@@ -1,5 +1,5 @@
-// The program monitor: an output canvas with one clip's picture placed inside
-// it.
+// The program monitor: an output canvas with the clips under the playhead
+// placed inside it.
 //
 // Each clip owns a <video> inside a crop window — a div with overflow:hidden.
 // The video is sized and offset so the whole picture would land where fit,
@@ -7,20 +7,23 @@
 // clips replaced content against an ancestor's overflow the same as anything
 // else, so this costs one style write per change and nothing per frame — no
 // readback, no per-frame composite, the decoded frame goes straight to the
-// renderer as it always did.
+// renderer as it always did. Stacking and opacity are the same deal: z-index
+// and an opacity on the window, both free.
 
-import { project } from './project.js';
+import { project, isSelected } from './project.js';
 
 let stage = null;       // the output canvas, sized to the project aspect
 let viewerEl = null;    // the box it is centred in
-let active = null;
+let active = [];        // the clips currently shown, bottom track first
 
 export function initViewer(refs) {
     stage = refs.stage;
     viewerEl = refs.viewer;
 }
 
-export function activeClip() { return active; }
+/// The clip that owns the moment — topmost, so it is the picture in front.
+export function activeClip() { return active.length ? active[active.length - 1] : null; }
+export function activeClips() { return active; }
 
 /// Build a clip's picture: a crop window with a video inside it. Sizing waits
 /// for layout(); src waits for the element to actually exist in the tree,
@@ -31,6 +34,12 @@ export function attachClip(clip) {
     frame.className = 'clipframe';
     const video = document.createElement('video');
     frame.appendChild(video);
+    // The selection ring is its own element, after the video, because a
+    // box-shadow on the window would be painted underneath its own child and a
+    // border would move the picture inside it.
+    const ring = document.createElement('div');
+    ring.className = 'ring';
+    frame.appendChild(ring);
     stage.appendChild(frame);
     clip.frame = frame;
     clip.video = video;
@@ -47,21 +56,38 @@ export function detachClip(clip) {
     stage.removeChild(clip.frame);
     clip.frame = null;
     clip.video = null;
-    if (active === clip) active = null;
+    const i = active.indexOf(clip);
+    if (i >= 0) active.splice(i, 1);
 }
 
 function setVisible(clip, on) {
     if (clip.frame) clip.frame.style.display = on ? 'block' : 'none';
 }
 
-/// Show exactly one clip. Everything else is paused — several decoders running
-/// at once would each be doing full-rate work for a picture nobody sees.
-export function setActive(clip) {
-    if (active === clip) return active;
-    if (active) { try { active.video.pause(); } catch (e) {} setVisible(active, false); }
-    active = clip;
-    if (active) setVisible(active, true);
-    return active;
+/// Show exactly this set of clips and no others. Everything else is paused —
+/// several decoders running for pictures nobody sees is the one cost in this
+/// design that is not free.
+///
+/// Returns true when the set changed, which is the caller's cue that the newly
+/// shown clips need seeking into position.
+export function setActiveSet(clips) {
+    let same = clips.length === active.length;
+    if (same) for (let i = 0; i < clips.length; i++) if (clips[i] !== active[i]) { same = false; break; }
+    if (same) return false;
+
+    for (const c of active) {
+        if (clips.indexOf(c) >= 0) continue;
+        try { c.video.pause(); } catch (e) {}
+        setVisible(c, false);
+    }
+    for (const c of clips) if (active.indexOf(c) < 0) setVisible(c, true);
+    active = clips.slice();
+    // Paint order: the array is already bottom-track-first, and z-index by
+    // position keeps two clips on the same track from flickering past each
+    // other when one is replaced.
+    for (let i = 0; i < active.length; i++)
+        if (active[i].frame) active[i].frame.style.zIndex = String(i + 1);
+    return true;
 }
 
 /// Size the output canvas to fit the viewer, then place every clip inside it.
@@ -79,25 +105,84 @@ export function layout() {
     for (const c of project.clips) place(c, w, h);
 }
 
+// ── grid ───────────────────────────────────────────────────────────────────
+
+/// Rows and columns for n cells in a canvas of this shape. Squarest wins: the
+/// aim is cells as close to the canvas's own aspect as possible, so twelve
+/// 16:9 clips on a 16:9 canvas come out 4×3 rather than 12×1.
+export function gridShape(n, aspect) {
+    if (n <= 1) return { cols: 1, rows: 1 };
+    let best = { cols: n, rows: 1 }, bestScore = Infinity;
+    for (let cols = 1; cols <= n; cols++) {
+        const rows = Math.ceil(n / cols);
+        // A cell's aspect is the canvas's, scaled by rows/cols. The clips came
+        // out of the same canvas, so a cell shaped like the canvas is a cell
+        // the picture fills — which makes this a search for a square grid, not
+        // a square cell. Empty cells in the last row cost a little, but not
+        // enough to beat a good shape: three 16:9 clips look better two-up with
+        // a gap than in one tall row of slivers.
+        const cell = (aspect * rows) / cols;
+        // The last term breaks ties toward the wider layout — 4×3 rather than
+        // 3×4 for a dozen, the way a wall of monitors is always arranged. It is
+        // orders of magnitude below any real difference in shape, so it decides
+        // nothing else.
+        const score = Math.abs(Math.log(cell / aspect)) + (cols * rows - n) * 0.06
+                      - cols * 1e-4;
+        if (score < bestScore) { bestScore = score; best = { cols, rows }; }
+    }
+    return best;
+}
+
+/// The cell a clip gets in grid layout, or null when the layout is 'stack'.
+/// Cells are handed out in timeline order, so the grid reads the way the
+/// timeline does rather than jumping around as clips are added.
+export function cellFor(clip, sw, sh) {
+    if (project.layout !== 'grid') return null;
+    const order = project.clips;
+    const i = order.indexOf(clip);
+    if (i < 0) return null;
+    const { cols, rows } = gridShape(order.length, sw / sh);
+    const cw = sw / cols, ch = sh / rows;
+    // A gutter, so twelve recordings of the same green-screen desk read as
+    // twelve pictures instead of one. The stage behind is black, so the gap
+    // needs no colour of its own.
+    const g = Math.min(GRID_GUTTER, cw / 8, ch / 8);
+    return { x: (i % cols) * cw + g, y: Math.floor(i / cols) * ch + g,
+             w: cw - g * 2, h: ch - g * 2 };
+}
+
+const GRID_GUTTER = 3;
+
+// ── placement ──────────────────────────────────────────────────────────────
+
 /// Where the whole picture lands inside the canvas, before cropping. Returned
 /// separately because the crop UI needs it to turn a dragged handle back into
 /// a fraction of the source.
 export function placement(clip, sw, sh) {
+    // In a grid the clip's own placement is set aside: every cell is the same
+    // size and every picture is fitted inside its cell. Zoom and pan still
+    // apply, so one cell can be pushed in on a detail while the others stay put.
+    const cell = cellFor(clip, sw, sh);
+    const bx = cell ? cell.x : 0, by = cell ? cell.y : 0;
+    const bw = cell ? cell.w : sw, bh = cell ? cell.h : sh;
+
     const W = clip.width || 16, H = clip.height || 9;
     const x = clip.xform;
+    const fit = cell ? 'contain' : x.fit;
     let dw, dh;
-    if (x.fit === 'stretch') { dw = sw; dh = sh; }
+    if (fit === 'stretch') { dw = bw; dh = bh; }
     else {
-        const s = x.fit === 'cover'  ? Math.max(sw / W, sh / H)
-                : x.fit === 'actual' ? 1
-                                     : Math.min(sw / W, sh / H);
+        const s = fit === 'cover'  ? Math.max(bw / W, bh / H)
+                : fit === 'actual' ? 1
+                                   : Math.min(bw / W, bh / H);
         dw = W * s; dh = H * s;
     }
     dw *= x.zoom; dh *= x.zoom;
     return {
         w: dw, h: dh,
-        x: (sw - dw) / 2 + x.panX * sw,
-        y: (sh - dh) / 2 + x.panY * sh,
+        x: bx + (bw - dw) / 2 + x.panX * bw,
+        y: by + (bh - dh) / 2 + x.panY * bh,
+        cell,
     };
 }
 
@@ -113,6 +198,12 @@ function place(clip, sw, sh) {
     clip.frame.style.top = (p.y + p.h * c.t).toFixed(2) + 'px';
     clip.frame.style.width = fw.toFixed(2) + 'px';
     clip.frame.style.height = fh.toFixed(2) + 'px';
+    clip.frame.style.opacity = String(clip.xform.opacity);
+    // Which picture is picked has to be visible on the picture itself. In a
+    // grid the timeline lane is a sliver and the panel names one file; without
+    // a ring on the cell there is nothing tying the two together.
+    clip.frame.classList.toggle('sel', project.clips.length > 1 && isSelected(clip));
+    clip.frame.classList.toggle('primary', project.selected === clip);
 
     // ...and the picture inside it stays whole, pushed up and left so the
     // cropped edges fall outside.
@@ -127,6 +218,26 @@ export function refresh(clip) {
     place(clip, stage.clientWidth, stage.clientHeight);
 }
 
+/// Re-place everything — what a layout-mode or canvas-size change needs.
+export function refreshAll() {
+    for (const c of project.clips) place(c, stage.clientWidth, stage.clientHeight);
+}
+
 export function stageSize() {
     return { w: stage ? stage.clientWidth : 0, h: stage ? stage.clientHeight : 0 };
+}
+
+/// Which clip's picture is under a point on the stage, topmost first. Grid
+/// layout needs it: clicking a cell should select the clip in that cell.
+export function clipAtPoint(sx, sy) {
+    for (let i = active.length - 1; i >= 0; i--) {
+        const c = active[i];
+        if (!c.frame) continue;
+        const l = parseFloat(c.frame.style.left) || 0;
+        const t = parseFloat(c.frame.style.top) || 0;
+        const w = parseFloat(c.frame.style.width) || 0;
+        const h = parseFloat(c.frame.style.height) || 0;
+        if (sx >= l && sx <= l + w && sy >= t && sy <= t + h) return c;
+    }
+    return null;
 }

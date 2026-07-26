@@ -7,8 +7,9 @@
 // frame-accurate, why seeking is instant, and why several clips can sit on one
 // timeline without any of them being transcoded first.
 
-import { project, makeClip, addClip, removeClip, duration, clipAt, nextClipAfter,
-         sourceTime, resolveOverlaps, onChange, changed, select } from './project.js';
+import { project, makeClip, addClip, removeClip, duration, clipsAt,
+         nextClipAfter, sourceTime, resolveOverlaps, onChange, changed, select,
+         selectMany, selectFollow, isSelected, splitClip, trackCount } from './project.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
@@ -62,8 +63,8 @@ el('libav').textContent = bro.ffmpeg.version;
 viewer.initViewer({ stage, viewer: viewerEl });
 timeline.initTimeline({
     timeline: el('timeline'),
-    ruler: el('ruler'), film: el('film'), wave: el('wave'),
-    laneVideo: el('lane-video'), laneAudio: el('lane-audio'),
+    ruler: el('ruler'), tracks: el('tracks'), wave: el('wave'),
+    laneAudio: el('lane-audio'),
     playhead: el('playhead'),
     scrollTrack: el('tl-scroll'), scrollThumb: el('tl-thumb'),
     zoomLabel: el('tl-zoom'),
@@ -79,8 +80,11 @@ let resumeAfterScrub = false;
 
 onChange((what) => {
     if (what === 'selection' || what === 'move' || what === 'moved') {
-        showClip(project.selected);
-        if (what !== 'selection') setPlayhead(transport.t);
+        showProperties();
+        // The selection ring lives on the picture, so a change of selection is
+        // a change to the stage as well as to the panel.
+        if (what === 'selection') viewer.refreshAll();
+        else setPlayhead(transport.t);
     }
     timeline.draw();
     syncUI();
@@ -91,7 +95,7 @@ if (bro.ffmpeg.openOnStart) open(bro.ffmpeg.openOnStart);
 
 // ── opening ────────────────────────────────────────────────────────────────
 
-function open(path) {
+function open(path, opts = {}) {
     let probe;
     try {
         probe = bro.ffmpeg.probe(path);
@@ -108,43 +112,108 @@ function open(path) {
         return null;
     }
 
-    // New clips land after everything already on the timeline, which is what
-    // dropping a second file onto a player is asking for.
-    const clip = addClip(makeClip(path, probe));
+    // New clips land after everything already on their track, which is what
+    // dropping a second file onto a player is asking for. `track` puts one on
+    // a lane of its own instead — that is how a batch becomes a grid.
+    const clip = makeClip(path, probe);
+    if (opts.track !== undefined) clip.track = opts.track;
+    addClip(clip);
     viewer.attachClip(clip);
     analyzeClip(clip);
-    project.selected = clip;
+    select(clip, 'auto');
 
     dropzone.classList.add('hidden');
     setControlsEnabled(true);
     viewer.layout();
-    if (project.clips.length === 1) {
+    if (!opts.quiet) {
         timeline.fitView();
-        setPlayhead(0);
-    } else {
-        timeline.fitView();
-        setPlayhead(clip.start);
+        setPlayhead(project.clips.length === 1 ? 0 : clip.start);
+        showProperties();
+        changed('open');
     }
-    showClip(clip);
-    changed('open');
     return clip;
 }
 
-function removeSelected() {
-    const clip = project.selected;
-    if (!clip) return;
-    viewer.detachClip(clip);
-    removeClip(clip);
+/// Open several files as one gesture. Dropping a morning's recordings is not
+/// the same act as opening one file: past a couple of them the useful thing is
+/// usually to see them all at once, so they go on separate tracks, all starting
+/// at zero, and the canvas switches to a grid.
+function openBatch(paths) {
+    if (paths.length === 1) return [open(paths[0])];
+    const grid = paths.length >= 3;
+    // Stack the batch above whatever is already there, or start at V1 when the
+    // timeline is empty — `trackCount()` counts the spare lane, which is not a
+    // track anything lives on yet.
+    const base = grid ? (project.clips.length ? trackCount() - 1 : 0) : 0;
+    const made = [];
+    for (const p of paths) {
+        const clip = open(p, { quiet: true, track: grid ? base + made.length : undefined });
+        if (clip) { if (grid) clip.start = 0; made.push(clip); }
+    }
+    if (!made.length) return made;
+    if (grid) setLayout('grid');
+    selectMany(made);
+    timeline.fitView();
+    // A grid starts at the top; a run of clips appended to the timeline starts
+    // at the first one you just dropped, which is what you came to look at.
+    setPlayhead(grid ? 0 : made[0].start);
+    showProperties();
+    changed('open');
+    flash(`Opened ${made.length} clips` + (grid ? ' as a grid' : ''));
+    return made;
+}
+
+function removeSelection() {
+    const doomed = project.selection.slice();
+    if (!doomed.length) return;
+    for (const clip of doomed) {
+        viewer.detachClip(clip);
+        removeClip(clip);
+    }
     if (!project.clips.length) {
         dropzone.classList.remove('hidden');
         setControlsEnabled(false);
         project.width = project.height = 0;
+        project.layout = 'stack';
     }
     timeline.fitView();
     setPlayhead(Math.min(transport.t, duration()));
-    showClip(project.selected);
+    showProperties();
     changed('remove');
-    flash('Removed ' + clip.name);
+    flash(doomed.length === 1 ? 'Removed ' + doomed[0].name : `Removed ${doomed.length} clips`);
+}
+
+/// Split every selected clip the playhead is inside. Splitting the selection
+/// rather than "the clip under the playhead" is what makes it work on a stack:
+/// one keypress can cut through four tracks at the same instant, or through
+/// exactly the one you picked.
+function splitAtPlayhead() {
+    const t = transport.t;
+    const targets = (project.selection.length ? project.selection : clipsAt(t))
+        .filter((c) => t > c.start + 1e-3 && t < c.start + c.length - 1e-3);
+    if (!targets.length) { flash('Nothing to split here'); return; }
+    const halves = [];
+    for (const c of targets) {
+        const right = splitClip(c, t, (n) => { n.peaks = c.peaks; n.film = c.film; viewer.attachClip(n); });
+        if (right) halves.push(right);
+    }
+    // The right-hand halves become the selection: after a cut you are almost
+    // always about to do something to what comes after it.
+    if (halves.length) selectMany(halves);
+    viewer.layout();
+    setPlayhead(t);
+    changed('split');
+    flash(halves.length === 1 ? 'Split' : `Split ${halves.length} clips`);
+}
+
+function setLayout(mode) {
+    if (project.layout === mode) return;
+    project.layout = mode;
+    el('btn-grid').classList.toggle('on', mode === 'grid');
+    viewer.refreshAll();
+    updateCropUI();
+    showProperties();
+    flash(mode === 'grid' ? 'Grid layout' : 'Stacked layout');
 }
 
 // ── transport ──────────────────────────────────────────────────────────────
@@ -162,46 +231,46 @@ setControlsEnabled(false);
 function setPlayhead(t, seek = true) {
     const d = duration();
     transport.t = Math.max(0, Math.min(d, t));
-    const clip = clipAt(transport.t);
-    viewer.setActive(clip);
-    // Selection follows the playhead. With one video track and an inspector
-    // that edits the selected clip, a selection pointing somewhere other than
-    // the picture on screen means the crop handles are over the wrong frame
-    // and the panel describes a file you are not looking at.
-    if (clip && project.selected !== clip) select(clip);
-    if (clip) {
+    const here = clipsAt(transport.t);
+    const changedSet = viewer.setActiveSet(here);
+    // A clip that has just come into view has its decoder parked wherever it
+    // was left, so it always needs the seek even when the caller said not to.
+    for (const clip of here) {
         applyAudio(clip);
         const want = sourceTime(clip, transport.t);
-        if (seek && Math.abs(clip.video.currentTime - want) > 0.0005)
+        if ((seek || changedSet) && Math.abs(clip.video.currentTime - want) > 0.0005)
             clip.video.currentTime = want;
         if (transport.playing && clip.video.paused) clip.video.play();
     }
+    if (here.length) selectFollow(here[here.length - 1]);
     syncUI();
 }
 
 function applyAudio(clip) {
     if (!clip || !clip.video) return;
-    clip.video.muted = transport.muted;
-    clip.video.volume = transport.volume;
+    // Two volumes multiply: the clip's own level, which is part of the edit,
+    // and the transport's, which is just how loud you are listening.
+    clip.video.muted = transport.muted || clip.muted;
+    clip.video.volume = transport.volume * clip.volume;
     clip.video.playbackRate = transport.rate;
     // Looping is a property of the timeline, not of any one clip: a clip that
     // looped itself would never hand over to the next one.
     clip.video.loop = false;
 }
 
+function applyAudioAll() { for (const c of viewer.activeClips()) applyAudio(c); }
+
 function play() {
     if (!project.clips.length) return;
     if (transport.t >= duration() - 1e-4) setPlayhead(0);
     transport.playing = true;
-    const clip = viewer.activeClip() || clipAt(transport.t);
-    if (clip) { applyAudio(clip); clip.video.play(); }
+    for (const c of viewer.activeClips()) { applyAudio(c); c.video.play(); }
     syncUI();
 }
 
 function pause() {
     transport.playing = false;
-    const clip = viewer.activeClip();
-    if (clip) clip.video.pause();
+    for (const c of viewer.activeClips()) c.video.pause();
     syncUI();
 }
 
@@ -256,14 +325,14 @@ btnLoop.addEventListener('click', () => {
 
 btnMute.addEventListener('click', () => {
     transport.muted = !transport.muted;
-    applyAudio(viewer.activeClip());
+    applyAudioAll();
     syncVolume();
     flash(transport.muted ? 'Muted' : 'Unmuted');
 });
 
 rateSel.addEventListener('change', () => {
     transport.rate = parseFloat(rateSel.value);
-    applyAudio(viewer.activeClip());
+    applyAudioAll();
     flash(rateSel.value + '×');
 });
 
@@ -313,19 +382,26 @@ draggable(scrub, (f) => setPlayhead(f * duration()), { scrubs: true });
 draggable(volume, (f) => {
     transport.volume = f;
     if (f > 0 && transport.muted) transport.muted = false;
-    applyAudio(viewer.activeClip());
+    applyAudioAll();
     syncVolume();
 });
 
 // ── the viewer: pan, zoom and crop the picture ─────────────────────────────
 
 stage.addEventListener('wheel', (e) => {
-    const c = project.selected;
+    const r = stage.getBoundingClientRect();
+    const hit = viewer.clipAtPoint(e.clientX - r.left, e.clientY - r.top);
+    const c = hit || project.selected;
     if (!c) return;
-    c.xform.zoom = Math.max(0.05, Math.min(20, c.xform.zoom * (e.deltaY > 0 ? 1 / 1.1 : 1.1)));
-    viewer.refresh(c);
+    const f = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+    // Scaling the whole selection at once is the useful version when a grid of
+    // twelve wants pushing in together — but only when the pointer is over one
+    // of them, so a stray wheel on the background changes nothing.
+    const list = hit && isSelected(hit) ? subjects() : [c];
+    for (const k of list) k.xform.zoom = Math.max(0.05, Math.min(20, k.xform.zoom * f));
+    viewer.refreshAll();
     updateCropUI();
-    showTransform(c);
+    showTransform(project.selected || c);
     e.preventDefault();
 });
 
@@ -334,21 +410,37 @@ stage.addEventListener('wheel', (e) => {
 {
     let pan = null;
     stage.addEventListener('mousedown', (e) => {
+        if (cropMode) return;
+        // Clicking a picture picks it. With several clips on screen — a stack
+        // or a grid — "the selected one" and "the one you are pointing at"
+        // have to be the same thing or panning moves the wrong picture.
+        const r = stage.getBoundingClientRect();
+        const hit = viewer.clipAtPoint(e.clientX - r.left, e.clientY - r.top);
+        if (hit) select(hit, (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'set');
         const c = project.selected;
-        if (!c || cropMode) return;
-        pan = { x: e.clientX, y: e.clientY, px: c.xform.panX, py: c.xform.panY };
+        if (!c) return;
+        pan = { x: e.clientX, y: e.clientY, px: c.xform.panX, py: c.xform.panY, clip: c };
         e.preventDefault();
     });
     document.addEventListener('mousemove', (e) => {
         if (!pan) return;
-        const c = project.selected;
         const s = viewer.stageSize();
-        c.xform.panX = pan.px + (e.clientX - pan.x) / Math.max(1, s.w);
-        c.xform.panY = pan.py + (e.clientY - pan.y) / Math.max(1, s.h);
-        viewer.refresh(c);
-        showTransform(c);
+        // In a grid the pan is a fraction of the cell, not of the canvas, so
+        // the picture keeps up with the pointer in a small cell too.
+        const p = viewer.placement(pan.clip, s.w, s.h);
+        const bw = p.cell ? p.cell.w : s.w, bh = p.cell ? p.cell.h : s.h;
+        // Only the picture under the pointer moves, even with several clips
+        // selected: a drag is aimed at a thing on screen, and sliding the other
+        // three by the same amount is never what it meant.
+        pan.clip.xform.panX = pan.px + (e.clientX - pan.x) / Math.max(1, bw);
+        pan.clip.xform.panY = pan.py + (e.clientY - pan.y) / Math.max(1, bh);
+        viewer.refresh(pan.clip);
+        updateCropUI();
     });
-    document.addEventListener('mouseup', () => { pan = null; });
+    document.addEventListener('mouseup', () => {
+        if (pan) showTransform(project.selected);
+        pan = null;
+    });
 }
 
 // Crop handles. Each edge maps a pixel drag back to a fraction of the placed
@@ -429,11 +521,17 @@ document.addEventListener('keydown', (e) => {
         case 'm':          btnMute.click(); break;
         case 'f':          toggleFullscreen(); break;
         case 'c':          setCropMode(!cropMode); break;
-        case 'Delete':     removeSelected(); break;
+        case 's':          splitAtPlayhead(); break;
+        case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
+        case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
+                           else return;
+                           break;
+        case 'Delete':     removeSelection(); break;
         case '+': case '=': timeline.zoomBy(1 / 1.5, transport.t); break;
         case '-':          timeline.zoomBy(1.5, transport.t); break;
         case '0':          timeline.fitView(); break;
         case 'Escape':     if (cropMode) setCropMode(false);
+                           else if (project.selection.length > 1) select(project.selected);
                            else if (fullscreen) toggleFullscreen(); break;
         default: return;
     }
@@ -450,7 +548,7 @@ function nudgeRate(dir) {
     i = Math.max(0, Math.min(RATES.length - 1, i + dir));
     transport.rate = RATES[i];
     rateSel.value = String(RATES[i]);
-    applyAudio(viewer.activeClip());
+    applyAudioAll();
     if (!transport.playing) play();
     flash(RATES[i] + '×');
 }
@@ -467,7 +565,7 @@ document.addEventListener('drop', (e) => {
     dropzone.classList.remove('over');
     const files = e.dataTransfer && e.dataTransfer.files;
     if (!files) return;
-    for (const f of files) open(f.path || f.name);
+    openBatch(Array.from(files, (f) => f.path || f.name));
 });
 
 // ── the frame loop ─────────────────────────────────────────────────────────
@@ -491,8 +589,11 @@ function frame(now) {
         viewer.layout();
         updateCropUI();
     }
-    if (el('film').clientWidth !== lastLaneW) {
-        lastLaneW = el('film').clientWidth;
+    // Watch the video lanes, not the waveform: the waveform is in the markup
+    // and laid out from the first frame, so it never notices a lane that was
+    // built a moment ago and has not been measured yet.
+    if (timeline.laneWidthPx() !== lastLaneW) {
+        lastLaneW = timeline.laneWidthPx();
         timeline.draw();
     }
     if (transport.playing) syncUI();
@@ -515,10 +616,17 @@ function adoptDecoderTime() {
     syncUI();
 }
 
-/// Where the playhead goes next. The active clip's own clock is the master
-/// while it is playing — it is the thing that knows which picture is on
-/// screen. A gap between clips has no clock of its own, so it runs on the
-/// wall.
+/// Where the playhead goes next. The topmost clip's own clock is the master
+/// while it is playing — it is the thing that knows which picture is in front.
+/// A gap between clips has no clock of its own, so it runs on the wall.
+///
+/// Everything else under the playhead is chased back into line rather than
+/// driven: several decoders each free-running from their own audio clock drift
+/// apart within a minute, and correcting on every frame would mean a seek per
+/// clip per frame. A seek only when a clip is more than a couple of frames out
+/// keeps a grid of a dozen videos together for the cost of the odd correction.
+const DRIFT_LIMIT = 0.12;
+
 function advance(dt) {
     const d = duration();
     const clip = viewer.activeClip();
@@ -530,13 +638,25 @@ function advance(dt) {
             return;
         }
         transport.t = clip.start + local;
+        resync(clip);
     } else {
         transport.t += dt * transport.rate;
-        if (clipAt(transport.t)) { setPlayhead(transport.t); return; }
+        if (clipsAt(transport.t).length) { setPlayhead(transport.t); return; }
     }
 
     if (transport.t >= d - 1e-6) { handOver(d); return; }
     if (timeline.revealTime(transport.t)) timeline.draw();
+}
+
+function resync(master) {
+    const all = viewer.activeClips();
+    if (all.length < 2) return;
+    for (const c of all) {
+        if (c === master || !c.video) continue;
+        const want = sourceTime(c, transport.t);
+        if (Math.abs(c.video.currentTime - want) > DRIFT_LIMIT) c.video.currentTime = want;
+        if (c.video.paused && !c.video.ended) c.video.play();
+    }
 }
 
 function handOver(t) {
@@ -568,8 +688,10 @@ function syncUI() {
 
     const n = project.clips.length;
     const waiting = pending();
+    const live = viewer.activeClips().length;
     stats.textContent = n
         ? `${project.width}×${project.height}  ${n} clip${n === 1 ? '' : 's'}` +
+          (live > 1 ? `  ${live} playing` : '') +
           (waiting ? `  reading ${waiting}…` : '')
         : '';
 }
@@ -586,7 +708,11 @@ syncVolume();
 
 // ── the inspector ──────────────────────────────────────────────────────────
 
-function showClip(clip) {
+/// Redraw the inspector for whatever is selected. The Media half always
+/// describes one file — the primary — because a codec list averaged over four
+/// clips would be nonsense; the Properties half edits all of them.
+function showProperties() {
+    const clip = project.selected;
     if (!clip) {
         filename.textContent = 'no media';
         filename.classList.add('dim');
@@ -665,12 +791,54 @@ function showInfo(p) {
 // The transform panel is rebuilt from the clip rather than kept in sync field
 // by field: it is a dozen elements, and a panel that can disagree with the
 // picture is worse than one that is redrawn.
+/// Every clip an edit applies to: the whole selection, or the primary alone if
+/// somehow nothing is selected.
+function subjects() {
+    return project.selection.length ? project.selection
+         : project.selected ? [project.selected] : [];
+}
+
+/// Read a property across the selection. Returns the value when they agree and
+/// `undefined` when they do not — which is what a field showing "—" means, and
+/// what stops a panel from quietly claiming four clips are all at 100%.
+function common(read) {
+    const list = subjects();
+    if (!list.length) return undefined;
+    const first = read(list[0]);
+    for (const c of list) if (read(c) !== first) return undefined;
+    return first;
+}
+
+/// Write a property to every selected clip and put the picture back in step.
+function edit(write) {
+    for (const c of subjects()) write(c);
+    viewer.refreshAll();
+    updateCropUI();
+    changed('edit');
+}
+
 function showTransform(clip) {
     if (!clip) { xformPanel.innerHTML = ''; return; }
+    const list = subjects();
+    const many = list.length > 1;
     const x = clip.xform, c = x.crop;
     const pc = (v) => (v * 100).toFixed(1);
+    // A number field over a mixed selection starts empty rather than showing
+    // one clip's value: an inherited value that silently applies to three
+    // others the moment you tab past it is the classic multi-select trap.
+    const num = (id, get, min, max, step) => {
+        const v = common(get);
+        return `<input class="num${v === undefined ? ' mixed' : ''}" id="${id}" type="number" ` +
+               `value="${v === undefined ? '' : v}" min="${min}" max="${max}" step="${step}" ` +
+               `placeholder="—">`;
+    };
+    const fitV = common((k) => k.xform.fit);
     const fitBtn = (id, label) =>
-        `<button class="tiny${x.fit === id ? ' on' : ''}" data-fit="${id}">${label}</button>`;
+        `<button class="tiny${fitV === id ? ' on' : ''}" data-fit="${id}">${label}</button>`;
+
+    const opacity = common((k) => k.xform.opacity);
+    const zoomV = common((k) => k.xform.zoom);
+    const gridOn = project.layout === 'grid';
 
     xformPanel.innerHTML =
         section('Canvas') +
@@ -686,28 +854,52 @@ function showTransform(clip) {
         `<button class="tiny" data-canvas="1080x1920">Vertical</button>` +
         `<button class="tiny" data-canvas="3840x2160">4K</button>` +
         `</span></div>` +
+        `<div class="row"><span class="key">Layout</span><span class="val seg">` +
+        `<button class="tiny${gridOn ? '' : ' on'}" data-layout="stack">Stack</button>` +
+        `<button class="tiny${gridOn ? ' on' : ''}" data-layout="grid">Grid</button>` +
+        `</span></div>` +
 
-        section('Transform · ' + clip.name) +
+        section(many ? `Properties · ${list.length} clips` : 'Properties · ' + clip.name) +
+        `<div class="row"><span class="key">Track</span><span class="val btns">` +
+        `<button class="tiny" data-track="-1">Down</button>` +
+        `<button class="tiny" data-track="1">Up</button>` +
+        `<span class="mono dim">${common((k) => k.track) === undefined
+            ? 'mixed' : 'V' + (clip.track + 1)}</span>` +
+        `</span></div>` +
+        `<div class="row"><span class="key">Opacity</span><span class="val btns">` +
+        `<input id="opacity" type="range" min="0" max="100" ` +
+        `value="${Math.round((opacity === undefined ? 1 : opacity) * 100)}">` +
+        `<span id="opacityval" class="mono dim">` +
+        `${opacity === undefined ? '—' : Math.round(opacity * 100) + '%'}</span></span></div>` +
+        `<div class="row"><span class="key">Audio</span><span class="val btns">` +
+        `<button class="tiny${common((k) => k.muted) === true ? ' on' : ''}" data-mute="1">Mute</button>` +
+        `<input id="clipvol" type="range" min="0" max="100" ` +
+        `value="${Math.round((common((k) => k.volume) ?? 1) * 100)}">` +
+        `</span></div>` +
+
+        section(gridOn ? 'Transform (grid: cell-relative)' : 'Transform') +
         `<div class="row"><span class="key">Fit</span><span class="val seg">` +
         fitBtn('contain', 'Fit') + fitBtn('cover', 'Fill') +
         fitBtn('stretch', 'Stretch') + fitBtn('actual', '1:1') +
         `</span></div>` +
         `<div class="row"><span class="key">Scale</span><span class="val btns">` +
-        `<input id="zoom" type="range" min="5" max="400" value="${Math.round(x.zoom * 100)}">` +
-        `<span id="zoomval" class="mono dim">${Math.round(x.zoom * 100)}%</span></span></div>` +
+        `<input id="zoom" type="range" min="5" max="400" ` +
+        `value="${Math.round((zoomV === undefined ? 1 : zoomV) * 100)}">` +
+        `<span id="zoomval" class="mono dim">` +
+        `${zoomV === undefined ? '—' : Math.round(zoomV * 100) + '%'}</span></span></div>` +
         `<div class="row"><span class="key">Position</span><span class="val btns">` +
-        `<span class="mono dim">${pc(x.panX)}%, ${pc(x.panY)}%</span>` +
+        `<span class="mono dim">${many ? '—' : pc(x.panX) + '%, ' + pc(x.panY) + '%'}</span>` +
         `<button class="tiny" data-reset="pan">Reset</button>` +
         `</span></div>` +
 
         section('Crop') +
         `<div class="row"><span class="key">Left / Top</span><span class="val btns">` +
-        `<input class="num" id="cl" type="number" value="${pc(c.l)}" min="0" max="95" step="0.5">` +
-        `<input class="num" id="ct" type="number" value="${pc(c.t)}" min="0" max="95" step="0.5">` +
+        num('cl', (k) => +pc(k.xform.crop.l), 0, 95, 0.5) +
+        num('ct', (k) => +pc(k.xform.crop.t), 0, 95, 0.5) +
         `</span></div>` +
         `<div class="row"><span class="key">Right / Bot</span><span class="val btns">` +
-        `<input class="num" id="cr" type="number" value="${pc(c.r)}" min="0" max="95" step="0.5">` +
-        `<input class="num" id="cb" type="number" value="${pc(c.b)}" min="0" max="95" step="0.5">` +
+        num('cr', (k) => +pc(k.xform.crop.r), 0, 95, 0.5) +
+        num('cb', (k) => +pc(k.xform.crop.b), 0, 95, 0.5) +
         `</span></div>` +
         `<div class="row"><span class="key"></span><span class="val btns">` +
         `<button class="tiny${cropMode ? ' on' : ''}" data-crop="handles">Handles (C)</button>` +
@@ -718,13 +910,22 @@ function showTransform(clip) {
 }
 
 function wireTransform(clip) {
-    const x = clip.xform;
-    const apply = () => { viewer.refresh(clip); updateCropUI(); };
-
     for (const b of xformPanel.querySelectorAll('button[data-fit]'))
         b.addEventListener('click', () => {
-            x.fit = b.getAttribute('data-fit');
-            apply(); showTransform(clip);
+            const v = b.getAttribute('data-fit');
+            edit((k) => { k.xform.fit = v; });
+            showTransform(clip);
+        });
+
+    for (const b of xformPanel.querySelectorAll('button[data-layout]'))
+        b.addEventListener('click', () => setLayout(b.getAttribute('data-layout')));
+
+    for (const b of xformPanel.querySelectorAll('button[data-track]'))
+        b.addEventListener('click', () => {
+            const d = Number(b.getAttribute('data-track'));
+            edit((k) => { k.track = Math.max(0, Math.min(7, k.track + d)); });
+            setPlayhead(transport.t);
+            changed('moved');
         });
 
     for (const b of xformPanel.querySelectorAll('button[data-canvas]')) {
@@ -739,13 +940,39 @@ function wireTransform(clip) {
         });
     }
 
-    const zoom = el('zoom');
-    if (zoom) zoom.addEventListener('input', () => {
-        x.zoom = Math.max(0.05, Number(zoom.value) / 100);
-        apply();
-        // Only the readout, not the whole panel: rebuilding it mid-drag would
-        // replace the slider under the pointer.
-        el('zoomval').textContent = `${Math.round(x.zoom * 100)}%`;
+    // Sliders write on every input event, so they only update their own
+    // readout: rebuilding the panel mid-drag would replace the slider under
+    // the pointer.
+    const slider = (id, valId, apply, label) => {
+        const s = el(id);
+        if (!s) return;
+        s.addEventListener('input', () => {
+            const f = Number(s.value) / 100;
+            apply(f);
+            viewer.refreshAll();
+            updateCropUI();
+            if (valId && el(valId)) el(valId).textContent = label(f);
+            timeline.draw();
+        });
+    };
+    slider('zoom', 'zoomval', (f) => {
+        for (const k of subjects()) k.xform.zoom = Math.max(0.05, f);
+    }, (f) => `${Math.round(f * 100)}%`);
+    slider('opacity', 'opacityval', (f) => {
+        for (const k of subjects()) k.xform.opacity = f;
+    }, (f) => `${Math.round(f * 100)}%`);
+    slider('clipvol', null, (f) => {
+        for (const k of subjects()) { k.volume = f; if (f > 0) k.muted = false; }
+        applyAudioAll();
+    }, () => '');
+
+    const mute = xformPanel.querySelector('button[data-mute]');
+    if (mute) mute.addEventListener('click', () => {
+        const on = !(common((k) => k.muted) === true);
+        for (const k of subjects()) k.muted = on;
+        applyAudioAll();
+        showTransform(clip);
+        timeline.draw();
     });
 
     const size = () => {
@@ -762,16 +989,19 @@ function wireTransform(clip) {
         const f = el(id);
         if (!f) continue;
         f.addEventListener('change', () => {
-            x.crop[crops[id]] = Math.max(0, Math.min(0.95, Number(f.value) / 100));
-            apply();
+            if (f.value === '') return;             // still mixed, left alone
+            const v = Math.max(0, Math.min(0.95, Number(f.value) / 100));
+            edit((k) => { k.xform.crop[crops[id]] = v; });
         });
     }
 
     for (const b of xformPanel.querySelectorAll('button[data-reset]'))
         b.addEventListener('click', () => {
-            if (b.getAttribute('data-reset') === 'pan') { x.panX = x.panY = 0; x.zoom = 1; }
-            else x.crop = { l: 0, t: 0, r: 0, b: 0 };
-            apply(); showTransform(clip);
+            if (b.getAttribute('data-reset') === 'pan')
+                edit((k) => { k.xform.panX = k.xform.panY = 0; k.xform.zoom = 1; });
+            else
+                edit((k) => { k.xform.crop = { l: 0, t: 0, r: 0, b: 0 }; });
+            showTransform(clip);
         });
 
     const handles = xformPanel.querySelector('button[data-crop]');
@@ -791,6 +1021,9 @@ function setCropMode(on) {
 el('btn-zoom-in').addEventListener('click', () => timeline.zoomBy(1 / 1.5, transport.t));
 el('btn-zoom-out').addEventListener('click', () => timeline.zoomBy(1.5, transport.t));
 el('btn-zoom-fit').addEventListener('click', () => timeline.fitView());
+el('btn-split').addEventListener('click', splitAtPlayhead);
+el('btn-grid').addEventListener('click',
+    () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
 
 function flash(message) {
     osd.textContent = message;
@@ -803,11 +1036,14 @@ function flash(message) {
 // only exists while one particular clip is selected.
 globalThis.__ffmpegBro = {
     project, transport, resolveOverlaps,
-    open, removeSelected,
+    open, openBatch, removeSelection,
     video: () => { const c = viewer.activeClip(); return c ? c.video : null; },
     activeClip: () => viewer.activeClip(),
+    activeClips: () => viewer.activeClips(),
     setPlayhead, play, pause, step,
     timeline, viewer,
     setCropMode, cropMode: () => cropMode,
+    splitAtPlayhead, setLayout, select, selectMany,
+    showProperties, pending,
 };
 globalThis.__ffmpegBroReady = true;

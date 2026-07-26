@@ -114,10 +114,14 @@ stream reports.
 
 ## The timeline
 
-Two lanes under the ruler, the way an edit suite stacks them:
+Video lanes under the ruler and one audio lane beneath them, the way an edit
+suite stacks them:
 
-- **V1** a filmstrip — each slot showing the frame that is on screen at that
-  point, so it stays honest as you zoom in.
+- **V1, V2, …** filmstrips — each slot showing the frame that is on screen at
+  that point, so it stays honest as you zoom in. There is always one empty lane
+  above the highest one in use: dragging a clip into it is how you add a track,
+  and the lanes share a fixed height between them so the waveform never gets
+  pushed off the bottom.
 - **A1** the waveform — peak envelope over an RMS body, so you can see where
   the sound is before you hear it.
 
@@ -133,13 +137,31 @@ the whole timeline. Everything is drawn from the visible window rather than the
 whole file, so at 200× the strip is the individual frames around the playhead
 and the waveform under it is the sound at that instant.
 
-**Drop more files** to add them. Each lands after what is already there, gets
-its own filmstrip and waveform, and plays through the same transport: the
-playhead crossing a boundary hands over to the next clip's decoder. Drag a clip
-along V1 to move it — it snaps to the timeline start, the playhead and the other
-clips' edges, and anything it lands on top of slides out of the way, which is
-also how you reorder. `Delete` removes the selected clip. Drag the ruler or A1
-to scrub.
+**Drop more files** to add them. One or two land after what is already there.
+Three or more is a different act — that is a morning's recordings, not an edit —
+so they go on tracks of their own, all starting together at zero, and the canvas
+switches to a **grid** (see below). Each gets its own filmstrip and waveform.
+
+**Drag a clip** along its lane to move it — it snaps to the timeline start, the
+playhead and the other clips' edges, and anything it lands on top of *on the
+same track* slides out of the way, which is also how you reorder. Overlapping
+across tracks is the point of having tracks, so nothing moves there. Drag it
+into another lane to restack it.
+
+**Drag a clip's end** to trim. In-point and start move together when you trim
+the head, so the pictures under the part you kept do not slide sideways, and a
+trim stops at its neighbours rather than growing over them. The two grips
+appear on the selected clip.
+
+**Split** (`S`, or the button) cuts every selected clip the playhead is inside —
+one keypress through a whole stack, or through exactly the one you picked. Both
+halves point at the same file, so a split costs nothing but a second `<video>`,
+and together they cover exactly what the one clip covered. Trimming a half and
+deleting the other is how you take a piece out of the middle.
+
+**Select** by clicking a clip or its picture. `Ctrl`/`Shift`-click adds to the
+selection, `Ctrl`+`A` takes everything, `Esc` narrows back to one. `Delete`
+removes the lot. Drag the ruler or A1 to scrub.
 
 ## The picture
 
@@ -148,8 +170,12 @@ size of its own (`Match clip`, 1080p, vertical, 4K, or type one in), and each
 clip is placed inside it. So a portrait phone capture and a 16:9 clip can share
 a timeline with the black bars you would actually get.
 
-Per clip:
+Every clip the playhead is inside is on screen at once, bottom track first, so
+V2 composites over V1. Per clip, from the **Properties** panel:
 
+- **Track** — which lane, and so where in the stack.
+- **Opacity** — what you see through it to the track below.
+- **Audio** — the clip's own level and mute, multiplied by the transport's.
 - **Fit / Fill / Stretch / 1:1** — how the picture meets the canvas.
 - **Scale** — the slider, or the wheel over the picture.
 - **Position** — drag the picture.
@@ -157,10 +183,31 @@ Per clip:
   trims edges where the picture already is; it does not re-fit what is left, so
   the frame stays put under the handle you are dragging.
 
+With several clips selected the panel edits all of them. A property they
+disagree on reads as blank or `mixed` rather than as one clip's value, so
+tabbing past a field cannot silently apply it to the rest.
+
 None of this costs anything per frame. The crop is a window around the clip's
-`<video>` and the engine clips replaced content against an ancestor's overflow
-like anything else, so a change is a handful of style writes and the decoded
+`<video>`, opacity and stacking order are an `opacity` and a `z-index` on that
+window, and the engine clips replaced content against an ancestor's overflow
+like anything else — so a change is a handful of style writes and the decoded
 frame still goes straight to the renderer.
+
+### Grid
+
+`Grid` (or `G`) sets every clip's placement aside and gives each an equal cell.
+The shape is chosen so a cell has the canvas's own aspect rather than being
+square — the clips came out of that canvas, so that is the shape that fills:
+four clips go 2×2, a dozen go 4×3, and three go two-up with a gap rather than
+into one row of slivers. Scale and position still work inside a cell, so one can
+be pushed in on a detail while the others hold still.
+
+Everything plays at once. The topmost clip's decoder is the master clock and the
+rest are chased back into line whenever they drift more than about two frames —
+correcting every frame would mean a seek per clip per frame, and left alone,
+several decoders each free-running on their own audio clock come apart within a
+minute. Four 1080p60 streams stay inside ~35 ms of each other; the ceiling is
+decode throughput, not the transport.
 
 ## Keyboard
 
@@ -175,7 +222,10 @@ frame still goes straight to the renderer.
 | `F` | fullscreen (`Esc` leaves) |
 | `+` `-` `0` | zoom the timeline in / out / to fit |
 | `C` | crop handles on the picture (`Esc` leaves) |
-| `Delete` | remove the selected clip |
+| `S` | split the selection at the playhead |
+| `G` | grid / stacked layout |
+| `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
+| `Delete` | remove the selection |
 
 ## Testing
 
@@ -201,12 +251,20 @@ Honest list of what does not work:
   so a file with no video track has nothing to advance. The UI says so rather
   than sitting at 0:00.
 - **Export.** The encoders are linked and the UI has no surface for them yet.
-- **Trimming and cutting.** Clips can be added, moved, reordered and deleted
-  whole, but not split or trimmed: there is no in/out point on the surface yet,
-  so a clip is always its whole file.
-- **Rendering the canvas.** Scale, position and crop are live on the viewer and
-  describe what an export *would* do — but with no export, they only affect what
-  you are looking at.
+- **Rendering the canvas.** Scale, position, crop, opacity, the track stack and
+  the grid are all live on the viewer and describe what an export *would* do —
+  but with no export, they only affect what you are looking at.
+- **Ripple, roll and slip.** Trimming leaves a gap rather than closing it up,
+  and there is no gesture that moves a cut without moving the pictures either
+  side of it. Nothing here needs new machinery — a clip already knows its
+  in-point separately from where it sits.
+- **One waveform for the whole timeline.** A1 draws every clip, so clips that
+  overlap in time draw over each other rather than mixing. With tracks stacked
+  it is the top one you see.
+- **Finding things by sound.** Reviewing wildlife footage, the birds are
+  audible long before anything is visible; nothing yet marks where a call
+  happens so you can jump between them. bro has the parts — `bro.sense` for
+  onset and tonality, `bro.kws` for open-vocabulary spotting.
 - **Hardware decode.** libavcodec's software decoders are threaded across all
   cores and cost no GPU→CPU readback, which is the right trade while the
   renderer still wants frames in system memory. `bro.ffmpeg.hwaccels` reports

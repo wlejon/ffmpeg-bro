@@ -118,6 +118,16 @@ body { display: flex; flex-direction: column; }
     display: block;
     object-fit: fill;
 }
+/* The ring sits over the picture and takes no space, so marking a selection
+   never moves what it is marking. */
+.clipframe .ring {
+    position: absolute;
+    left: 0; top: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    display: none;
+}
+.clipframe.sel .ring { display: block; border: 2px solid rgba(255, 140, 66, 0.5); }
+.clipframe.primary .ring { display: block; border: 2px solid var(--accent); }
 
 /* Crop handles, over the picture. */
 #cropbox {
@@ -379,7 +389,11 @@ input.num {
     font-family: Consolas, monospace;
     font-size: 11px;
 }
+/* A field whose selection disagrees. Empty rather than showing one clip's
+   value, so tabbing past it cannot silently apply that value to the rest. */
+input.num.mixed { color: var(--dim); border-style: dashed; }
 input[type=range] { width: 130px; }
+.row input[type=range] { width: 96px; }
 
 /* Built like the scrub bar, because it is the same kind of thing: a track, how
    far along it you are, and a grip. It was a bare line before, which read as a
@@ -422,7 +436,7 @@ input[type=range] { width: 130px; }
 /* ── timeline ────────────────────────────────────────────────────────── */
 
 #timeline {
-    height: 206px;
+    height: 212px;
     border-top: 1px solid var(--line);
     background: #14161b;
     padding: 0 12px 6px;
@@ -449,6 +463,13 @@ input[type=range] { width: 130px; }
     display: flex;
     align-items: center;
     padding-right: 8px;
+    overflow: hidden;
+}
+/* A lane too short for a pill just gets the number. */
+.track-head.tiny .track-name {
+    background: none;
+    border: 0;
+    padding: 0 4px;
 }
 .track-name {
     font-size: 10px;
@@ -486,6 +507,7 @@ input[type=range] { width: 130px; }
     margin-top: 6px;
 }
 .track-row + .track-row { margin-top: 4px; }
+#audio-row { margin-top: 4px; }
 .track-lane {
     position: relative;
     flex: 1;
@@ -496,6 +518,10 @@ input[type=range] { width: 130px; }
     border: 1px solid var(--line);
     cursor: pointer;
 }
+/* Video lane heights are written by the timeline, which divides a fixed budget
+   between however many tracks there are — see LANE_BUDGET. Two 64px tracks
+   plus the waveform is taller than the timeline, and the thing that would fall
+   off the bottom is the audio. */
 #lane-audio { height: 44px; }
 
 .track-lane canvas {

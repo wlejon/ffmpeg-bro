@@ -1,6 +1,7 @@
 // Drive the real UI the way a person does: drop files on it, press play,
-// scrub, step, zoom the timeline, move a clip, crop the picture, and check
-// what the app says afterwards.
+// scrub, step, zoom the timeline, move and trim and split clips, stack them on
+// tracks, crop the picture, drop a batch as a grid — and check what the app
+// says afterwards.
 //
 // Video runs on the REAL clock — advanceTime() moves bro's virtual time and
 // the decoder ignores it — so every wait here is wallSleep() plus a flush to
@@ -189,7 +190,8 @@ ok(clip.length - last < frameSec * 2.5,
 // bro.media in a worker, so this waits for them rather than assuming.
 
 console.log('\ntimeline');
-const film = el('film'), wave = el('wave');
+const v1 = () => A.timeline.laneOf(0);
+const film = v1().canvas, wave = el('wave');
 const litFraction = (canvas) => {
     if (!canvas.width || !canvas.height) return 0;
     const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
@@ -266,7 +268,7 @@ ok(Math.abs(A.timeline.getView().span - fitSpan) < 0.01, 'Fit goes back to the w
 
 console.log('\ngestures');
 const rectOf = (e) => e.getBoundingClientRect();
-const filmRect = rectOf(el('lane-video'));
+const filmRect = rectOf(v1().lane);
 const midY = filmRect.top + filmRect.height / 2;
 
 // Wheel over the timeline zooms about the pointer: the time under the cursor
@@ -360,8 +362,8 @@ if (second) {
        `and pushed the first one out of the way to ${clip.start.toFixed(3)}s`);
 
     // Deleting takes it off the timeline and releases its decoder.
-    A.project.selected = b;
-    A.removeSelected();
+    A.select(b);
+    A.removeSelection();
     pump(80);
     ok(A.project.clips.length === 1, 'deleting the selected clip removes it');
     ok(!b.video, 'and lets go of its decoder');
@@ -426,6 +428,132 @@ screenshot('out/09-portrait.png');
 A.project.width = shown.width; A.project.height = shown.height;
 shown.xform.crop = { l: 0, t: 0, r: 0, b: 0 };
 A.viewer.layout();
+
+// ── splitting, and trimming by dragging an end ─────────────────────────────
+//
+// A split is two clips over the same file covering exactly what one covered.
+// Trimming is the same edit from the other direction: drag an end inward and
+// the pictures under the part you kept must not slide sideways.
+
+console.log('\nsplit and trim');
+{
+    const before = A.project.clips.length;
+    const whole = clip.length, at = clip.start + whole * 0.4;
+    A.select(clip);
+    A.setPlayhead(at);
+    pump(120);
+    // Where the playhead actually landed, which is the frame containing the
+    // time asked for and so generally a little earlier. The cut is there.
+    const cutAt = A.transport.t;
+    A.splitAtPlayhead();
+    pump(120);
+    ok(A.project.clips.length === before + 1, 'splitting makes one more clip');
+    const left = A.project.clips.find((c) => c.start === 0 || c === clip);
+    const right = A.project.selection[0];
+    ok(Math.abs(left.length + right.length - whole) < 0.01,
+       `the halves add up to the whole (${left.length.toFixed(2)} + ` +
+       `${right.length.toFixed(2)} = ${whole.toFixed(2)}s)`);
+    ok(Math.abs(right.start - cutAt) < 0.01, 'the cut is at the playhead');
+    ok(Math.abs(right.inPoint - (left.inPoint + left.length)) < 0.01,
+       `and the right half starts where the left one stopped in the file ` +
+       `(${right.inPoint.toFixed(2)}s in)`);
+    ok(right.path === left.path, 'both halves are the same file');
+
+    // Trim the right half's head by dragging its left edge. In-point and start
+    // move together, so what is under the remaining pictures does not shift.
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(40);
+    const lane = rectOf(v1().lane);
+    const y = lane.top + lane.height / 2;
+    const edgeX = lane.left + A.timeline.timeToX(right.start);
+    const wasIn = right.inPoint, wasStart = right.start, wasLen = right.length;
+    const dragTo = edgeX + Math.max(12, lane.width * 0.05);
+    A.select(right);
+    mouseDown(edgeX, y);
+    mouseMove(edgeX + 8, y);
+    mouseMove(dragTo, y);
+    mouseUp(dragTo, y);
+    pump(80);
+    ok(right.start > wasStart, `trimming the head moved the start ` +
+       `${wasStart.toFixed(2)} → ${right.start.toFixed(2)}s`);
+    ok(Math.abs((right.inPoint - wasIn) - (right.start - wasStart)) < 0.02,
+       'and the in-point moved with it, so the pictures stayed put');
+    ok(right.length < wasLen, `and the clip got shorter (${right.length.toFixed(2)}s)`);
+    ok(Math.abs(right.start + right.length - (wasStart + wasLen)) < 0.02,
+       'while its tail stayed where it was');
+
+    // Undo the experiment: rejoin by deleting the right half.
+    A.select(right);
+    A.removeSelection();
+    pump(60);
+    left.start = 0;
+    left.length = whole;
+    left.inPoint = 0;
+    A.timeline.fitView();
+    A.select(left, 'auto');
+    A.setPlayhead(0);
+    pump(60);
+    ok(A.project.clips.length === before, 'back to where we started');
+}
+
+// ── stacked tracks, opacity and selecting several clips ────────────────────
+
+console.log('\ntracks');
+{
+    const a = A.project.clips[0];
+    ok(A.timeline.laneOf(0) && A.timeline.laneOf(1),
+       'there is a spare lane above the one in use, to drag into');
+    ok(!A.timeline.laneOf(A.project.clips.length + 4), 'and not an endless supply of them');
+
+    a.track = 1;
+    A.timeline.draw();
+    pump(40);
+    ok(A.timeline.laneOf(2) !== null, 'moving a clip up makes a new spare lane');
+
+    // Opacity reaches the picture, not just the model.
+    a.xform.opacity = 0.4;
+    A.viewer.refreshAll();
+    pump(40);
+    ok(Math.abs(parseFloat(a.frame.style.opacity) - 0.4) < 0.001,
+       'opacity reaches the picture');
+    a.xform.opacity = 1;
+    a.track = 0;
+    A.viewer.refreshAll();
+    A.timeline.draw();
+    pump(40);
+}
+
+// ── the grid ───────────────────────────────────────────────────────────────
+//
+// The shape is chosen so a cell is the canvas's own aspect, because the clips
+// came out of the same canvas — which makes it a search for a square grid, not
+// a square cell.
+
+console.log('\ngrid');
+{
+    const shape = (n, aspect) => A.viewer.gridShape(n, aspect);
+    ok(shape(4, 16 / 9).cols === 2 && shape(4, 16 / 9).rows === 2, 'four clips: 2×2');
+    ok(shape(12, 16 / 9).cols === 4 && shape(12, 16 / 9).rows === 3, 'a dozen: 4×3, not 3×4');
+    ok(shape(2, 16 / 9).cols === 2 && shape(2, 16 / 9).rows === 1, 'two: side by side');
+    ok(shape(3, 16 / 9).cols === 2 && shape(3, 16 / 9).rows === 2,
+       'three: two-up with a gap, not one row of slivers');
+
+    const s = A.viewer.stageSize();
+    const stacked = A.viewer.placement(clip, s.w, s.h);
+    A.setLayout('grid');
+    pump(60);
+    const celled = A.viewer.placement(clip, s.w, s.h);
+    ok(!!celled.cell, 'a clip in grid layout gets a cell');
+    if (A.project.clips.length === 1) {
+        ok(celled.w <= stacked.w + 1, 'one clip fills its cell, which is the whole canvas');
+    } else {
+        ok(celled.w < stacked.w, 'and its picture is smaller than it was on the whole canvas');
+    }
+    A.setLayout('stack');
+    pump(60);
+    ok(!A.viewer.placement(clip, s.w, s.h).cell, 'and back to the whole canvas');
+}
 
 // ── controls are wired ─────────────────────────────────────────────────────
 
@@ -508,5 +636,79 @@ screenshot('out/10-fullscreen.png');
 el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') < 0, 'fullscreen toggles back off');
+
+// ── a batch of files at once ───────────────────────────────────────────────
+//
+// Dropping a morning's recordings is a different act from opening one file:
+// they go on tracks of their own, all starting at zero, and play together in a
+// grid. This is the last section because it replaces everything on the
+// timeline.
+
+console.log('\na batch');
+{
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+    ok(A.project.clips.length === 0, 'cleared the timeline');
+
+    const batch = second ? [media, second, media] : [media, media, media];
+    A.openBatch(batch);
+    waitFor('the batch to load', () => A.project.clips.length === 3);
+    pump(300);
+    ok(A.project.clips.length === 3, 'three clips from one drop');
+    ok(A.project.layout === 'grid', 'and the canvas went to a grid');
+    const tracks = A.project.clips.map((c) => c.track);
+    ok(new Set(tracks).size === 3, `each on its own track (${tracks.join(', ')})`);
+    ok(A.project.clips.every((c) => c.start === 0), 'all starting together at zero');
+    ok(A.project.selection.length === 3, 'and all three selected');
+
+    waitFor('all three decoders', () => A.activeClips().length === 3, 20000);
+    ok(A.activeClips().length === 3, 'the playhead is inside all three at once');
+    const boxes = A.activeClips().map((c) => c.frame.getBoundingClientRect());
+    ok(boxes.every((b) => b.width > 4 && b.height > 4), 'each has a cell with a picture in it');
+    // Cells must not sit on top of each other — the whole point of a grid.
+    let overlaps = 0;
+    for (let i = 0; i < boxes.length; i++)
+        for (let j = i + 1; j < boxes.length; j++)
+            if (boxes[i].left < boxes[j].right - 1 && boxes[j].left < boxes[i].right - 1 &&
+                boxes[i].top < boxes[j].bottom - 1 && boxes[j].top < boxes[i].bottom - 1) overlaps++;
+    ok(overlaps === 0, 'and no two cells overlap');
+    screenshot('out/11-grid.png');
+
+    // They play together, and are chased back into line rather than left to
+    // drift apart on three independent audio clocks.
+    A.transport.muted = true;
+    A.play();
+    pump(1500);
+    A.pause();
+    pump(100);
+    const drift = A.activeClips().map((c) => Math.abs(c.video.currentTime - c.inPoint -
+                                                      (A.transport.t - c.start)));
+    ok(A.transport.t > 0.2, `the grid played (${A.transport.t.toFixed(2)}s)`);
+    ok(Math.max(...drift) < 0.25,
+       `and stayed in step (worst drift ${Math.max(...drift).toFixed(3)}s)`);
+    screenshot('out/12-grid-playing.png');
+
+    // Property edits reach every selected clip at once.
+    A.selectMany(A.project.clips.slice());
+    A.showProperties();
+    const slider = el('opacity');
+    ok(!!slider, 'the properties panel has an opacity control for the whole selection');
+    slider.value = '50';
+    slider.dispatchEvent(new Event('input'));
+    pump(60);
+    ok(A.project.clips.every((c) => Math.abs(c.xform.opacity - 0.5) < 0.001),
+       'and one drag sets all three');
+    ok(A.project.clips.every((c) => Math.abs(parseFloat(c.frame.style.opacity) - 0.5) < 0.001),
+       'which reaches all three pictures');
+
+    // A property the clips disagree on reads as mixed rather than as one of them.
+    A.project.clips[0].xform.crop.l = 0.2;
+    A.showProperties();
+    ok(el('cl').value === '' && el('cl').className.indexOf('mixed') >= 0,
+       'a crop the three disagree on shows as mixed, not as one of their values');
+    A.project.clips[0].xform.crop.l = 0;
+    A.viewer.refreshAll();
+}
 
 console.log(`\n${checks} checks passed`);
