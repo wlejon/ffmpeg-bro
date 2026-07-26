@@ -201,6 +201,9 @@ body { display: flex; flex-direction: column; }
 }
 .pad { padding: 10px 12px; }
 
+/* One line, always. The transform heading carries the clip's name, and a
+   camera filename set in uppercase wrapped to two shouting lines that pushed
+   the controls below it down the panel. */
 .section-head {
     padding: 6px 12px;
     margin-top: 4px;
@@ -209,6 +212,9 @@ body { display: flex; flex-direction: column; }
     text-transform: uppercase;
     color: var(--accent);
     border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .row {
@@ -225,6 +231,19 @@ body { display: flex; flex-direction: column; }
 /* Clusters of controls do want to be a flex row — but only the clusters, so
    the prose in the rest of the panel keeps wrapping. */
 .btns { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+/* Presets, sized by the column rather than by their labels. Left to themselves
+   they came out four different widths and wrapped two-and-two into a ragged
+   block; even shares make them read as one set of alternatives. */
+.btns.even > button { flex: 1 1 0; min-width: 0; }
+
+/* Four ways to fit one picture — one choice, so draw it as one control. The
+   buttons share edges instead of floating apart, and the selected one lifts
+   above its neighbours so its accent border isn't half-covered by theirs. */
+.seg { display: flex; }
+.seg > button { flex: 1 1 auto; min-width: 0; border-radius: 0; margin-left: -1px; }
+.seg > button:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
+.seg > button:last-child { border-radius: 0 3px 3px 0; }
+.seg > button.on { position: relative; z-index: 1; }
 .row .val input { vertical-align: middle; }
 
 /* ── controls ────────────────────────────────────────────────────────── */
@@ -276,15 +295,20 @@ body { display: flex; flex-direction: column; }
 #buttonrow {
     display: flex;
     align-items: center;
-    gap: 16px;
     padding: 4px 12px 8px;
 }
 
+/* The side zones take equal shares of whatever the transport leaves, so the
+   transport sits on the window's centre line and stays there while the stats
+   readout on the right grows and shrinks. `min-width: 0` matters: without it a
+   long readout would refuse to shrink and would shove the centre off-centre. */
+.zone { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.zone.start, .zone.end { flex: 1 1 0; }
+.zone.end { justify-content: flex-end; }
+.zone.center { gap: 5px; }
+
 .group { display: flex; align-items: center; gap: 6px; }
 
-/* Glyph buttons: a flex box centres the label on both axes. Line-height alone
-   does not — the arrow and bar characters have their own idea of a baseline,
-   and they sit high in the box unless the box centres them itself. */
 button {
     display: inline-flex;
     align-items: center;
@@ -301,10 +325,29 @@ button {
     cursor: pointer;
 }
 button:hover { background: #323844; }
-button.primary { min-width: 44px; background: var(--accent); border-color: var(--accent); color: #12141a; }
-button.primary:hover { background: #ffa063; }
 button.on { color: var(--accent); border-color: var(--accent-dim); }
 button:disabled { opacity: 0.35; cursor: default; }
+
+/* An icon button is a fixed square. The glyphs these replaced were sized by
+   the font — ▮◀ is two characters and ▶ is one — so no two transport buttons
+   came out the same width and the row read as a ragged fence. */
+button.icon {
+    width: 34px;
+    min-width: 0;
+    height: 28px;
+    padding: 0;
+}
+button.icon.primary {
+    width: 44px;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #12141a;
+}
+button.icon.primary:hover { background: #ffa063; }
+/* The icon is decoration; the click belongs to the button. */
+button .ic { display: block; pointer-events: none; }
+
+button.text { height: 28px; font-size: 12px; }
 
 button.tiny {
     height: 20px;
@@ -338,22 +381,43 @@ input.num {
 }
 input[type=range] { width: 130px; }
 
-#volume { width: 78px; padding: 8px 0; cursor: pointer; }
+/* Built like the scrub bar, because it is the same kind of thing: a track, how
+   far along it you are, and a grip. It was a bare line before, which read as a
+   rule between two controls rather than as a control. */
+#volume { width: 84px; padding: 8px 2px; cursor: pointer; }
 #vol-track {
     position: relative;
-    height: 4px;
+    height: 5px;
     background: #0e1014;
     border: 1px solid var(--line);
-    border-radius: 2px;
+    border-radius: 3px;
 }
 #vol-fill {
     position: absolute;
     left: 0; top: 0; bottom: 0;
-    background: var(--dim);
-    border-radius: 2px;
+    background: #7d8798;
+    border-radius: 3px;
+}
+#vol-head {
+    position: absolute;
+    top: -3px;
+    left: 0;
+    width: 9px;
+    height: 9px;
+    margin-left: -4px;
+    border-radius: 5px;
+    background: var(--text);
+    border: 1px solid #0b0c0f;
 }
 
-#stats { font-size: 11px; }
+#stats {
+    font-size: 11px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    margin-right: 6px;
+}
 
 /* ── timeline ────────────────────────────────────────────────────────── */
 
@@ -367,9 +431,13 @@ input[type=range] { width: 130px; }
 #tl-bar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    height: 26px;
+    height: 30px;
 }
+/* Spaced by margin rather than `gap`, because the first child is the track-head
+   gutter and it has to butt straight up against the zoom cluster for that
+   cluster to start exactly where the ruler does. */
+#tl-bar > * + * { margin-left: 10px; }
+#tl-bar > .track-head + * { margin-left: 0; }
 .tl-hint { font-size: 10px; }
 #tl-zoom { font-size: 10px; }
 

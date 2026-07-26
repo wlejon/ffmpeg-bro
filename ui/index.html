@@ -62,17 +62,12 @@
             <span id="tc-duration" class="mono tc dim">00:00:00:00</span>
         </div>
 
+        <!-- Three zones. The side zones share the leftover width equally, which
+             is what keeps the transport dead-centre under the picture however
+             wide the readouts on either side happen to grow. -->
         <div id="buttonrow">
-            <div class="group">
-                <button id="btn-start" title="Go to start (Home)">&#9646;&#9664;</button>
-                <button id="btn-prev" title="Previous frame (Left)">&#9664;&#9646;</button>
-                <button id="btn-play" class="primary" title="Play / Pause (Space)">&#9654;</button>
-                <button id="btn-next" title="Next frame (Right)">&#9646;&#9654;</button>
-                <button id="btn-end" title="Go to end (End)">&#9654;&#9646;</button>
-            </div>
-
-            <div class="group">
-                <button id="btn-loop" title="Loop (L)">&#8635;</button>
+            <div class="zone start">
+                <button id="btn-loop" class="icon" data-icon="loop" title="Loop (L)"></button>
                 <div class="field">
                     <label for="rate">Speed</label>
                     <select id="rate">
@@ -86,27 +81,37 @@
                 </div>
             </div>
 
-            <div class="group">
-                <button id="btn-mute" title="Mute (M)">Vol</button>
-                <div id="volume">
-                    <div id="vol-track"><div id="vol-fill"></div></div>
-                </div>
+            <div class="zone center">
+                <button id="btn-start" class="icon" data-icon="start" title="Go to start (Home)"></button>
+                <button id="btn-prev" class="icon" data-icon="prev" title="Previous frame (Left)"></button>
+                <button id="btn-play" class="icon primary" data-icon="play" title="Play / Pause (Space)"></button>
+                <button id="btn-next" class="icon" data-icon="next" title="Next frame (Right)"></button>
+                <button id="btn-end" class="icon" data-icon="end" title="Go to end (End)"></button>
             </div>
 
-            <span class="spacer"></span>
-
-            <div class="group">
+            <div class="zone end">
                 <span id="stats" class="mono dim"></span>
-                <button id="btn-full" title="Fullscreen (F)">&#9633;</button>
+                <button id="btn-mute" class="icon" data-icon="volume" title="Mute (M)"></button>
+                <div id="volume">
+                    <div id="vol-track">
+                        <div id="vol-fill"></div>
+                        <div id="vol-head"></div>
+                    </div>
+                </div>
+                <button id="btn-full" class="icon" data-icon="full" title="Fullscreen (F)"></button>
             </div>
         </div>
 
         <div id="timeline">
             <div id="tl-bar">
+                <!-- Same gutter the ruler and the lanes use, so the zoom
+                     controls start on the timeline's left edge rather than
+                     hanging off it. -->
+                <div class="track-head"></div>
                 <div class="group">
-                    <button id="btn-zoom-out" title="Zoom out (-)">&minus;</button>
-                    <button id="btn-zoom-in" title="Zoom in (+)">+</button>
-                    <button id="btn-zoom-fit" title="Fit the whole timeline (0)">Fit</button>
+                    <button id="btn-zoom-out" class="icon" data-icon="zoomOut" title="Zoom out (-)"></button>
+                    <button id="btn-zoom-in" class="icon" data-icon="zoomIn" title="Zoom in (+)"></button>
+                    <button id="btn-zoom-fit" class="text" title="Fit the whole timeline (0)">Fit</button>
                 </div>
                 <span id="tl-zoom" class="mono dim"></span>
                 <span class="spacer"></span>

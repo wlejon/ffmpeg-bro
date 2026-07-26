@@ -433,9 +433,12 @@ console.log('\ncontrols');
 el('btn-play').click();
 pump(120);
 ok(A.transport.playing, 'play button starts playback');
+ok(el('btn-play').querySelector('svg') && el('btn-play').getAttribute('data-icon') === 'pause',
+   'and shows the pause icon while it plays');
 el('btn-play').click();
 pump(60);
 ok(!A.transport.playing, 'play button pauses again');
+ok(el('btn-play').getAttribute('data-icon') === 'play', 'and goes back to the play icon');
 
 el('btn-loop').click();
 pump(20);
@@ -449,9 +452,36 @@ el('btn-mute').click();
 pump(20);
 ok(A.transport.muted === true, 'mute button mutes');
 ok(el('vol-fill').style.width === '0.0%', 'volume meter reads zero when muted');
+ok(el('btn-mute').getAttribute('data-icon') === 'muted', 'and the speaker icon crosses out');
 el('btn-mute').click();
 pump(20);
 ok(A.transport.muted === false, 'mute button unmutes');
+
+// ── the row is laid out, not just wired ────────────────────────────────────
+//
+// These are the kind of thing that breaks silently: a mistyped icon name
+// leaves an empty button, and a stray width on one control drags the whole
+// transport off centre. Neither shows up in a behavioural check.
+
+console.log('\nlayout');
+const iconButtons = document.querySelectorAll('button[data-icon]');
+ok(iconButtons.length >= 9, `${iconButtons.length} icon buttons`);
+let drawn = 0, sameWidth = new Set();
+for (const b of iconButtons) if (b.querySelector('svg')) drawn++;
+ok(drawn === iconButtons.length, 'every one of them actually drew its icon');
+
+for (const id of ['btn-start', 'btn-prev', 'btn-next', 'btn-end'])
+    sameWidth.add(Math.round(el(id).getBoundingClientRect().width));
+ok(sameWidth.size === 1, `the transport buttons are one width (${[...sameWidth]}px)`);
+
+const rowBox  = el('buttonrow').getBoundingClientRect();
+const playBox = el('btn-play').getBoundingClientRect();
+const offCentre = Math.abs((playBox.left + playBox.width / 2) - (rowBox.left + rowBox.width / 2));
+ok(offCentre <= 1, `the transport sits on the centre line (off by ${offCentre.toFixed(1)}px)`);
+
+ok(Math.abs(el('btn-zoom-out').getBoundingClientRect().left -
+            el('ruler').getBoundingClientRect().left) < 0.5,
+   'the zoom controls start on the timeline’s left edge');
 
 el('btn-start').click();
 pump(80);

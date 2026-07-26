@@ -187,7 +187,11 @@ frame still goes straight to the renderer.
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
 last picture in the file, zooms the timeline, moves and deletes a clip, scales
 and crops the picture, works the controls, and screenshots the viewer into
-`out/`. Pass a second file to exercise the multi-clip transport.
+`out/`. Pass a second file to exercise the multi-clip transport. It also checks
+the control strip's geometry — that every icon button drew its icon, that the
+transport buttons are one width, that the transport is on the window's centre
+line and the zoom controls on the timeline's left edge — because a mistyped
+icon name or a stray width breaks none of the behaviour and all of the look.
 
 ## Not yet
 

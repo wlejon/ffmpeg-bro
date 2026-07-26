@@ -13,6 +13,7 @@ import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
 import { clock, timecode, bytes, kbps, escapeHtml, basename } from './format.js';
+import { paintIcons, setIcon } from './icons.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -43,6 +44,9 @@ const btnFull  = el('btn-full');
 const rateSel  = el('rate');
 const volume   = el('volume');
 const volFill  = el('vol-fill');
+const volHead  = el('vol-head');
+
+paintIcons();
 
 const cropbox = el('cropbox');
 
@@ -552,7 +556,7 @@ function syncUI() {
     const t = transport.t;
     const d = duration();
 
-    btnPlay.textContent = transport.playing ? '❙❙' : '▶';
+    setIcon(btnPlay, transport.playing ? 'pause' : 'play');
     tcCurrent.textContent = timecode(t, project.fps);
     tcDuration.textContent = timecode(d, project.fps);
 
@@ -572,8 +576,10 @@ function syncUI() {
 
 function syncVolume() {
     const v = transport.muted ? 0 : transport.volume;
-    volFill.style.width = (v * 100).toFixed(1) + '%';
-    btnMute.textContent = transport.muted ? 'Mute' : 'Vol';
+    const pct = (v * 100).toFixed(1) + '%';
+    volFill.style.width = pct;
+    volHead.style.left = pct;
+    setIcon(btnMute, transport.muted ? 'muted' : 'volume');
     btnMute.classList.toggle('on', transport.muted);
 }
 syncVolume();
@@ -672,15 +678,17 @@ function showTransform(clip) {
         `<input class="num" id="pw" type="number" value="${project.width}" min="16" max="16384">` +
         ` × <input class="num" id="ph" type="number" value="${project.height}" min="16" max="16384">` +
         `</span></div>` +
-        `<div class="row"><span class="key"></span><span class="val btns">` +
+        `<div class="row"><span class="key">Preset</span><span class="val btns even">` +
         `<button class="tiny" data-canvas="source">Match clip</button>` +
         `<button class="tiny" data-canvas="1920x1080">1080p</button>` +
+        `</span></div>` +
+        `<div class="row"><span class="key"></span><span class="val btns even">` +
         `<button class="tiny" data-canvas="1080x1920">Vertical</button>` +
         `<button class="tiny" data-canvas="3840x2160">4K</button>` +
         `</span></div>` +
 
         section('Transform · ' + clip.name) +
-        `<div class="row"><span class="key">Fit</span><span class="val btns">` +
+        `<div class="row"><span class="key">Fit</span><span class="val seg">` +
         fitBtn('contain', 'Fit') + fitBtn('cover', 'Fill') +
         fitBtn('stretch', 'Stretch') + fitBtn('actual', '1:1') +
         `</span></div>` +
