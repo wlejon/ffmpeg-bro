@@ -149,6 +149,36 @@ for (let i = 0; i < 4; i++) {
 ok(movedBack === 4, `four back steps each moved (${movedBack})`);
 screenshot('out/04-stepped.png');
 
+// ── the timeline shows what is in the file ─────────────────────────────────
+// Two lanes: V1 draws a filmstrip, A1 draws the waveform. Both come from
+// bro.media in a worker, so this waits for them rather than assuming.
+
+console.log('\ntimeline');
+const film = el('film'), wave = el('wave');
+const litFraction = (canvas) => {
+    if (!canvas.width || !canvas.height) return 0;
+    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 30) lit++;
+    return lit / (d.length / 4);
+};
+waitFor('the worker to draw the lanes',
+        () => litFraction(film) > 0.5 && (!p.audio || litFraction(wave) > 0.02), 20000);
+ok(film.width > 100, `filmstrip canvas sized ${film.width}x${film.height}`);
+ok(litFraction(film) > 0.5, `filmstrip has picture (${(litFraction(film) * 100).toFixed(0)}% lit)`);
+ok(el('lane-video').className.indexOf('loaded') >= 0, 'V1 lane marked loaded');
+if (p.audio) {
+    ok(litFraction(wave) > 0.02 && litFraction(wave) < 0.9,
+       `waveform drawn, not a solid block (${(litFraction(wave) * 100).toFixed(0)}% lit)`);
+    ok(el('lane-audio').className.indexOf('loaded') >= 0, 'A1 lane marked loaded');
+} else {
+    // A file with no audio must SAY so, not leave an empty lane looking broken.
+    ok(litFraction(wave) < 0.01, 'no waveform drawn for a file with no audio');
+    ok(el('audio-label').textContent.indexOf('no audio') >= 0,
+       `A1 lane says why it is empty: "${el('audio-label').textContent}"`);
+}
+screenshot('out/05-timeline.png');
+
 // ── controls are wired ─────────────────────────────────────────────────────
 
 console.log('\ncontrols');
@@ -195,7 +225,7 @@ el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') >= 0, 'body enters fullscreen mode');
 flush();
-screenshot('out/05-fullscreen.png');
+screenshot('out/06-fullscreen.png');
 el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') < 0, 'fullscreen toggles back off');

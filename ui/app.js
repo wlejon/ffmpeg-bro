@@ -39,8 +39,12 @@ const volFill = el('vol-fill');
 
 const timeline = el('timeline');
 const ruler    = el('ruler');
-const clipBox  = el('clip');
+const laneVideo = el('lane-video');
+const laneAudio = el('lane-audio');
+const film      = el('film');
+const wave      = el('wave');
 const clipLabel = el('clip-label');
+const audioLabel = el('audio-label');
 const playhead = el('playhead');
 
 // ── state ──────────────────────────────────────────────────────────────────
@@ -97,8 +101,12 @@ function open(path) {
     filename.classList.remove('dim');
     dropzone.classList.add('hidden');
     video.classList.add('loaded');
-    clipBox.classList.add('loaded');
+    laneVideo.classList.add('loaded');
     clipLabel.textContent = basename(path);
+    audioLabel.textContent = probe.audio ? '' : 'no audio track';
+    if (probe.audio) laneAudio.classList.add('loaded');
+    else laneAudio.classList.remove('loaded');
+    analyze(path);
 
     showChips(probe);
     showInfo(probe);
@@ -289,7 +297,8 @@ function draggable(surface, onFraction, opts) {
 }
 
 draggable(scrub, (f) => seek(f * (video.duration || 0)), { scrubs: true });
-draggable(timeline, (f) => seek(f * (video.duration || 0)), { scrubs: true });
+for (const lane of [ruler, laneVideo, laneAudio])
+    draggable(lane, (f) => seek(f * (video.duration || 0)), { scrubs: true });
 draggable(volume, (f) => {
     video.volume = f;
     if (f > 0 && video.muted) video.muted = false;
@@ -368,7 +377,10 @@ function sync() {
     const pct = (f * 100).toFixed(3) + '%';
     scrubPlayed.style.width = pct;
     scrubHead.style.left = pct;
-    playhead.style.left = pct;
+    // The playhead spans both lanes, which start after the track-head gutter,
+    // so it is placed in pixels rather than as a percentage of the whole row.
+    playhead.style.left =
+        (laneVideo.offsetLeft + f * (laneVideo.clientWidth || 0)).toFixed(1) + 'px';
 
     if (loaded && info) {
         stats.textContent =
@@ -387,9 +399,144 @@ syncVolume();
 
 function frame() {
     if (loaded && !video.paused) sync();
+    // A lane that changed width (window resize, inspector toggle) has to be
+    // redrawn from the analysis, not stretched — a stretched waveform lies
+    // about where the sound is.
+    if (laneVideo.clientWidth !== lastLaneWidth) {
+        lastLaneWidth = laneVideo.clientWidth;
+        drawFilm();
+        drawWave();
+        sync();
+    }
     requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ── what is inside the file: the filmstrip and the waveform ────────────────
+//
+// Both come from bro.media, which decodes the whole file — every audio sample
+// for the envelope, a frame every few seconds for the strip. That is far too
+// much work to do on the thread drawing the UI, so it runs in a worker and the
+// lanes fill in as the answers arrive.
+
+let analyzer = null;        // the worker, created on first use and reused
+let analyzeToken = 0;       // results for an older file are dropped
+let peaks = null;
+let filmstrip = null;       // { bitmap, width, height, count }
+let lastLaneWidth = -1;
+
+function analyze(path) {
+    peaks = null;
+    filmstrip = null;
+    drawFilm();
+    drawWave();
+
+    const token = ++analyzeToken;
+    // A worker mid-decode on the previous file would finish that first and only
+    // then start this one — the lanes would sit empty for a whole extra file's
+    // worth of work. Dropping it is cheaper than waiting for it.
+    if (analyzer) analyzer.terminate();
+    analyzer = new Worker('analyze-worker.js');
+    analyzer.onmessage = (e) => onAnalysis(e.data);
+    analyzer.postMessage({
+        token,
+        path,
+        buckets: 3000,
+        // One thumbnail per ~120 px of lane, which is about one per two
+        // thumbnails' width — dense enough to read, cheap enough to grab.
+        count: Math.max(8, Math.min(64, Math.round((laneVideo.clientWidth || 800) / 90))),
+        height: 96,
+    });
+}
+
+function onAnalysis(msg) {
+    if (!msg || msg.token !== analyzeToken) return;   // a file we have moved off
+    if (msg.error) { console.log(`analysis (${msg.kind}): ${msg.error}`); return; }
+
+    if (msg.kind === 'peaks') {
+        peaks = msg.peaks;
+        if (!peaks) audioLabel.textContent = 'no audio track';
+        drawWave();
+    } else if (msg.kind === 'thumbs' && msg.thumbs) {
+        const t = msg.thumbs;
+        const img = new ImageData(new Uint8ClampedArray(t.data.buffer || t.data),
+                                 t.width * t.count, t.height);
+        createImageBitmap(img).then((bitmap) => {
+            filmstrip = { bitmap, width: t.width, height: t.height, count: t.count };
+            drawFilm();
+        });
+    }
+}
+
+// Size a canvas to its box in real device pixels, and hand back a context
+// already scaled so the drawing code can work in CSS pixels.
+function laneContext(canvas) {
+    const w = canvas.clientWidth | 0;
+    const h = canvas.clientHeight | 0;
+    if (w <= 0 || h <= 0) return null;
+    if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    return { ctx, w, h };
+}
+
+function drawFilm() {
+    const c = laneContext(film);
+    if (!c) return;
+    if (!filmstrip) return;
+
+    const { ctx, w, h } = c;
+    const { bitmap, width: tw, height: th, count } = filmstrip;
+    // Even slots rather than one per timestamp: the grabs snap to keyframes,
+    // so placing them by time would leave ragged gaps. Each slot is cropped
+    // out of the middle of its thumbnail, so nothing is stretched.
+    const slot = w / count;
+    for (let i = 0; i < count; i++) {
+        const want = (slot / h) * th;            // source width for this slot
+        const sw = Math.min(tw, Math.max(1, want));
+        const sx = i * tw + (tw - sw) / 2;
+        ctx.drawImage(bitmap, sx, 0, sw, th, i * slot, 0, slot + 0.5, h);
+    }
+}
+
+function drawWave() {
+    const c = laneContext(wave);
+    if (!c) return;
+    if (!peaks || !peaks.buckets) return;
+
+    const { ctx, w, h } = c;
+    const mid = h / 2;
+    const n = peaks.buckets;
+
+    // The RMS body first, then the peak envelope over it: the body is what the
+    // sound feels like, the envelope is what it actually reaches.
+    ctx.fillStyle = 'rgba(126, 214, 160, 0.35)';
+    for (let x = 0; x < w; x++) {
+        const b0 = Math.floor((x / w) * n);
+        const b1 = Math.max(b0 + 1, Math.floor(((x + 1) / w) * n));
+        let r = 0;
+        for (let b = b0; b < b1 && b < n; b++) r = Math.max(r, peaks.rms[b]);
+        const y = Math.min(mid, r * mid * 1.6);
+        ctx.fillRect(x, mid - y, 1, y * 2);
+    }
+
+    ctx.fillStyle = 'rgba(126, 214, 160, 0.9)';
+    for (let x = 0; x < w; x++) {
+        const b0 = Math.floor((x / w) * n);
+        const b1 = Math.max(b0 + 1, Math.floor(((x + 1) / w) * n));
+        let lo = 0, hi = 0;
+        for (let b = b0; b < b1 && b < n; b++) {
+            if (peaks.min[b] < lo) lo = peaks.min[b];
+            if (peaks.max[b] > hi) hi = peaks.max[b];
+        }
+        const top = mid - Math.min(mid, hi * mid);
+        const bot = mid + Math.min(mid, -lo * mid);
+        ctx.fillRect(x, top, 1, Math.max(1, bot - top));
+    }
+}
 
 // ── timeline ruler ─────────────────────────────────────────────────────────
 

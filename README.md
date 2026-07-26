@@ -105,6 +105,19 @@ bro.ffmpeg.probe(path)    // in-process ffprobe: throws if the file can't be rea
 display matrix — a phone video is 1920×1080 on disk and 1080×1920 on screen, and
 only that side-datum says so.
 
+## The timeline
+
+Two lanes under the ruler, the way an edit suite stacks them:
+
+- **V1** a filmstrip — frames grabbed across the file and drawn into the lane.
+- **A1** the waveform — peak envelope over an RMS body, so you can see where
+  the sound is before you hear it.
+
+Both come from `bro.media` (see bro's `docs/video-api.js`), which decodes the
+whole file through the same backend registry `<video>` plays through. Both are
+full-file decodes, so ffmpeg-bro runs them in a Worker and the lanes fill in
+behind a UI that never stops responding. Clicking or dragging either lane scrubs.
+
 ## Keyboard
 
 | Key | Action |
@@ -135,8 +148,9 @@ Honest list of what does not work:
   so a file with no video track has nothing to advance. The UI says so rather
   than sitting at 0:00.
 - **Export.** The encoders are linked and the UI has no surface for them yet.
-- **Cutting.** The timeline is a scrub surface today; split/cut/select/delete are
-  the next thing to land on it.
+- **Cutting.** The timeline shows the file — a V1 filmstrip and an A1 waveform,
+  both scrubbable — but it is still a viewing surface: split/cut/select/delete
+  are the next thing to land on it.
 - **Hardware decode.** libavcodec's software decoders are threaded across all
   cores and cost no GPU→CPU readback, which is the right trade while the
   renderer still wants frames in system memory. `bro.ffmpeg.hwaccels` reports
