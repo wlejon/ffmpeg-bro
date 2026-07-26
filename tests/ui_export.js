@@ -34,6 +34,19 @@ function waitFor(what, predicate, timeoutMs = 10000) {
 }
 
 const el = (id) => document.getElementById(id);
+
+// Anything the UI builds at runtime is found by selector, never by id.
+//
+// bro's id index is keyed by the id string and is not updated when a
+// replacement element claims an id the index already knows, so after a redraw
+// getElementById — and querySelector('#…'), which is backed by the same index
+// — hands back the *previous* element: detached, measuring zero, wired to
+// nothing. Classes and data attributes are matched by walking the live tree,
+// so they always answer about what is actually on screen.
+const q = (sel, root) => (root || document).querySelector(sel);
+const qq = (sel, root) => (root || document).querySelectorAll(sel);
+/// One of the Output workspace's form controls, by its data-f name.
+const f = (name) => q(`#output [data-f="${name}"]`);
 let checks = 0;
 function ok(cond, what) {
     checks++;
@@ -131,9 +144,9 @@ ok(document.body.className.indexOf('ws-output') >= 0,
    'the body says which workspace is up, which is what hides the edit');
 ok(el('ws-output').className.indexOf('on') >= 0 && el('ws-edit').className.indexOf('on') < 0,
    'and the tabs followed it without being clicked');
-ok(!!el('ex-path') && el('ex-path').value.length > 0,
-   `an output path is proposed (${el('ex-path').value})`);
-ok(!!el('ex-container') && !!el('ex-vcodec'), 'format and codec menus are there');
+ok(!!f('path') && f('path').value.length > 0,
+   `an output path is proposed (${f('path').value})`);
+ok(!!f('container') && !!f('vcodec'), 'format and codec menus are there');
 ok(el('ex-summary').textContent.indexOf('frames') >= 0,
    `the summary says what will be written: ` +
    el('ex-summary').textContent.replace(/\s+/g, ' ').trim());
@@ -217,19 +230,19 @@ if (bro.ffmpeg.encoders.some((e) => e.id === 'prores_ks')) {
 // ── presets ────────────────────────────────────────────────────────────────
 
 console.log('\nstarting points');
-const intentButtons = el('ex-intent').querySelectorAll('button[data-intent]');
+const intentButtons = q('#ex-intent-list').querySelectorAll('button[data-intent]');
 ok(intentButtons.length >= 3, `${intentButtons.length} presets offered`);
 {
-    const hevc = el('ex-intent').querySelector('button[data-intent="hevc"]');
+    const hevc = q('#ex-intent-list').querySelector('button[data-intent="hevc"]');
     if (hevc) {
         hevc.click();
         pump(60);
         ok(A.exporter.currentSettings().videoCodec === 'libx265',
            'picking HEVC selects the x265 encoder');
-        ok(el('ex-intent').querySelector('button[data-intent="hevc"]').className.indexOf('on') >= 0,
+        ok(q('#ex-intent-list').querySelector('button[data-intent="hevc"]').className.indexOf('on') >= 0,
            'and the preset shows as the one in use');
     }
-    const web = el('ex-intent').querySelector('button[data-intent="web"]');
+    const web = q('#ex-intent-list').querySelector('button[data-intent="web"]');
     web.click();
     pump(60);
     ok(A.exporter.currentSettings().videoCodec === 'libx264' &&
@@ -243,13 +256,13 @@ ok(intentButtons.length >= 3, `${intentButtons.length} presets offered`);
 // list, the types, the ranges and the help all come out of libavcodec.
 
 console.log('\nevery option the encoder has');
-el('ex-adv-head').click();
+f('advanced').click();
 pump(60);
-ok(!!el('ex-optsearch'), 'the advanced section opens with an option search');
+ok(!!f('optsearch'), 'the advanced section opens with an option search');
 // Its own column, not a fold under twenty other controls: eighty options read
 // through a slot are not options anyone reads.
 ok(el('ex-advanced').className.indexOf('hidden') < 0 &&
-   el('ex-advanced').querySelectorAll('#ex-optsearch').length === 1,
+   el('ex-advanced').querySelectorAll('[data-f="optsearch"]').length === 1,
    'and it opens in a column of its own');
 
 // The form is now split across two columns but it is still one form. A control
@@ -268,14 +281,17 @@ ok(el('ex-advanced').className.indexOf('hidden') < 0 &&
     }
 }
 
-el('ex-optsearch').value = 'aq-mode';
-el('ex-optsearch').dispatchEvent(new Event('input'));
+f('optsearch').value = 'aq-mode';
+f('optsearch').dispatchEvent(new Event('input'));
 pump(60);
 const optRows = el('ex-advanced').querySelectorAll('.ex-opt-row');
 ok(optRows.length >= 1, `searching finds matching options (${optRows.length} for "aq-mode")`);
-const aqControl = el('ex-advanced').querySelector('[data-opt="aq-mode"]');
-ok(!!aqControl, 'including the one that was searched for');
-if (aqControl) {
+// Re-queried each time rather than held: setting an option redraws the form,
+// so a reference kept across that is a reference to an element that is no
+// longer on screen — and a test that drives one is not driving the app.
+const aqOption = () => el('ex-advanced').querySelector('[data-opt="aq-mode"]');
+ok(!!aqOption(), 'including the one that was searched for');
+if (aqOption()) {
     // aq-mode is an enum in libavcodec, so the control is a menu of the names
     // it declared — picking one of those rather than inventing a number is
     // both what a person does and the only thing a <select> accepts.
@@ -283,28 +299,29 @@ if (aqControl) {
         .find((x) => x.name === 'aq-mode').values.map((v) => v.name);
     ok(choices.length > 1, `and knows its named values (${choices.join(' ')})`);
     const pick = choices[1];
-    aqControl.value = pick;
-    aqControl.dispatchEvent(new Event('change'));
+    aqOption().value = pick;
+    aqOption().dispatchEvent(new Event('change'));
     pump(60);
     ok(String(A.exporter.currentOptions()['aq-mode']) === pick,
        `setting one puts it in what the encoder is told (-aq-mode ${pick})`);
     ok(A.exporter.buildSpec().videoOptions['aq-mode'] === pick,
        'and it survives into the spec the renderer is handed');
+    ok(aqOption().value === pick, 'and the redrawn control shows it');
     // Left set, this would be applied to every render below.
-    aqControl.value = '';
-    aqControl.dispatchEvent(new Event('change'));
+    aqOption().value = '';
+    aqOption().dispatchEvent(new Event('change'));
     pump(60);
     ok(A.exporter.currentOptions()['aq-mode'] === undefined, 'clearing it takes it back out');
 }
-el('ex-optsearch').value = '';
-el('ex-optsearch').dispatchEvent(new Event('input'));
+f('optsearch').value = '';
+f('optsearch').dispatchEvent(new Event('input'));
 pump(40);
 screenshot('out/export-01b-advanced.png');
 // The form redraws on its own when this is toggled, without the summary. The
 // filename beside "Choose…" belongs to the form and used to come back blank.
-ok(el('ex-dir').textContent.length > 0,
-   `the form redraws complete on its own (${el('ex-dir').textContent})`);
-el('ex-adv-head').click();
+ok(q('#ex-settings .ex-dir').textContent.length > 0,
+   `the form redraws complete on its own (${q('#ex-settings .ex-dir').textContent})`);
+f('advanced').click();
 pump(40);
 
 // ── warnings ───────────────────────────────────────────────────────────────
@@ -318,7 +335,7 @@ console.log('\nwhat it warns about');
     S.height = 361;
     S.pixelFormat = 'yuv420p';
     A.exporter.buildSpec();
-    el('ex-container').dispatchEvent(new Event('change'));   // forces a redraw
+    f('container').dispatchEvent(new Event('change'));   // forces a redraw
     pump(60);
     ok(el('ex-summary').textContent.indexOf('even dimensions') >= 0,
        'an odd size with 4:2:0 chroma is called out before the encoder refuses it');
@@ -338,7 +355,7 @@ console.log('\nwriting part of the timeline');
     ok(Math.abs(partial.start - total * 0.25) < 0.01 &&
        Math.abs(partial.end - total * 0.75) < 0.01,
        `in and out points reach the renderer (${partial.start.toFixed(2)}–${partial.end.toFixed(2)})`);
-    ok(!!el('ex-strip-c'), 'and the range strip is drawn');
+    ok(!!q('#ex-strip .ex-strip'), 'and the range strip is drawn');
 
     // An out point kept from a longer timeline must not survive onto a shorter
     // one, or the first render after loading a new project writes nothing.
@@ -353,18 +370,18 @@ console.log('\nwriting part of the timeline');
 
 console.log('\nrendering');
 const outPath = bro.appDir + '/../out/ui-export.mp4';
-el('ex-path').value = outPath;
-el('ex-path').dispatchEvent(new Event('change'));
+f('path').value = outPath;
+f('path').dispatchEvent(new Event('change'));
 
 // Small, so this is a test and not a coffee break.
-el('ex-w').value = '320';
-el('ex-h').value = '180';
-el('ex-w').dispatchEvent(new Event('change'));
+f('w').value = '320';
+f('h').value = '180';
+f('w').dispatchEvent(new Event('change'));
 pump(40);
 ok(el('ex-summary').textContent.indexOf('320') >= 0,
    'the summary follows the size that was typed');
 
-const fpsSel = el('ex-fps');
+const fpsSel = f('fps');
 fpsSel.value = '25';
 fpsSel.dispatchEvent(new Event('change'));
 pump(20);
@@ -415,7 +432,7 @@ ok(p.video.codec === 'h264', `encoded with the chosen codec (${p.video.codec})`)
 
 console.log('\nback onto the timeline');
 const before = A.project.clips.length;
-const importBtn = el('ex-import');
+const importBtn = f('import');
 ok(!!importBtn, 'the finished panel offers to add it to the timeline');
 importBtn.click();
 waitFor('the export to load as a clip', () => A.project.clips.length > before);
@@ -444,7 +461,7 @@ console.log('\nthe A/B preview');
     P.quality = 30;
     A.exporter.previewState().at = 0;
 
-    const goPv = el('ex-pv-go');
+    const goPv = q('#ex-pv-controls .pv-render');
     ok(!!goPv, 'the preview offers to render');
     goPv.click();
     pump(60);
@@ -461,12 +478,12 @@ console.log('\nthe A/B preview');
        `for ${pv.stats ? pv.stats.seconds : 0}s)`);
 
     pump(300);
-    ok(!!el('ex-pv-ref') && !!el('ex-pv-cand'), 'both are on screen');
+    ok(!!q('#ex-pv-stage-host .pv-ref') && !!q('#ex-pv-stage-host .pv-cand'), 'both are on screen');
     // The wipe only means anything if the two pictures are on the same pixels;
     // sized to their own boxes, the encoded half would be a squashed copy.
-    ok(el('ex-pv-ref').style.width === el('ex-pv-cand').style.width &&
-       el('ex-pv-ref').style.width.length > 0,
-       `and laid out on identical pixels (${el('ex-pv-ref').style.width})`);
+    ok(q('#ex-pv-stage-host .pv-ref').style.width === q('#ex-pv-stage-host .pv-cand').style.width &&
+       q('#ex-pv-stage-host .pv-ref').style.width.length > 0,
+       `and laid out on identical pixels (${q('#ex-pv-stage-host .pv-ref').style.width})`);
     screenshot('out/export-03-preview.png');
 
     // The measured size is worth more than any estimate, so it becomes the
@@ -481,7 +498,7 @@ console.log('\nthe A/B preview');
     // together to the frame, or the wipe shows the movement between them
     // rather than what the encoder did.
 
-    const rv = el('ex-pv-ref'), cv = el('ex-pv-cand');
+    const rv = q('#ex-pv-stage-host .pv-ref'), cv = q('#ex-pv-stage-host .pv-cand');
     ok(!rv.paused && !cv.paused, 'both halves are playing');
     const t0 = cv.currentTime;
     pump(500);
@@ -499,9 +516,9 @@ console.log('\nthe A/B preview');
 
     // The timecode is the edit's, not the little file's: the frame on screen
     // is one you can go back and find on the timeline.
-    const shown = el('ex-pv-time').textContent;
+    const shown = q('#ex-pv-controls .pv-time').textContent;
     ok(shown.indexOf('00:00:0') === 0, `the position is shown as timeline timecode (${shown.trim()})`);
-    ok(el('ex-strip-head').className.indexOf('hidden') < 0,
+    ok(q('#ex-strip .ex-strip-head').className.indexOf('hidden') < 0,
        'and marked on the range strip');
 
     // Space is play/pause here, not playback of a timeline nobody can see.
@@ -513,7 +530,7 @@ console.log('\nthe A/B preview');
     // where the stepping below starts from: a step at the last frame is a step
     // that correctly refuses to move, which proves nothing either way.
     {
-        const bar = el('ex-pv-scrub').getBoundingClientRect();
+        const bar = q('#ex-pv-controls .ex-pv-scrub').getBoundingClientRect();
         const at = (f) => { mouseDown(bar.left + bar.width * f, bar.top + bar.height / 2);
                             mouseUp(bar.left + bar.width * f, bar.top + bar.height / 2); };
         at(0.5);
@@ -544,7 +561,7 @@ console.log('\nthe A/B preview');
     const key = pv.refKey;
     P.quality = 20;
     A.exporter.currentOptions();
-    el('ex-container').dispatchEvent(new Event('change'));
+    f('container').dispatchEvent(new Event('change'));
     pump(60);
     ok(A.exporter.previewState().refReady && !A.exporter.previewState().candReady,
        'changing the quality invalidates the candidate but keeps the reference');
@@ -552,7 +569,7 @@ console.log('\nthe A/B preview');
 
     // Changing the output size does change them.
     P.width = 640; P.height = 360;
-    el('ex-container').dispatchEvent(new Event('change'));
+    f('container').dispatchEvent(new Event('change'));
     pump(60);
     ok(!A.exporter.previewState().refReady,
        'changing the output size invalidates the reference too');
@@ -580,8 +597,8 @@ console.log('\nstopping a render');
 
     el('btn-export').click();
     pump(60);
-    el('ex-path').value = bro.appDir + '/../out/ui-export-stopped.mp4';
-    el('ex-path').dispatchEvent(new Event('change'));
+    f('path').value = bro.appDir + '/../out/ui-export-stopped.mp4';
+    f('path').dispatchEvent(new Event('change'));
     el('ex-go').click();
     pump(200);
     ok(A.exporter.isRunning(), 'a long render is under way');

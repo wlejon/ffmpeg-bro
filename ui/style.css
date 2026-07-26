@@ -609,6 +609,10 @@ body.ws-output #controls { display: none; }
     flex-shrink: 0;
 }
 .ex-intent-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+/* Its own flex row. As a plain span it is a flex *item*, and a flex item does
+   not lay its inline children out — the six presets came out stacked, each the
+   width of the bar. */
+.ex-intent-list { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 
 /* Three columns: what to write, what it looks like, and every knob the
    encoder has. The middle one is the one that grows. */
@@ -678,7 +682,7 @@ body.ws-output #controls { display: none; }
 #ex-settings input.wide, #ex-advanced input.wide { width: 100%; box-sizing: border-box; }
 #ex-settings select, #ex-advanced select { max-width: 100%; }
 #ex-settings input[type=range] { width: 140px; }
-#ex-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiny-note { font-size: 11px; }
 
 .ex-toggle { cursor: pointer; user-select: none; }
@@ -699,6 +703,17 @@ body.ws-output #controls { display: none; }
 /* The A/B stage. The encoded half sits in a window with overflow:hidden whose
    width is the wipe — the same trick the viewer uses for a crop, and just as
    free: no compositing, no readback, two videos decoding straight to screen. */
+/* The stage is swapped out whole — empty, busy, wipe, side by side — so it
+   lives in a host that owns the space rather than being the thing that has
+   it. The host has to pass the column's spare height through, or the stage
+   collapses to its minimum and the picture with it. */
+.ex-pv-stage-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .ex-pv-stage {
     position: relative;
     flex: 1;
@@ -785,8 +800,8 @@ body.ws-output #controls { display: none; }
     background: #fff;
     border: 1px solid #000;
 }
-#ex-pv-time { font-size: 12px; min-width: 92px; }
-#ex-pv-len { font-size: 12px; min-width: 96px; }
+.pv-time { font-size: 12px; min-width: 92px; }
+.pv-len { font-size: 12px; min-width: 96px; }
 
 .ex-pv-stats { font-size: 12px; line-height: 1.8; padding: 6px 0 2px; }
 .ex-pv-stats .good { color: var(--good); }

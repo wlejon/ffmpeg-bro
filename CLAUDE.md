@@ -150,6 +150,38 @@ once to mix. Notable:
 `ui/project.js` is the single source of truth: clips, selection, the output canvas, the
 layout mode. Everything else reads it and nothing else.
 
+**No markup in strings.** Structure that repeats lives in a `<template>` in `index.html`
+and is cloned; everything else is built with the helpers in `ui/dom.js` (`el`, `div`,
+`span`, `put`, `select`, `segmented`, `fromTemplate`). Two reasons beyond taste: a value
+interpolated into a template literal has to be escaped by hand and only ever is until
+someone forgets, and markup rebuilt as a string throws away its elements, so every
+listener has to be found and re-attached in a second pass — a pass that is free to drift
+out of step with the first. Controls here carry their own listeners, made in the same call
+that makes the control, so a control that moves between panels takes its behaviour with it.
+
+**Three things about bro's DOM, each of which cost an afternoon:**
+
+- **An element built at runtime must not have an `id`.** bro's id index is keyed by the id
+  *string* and written when `.id` is assigned; removing an element deletes that entry
+  whichever element currently holds the id. So a redraw that builds its replacement before
+  clearing the old content — which is what passing an array of children does, since the
+  argument is evaluated first — leaves elements that are in the tree, that `querySelector`
+  by class finds, and that `getElementById` swears do not exist. Worse, after a second
+  redraw the index hands back the *previous* element: detached, measuring zero, wired to
+  nothing. `querySelector('#id')` is backed by the same index and is no better. Hence
+  `put(node, () => [...])` takes a builder and not a list, and hence dynamic elements are
+  marked with classes (`.pv-ref`) or `data-f` attributes rather than ids. **Tests must
+  select the same way** — `document.querySelector('#output [data-f="path"]')`, never
+  `getElementById` — for anything the UI redraws.
+- **A `<span>` that is a flex item does not lay its own inline children out.** They come
+  out drawn on top of each other. Either make it `display: flex` itself, or make the
+  children direct children of the flex row.
+- **A canvas cannot measure itself in the turn it was created in**, and neither can
+  anything else: layout has not run. Anything sized from `getBoundingClientRect` has to be
+  built in one turn and measured in a later one — which is why the range strip separates
+  `drawStrip` (build once) from `paintStrip` (measure and paint), and why the preview
+  videos are re-fitted from the frame loop rather than at creation.
+
 - `app.js` — orchestration: transport, keyboard, drag/drop, the frame loop, the inspector.
 - `viewer.js` — the program monitor. Each clip is a `<video>` inside a crop window (a div
   with `overflow:hidden`). Fit/zoom/pan/crop/opacity/stacking are **style writes on those
@@ -160,8 +192,16 @@ layout mode. Everything else reads it and nothing else.
 - `analysis.js` + `analyze-worker.js` — filmstrip and waveform via `bro.media` (see
   `../bro/docs/video-api.js`). Both are full-file decodes, so they run in one worker with
   one queue and the lanes fill in behind a responsive UI.
-- `export.js` — the Output workspace, and `buildSpec()`, which turns the model into what
-  `bro.ffmpeg.render.start` wants. **A screen, not a modal**: `#output` is a sibling of
+- `inspector.js` — the right-hand panel and the chips in the title bar. Owns `subjects()`
+  and `common()`: what an edit applies to, and what a field shows when the selection
+  disagrees. It edits the model and calls back for everything else, so it never has to
+  know about the viewer, the timeline or the transport.
+- `export.js` + `export/` — the Output workspace. `export.js` is the wiring; the parts are
+  `state` (settings and the render slot), `capabilities` (what libavcodec says this build
+  can do), `options` (settings → `-key value`), `spec` (the model → what the renderer
+  wants), `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress`.
+  `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **A screen, not
+  a modal**: `#output` is a sibling of
   `#main`, and `body.ws-output` is what hides the edit. The two workspaces hide each other
   rather than unmounting — the viewer's `<video>` elements *are* the decoders, and tearing
   them down to look at an export would mean rebuilding and re-seeking every one on the way
@@ -179,13 +219,10 @@ layout mode. Everything else reads it and nothing else.
   would compare a picture against a squashed copy of itself. Because they are placed in
   pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
   refits when the measured stage changes.
-- **A canvas cannot measure itself in the turn it was created in.** The range strip is
-  built once (`drawStrip`) and painted separately (`paintStrip`); a paint that rebuilt its
-  own markup would measure an unlaid-out canvas every time, fall back to the default width
-  forever, and be stretched across the window. Same rule as the preview videos: create,
-  then measure a frame later.
 - `format.js`, `icons.js` — timecode/byte formatting, and SVG icons painted from
-  `data-icon` attributes.
+  `data-icon` attributes. `icons.js` is the one place that still writes markup as a
+  string: the icons are `<svg>` path data, closer to an asset than to a UI, and
+  createElementNS would make a table of paths unreadable to save nothing.
 
 ### Invariants worth knowing before changing playback
 

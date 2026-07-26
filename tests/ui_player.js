@@ -692,7 +692,9 @@ console.log('\na batch');
     // Property edits reach every selected clip at once.
     A.selectMany(A.project.clips.slice());
     A.showProperties();
-    const slider = el('opacity');
+    // By selector, not by id: the panel is rebuilt on every change, and bro's
+    // id index hands back the element from the draw before.
+    const slider = document.querySelector('#transform [data-s="opacity"]');
     ok(!!slider, 'the properties panel has an opacity control for the whole selection');
     slider.value = '50';
     slider.dispatchEvent(new Event('input'));
@@ -705,7 +707,8 @@ console.log('\na batch');
     // A property the clips disagree on reads as mixed rather than as one of them.
     A.project.clips[0].xform.crop.l = 0.2;
     A.showProperties();
-    ok(el('cl').value === '' && el('cl').className.indexOf('mixed') >= 0,
+    const cropLeft = document.querySelector('#transform [data-crop-edge="l"]');
+    ok(cropLeft.value === '' && cropLeft.className.indexOf('mixed') >= 0,
        'a crop the three disagree on shows as mixed, not as one of their values');
     A.project.clips[0].xform.crop.l = 0;
     A.viewer.refreshAll();

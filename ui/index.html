@@ -156,14 +156,38 @@
          a column of its own for the same reason — there are eighty of them for
          x265 and they were being read through a slot. -->
     <section id="output" class="hidden">
-        <div id="ex-intent" class="ex-intent"></div>
+        <div id="ex-intent" class="ex-intent">
+            <span class="ex-intent-label dim">Start from</span>
+            <span id="ex-intent-list" class="ex-intent-list"></span>
+            <span id="ex-intent-custom" class="dim ex-intent-label hidden">custom</span>
+        </div>
         <div id="ex-form" class="ex-panes">
             <div id="ex-settings" class="ex-col ex-left"></div>
-            <div id="ex-preview" class="ex-stage-col"></div>
+            <div id="ex-preview" class="ex-stage-col">
+                <div class="section-head">Preview</div>
+                <div id="ex-pv-stage-host" class="ex-pv-stage-host"></div>
+                <div id="ex-pv-controls"></div>
+                <div id="ex-pv-stats" class="ex-pv-stats mono"></div>
+            </div>
             <div id="ex-advanced" class="ex-col ex-right hidden"></div>
         </div>
         <div id="ex-progress" class="ex-progress hidden"></div>
-        <div id="ex-strip" class="ex-strip-bar"></div>
+        <div id="ex-strip" class="ex-strip-bar">
+            <div class="section-head">Range</div>
+            <div class="ex-strip-wrap">
+                <canvas id="ex-strip-c" class="ex-strip"></canvas>
+                <!-- Where the preview has got to, against the whole edit. A div
+                     over the canvas rather than part of it: this moves every
+                     frame, and repainting a window-wide canvas to shift one
+                     line is work for nothing. -->
+                <div id="ex-strip-head" class="ex-strip-head hidden"></div>
+            </div>
+            <div class="ex-pv-row mono">
+                <span id="ex-range-nums"></span>
+                <span class="spacer"></span>
+                <button class="tiny" id="ex-range-all">Whole timeline</button>
+            </div>
+        </div>
         <div class="ex-foot">
             <div id="ex-summary" class="ex-summary mono dim"></div>
             <span class="spacer"></span>
@@ -171,6 +195,83 @@
             <button id="ex-go" class="text primary">Export</button>
         </div>
     </section>
+
+    <!-- The structures the UI clones rather than writes out as strings. What
+         is here is anything with a shape: nesting, a class on a child, an
+         element that has to be found by selector afterwards. Flat runs of text
+         are still built in JS, where they read better than markup would. -->
+
+    <template id="tpl-row">
+        <div class="row"><span class="key"></span><span class="val"></span></div>
+    </template>
+
+    <!-- One raw ffmpeg option: what it is called, what libavcodec says it
+         does, and somewhere to put a value. -->
+    <template id="tpl-option">
+        <div class="ex-opt-row">
+            <div class="ex-opt-name mono">
+                <span class="opt-name"></span>
+                <span class="dim opt-type"></span>
+                <span class="dim opt-range"></span>
+            </div>
+            <div class="ex-opt-help dim"></div>
+            <div class="opt-control"></div>
+        </div>
+    </template>
+
+    <!-- The A/B stage. The encoded half sits in a window with overflow:hidden
+         whose width is the wipe — the same trick the viewer uses for a crop,
+         and just as free: no compositing, no readback, two videos decoding
+         straight to the screen. -->
+    <template id="tpl-pv-wipe">
+        <div class="ex-pv-stage pv-wipe">
+            <video class="pv-ref" muted></video>
+            <div class="ex-pv-window"><video class="pv-cand" muted></video></div>
+            <div class="ex-pv-handle"></div>
+            <span class="ex-pv-tag right">before</span>
+            <span class="ex-pv-tag">encoded</span>
+        </div>
+    </template>
+
+    <template id="tpl-pv-side">
+        <div class="ex-pv-stage side">
+            <div class="ex-pv-half">
+                <video class="pv-ref" muted></video><span class="ex-pv-tag">before</span>
+            </div>
+            <div class="ex-pv-half">
+                <video class="pv-cand" muted></video><span class="ex-pv-tag">encoded</span>
+            </div>
+        </div>
+    </template>
+
+    <template id="tpl-pv-busy">
+        <div class="ex-pv-stage empty">
+            <div class="ex-pv-busy">
+                <div class="what"></div>
+                <div class="ex-bar"><div class="ex-fill"></div></div>
+                <div class="mono dim pct"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="tpl-pv-idle">
+        <div class="ex-pv-stage empty"><div class="message dim"></div></div>
+    </template>
+
+    <!-- The preview's own transport. Built like the main scrub bar because it
+         is the same kind of thing: a track, how far along it you are, a grip. -->
+    <template id="tpl-pv-scrub">
+        <div class="ex-pv-scrub">
+            <div class="ex-pv-scrub-track">
+                <div class="ex-pv-scrub-played"></div>
+                <div class="ex-pv-scrub-head"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="tpl-bar">
+        <div class="ex-bar"><div class="ex-fill"></div></div>
+    </template>
 
     <script type="module" src="app.js"></script>
 </body>

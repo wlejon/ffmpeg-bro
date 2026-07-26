@@ -13,6 +13,7 @@
 import { project, duration, moveClip, resolveOverlaps, changed, trackCount,
          isSelected, select, selectMany, trimClip } from './project.js';
 import { rulerLabel, clock } from './format.js';
+import { el, put } from './dom.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
 let lanes = [];                 // [{ row, head, lane, canvas }] bottom track first
@@ -311,22 +312,24 @@ function drawAudioLane() {
 
 function drawRuler() {
     const w = laneWidth();
-    if (w <= 0) { ruler.innerHTML = ''; return; }
+    if (w <= 0) return put(ruler, () => []);
 
     // A label roughly every 90 px, landing on a round number of seconds.
     const steps = [0.04, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
     const want = (view.span * 90) / w;
     const step = steps.find((s) => s >= want) || steps[steps.length - 1];
 
-    let html = '';
-    const first = Math.ceil(view.start / step) * step;
-    for (let t = first; t <= view.start + view.span + 1e-9; t += step) {
-        const x = timeToX(t);
-        if (x < -2 || x > w) continue;
-        html += `<div class="tick" style="left:${x.toFixed(1)}px">` +
-                `${rulerLabel(t, view.span)}</div>`;
-    }
-    ruler.innerHTML = html;
+    put(ruler, () => {
+        const ticks = [];
+        const first = Math.ceil(view.start / step) * step;
+        for (let t = first; t <= view.start + view.span + 1e-9; t += step) {
+            const x = timeToX(t);
+            if (x < -2 || x > w) continue;
+            ticks.push(el('div', { cls: 'tick', text: rulerLabel(t, view.span),
+                                   style: { left: `${x.toFixed(1)}px` } }));
+        }
+        return ticks;
+    });
 }
 
 function drawScrollbar() {
@@ -390,9 +393,8 @@ function syncLanes() {
     for (let track = 0; track < want; track++) {
         const row = document.createElement('div');
         row.className = 'track-row';
-        const head = document.createElement('div');
-        head.className = 'track-head';
-        head.innerHTML = `<span class="track-name">V${track + 1}</span>`;
+        const head = el('div', { cls: 'track-head' },
+                        el('span', { cls: 'track-name', text: `V${track + 1}` }));
         const lane = document.createElement('div');
         lane.className = 'track-lane';
         const canvas = document.createElement('canvas');

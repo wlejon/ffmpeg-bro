@@ -14,7 +14,8 @@ import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
 import * as exporter from './export.js';
-import { clock, timecode, bytes, kbps, escapeHtml, basename } from './format.js';
+import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
+import { clock, timecode, basename } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
 
 const el = (id) => document.getElementById(id);
@@ -62,6 +63,19 @@ let osdTimer = 0;
 el('libav').textContent = bro.ffmpeg.version;
 
 viewer.initViewer({ stage, viewer: viewerEl });
+
+initInspector({ filename, chips, media: mediaInfo, transform: xformPanel }, {
+    // The panel edits the model; putting the picture and the timeline back in
+    // step with it is the application's job, not the panel's.
+    edited: () => { viewer.refreshAll(); updateCropUI(); changed('edit'); },
+    moved: () => { setPlayhead(transport.t); changed('moved'); },
+    canvasResized: () => { viewer.layout(); updateCropUI(); syncUI(); },
+    audioChanged: () => { applyAudioAll(); timeline.draw(); },
+    setLayout: (mode) => setLayout(mode),
+    redraw: () => { viewer.refreshAll(); updateCropUI(); timeline.draw(); },
+    cropHandlesOn: () => cropMode,
+    toggleCropHandles: () => setCropMode(!cropMode),
+});
 timeline.initTimeline({
     timeline: el('timeline'),
     ruler: el('ruler'), tracks: el('tracks'), wave: el('wave'),
@@ -82,8 +96,8 @@ exporter.initExport({
     form: el('ex-form'),
     settings: el('ex-settings'),
     advanced: el('ex-advanced'),
-    intent: el('ex-intent'),
-    preview: el('ex-preview'),
+    intentList: el('ex-intent-list'),
+    intentCustom: el('ex-intent-custom'),
     strip: el('ex-strip'),
     summary: el('ex-summary'),
     progress: el('ex-progress'),
@@ -758,308 +772,6 @@ function syncVolume() {
     btnMute.classList.toggle('on', transport.muted);
 }
 syncVolume();
-
-// ── the inspector ──────────────────────────────────────────────────────────
-
-/// Redraw the inspector for whatever is selected. The Media half always
-/// describes one file — the primary — because a codec list averaged over four
-/// clips would be nonsense; the Properties half edits all of them.
-function showProperties() {
-    const clip = project.selected;
-    if (!clip) {
-        filename.textContent = 'no media';
-        filename.classList.add('dim');
-        chips.innerHTML = '';
-        mediaInfo.innerHTML = 'Nothing loaded.';
-        mediaInfo.classList.add('dim', 'pad');
-        xformPanel.innerHTML = '';
-        cropbox.classList.add('hidden');
-        return;
-    }
-    filename.textContent = clip.name;
-    filename.classList.remove('dim');
-    showChips(clip.probe);
-    showInfo(clip.probe);
-    showTransform(clip);
-    updateCropUI();
-}
-
-function showChips(p) {
-    const out = [];
-    out.push(chip(p.format.name.split(',')[0], true));
-    if (p.video) {
-        out.push(chip(`${p.video.displayWidth}×${p.video.displayHeight}`));
-        out.push(chip(p.video.codec));
-        if (p.video.fps) out.push(chip(p.video.fps.toFixed(3) + ' fps'));
-    }
-    if (p.audio) out.push(chip(`${p.audio.codec} ${p.audio.channels}ch`));
-    chips.innerHTML = out.join('');
-}
-
-function chip(text, hot) {
-    return `<span class="chip${hot ? ' hot' : ''}">${escapeHtml(String(text))}</span>`;
-}
-
-function section(t) { return `<div class="section-head">${escapeHtml(t)}</div>`; }
-function row(k, v) {
-    return `<div class="row"><span class="key">${escapeHtml(k)}</span>` +
-           `<span class="val">${escapeHtml(String(v))}</span></div>`;
-}
-
-function showInfo(p) {
-    const parts = [];
-    parts.push(section('Container'));
-    parts.push(row('Format', p.format.longName || p.format.name));
-    parts.push(row('Duration', clock(p.format.duration)));
-    parts.push(row('Size', bytes(p.format.size)));
-    parts.push(row('Bitrate', p.format.bitRate ? kbps(p.format.bitRate) : '—'));
-    parts.push(row('Streams', String(p.streams.length)));
-
-    for (const s of p.streams) {
-        const label = `${s.kind} #${s.index}` + (s.language ? ` · ${s.language}` : '');
-        parts.push(section(label));
-        parts.push(row('Codec', s.codecLong || s.codec));
-        if (s.profile) parts.push(row('Profile', s.profile));
-        if (s.duration) parts.push(row('Duration', s.duration.toFixed(3) + ' s'));
-        if (s.kind === 'video') {
-            parts.push(row('Size', `${s.width}×${s.height}` +
-                (s.rotation ? ` → ${s.displayWidth}×${s.displayHeight} (${s.rotation}°)` : '')));
-            parts.push(row('Frame rate', s.fps ? s.fps.toFixed(3) + ' fps' : '—'));
-            parts.push(row('Pixels', s.pixFmt || '—'));
-            if (s.sampleAspect && Math.abs(s.sampleAspect - 1) > 0.001)
-                parts.push(row('Pixel AR', s.sampleAspect.toFixed(4)));
-        } else if (s.kind === 'audio') {
-            parts.push(row('Rate', s.sampleRate + ' Hz'));
-            parts.push(row('Channels', `${s.channels} (${s.channelLayout || 'unknown'})`));
-            parts.push(row('Samples', s.sampleFmt || '—'));
-        }
-        if (s.bitRate) parts.push(row('Bitrate', kbps(s.bitRate)));
-        if (s.title) parts.push(row('Title', s.title));
-    }
-
-    mediaInfo.classList.remove('dim', 'pad');
-    mediaInfo.innerHTML = parts.join('');
-}
-
-// The transform panel is rebuilt from the clip rather than kept in sync field
-// by field: it is a dozen elements, and a panel that can disagree with the
-// picture is worse than one that is redrawn.
-/// Every clip an edit applies to: the whole selection, or the primary alone if
-/// somehow nothing is selected.
-function subjects() {
-    return project.selection.length ? project.selection
-         : project.selected ? [project.selected] : [];
-}
-
-/// Read a property across the selection. Returns the value when they agree and
-/// `undefined` when they do not — which is what a field showing "—" means, and
-/// what stops a panel from quietly claiming four clips are all at 100%.
-function common(read) {
-    const list = subjects();
-    if (!list.length) return undefined;
-    const first = read(list[0]);
-    for (const c of list) if (read(c) !== first) return undefined;
-    return first;
-}
-
-/// Write a property to every selected clip and put the picture back in step.
-function edit(write) {
-    for (const c of subjects()) write(c);
-    viewer.refreshAll();
-    updateCropUI();
-    changed('edit');
-}
-
-function showTransform(clip) {
-    if (!clip) { xformPanel.innerHTML = ''; return; }
-    const list = subjects();
-    const many = list.length > 1;
-    const x = clip.xform, c = x.crop;
-    const pc = (v) => (v * 100).toFixed(1);
-    // A number field over a mixed selection starts empty rather than showing
-    // one clip's value: an inherited value that silently applies to three
-    // others the moment you tab past it is the classic multi-select trap.
-    const num = (id, get, min, max, step) => {
-        const v = common(get);
-        return `<input class="num${v === undefined ? ' mixed' : ''}" id="${id}" type="number" ` +
-               `value="${v === undefined ? '' : v}" min="${min}" max="${max}" step="${step}" ` +
-               `placeholder="—">`;
-    };
-    const fitV = common((k) => k.xform.fit);
-    const fitBtn = (id, label) =>
-        `<button class="tiny${fitV === id ? ' on' : ''}" data-fit="${id}">${label}</button>`;
-
-    const opacity = common((k) => k.xform.opacity);
-    const zoomV = common((k) => k.xform.zoom);
-    const gridOn = project.layout === 'grid';
-
-    xformPanel.innerHTML =
-        section('Canvas') +
-        `<div class="row"><span class="key">Size</span><span class="val">` +
-        `<input class="num" id="pw" type="number" value="${project.width}" min="16" max="16384">` +
-        ` × <input class="num" id="ph" type="number" value="${project.height}" min="16" max="16384">` +
-        `</span></div>` +
-        `<div class="row"><span class="key">Preset</span><span class="val btns even">` +
-        `<button class="tiny" data-canvas="source">Match clip</button>` +
-        `<button class="tiny" data-canvas="1920x1080">1080p</button>` +
-        `</span></div>` +
-        `<div class="row"><span class="key"></span><span class="val btns even">` +
-        `<button class="tiny" data-canvas="1080x1920">Vertical</button>` +
-        `<button class="tiny" data-canvas="3840x2160">4K</button>` +
-        `</span></div>` +
-        `<div class="row"><span class="key">Layout</span><span class="val seg">` +
-        `<button class="tiny${gridOn ? '' : ' on'}" data-layout="stack">Stack</button>` +
-        `<button class="tiny${gridOn ? ' on' : ''}" data-layout="grid">Grid</button>` +
-        `</span></div>` +
-
-        section(many ? `Properties · ${list.length} clips` : 'Properties · ' + clip.name) +
-        `<div class="row"><span class="key">Track</span><span class="val btns">` +
-        `<button class="tiny" data-track="-1">Down</button>` +
-        `<button class="tiny" data-track="1">Up</button>` +
-        `<span class="mono dim">${common((k) => k.track) === undefined
-            ? 'mixed' : 'V' + (clip.track + 1)}</span>` +
-        `</span></div>` +
-        `<div class="row"><span class="key">Opacity</span><span class="val btns">` +
-        `<input id="opacity" type="range" min="0" max="100" ` +
-        `value="${Math.round((opacity === undefined ? 1 : opacity) * 100)}">` +
-        `<span id="opacityval" class="mono dim">` +
-        `${opacity === undefined ? '—' : Math.round(opacity * 100) + '%'}</span></span></div>` +
-        `<div class="row"><span class="key">Audio</span><span class="val btns">` +
-        `<button class="tiny${common((k) => k.muted) === true ? ' on' : ''}" data-mute="1">Mute</button>` +
-        `<input id="clipvol" type="range" min="0" max="100" ` +
-        `value="${Math.round((common((k) => k.volume) ?? 1) * 100)}">` +
-        `</span></div>` +
-
-        section(gridOn ? 'Transform (grid: cell-relative)' : 'Transform') +
-        `<div class="row"><span class="key">Fit</span><span class="val seg">` +
-        fitBtn('contain', 'Fit') + fitBtn('cover', 'Fill') +
-        fitBtn('stretch', 'Stretch') + fitBtn('actual', '1:1') +
-        `</span></div>` +
-        `<div class="row"><span class="key">Scale</span><span class="val btns">` +
-        `<input id="zoom" type="range" min="5" max="400" ` +
-        `value="${Math.round((zoomV === undefined ? 1 : zoomV) * 100)}">` +
-        `<span id="zoomval" class="mono dim">` +
-        `${zoomV === undefined ? '—' : Math.round(zoomV * 100) + '%'}</span></span></div>` +
-        `<div class="row"><span class="key">Position</span><span class="val btns">` +
-        `<span class="mono dim">${many ? '—' : pc(x.panX) + '%, ' + pc(x.panY) + '%'}</span>` +
-        `<button class="tiny" data-reset="pan">Reset</button>` +
-        `</span></div>` +
-
-        section('Crop') +
-        `<div class="row"><span class="key">Left / Top</span><span class="val btns">` +
-        num('cl', (k) => +pc(k.xform.crop.l), 0, 95, 0.5) +
-        num('ct', (k) => +pc(k.xform.crop.t), 0, 95, 0.5) +
-        `</span></div>` +
-        `<div class="row"><span class="key">Right / Bot</span><span class="val btns">` +
-        num('cr', (k) => +pc(k.xform.crop.r), 0, 95, 0.5) +
-        num('cb', (k) => +pc(k.xform.crop.b), 0, 95, 0.5) +
-        `</span></div>` +
-        `<div class="row"><span class="key"></span><span class="val btns">` +
-        `<button class="tiny${cropMode ? ' on' : ''}" data-crop="handles">Handles (C)</button>` +
-        `<button class="tiny" data-reset="crop">Reset</button>` +
-        `</span></div>`;
-
-    wireTransform(clip);
-}
-
-function wireTransform(clip) {
-    for (const b of xformPanel.querySelectorAll('button[data-fit]'))
-        b.addEventListener('click', () => {
-            const v = b.getAttribute('data-fit');
-            edit((k) => { k.xform.fit = v; });
-            showTransform(clip);
-        });
-
-    for (const b of xformPanel.querySelectorAll('button[data-layout]'))
-        b.addEventListener('click', () => setLayout(b.getAttribute('data-layout')));
-
-    for (const b of xformPanel.querySelectorAll('button[data-track]'))
-        b.addEventListener('click', () => {
-            const d = Number(b.getAttribute('data-track'));
-            edit((k) => { k.track = Math.max(0, Math.min(7, k.track + d)); });
-            setPlayhead(transport.t);
-            changed('moved');
-        });
-
-    for (const b of xformPanel.querySelectorAll('button[data-canvas]')) {
-        b.addEventListener('click', () => {
-            const v = b.getAttribute('data-canvas');
-            if (v === 'source') { project.width = clip.width; project.height = clip.height; }
-            else {
-                const [w, h] = v.split('x').map(Number);
-                project.width = w; project.height = h;
-            }
-            viewer.layout(); updateCropUI(); showTransform(clip); syncUI();
-        });
-    }
-
-    // Sliders write on every input event, so they only update their own
-    // readout: rebuilding the panel mid-drag would replace the slider under
-    // the pointer.
-    const slider = (id, valId, apply, label) => {
-        const s = el(id);
-        if (!s) return;
-        s.addEventListener('input', () => {
-            const f = Number(s.value) / 100;
-            apply(f);
-            viewer.refreshAll();
-            updateCropUI();
-            if (valId && el(valId)) el(valId).textContent = label(f);
-            timeline.draw();
-        });
-    };
-    slider('zoom', 'zoomval', (f) => {
-        for (const k of subjects()) k.xform.zoom = Math.max(0.05, f);
-    }, (f) => `${Math.round(f * 100)}%`);
-    slider('opacity', 'opacityval', (f) => {
-        for (const k of subjects()) k.xform.opacity = f;
-    }, (f) => `${Math.round(f * 100)}%`);
-    slider('clipvol', null, (f) => {
-        for (const k of subjects()) { k.volume = f; if (f > 0) k.muted = false; }
-        applyAudioAll();
-    }, () => '');
-
-    const mute = xformPanel.querySelector('button[data-mute]');
-    if (mute) mute.addEventListener('click', () => {
-        const on = !(common((k) => k.muted) === true);
-        for (const k of subjects()) k.muted = on;
-        applyAudioAll();
-        showTransform(clip);
-        timeline.draw();
-    });
-
-    const size = () => {
-        const w = Number(el('pw').value), h = Number(el('ph').value);
-        if (w >= 16 && h >= 16) { project.width = w; project.height = h; viewer.layout(); updateCropUI(); syncUI(); }
-    };
-    for (const id of ['pw', 'ph']) {
-        const f = el(id);
-        if (f) f.addEventListener('change', size);
-    }
-
-    const crops = { cl: 'l', ct: 't', cr: 'r', cb: 'b' };
-    for (const id of Object.keys(crops)) {
-        const f = el(id);
-        if (!f) continue;
-        f.addEventListener('change', () => {
-            if (f.value === '') return;             // still mixed, left alone
-            const v = Math.max(0, Math.min(0.95, Number(f.value) / 100));
-            edit((k) => { k.xform.crop[crops[id]] = v; });
-        });
-    }
-
-    for (const b of xformPanel.querySelectorAll('button[data-reset]'))
-        b.addEventListener('click', () => {
-            if (b.getAttribute('data-reset') === 'pan')
-                edit((k) => { k.xform.panX = k.xform.panY = 0; k.xform.zoom = 1; });
-            else
-                edit((k) => { k.xform.crop = { l: 0, t: 0, r: 0, b: 0 }; });
-            showTransform(clip);
-        });
-
-    const handles = xformPanel.querySelector('button[data-crop]');
-    if (handles) handles.addEventListener('click', () => setCropMode(!cropMode));
-}
 
 function setCropMode(on) {
     cropMode = on;
