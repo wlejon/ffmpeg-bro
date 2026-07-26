@@ -1,4 +1,4 @@
-import { locateTools, probe } from '/app/src/ffmpeg.js';
+import { locateTools, probe } from '/app/ffmpeg.js';
 
 const tools = await locateTools();
 console.log('ok      =', tools.ok, tools.error || '');

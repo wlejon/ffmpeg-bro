@@ -13,8 +13,9 @@ line it ran.
 
 That is deliberate, and it is why this lives in its own repository:
 
-- **bro and its ecosystem are MIT.** ffmpeg never enters them. This app links
-  nothing into bro; it drives the `ffmpeg` and `ffprobe` *executables* over pipes.
+- **bro and its ecosystem are MIT.** ffmpeg never enters them. libav* is linked
+  into *this* binary and reaches the engine only through bro's codec-agnostic
+  media interfaces.
 - **ffmpeg builds worth using are GPL.** x264, x265, and the rest of the good
   encoders are GPL, so a build that can actually do the work is GPL. Rather than
   restrict the app to an LGPL subset, this repo takes the license ffmpeg's best
@@ -22,35 +23,45 @@ That is deliberate, and it is why this lives in its own repository:
 
 So: bro stays MIT and ffmpeg-free, this app is GPL and uses all of ffmpeg.
 
-## Setup
+## What this is, structurally
 
-Two things, in this order.
+`ffmpeg-bro` is **its own executable**, not an app directory you hand to `bro.exe`.
+It links two things:
 
-1. **bro** — build it (see the bro repo's `BUILDING.md`), or use a release binary.
-2. **ffmpeg** — any recent full build with `ffmpeg` and `ffprobe`. Either:
-   - put them on `PATH` (`winget install Gyan.FFmpeg`, `brew install ffmpeg`,
-     `apt install ffmpeg`), or
-   - drop the executables in `bin/` next to this README.
+- **bro's engine** (`bro_engine` and friends) — MIT static libraries, for the
+  window, DOM, layout, renderer and JS runtime.
+- **libavformat / libavcodec / libavfilter / libswscale** — GPL, for decoding and
+  encoding.
 
-   The app finds them either way, and tells you what it found.
+Linking ffmpeg is what makes this binary GPL, and it is why this is a separate
+repository. libav* reaches bro only through `bro::video`'s codec-agnostic
+`MediaSource` / `VideoDecoder` / `AudioDecoder` interfaces, registered as a
+[media backend](../bro/src/video/media_backend.h). bro itself never links, ships,
+or knows about ffmpeg.
 
-Then run it:
+The payoff is that **one download does everything**: no separate ffmpeg install,
+no PATH hunting, no version skew, and decoding happens in-process so frames reach
+the renderer without a subprocess or a pipe in the way.
+
+## Building
 
 ```
-bro /path/to/ffmpeg-bro
+git clone <this repo>
+git clone https://github.com/wlejon/bro   # beside it, or pass -DBRO_DIR=<path>
+
+vcpkg install ffmpeg[avcodec,avformat,avfilter,swscale,x264,x265,nvcodec]:x64-windows
+
+cmake -B build
+cmake --build build --config Release
+./build/Release/ffmpeg-bro
 ```
 
-## Requirements
-
-- bro (any profile; the `app` default is plenty). Hardware-accelerated encode and
-  the ML features come from ffmpeg and from bro's optional AI tower respectively —
-  neither is needed to play or convert.
-- ffmpeg 6.0 or newer. 8.x is what this is developed against.
+`x264`/`x265`/`nvcodec` are **encoders**, needed for export. Decoding — and so
+playback — works with the plain `ffmpeg` port, because H.264/HEVC/AV1 decoders
+are native to libavcodec.
 
 ## How preview works
 
-There is no proxy transcode and no intermediate file. ffmpeg decodes to raw RGBA
-straight down a pipe (`-f rawvideo -pix_fmt rgba pipe:1`), the app uploads those
-frames to a texture, and a second ffmpeg feeds raw float PCM into bro's live audio
-stream. What you see is what ffmpeg decoded, at full quality, with no second
-encode anywhere in the path.
+There is no proxy transcode, no intermediate file, and no second encode. libavcodec
+decodes in-process, frames go to the renderer, and audio goes to bro's live PCM
+ring. What you see is the decoder's output at full quality.

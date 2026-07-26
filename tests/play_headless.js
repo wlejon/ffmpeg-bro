@@ -5,8 +5,8 @@
 // a device would. Date.now() is the real clock here; performance.now() is
 // virtual and moves ONLY when advanceTime says so, so driving the loop from it
 // would just feed itself zeros.
-import { locateTools } from '/app/src/ffmpeg.js';
-import { Player } from '/app/src/player.js';
+import { locateTools } from '/app/ffmpeg.js';
+import { Player } from '/app/player.js';
 
 const tools = await locateTools();
 if (!tools.ok) { console.log('SKIP:', tools.error); }

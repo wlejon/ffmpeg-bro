@@ -1,7 +1,7 @@
 // ffmpeg-bro — wiring the UI to the tools and the player.
 
-import { locateTools } from '/app/src/ffmpeg.js';
-import { Player } from '/app/src/player.js';
+import { locateTools } from '/app/ffmpeg.js';
+import { Player } from '/app/player.js';
 
 const el = (id) => document.getElementById(id);
 const toolStatus = el('toolstatus');

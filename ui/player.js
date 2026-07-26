@@ -12,7 +12,7 @@
 // are held until that clock reaches them; a frame already past is dropped
 // rather than shown late. Nothing tries to speed audio up or slow it down.
 
-import { probe } from '/app/src/ffmpeg.js';
+import { probe } from '/app/ffmpeg.js';
 
 const cp = require('child_process');
 
