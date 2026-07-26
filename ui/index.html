@@ -7,26 +7,88 @@
 </head>
 <body>
     <header id="topbar">
-        <h1>ffmpeg-bro</h1>
-        <span id="toolstatus" class="status">looking for ffmpeg&hellip;</span>
+        <span id="appname">ffmpeg&#8203;-bro</span>
+        <span id="filename" class="dim">no media</span>
+        <span id="chips"></span>
+        <span class="spacer"></span>
+        <span id="libav" class="dim mono"></span>
     </header>
 
-    <main id="stage">
-        <div id="dropzone">
-            <p class="big">Drop a media file here</p>
-            <p class="dim">or pass one on the command line</p>
+    <div id="main">
+        <section id="viewer">
+            <video id="player"></video>
+            <div id="dropzone">
+                <div class="dz-icon">&#9654;</div>
+                <p class="big">Drop a media file here</p>
+                <p class="dim">anything ffmpeg can read &mdash; mp4, mkv, mov, webm, avi, ts&hellip;</p>
+            </div>
+            <div id="osd" class="hidden"></div>
+        </section>
+
+        <aside id="inspector">
+            <div class="panel-title">Media</div>
+            <div id="mediainfo" class="dim pad">Nothing loaded.</div>
+        </aside>
+    </div>
+
+    <footer id="controls">
+        <div id="scrubrow">
+            <span id="tc-current" class="mono tc">00:00:00:00</span>
+            <div id="scrub">
+                <div id="scrub-track">
+                    <div id="scrub-played"></div>
+                    <div id="scrub-head"></div>
+                </div>
+            </div>
+            <span id="tc-duration" class="mono tc dim">00:00:00:00</span>
         </div>
-        <canvas id="video" width="16" height="9"></canvas>
-    </main>
 
-    <section id="details" class="hidden">
-        <div id="mediainfo"></div>
-    </section>
+        <div id="buttonrow">
+            <div class="group">
+                <button id="btn-start" title="Go to start (Home)">&#9646;&#9664;</button>
+                <button id="btn-prev" title="Previous frame (Left)">&#9664;&#9646;</button>
+                <button id="btn-play" class="primary" title="Play / Pause (Space)">&#9654;</button>
+                <button id="btn-next" title="Next frame (Right)">&#9646;&#9654;</button>
+                <button id="btn-end" title="Go to end (End)">&#9654;&#9646;</button>
+            </div>
 
-    <footer id="transport">
-        <button id="playpause" disabled>Play</button>
-        <input id="scrub" type="range" min="0" max="1000" value="0" disabled>
-        <span id="timecode" class="mono">--:--:-- / --:--:--</span>
+            <div class="group">
+                <button id="btn-loop" title="Loop (L)">&#8635;</button>
+                <div class="field">
+                    <label for="rate">Speed</label>
+                    <select id="rate">
+                        <option value="0.25">0.25&times;</option>
+                        <option value="0.5">0.5&times;</option>
+                        <option value="1" selected>1&times;</option>
+                        <option value="1.5">1.5&times;</option>
+                        <option value="2">2&times;</option>
+                        <option value="4">4&times;</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="group">
+                <button id="btn-mute" title="Mute (M)">Vol</button>
+                <div id="volume">
+                    <div id="vol-track"><div id="vol-fill"></div></div>
+                </div>
+            </div>
+
+            <span class="spacer"></span>
+
+            <div class="group">
+                <span id="stats" class="mono dim"></span>
+                <button id="btn-full" title="Fullscreen (F)">&#9633;</button>
+            </div>
+        </div>
+
+        <div id="timeline">
+            <div id="ruler"></div>
+            <div id="track">
+                <div id="clip"><span id="clip-label"></span></div>
+                <div id="playhead"></div>
+            </div>
+        </div>
     </footer>
 
     <script type="module" src="app.js"></script>

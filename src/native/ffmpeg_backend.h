@@ -1,0 +1,67 @@
+// The libav media backend — what makes <video src="anything"> work.
+//
+// This is the GPL half of ffmpeg-bro. It implements bro's codec-agnostic
+// bro::video interfaces (MediaSource / VideoDecoder / AudioDecoder) on top of
+// libavformat and libavcodec and registers them with bro's media backend
+// registry. bro never links or knows about ffmpeg; it just finds a backend
+// sitting above its built-in WebM one and uses it.
+#pragma once
+
+#include <string>
+#include <vector>
+
+namespace ffmpegbro {
+
+// Register the ffmpeg backend with bro::video. Call once, before any media is
+// opened. Also quiets libav's default stderr logging into bro's logger.
+void registerFfmpegBackend();
+
+// ── What the UI wants to know about the library it is driving ──────────────
+
+struct StreamSummary {
+    int index = 0;
+    std::string kind;        // "video" | "audio" | "subtitle" | "data"
+    std::string codec;       // short name, e.g. "h264"
+    std::string codecLong;
+    std::string profile;
+    int64_t bitRate = 0;
+    // Video
+    int width = 0;
+    int height = 0;
+    double fps = 0.0;
+    std::string pixFmt;
+    double sampleAspect = 0.0;   // pixel aspect ratio, 0 when unknown/square
+    int rotation = 0;            // degrees, from the display matrix
+    // Audio
+    int sampleRate = 0;
+    int channels = 0;
+    std::string channelLayout;
+    std::string sampleFmt;
+    // Both
+    std::string language;
+    std::string title;
+    bool isDefault = false;
+};
+
+struct ProbeResult {
+    bool ok = false;
+    std::string error;
+    std::string path;
+    std::string formatName;
+    std::string formatLongName;
+    double durationSec = 0.0;
+    int64_t bitRate = 0;
+    int64_t sizeBytes = 0;
+    std::vector<StreamSummary> streams;
+};
+
+// Read a file's structure without decoding it — the in-process replacement
+// for shelling out to ffprobe.
+ProbeResult probeMedia(const std::string& path);
+
+// Version/capability strings for the about panel.
+std::string libavVersion();
+std::string libavConfiguration();
+std::vector<std::string> availableHwAccels();
+
+} // namespace ffmpegbro

@@ -23,15 +23,50 @@ endif()
 # is not the top-level project, so this does NOT produce a second bro.exe.
 add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")
 
+# ── ffmpeg ────────────────────────────────────────────────────────────────
+#
+# Linking these is what makes this binary GPL. See README.md — it is the
+# reason this application lives outside bro's MIT tree.
+find_package(FFMPEG REQUIRED)
+
+# The backend + its JS surface, as a library so the app and its tests share
+# one build of it.
+add_library(ffmpeg-bro-core STATIC
+    src/native/ffmpeg_backend.cpp
+    src/native/ffmpeg_bindings.cpp
+)
+target_include_directories(ffmpeg-bro-core
+    PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
+    PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS}
+)
+target_link_libraries(ffmpeg-bro-core PRIVATE bro_video qjs ${FFMPEG_LIBRARIES})
+target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
+
 add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
-target_link_libraries(ffmpeg-bro PRIVATE bro_engine)
+target_link_libraries(ffmpeg-bro PRIVATE ffmpeg-bro-core bro_engine)
 target_include_directories(ffmpeg-bro PRIVATE "${BRO_DIR}/src")
+
+# The same engine and the same backend, driven by a script. This is what the
+# UI tests run against, and a usable scripted media tool in its own right.
+add_executable(ffmpeg-bro-headless src/native/headless_main.cpp)
+target_link_libraries(ffmpeg-bro-headless PRIVATE ffmpeg-bro-core bro_engine)
+target_include_directories(ffmpeg-bro-headless PRIVATE "${BRO_DIR}/src")
 
 if(MSVC)
     # Same reason bro.exe needs it: QuickJS's interpreter frame is large and
     # deep JS recursion overflows the default 1 MB stack.
     target_link_options(ffmpeg-bro PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
+    target_link_options(ffmpeg-bro-headless PRIVATE /STACK:8388608)
 endif()
 if(WIN32)
     target_link_libraries(ffmpeg-bro PRIVATE ws2_32)
+    target_link_libraries(ffmpeg-bro-headless PRIVATE ws2_32)
 endif()
+
+# ── tests ─────────────────────────────────────────────────────────────────
+#
+# Decodes a real file through bro's registry, so it exercises exactly the path
+# <video> takes: backend precedence, demux, reordering, seek, audio.
+add_executable(ffmpeg-bro-decodetest tests/decode_test.cpp)
+target_link_libraries(ffmpeg-bro-decodetest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-decodetest PRIVATE "${BRO_DIR}/src")

@@ -17,35 +17,14 @@
 #include "engine/launcher.h"
 #include "util/log.h"
 
+#include "ffmpeg_backend.h"
+#include "ffmpeg_bindings.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 namespace {
-
-// bro.ffmpeg — what the UI asks about the tools underneath it.
-//
-// Until the libav backend lands this reports availability honestly rather
-// than pretending: the UI can render a truthful state instead of failing
-// later with a decode error.
-void installFfmpegBindings(JSContext* ctx) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj)) {
-        JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue ns = JS_NewObject(ctx);
-    // Flipped on once registerFfmpegBackend() is real. The UI branches on it.
-    JS_SetPropertyStr(ctx, ns, "available", JS_FALSE);
-    JS_SetPropertyStr(ctx, ns, "linked", JS_FALSE);
-    JS_SetPropertyStr(ctx, broObj, "ffmpeg", ns);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
-}
 
 // Locate the UI directory: beside the executable in a packaged build, or up
 // in the source tree when running straight out of build/Release.
@@ -69,11 +48,15 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Before the Engine exists, so the first <video> in the first document
+    // already finds it. bro's own WebM backend stays registered underneath.
+    ffmpegbro::registerFfmpegBackend();
+
     bro::engine::EngineConfig config;
     config.title = "ffmpeg-bro";
     config.displayMode = bro::engine::DisplayMode::Windowed;
     config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
-    config.installHostBindings = installFfmpegBindings;
+    config.installHostBindings = ffmpegbro::installFfmpegBindings;
 
     if (!locateUi(config)) {
         LOG_ERROR("Cannot find the ffmpeg-bro UI next to %s",
@@ -82,16 +65,10 @@ int main(int argc, char* argv[]) {
     }
     bro::engine::publishLaunchEnv(config);
 
-    // A media file named on the command line reaches the UI through the
-    // environment: the engine's launch target is the UI, not the media.
-    if (argc >= 2) {
-        const std::string media = bro::engine::absolutePath(argv[1]);
-#ifdef _WIN32
-        _putenv_s("FFMPEG_BRO_OPEN", media.c_str());
-#else
-        setenv("FFMPEG_BRO_OPEN", media.c_str(), 1);
-#endif
-    }
+    // A media file named on the command line reaches the UI as
+    // bro.ffmpeg.openOnStart: the engine's launch target is the UI, not the
+    // media, so it can't arrive the usual way.
+    if (argc >= 2) ffmpegbro::setInitialMedia(bro::engine::absolutePath(argv[1]));
 
     try {
         bro::engine::Engine engine(config);
