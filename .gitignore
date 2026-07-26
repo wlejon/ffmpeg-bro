@@ -1,0 +1,9 @@
+# Bundled ffmpeg binaries, if the user drops them here rather than using PATH.
+bin/
+
+# Engine-written settings.
+.bro_settings.json
+
+# Scratch output from manual runs.
+out/
+*.log

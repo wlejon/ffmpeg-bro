@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ffmpeg-bro</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header id="topbar">
+        <h1>ffmpeg-bro</h1>
+        <span id="toolstatus" class="status">looking for ffmpeg&hellip;</span>
+    </header>
+
+    <main id="stage">
+        <div id="dropzone">
+            <p class="big">Drop a media file here</p>
+            <p class="dim">or pass one on the command line</p>
+        </div>
+        <canvas id="video" width="16" height="9"></canvas>
+    </main>
+
+    <section id="details" class="hidden">
+        <div id="mediainfo"></div>
+    </section>
+
+    <footer id="transport">
+        <button id="playpause" disabled>Play</button>
+        <input id="scrub" type="range" min="0" max="1000" value="0" disabled>
+        <span id="timecode" class="mono">--:--:-- / --:--:--</span>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
