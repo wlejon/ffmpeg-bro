@@ -371,7 +371,17 @@ public:
         return convertToI420(fmt, w, h, out);
     }
 
+    // A null packet is how libavcodec is told the stream ended: receive_frame
+    // then hands back the reorder buffer instead of returning EAGAIN. HEVC
+    // with a full DPB holds sixteen pictures there, which is a full second of
+    // a 15 fps file that would otherwise never be seen.
+    void drain() override {
+        if (ctx_) avcodec_send_packet(ctx_, nullptr);
+    }
+
     void flush() override {
+        // Also clears the drained state, so the decoder accepts packets again
+        // after a seek away from the end.
         if (ctx_) avcodec_flush_buffers(ctx_);
     }
 
@@ -682,6 +692,12 @@ ProbeResult probeMedia(const std::string& path) {
         if (const char* p = avcodec_profile_name(par->codec_id, par->profile))
             s.profile = p;
         s.bitRate = par->bit_rate;
+        // Matroska keeps one duration for the whole file and none per track,
+        // so falling back to the container's is the best answer available
+        // rather than reporting a clip of length zero.
+        s.duration = st->duration != AV_NOPTS_VALUE
+                         ? st->duration * av_q2d(st->time_base)
+                         : r.durationSec;
         s.isDefault = (st->disposition & AV_DISPOSITION_DEFAULT) != 0;
 
         if (par->codec_type == AVMEDIA_TYPE_VIDEO) {

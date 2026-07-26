@@ -182,6 +182,27 @@ void testFile(const std::string& path) {
         pipe.seekTo(0);
         check(!pipe.stepFrame(-1), "no frame before the first");
 
+        // And the file really ends where it says it does. H.264 and HEVC hand
+        // pictures back several frames late and hold a whole reorder buffer
+        // until the stream ends; without draining the decoder at end of stream
+        // that buffer — sixteen pictures for HEVC — is simply never shown, and
+        // the last second of the file does not exist as far as playback is
+        // concerned.
+        pipe.seekTo(dur > 3000000000LL ? dur - 3000000000LL : 0);
+        TimeNs lastPts = pipe.currentPts();
+        int forward = 0;
+        while (pipe.stepFrame(1) && forward < 100000) {
+            if (pipe.currentPts() <= lastPts) break;
+            lastPts = pipe.currentPts();
+            ++forward;
+        }
+        const double frameSec = pipe.frameRate() > 0 ? 1.0 / pipe.frameRate() : 1.0 / 25.0;
+        checkf(forward > 0, "stepped %d frames to the end of the file", forward);
+        checkf((dur - lastPts) / 1e9 < frameSec * 2.5,
+               "the last picture is %.2f frames from the end (%.4f s of %.4f s)",
+               ((dur - lastPts) / 1e9) / frameSec, lastPts / 1e9, dur / 1e9);
+        check(pipe.isEnded(), "and the pipeline reports the file ended");
+
         // Seeking backwards must not resurrect frames from ahead of the
         // target — that is what decoder flush() is for.
         pipe.seekTo(0);

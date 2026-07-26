@@ -1,14 +1,17 @@
-// Drive the real UI the way a person does: drop a file on it, press play,
-// scrub, and check what the DOM says afterwards.
+// Drive the real UI the way a person does: drop files on it, press play,
+// scrub, step, zoom the timeline, move a clip, crop the picture, and check
+// what the app says afterwards.
 //
 // Video runs on the REAL clock — advanceTime() moves bro's virtual time and
 // the decoder ignores it — so every wait here is wallSleep() plus a flush to
 // pump media events and present a frame.
 //
-// Usage: ffmpeg-bro-headless ui/ tests/ui_player.js -- <media-file>
+// Usage: ffmpeg-bro-headless ui/ tests/ui_player.js -- <media-file> [<second-file>]
 
-const media = (globalThis.scriptArgs || []).filter((a) => a !== '--')[0];
-assert(media, 'pass a media file: ... tests/ui_player.js -- <file>');
+const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
+const media = args[0];
+const second = args[1];
+assert(media, 'pass a media file: ... tests/ui_player.js -- <file> [<file2>]');
 
 function pump(ms) {
     const steps = Math.max(1, Math.ceil(ms / 20));
@@ -48,9 +51,15 @@ ok(p.format.duration > 0, `duration ${p.format.duration.toFixed(3)}s`);
 ok(p.streams.length > 0, `${p.streams.length} streams`);
 ok(!!p.video, p.video ? `video ${p.video.codec} ${p.video.width}x${p.video.height} ` +
                         `${p.video.fps.toFixed(3)}fps ${p.video.pixFmt}` : 'no video stream');
+// A stream's own duration, which is what a clip's length comes from. It is
+// routinely shorter than the container's — the recording stops the audio after
+// the last picture — and using the container's leaves the playhead running
+// past the end of the video.
+ok(p.video.duration > 0 && p.video.duration <= p.format.duration + 0.01,
+   `video track duration ${p.video.duration.toFixed(3)}s ` +
+   `(container ${p.format.duration.toFixed(3)}s)`);
 if (p.audio) console.log(`        audio ${p.audio.codec} ${p.audio.channels}ch ${p.audio.sampleRate}Hz`);
 
-// probe must reject a non-media file rather than returning junk.
 let threw = false;
 try { bro.ffmpeg.probe(bro.appDir + '/index.html'); } catch (e) { threw = true; }
 ok(threw, 'probe throws on a file that is not media');
@@ -59,20 +68,23 @@ ok(threw, 'probe throws on a file that is not media');
 
 console.log('\nui');
 waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
-ok(!!el('player'), 'player element present');
+const A = globalThis.__ffmpegBro;
+ok(!!A && !!A.project, 'the app exposes its model');
 ok(el('dropzone').className.indexOf('hidden') < 0, 'dropzone visible before a file');
 
 // ── dropping a file loads it ───────────────────────────────────────────────
 
 dropFiles(400, 300, [media]);
-waitFor('the file to load', () => el('player').className.indexOf('loaded') >= 0);
-const video = el('player');
+waitFor('the file to load', () => A.project.clips.length > 0);
+const clip = A.project.clips[0];
+waitFor('a decoded frame', () => A.video() && A.video().videoWidth > 0);
+const video = A.video();
 
 ok(el('dropzone').className.indexOf('hidden') >= 0, 'dropzone hidden after drop');
 ok(video.videoWidth > 0 && video.videoHeight > 0,
    `frame size ${video.videoWidth}x${video.videoHeight}`);
-ok(Math.abs(video.duration - p.format.duration) < 0.5,
-   `element duration ${video.duration.toFixed(3)}s matches the container`);
+ok(Math.abs(clip.length - p.video.duration) < 0.01,
+   `clip is as long as its video track (${clip.length.toFixed(3)}s)`);
 ok(el('mediainfo').textContent.indexOf('Container') >= 0, 'inspector filled in');
 ok(el('chips').textContent.length > 0, `chips: ${el('chips').textContent.replace(/\s+/g, ' ').trim()}`);
 ok(el('tc-duration').textContent !== '00:00:00:00',
@@ -83,51 +95,51 @@ screenshot('out/01-loaded.png');
 // ── playback actually advances ─────────────────────────────────────────────
 
 console.log('\nplayback');
-video.muted = true;         // no audio device in headless
-const before = video.currentTime;
-video.play();
+A.transport.muted = true;         // no audio device in headless
+const before = A.transport.t;
+A.play();
 pump(700);
-const after = video.currentTime;
-ok(after > before, `currentTime advanced ${before.toFixed(3)} → ${after.toFixed(3)}`);
-ok(!video.paused, 'element reports playing');
+const after = A.transport.t;
+ok(after > before, `playhead advanced ${before.toFixed(3)} → ${after.toFixed(3)}`);
+ok(A.transport.playing, 'transport reports playing');
 ok(el('scrub-played').style.width !== '0%', `scrubber moved (${el('scrub-played').style.width})`);
 ok(el('tc-current').textContent !== '00:00:00:00',
    `timecode running: ${el('tc-current').textContent}`);
 
 screenshot('out/02-playing.png');
 
-video.pause();
+A.pause();
 pump(60);
-const paused = video.currentTime;
+const paused = A.transport.t;
 pump(300);
-ok(Math.abs(video.currentTime - paused) < 0.02, 'paused clock holds still');
+ok(Math.abs(A.transport.t - paused) < 0.02, 'paused clock holds still');
 
 // ── seeking lands where asked ──────────────────────────────────────────────
 
 console.log('\nseek');
-const target = video.duration * 0.6;
-video.currentTime = target;
+const target = clip.length * 0.6;
+A.setPlayhead(target);
 pump(120);
-ok(Math.abs(video.currentTime - target) < 1.0,
-   `seek to ${target.toFixed(3)}s landed at ${video.currentTime.toFixed(3)}s`);
+ok(Math.abs(A.transport.t - target) < 1.0,
+   `seek to ${target.toFixed(3)}s landed at ${A.transport.t.toFixed(3)}s`);
 screenshot('out/03-seeked.png');
 
-video.currentTime = 0;
+A.setPlayhead(0);
 pump(120);
-ok(video.currentTime < 0.5, `seek back to 0 landed at ${video.currentTime.toFixed(3)}s`);
+ok(A.transport.t < 0.5, `seek back to 0 landed at ${A.transport.t.toFixed(3)}s`);
 
 // ── frame stepping moves by pictures, both ways ────────────────────────────
-// The bug: the buttons used to do currentTime += 1/fps, and a back step landed
-// on the frame it started from, so nothing happened.
+// The bug this guards: the buttons used to do currentTime += 1/fps, and a back
+// step landed on the frame it started from, so nothing happened.
 
 console.log('\nframe step');
-video.currentTime = video.duration * 0.4;
+A.setPlayhead(clip.length * 0.4);
 pump(60);
-const stepOrigin = video.currentTime;
+const stepOrigin = A.transport.t;
 
 el('btn-next').click();
 pump(60);
-const stepped = video.currentTime;
+const stepped = A.transport.t;
 ok(stepped > stepOrigin,
    `next frame advanced ${stepOrigin.toFixed(4)} → ${stepped.toFixed(4)}s`);
 ok(stepped - stepOrigin < 0.2,
@@ -135,19 +147,42 @@ ok(stepped - stepOrigin < 0.2,
 
 el('btn-prev').click();
 pump(60);
-ok(Math.abs(video.currentTime - stepOrigin) < 0.0005,
-   `previous frame came back to ${stepOrigin.toFixed(4)}s (${video.currentTime.toFixed(4)}s)`);
+ok(Math.abs(A.transport.t - stepOrigin) < 0.0005,
+   `previous frame came back to ${stepOrigin.toFixed(4)}s (${A.transport.t.toFixed(4)}s)`);
 
-let walk = video.currentTime;
+let walk = A.transport.t;
 let movedBack = 0;
 for (let i = 0; i < 4; i++) {
     el('btn-prev').click();
     pump(30);
-    if (video.currentTime < walk) movedBack++;
-    walk = video.currentTime;
+    if (A.transport.t < walk) movedBack++;
+    walk = A.transport.t;
 }
 ok(movedBack === 4, `four back steps each moved (${movedBack})`);
 screenshot('out/04-stepped.png');
+
+// ── the end of the file is reachable ───────────────────────────────────────
+// A reordering codec holds its whole DPB back — sixteen pictures for HEVC —
+// and until the pipeline drains the decoder at end of stream none of them are
+// ever shown. That is a full second of a 15 fps file missing, and it looks
+// like the playhead stopping short of the end.
+
+console.log('\nthe tail of the file');
+A.setPlayhead(Math.max(0, clip.length - 2));
+pump(200);
+let last = A.transport.t, steps = 0;
+for (let i = 0; i < 400; i++) {
+    if (!video.stepFrame(1)) break;
+    pump(20);
+    if (A.transport.t <= last) break;
+    last = A.transport.t;
+    steps++;
+}
+const frameSec = 1 / (p.video.fps || 25);
+ok(steps > 0, `stepped ${steps} frames to the end`);
+ok(clip.length - last < frameSec * 2.5,
+   `last picture is ${((clip.length - last) / frameSec).toFixed(2)} frames from the end ` +
+   `(${last.toFixed(3)}s of ${clip.length.toFixed(3)}s)`);
 
 // ── the timeline shows what is in the file ─────────────────────────────────
 // Two lanes: V1 draws a filmstrip, A1 draws the waveform. Both come from
@@ -162,58 +197,272 @@ const litFraction = (canvas) => {
     for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 30) lit++;
     return lit / (d.length / 4);
 };
-waitFor('the worker to draw the lanes',
-        () => litFraction(film) > 0.5 && (!p.audio || litFraction(wave) > 0.02), 20000);
+// The lane paints its own clip backgrounds, so "not black" no longer means
+// "there is a waveform". The trace is the only strongly green thing on it.
+const waveFraction = (canvas) => {
+    if (!canvas.width || !canvas.height) return 0;
+    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 1] - d[i] > 40) lit++;
+    return lit / (d.length / 4);
+};
+waitFor('the worker to read the clip', () => clip.film && (clip.peaks || !p.audio), 30000);
+pump(80);
 ok(film.width > 100, `filmstrip canvas sized ${film.width}x${film.height}`);
 ok(litFraction(film) > 0.5, `filmstrip has picture (${(litFraction(film) * 100).toFixed(0)}% lit)`);
-ok(el('lane-video').className.indexOf('loaded') >= 0, 'V1 lane marked loaded');
+ok(clip.film.times.length === clip.film.count &&
+   clip.film.times[clip.film.count - 1] > clip.film.times[0],
+   `${clip.film.count} thumbnails walking ${clip.film.times[0].toFixed(2)}s → ` +
+   `${clip.film.times[clip.film.count - 1].toFixed(2)}s`);
 if (p.audio) {
-    ok(litFraction(wave) > 0.02 && litFraction(wave) < 0.9,
-       `waveform drawn, not a solid block (${(litFraction(wave) * 100).toFixed(0)}% lit)`);
-    ok(el('lane-audio').className.indexOf('loaded') >= 0, 'A1 lane marked loaded');
+    ok(waveFraction(wave) > 0.02 && waveFraction(wave) < 0.9,
+       `waveform drawn, not a solid block (${(waveFraction(wave) * 100).toFixed(0)}% lit)`);
+    ok(clip.peaks.duration > 0, `peaks span ${clip.peaks.duration.toFixed(3)}s`);
 } else {
-    // A file with no audio must SAY so, not leave an empty lane looking broken.
-    ok(litFraction(wave) < 0.01, 'no waveform drawn for a file with no audio');
-    ok(el('audio-label').textContent.indexOf('no audio') >= 0,
-       `A1 lane says why it is empty: "${el('audio-label').textContent}"`);
+    ok(!clip.peaks, 'no peaks for a file with no audio track');
+    ok(waveFraction(wave) < 0.02, 'and no waveform is drawn');
 }
 screenshot('out/05-timeline.png');
+
+// ── zooming the timeline ───────────────────────────────────────────────────
+
+console.log('\nzoom');
+const fitSpan = A.timeline.getView().span;
+ok(Math.abs(fitSpan - Math.max(clip.length, 1)) < 0.01,
+   `fit shows the whole timeline (${fitSpan.toFixed(3)}s)`);
+
+A.setPlayhead(clip.length * 0.5);
+pump(60);
+const anchor = A.transport.t;
+el('btn-zoom-in').click();
+el('btn-zoom-in').click();
+el('btn-zoom-in').click();
+pump(60);
+const v = A.timeline.getView();
+ok(v.span < fitSpan * 0.5, `zoomed in to ${v.span.toFixed(3)}s of ${fitSpan.toFixed(3)}s`);
+ok(anchor >= v.start && anchor <= v.start + v.span,
+   `the playhead stayed in view (${v.start.toFixed(2)}–${(v.start + v.span).toFixed(2)})`);
+ok(el('tl-thumb').style.display !== 'none', 'the scrollbar appears once zoomed');
+ok(litFraction(film) > 0.5, 'the filmstrip redraws at the new zoom');
+ok(el('ruler').children.length > 1,
+   `the ruler relabels itself (${el('ruler').children.length} ticks)`);
+screenshot('out/06-zoomed.png');
+
+// Panning keeps the window inside the timeline rather than sliding off it.
+A.timeline.panBy(-1e6);
+ok(A.timeline.getView().start === 0, 'panning stops at the start');
+A.timeline.panBy(1e6);
+const end = A.timeline.getView();
+ok(Math.abs(end.start + end.span - Math.max(clip.length, 1)) < 0.01,
+   'and at the end');
+
+el('btn-zoom-fit').click();
+pump(40);
+ok(Math.abs(A.timeline.getView().span - fitSpan) < 0.01, 'Fit goes back to the whole timeline');
+
+// ── the real gestures, not just the functions behind them ──────────────────
+// Everything above drives the model. These are the actual events the engine
+// delivers, which is the only way to know the handlers are wired to anything.
+
+console.log('\ngestures');
+const rectOf = (e) => e.getBoundingClientRect();
+const filmRect = rectOf(el('lane-video'));
+const midY = filmRect.top + filmRect.height / 2;
+
+// Wheel over the timeline zooms about the pointer: the time under the cursor
+// has to still be under the cursor afterwards.
+const probeX = filmRect.left + filmRect.width * 0.7;
+const underCursor = A.timeline.xToTime(probeX - filmRect.left);
+wheel(probeX, midY, -3);
+pump(40);
+const zoomedSpan = A.timeline.getView().span;
+ok(zoomedSpan < fitSpan, `wheel zoomed in (${zoomedSpan.toFixed(3)}s)`);
+const stillUnder = A.timeline.xToTime(probeX - filmRect.left);
+ok(Math.abs(stillUnder - underCursor) < zoomedSpan * 0.02,
+   `and held ${underCursor.toFixed(3)}s under the pointer (${stillUnder.toFixed(3)}s)`);
+wheel(probeX, midY, 3);
+pump(40);
+ok(A.timeline.getView().span > zoomedSpan, 'and back out again');
+el('btn-zoom-fit').click();
+pump(40);
+
+// Dragging a clip on V1 moves it in time.
+const wasStart = clip.start;
+const grabX = filmRect.left + filmRect.width * 0.3;
+const dropX = filmRect.left + filmRect.width * 0.5;
+mouseDown(grabX, midY);
+pump(20);
+mouseMove(grabX + 20, midY);
+mouseMove(dropX, midY);
+pump(20);
+mouseUp(dropX, midY);
+pump(60);
+ok(clip.start > wasStart,
+   `dragging the clip moved it ${wasStart.toFixed(2)}s → ${clip.start.toFixed(2)}s`);
+
+// And dragging it back off the left edge puts it at the start rather than at
+// a negative time.
+mouseDown(dropX, midY);
+mouseMove(dropX - 40, midY);
+mouseMove(filmRect.left + 2, midY);
+mouseUp(filmRect.left + 2, midY);
+pump(60);
+ok(clip.start === 0, `dragging it back put it at the start (${clip.start.toFixed(4)}s)`);
+
+// Dragging the ruler scrubs.
+const rulerRect = rectOf(el('ruler'));
+const scrubTo = rulerRect.left + rulerRect.width * 0.35;
+mouseDown(scrubTo, rulerRect.top + rulerRect.height / 2);
+mouseUp(scrubTo, rulerRect.top + rulerRect.height / 2);
+pump(160);
+const wanted = A.timeline.xToTime(scrubTo - rulerRect.left);
+ok(Math.abs(A.transport.t - wanted) < 0.5,
+   `pressing the ruler at ${wanted.toFixed(2)}s moved the playhead there ` +
+   `(${A.transport.t.toFixed(2)}s)`);
+
+// ── a second clip ──────────────────────────────────────────────────────────
+
+if (second) {
+    console.log('\na second clip');
+    const p2 = bro.ffmpeg.probe(second);
+    dropFiles(400, 300, [second]);
+    waitFor('the second file to load', () => A.project.clips.length === 2);
+    const b = A.project.clips[1];
+    ok(A.project.clips.length === 2, 'two clips on the timeline');
+    ok(Math.abs(b.start - clip.length) < 0.01,
+       `the new clip lands after the first (${b.start.toFixed(3)}s)`);
+    ok(A.timeline.getView().span > fitSpan, 'and the view refits to cover both');
+
+    waitFor('the second clip to be read', () => b.film && (b.peaks || !p2.audio), 40000);
+    pump(80);
+    ok(litFraction(film) > 0.5, 'both clips draw on V1');
+
+    // The transport is the timeline's, not one file's: the playhead crossing
+    // the boundary has to hand over to the other clip's decoder.
+    A.setPlayhead(clip.length + Math.min(1, b.length / 2));
+    pump(200);
+    ok(A.activeClip() === b, 'the playhead inside the second clip plays the second clip');
+    ok(A.project.selected === b, 'and the inspector follows it');
+    ok(el('filename').textContent === b.name, `the title bar names it: ${b.name}`);
+    A.setPlayhead(clip.length * 0.5);
+    pump(200);
+    ok(A.activeClip() === clip, 'and back again');
+    screenshot('out/07-two-clips.png');
+
+    // Moving one. Dragged past the other, the other is pushed out of the way
+    // rather than the two overlapping with no answer to which is on screen.
+    b.start = 0;
+    A.resolveOverlaps(b);
+    A.timeline.draw();
+    pump(40);
+    ok(b.start === 0, 'the second clip moved to the start');
+    ok(Math.abs(clip.start - b.length) < 0.01,
+       `and pushed the first one out of the way to ${clip.start.toFixed(3)}s`);
+
+    // Deleting takes it off the timeline and releases its decoder.
+    A.project.selected = b;
+    A.removeSelected();
+    pump(80);
+    ok(A.project.clips.length === 1, 'deleting the selected clip removes it');
+    ok(!b.video, 'and lets go of its decoder');
+
+    // Deleting leaves the gap the removed clip occupied — nothing closes up on
+    // its own. Put the survivor back at the top so the rest of this runs on an
+    // ordinary one-clip timeline.
+    clip.start = 0;
+    A.timeline.fitView();
+}
+
+// ── the picture can be scaled and cropped ──────────────────────────────────
+
+console.log('\nviewer transform');
+// clip.start is not 0 any more if the reorder above pushed it along.
+A.setPlayhead(clip.start + clip.length * 0.3);
+pump(200);
+const shown = A.activeClip();
+ok(!!shown && !!shown.frame, 'the active clip has a crop window');
+const wholeW = parseFloat(shown.frame.style.width);
+const wholeH = parseFloat(shown.frame.style.height);
+ok(wholeW > 0 && wholeH > 0, `picture placed at ${wholeW.toFixed(0)}x${wholeH.toFixed(0)}`);
+
+shown.xform.zoom = 2;
+A.viewer.refresh(shown);
+pump(40);
+ok(Math.abs(parseFloat(shown.frame.style.width) - wholeW * 2) < 1,
+   'scale 2× doubles the placed picture');
+shown.xform.zoom = 1;
+
+shown.xform.crop = { l: 0.25, t: 0.1, r: 0.25, b: 0.1 };
+A.viewer.refresh(shown);
+pump(40);
+const cw = parseFloat(shown.frame.style.width);
+const ch = parseFloat(shown.frame.style.height);
+ok(Math.abs(cw - wholeW * 0.5) < 1, `cropping half the width leaves ${cw.toFixed(0)}px`);
+ok(Math.abs(ch - wholeH * 0.8) < 1, `and 80% of the height leaves ${ch.toFixed(0)}px`);
+// The picture itself is untouched — it is the window that shrank, which is
+// what stops a crop from also scaling what is left.
+ok(Math.abs(parseFloat(shown.video.style.width) - wholeW) < 1,
+   'the picture inside keeps its size');
+ok(Math.abs(parseFloat(shown.video.style.left) + wholeW * 0.25) < 1,
+   'and slides so the trimmed edge falls outside the window');
+
+A.setCropMode(true);
+pump(40);
+ok(el('cropbox').className.indexOf('hidden') < 0, 'crop handles appear');
+ok(Math.abs(parseFloat(el('cropbox').style.width) - cw) < 1,
+   'and sit on the cropped picture');
+screenshot('out/08-cropped.png');
+A.setCropMode(false);
+
+// Resizing the output canvas re-fits every clip inside it.
+const wasStage = A.viewer.stageSize();
+A.project.width = 1080; A.project.height = 1920;
+A.viewer.layout();
+pump(40);
+const nowStage = A.viewer.stageSize();
+ok(nowStage.h >= nowStage.w, `canvas resized to portrait (${nowStage.w}x${nowStage.h})`);
+ok(nowStage.w !== wasStage.w || nowStage.h !== wasStage.h, 'the stage changed shape');
+screenshot('out/09-portrait.png');
+A.project.width = shown.width; A.project.height = shown.height;
+shown.xform.crop = { l: 0, t: 0, r: 0, b: 0 };
+A.viewer.layout();
 
 // ── controls are wired ─────────────────────────────────────────────────────
 
 console.log('\ncontrols');
 el('btn-play').click();
 pump(120);
-ok(!video.paused, 'play button starts playback');
+ok(A.transport.playing, 'play button starts playback');
 el('btn-play').click();
 pump(60);
-ok(video.paused, 'play button pauses again');
+ok(!A.transport.playing, 'play button pauses again');
 
 el('btn-loop').click();
 pump(20);
-ok(video.loop === true, 'loop button arms looping');
+ok(A.transport.loop === true, 'loop button arms looping');
 el('btn-loop').click();
 pump(20);
-ok(video.loop === false, 'loop button disarms looping');
+ok(A.transport.loop === false, 'loop button disarms looping');
 
-video.muted = false;
+A.transport.muted = false;
 el('btn-mute').click();
 pump(20);
-ok(video.muted === true, 'mute button mutes');
+ok(A.transport.muted === true, 'mute button mutes');
 ok(el('vol-fill').style.width === '0.0%', 'volume meter reads zero when muted');
 el('btn-mute').click();
 pump(20);
-ok(video.muted === false, 'mute button unmutes');
+ok(A.transport.muted === false, 'mute button unmutes');
 
 el('btn-start').click();
 pump(80);
-ok(video.currentTime < 0.5, 'go-to-start rewinds');
+ok(A.transport.t < 0.5, 'go-to-start rewinds');
 
 const rate = el('rate');
 rate.value = '2';
 rate.dispatchEvent(new Event('change'));
 pump(20);
-ok(video.playbackRate === 2, 'speed selector sets playbackRate');
+ok(A.transport.rate === 2 && A.video().playbackRate === 2,
+   'speed selector reaches the clip');
 rate.value = '1';
 rate.dispatchEvent(new Event('change'));
 pump(20);
@@ -225,7 +474,7 @@ el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') >= 0, 'body enters fullscreen mode');
 flush();
-screenshot('out/06-fullscreen.png');
+screenshot('out/10-fullscreen.png');
 el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') < 0, 'fullscreen toggles back off');

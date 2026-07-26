@@ -25,6 +25,12 @@ struct StreamSummary {
     std::string codecLong;
     std::string profile;
     int64_t bitRate = 0;
+    // This stream's own duration, which is routinely NOT the container's. A
+    // recording usually stops the audio a fraction of a second after the last
+    // picture, and a clip on a timeline is as long as its pictures — using the
+    // container duration leaves the playhead running past the end of the video.
+    // 0 when the container doesn't say.
+    double duration = 0.0;
     // Video
     int width = 0;
     int height = 0;

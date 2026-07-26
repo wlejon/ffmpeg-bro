@@ -20,6 +20,7 @@ JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
     setStr(ctx, o, "codecLong", s.codecLong);
     setStr(ctx, o, "profile", s.profile);
     JS_SetPropertyStr(ctx, o, "bitRate", JS_NewInt64(ctx, s.bitRate));
+    JS_SetPropertyStr(ctx, o, "duration", JS_NewFloat64(ctx, s.duration));
     JS_SetPropertyStr(ctx, o, "default", JS_NewBool(ctx, s.isDefault));
     setStr(ctx, o, "language", s.language);
     setStr(ctx, o, "title", s.title);

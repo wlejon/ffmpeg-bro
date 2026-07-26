@@ -6,28 +6,32 @@
 // frozen through all of it.
 //
 // bro.media is installed in worker realms for exactly this.
+//
+// Jobs arrive one per clip and are handled in order. Each reply carries the
+// clip id back, because by the time it lands the timeline may have moved on.
 
 onmessage = (e) => {
     const job = e.data || {};
-    const path = job.path;
-    if (!path) return;
+    if (!job.path) return;
+    const id = job.clip;
 
     // Audio first: it is the faster of the two and the more useful, so the
     // waveform appears while the frames are still being grabbed.
     try {
-        const peaks = bro.media.peaks(path, { buckets: job.buckets || 2048 });
-        postMessage({ token: job.token, kind: 'peaks', peaks });
+        const peaks = bro.media.peaks(job.path, { buckets: job.buckets || 2048 });
+        postMessage({ clip: id, kind: 'peaks', peaks });
     } catch (err) {
-        postMessage({ token: job.token, kind: 'peaks', error: String(err && err.message || err) });
+        postMessage({ clip: id, kind: 'peaks', error: String(err && err.message || err) });
     }
 
     try {
-        const thumbs = bro.media.thumbnails(path, {
+        const thumbs = bro.media.thumbnails(job.path, {
             count: job.count || 32,
             height: job.height || 72,
         });
-        postMessage({ token: job.token, kind: 'thumbs', thumbs });
+        postMessage({ clip: id, kind: 'thumbs', thumbs, done: true });
     } catch (err) {
-        postMessage({ token: job.token, kind: 'thumbs', error: String(err && err.message || err) });
+        postMessage({ clip: id, kind: 'thumbs', done: true,
+                      error: String(err && err.message || err) });
     }
 };

@@ -91,20 +91,65 @@ body { display: flex; flex-direction: column; }
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #000;
+    background: #0b0c0f;
     min-width: 0;
     overflow: hidden;
 }
 
-/* Fill the viewer and letterbox inside it, rather than sitting at the file's
-   pixel size in the middle of a much larger window. */
-#player {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: none;
+/* The output canvas. Sized in JS to the project's aspect, fitted inside the
+   viewer — so a portrait clip on a 16:9 canvas shows the black at the sides
+   that the export would have, rather than pretending the window is the frame. */
+#stage {
+    position: relative;
+    background: #000;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px var(--line);
 }
-#player.loaded { display: block; }
+
+/* One per clip: the crop window. Its size and offset are the crop; the video
+   inside keeps its full placed size and is pushed up and left so the trimmed
+   edges fall outside. */
+.clipframe {
+    position: absolute;
+    overflow: hidden;
+}
+.clipframe video {
+    position: absolute;
+    display: block;
+    object-fit: fill;
+}
+
+/* Crop handles, over the picture. */
+#cropbox {
+    position: absolute;
+    border: 1px solid var(--accent);
+    pointer-events: none;
+}
+#cropbox .ch {
+    position: absolute;
+    width: 11px;
+    height: 11px;
+    margin: -6px 0 0 -6px;
+    background: var(--accent);
+    border: 1px solid #12141a;
+    pointer-events: auto;
+    cursor: crosshair;
+}
+#cropbox .ch.mid {
+    left: 0; top: 0; right: 0; bottom: 0;
+    width: auto; height: auto; margin: 0;
+    background: transparent;
+    border: 0;
+    cursor: move;
+}
+#cropbox .ch[data-h="nw"] { left: 0;    top: 0; }
+#cropbox .ch[data-h="n"]  { left: 50%;  top: 0; }
+#cropbox .ch[data-h="ne"] { left: 100%; top: 0; }
+#cropbox .ch[data-h="w"]  { left: 0;    top: 50%; }
+#cropbox .ch[data-h="e"]  { left: 100%; top: 50%; }
+#cropbox .ch[data-h="sw"] { left: 0;    top: 100%; }
+#cropbox .ch[data-h="s"]  { left: 50%;  top: 100%; }
+#cropbox .ch[data-h="se"] { left: 100%; top: 100%; }
 
 #dropzone {
     position: absolute;
@@ -171,9 +216,16 @@ body { display: flex; flex-direction: column; }
     gap: 8px;
     padding: 3px 12px;
     line-height: 1.5;
+    align-items: center;
 }
 .row .key { width: 92px; flex-shrink: 0; color: var(--dim); }
-.row .val { flex: 1; word-break: break-word; }
+/* Not a flex box: this holds long codec names as often as it holds controls,
+   and flex stops them wrapping, so they run off the side of the panel. */
+.row .val { flex: 1; min-width: 0; word-break: break-word; }
+/* Clusters of controls do want to be a flex row — but only the clusters, so
+   the prose in the rest of the panel keeps wrapping. */
+.btns { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.row .val input { vertical-align: middle; }
 
 /* ── controls ────────────────────────────────────────────────────────── */
 
@@ -230,7 +282,13 @@ body { display: flex; flex-direction: column; }
 
 .group { display: flex; align-items: center; gap: 6px; }
 
+/* Glyph buttons: a flex box centres the label on both axes. Line-height alone
+   does not — the arrow and bar characters have their own idea of a baseline,
+   and they sit high in the box unless the box centres them itself. */
 button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-width: 30px;
     height: 26px;
     padding: 0 8px;
@@ -239,6 +297,7 @@ button {
     border: 1px solid var(--line);
     border-radius: 3px;
     font-size: 13px;
+    line-height: 1;
     cursor: pointer;
 }
 button:hover { background: #323844; }
@@ -246,6 +305,13 @@ button.primary { min-width: 44px; background: var(--accent); border-color: var(-
 button.primary:hover { background: #ffa063; }
 button.on { color: var(--accent); border-color: var(--accent-dim); }
 button:disabled { opacity: 0.35; cursor: default; }
+
+button.tiny {
+    height: 20px;
+    min-width: 0;
+    padding: 0 6px;
+    font-size: 11px;
+}
 
 .field { display: flex; align-items: center; gap: 5px; }
 .field label { color: var(--dim); font-size: 11px; }
@@ -258,6 +324,19 @@ select {
     border-radius: 3px;
     padding: 0 4px;
 }
+
+input.num {
+    width: 62px;
+    height: 20px;
+    background: #0e1014;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+}
+input[type=range] { width: 130px; }
 
 #volume { width: 78px; padding: 8px 0; cursor: pointer; }
 #vol-track {
@@ -279,15 +358,24 @@ select {
 /* ── timeline ────────────────────────────────────────────────────────── */
 
 #timeline {
-    height: 172px;
+    height: 206px;
     border-top: 1px solid var(--line);
     background: #14161b;
-    padding: 0 12px 8px;
+    padding: 0 12px 6px;
 }
+
+#tl-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 26px;
+}
+.tl-hint { font-size: 10px; }
+#tl-zoom { font-size: 10px; }
 
 /* Track heads line the lanes up under a fixed gutter, the way an edit suite
    stacks V1 over A1. The ruler gets a blank head so it starts at the same x. */
-#ruler-row, .track-row { display: flex; }
+#ruler-row, .track-row, #tl-scroll-row { display: flex; }
 .track-head {
     flex: 0 0 44px;
     display: flex;
@@ -311,6 +399,7 @@ select {
     height: 18px;
     border-bottom: 1px solid var(--line);
     cursor: pointer;
+    overflow: hidden;
 }
 .tick {
     position: absolute;
@@ -321,27 +410,25 @@ select {
     font-size: 10px;
     color: var(--dim);
     font-family: Consolas, monospace;
+    white-space: nowrap;
 }
 
 #tracks {
     position: relative;
-    margin-top: 8px;
+    margin-top: 6px;
 }
 .track-row + .track-row { margin-top: 4px; }
 .track-lane {
     position: relative;
     flex: 1;
-    height: 56px;
+    height: 64px;
     border-radius: 3px;
     overflow: hidden;
     background: #191c22;
     border: 1px solid var(--line);
     cursor: pointer;
 }
-.track-lane.loaded { border-color: #3d6183; }
-#lane-video.loaded { background: #223449; }
-#lane-audio { height: 40px; }
-#lane-audio.loaded { background: #1d3227; border-color: #35604a; }
+#lane-audio { height: 44px; }
 
 .track-lane canvas {
     display: block;
@@ -349,31 +436,9 @@ select {
     height: 100%;
 }
 
-#clip-label {
-    position: absolute;
-    left: 6px;
-    bottom: 3px;
-    font-size: 10px;
-    color: #dbe6f2;
-    text-shadow: 0 1px 2px #000, 0 0 6px #000;
-    white-space: nowrap;
-    overflow: hidden;
-    max-width: calc(100% - 12px);
-    pointer-events: none;
-}
-.lane-note {
-    position: absolute;
-    left: 6px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-size: 10px;
-    color: var(--dim);
-    pointer-events: none;
-}
-
 #playhead {
     position: absolute;
-    top: -26px;              /* up through the ruler, like an edit suite */
+    top: -24px;              /* up through the ruler, like an edit suite */
     bottom: 0;
     left: 44px;
     width: 2px;
@@ -382,10 +447,30 @@ select {
     pointer-events: none;
 }
 
+#tl-scroll-row { margin-top: 6px; }
+#tl-scroll {
+    position: relative;
+    flex: 1;
+    height: 9px;
+    background: #0e1014;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    cursor: pointer;
+}
+#tl-thumb {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: #3d4450;
+    border-radius: 5px;
+    min-width: 12px;
+}
+
 /* ── fullscreen: picture only ─────────────────────────────────────────── */
 
 body.fs #topbar,
 body.fs #inspector,
 body.fs #controls { display: none; }
 body.fs #viewer { background: #000; }
+body.fs #stage { box-shadow: none; }
 body.fs #dropzone { display: none; }
+body.fs #cropbox { display: none; }

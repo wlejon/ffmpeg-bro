@@ -16,16 +16,35 @@
 
     <div id="main">
         <section id="viewer">
-            <video id="player"></video>
+            <!-- The output canvas. Clips are placed inside it, each in its own
+                 crop window; the stage itself is what "resize the canvas"
+                 resizes. -->
+            <div id="stage">
+                <div id="cropbox" class="hidden">
+                    <div class="ch mid" data-h="move"></div>
+                    <div class="ch" data-h="nw"></div>
+                    <div class="ch" data-h="n"></div>
+                    <div class="ch" data-h="ne"></div>
+                    <div class="ch" data-h="w"></div>
+                    <div class="ch" data-h="e"></div>
+                    <div class="ch" data-h="sw"></div>
+                    <div class="ch" data-h="s"></div>
+                    <div class="ch" data-h="se"></div>
+                </div>
+            </div>
             <div id="dropzone">
                 <div class="dz-icon">&#9654;</div>
                 <p class="big">Drop a media file here</p>
                 <p class="dim">anything ffmpeg can read &mdash; mp4, mkv, mov, webm, avi, ts&hellip;</p>
+                <p class="dim">drop more to add them to the timeline</p>
             </div>
             <div id="osd" class="hidden"></div>
         </section>
 
+        <!-- Transform above Media: the transform is what you reach for, and a
+             file with seven streams would otherwise push it off the bottom. -->
         <aside id="inspector">
+            <div id="transform"></div>
             <div class="panel-title">Media</div>
             <div id="mediainfo" class="dim pad">Nothing loaded.</div>
         </aside>
@@ -83,6 +102,17 @@
         </div>
 
         <div id="timeline">
+            <div id="tl-bar">
+                <div class="group">
+                    <button id="btn-zoom-out" title="Zoom out (-)">&minus;</button>
+                    <button id="btn-zoom-in" title="Zoom in (+)">+</button>
+                    <button id="btn-zoom-fit" title="Fit the whole timeline (0)">Fit</button>
+                </div>
+                <span id="tl-zoom" class="mono dim"></span>
+                <span class="spacer"></span>
+                <span class="dim tl-hint">wheel zooms &middot; shift+wheel pans &middot;
+                    drag a clip on V1 to move it &middot; drag the ruler to scrub</span>
+            </div>
             <div id="ruler-row">
                 <div class="track-head"></div>
                 <div id="ruler"></div>
@@ -90,19 +120,17 @@
             <div id="tracks">
                 <div class="track-row">
                     <div class="track-head"><span class="track-name">V1</span></div>
-                    <div class="track-lane" id="lane-video">
-                        <canvas id="film"></canvas>
-                        <span id="clip-label"></span>
-                    </div>
+                    <div class="track-lane" id="lane-video"><canvas id="film"></canvas></div>
                 </div>
                 <div class="track-row">
                     <div class="track-head"><span class="track-name">A1</span></div>
-                    <div class="track-lane" id="lane-audio">
-                        <canvas id="wave"></canvas>
-                        <span id="audio-label" class="lane-note"></span>
-                    </div>
+                    <div class="track-lane" id="lane-audio"><canvas id="wave"></canvas></div>
                 </div>
                 <div id="playhead"></div>
+            </div>
+            <div id="tl-scroll-row">
+                <div class="track-head"></div>
+                <div id="tl-scroll"><div id="tl-thumb"></div></div>
             </div>
         </div>
     </footer>
