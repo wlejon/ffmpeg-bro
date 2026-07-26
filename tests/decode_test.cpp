@@ -78,6 +78,8 @@ void testFile(const std::string& path) {
            "dimensions known before first decode (%dx%d)",
            pipe.frameWidth(), pipe.frameHeight());
     checkf(pipe.durationNs() > 0, "duration reported (%.3f s)", pipe.durationNs() / 1e9);
+    checkf(pipe.frameRate() > 0.0 && pipe.frameRate() < 1000.0,
+           "frame rate reported (%.3f fps)", pipe.frameRate());
 
     // ── the first frame decodes and is not blank ───────────────────────────
     pipe.advanceTo(0);
@@ -111,12 +113,54 @@ void testFile(const std::string& path) {
         pipe.seekTo(target);
         check(pipe.hasFrame(), "frame available after seek");
         check(hasContent(pipe.currentRgba()), "post-seek frame has image content");
-        // Landing within a GOP of the target is the contract: seeks go to the
-        // keyframe at or before, then decode forward.
+        // The contract is the frame the instant falls INSIDE: the last one at
+        // or before the target, so the delta is one frame at most and never
+        // positive.
         const double delta = (pipe.currentPts() - target) / 1e9;
-        checkf(delta > -0.05 && delta < 2.0,
+        checkf(delta > -0.2 && delta <= 0.0,
                "seek to %.3f s landed at %.3f s (delta %.3f s)",
                target / 1e9, pipe.currentPts() / 1e9, delta);
+
+        // ── stepping moves by pictures, and is reversible ──────────────────
+        // The emulation every player reaches for — currentTime += 1/fps —
+        // cannot do this: with a 1/12800 timebase and B-frames the seconds
+        // round trip misses the boundary and a back step lands where it
+        // started.
+        const TimeNs origin = pipe.currentPts();
+        check(pipe.stepFrame(1), "step forward reports a move");
+        checkf(pipe.currentPts() > origin, "step forward advanced (%.4f -> %.4f s)",
+               origin / 1e9, pipe.currentPts() / 1e9);
+        check(hasContent(pipe.currentRgba()), "stepped frame has image content");
+
+        check(pipe.stepFrame(-1), "step back reports a move");
+        checkf(pipe.currentPts() == origin,
+               "step back returns to the exact frame (%.4f vs %.4f s)",
+               pipe.currentPts() / 1e9, origin / 1e9);
+
+        // Repeatedly, in both directions — the failure mode was a step that
+        // silently did nothing every time.
+        TimeNs walk = origin;
+        int fwd = 0;
+        for (int i = 0; i < 5; ++i) {
+            if (!pipe.stepFrame(1)) break;
+            if (pipe.currentPts() <= walk) break;
+            walk = pipe.currentPts();
+            ++fwd;
+        }
+        checkf(fwd == 5, "five forward steps each moved (%d)", fwd);
+        int back = 0;
+        for (int i = 0; i < 5; ++i) {
+            if (!pipe.stepFrame(-1)) break;
+            if (pipe.currentPts() >= walk) break;
+            walk = pipe.currentPts();
+            ++back;
+        }
+        checkf(back == 5, "five back steps each moved (%d)", back);
+        checkf(pipe.currentPts() == origin, "the walk was exactly reversible");
+
+        // Nothing before the first frame.
+        pipe.seekTo(0);
+        check(!pipe.stepFrame(-1), "no frame before the first");
 
         // Seeking backwards must not resurrect frames from ahead of the
         // target — that is what decoder flush() is for.

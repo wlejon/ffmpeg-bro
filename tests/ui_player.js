@@ -116,6 +116,39 @@ video.currentTime = 0;
 pump(120);
 ok(video.currentTime < 0.5, `seek back to 0 landed at ${video.currentTime.toFixed(3)}s`);
 
+// ── frame stepping moves by pictures, both ways ────────────────────────────
+// The bug: the buttons used to do currentTime += 1/fps, and a back step landed
+// on the frame it started from, so nothing happened.
+
+console.log('\nframe step');
+video.currentTime = video.duration * 0.4;
+pump(60);
+const stepOrigin = video.currentTime;
+
+el('btn-next').click();
+pump(60);
+const stepped = video.currentTime;
+ok(stepped > stepOrigin,
+   `next frame advanced ${stepOrigin.toFixed(4)} → ${stepped.toFixed(4)}s`);
+ok(stepped - stepOrigin < 0.2,
+   `and it moved one frame, not a chunk of time (${(stepped - stepOrigin).toFixed(4)}s)`);
+
+el('btn-prev').click();
+pump(60);
+ok(Math.abs(video.currentTime - stepOrigin) < 0.0005,
+   `previous frame came back to ${stepOrigin.toFixed(4)}s (${video.currentTime.toFixed(4)}s)`);
+
+let walk = video.currentTime;
+let movedBack = 0;
+for (let i = 0; i < 4; i++) {
+    el('btn-prev').click();
+    pump(30);
+    if (video.currentTime < walk) movedBack++;
+    walk = video.currentTime;
+}
+ok(movedBack === 4, `four back steps each moved (${movedBack})`);
+screenshot('out/04-stepped.png');
+
 // ── controls are wired ─────────────────────────────────────────────────────
 
 console.log('\ncontrols');
@@ -162,7 +195,7 @@ el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') >= 0, 'body enters fullscreen mode');
 flush();
-screenshot('out/04-fullscreen.png');
+screenshot('out/05-fullscreen.png');
 el('btn-full').click();
 pump(80);
 ok(document.body.className.indexOf('fs') < 0, 'fullscreen toggles back off');

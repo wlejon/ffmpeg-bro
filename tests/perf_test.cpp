@@ -76,6 +76,23 @@ int main(int argc, char* argv[]) {
         report("advanceTo (+1 frame, no seek)", msSince(t0), n);
     }
 
+    // Frame stepping, the transport button people hold down. Forward is one
+    // decode; backward has to walk the GOP again, which is inherent.
+    {
+        pipe.seekTo(dur / 2);
+        auto t0 = Clock::now();
+        const int n = 30;
+        for (int i = 0; i < n; ++i) pipe.stepFrame(1);
+        report("stepFrame(+1)", msSince(t0), n);
+    }
+    {
+        pipe.seekTo(dur / 2);
+        auto t0 = Clock::now();
+        const int n = 30;
+        for (int i = 0; i < n; ++i) pipe.stepFrame(-1);
+        report("stepFrame(-1)", msSince(t0), n);
+    }
+
     // ── the layers underneath ──────────────────────────────────────────────
     const MediaBackend* be = nullptr;
     std::unique_ptr<MediaSource> src;

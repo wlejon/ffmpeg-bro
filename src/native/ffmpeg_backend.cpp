@@ -164,6 +164,11 @@ public:
             if (isVideo) {
                 t.width = static_cast<uint32_t>(par->width);
                 t.height = static_cast<uint32_t>(par->height);
+                // Prefers the container's declared rate and falls back to one
+                // measured from the timestamps, which is what makes this
+                // sensible for a variable-frame-rate phone capture.
+                const AVRational fr = av_guess_frame_rate(fmt_, st, nullptr);
+                if (fr.num > 0 && fr.den > 0) t.frameRate = av_q2d(fr);
             } else {
                 t.sampleRate = static_cast<uint32_t>(par->sample_rate);
                 t.channels = static_cast<uint32_t>(par->ch_layout.nb_channels);

@@ -85,7 +85,9 @@ function open(path) {
     }
 
     info = probe;
-    fps = (probe.video && probe.video.fps) || 25;
+    // Only for the timecode readout and the End key — stepping asks the
+    // engine, which knows where the frames actually are.
+    fps = (probe.video && probe.video.fps) || video.frameRate || 25;
 
     // Assigning src loads it; an explicit load() here would open the file a
     // second time and throw the first decode away.
@@ -199,10 +201,16 @@ function togglePlay() {
 
 // Frame stepping pauses first: nudging while running would race the clock and
 // land somewhere the user did not ask for.
+//
+// video.stepFrame() moves by decoded pictures. Doing it the usual way —
+// currentTime += 1/fps — does not work: the frame rate is an average, and the
+// seconds round trip misses the frame boundary, so a back step lands on the
+// frame it started from and nothing happens.
 function step(frames) {
     if (!loaded) return;
     if (!video.paused) video.pause();
-    seek(video.currentTime + frames / fps);
+    video.stepFrame(frames);
+    sync();
 }
 
 function seek(seconds) {
@@ -214,7 +222,7 @@ function seek(seconds) {
 
 btnPlay.addEventListener('click', togglePlay);
 btnStart.addEventListener('click', () => seek(0));
-btnEnd.addEventListener('click', () => seek((video.duration || 0) - 1 / fps));
+btnEnd.addEventListener('click', () => seek(video.duration || 0));
 btnPrev.addEventListener('click', () => step(-1));
 btnNext.addEventListener('click', () => step(1));
 
@@ -296,10 +304,12 @@ document.addEventListener('keydown', (e) => {
 
     switch (e.key) {
         case ' ':          togglePlay(); break;
-        case 'ArrowLeft':  step(e.shiftKey ? -fps : -1); break;
-        case 'ArrowRight': step(e.shiftKey ?  fps :  1); break;
+        // Shift is a second of time, not a second's worth of frames: one seek
+        // instead of `fps` of them, and it means the same thing.
+        case 'ArrowLeft':  if (e.shiftKey) seek(video.currentTime - 1); else step(-1); break;
+        case 'ArrowRight': if (e.shiftKey) seek(video.currentTime + 1); else step(1); break;
         case 'Home':       seek(0); break;
-        case 'End':        seek((video.duration || 0) - 1 / fps); break;
+        case 'End':        seek(video.duration || 0); break;
         case 'j':          nudgeRate(-1); break;
         case 'k':          if (!video.paused) video.pause(); sync(); break;
         case 'l':          nudgeRate(1); break;
