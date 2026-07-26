@@ -34,6 +34,7 @@ find_package(FFMPEG REQUIRED)
 add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
     src/native/ffmpeg_bindings.cpp
+    src/native/ffmpeg_export.cpp
 )
 target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
@@ -70,6 +71,12 @@ endif()
 add_executable(ffmpeg-bro-decodetest tests/decode_test.cpp)
 target_link_libraries(ffmpeg-bro-decodetest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-decodetest PRIVATE "${BRO_DIR}/src")
+
+# Renders a timeline and opens the result: canvas geometry, opacity, the audio
+# mix, cancellation, and that what came out is a file this app can read back.
+add_executable(ffmpeg-bro-exporttest tests/export_test.cpp)
+target_link_libraries(ffmpeg-bro-exporttest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-exporttest PRIVATE "${BRO_DIR}/src")
 
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)

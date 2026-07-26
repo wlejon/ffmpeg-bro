@@ -1,8 +1,10 @@
 #include "ffmpeg_bindings.h"
 
 #include "ffmpeg_backend.h"
+#include "ffmpeg_export.h"
 
 #include <string>
+#include <vector>
 
 namespace ffmpegbro {
 
@@ -10,6 +12,45 @@ namespace {
 
 void setStr(JSContext* ctx, JSValue obj, const char* key, const std::string& v) {
     JS_SetPropertyStr(ctx, obj, key, JS_NewStringLen(ctx, v.data(), v.size()));
+}
+
+// ── Reading a plain JS object ──────────────────────────────────────────────
+//
+// The render spec is a JS object literal built by the UI, so every field is
+// optional and every default lives here rather than being repeated in the
+// caller.
+
+double numProp(JSContext* ctx, JSValueConst obj, const char* key, double fallback) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    double out = fallback;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+        double d = 0;
+        if (JS_ToFloat64(ctx, &d, v) == 0 && d == d) out = d;
+    }
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
+bool boolProp(JSContext* ctx, JSValueConst obj, const char* key, bool fallback) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    const bool out = (JS_IsUndefined(v) || JS_IsNull(v)) ? fallback : JS_ToBool(ctx, v) == 1;
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
+std::string strProp(JSContext* ctx, JSValueConst obj, const char* key,
+                    const std::string& fallback) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    std::string out = fallback;
+    if (JS_IsString(v)) {
+        size_t len = 0;
+        if (const char* s = JS_ToCStringLen(ctx, &len, v)) {
+            out.assign(s, len);
+            JS_FreeCString(ctx, s);
+        }
+    }
+    JS_FreeValue(ctx, v);
+    return out;
 }
 
 JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
@@ -97,6 +138,258 @@ JSValue js_probe(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return out;
 }
 
+// ── bro.ffmpeg.render ──────────────────────────────────────────────────────
+//
+// Rendering runs on its own thread and the UI polls it, rather than the render
+// calling back into JS. A callback would have to be marshalled onto the JS
+// thread anyway — QuickJS has one — and polling costs a lock per animation
+// frame, which is nothing next to encoding one.
+
+/// One clip out of `spec.clips`. The placement rectangle arrives in canvas
+/// pixels: ui/viewer.js already knows how to work it out and there is no
+/// second implementation here to disagree with it.
+ExportClip clipFromJs(JSContext* ctx, JSValueConst o) {
+    ExportClip c;
+    c.path = strProp(ctx, o, "path", "");
+    c.start = numProp(ctx, o, "start", 0);
+    c.length = numProp(ctx, o, "length", 0);
+    c.inPoint = numProp(ctx, o, "inPoint", 0);
+    c.x = numProp(ctx, o, "x", 0);
+    c.y = numProp(ctx, o, "y", 0);
+    c.w = numProp(ctx, o, "w", 0);
+    c.h = numProp(ctx, o, "h", 0);
+    c.opacity = numProp(ctx, o, "opacity", 1.0);
+    c.volume = numProp(ctx, o, "volume", 1.0);
+    c.muted = boolProp(ctx, o, "muted", false);
+    c.z = static_cast<int>(numProp(ctx, o, "z", 0));
+
+    JSValue crop = JS_GetPropertyStr(ctx, o, "crop");
+    if (JS_IsObject(crop)) {
+        c.cropL = numProp(ctx, crop, "l", 0);
+        c.cropT = numProp(ctx, crop, "t", 0);
+        c.cropR = numProp(ctx, crop, "r", 0);
+        c.cropB = numProp(ctx, crop, "b", 0);
+    }
+    JS_FreeValue(ctx, crop);
+    return c;
+}
+
+/// `{ g: 60, bf: 2, "x264-params": "aq-mode=3" }` — the natural JS shape for a
+/// bag of ffmpeg arguments. Numbers are stringified here rather than in the UI
+/// so that a control emitting 23 and one emitting "23" mean the same thing.
+std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst spec, const char* key) {
+    std::vector<ExportOption> out;
+    JSValue obj = JS_GetPropertyStr(ctx, spec, key);
+    if (!JS_IsObject(obj)) { JS_FreeValue(ctx, obj); return out; }
+
+    JSPropertyEnum* props = nullptr;
+    uint32_t count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &props, &count, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t i = 0; i < count; ++i) {
+            JSValue v = JS_GetProperty(ctx, obj, props[i].atom);
+            // An option deliberately left unset is absent, not empty: null and
+            // undefined mean "do not pass this", which is what lets the UI keep
+            // a blank field in its model without it reaching the encoder.
+            if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+                const char* name = JS_AtomToCString(ctx, props[i].atom);
+                size_t len = 0;
+                const char* val = JS_ToCStringLen(ctx, &len, v);
+                if (name && val && *name) out.push_back({name, std::string(val, len)});
+                if (name) JS_FreeCString(ctx, name);
+                if (val) JS_FreeCString(ctx, val);
+            }
+            JS_FreeValue(ctx, v);
+            JS_FreeAtom(ctx, props[i].atom);
+        }
+        js_free(ctx, props);
+    }
+    JS_FreeValue(ctx, obj);
+    return out;
+}
+
+JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "render.start(spec) requires a spec object");
+    JSValueConst spec = argv[0];
+
+    ExportSettings s;
+    s.path = strProp(ctx, spec, "path", "");
+    s.width = static_cast<int>(numProp(ctx, spec, "width", 1920));
+    s.height = static_cast<int>(numProp(ctx, spec, "height", 1080));
+    s.fps = numProp(ctx, spec, "fps", 30);
+    s.startTime = numProp(ctx, spec, "start", 0);
+    s.endTime = numProp(ctx, spec, "end", 0);
+    s.videoCodec = strProp(ctx, spec, "videoCodec", "libx264");
+    s.audioCodec = strProp(ctx, spec, "audioCodec", "aac");
+    s.crf = static_cast<int>(numProp(ctx, spec, "crf", 20));
+    s.videoBitrateKbps = static_cast<int>(numProp(ctx, spec, "videoBitrate", 0));
+    s.preset = strProp(ctx, spec, "preset", "medium");
+    s.includeAudio = boolProp(ctx, spec, "audio", true);
+    s.audioBitrateKbps = static_cast<int>(numProp(ctx, spec, "audioBitrate", 192));
+    s.audioSampleRate = static_cast<int>(numProp(ctx, spec, "sampleRate", 48000));
+    s.audioChannels = static_cast<int>(numProp(ctx, spec, "channels", 2));
+    s.pixelFormat = strProp(ctx, spec, "pixelFormat", "");
+    s.scaler = strProp(ctx, spec, "scaler", "");
+    s.colorspace = strProp(ctx, spec, "colorspace", "");
+    s.colorRange = strProp(ctx, spec, "colorRange", "");
+    s.faststart = boolProp(ctx, spec, "faststart", true);
+    s.title = strProp(ctx, spec, "title", "");
+    s.videoOptions = optionsFromJs(ctx, spec, "videoOptions");
+    s.audioOptions = optionsFromJs(ctx, spec, "audioOptions");
+    s.formatOptions = optionsFromJs(ctx, spec, "formatOptions");
+
+    std::vector<ExportClip> clips;
+    JSValue arr = JS_GetPropertyStr(ctx, spec, "clips");
+    if (JS_IsArray(arr)) {
+        JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
+        uint32_t len = 0;
+        JS_ToUint32(ctx, &len, lenv);
+        JS_FreeValue(ctx, lenv);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+            if (JS_IsObject(item)) clips.push_back(clipFromJs(ctx, item));
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, arr);
+
+    std::string err;
+    if (!startExport(s, clips, &err))
+        return JS_ThrowTypeError(ctx, "cannot start the render: %s", err.c_str());
+    return JS_TRUE;
+}
+
+const char* stateName(ExportStatus::State s) {
+    switch (s) {
+        case ExportStatus::State::Running:   return "running";
+        case ExportStatus::State::Done:      return "done";
+        case ExportStatus::State::Failed:    return "failed";
+        case ExportStatus::State::Cancelled: return "cancelled";
+        case ExportStatus::State::Idle:      break;
+    }
+    return "idle";
+}
+
+JSValue js_renderPoll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const ExportStatus st = exportStatus();
+    JSValue o = JS_NewObject(ctx);
+    setStr(ctx, o, "state", stateName(st.state));
+    JS_SetPropertyStr(ctx, o, "running",
+                      JS_NewBool(ctx, st.state == ExportStatus::State::Running));
+    JS_SetPropertyStr(ctx, o, "progress", JS_NewFloat64(ctx, st.progress));
+    JS_SetPropertyStr(ctx, o, "frames", JS_NewInt64(ctx, st.framesDone));
+    JS_SetPropertyStr(ctx, o, "totalFrames", JS_NewInt64(ctx, st.framesTotal));
+    JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, st.elapsedSec));
+    JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, st.encodeFps));
+    JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, st.bytesWritten));
+    setStr(ctx, o, "path", st.path);
+    setStr(ctx, o, "stage", st.stage);
+    setStr(ctx, o, "error", st.error);
+    return o;
+}
+
+JSValue js_renderCancel(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    cancelExport();
+    return JS_UNDEFINED;
+}
+
+JSValue stringsToJs(JSContext* ctx, const std::vector<std::string>& v) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& s : v)
+        JS_SetPropertyUint32(ctx, arr, i++, JS_NewStringLen(ctx, s.data(), s.size()));
+    return arr;
+}
+
+JSValue intsToJs(JSContext* ctx, const std::vector<int>& v) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (int n : v) JS_SetPropertyUint32(ctx, arr, i++, JS_NewInt32(ctx, n));
+    return arr;
+}
+
+JSValue codecListToJs(JSContext* ctx, const std::vector<CodecOption>& list) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& c : list) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "id", c.id);
+        setStr(ctx, o, "label", c.label);
+        setStr(ctx, o, "longName", c.longName);
+        JS_SetPropertyStr(ctx, o, "crf", JS_NewBool(ctx, c.supportsCrf));
+        JS_SetPropertyStr(ctx, o, "preset", JS_NewBool(ctx, c.supportsPreset));
+        JS_SetPropertyStr(ctx, o, "qp", JS_NewBool(ctx, c.supportsQp));
+        JS_SetPropertyStr(ctx, o, "tune", JS_NewBool(ctx, c.supportsTune));
+        JS_SetPropertyStr(ctx, o, "hardware", JS_NewBool(ctx, c.hardware));
+        JS_SetPropertyStr(ctx, o, "intraOnly", JS_NewBool(ctx, c.intraOnly));
+        JS_SetPropertyStr(ctx, o, "lossless", JS_NewBool(ctx, c.lossless));
+        JS_SetPropertyStr(ctx, o, "alwaysLossless", JS_NewBool(ctx, c.alwaysLossless));
+        JS_SetPropertyStr(ctx, o, "losslessOption", JS_NewBool(ctx, c.losslessOption));
+        JS_SetPropertyStr(ctx, o, "crfMin", JS_NewFloat64(ctx, c.crfMin));
+        JS_SetPropertyStr(ctx, o, "crfMax", JS_NewFloat64(ctx, c.crfMax));
+        JS_SetPropertyStr(ctx, o, "crfDefault", JS_NewFloat64(ctx, c.crfDefault));
+        JS_SetPropertyStr(ctx, o, "pixelFormats", stringsToJs(ctx, c.pixelFormats));
+        JS_SetPropertyStr(ctx, o, "presets", stringsToJs(ctx, c.presets));
+        JS_SetPropertyStr(ctx, o, "tunes", stringsToJs(ctx, c.tunes));
+        JS_SetPropertyStr(ctx, o, "profiles", stringsToJs(ctx, c.profiles));
+        JS_SetPropertyStr(ctx, o, "profileLabels", stringsToJs(ctx, c.profileLabels));
+        JS_SetPropertyStr(ctx, o, "sampleRates", intsToJs(ctx, c.sampleRates));
+        JS_SetPropertyStr(ctx, o, "channelCounts", intsToJs(ctx, c.channelCounts));
+        JS_SetPropertyStr(ctx, o, "containers", stringsToJs(ctx, c.containers));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+/// bro.ffmpeg.encoderOptions(name) — every private option of one encoder.
+/// Looked up on demand rather than built for all of them at startup: x265
+/// alone has some eighty, and the dialog only ever shows one encoder's.
+JSValue js_encoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "encoderOptions(name) requires an encoder name");
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_EXCEPTION;
+    const auto opts = encoderOptions(name);
+    JS_FreeCString(ctx, name);
+
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& o : opts) {
+        JSValue e = JS_NewObject(ctx);
+        setStr(ctx, e, "name", o.name);
+        setStr(ctx, e, "help", o.help);
+        setStr(ctx, e, "type", o.type);
+        setStr(ctx, e, "unit", o.unit);
+        setStr(ctx, e, "default", o.defaultValue);
+        JS_SetPropertyStr(ctx, e, "min", JS_NewFloat64(ctx, o.min));
+        JS_SetPropertyStr(ctx, e, "max", JS_NewFloat64(ctx, o.max));
+        JS_SetPropertyStr(ctx, e, "hasRange", JS_NewBool(ctx, o.hasRange));
+
+        JSValue vals = JS_NewArray(ctx);
+        uint32_t vi = 0;
+        for (const auto& v : o.values) {
+            JSValue vo = JS_NewObject(ctx);
+            setStr(ctx, vo, "name", v.name);
+            setStr(ctx, vo, "help", v.help);
+            JS_SetPropertyStr(ctx, vo, "value", JS_NewInt64(ctx, v.value));
+            JS_SetPropertyUint32(ctx, vals, vi++, vo);
+        }
+        JS_SetPropertyStr(ctx, e, "values", vals);
+        JS_SetPropertyUint32(ctx, arr, i++, e);
+    }
+    return arr;
+}
+
+JSValue js_tempPath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "tempPath(name) requires a name");
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_EXCEPTION;
+    const std::string out = tempPath(name);
+    JS_FreeCString(ctx, name);
+    return JS_NewStringLen(ctx, out.data(), out.size());
+}
+
 std::string g_initialMedia;
 
 } // namespace
@@ -126,6 +419,36 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, ns, "hwaccels", hw);
 
     JS_SetPropertyStr(ctx, ns, "probe", JS_NewCFunction(ctx, js_probe, "probe", 1));
+
+    // What this build can write, asked of libavcodec rather than assumed: a
+    // menu offering H.265 on a build without x265 is a menu that fails at the
+    // last step.
+    JS_SetPropertyStr(ctx, ns, "encoders", codecListToJs(ctx, availableVideoEncoders()));
+    JS_SetPropertyStr(ctx, ns, "audioEncoders", codecListToJs(ctx, availableAudioEncoders()));
+
+    JSValue containers = JS_NewArray(ctx);
+    uint32_t ci = 0;
+    for (const auto& c : availableContainers()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "ext", c.ext);
+        setStr(ctx, o, "label", c.label);
+        setStr(ctx, o, "longName", c.longName);
+        setStr(ctx, o, "videoCodec", c.videoCodec);
+        setStr(ctx, o, "audioCodec", c.audioCodec);
+        JS_SetPropertyStr(ctx, o, "videoCodecs", stringsToJs(ctx, c.videoCodecs));
+        JS_SetPropertyStr(ctx, o, "audioCodecs", stringsToJs(ctx, c.audioCodecs));
+        JS_SetPropertyUint32(ctx, containers, ci++, o);
+    }
+    JS_SetPropertyStr(ctx, ns, "containers", containers);
+    JS_SetPropertyStr(ctx, ns, "encoderOptions",
+                      JS_NewCFunction(ctx, js_encoderOptions, "encoderOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "tempPath", JS_NewCFunction(ctx, js_tempPath, "tempPath", 1));
+
+    JSValue render = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, render, "start", JS_NewCFunction(ctx, js_renderStart, "start", 1));
+    JS_SetPropertyStr(ctx, render, "poll", JS_NewCFunction(ctx, js_renderPoll, "poll", 0));
+    JS_SetPropertyStr(ctx, render, "cancel", JS_NewCFunction(ctx, js_renderCancel, "cancel", 0));
+    JS_SetPropertyStr(ctx, ns, "render", render);
     JS_SetPropertyStr(ctx, ns, "openOnStart",
                       g_initialMedia.empty()
                           ? JS_NULL

@@ -11,6 +11,12 @@
         <span id="filename" class="dim">no media</span>
         <span id="chips"></span>
         <span class="spacer"></span>
+        <!-- Two screens, not a screen and a dialog. Which one you are on is a
+             property of the window, so it is stated where the window is named. -->
+        <div id="workspaces" class="seg">
+            <button id="ws-edit" class="tiny on" title="The timeline (Esc)">Edit</button>
+            <button id="ws-output" class="tiny" title="Choose what to write (E)">Output</button>
+        </div>
         <span id="libav" class="dim mono"></span>
     </header>
 
@@ -117,6 +123,7 @@
                 <div class="group">
                     <button id="btn-split" class="text" title="Split at the playhead (S)">Split</button>
                     <button id="btn-grid" class="text" title="Lay every clip out as a grid (G)">Grid</button>
+                    <button id="btn-export" class="text" title="Render the timeline to a file (E)">Export</button>
                 </div>
                 <span class="spacer"></span>
                 <span class="dim tl-hint">wheel zooms &middot; shift+wheel pans &middot;
@@ -141,6 +148,29 @@
             </div>
         </div>
     </footer>
+
+    <!-- The Output workspace. A screen rather than a modal, because encoder
+         settings are chosen by looking at what they do to the picture: the A/B
+         comparison is the whole reason the thing exists, and it wants the
+         window, not a box in the middle of one. The advanced option list gets
+         a column of its own for the same reason — there are eighty of them for
+         x265 and they were being read through a slot. -->
+    <section id="output" class="hidden">
+        <div id="ex-intent" class="ex-intent"></div>
+        <div id="ex-form" class="ex-panes">
+            <div id="ex-settings" class="ex-col ex-left"></div>
+            <div id="ex-preview" class="ex-stage-col"></div>
+            <div id="ex-advanced" class="ex-col ex-right hidden"></div>
+        </div>
+        <div id="ex-progress" class="ex-progress hidden"></div>
+        <div id="ex-strip" class="ex-strip-bar"></div>
+        <div class="ex-foot">
+            <div id="ex-summary" class="ex-summary mono dim"></div>
+            <span class="spacer"></span>
+            <button id="ex-cancel" class="text">Close</button>
+            <button id="ex-go" class="text primary">Export</button>
+        </div>
+    </section>
 
     <script type="module" src="app.js"></script>
 </body>

@@ -568,3 +568,282 @@ body.fs #viewer { background: #000; }
 body.fs #stage { box-shadow: none; }
 body.fs #dropzone { display: none; }
 body.fs #cropbox { display: none; }
+
+/* ── the Output workspace ─────────────────────────────────────────────────
+
+   A screen rather than a modal. What makes an encoder setting hard to choose
+   is that you cannot see it, so the comparison is the thing this screen is
+   for — and a comparison worth making is one you can look at across the
+   window rather than through a porthole. The settings and the option list
+   flank it and scroll on their own; the range and the summary run the full
+   width underneath, where a timeline belongs. */
+
+#output {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg);
+}
+#output.hidden { display: none; }
+
+/* One workspace at a time. Hiding rather than unmounting: the viewer's
+   <video> elements are the decoders, and tearing them down to look at an
+   export would mean rebuilding and re-seeking every one of them on the way
+   back. */
+body.ws-output #main,
+body.ws-output #controls { display: none; }
+
+#workspaces { flex-shrink: 0; }
+
+/* The presets. Six buttons that between them cover most renders, so the
+   twenty controls below them are for the render that is not one of the six. */
+.ex-intent {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+.ex-intent-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Three columns: what to write, what it looks like, and every knob the
+   encoder has. The middle one is the one that grows. */
+.ex-panes {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+.ex-panes.hidden { display: none; }
+.ex-col { overflow-y: auto; min-height: 0; }
+.ex-left { width: 380px; flex-shrink: 0; padding: 4px 12px 16px; }
+.ex-right {
+    width: 400px;
+    flex-shrink: 0;
+    padding: 4px 12px 16px;
+    border-left: 1px solid var(--line);
+    background: #191c22;
+}
+.ex-right.hidden { display: none; }
+
+/* The picture column. Everything in it is fixed height except the stage,
+   which takes the rest of the window — the point of the screen. */
+.ex-stage-col {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 12px 8px;
+    border-left: 1px solid var(--line);
+}
+
+/* Nothing in this column is a labelled row, so its headings line up with the
+   picture rather than with a gutter that is not there. */
+.ex-stage-col .section-head { padding-left: 0; padding-right: 0; }
+
+.ex-progress { flex: 1; overflow-y: auto; padding: 16px 14px; }
+.ex-progress.hidden { display: none; }
+
+.ex-strip-bar {
+    flex-shrink: 0;
+    padding: 2px 12px 0;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+}
+.ex-strip-bar.hidden { display: none; }
+/* The bar already has the gutter; the heading must not add a second one. */
+.ex-strip-bar .section-head { padding: 4px 0 3px; margin-top: 0; }
+.ex-strip-bar .ex-pv-row { margin-bottom: 4px; }
+/* One line. Wrapped, the in/out readout pushes the strip up by its own height
+   every time the numbers get longer. */
+#ex-range-nums { white-space: nowrap; }
+
+.ex-foot {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+    flex-shrink: 0;
+}
+.ex-foot button.hidden { display: none; }
+.ex-foot .ex-summary { flex: 1; min-width: 0; }
+
+#ex-settings input.wide, #ex-advanced input.wide { width: 100%; box-sizing: border-box; }
+#ex-settings select, #ex-advanced select { max-width: 100%; }
+#ex-settings input[type=range] { width: 140px; }
+#ex-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiny-note { font-size: 11px; }
+
+.ex-toggle { cursor: pointer; user-select: none; }
+.ex-toggle:hover { color: var(--accent); }
+.ex-note { font-size: 11px; line-height: 1.6; padding: 4px 2px; }
+
+/* One raw ffmpeg option: what it is called, what libavcodec says it does, and
+   somewhere to put a value. */
+.ex-opt-row {
+    padding: 6px 0 7px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.ex-opt-row.set { border-left: 2px solid var(--accent); padding-left: 6px; }
+.ex-opt-name { font-size: 11.5px; }
+.ex-opt-help { font-size: 11px; line-height: 1.45; margin: 1px 0 4px; }
+.ex-opt-row select, .ex-opt-row input { width: 100%; box-sizing: border-box; }
+
+/* The A/B stage. The encoded half sits in a window with overflow:hidden whose
+   width is the wipe — the same trick the viewer uses for a crop, and just as
+   free: no compositing, no readback, two videos decoding straight to screen. */
+.ex-pv-stage {
+    position: relative;
+    flex: 1;
+    min-height: 140px;
+    width: 100%;
+    background: #08090c;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+.ex-pv-stage.empty { display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center; }
+/* Both videos are placed in pixels by fitPreviewVideos(), not stretched to
+   the box: the encoded one has to land on exactly the same pixels as the
+   reference or the wipe compares a picture against a shifted copy of itself. */
+.ex-pv-stage video {
+    position: absolute;
+    display: block;
+    object-fit: fill;
+}
+.ex-pv-window {
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    overflow: hidden;
+}
+.ex-pv-handle {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--accent);
+    cursor: ew-resize;
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.7);
+}
+.ex-pv-tag {
+    position: absolute;
+    bottom: 6px; left: 8px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #cfd4dc;
+    background: rgba(8, 9, 12, 0.6);
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+.ex-pv-tag.right { left: auto; right: 8px; }
+.ex-pv-stage.side { display: flex; gap: 2px; }
+.ex-pv-half { position: relative; flex: 1; min-width: 0; }
+.ex-pv-busy { text-align: center; width: 70%; font-size: 12px; }
+
+.ex-pv-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+/* The preview's own transport. Built like the main scrub bar because it is the
+   same kind of thing — a track, how far along it you are, and a grip. */
+.ex-pv-scrub { padding: 4px 0 8px; cursor: pointer; }
+.ex-pv-scrub-track {
+    position: relative;
+    height: 6px;
+    background: #0e1014;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+}
+.ex-pv-scrub-played {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 0;
+    background: var(--accent);
+    border-radius: 3px;
+}
+.ex-pv-scrub-head {
+    position: absolute;
+    top: -4px;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    border-radius: 6px;
+    background: #fff;
+    border: 1px solid #000;
+}
+#ex-pv-time { font-size: 12px; min-width: 92px; }
+#ex-pv-len { font-size: 12px; min-width: 96px; }
+
+.ex-pv-stats { font-size: 12px; line-height: 1.8; padding: 6px 0 2px; }
+.ex-pv-stats .good { color: var(--good); }
+.ex-pv-stats .dim { display: inline-block; min-width: 92px; }
+
+/* Full width, because that is what a timeline is: the whole edit, with the
+   part being written picked out of it. */
+.ex-strip-wrap { position: relative; }
+.ex-strip-head {
+    position: absolute;
+    top: 0;
+    bottom: 4px;
+    width: 2px;
+    margin-left: -1px;
+    background: #78c8ff;
+    pointer-events: none;
+}
+.ex-strip-head.hidden { display: none; }
+.ex-strip {
+    width: 100%;
+    height: 62px;
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    cursor: pointer;
+    margin-bottom: 4px;
+}
+
+button.text.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a1206;
+    font-weight: 600;
+}
+button.text.primary:hover { background: #ffa063; }
+
+#ex-form input[type=range] { width: 120px; }
+
+.ex-summary { line-height: 1.6; padding: 2px 0 0 2px; }
+.ex-summary .warn { color: var(--accent); }
+
+.ex-bar {
+    height: 8px;
+    background: #0e1014;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 10px 0 12px;
+}
+.ex-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.12s linear;
+}
+.ex-fill.done { background: var(--good); }
+.ex-fill.stopped { background: #4a5160; }
+
+.ex-line { font-size: 12px; line-height: 1.7; word-break: break-all; }
+.ex-line.good { color: var(--good); }
+.ex-failed { color: var(--bad); font-size: 12px; line-height: 1.7; }

@@ -1,4 +1,7 @@
 build/
 .bro_settings.json
+# localStorage, written beside the app: remembered export settings, not source.
+.storage.json
+ui/.storage.json
 *.log
 out/

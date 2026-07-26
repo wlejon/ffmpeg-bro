@@ -34,6 +34,16 @@ export function rulerLabel(seconds, spanSec) {
     return (neg ? '-' : '') + body;
 }
 
+// How long something took, rather than where it is on a timeline. clock() is
+// the wrong shape for this: a render that took a quarter of a second reads as
+// "00:00:00", which looks like it did not run.
+export function elapsed(seconds) {
+    if (!isFinite(seconds) || seconds < 0) seconds = 0;
+    if (seconds < 10) return seconds.toFixed(1) + ' s';
+    if (seconds < 60) return Math.round(seconds) + ' s';
+    return clock(seconds);
+}
+
 export function kbps(bits) { return Math.round(bits / 1000) + ' kbps'; }
 
 export function bytes(n) {

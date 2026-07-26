@@ -102,6 +102,55 @@ bro.ffmpeg.probe(path)    // in-process ffprobe: throws if the file can't be rea
 //     video, audio }          // shortcuts to the first of each
 ```
 
+```js
+// What this build can write — asked of libavcodec, not hardcoded.
+bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
+                          //    crf, preset, qp, tune,          // booleans
+                          //    hardware, intraOnly, lossless, alwaysLossless,
+                          //    crfMin, crfMax, crfDefault,
+                          //    pixelFormats, presets, tunes, profiles,
+                          //    containers }, ...]
+bro.ffmpeg.audioEncoders  // [{ id: "aac", label, sampleRates, channelCounts,
+                          //    lossless, containers }, ...]
+bro.ffmpeg.containers     // [{ ext: "mp4", label, videoCodec, audioCodec,
+                          //    videoCodecs, audioCodecs }, ...]
+
+// Every private option of one encoder, out of its AVClass. On demand: x265
+// alone has enough of them that building all of these at startup would be
+// work nobody asked for.
+bro.ffmpeg.encoderOptions("libx265")
+// → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
+//      values: [{ name, help, value }, ...] }, ...]
+
+bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
+
+// Rendering the timeline. Runs on its own thread; poll it.
+bro.ffmpeg.render.start({ path, width, height, fps, start, end,
+                          videoCodec, audioCodec, audio, clips: [...],
+                          pixelFormat, scaler, colorspace, colorRange,
+                          faststart, title, sampleRate, channels,
+                          // -key value pairs, applied with av_opt_set and
+                          // AV_OPT_SEARCH_CHILDREN — the whole of ffmpeg's
+                          // writing surface, not a subset with named fields.
+                          videoOptions: { crf: 20, preset: "slow" },
+                          audioOptions: { b: "192k" },
+                          formatOptions: {} })
+bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames,
+                            //     elapsed, fps, bytes, path, stage, error }
+bro.ffmpeg.render.cancel()
+```
+
+`render.start` throws if a job is already running. It stops being one the
+instant `poll()` reports a terminal state — the run slot is released before
+the status is published, so chaining a second render off the first's `done` is
+safe, which is what the preview does.
+
+A clip in a render spec is a file, a slice of it, and a rectangle in the output
+canvas — `{ path, start, length, inPoint, x, y, w, h, crop, opacity, volume,
+muted, z }`. Rectangles rather than fit/zoom/pan modes on purpose: the layout
+is worked out once, in `ui/viewer.js`, and both the screen and the encoder are
+driven from the same answer.
+
 `displayWidth`/`displayHeight` account for the rotation in the container's
 display matrix — a phone video is 1920×1080 on disk and 1080×1920 on screen, and
 only that side-datum says so.
@@ -209,6 +258,121 @@ several decoders each free-running on their own audio clock come apart within a
 minute. Four 1080p60 streams stay inside ~35 ms of each other; the ceiling is
 decode throughput, not the transport.
 
+## Output
+
+`Output` — the second tab in the title bar, or `Export`, or `E` — is a screen
+of its own, not a dialog. `Esc` or the `Edit` tab goes back. Choosing an
+encoder setting means looking at what it does to the picture, and the
+comparison that shows you is the whole point of the screen, so it gets the
+middle of the window: settings down the left, every option the encoder has down
+the right when you want them, the range across the bottom.
+
+Everything the viewer is showing is what gets written: the track stack
+composited bottom-up, each clip in the rectangle its fit, scale, position and
+crop put it in, at its opacity, and the grid if the grid is on. The placement
+rectangles the renderer works from are the ones `ui/viewer.js` computes, so
+there is no second layout implementation to drift away from what you were just
+looking at.
+
+The encoders are the reason this repo is GPL, and they are all here:
+
+| | |
+|---|---|
+| Video | x264, x265, AV1 (SVT / libaom), VP9, ProRes, MJPEG, MPEG-4 — plus NVENC, AMF and QSV when the build has them |
+| Audio | AAC, Opus, MP3, Vorbis, FLAC, PCM |
+| Containers | MP4, Matroska, QuickTime, WebM |
+
+The menu is built by asking libavcodec what this binary actually has rather
+than from a list, so it cannot offer an encoder that then fails at the last
+step. The same goes for what each encoder can do: its pixel formats, presets,
+tunes, profiles and the range of its quality scale are read out of libavcodec's
+own option tables, so the controls change with the encoder — x264 gets a CRF
+slider from 0 to 51 and ten presets, VP9's goes to 63, ProRes gets its six
+profiles and no quality slider at all, and NVENC gets `p1`–`p7`. Which
+containers will hold a codec comes from `avformat_query_codec` rather than from
+a table, so picking WebM narrows the codec list to the two that are legal in it.
+
+**Start from** is the top row: six named starting points — web, small, HEVC,
+ProRes master, GPU, lossless — each filtered against what this build has, so
+the NVIDIA one is absent on a machine without one. Most renders are one of
+these, and the twenty controls below are for the render that is not.
+
+**Rate control** is offered as the modes the encoder actually has: constant
+quality, a bitrate target, a capped average for streaming (`-maxrate` and
+`-bufsize`), and lossless. NVENC has no CRF, so its quality mode is `-cq` with
+the bitrate target taken out of the way; x264's lossless is `-crf 0`; VP9's is
+`-lossless 1`. That mapping lives in one function, so the summary line, the
+preview and the export cannot describe three different renders.
+
+**Every option the encoder has** is available under Advanced. The list is
+`av_opt_next` over the encoder's `AVClass` — name, type, range, default, help
+text and named values, straight out of libavcodec — with a search box over it.
+x264 reports 48 options here, x265 many more. Nothing about them is written
+down in this repo, so an ffmpeg upgrade that adds an option adds it to the app.
+
+This works because there is no private path from the controls to the encoder:
+a Quality slider produces `{crf: 20}`, the raw editor produces `{crf: 20}`, and
+both are applied with `av_opt_set(ctx, key, value, AV_OPT_SEARCH_CHILDREN)` —
+exactly how the `ffmpeg` command line applies its own arguments. Anything
+documented for `ffmpeg -c:v libx265 -x265-params …` works here unchanged. The
+summary at the bottom shows the result as a command line, because that is the
+shortest complete statement of what is about to happen. An option the encoder
+does not have is an error, not a shrug: a render that succeeds while silently
+ignoring half of what it was told is the worst of the three outcomes.
+
+### Preview
+
+The hard part of encoding is not finding the settings, it is knowing what they
+cost. `Render preview` encodes a few seconds — 1 to 10, from wherever you were
+looking — at the exact settings, *and* the same frames losslessly, and lays one
+over the other with a wipe you can drag. The lossless one is what the
+compositor produced before any encoder saw it, so the difference on screen is
+what the settings cost and nothing else.
+
+Underneath it: what those seconds weighed, the bitrate they came to, and the
+size the whole render extrapolates to — which is the number the summary then
+quotes, because a measurement beats an estimate. Also how fast it encoded, and
+therefore how long the whole thing will take.
+
+It plays, and the two halves run together to the frame — banding crawls and
+grass smears, and neither shows on a still. `Space` starts and stops it, the
+arrows step a frame at a time, and the scrub bar under the picture goes
+anywhere in it; both sides are seeked to exactly the same frame, because a wipe
+between two moments a fraction of a second apart shows the movement between
+them rather than what the encoder did. The timecode is the **timeline's**, not
+the little preview file's, and a marker runs along the range strip below — so
+the frame you are looking at is one you can go back and find on the edit.
+
+Changing the quality re-renders only the candidate; the reference is of the
+same frames and does not move. Changing the size or the edit invalidates both.
+Both files go to a temp directory and are overwritten each time — the lossless
+one is large, on the order of 15 MB per second at 720p.
+
+**Range** is the strip across the bottom: the whole edit with a ruler over it
+and one bar per track, the part being written picked out. Drag its ends to
+write part of the timeline, and drag the lane beneath to move where the preview
+samples from.
+
+**Sound** is mixed, not picked from: every clip under the playhead contributes,
+at its own level and mute, summed and clamped. A clip's in-point is honoured to
+the sample — a seek lands on a packet boundary at or before the target, and
+what is between the two is dropped rather than played.
+
+**Colour** is converted rather than reinterpreted. Sources are decoded through
+their own matrix (BT.709, BT.601, BT.2020 — whatever the file says, or what its
+size implies when it says nothing), and the output is tagged to match what was
+actually written, so the result does not come back a little green.
+
+The render runs on its own thread: the UI keeps drawing, the progress bar has a
+frame count, an encode rate and an estimate, and `Stop` stops it. A stopped
+render still closes its file properly — a half-written MP4 with no index plays
+nowhere, so the part that was rendered is left playable. When it finishes, one
+button puts the result back on the timeline, which is the fastest way to see
+what you just made.
+
+Rotation is applied here: a phone clip that was shot upright is written
+upright, from the container's display matrix.
+
 ## Keyboard
 
 | Key | Action |
@@ -224,6 +388,8 @@ decode throughput, not the transport.
 | `C` | crop handles on the picture (`Esc` leaves) |
 | `S` | split the selection at the playhead |
 | `G` | grid / stacked layout |
+| `E` | the Output workspace (`Esc` goes back to the edit) |
+| `Space` `←` `→` | on the Output screen: play / pause and step the comparison |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
 | `Delete` | remove the selection |
 
@@ -231,7 +397,9 @@ decode throughput, not the transport.
 
 ```
 ./build/Release/ffmpeg-bro-decodetest <file>          # backend: demux, decode, seek, audio
+./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ```
 
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
@@ -243,6 +411,19 @@ transport buttons are one width, that the transport is on the window's centre
 line and the zoom controls on the timeline's left edge — because a mistyped
 icon name or a stray width breaks none of the behaviour and all of the look.
 
+`exporttest` renders a timeline and then opens what it wrote, which is the only
+way to check the things nobody can see until the render is over: that a clip
+lands in the rectangle it was given and the rest of the canvas stays black,
+that opacity is a blend and not a switch (half of a picture over black is half
+as bright, whatever the picture is), that overlapping clips are summed rather
+than picked between, and that stopping half way still leaves a playable file.
+`ui_export.js` drives the Output workspace and checks the join above it — that the spec
+it builds is the edit that is on screen, that every control turns into the
+ffmpeg option it claims to be (and that a raw option beats the control setting
+the same key), that the advanced editor's list is libavcodec's, that both
+halves of the A/B preview render and land on identical pixels, and that the
+file that comes out can be dropped straight back on the timeline.
+
 ## Not yet
 
 Honest list of what does not work:
@@ -250,10 +431,27 @@ Honest list of what does not work:
 - **Audio-only files.** bro's `<video>` drives its clock from decoded pictures,
   so a file with no video track has nothing to advance. The UI says so rather
   than sitting at 0:00.
-- **Export.** The encoders are linked and the UI has no surface for them yet.
-- **Rendering the canvas.** Scale, position, crop, opacity, the track stack and
-  the grid are all live on the viewer and describe what an export *would* do —
-  but with no export, they only affect what you are looking at.
+- **Rotation on playback.** Export reads the container's display matrix and
+  writes the picture upright. `<video>` does not: bro's decode path carries no
+  rotation, so a phone clip shot upright plays on its side and exports
+  correctly. The export is the one that is right, which is the wrong way round.
+- **Effects.** libavfilter is linked and unused. Everything the renderer does —
+  scale, crop, place, blend, mix — it does itself, which covers the edit as it
+  stands and none of what a filter graph is for.
+- **Two-pass encoding.** A bitrate target is one pass, so it is met on average
+  and not intelligently. Real two-pass needs the stats file from pass one fed
+  into pass two, which means a job that is two jobs, and the job state machine
+  is built around one.
+- **Stream copy.** Every render decodes and re-encodes, even where the output
+  settings match the input exactly and the packets could have been remuxed
+  untouched — which would be both instant and lossless.
+- **Encoding straight from the GPU.** NVENC, AMF and QSV are offered with their
+  own presets, tunes, profiles and rate-control modes, but frames still go
+  down to system memory as RGBA and back up again. A hardware decode feeding a
+  hardware encode would never leave the card.
+- **Speed on a render.** `J`/`K`/`L` and the speed selector are transport
+  controls, not part of the edit, so a clip exports at its own rate whatever
+  the viewer was last playing at.
 - **Ripple, roll and slip.** Trimming leaves a gap rather than closing it up,
   and there is no gesture that moves a cut without moving the pictures either
   side of it. Nothing here needs new machinery — a clip already knows its

@@ -13,6 +13,7 @@ import { project, makeClip, addClip, removeClip, duration, clipsAt,
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
+import * as exporter from './export.js';
 import { clock, timecode, bytes, kbps, escapeHtml, basename } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
 
@@ -73,6 +74,33 @@ timeline.initTimeline({
         if (release) { if (resumeAfterScrub) { resumeAfterScrub = false; play(); } return; }
         if (press && transport.playing) { resumeAfterScrub = true; pause(); }
         setPlayhead(t);
+    },
+});
+
+exporter.initExport({
+    screen: el('output'),
+    form: el('ex-form'),
+    settings: el('ex-settings'),
+    advanced: el('ex-advanced'),
+    intent: el('ex-intent'),
+    preview: el('ex-preview'),
+    strip: el('ex-strip'),
+    summary: el('ex-summary'),
+    progress: el('ex-progress'),
+    cancel: el('ex-cancel'),
+    go: el('ex-go'),
+}, {
+    pause,
+    flash,
+    workspace: syncWorkspace,
+    // The preview starts where you were looking, which is nearly always the
+    // part of the render worth checking.
+    playhead: () => transport.t,
+    open: (path) => { open(path); },
+    finished: (p) => {
+        if (p.state === 'done') flash(`Exported ${basename(p.path)}`);
+        else if (p.state === 'cancelled') flash('Export stopped');
+        else if (p.state === 'failed') flash(`Export failed: ${p.error}`);
     },
 });
 
@@ -507,6 +535,19 @@ document.addEventListener('keydown', (e) => {
     const tag = e.target && e.target.tagName;
     if (tag === 'SELECT' || tag === 'INPUT') return;
 
+    // The Output workspace owns the keyboard while it is the screen you are
+    // on: Space must not start playback on a timeline nobody can see, and
+    // Delete must not remove the clips being rendered. Escape is the way back.
+    // ...except for the keys that mean the same thing on it. Space plays the
+    // comparison rather than the timeline, and the arrows step it.
+    if (exporter.isOpen()) {
+        if (e.key === 'Escape') { exporter.closeExport(); e.preventDefault(); }
+        else if (e.key === ' ') { exporter.togglePreviewPlay(); e.preventDefault(); }
+        else if (e.key === 'ArrowLeft') { exporter.stepPreviewBy(-1); e.preventDefault(); }
+        else if (e.key === 'ArrowRight') { exporter.stepPreviewBy(1); e.preventDefault(); }
+        return;
+    }
+
     switch (e.key) {
         case ' ':          togglePlay(); break;
         // Shift is a second of time, not a second's worth of frames: one seek
@@ -523,6 +564,7 @@ document.addEventListener('keydown', (e) => {
         case 'c':          setCropMode(!cropMode); break;
         case 's':          splitAtPlayhead(); break;
         case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
+        case 'e':          exporter.openExport(); break;
         case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
                            else return;
                            break;
@@ -583,7 +625,14 @@ function frame(now) {
     // A panel that changed size (window resize, fullscreen) has to be redrawn
     // from the analysis rather than stretched — a stretched waveform lies
     // about where the sound is.
-    if (viewerEl.clientWidth !== lastViewerW || viewerEl.clientHeight !== lastViewerH) {
+    //
+    // A panel that is not on screen measures zero, which is not a size it ever
+    // has to be laid out for: the Output workspace hides the edit, and
+    // relaying everything out to nothing and back costs a full re-layout each
+    // way for a picture nobody was looking at. Remembering the last real size
+    // also means coming back only redraws if the window actually changed.
+    if (viewerEl.clientWidth > 0 &&
+        (viewerEl.clientWidth !== lastViewerW || viewerEl.clientHeight !== lastViewerH)) {
         lastViewerW = viewerEl.clientWidth;
         lastViewerH = viewerEl.clientHeight;
         viewer.layout();
@@ -592,11 +641,15 @@ function frame(now) {
     // Watch the video lanes, not the waveform: the waveform is in the markup
     // and laid out from the first frame, so it never notices a lane that was
     // built a moment ago and has not been measured yet.
-    if (timeline.laneWidthPx() !== lastLaneW) {
-        lastLaneW = timeline.laneWidthPx();
+    const laneW = timeline.laneWidthPx();
+    if (laneW > 0 && laneW !== lastLaneW) {
+        lastLaneW = laneW;
         timeline.draw();
     }
     if (transport.playing) syncUI();
+    // The render is on a thread of its own in the host binary; this is the
+    // only thing that looks at it, and only while its dialog is up.
+    exporter.tick();
 
     requestAnimationFrame(frame);
 }
@@ -1024,6 +1077,29 @@ el('btn-zoom-fit').addEventListener('click', () => timeline.fitView());
 el('btn-split').addEventListener('click', splitAtPlayhead);
 el('btn-grid').addEventListener('click',
     () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
+el('btn-export').addEventListener('click', () => exporter.openExport());
+
+// ── workspaces ─────────────────────────────────────────────────────────────
+//
+// Two screens over one project. The tabs are the only thing that knows there
+// are two: the export module opens and closes itself, and tells us when it
+// did so the tabs cannot come to disagree with what is on screen.
+
+const wsEdit = el('ws-edit');
+const wsOutput = el('ws-output');
+
+wsEdit.addEventListener('click', () => exporter.closeExport());
+wsOutput.addEventListener('click', () => exporter.openExport());
+
+function syncWorkspace() {
+    const out = exporter.isOpen();
+    wsEdit.classList.toggle('on', !out);
+    wsOutput.classList.toggle('on', out);
+    // A render holds the host's one job slot, and the Stop button is the way
+    // out of one. Offering a door that will not open is worse than not
+    // offering it, so it is shut for as long as that is true.
+    wsEdit.disabled = out && exporter.isRunning();
+}
 
 function flash(message) {
     osd.textContent = message;
@@ -1045,5 +1121,6 @@ globalThis.__ffmpegBro = {
     setCropMode, cropMode: () => cropMode,
     splitAtPlayhead, setLayout, select, selectMany,
     showProperties, pending,
+    exporter,
 };
 globalThis.__ffmpegBroReady = true;

@@ -44,11 +44,20 @@ media file as an argument.
 # native: demux, decode, reorder, seek, audio, backend precedence
 ./build/Release/ffmpeg-bro-decodetest <file> [more files...]
 
+# native: render a timeline and open the result — geometry, opacity, audio
+# mixing, cancellation, capability reporting, whether options reach the
+# encoder. Writes into out/.
+./build/Release/ffmpeg-bro-exporttest <file> [<second-file>]
+
 # native: where the time in a seek goes (demux vs decode vs YUV->RGB)
 ./build/Release/ffmpeg-bro-perftest <file>
 
 # the whole UI, driven like a person — writes screenshots to out/
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
+
+# the Output workspace end to end: controls -> ffmpeg options, the advanced
+# option editor, both halves of the A/B preview, and loading the result back
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ```
 
 `tests/ui_player.js` is the main regression suite: it drops files on the real UI, plays,
@@ -61,6 +70,15 @@ Test scripts use bro's headless globals (`dropFiles`, `wallSleep`, `advanceTime`
 `screenshot`, `assert`, `scriptArgs`) — documented in `../bro/docs/headless.md`. Video runs
 on the **real** clock: `advanceTime()` moves bro's virtual time and the decoder ignores it,
 so every wait must be `wallSleep()` + `flush()` (that is what `pump()` in the test does).
+
+Two traps when writing headless tests here:
+
+- **Never trigger a native file dialog.** `showSaveFileDialog` / `showOpenFileDialog` block
+  the JS thread until dismissed, and headless is not a safe harbour — there is no window to
+  dismiss them at. `ui_export.js` types into `#ex-path` rather than pressing "Choose…".
+- **Paths handed to `<video src>` must be absolute.** `bro.ffmpeg.probe()` resolves relative
+  to the process cwd but `<video src>` resolves relative to the *document* (`ui/`), so a
+  relative path silently probes fine and plays black. Use `bro.appDir + '/../out/x.mp4'`.
 
 The app exposes `globalThis.__ffmpegBro` (model, transport, and the operations) and
 `__ffmpegBroReady` purely so tests drive it through a stable surface instead of DOM ids
@@ -80,8 +98,48 @@ backend, which is why `<video src="anything.mkv">` just works and why every cont
 through one set of seek/timestamp/reordering semantics.
 
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
-`openOnStart`, …) via `EngineConfig::installHostBindings`, so it exists in every realm
-including workers. `probe()` is synchronous on purpose.
+`openOnStart`, `encoders`, `containers`, `render.*`, …) via
+`EngineConfig::installHostBindings`, so it exists in every realm including workers.
+`probe()` is synchronous on purpose.
+
+`ffmpeg_export.cpp` is the encode half: decode each clip → composite into an RGBA canvas →
+swscale to the encoder's pixel format → encode → mux. It owns its own readers rather than
+going through `bro::video` — export walks strictly forward at a fixed output frame rate,
+which is a different access pattern from playback, and it needs the audio of every clip at
+once to mix. Notable:
+
+- **One job at a time**, on a `std::thread`, with a mutex-guarded `ExportStatus`. The UI
+  polls (`render.poll()`) from its rAF loop; nothing calls back into JS, because QuickJS is
+  single-threaded and a callback would have to be marshalled anyway.
+- **Sources are converted to RGBA before being cropped**, so a crop is a pointer offset with
+  no chroma-alignment rounding. The conversion is cached against the decoded frame, so a
+  30 fps render off a 60 fps source converts each picture once.
+- **Encoder capabilities are queried, never assumed** — `avcodec_get_supported_config` for
+  pixel/sample formats and sample rates, `av_opt_find(..., AV_OPT_SEARCH_FAKE_OBJ)` to ask
+  whether an encoder takes `crf`/`preset` before there is a context to ask about, and
+  `av_opt_next` over an encoder's `AVClass` to enumerate its whole option table (which is
+  what `encoderOptions()` returns and what the workspace's advanced column is drawn from).
+  Walking an `AVClass` with no instance of it works by passing `&cls` to `av_opt_next`.
+- **Settings past the codec are `ExportOption` key/values**, applied with
+  `av_opt_set(ctx, k, v, AV_OPT_SEARCH_CHILDREN)` — the same path the ffmpeg CLI uses for
+  its `-key value` arguments, reaching both generic `AVCodecContext` options and private
+  ones. The UI's friendly controls *produce* those pairs, so a slider and the raw editor
+  are one mechanism and cannot drift. Applied last, after the named convenience fields, so
+  an explicit option wins. **An unknown key is an error, not a shrug** — a render that
+  succeeds while ignoring what it was told is the worst of the three outcomes.
+- **A cancelled render still writes its trailer.** An MP4 with no index opens nowhere.
+- **The run slot is freed *before* the terminal status is published.** Anything polling
+  acts the instant it sees `done`, and the obvious next act is another render — which is
+  what the preview does, chaining a lossless reference into the candidate. Cleared
+  afterwards, there is a short and perfectly reachable window where the status says
+  finished and the next `startExport` is refused as "already running".
+- **Output size is stat'd from the file, not taken from `avio_tell`.** `+faststart`
+  rewrites an mp4 after the trailer goes down; the write position left behind reported
+  three kilobytes for a file of three quarters of a megabyte.
+- **Profile ids are numbered per codec.** Do not resolve `codec->profiles` against the
+  generic `profile` option's constants: VP9's profile 2 and HEVC's Main 10 are both 2, and
+  that "translation" confidently offered `main10` as a VP9 profile. Profiles come from the
+  encoder's own private enum, or from x264/x265's documented vocabularies, or not at all.
 
 **Licensing is a structural constraint, not a footnote.** libav* may only reach bro through
 `bro::video`'s codec-agnostic interfaces. Never add an ffmpeg dependency to anything under
@@ -102,6 +160,30 @@ layout mode. Everything else reads it and nothing else.
 - `analysis.js` + `analyze-worker.js` — filmstrip and waveform via `bro.media` (see
   `../bro/docs/video-api.js`). Both are full-file decodes, so they run in one worker with
   one queue and the lanes fill in behind a responsive UI.
+- `export.js` — the Output workspace, and `buildSpec()`, which turns the model into what
+  `bro.ffmpeg.render.start` wants. **A screen, not a modal**: `#output` is a sibling of
+  `#main`, and `body.ws-output` is what hides the edit. The two workspaces hide each other
+  rather than unmounting — the viewer's `<video>` elements *are* the decoders, and tearing
+  them down to look at an export would mean rebuilding and re-seeking every one on the way
+  back. Consequences: anything in the frame loop that measures a panel has to ignore a
+  measurement of zero, and `openExport`/`closeExport` are the only things that switch, with
+  the tabs following through the `workspace` hook rather than setting their own state.
+
+  Four regions: the settings form (drawn from the selected encoder's reported capabilities,
+  so it changes shape per codec), the A/B stage, the advanced option column, and the range
+  strip across the bottom. The preview renders the same seconds twice — once at the chosen
+  settings, once losslessly — and wipes between them; the reference is keyed by
+  `referenceKey()` on everything that changes the *picture*, so changing the quality
+  re-renders only the candidate. Both videos are placed in pixels against the stage, never
+  sized to their own boxes: the clipped one's parent is the wipe window, and fitting to it
+  would compare a picture against a squashed copy of itself. Because they are placed in
+  pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
+  refits when the measured stage changes.
+- **A canvas cannot measure itself in the turn it was created in.** The range strip is
+  built once (`drawStrip`) and painted separately (`paintStrip`); a paint that rebuilt its
+  own markup would measure an unlaid-out canvas every time, fall back to the default width
+  forever, and be stretched across the window. Same rule as the preview videos: create,
+  then measure a frame later.
 - `format.js`, `icons.js` — timecode/byte formatting, and SVG icons painted from
   `data-icon` attributes.
 
@@ -126,6 +208,13 @@ layout mode. Everything else reads it and nothing else.
   transport's (how loud you are listening).
 - **Multi-select edits must not leak values.** `common()` returns `undefined` when the
   selection disagrees, and fields render blank/`mixed` rather than one clip's value.
+- **The renderer must never learn about layout.** `buildSpec()` sends rectangles in canvas
+  pixels straight from `viewer.placement(clip, project.width, project.height)`; fit, zoom,
+  pan and grid are resolved in one place. Anything that changes how a clip is placed on
+  screen has to change `viewer.placement()`, and then the export follows for free. Paint
+  order is the `project.clips` array order (already sorted bottom-track-first) as `z`.
+- **App preferences go in `localStorage`, not `bro.settings`.** bro's settings are a closed
+  schema of engine keys; an unknown key is warned about and dropped.
 
 ## Style
 
