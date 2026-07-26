@@ -139,24 +139,44 @@ void testFile(const std::string& path) {
 
         // Repeatedly, in both directions — the failure mode was a step that
         // silently did nothing every time.
+        //
+        // Sixty is chosen to cross at least one keyframe, which is where
+        // backward stepping used to stall for good: a 1 ns step rounds to
+        // nothing in the container's timebase, so a seek meant to land before
+        // a keyframe landed on it, and the walk stopped dead at the top of
+        // whatever GOP it had reached.
+        const int WALK = 60;
         TimeNs walk = origin;
         int fwd = 0;
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < WALK; ++i) {
             if (!pipe.stepFrame(1)) break;
             if (pipe.currentPts() <= walk) break;
             walk = pipe.currentPts();
             ++fwd;
         }
-        checkf(fwd == 5, "five forward steps each moved (%d)", fwd);
+        checkf(fwd == WALK, "%d forward steps each moved (%d)", WALK, fwd);
         int back = 0;
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < WALK; ++i) {
             if (!pipe.stepFrame(-1)) break;
             if (pipe.currentPts() >= walk) break;
             walk = pipe.currentPts();
             ++back;
         }
-        checkf(back == 5, "five back steps each moved (%d)", back);
+        checkf(back == WALK, "%d back steps each moved (%d)", WALK, back);
         checkf(pipe.currentPts() == origin, "the walk was exactly reversible");
+
+        // And all the way to the start, however many keyframes are in the way.
+        pipe.seekTo(dur / 8);
+        TimeNs prev = pipe.currentPts();
+        int steps = 0, stalls = 0;
+        while (pipe.stepFrame(-1) && steps < 100000) {
+            if (pipe.currentPts() >= prev) { ++stalls; break; }
+            prev = pipe.currentPts();
+            ++steps;
+        }
+        checkf(stalls == 0, "no stall while walking back (stopped at %.4f s)", prev / 1e9);
+        checkf(steps > 0 && prev < dur / 8 / 4,
+               "walked %d frames back to the start (%.4f s)", steps, prev / 1e9);
 
         // Nothing before the first frame.
         pipe.seekTo(0);

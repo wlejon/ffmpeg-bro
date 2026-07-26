@@ -240,9 +240,13 @@ public:
     bool seekTo(TimeNs pts) override {
         if (!fmt_) return false;
         const int idx = videoStreamIndex_;
-        const int64_t target = idx >= 0
-            ? fromNs(pts + startOffsetNs_, fmt_->streams[idx]->time_base)
-            : av_rescale_q(pts + startOffsetNs_, kNsTimeBase, AV_TIME_BASE_Q);
+        // Rounded DOWN, not to nearest. The contract is "at or before", and a
+        // container tick is tens of microseconds wide — rounding to nearest
+        // can carry a target that sits just below a frame up onto it, and a
+        // seek meant to land before a keyframe lands on it instead.
+        const AVRational tb = idx >= 0 ? fmt_->streams[idx]->time_base : AV_TIME_BASE_Q;
+        const int64_t target =
+            av_rescale_q_rnd(pts + startOffsetNs_, kNsTimeBase, tb, AV_ROUND_DOWN);
         // BACKWARD lands on the keyframe at or before the target; the pipeline
         // decodes forward from there and drops what it doesn't need.
         int rc = av_seek_frame(fmt_, idx, target, AVSEEK_FLAG_BACKWARD);
