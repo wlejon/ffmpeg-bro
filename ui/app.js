@@ -248,8 +248,10 @@ function toggleFullscreen() {
 // One helper for all three: press anywhere on the surface to jump there, then
 // keep tracking while the button is held even if the pointer leaves the
 // element.
-function draggable(surface, onFraction) {
+function draggable(surface, onFraction, opts) {
     let dragging = false;
+    const scrubs = opts && opts.scrubs;
+    let resumeAfter = false;
 
     const fractionAt = (clientX) => {
         const r = surface.getBoundingClientRect();
@@ -259,6 +261,10 @@ function draggable(surface, onFraction) {
 
     surface.addEventListener('mousedown', (e) => {
         dragging = true;
+        // Dragging a playhead stops playback, the way every edit suite does.
+        // It is also what keeps a drag cheap: while paused, a seek costs one
+        // decode instead of also tearing down and refilling the audio ring.
+        if (scrubs && !video.paused) { resumeAfter = true; video.pause(); }
         onFraction(fractionAt(e.clientX), false);
         e.preventDefault();
     });
@@ -269,11 +275,13 @@ function draggable(surface, onFraction) {
         if (!dragging) return;
         dragging = false;
         onFraction(fractionAt(e.clientX), true);
+        if (resumeAfter) { resumeAfter = false; video.play(); }
+        sync();
     });
 }
 
-draggable(scrub, (f) => seek(f * (video.duration || 0)));
-draggable(timeline, (f) => seek(f * (video.duration || 0)));
+draggable(scrub, (f) => seek(f * (video.duration || 0)), { scrubs: true });
+draggable(timeline, (f) => seek(f * (video.duration || 0)), { scrubs: true });
 draggable(volume, (f) => {
     video.volume = f;
     if (f > 0 && video.muted) video.muted = false;

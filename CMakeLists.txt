@@ -70,3 +70,8 @@ endif()
 add_executable(ffmpeg-bro-decodetest tests/decode_test.cpp)
 target_link_libraries(ffmpeg-bro-decodetest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-decodetest PRIVATE "${BRO_DIR}/src")
+
+# Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
+add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
+target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-perftest PRIVATE "${BRO_DIR}/src")
