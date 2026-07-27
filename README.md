@@ -316,6 +316,36 @@ would sit in the encoder's colour in the command you copied and in RGBA in the
 render you got. One insert point producing two pictures is worse than one fewer
 insert point.
 
+### Seeing what each node produces
+
+A node card says what a filter is *set to*. What it does not say is what comes out
+of it, which is the thing you actually want — `crop=iw*0.8:ih*0.5:iw*0.1:ih*0.25`
+is a claim about a picture, and a claim about a picture is either right or it is a
+bug you find at the end of a render.
+
+So every node on the picture side plays its own output, looping. **Drag the corner
+of a card** to make it as big as helps, and the media fills it — and re-renders at
+the new size, so a bigger card is a sharper picture rather than a stretched one.
+The size is remembered per node.
+
+These are real renders, not simulations: the graph is cut off at the chosen node,
+ended with a scale that fits the card, and run through the same libavfilter path
+an export takes. What a card shows is what that pad hands its consumer. The rules
+that make it affordable are worth knowing, because they are what you will notice:
+
+- **One at a time, and always behind an export.** There is one render slot. A node
+  preview is the least important thing in the application and waits for everything
+  else, so a nine-node graph fills in over a second or two rather than at once.
+- **Nothing renders until the graph holds still.** Dragging a value walks through
+  fifty of them; only the one you stop on is rendered.
+- **Only what the node depends on.** Previewing the first filter of a two-clip edit
+  opens one file, not two — and each input seeks to its own window, so a node on a
+  clip forty minutes in costs the same as one at the top.
+- **Taken from where the playhead was** when you opened the stage, not followed
+  live. `At playhead` re-takes it; `Previews` turns the whole thing off.
+
+Audio nodes have no picture, and show none rather than a black rectangle.
+
 ### Locks
 
 Every value on a derived node can be typed into, and **typing into one locks
@@ -609,10 +639,14 @@ Honest list of what does not work:
   writes the picture upright. `<video>` does not: bro's decode path carries no
   rotation, so a phone clip shot upright plays on its side and exports
   correctly. The export is the one that is right, which is the wrong way round.
-- **Filters on playback.** A filter you put on the graph runs when you render
-  and in the export preview. The viewer cannot show it: playback is the engine
-  decoding into a `<video>` and there is no filter anywhere in that path.
-  Filtered clips are marked `fx` rather than left looking broken.
+- **Filters on playback.** A filter you put on the graph runs when you render,
+  in the export preview, and in the node's own preview on the Graph stage. The
+  *viewer* cannot show it: playback is the engine decoding into a `<video>` and
+  there is no filter anywhere in that path. Filtered clips are marked `fx` rather
+  than left looking broken.
+- **Scrubbing a node preview.** Each one is a couple of seconds from wherever
+  the playhead was, looping. There is no way to move within it except to move
+  the playhead and press `At playhead`.
 - **Filters with more than one input or output.** The palette offers what can
   be spliced onto a wire, which means one in and one out. `amix`, `split`,
   `blend` and everything else that needs a wire made by hand needs an editor

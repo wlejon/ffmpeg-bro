@@ -98,6 +98,12 @@ export function makeGraph(opts = {}) {
         if (spec.stream) node.stream = spec.stream;
         if (spec.index !== undefined) node.index = spec.index;
         if (spec.path) node.path = spec.path;
+        // The earliest source time anything downstream will ask this input
+        // for. Not printed — a command line says it with `trim` — but a
+        // renderer given the graph can seek there instead of decoding from the
+        // start of the file, which for a clip an hour in is the difference
+        // between a render and an hour.
+        if (spec.from !== undefined) node.from = spec.from;
         if (spec.title) node.title = spec.title;
         nodes.push(node);
         return node;

@@ -68,6 +68,17 @@ struct ExportGraphInput {
     std::string label;      // "0:v", exactly as the graph text writes it
     std::string path;
     std::string stream;     // "v" for pictures, "a" for sound
+
+    // The earliest source time the graph will use from this pad, in seconds.
+    //
+    // `-filter_complex` without `-ss` decodes every input from the start of
+    // its file and lets `trim` throw the rest away, which is right and is
+    // ruinous for a clip an hour in. This is where the seek goes, and it is
+    // safe by construction rather than by care: the seek is
+    // `AVSEEK_FLAG_BACKWARD`, so it lands at or *before* what it is given and
+    // can never skip a frame the graph still wants. Too small only costs
+    // decoding; too large is not reachable.
+    double from = 0.0;
 };
 
 struct ExportSettings {
@@ -155,6 +166,21 @@ struct ExportSettings {
     // that tail because a standalone ffmpeg has no writer to do it.
     std::string filterGraph;
     std::vector<ExportGraphInput> filterInputs;
+
+    // Take the frame size from the graph rather than from `width`/`height`.
+    //
+    // Off, a graph whose last pad is a different size from the render is an
+    // error — the writer was opened for one size and would be handed another,
+    // and saying so plainly beats a scaler quietly resizing every frame. On,
+    // there is nothing to disagree with: the graph is asked what it produces
+    // and the writer is opened for that.
+    //
+    // Which is exactly what previewing a node in the middle of a graph needs,
+    // since nothing outside libavfilter knows how big the picture is
+    // half-way through. It is opt-in because for a real export the size is a
+    // decision somebody made, and silently following the graph away from it
+    // would write a file of the wrong size rather than refusing to.
+    bool sizeFromGraph = false;
 };
 
 /// A snapshot of the running job. Copied under the lock, so the caller can

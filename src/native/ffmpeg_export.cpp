@@ -93,6 +93,11 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
             LOG_ERROR("export failed: %s", err.c_str());
             return;
         }
+        // What the graph turned out to be. The writer is opened next and has
+        // to be opened for the picture it will actually be handed, which for a
+        // node half-way down a graph is not something anything outside
+        // libavfilter could have said before it was configured.
+        if (s.sizeFromGraph) { s.width = g->outWidth(); s.height = g->outHeight(); }
         source = std::move(g);
     } else {
         source = std::make_unique<TimelineSource>(s, std::move(clips));
@@ -221,9 +226,13 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
 
     ExportSettings s = settings;
     // yuv420p has no half pixels, and an odd canvas is a failure at
-    // avcodec_open2 with an unhelpful message. Round rather than refuse.
-    s.width = std::max(16, s.width & ~1);
-    s.height = std::max(16, s.height & ~1);
+    // avcodec_open2 with an unhelpful message. Round rather than refuse —
+    // except where the size is the graph's to say, in which case there is
+    // nothing here yet to round and `GraphSource::build` does it once it knows.
+    if (!s.sizeFromGraph) {
+        s.width = std::max(16, s.width & ~1);
+        s.height = std::max(16, s.height & ~1);
+    }
     if (s.fps < 1.0 || s.fps > 1000.0) s.fps = 30.0;
 
     if (s.path.empty()) {

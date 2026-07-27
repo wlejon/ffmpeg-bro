@@ -83,12 +83,20 @@ bool GraphSource::build(std::string* err) {
 
     // The graph decides its own output size, and the writer was opened for the
     // one in the settings. Caught here, where it can be said plainly, rather
-    // than as a scaler quietly resizing every frame.
+    // than as a scaler quietly resizing every frame — unless the render asked
+    // to follow the graph, in which case there is nothing to disagree with and
+    // the answer is taken. Rounded down to even because yuv420p has no half
+    // pixels; a graph that lands on an odd size gets a one-pixel resize on the
+    // way into the canvas rather than an encoder that refuses.
     const int w = av_buffersink_get_w(vsink_), h = av_buffersink_get_h(vsink_);
-    if (w != settings_.width || h != settings_.height)
+    if (settings_.sizeFromGraph) {
+        settings_.width = std::max(16, w & ~1);
+        settings_.height = std::max(16, h & ~1);
+    } else if (w != settings_.width || h != settings_.height) {
         return fail("the graph produces " + std::to_string(w) + "x" + std::to_string(h) +
                     " but the render is " + std::to_string(settings_.width) + "x" +
                     std::to_string(settings_.height));
+    }
 
     const AVRational r = av_buffersink_get_frame_rate(vsink_);
     if (r.den > 0 && r.num > 0 && std::abs(av_q2d(r) - settings_.fps) > 0.01) {
@@ -170,7 +178,17 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
         feed.video = std::make_unique<SourceVideo>();
         std::string open;
         const AVFrame* f = nullptr;
-        if (feed.video->open(want.path, &open)) f = feed.video->nextRaw();
+        if (feed.video->open(want.path, &open)) {
+            // Where this pad's window begins. Without it every input decodes
+            // from the start of its file — which is what `-filter_complex`
+            // without `-ss` does, and what makes a clip an hour in take an
+            // hour to start. `seekTo` is a backward seek, so it lands at or
+            // before what it is given and the `trim` in the graph still gets
+            // every frame it asked for; the frames keep their file
+            // timestamps, which is what `trim` matches on.
+            if (want.from > 0.0) feed.video->seekTo(want.from);
+            f = feed.video->nextRaw();
+        }
         if (!f) {
             av_free(par);
             if (err) *err = open.empty() ? want.path + ": nothing decodes out of it" : open;
@@ -188,8 +206,15 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
     } else {
         feed.sound = std::make_unique<SourceAudio>();
         const AVFrame* f = nullptr;
-        if (feed.sound->open(want.path, settings_.audioSampleRate, settings_.audioChannels))
+        if (feed.sound->open(want.path, settings_.audioSampleRate, settings_.audioChannels)) {
+            // The same seek, and safe for the same reason. `nextRaw` reads the
+            // decoder directly rather than through the fifo, so none of the
+            // sample-accurate trimming `fill()` does after a seek applies
+            // here: the frames come out with their own timestamps and `atrim`
+            // is what cuts them.
+            if (want.from > 0.0) feed.sound->seekTo(want.from);
             f = feed.sound->nextRaw();
+        }
         if (f) {
             feed.first = av_frame_clone(f);
             par->format = f->format;

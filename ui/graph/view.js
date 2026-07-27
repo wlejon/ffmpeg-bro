@@ -44,6 +44,7 @@ import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
 import * as overlay from './overlay.js';
 import * as panel from './panel.js';
+import * as preview from './preview.js';
 
 // The palette's --blue and --good. Canvas takes colours, not custom
 // properties, and a wire whose colour drifts from the node it leaves is worse
@@ -57,6 +58,8 @@ let panX = 0;
 let panY = 0;
 let placed = null;      // the last layout(), for repainting wires on a pan
 let shape = '';         // what the graph looked like, so a fit happens once per shape
+let bounds = '';        // and how big it came out, so a card that grew is framed
+let userMoved = false;  // ...unless you have panned or zoomed since
 let canvasSize = '';
 
 /// Walked by hand rather than with `closest()`: this engine's DOM is a subset,
@@ -70,6 +73,19 @@ function inNode(node) {
 
 export function initGraphView(r, hooks = {}) {
     refs = r;
+
+    preview.initPreview({
+        // The preview graph is derived over its own short range, so it asks for
+        // a spec of that range rather than reusing the one on screen: two
+        // seconds of a ten-minute edit is two seconds of decoding, and the
+        // `trim` in the graph is what makes it so.
+        spec: (start, end) => buildSpec({ start, end }),
+        sources: specSources,
+        overlay: overlay.current,
+        // An export and the A/B comparison are both more important than this.
+        busy: () => (hooks.busy ? hooks.busy() : false),
+        changed: () => drawGraph(),
+    });
 
     panel.initPanel({ panel: refs.panel }, {
         // An edit to the overlay changes the graph, the command, the spine and
@@ -101,13 +117,38 @@ export function initGraphView(r, hooks = {}) {
         markSelection();
     });
     document.addEventListener('mousemove', (e) => {
+        if (resizing) return dragResize(e);
         if (!dragging) return;
         panX = dragging.panX + (e.clientX - dragging.x);
         panY = dragging.panY + (e.clientY - dragging.y);
-        if (Math.abs(e.clientX - dragging.x) + Math.abs(e.clientY - dragging.y) > 3) panned = true;
+        if (Math.abs(e.clientX - dragging.x) + Math.abs(e.clientY - dragging.y) > 3) {
+            panned = true;
+            userMoved = true;
+        }
         apply();
     });
-    document.addEventListener('mouseup', () => { dragging = null; });
+    document.addEventListener('mouseup', () => {
+        dragging = null;
+        if (!resizing) return;
+        const done = resizing;
+        resizing = null;
+        // Committed once. Everything downstream of a size — the layout, the
+        // wires, and the preview that has to be re-rendered to be sharp at it —
+        // happens here rather than on every pixel of the drag.
+        overlay.setSize(done.key, done.at);
+        drawGraph();
+    });
+
+    if (refs.previews)
+        refs.previews.addEventListener('click', () => {
+            preview.setEnabled(!preview.isEnabled());
+            drawGraph();
+        });
+    if (refs.atPlayhead)
+        refs.atPlayhead.addEventListener('click', () => {
+            if (hooks.playhead) preview.setRange(hooks.playhead(), hooks.playhead() + preview.previewSeconds);
+            drawGraph();
+        });
 
     // Zoom about the pointer, so the thing being looked at stays under it.
     // Zooming about the corner means chasing the graph across the screen with
@@ -122,6 +163,7 @@ export function initGraphView(r, hooks = {}) {
         panX = mx - ((mx - panX) * next) / zoom;
         panY = my - ((my - panY) * next) / zoom;
         zoom = next;
+        userMoved = true;
         apply();
         e.preventDefault();
     });
@@ -177,6 +219,8 @@ export function outrankedControls() {
 /// zero wide, and every measurement would be of a different card from the one
 /// that ends up on screen.
 function card(n, g) {
+    const key = panel.keyOf(n);
+    const width = cardWidth(key);
     const cls = ['gn', `gn-${n.kind}`];
     if (n.locked) cls.push('gn-locked');
     if (!n.derived) cls.push('gn-user');
@@ -201,11 +245,11 @@ function card(n, g) {
     return el('div', {
         cls: cls.join(' '),
         'data-node': n.id,
-        'data-key': panel.keyOf(n) || '',
+        'data-key': key || '',
         'data-filter': n.filter || n.kind,
         title: n.path || undefined,
-        style: { width: `${NODE_W}px` },
-        on: { click: () => { panel.selectNode(panel.keyOf(n)); markSelection(); } },
+        style: { width: `${width}px` },
+        on: { click: () => { panel.selectNode(key); markSelection(); } },
     }, [
         div('gn-head', [
             span(name, 'gn-name'),
@@ -213,7 +257,100 @@ function card(n, g) {
             pad && span(pad, 'gn-pad mono'),
         ]),
         args.length ? div('gn-args mono', args) : null,
+        shotView(key, width),
+        grip(key, width),
     ]);
+}
+
+// ── the picture in the card ───────────────────────────────────────────
+
+/// How wide this card is: what it was dragged to, or the default.
+function cardWidth(key) {
+    return Math.max(120, Math.min(720, overlay.sizeOf(key) || NODE_W));
+}
+
+/// The `<video>` elements, kept across rebuilds.
+///
+/// The card set is rebuilt on every change and a `<video>` created fresh each
+/// time would reload and restart — so a graph filling in one preview at a time
+/// would restart the other eight, over and over, and none of them would ever
+/// get past the first second. Held by node key, moved into the new card,
+/// re-`src`ed only when the file it should be showing actually changes.
+const videos = new Map();
+
+function videoFor(key, path) {
+    let v = videos.get(key);
+    if (!v) {
+        v = document.createElement('video');
+        v.loop = true;
+        v.muted = true;
+        videos.set(key, v);
+    }
+    if (v.__path !== path) {
+        v.__path = path;
+        v.src = path;
+        try { v.play(); } catch (e) { /* it will play when it can */ }
+    }
+    return v;
+}
+
+/// The picture a node produces, or what is happening instead.
+///
+/// The box keeps its height while a render is outstanding, guessed at 16:9,
+/// because a card that grows when its picture arrives shoves every card below
+/// it down the screen — and with nine of them arriving one at a time that is
+/// nine jumps.
+function shotView(key, width) {
+    if (!preview.isEnabled() || !key) return null;
+    const shot = preview.shotFor(key);
+    if (!shot) return null;
+    const inner = Math.max(16, width - 12);
+    if (shot.state === 'ready' && shot.w > 0) {
+        const box = div('gn-shot');
+        box.style.height = `${Math.round((inner * shot.h) / shot.w)}px`;
+        box.append(videoFor(key, shot.path));
+        return box;
+    }
+    const box = div('gn-shot gn-shot-' + (shot.state === 'failed' ? 'fail' : 'wait'),
+                    span(shot.state === 'failed' ? (shot.reason || 'no picture') : '…', 'dim'));
+    box.style.height = `${Math.round(inner * 9 / 16)}px`;
+    return box;
+}
+
+/// The corner you drag to make a card bigger.
+///
+/// The drag writes straight to the element and only commits on release: a
+/// redraw per mouse move would re-derive the graph, re-measure every card and
+/// re-lay out the whole screen sixty times a second, and the wires would be the
+/// only thing that looked right.
+function grip(key, width) {
+    if (!key) return null;
+    return el('div', { cls: 'gn-grip', 'data-grip': key,
+        title: 'Drag to resize — the preview re-renders at the new size',
+        on: { mousedown: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            resizing = { key, from: width, x: e.clientX, at: width };
+        } } });
+}
+
+let resizing = null;
+
+/// Resize under the pointer, written straight to the two elements that show it.
+/// In graph coordinates: the container is scaled, so a hundred pixels of mouse
+/// at 0.5× is two hundred pixels of card.
+function dragResize(e) {
+    resizing.at = Math.max(120, Math.min(720,
+        Math.round(resizing.from + (e.clientX - resizing.x) / Math.max(0.1, zoom))));
+    const node = refs.nodes.querySelector(`[data-key="${resizing.key}"]`);
+    if (!node) return;
+    node.style.width = `${resizing.at}px`;
+    const box = node.querySelector('.gn-shot');
+    const shot = preview.shotFor(resizing.key);
+    if (box) {
+        const ratio = shot && shot.state === 'ready' && shot.w > 0 ? shot.h / shot.w : 9 / 16;
+        box.style.height = `${Math.round((resizing.at - 12) * ratio)}px`;
+    }
 }
 
 /// The `+` that sits on a wire. In the transformed container with the cards
@@ -263,8 +400,10 @@ export function drawGraph() {
     }));
 
     const measured = new Map();
-    for (const n of d.graph.nodes)
-        measured.set(n.id, cards.get(n.id).getBoundingClientRect().height);
+    for (const n of d.graph.nodes) {
+        const box = cards.get(n.id).getBoundingClientRect();
+        measured.set(n.id, { w: cardWidth(panel.keyOf(n)), h: box.height });
+    }
 
     placed = layout(d.graph, (n) => measured.get(n.id));
     const boxes = new Map();
@@ -290,11 +429,57 @@ export function drawGraph() {
         refs.nodes.append(insertButton(p, x - 9, y - 9));
     }
 
-    if (shape !== shapeOf(d.graph)) { shape = shapeOf(d.graph); fit(); }
+    if (refs.previews) refs.previews.classList.toggle('on', preview.isEnabled());
+
+    // Frame it when the graph is a different graph, and also when it is the
+    // same graph at a different size — a card is as tall as what is in it, and
+    // eight pictures arriving one at a time grow the whole layout out from
+    // under a frame that was computed before any of them existed. Not once you
+    // have panned or zoomed yourself: at that point where you are looking is a
+    // decision, and nothing here gets to overrule it.
+    const nowShape = shapeOf(d.graph);
+    const nowBounds = `${Math.round(placed.width)}x${Math.round(placed.height)}`;
+    if (shape !== nowShape || (!userMoved && bounds !== nowBounds)) {
+        shape = nowShape;
+        bounds = nowBounds;
+        fit();
+    }
     apply();
     status(print(d.graph), d);
     panel.draw(d.graph);
     markSelection();
+
+    // What is worth a picture: everything on the picture side that is not the
+    // pad the muxer maps. Asked for after the layout because it is the layout
+    // that says which stream a node is on — only the two ends of the graph say
+    // so themselves — and at the width each card actually is, so a card dragged
+    // bigger gets a sharper render rather than a stretched one.
+    if (preview.isEnabled()) {
+        preview.sync(placed.nodes
+            .filter((b) => b.stream === 'v' && b.node.kind !== 'sink')
+            .map((b) => ({ key: panel.keyOf(b.node), fit: previewFit(cardWidth(panel.keyOf(b.node))) }))
+            .filter((w) => w.key));
+    }
+    // A card that has gone takes its decoder with it. Left behind, every node
+    // ever previewed would still be decoding.
+    for (const [key, v] of Array.from(videos)) {
+        if (preview.shotFor(key)) continue;
+        try { v.pause(); v.src = ''; } catch (e) { /* already gone */ }
+        videos.delete(key);
+    }
+}
+
+/// The width a preview is rendered at, rounded so that nudging a card by three
+/// pixels does not re-render it. Doubled for the sharper look on a scaled-up
+/// graph would be nice and is not worth the encode.
+function previewFit(width) {
+    return Math.max(128, Math.min(640, Math.round(width / 32) * 32));
+}
+
+/// Called once a frame while this stage is up: the render queue is the only
+/// asynchronous thing here.
+export function tickGraph() {
+    preview.tick();
 }
 
 /// Which card the panel is about. A class rather than a rebuild: the selection
@@ -327,7 +512,7 @@ function shapeOf(g) {
 
 /// Frame the whole graph and repaint. The two halves are separate because
 /// `drawGraph()` fits before it has anything to apply to.
-export function fitView() { fit(); apply(); }
+export function fitView() { userMoved = false; fit(); apply(); }
 
 /// Zoom and centre so the whole graph is on screen, never magnified past
 /// life-size — a four-node graph blown up to fill the window reads as an error.
@@ -417,6 +602,11 @@ function status(p, d) {
         span('·', 'dim'),
         span(`${p.chains.length} chain${p.chains.length === 1 ? '' : 's'}`),
         span('·', 'dim'),
+        // A graph that is halfway through filling its pictures in should say
+        // so; half of them blank and no explanation reads as broken.
+        preview.isEnabled() && preview.outstanding()
+            ? span(`${preview.outstanding()} rendering`, 'gr-mine') : null,
+        preview.isEnabled() && preview.outstanding() ? span('·', 'dim') : null,
         // What is derived and what is not, counted separately, because that is
         // the difference the whole stage turns on: the first is rebuilt from
         // the timeline and the second survives it.

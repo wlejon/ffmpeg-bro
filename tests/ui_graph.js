@@ -582,6 +582,63 @@ console.log('\nthe run graph carries the user’s filters too');
        `while the printed one carries on into the encoder’s colour: ${shownVideo}`);
 }
 
+// ── the graph, cut off at one node ─────────────────────────────────────────
+//
+// What a node produces is the thing a card cannot state and a picture can, and
+// the picture comes from rendering the graph up to that node. Everything about
+// that is a text transformation, so it is checked here rather than by looking
+// at the pixels: if the chains are right the renderer's own tests already say
+// the picture is.
+
+console.log('\nthe graph, cut off at one node');
+{
+    const { previewGraph } = globalThis.__ffmpegBro.graph;
+    const d = derive(oneClip());
+    const at = (anchor, opts) => previewGraph(d.graph, d.graph.byAnchor(anchor), opts);
+
+    const early = at('clip:7/trim', { fit: 160 });
+    ok(early.ok, 'a node in the middle of a chain can be rendered on its own');
+    same(early.filterGraph,
+         "[0:v]trim=start=0:end=4[x0];[x0]scale=w='min(160\\,trunc(iw/2)*2)':h=-2[pv]",
+         'everything downstream of it is gone, and a scale fits it into the card');
+    same(early.filterInputs.length, 1, 'and it opens only the files it depends on');
+
+    // Which is the point of cutting: previewing the first filter of a two-clip
+    // edit must not decode the second clip.
+    const two = derive({
+        width: 1920, height: 1080, fps: 30, start: 0, end: 4, audio: true,
+        clips: [oneClip().clips[0],
+                Object.assign({}, oneClip({ id: 8 }).clips[0], { path: 'b.mp4' })],
+    });
+    same(previewGraph(two.graph, two.graph.byAnchor('clip:7/scale')).filterInputs.length, 1,
+         'one clip’s chain reads one file, whatever else is on the timeline');
+    same(previewGraph(two.graph, two.graph.byAnchor('composite/overlay:8')).filterInputs.length, 2,
+         'and the composite reads both');
+
+    // A pad that already has a name keeps it; `print()` only names chain ends,
+    // and cutting a run in half makes a chain end out of a node that had none.
+    const tail = at('clip:7/format');
+    ok(/\[v0\]$/.test(tail.filterGraph.split(';')[0]),
+       `a node that was already a chain end keeps its own pad: ${tail.filterGraph.split(';')[0]}`);
+    ok(tail.filterGraph.indexOf('[v0]scale=') > 0, 'and the fit reads it by that name');
+
+    // An input is not a filter and cannot be a chain, so there is nothing to
+    // print in front of the scale that fits it.
+    const source = at('clip:7/in:v');
+    ok(source.ok, 'an input node can be previewed');
+    ok(/^\[0:v\]scale=/.test(source.filterGraph),
+       `which is the stream itself: ${source.filterGraph}`);
+
+    same(previewGraph(d.graph, d.graph.byAnchor('out:v')).ok, false,
+         'a sink is refused — it is the pad the muxer maps, not a picture');
+    same(previewGraph(d.graph, null).ok, false, 'and so is nothing at all');
+
+    // The card's width is what the picture is rendered at, so dragging one
+    // wider is a sharper render rather than a stretched one.
+    ok(at('clip:7/trim', { fit: 480 }).filterGraph.indexOf('min(480') > 0,
+       'the fit is the size asked for');
+}
+
 // ── the stage, with nothing to draw ────────────────────────────────────────
 //
 // The half of the Graph stage this test can reach. Everything else about it

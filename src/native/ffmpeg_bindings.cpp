@@ -230,6 +230,7 @@ std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spe
                 g.label = strProp(ctx, item, "label", "");
                 g.path = strProp(ctx, item, "path", "");
                 g.stream = strProp(ctx, item, "stream", "v");
+                g.from = numProp(ctx, item, "from", 0.0);
                 out.push_back(std::move(g));
             }
             JS_FreeValue(ctx, item);
@@ -271,6 +272,7 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     s.formatOptions = optionsFromJs(ctx, spec, "formatOptions");
     s.filterGraph = strProp(ctx, spec, "filterGraph", "");
     s.filterInputs = graphInputsFromJs(ctx, spec);
+    s.sizeFromGraph = boolProp(ctx, spec, "sizeFromGraph", false);
 
     std::vector<ExportClip> clips;
     JSValue arr = JS_GetPropertyStr(ctx, spec, "clips");

@@ -320,11 +320,31 @@ console.log('\nthe same graph, to run rather than to print');
          'where the printed one goes on into the encoder’s');
 
     same(JSON.stringify(run.filterInputs),
-         JSON.stringify([{ label: '0:v', path: 'a.mp4', stream: 'v' },
-                         { label: '1:v', path: 'a.mp4', stream: 'v' },
-                         { label: '0:a', path: 'a.mp4', stream: 'a' },
-                         { label: '1:a', path: 'a.mp4', stream: 'a' }]),
+         JSON.stringify([{ label: '0:v', path: 'a.mp4', stream: 'v', from: 0 },
+                         { label: '1:v', path: 'a.mp4', stream: 'v', from: 0 },
+                         { label: '0:a', path: 'a.mp4', stream: 'a', from: 0 },
+                         { label: '1:a', path: 'a.mp4', stream: 'a', from: 0 }]),
          'every pad the graph reads says which file and which kind of stream feeds it');
+
+    // `from` is where the renderer seeks each input to. It is not in the
+    // printed command — a command line says the same thing with `trim`, and
+    // that is what makes the two forms differ by only the colour chain — but
+    // without it every input decodes from the start of its file, which for a
+    // clip an hour in is an hour.
+    //
+    // Never *later* than what `trim` will ask for, which is the whole safety
+    // argument: the seek is backward-seeking, so being early costs decoding and
+    // being late is not reachable.
+    const late = renderGraph({
+        width: 1920, height: 1080, fps: 30, start: 0, end: 2, audio: true,
+        clips: [{ path: 'a.mp4', start: 0, length: 2, inPoint: 615.5,
+                  x: 0, y: 0, w: 1920, h: 1080,
+                  crop: { l: 0, t: 0, r: 0, b: 0 },
+                  opacity: 1, volume: 1, muted: false, z: 0 }],
+    });
+    same(late.filterInputs[0].from, 615.5, 'a clip with an in-point says where to seek to');
+    ok(late.filterGraph.indexOf('trim=start=615.5') > 0,
+       'the same number the trim in the graph is cut at');
 
     // A pixel format is the encoder's business on this path, so it must not
     // appear in what runs — the writer would then convert into it twice.

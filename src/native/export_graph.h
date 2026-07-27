@@ -63,6 +63,14 @@ public:
     /// render has to report, not a source that quietly produces nothing.
     bool build(std::string* err);
 
+    /// What the graph turned out to produce. Only interesting with
+    /// `ExportSettings::sizeFromGraph`, where the render has no opinion of its
+    /// own and the writer has to be opened for whatever this says — a node in
+    /// the middle of a graph is whatever size libavfilter made it, and nothing
+    /// outside libavfilter knows what that is until the graph is configured.
+    int outWidth() const { return settings_.width; }
+    int outHeight() const { return settings_.height; }
+
     bool hasAudio() const override { return asink_ != nullptr; }
     const Rgba& canvasAt(double t) override;
     void mixInto(float* dst, double from, int frames, int rate, int channels) override;

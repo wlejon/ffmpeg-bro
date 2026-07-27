@@ -1208,6 +1208,48 @@ button.text.primary:hover { background: #ffa063; }
     font-size: 13px;
 }
 
+/* The picture a node produces. Sized by the card, not by itself: the whole
+   point of dragging a card wider is that the media follows. */
+.gn-shot {
+    position: relative;
+    margin-top: 4px;
+    background: #000;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.gn-shot video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+}
+.gn-shot-wait, .gn-shot-fail {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    text-align: center;
+    padding: 2px;
+    background: rgba(255, 255, 255, 0.03);
+}
+.gn-shot-fail { color: var(--bad); }
+
+/* The corner you drag. Bottom-right, no icon, and only obvious on hover —
+   there is one on every card and nine arrows would be the loudest thing on the
+   screen. */
+.gn-grip {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+    border-right: 2px solid var(--line);
+    border-bottom: 2px solid var(--line);
+    border-bottom-right-radius: 4px;
+}
+.gn:hover .gn-grip { border-color: var(--blue); }
+
 /* The insert point, on the wire. In the transformed container with the cards,
    so it stays where the wire is at every zoom — and small, because there is one
    on every wire that can take a filter and they must not read as the graph. */

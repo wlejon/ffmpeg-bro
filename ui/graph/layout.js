@@ -20,8 +20,9 @@
 // shallow and almost planar already. A second sweep changed nothing on every
 // edit tried.
 
-/// Fixed, so a column's x is arithmetic rather than a measurement, and so that
-/// two nodes at the same depth line up whatever is written inside them.
+/// What a card is when nothing has resized it. A column is as wide as its
+/// widest card rather than this, so that dragging one node bigger moves the
+/// rest of the graph out of its way instead of drawing over it.
 export const NODE_W = 156;
 const COL_GAP = 54;
 const ROW_GAP = 16;
@@ -70,12 +71,16 @@ function streams(g) {
     return (n) => s.get(n.id) || n.stream || 'v';
 }
 
-/// `heightOf(node)` is asked once per node and must answer in pixels.
+/// `sizeOf(node)` is asked once per node and must answer `{ w, h }` in pixels.
+///
+/// Both, rather than a height and a constant width, because a card can be
+/// dragged wider to see the picture in it — and a wider card is a wider column,
+/// or the next column is drawn on top of it.
 ///
 /// Returns `{ nodes, wires, width, height }` — `nodes` carrying the node and
 /// its box, `wires` the endpoints of every edge already resolved to the port it
 /// arrives at, so the caller draws curves and does no arithmetic.
-export function layout(g, heightOf) {
+export function layout(g, sizeOf) {
     const depth = depths(g);
     const streamOf = streams(g);
 
@@ -111,20 +116,31 @@ export function layout(g, heightOf) {
 
     // Row tops, from the tallest node in each row. A row is a horizontal band
     // across every column, so a tall node anywhere in it pushes the whole band
-    // — which is what keeps the chains from overlapping each other.
-    const heights = new Map();
+    // — which is what keeps the chains from overlapping each other. Columns are
+    // the same idea sideways, and for the same reason.
+    const sizes = new Map();
     const rowHeight = [];
+    const colWidth = [];
     for (const n of g.nodes) {
-        const h = Math.max(24, heightOf(n) || 0);
-        heights.set(n.id, h);
+        const s = sizeOf(n) || {};
+        const box = { w: Math.max(48, s.w || NODE_W), h: Math.max(24, s.h || 0) };
+        sizes.set(n.id, box);
         const r = row.get(n.id);
-        rowHeight[r] = Math.max(rowHeight[r] || 0, h);
+        rowHeight[r] = Math.max(rowHeight[r] || 0, box.h);
+        const c = depth.get(n.id);
+        colWidth[c] = Math.max(colWidth[c] || 0, box.w);
     }
     const rowTop = [];
     let y = 0;
     for (let r = 0; r < rowHeight.length; r++) {
         rowTop[r] = y;
         y += (rowHeight[r] || 0) + ROW_GAP;
+    }
+    const colLeft = [];
+    let x = 0;
+    for (let c = 0; c < cols.length; c++) {
+        colLeft[c] = x;
+        x += (colWidth[c] || NODE_W) + COL_GAP;
     }
 
     const boxes = new Map();
@@ -134,10 +150,10 @@ export function layout(g, heightOf) {
             col: depth.get(n.id),
             row: row.get(n.id),
             stream: streamOf(n),
-            x: depth.get(n.id) * (NODE_W + COL_GAP),
+            x: colLeft[depth.get(n.id)],
             y: rowTop[row.get(n.id)],
-            w: NODE_W,
-            h: heights.get(n.id),
+            w: sizes.get(n.id).w,
+            h: sizes.get(n.id).h,
         };
         boxes.set(n.id, box);
         return box;
@@ -161,7 +177,7 @@ export function layout(g, heightOf) {
 
     return {
         nodes, wires,
-        width: cols.length ? (cols.length - 1) * (NODE_W + COL_GAP) + NODE_W : 0,
+        width: Math.max(0, x - COL_GAP),
         height: Math.max(0, y - ROW_GAP),
     };
 }

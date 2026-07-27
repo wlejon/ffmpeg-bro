@@ -25,6 +25,22 @@ import { print } from './graph/print.js';
 
 export { outputColor };
 
+/// The files a graph's input pads read, in the shape `render.start` wants.
+///
+/// Taken from the input nodes rather than passed alongside them, so `[0:v]` in
+/// a chain and input number zero are one fact rather than two that can
+/// disagree. `from` is the seek — see `ExportGraphInput` — and it is here
+/// rather than in the printed chains because a command line says it with `-ss`
+/// and this application says it by handing the renderer a number.
+///
+/// Exported because a preview of one node needs the same list for a subgraph.
+export function inputsOf(graph) {
+    return graph.nodes
+        .filter((n) => n.kind === 'input' && n.path)
+        .map((n) => ({ label: `${n.index}:${n.stream}`, path: n.path,
+                       stream: n.stream, from: n.from || 0 }));
+}
+
 /// `buildSpec()`'s output → the inputs and the graph that would render it.
 ///
 /// Returns `{ ok: true, inputs, chains, video, audio, colour, caveats, graph }`
@@ -61,9 +77,7 @@ export function renderGraph(spec, sources, opts) {
     const d = derive(spec, sources, Object.assign({}, opts, { forRender: true }));
     if (!d.ok) return d;
     const { chains } = print(d.graph);
-    const filterInputs = d.graph.nodes
-        .filter((n) => n.kind === 'input' && n.path)
-        .map((n) => ({ label: `${n.index}:${n.stream}`, path: n.path, stream: n.stream }));
+    const filterInputs = inputsOf(d.graph);
     return { ok: true, filterGraph: chains.join(';'), filterInputs,
              caveats: d.caveats, graph: d.graph };
 }

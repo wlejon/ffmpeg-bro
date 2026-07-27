@@ -22,7 +22,9 @@ import { makeGraph, restore } from './graph/model.js';
 import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, fitView,
-         outrankedControls } from './graph/view.js';
+         outrankedControls, tickGraph } from './graph/view.js';
+import * as graphPreview from './graph/preview.js';
+import { previewGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
 import * as shell from './shell.js';
 import { initSources, drawSources } from './sources.js';
@@ -87,7 +89,13 @@ initGraphView({
     status: el('gr-status'),
     panel: el('gr-panel'),
     fit: el('gr-fit'),
+    previews: el('gr-previews'),
+    atPlayhead: el('gr-at-playhead'),
 }, {
+    // A node preview is the least important render in the application, so it
+    // waits for anything that wants the host's one job slot.
+    busy: () => !exporter.canLeave() || exporter.isOpen(),
+    playhead: () => transport.t,
     // A filter inserted or a value locked changes what will be rendered, so it
     // changes the three things that state that: the spine's cards, the command
     // underneath them, and the properties panel, whose controls may just have
@@ -689,6 +697,9 @@ function frame(now) {
     // as everything above: a measurement of zero is a hidden stage, not a
     // small one.
     chaseGraph();
+    // The node previews are renders, and a render is watched from here for the
+    // same reason the export's is: nothing calls back into JS.
+    if (shell.currentStage() === 'graph') tickGraph();
     // The render is on a thread of its own in the host binary; this is the
     // only thing that looks at it, and only while its dialog is up.
     exporter.tick();
@@ -786,8 +797,14 @@ shell.initShell({
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
         if (id === 'sources') drawSources();
         // Every height the layout needs measures zero while the stage is
-        // hidden, so the graph is built on the way in and not before.
-        if (id === 'graph') drawGraph();
+        // hidden, so the graph is built on the way in and not before. The
+        // previews are taken from wherever the playhead is standing, snapshotted
+        // now rather than followed: a playhead that moved would otherwise
+        // re-render every node for a picture nobody asked to change.
+        if (id === 'graph') {
+            graphPreview.setRange(transport.t, transport.t + graphPreview.previewSeconds);
+            drawGraph();
+        }
         command.draw();
     },
     state: stageState,
@@ -882,6 +899,6 @@ globalThis.__ffmpegBro = {
     // do not have to go through a spec and a printed string to reach it.
     graph: { makeGraph, restore, derive, print,
              overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
-             outranked: outrankedControls },
+             outranked: outrankedControls, preview: graphPreview, previewGraph },
 };
 globalThis.__ffmpegBroReady = true;

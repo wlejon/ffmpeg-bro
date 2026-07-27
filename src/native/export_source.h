@@ -71,10 +71,18 @@ public:
     AVRational timeBase() const { return timeBase_; }
     int rotation() const { return rotation_; }
 
+    /// Move the demuxer to `t`, or to the keyframe before it.
+    ///
+    /// Public because the graph path needs it and `rgbaAt` does not: walking
+    /// forward, the reader seeks for itself. A graph is fed raw frames from
+    /// wherever they start, so the only thing that knows the window can begin
+    /// an hour in is the graph's own `trim`, and only the caller has read it.
+    /// It is backward-seeking, so it can land early and never late.
+    void seekTo(double t);
+
 private:
     void close();
     double ptsOf(const AVFrame* f) const;
-    void seekTo(double t);
     /// Leave `cur_` holding the last frame at or before `t`.
     bool advanceTo(double t);
     /// Fill `pending_` with the next decoded frame. False at end of file.

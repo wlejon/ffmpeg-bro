@@ -56,6 +56,16 @@ function ok(cond, what) {
     assert(cond, what);
 }
 
+/// Prints both sides before it fails, because "expected 8, got 1" is the whole
+/// of the diagnosis and `assert(a === b)` throws it away.
+function same(actual, expected, what) {
+    if (actual !== expected) {
+        console.log(`    expected: ${expected}`);
+        console.log(`    actual:   ${actual}`);
+    }
+    ok(actual === expected, what);
+}
+
 // ── what the build says it can write ───────────────────────────────────────
 
 console.log('\ncapabilities');
@@ -966,6 +976,100 @@ console.log('\na value typed into the graph outranks the edit');
     A.graph.overlay.clear();
     q('#spine [data-stage="compose"]').click();
     pump(120);
+}
+
+// ── and each node showing what it produces ─────────────────────────────────
+//
+// The previews are renders, so this is the only place they can be checked: the
+// subgraph text is proved in ui_graph.js, and what is proved here is that
+// libavfilter takes it, that a file comes out, and that the card ends up with a
+// picture in it at the size the card is.
+
+console.log('\nwhat each node produces');
+{
+    q('#spine [data-stage="graph"]').click();
+    pump(400);
+    ok(A.graph.preview.isEnabled(), 'previews are on by default');
+
+    waitFor('the node previews to render',
+            () => A.graph.preview.outstanding() === 0, 90000);
+    pump(600);
+
+    const cards = qq('#gr-nodes .gn');
+    const shots = qq('#gr-nodes .gn-shot');
+    const videos = qq('#gr-nodes .gn-shot video');
+    const failed = qq('#gr-nodes .gn-shot-fail');
+    ok(shots.length >= 5, `every picture-side node gets one (${shots.length} of ${cards.length})`);
+    ok(failed.length === 0,
+       `and none of them failed${failed.length ? ': ' + failed[0].textContent : ''}`);
+    // A `<video>` per card, and the same count as boxes — this is the check
+    // that caught bro's `replaceChildren()` destroying the subtree it removes,
+    // which left eight of nine cards empty with nothing in the code to see.
+    same(videos.length, shots.length, 'each with its own player, kept across redraws');
+
+    // Audio has no picture and must not pretend to. A waveform of a pad is a
+    // real thing to want and it is not a smaller version of this.
+    const audioCard = q('#gr-nodes [data-key$="/atrim"]');
+    ok(audioCard && !audioCard.querySelector('.gn-shot'),
+       'and the sound side has none, rather than a black rectangle');
+
+    screenshot('out/export-07-node-previews.png');
+}
+
+console.log('\na node resized to the size that helps');
+{
+    const key = `clip:${A.project.clips[0].id}/scale`;
+    const before = q(`#gr-nodes [data-key="${key}"]`).getBoundingClientRect().width;
+    A.graph.overlay.setSize(key, 400);
+    A.graph.draw();
+    pump(200);
+
+    const after = q(`#gr-nodes [data-key="${key}"]`).getBoundingClientRect().width;
+    ok(after > before + 100, `the card is as wide as it was dragged (${before} → ${after})`);
+
+    // A wider card is a sharper render, not a stretched one, so the preview is
+    // re-rendered at the new size — which means waiting for it before asking
+    // what shape it is.
+    waitFor('the bigger preview', () => A.graph.preview.outstanding() === 0, 60000);
+    pump(400);
+    const shot = A.graph.preview.shotFor(key);
+    ok(shot.state === 'ready' && shot.w > 160,
+       `re-rendered at the new size (${shot.w}px wide, was 160)`);
+
+    // The media fills the node: the box is the card's width and its height
+    // follows the picture's own shape rather than a guess. Read from the styles
+    // rather than from `getBoundingClientRect`, which reports screen pixels —
+    // the whole container is scaled by the zoom, and comparing a scaled
+    // measurement against an unscaled arithmetic is how you get a test that
+    // passes at one zoom level.
+    const card = q(`#gr-nodes [data-key="${key}"]`);
+    same(card.style.width, '400px', 'and the card is the width it was given');
+    const box = card.querySelector('.gn-shot');
+    same(box.style.height, `${Math.round(((400 - 12) * shot.h) / shot.w)}px`,
+         'with the picture filling it at its own aspect');
+
+    // Neighbours move out of the way rather than being drawn over: a column is
+    // as wide as its widest card.
+    const next = q(`#gr-nodes [data-key="clip:${A.project.clips[0].id}/format"]`);
+    ok(next.getBoundingClientRect().left > card.getBoundingClientRect().right,
+       'and the column after it is pushed clear');
+
+    A.graph.overlay.setSize(key, 0);
+    A.graph.draw();
+    pump(120);
+}
+
+console.log('\nturning them off');
+{
+    q('#gr-previews').click();
+    pump(200);
+    ok(!A.graph.preview.isEnabled(), 'the bar switches them off');
+    same(qq('#gr-nodes .gn-shot').length, 0, 'and the cards go back to being text');
+    same(A.graph.preview.outstanding(), 0, 'with nothing left queued');
+    q('#gr-previews').click();
+    pump(200);
+    ok(A.graph.preview.isEnabled(), 'and back on again');
+    A.graph.overlay.clear();
 }
 
 console.log(`\n${checks} checks passed`);

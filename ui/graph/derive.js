@@ -368,7 +368,7 @@ export function derive(spec, sources, opts = {}) {
     // and the overlays after all of them.
     const heads = kept.map(({ clip, w, src, i, key }) => {
         const input = g.add({ kind: 'input', stream: 'v', index: i, path: clip.path,
-                              anchor: `${key}/in:v` });
+                              anchor: `${key}/in:v`, from: w.srcIn });
         const tail = g.run(input, videoSteps(clip, w, src, key), `v${i}`);
         // Two points per clip, and they are two different pictures: before the
         // scale a filter sees the source at its own size, in its own pixel
@@ -429,7 +429,7 @@ export function derive(spec, sources, opts = {}) {
         const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0);
         const tails = heard.map(({ clip, w, i, key }) => {
             const input = g.add({ kind: 'input', stream: 'a', index: i, path: clip.path,
-                                  anchor: `${key}/in:a` });
+                                  anchor: `${key}/in:a`, from: w.srcIn });
             const tail = g.run(input, audioSteps(clip, w, key), `a${i}`);
             point(`${key}/audio`, input, 'a', 'clip audio');
             return tail;

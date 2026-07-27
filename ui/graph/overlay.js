@@ -34,7 +34,13 @@ const KEY = 'ffmpeg-bro.graph';
 
 /// `inserts` is ordered: several nodes at one insert point are spliced in in
 /// the order they were added, which is the order they will run in.
-let state = { inserts: [], locks: {} };
+/// `sizes` is how wide each node's card was dragged to, keyed the same way a
+/// selection is. It is here rather than beside the view because it is a thing a
+/// person set and expects to find again, which is what everything in this file
+/// is — but it is deliberately *not* part of `isEmpty()`: how big you like
+/// looking at a node has nothing to do with which of the renderer's two paths
+/// the render takes.
+let state = { inserts: [], locks: {}, sizes: {} };
 
 /// Ids that are stable across a rebuild, and that cannot collide with the
 /// derivation's — it hands out `n1`, `n2`… from a counter that starts fresh
@@ -134,9 +140,24 @@ export function unlock(anchor) {
     return true;
 }
 
+/// Everything a person put *into* the graph. Card widths stay: they are how
+/// you like looking at it, not part of it, and throwing them away with the
+/// filters would be a second surprise on top of an intended one.
 export function clear() {
-    state = { inserts: [], locks: {} };
+    state = { inserts: [], locks: {}, sizes: state.sizes };
     changed('clear');
+}
+
+// ── how big each card is ───────────────────────────────────────────────────
+
+export function sizeOf(key) { return (key && state.sizes[key]) || 0; }
+
+export function setSize(key, width) {
+    if (!key) return;
+    const w = Math.round(width);
+    if (!(w > 0)) delete state.sizes[key];
+    else state.sizes[key] = w;
+    changed('size');
 }
 
 /// Everything pinned to one clip, copied onto another.
@@ -184,6 +205,8 @@ export function retain(clipIds) {
         if (gone(state.inserts[i].anchor)) { state.inserts.splice(i, 1); any = true; }
     for (const anchor of Object.keys(state.locks))
         if (gone(anchor)) { delete state.locks[anchor]; any = true; }
+    for (const key of Object.keys(state.sizes))
+        if (gone(key)) { delete state.sizes[key]; any = true; }
     if (any) changed('retain');
 }
 
@@ -203,6 +226,7 @@ export function restore() {
                                              params: Object.assign({}, n.params) }))
                 : [],
             locks: (blob.locks && typeof blob.locks === 'object') ? blob.locks : {},
+            sizes: (blob.sizes && typeof blob.sizes === 'object') ? blob.sizes : {},
         };
         // Ids handed back to us must not be handed out again.
         for (const rec of state.inserts) {

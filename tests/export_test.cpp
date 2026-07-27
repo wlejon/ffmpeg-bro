@@ -730,6 +730,46 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // The same graph again, with each input told where its window begins.
+        //
+        // `-filter_complex` without `-ss` decodes every input from the start of
+        // its file and lets `trim` throw the rest away, which is correct and is
+        // ruinous for a clip an hour in. `ExportGraphInput::from` is where the
+        // seek goes. It has to make no difference to the picture at all, which
+        // is what this checks — against the render that did not seek, not
+        // against the track stack, so that a frame lost to the seek shows up as
+        // a disagreement and not as one more decibel of x264.
+        {
+            const std::string outS = "out/export-graph-seek.mp4";
+            ExportSettings ss = sg;
+            ss.path = outS;
+            for (auto& in : ss.filterInputs) in.from = c.inPoint;
+            const ExportStatus sst = render(ss, clipsA);
+            checkf(sst.state == ExportStatus::State::Done,
+                   "a graph whose inputs seek to their window renders (%s)",
+                   sst.error.empty() ? "no error" : sst.error.c_str());
+
+            VideoPipeline a, b;
+            if (sst.state == ExportStatus::State::Done && a.open(outG) && b.open(outS)) {
+                double worst = 99.0;
+                for (double at : {0.3, 0.8, 1.3}) {
+                    a.advanceTo(static_cast<TimeNs>(at * 1e9));
+                    b.advanceTo(static_cast<TimeNs>(at * 1e9));
+                    if (!a.hasFrame() || !b.hasFrame()) { worst = -1.0; break; }
+                    worst = std::min(worst, psnr(a.currentRgba(), b.currentRgba(), kW, kH));
+                }
+                // Higher than the cross-path threshold on purpose: these two
+                // renders composited identical frames, so the only difference
+                // left is two x264 passes over the same pictures. Anything the
+                // seek got wrong — a frame late, a keyframe short — is a
+                // different picture and lands far below.
+                checkf(worst > 40.0,
+                       "and produces the same frames as decoding from zero (%.1f dB)", worst);
+            } else {
+                check(false, "both graph renders open for comparison");
+            }
+        }
+
         // The graph is text the user can edit, so every way of getting it wrong
         // has to arrive as a sentence rather than as a render that produces
         // nothing.

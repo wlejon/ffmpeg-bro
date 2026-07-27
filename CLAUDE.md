@@ -197,9 +197,21 @@ Four things about the graph path are load-bearing:
 - **Rotation is inserted as `transpose` filters** between the buffersrc and the graph,
   where ffmpeg's own autorotate puts it, because a display matrix is metadata and a filter
   graph works on pictures.
-- **Every input decodes from the start of its file**, as `-filter_complex` without `-ss`
-  does; `trim` throws away the rest. Right, and wrong for a clip an hour in — when the
-  derivation starts saying where each input's window begins, that is where a seek goes.
+- **Each input seeks to its own window** — `ExportGraphInput::from`, which the derivation
+  fills in from the same number the `trim` in the graph is cut at. A plain
+  `-filter_complex` without `-ss` decodes every input from the start of its file and lets
+  `trim` throw the rest away, which is right and takes an hour for a clip an hour in.
+  The seek is **safe by construction rather than by care**: `SourceVideo::seekTo` is
+  `AVSEEK_FLAG_BACKWARD`, so it lands at or *before* what it is given and can never skip a
+  frame the graph still wants; too small only costs decoding and too large is not
+  reachable. `tests/export_test.cpp` renders the same graph with and without it and
+  requires the frames to be identical (99 dB), not merely close.
+- **`ExportSettings::sizeFromGraph` lets the graph say how big the picture is.** Off — the
+  export — a last pad that is a different size from the render is an error, because the
+  writer was opened for one size and saying so plainly beats a scaler quietly resizing
+  every frame. On, the sink is asked and the writer is opened for the answer. That is what
+  previewing a node in the middle of a graph needs, since nothing outside libavfilter
+  knows how big the picture is half way through.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -272,10 +284,11 @@ listener has to be found and re-attached in a second pass — a pass that is fre
 out of step with the first. Controls here carry their own listeners, made in the same call
 that makes the control, so a control that moves between panels takes its behaviour with it.
 
-**Four bugs this app found in bro, each of which cost an afternoon. All four are fixed
+**Five bugs this app found in bro, each of which cost an afternoon. Four are fixed
 upstream** — bro `87d60e5` and htmlayout `2f881f7` for the first three, and the shutdown
 order in `Engine::~Engine` for the fourth — so this app needs a bro at least that new.
-What the fixes were, and what the code here still does about them:
+The fifth is worked around here. What the fixes were, and what the code here still does
+about them:
 
 - **`getElementById` went stale on a redraw.** The index kept one element per id and erased
   by the id *string*, so removing an element unregistered whatever element currently
@@ -311,6 +324,17 @@ What the fixes were, and what the code here still does about them:
   which surfaced as this app's headless binary dying after every check had passed. The
   general shape is worth remembering: **a shutdown that frees a service before the objects
   that call into it fails silently and blames whatever ran last.**
+- **`replaceChildren()` destroys the subtree it removes instead of detaching it.** Every
+  descendant is dead afterwards: appending one back into the document silently does
+  nothing — no error, no exception, `childNodes.length` stays zero — and it is not
+  specific to any element type, a plain `<span>` behaves the same way. Found because the
+  Graph stage keeps one `<video>` per node across rebuilds, so that a preview arriving for
+  one card does not restart the other eight; seven of nine came back blank with every line
+  of the code that built them looking correct. **`put()` in `ui/dom.js` now clears with
+  `removeChild` in a loop**, which is what the DOM says happens and leaves the elements
+  alive. Not fixed upstream yet. The shape to remember: an API that destroys where the
+  standard detaches turns *holding a reference* — an ordinary thing to do — into a silent
+  no-op somewhere else entirely.
 
 - `shell.js` — the pipeline, as the thing you navigate. Five stages — Sources,
   Compose, Graph, Encode, Write — and the spine is both the diagram and the navigation:
@@ -493,11 +517,31 @@ What the fixes were, and what the code here still does about them:
   out — so the view can build its cards, measure them and only then place them,
   which is the build/measure split the range strip already uses and is
   necessary for the same reason: a node is as tall as the arguments its filter
-  was given. Columns are longest-path depth; within a column a node wants the
-  average row of what feeds it, which is what keeps a clip's whole chain on one
-  line. The `+` on a wire is a DOM element in the transformed card container
+  was given — and now as tall as the picture in it, at whatever width the card
+  was dragged to, which is why `layout()` asks for a `{w, h}` and a column is as
+  wide as its widest card rather than a constant. Columns are longest-path
+  depth; within a column a node wants the average row of what feeds it, which is
+  what keeps a clip's whole chain on one line. The `+` on a wire is a DOM element in the transformed card container
   rather than something drawn into the canvas, because hit-testing a bezier by
   hand to find out which wire was meant is work with a DOM node's name on it.
+- `graph/subgraph.js` + `graph/preview.js` — **what each node actually produces**, drawn
+  in the card. A node states what a filter is configured with, which is not the same as
+  knowing what comes out of it: `crop=iw*0.8:ih*0.5:iw*0.1:ih*0.25` is a claim about a
+  picture. `subgraph.js` keeps a node's ancestors and nothing else, ends the graph there
+  with a `scale` that fits it into the card, and hands back a `-filter_complex`;
+  `preview.js` renders it through the same `GraphSource` the export uses and plays the
+  result in the card. **There is no preview-only path** — a preview that agreed with the
+  render most of the time would be worse than none, because it would be trusted.
+
+  Four rules, not tuning knobs: one render at a time and always behind the export (the
+  host has a single slot); only ancestors and only seconds, with each input seeking to its
+  window; keyed by the subgraph *text*, so a rebuild that regenerated every node object
+  changes nothing and an edit that does not reach a node leaves its picture alone; and
+  nothing starts until the graph has held still, or dragging a slider would render every
+  value it passed through. The range is snapshotted when the stage opens rather than
+  following the playhead, because a playhead move would otherwise invalidate every node.
+  Audio nodes get no picture: a waveform of a pad is a real thing to want and it is not a
+  smaller version of this.
 - `graph/panel.js` — the column beside the graph: what the selected node is set
   to, or what can go on the wire whose `+` was clicked. One panel for both,
   because inserting a filter and configuring it are one gesture with a pause in
