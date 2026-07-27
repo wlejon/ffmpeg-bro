@@ -911,6 +911,19 @@ std::vector<OptionInfo> decoderOptions(const std::string& name) {
 
 // ── tags and dispositions ──────────────────────────────────────────────────
 
+std::string guessEncoder(const std::string& format, const std::string& path, bool audio) {
+    const AVOutputFormat* ofmt = muxerNamed(format);
+    if (!ofmt) return "";
+    const AVCodecID id = av_guess_codec(ofmt, nullptr, path.c_str(), nullptr,
+                                        audio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO);
+    if (id == AV_CODEC_ID_NONE) return "";
+    // Named rather than numbered, because everything above this speaks in
+    // encoder names — and asked for by id, so a build without that encoder
+    // says so instead of offering something that fails at the last step.
+    const AVCodec* enc = avcodec_find_encoder(id);
+    return enc && enc->name ? enc->name : "";
+}
+
 std::vector<std::string> codecTags(const std::string& format,
                                    const std::string& codecName) {
     std::vector<std::string> out;

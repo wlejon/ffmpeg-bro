@@ -167,6 +167,12 @@ add_test(NAME ui-sources COMMAND ffmpeg-bro-headless
 add_test(NAME ui-export COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
          -- "${FIXTURE_A}")
+# Inputs that are assembled, from the drop that groups them to the Write stage
+# that says what a run of files will be called. Takes the fixture *directory*
+# rather than one file, because what it is about is a folder of frames.
+add_test(NAME ui-sequence COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_sequence.js"
+         -- "${FIXTURE_DIR}")
 # What a render said, from av_log inside libav to a line somebody can read:
 # the drain off the frame loop, a warning that is visible, and a measuring
 # filter's values as a series over time.
@@ -174,7 +180,7 @@ add_test(NAME ui-report COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_report.js"
          -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences ui-player ui-sources
-                     ui-export ui-report PROPERTIES
+                     ui-export ui-sequence ui-report PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -190,5 +196,5 @@ set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences ui-player ui-sources ui-export
-                     ui-report
+                     ui-sequence ui-report
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

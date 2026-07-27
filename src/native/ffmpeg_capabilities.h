@@ -350,6 +350,20 @@ std::vector<OptionInfo> decoderOptions(const std::string& name);
 /// muxer's own tables before it is offered: nothing reaches the caller that the
 /// container does not agree means this codec, and a candidate that is wrong for
 /// a format simply does not appear in it.
+/// The encoder libavformat itself would reach for, given a muxer and a
+/// filename — `av_guess_codec`, which is exactly what the `ffmpeg` CLI uses to
+/// decide what `out%04d.png` should be encoded with.
+///
+/// It matters for one muxer above all others. **`image2`'s extension names a
+/// codec, not a container**: `.png` is PNG data and `.bmp` is BMP data and the
+/// muxer is the same muxer either way, which is the opposite of how every
+/// other extension in libavformat works. Picking image2 and leaving the
+/// encoder on the muxer's declared default lands on mjpeg whatever the file is
+/// called.
+///
+/// Returns the name of an encoder *this build has* for that codec, or empty.
+std::string guessEncoder(const std::string& format, const std::string& path, bool audio);
+
 std::vector<std::string> codecTags(const std::string& format,
                                    const std::string& codecName);
 

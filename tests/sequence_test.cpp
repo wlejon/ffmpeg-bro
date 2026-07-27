@@ -292,6 +292,21 @@ int main(int argc, char* argv[]) {
         check(inputIsEndless(of(movie)) == false && inputIsEndless(twice),
               "-stream_loop makes an input endless and a plain path does not");
 
+        // A finite count is measurable, which is the difference between it and
+        // `-loop 1`: the file is ten seconds and this input is twenty, and
+        // nobody has to say so.
+        const ProbeResult whole = probeMedia(of(movie));
+        const ProbeResult doubled = probeMedia(twice);
+        checkf(doubled.ok && std::abs(doubled.durationSec - whole.durationSec * 2) < 0.05,
+               "-stream_loop 1 is twice the length of the file (%.2f from %.2f)",
+               doubled.durationSec, whole.durationSec);
+
+        MediaInput ever = of(movie);
+        ever.streamLoop = -1;
+        const ProbeResult never = probeMedia(ever);
+        check(never.ok && never.durationSec == 0.0,
+              "-stream_loop -1 has no length at all, because forever has none");
+
         SourceVideo plain, looped;
         std::string err;
         const bool both = plain.open(of(movie), &err) && looped.open(twice, &err);

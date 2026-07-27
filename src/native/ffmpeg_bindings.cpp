@@ -826,6 +826,22 @@ JSValue js_codecTags(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
     return JS_IsNull(out) ? JS_NewArray(ctx) : out;
 }
 
+// The encoder libavformat itself would reach for. `image2`'s extension names a
+// codec rather than a container, so this is what decides whether `out%04d.png`
+// is PNG or the mjpeg its muxer declares as a default.
+JSValue js_guessCodec(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1]))
+        return JS_ThrowTypeError(ctx, "guessCodec(muxer, path) requires both");
+    const char* muxer = JS_ToCString(ctx, argv[0]);
+    const char* path = JS_ToCString(ctx, argv[1]);
+    const bool audio = argc >= 3 && JS_ToBool(ctx, argv[2]);
+    std::string name;
+    if (muxer && path) name = guessEncoder(muxer, path, audio);
+    if (muxer) JS_FreeCString(ctx, muxer);
+    if (path) JS_FreeCString(ctx, path);
+    return JS_NewStringLen(ctx, name.data(), name.size());
+}
+
 /// The four registries, in the shape a picker wants. One function each rather
 /// than one generic one: they answer different questions, and the fields are
 /// what makes each list navigable — a muxer's are what a picker groups by, a
@@ -1059,6 +1075,15 @@ JSValue js_frameNames(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     return arr;
 }
 
+JSValue js_hasFramePattern(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString(argv[0])) return JS_FALSE;
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+    const bool yes = hasFramePattern(path);
+    JS_FreeCString(ctx, path);
+    return JS_NewBool(ctx, yes);
+}
+
 JSValue js_concatList(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "concatList(path, files) requires a path and files");
@@ -1156,6 +1181,8 @@ void installFfmpegBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_deviceSources, "deviceSources", 1));
     JS_SetPropertyStr(ctx, ns, "codecTags",
                       JS_NewCFunction(ctx, js_codecTags, "codecTags", 2));
+    JS_SetPropertyStr(ctx, ns, "guessCodec",
+                      JS_NewCFunction(ctx, js_guessCodec, "guessCodec", 3));
     // Small enough to build once: thirty-odd names, and every stream row on
     // the Write stage draws a toggle per entry.
     JS_SetPropertyStr(ctx, ns, "dispositions", stringsToJs(ctx, streamDispositions()));
@@ -1176,6 +1203,8 @@ void installFfmpegBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_sequences, "sequences", 1));
     JS_SetPropertyStr(ctx, ns, "frameNames",
                       JS_NewCFunction(ctx, js_frameNames, "frameNames", 3));
+    JS_SetPropertyStr(ctx, ns, "hasFramePattern",
+                      JS_NewCFunction(ctx, js_hasFramePattern, "hasFramePattern", 1));
     JS_SetPropertyStr(ctx, ns, "concatList",
                       JS_NewCFunction(ctx, js_concatList, "concatList", 2));
     JS_SetPropertyStr(ctx, ns, "imageExtensions", stringsToJs(ctx, imageExtensions()));

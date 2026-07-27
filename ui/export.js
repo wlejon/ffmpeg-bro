@@ -324,5 +324,10 @@ export function lastStatus() { return lastPoll; }
 
 /// For tests: the settings block, and what the encoder is being told.
 export function currentSettings() { return settings; }
+
+/// Redraw everything from the settings as they now are. The app itself never
+/// needs this — every control redraws what it changed — but a test that writes
+/// into `settings` directly has changed the model behind the form's back.
+export function redraw() { if (open) drawAll(); }
 export function currentOptions() { return videoOptions(activeVideoCodec()); }
 export function previewState() { return preview; }

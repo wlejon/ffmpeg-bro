@@ -547,7 +547,16 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
         o.enc->color_primaries = hd ? AVCOL_PRI_BT709 : AVCOL_PRI_SMPTE170M;
         o.enc->color_trc = hd ? AVCOL_TRC_BT709 : AVCOL_TRC_SMPTE170M;
     }
-    const bool fullRange = settings_.colorRange == "pc";
+    // A `yuvj*` pixel format *is* the statement that the picture is full
+    // range — that is the whole of what the J means — so telling the encoder
+    // limited range alongside one is a contradiction, and mjpeg is the encoder
+    // that refuses it: `avcodec_open2` returns EINVAL and the render fails with
+    // "Invalid argument" and no mention of colour. Picking image2 lands on
+    // mjpeg by default, so this was reachable in two clicks.
+    const AVPixFmtDescriptor* pixDesc = av_pix_fmt_desc_get(o.enc->pix_fmt);
+    const bool impliedFull = pixDesc && pixDesc->name &&
+                             std::strncmp(pixDesc->name, "yuvj", 4) == 0;
+    const bool fullRange = impliedFull || settings_.colorRange == "pc";
     o.enc->color_range = fullRange ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 
     if (o.desc.bitrateKbps > 0) {

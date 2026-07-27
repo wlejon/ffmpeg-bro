@@ -127,13 +127,22 @@ bool inputIsEndless(const MediaInput& in) {
 }
 
 double inputDuration(const MediaInput& in, double containerDuration) {
+    double measured = containerDuration > 0.0 ? containerDuration : 0.0;
+    // A finite `-stream_loop` is the file over again a known number of times,
+    // which is measurable and useful: `-stream_loop 1` on ten seconds is
+    // twenty. `-stream_loop -1` and `-loop 1` are not measurable at all —
+    // libavformat reports one pass, or for a still one frame — so nothing that
+    // was measured says how long they are.
+    if (in.streamLoop > 0) measured *= double(in.streamLoop) + 1.0;
+    else if (inputIsEndless(in)) measured = 0.0;
+
+    // Nothing measurable. `-t` is the whole answer and without one nobody
+    // knows, which is a truth worth reporting rather than a zero to be
+    // replaced further up with a number nobody chose.
+    if (measured <= 0.0) return inputLimit(in);
+
     const double limit = inputLimit(in);
-    // An endless input has no measured length to trim: `-t` is the whole
-    // answer, and without one nobody knows — which is a truth worth reporting
-    // rather than a zero to be replaced with a guess further up.
-    if (inputIsEndless(in)) return limit > 0.0 ? limit - in.ss + in.itsoffset : 0.0;
-    if (!(containerDuration > 0.0)) return 0.0;
-    double d = containerDuration - in.ss + in.itsoffset;
+    double d = measured - in.ss + in.itsoffset;
     if (limit > 0.0) d = std::min(d, limit);
     return std::max(0.0, d);
 }

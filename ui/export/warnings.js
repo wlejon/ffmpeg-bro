@@ -5,11 +5,19 @@
 // refuses says so itself and needs no help from this.
 
 import { project } from '../project.js';
+import { basename } from '../format.js';
 import { settings, activeVideoCodec, outputFps } from './state.js';
 import { encoderInfo, audioInfo, muxerInfo, codecTags } from './capabilities.js';
 import { codecOf } from './streams.js';
 import { isEmpty as noUserNodes } from '../graph/overlay.js';
-import { buildSpec } from './spec.js';
+import { buildSpec, range } from './spec.js';
+
+/// How many frames this render will write. A single-frame range written into
+/// one picture is exactly what somebody means by "a still of this moment";
+/// the same path over a hundred frames is not.
+function outputFrames() {
+    return Math.max(0, Math.round(range().length * outputFps()));
+}
 
 export function warnings() {
     const out = [];
@@ -24,6 +32,16 @@ export function warnings() {
     if (!noUserNodes() && !buildSpec().filterGraph)
         out.push('your filters cannot be expressed as a graph for this edit, so this ' +
                  'render would go through the internal compositor without them');
+
+    // image2 writes one file per frame and the numbering is in the filename,
+    // so a path with no pattern in it is one picture written over itself for
+    // every frame of the range. It succeeds, and what is left is the last
+    // frame — which is the shape of failure this whole list is for.
+    if (settings.container === 'image2' && !bro.ffmpeg.hasFramePattern(settings.path) &&
+        !settings.extraFormat.update && outputFrames() > 1)
+        out.push(`${settings.path ? basename(settings.path) : 'the output'} has no frame ` +
+                 'number in it, so every frame would be written over the one before — put ' +
+                 '%04d in the name, or say One picture');
 
     // A row still being drafted is not sent to the renderer — an `-attach`
     // with nothing after it is not a command anybody should be shown — so the

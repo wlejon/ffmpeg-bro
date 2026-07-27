@@ -23,6 +23,23 @@ export function withExtension(path, ext) {
     return `${cut}.${ext}`;
 }
 
+/// A path with a frame-number pattern in it, or the same path without one.
+///
+/// **`image2` writes a run of files, one per frame, and the numbering is in
+/// the filename** — there is no other place for it, which is why this is a
+/// question about the path and not an option. Without a pattern the muxer
+/// writes one file and overwrites it on every frame, which is a legitimate
+/// thing to want (`-update 1`) and a disastrous thing to get by accident.
+export function withPattern(path, digits = 4) {
+    if (!path || bro.ffmpeg.hasFramePattern(path)) return path;
+    const cut = /^(.*?)(\.[^./\\]*)?$/.exec(path);
+    return `${cut[1]}%0${digits}d${cut[2] || ''}`;
+}
+
+export function withoutPattern(path) {
+    return String(path || '').replace(/%[-+ #0]*\d*d/, '');
+}
+
 /// Beside the first clip, named after it. Somewhere is better than nowhere:
 /// the file picker is one click away, and this is right often enough that the
 /// click is usually unnecessary.

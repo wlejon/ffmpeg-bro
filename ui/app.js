@@ -12,6 +12,7 @@ import { project, makeClip, addClip, removeClip, duration, clipsAt,
          selectMany, selectFollow, isSelected, splitClip, trackCount,
          applyInput, clipsOf } from './project.js';
 import * as inputsModel from './inputs.js';
+import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
@@ -255,8 +256,26 @@ if (bro.ffmpeg.openOnStart) open(bro.ffmpeg.openOnStart);
 /// state and the reason the Sources stage is not derived from the timeline any
 /// more.
 function open(path, opts = {}) {
-    const existing = inputsModel.plainInputFor(path);
-    const input = existing || inputsModel.addInput({ path });
+    // Through the same rules a drop goes through: `shot_%04d.png` is a
+    // sequence and a lone picture is a still, whether it arrived on a drop, on
+    // the command line or typed into the Sources stage. One path that decided
+    // it per entry point would be three answers to what a `.png` is.
+    return openSpec(assemble.typedSpec(path), opts);
+}
+
+/// The same, given the whole `-i` rather than only a path.
+///
+/// A drop of three hundred numbered PNGs is one input carrying `-f image2
+/// -framerate 25 -start_number 1`, and a single picture is one carrying
+/// `-loop 1 -t 5` — see ui/sequence.js, which decides which. The reuse rule is
+/// unchanged and is the reason this takes a spec rather than setting the
+/// options afterwards: `plainInputFor` matches only an input nothing has been
+/// said about, so an assembled one is never silently shared with a second drop.
+function openSpec(spec, opts = {}) {
+    const existing = spec.format || Object.keys(spec.options || {}).length
+                         ? null
+                         : inputsModel.plainInputFor(spec.path);
+    const input = existing || inputsModel.addInput(spec);
     const clip = openInput(input, opts);
     // An input that was made here and turned out to be unusable goes away
     // again; one that was already on the list stays, because somebody put it
@@ -279,6 +298,22 @@ function openInput(input, opts = {}) {
         // loading something that will sit at 0:00 forever.
         flash(probe.audio ? 'audio-only files are not playable yet — this needs a video track'
                           : 'no audio or video track in this file');
+        return null;
+    }
+
+    // An input with no length cannot be laid out, and there are two ways to
+    // have one. A single picture *is* no time at all: libavformat says so, and
+    // bro's `<video>` agrees, since it drives its clock from decoded pictures
+    // and one picture is nothing to advance through. An endless input — a
+    // `-loop` or a `-stream_loop` — is the other way round and has no length
+    // for the opposite reason. Both are said plainly, and both are fixed in the
+    // one place the number belongs, which is the input's own window.
+    if (inputsModel.lengthOf(input) <= 0) {
+        flash(inputsModel.endless(input)
+                  ? `${input.name} never ends — set -to on the Sources stage to say how ` +
+                    'long it is'
+                  : `${input.name} is one picture and no time at all — Sources ▸ Still ` +
+                    'holds it for a chosen length');
         return null;
     }
 
@@ -329,15 +364,22 @@ function reloadInput(input) {
 /// usually to see them all at once, so they go on separate tracks, all starting
 /// at zero, and the canvas switches to a grid.
 function openBatch(paths) {
-    if (paths.length === 1) return [open(paths[0])];
-    const grid = paths.length >= 3;
+    // What was dropped is files; what is opened is inputs, and the two are not
+    // the same count. Three hundred numbered PNGs are one input, so the rule
+    // about a batch becoming a grid has to be counted after the grouping and
+    // not before it — dropping a folder of frames is one clip, and it would
+    // otherwise be three hundred tracks.
+    const items = assemble.openables(paths);
+    if (items.length === 1) return [openSpec(items[0].spec)];
+    const grid = items.length >= 3;
     // Stack the batch above whatever is already there, or start at V1 when the
     // timeline is empty — `trackCount()` counts the spare lane, which is not a
     // track anything lives on yet.
     const base = grid ? (project.clips.length ? trackCount() - 1 : 0) : 0;
     const made = [];
-    for (const p of paths) {
-        const clip = open(p, { quiet: true, track: grid ? base + made.length : undefined });
+    for (const item of items) {
+        const clip = openSpec(item.spec,
+                              { quiet: true, track: grid ? base + made.length : undefined });
         if (clip) { if (grid) clip.start = 0; made.push(clip); }
     }
     if (!made.length) return made;
@@ -998,6 +1040,11 @@ globalThis.__ffmpegBro = {
     // The `-i`s, which are the document now: a test that wants to know what
     // will be opened asks this rather than walking the timeline for paths.
     inputs: inputsModel,
+    // What a drop of files amounts to, and the three inputs whose content is
+    // assembled rather than opened. Exposed because the grouping is the most
+    // used path into them and a test of it should not have to go through a
+    // drop to reach it.
+    assemble,
     drawSources,
     video: () => { const c = viewer.activeClip(); return c ? c.video : null; },
     activeClip: () => viewer.activeClip(),

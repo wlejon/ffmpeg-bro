@@ -55,6 +55,7 @@ export function asInput(i) {
         ss: i.ss || 0,
         to: i.to || 0,
         itsoffset: i.itsoffset || 0,
+        streamLoop: i.streamLoop || 0,
     };
 }
 
@@ -79,6 +80,17 @@ export function addInput(spec) {
         ss: spec.ss || 0,
         to: spec.to || 0,
         itsoffset: spec.itsoffset || 0,
+        streamLoop: spec.streamLoop || 0,
+        // What the scan found, when this input came out of one: the numbers
+        // that are on disk. Kept because it is the answer to "and where does
+        // it start" and "how many are there", which nothing else can say —
+        // `probe()` reports what image2 read, and image2 stops at the first
+        // gap, so the two are different facts and both are worth showing.
+        sequence: spec.sequence || null,
+        // The files a `concat` list was written out of, for the same reason:
+        // the list is a file on disk and the input is the list, so without
+        // this nothing on screen could say what is being joined.
+        parts: spec.parts || null,
         probe: null,
         error: '',
         src: '',
@@ -178,12 +190,51 @@ export function lengthOf(input) {
 /// What this input is set to, in one line, for a card and for the spine.
 export function summary(input) {
     const bits = [];
+    if (input.streamLoop) bits.push(`-stream_loop ${input.streamLoop}`);
     if (input.format) bits.push(`-f ${input.format}`);
     for (const k of Object.keys(input.options)) bits.push(`-${k} ${input.options[k]}`);
     if (input.ss) bits.push(`-ss ${input.ss}`);
     if (input.to) bits.push(`-to ${input.to}`);
     if (input.itsoffset) bits.push(`-itsoffset ${input.itsoffset}`);
     return bits.join(' ');
+}
+
+/// What this input's content *is*: one file, a numbered run of them, a single
+/// picture held for a chosen length, or a list read end to end.
+///
+/// Derived and never stored. Every one of those is a consequence of the path,
+/// the demuxer and the option bag — a sequence is a path with `%04d` in it, a
+/// still is an image file that is not one — so a `kind` field would be a
+/// second place for the same fact to live and the two would drift.
+export function kindOf(input) {
+    if (input.format === 'concat') return 'concat';
+    if (bro.ffmpeg.hasFramePattern(input.path)) return 'sequence';
+    if ((input.options.pattern_type || '') === 'glob') return 'sequence';
+    if (isImagePath(input.path)) return 'still';
+    return 'file';
+}
+
+/// True when this input goes on producing pictures for as long as it is asked
+/// to, so that nothing about it says how long it is.
+///
+/// The same rule the native side applies (`inputIsEndless` in
+/// src/native/ffmpeg_input.h), and it has to stay the same rule: it is what
+/// decides whether `-t` is the whole of the answer, and a UI that disagreed
+/// with the renderer about that would lay out a clip at a length the render
+/// does not produce.
+export function endless(input) {
+    if (input.streamLoop) return true;
+    const loop = input.options.loop;
+    return loop !== undefined && loop !== '' && String(loop) !== '0';
+}
+
+/// Does this path name a still picture? The extensions are libavformat's own
+/// — the image2 muxer's list plus every `*_pipe` demuxer — so there is no
+/// table of image formats written down here either.
+export function isImagePath(path) {
+    const m = /\.([A-Za-z0-9]+)$/.exec(String(path || ''));
+    if (!m) return false;
+    return (bro.ffmpeg.imageExtensions || []).indexOf(m[1].toLowerCase()) >= 0;
 }
 
 /// The scheme a URL names, or '' for a plain path. `file` is left as '' too:

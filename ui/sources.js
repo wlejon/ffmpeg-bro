@@ -22,10 +22,11 @@
 //     with the options in force, so the stream list under them is the file as
 //     this input opens it and not as libavformat's defaults see it.
 
-import { div, span, el, put, row, head, fromTemplate, show } from './dom.js';
+import { div, span, el, put, row, head, fromTemplate, show, segmented } from './dom.js';
 import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
-         lengthOf } from './inputs.js';
+         lengthOf, kindOf, endless } from './inputs.js';
+import { typedSpec, SEQUENCE_FPS } from './sequence.js';
 import { optionColumn } from './opttable.js';
 
 let refs = {};
@@ -52,7 +53,11 @@ export function initSources(nodes, h) {
         const add = () => {
             const path = refs.addPath.value.trim();
             if (!path) return;
-            const input = addInput({ path });
+            // Typing `shot_%04d.png` means a sequence in exactly the way
+            // dropping the folder does, and a path that is one picture means a
+            // still. Anything else is a file or a URL and nothing is added to
+            // it — see ui/sequence.js.
+            const input = addInput(typedSpec(path));
             refs.addPath.value = '';
             chosenId = input.id;
             if (input.error && hooks.flash) hooks.flash(input.error);
@@ -129,6 +134,7 @@ function drawDetail() {
         head(input.name),
         ...whereRows(input),
         ...demuxerRows(input),
+        ...assemblyRows(input),
         ...windowRows(input),
         ...actionRows(input),
         ...contentRows(input),
@@ -228,6 +234,168 @@ function demuxerPicker(input) {
     return div('src-pick', [row('Find', search), list]);
 }
 
+// ── inputs whose content is assembled ──────────────────────────────────────
+//
+// A numbered run of files, a single picture held for a chosen length, and a
+// list read end to end are three inputs that are not a file. **Everything they
+// are set with is an ordinary demuxer option** — `-framerate`,
+// `-start_number`, `-pattern_type` and `-loop` belong to `image2`, `safe`
+// belongs to `concat` — so these rows write into the same bag `-probesize`
+// goes in, and the option column beside them holds the same values. Given
+// their own rows because the two or three that matter are otherwise three
+// among seventy, and because *what they mean* is the point: a sequence's frame
+// rate is a decision, and drawing it as row 34 of an option table says the
+// opposite.
+
+/// One demuxer option, edited as itself: the value goes into the bag under the
+/// name ffmpeg gives it, and the command bar prints it in front of the `-i`.
+function optionField(input, key, opts = {}) {
+    const field = el('input', {
+        cls: opts.wide ? 'wide' : 'num', 'data-f': opts.name || key, type: 'text',
+        value: input.options[key] !== undefined ? String(input.options[key]) : '',
+        placeholder: opts.hint || '',
+        on: { change: () => {
+            const next = Object.assign({}, input.options);
+            const v = field.value.trim();
+            if (v) next[key] = v; else delete next[key];
+            change(input, { options: next });
+        } },
+    });
+    return field;
+}
+
+function assemblyRows(input) {
+    switch (kindOf(input)) {
+        case 'sequence': return sequenceRows(input);
+        case 'still':    return stillRows(input);
+        case 'concat':   return concatRows(input);
+        default:         return [];
+    }
+}
+
+/// A numbered run of files, as the one `-i` it is.
+function sequenceRows(input) {
+    const seq = input.sequence;
+    const rows = [head('Image sequence')];
+
+    if (seq && seq.count) {
+        rows.push(row('Frames', span(
+            `${seq.count} on disk, ${seq.start}…${seq.end}`, 'mono')));
+        // A gap is reported and never closed. image2 stops at the first
+        // missing number, so a run of three hundred with twelve absent is not
+        // three hundred frames — and a length nothing will render is worse
+        // than a number that looks short.
+        if (seq.missing)
+            rows.push(row('', span(
+                `${seq.missing} number${seq.missing === 1 ? ' is' : 's are'} missing between ` +
+                `${seq.start} and ${seq.end} — image2 stops at the first gap, so this ` +
+                'sequence ends there', 'src-missing')));
+    }
+
+    // **The rate of a sequence is an input option, not a property of the
+    // files.** Twelve pictures are twelve pictures; how long each is on screen
+    // is a decision, and the same files are one second or two depending only
+    // on this. It is the single most important sentence on this stage.
+    rows.push(row('-framerate', optionField(input, 'framerate', {
+        name: 'seqfps', hint: String(SEQUENCE_FPS),
+    })));
+    rows.push(row('', span(
+        'A sequence has no frame rate of its own — nothing on disk says how long each ' +
+        'picture is on screen. This is what decides it, and it is an input option: the ' +
+        'same files are one second or two depending only on what is here.', 'dim')));
+
+    rows.push(row('-start_number', optionField(input, 'start_number', {
+        name: 'seqstart', hint: '0',
+    })));
+    rows.push(row('', span(
+        'Which number the run begins at. image2 looks for the first five numbers from ' +
+        'zero and then gives up, so a run beginning at 1000 is unopenable without it — ' +
+        'and one beginning at 1 opens only by accident.', 'dim')));
+
+    // `pattern_type` is the demuxer's own option and its values are the
+    // demuxer's own; whether `glob` *works* is a compile-time fact about this
+    // build and the only capability in this application that has to be asked
+    // by trying. Offering it where it cannot work would be offering something
+    // that fails at open with a sentence about a file.
+    const pattern = input.options.pattern_type || 'sequence';
+    rows.push(row('-pattern_type', div('src-demux', [
+        segmented('src-pattern', [
+            { v: 'sequence', l: 'sequence', title: 'A number in the name — %04d' },
+            { v: 'glob', l: 'glob', disabled: !bro.ffmpeg.globPatterns,
+              title: bro.ffmpeg.globPatterns ? 'A shell pattern — frame*.png'
+                                             : 'This build has no globbing' },
+        ], pattern, (id) => {
+            const next = Object.assign({}, input.options);
+            if (id === 'sequence') delete next.pattern_type; else next.pattern_type = id;
+            change(input, { options: next });
+        }),
+    ])));
+    if (!bro.ffmpeg.globPatterns)
+        rows.push(row('', span(
+            'This build of libavformat was compiled without globbing, so pattern_type=glob ' +
+            'is refused at open. Numbered patterns are unaffected.', 'dim')));
+    return rows;
+}
+
+/// One picture, held. The only input on this stage whose length is not a fact.
+function stillRows(input) {
+    const held = endless(input);
+    const seconds = el('input', {
+        cls: 'num', 'data-f': 'stillhold', type: 'text',
+        value: input.to ? String(input.to) : '',
+        placeholder: 'seconds',
+        on: { change: () => {
+            // The hold is `-loop 1` and `-t` together, so setting one sets
+            // both: a `-t` on an input that does not loop is a window on one
+            // picture and still no time at all.
+            const next = Object.assign({}, input.options, { loop: '1' });
+            if (!next.framerate) next.framerate = String(SEQUENCE_FPS);
+            change(input, { to: Number(seconds.value) || 0, options: next,
+                            format: input.format || 'image2' });
+        } },
+    });
+
+    return [
+        head('Still'),
+        row('Hold for', seconds),
+        row('', span(
+            'A still has no duration of its own — it is a decision, not a fact. -loop 1 ' +
+            'makes the input go on producing the same picture forever and -t is the only ' +
+            'thing that can say how long it is; either without the other is a clip that ' +
+            'cannot be laid out.', 'dim')),
+        row('-framerate', optionField(input, 'framerate', {
+            name: 'stillfps', hint: String(SEQUENCE_FPS),
+        })),
+        held ? null : row('', span(
+            'Not looping: this input is one picture and no time at all. bro’s <video> ' +
+            'drives its clock from decoded pictures, so there is nothing here for it to ' +
+            'advance through — set a hold above.', 'src-missing')),
+    ].filter(Boolean);
+}
+
+/// Several files as one input, through the concat demuxer.
+function concatRows(input) {
+    const parts = input.parts || [];
+    return [
+        head('Concat list'),
+        row('Files', span(String(parts.length || '—'), 'mono')),
+        ...parts.map((p, i) => row(String(i), span(p, 'mono dim'))),
+        row('List', span(input.path, 'mono dim')),
+        // The distinction this application exists to make legible. All three
+        // are reachable from here and they are three different renders.
+        row('', span(
+            'The concat *demuxer* reads these files as one input, before any decoding, ' +
+            'and wants them encoded compatibly. The concat *filter* joins decoded streams ' +
+            'inside the graph and does not care what they were. Two clips laid end to end ' +
+            'on the timeline is neither — that is an edit, and it goes through the ' +
+            'compositor.', 'dim')),
+        row('', span(
+            'Each entry carries its own duration, because without one the demuxer reports ' +
+            'no length at all until something has read to the end of the last file.',
+            'dim')),
+    ];
+}
+
 /// The window: which part of the input there is.
 function windowRows(input) {
     const number = (name, key, value, hint) => {
@@ -254,7 +422,21 @@ function windowRows(input) {
         row('', span('An input seek is not a clip’s in-point: -ss moves this input’s zero, ' +
                      'so it is what a clip is cut *from*. -itsoffset delays it, which is how ' +
                      'a camera and a separate recorder are lined up.', 'dim')),
-        len ? row('Length', span(`${clock(len)} of input`, 'mono')) : null,
+        // `-stream_loop` is the one thing here libavformat has never heard of:
+        // ffmpeg's own CLI implements it by seeking the input back to the
+        // start and shifting every timestamp forward, and so does this
+        // binary's `InputLoop`. It belongs beside the window because it is the
+        // other half of the same question — how much of this input there is.
+        row('-stream_loop', number('srcloop', 'streamLoop', input.streamLoop, '0')),
+        row('', span('How many more times to read this input after the first. -1 is forever, ' +
+                     'and forever has no length — so an input that loops is as long as -to ' +
+                     'says and no longer.', 'dim')),
+        len ? row('Length', span(
+            `${clock(len)} of input` + (endless(input) ? ' — because -to says so' : ''),
+            'mono')) : null,
+        !len && endless(input) ? row('', span(
+            'This input never ends and nothing says how long it is, so there is nothing to ' +
+            'lay out. Set -to above.', 'src-missing')) : null,
     ].filter(Boolean);
 }
 

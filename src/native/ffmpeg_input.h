@@ -153,10 +153,14 @@ bool inputIsEndless(const MediaInput& in);
 /// How long this input is, given what the container said its own length was.
 ///
 /// One rule in one place, because a clip's length comes from it and the
-/// timeline, the renderer and playback each ask separately: the window is
-/// applied to what was measured, and an endless input is as long as `-t` says
-/// and no longer. Zero means "nobody knows" — which for a still with no `-t` is
-/// the honest answer and not a number to paper over.
+/// timeline, the renderer and playback each ask separately. Three cases:
+///
+///   - an ordinary input is as long as it measured, cut down by the window;
+///   - a finite `-stream_loop` is that length over again a known number of
+///     times, which is measurable and is measured;
+///   - an input that never ends — `-loop 1`, `-stream_loop -1` — has `-t` as
+///     the whole of its length, and **zero when there is no `-t`**. Zero means
+///     nobody knows, which is the honest answer and not a number to paper over.
 double inputDuration(const MediaInput& in, double containerDuration);
 
 /// `-stream_loop`, folded into the packet read.

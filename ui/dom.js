@@ -128,9 +128,14 @@ export function segmented(name, items, chosen, onPick) {
         cls: 'tiny' + (String(it.v) === String(chosen) ? ' on' : ''),
         text: it.l,
         title: it.title,
+        // A choice this build cannot make is shown and refused rather than
+        // hidden: `pattern_type=glob` is absent from libavformat only when it
+        // was compiled without globbing, and a control that quietly lost an
+        // option would leave nowhere to find out why.
+        disabled: !!it.disabled,
         'data-seg': name,
         'data-v': it.v,
-        on: { click: () => onPick(it.v) },
+        on: { click: () => { if (!it.disabled) onPick(it.v); } },
     })));
 }
 

@@ -17,11 +17,13 @@ import { el, div, span, put, select, segmented, show,
          row, head } from '../dom.js';
 import { basename } from '../format.js';
 import { btns, num, note } from './controls.js';
-import { settings, activeVideoCodec, activeAudioCodec, outputExt } from './state.js';
+import { settings, activeVideoCodec, activeAudioCodec, outputExt,
+         outputFps } from './state.js';
 import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
          muxerInfo, optionsOf, formatOptionsOf,
          rateModes, qualityRange } from './capabilities.js';
-import { defaultPath, withExtension } from './spec.js';
+import { defaultPath, withExtension, withPattern, withoutPattern,
+         range } from './spec.js';
 import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
 
@@ -102,7 +104,12 @@ export function drawForm() {
 function outputRows() {
     const path = el('input', {
         cls: 'wide', 'data-f': 'path', type: 'text', value: settings.path,
-        on: { change: () => { settings.path = path.value.trim(); refreshFileLabel(); hooks.tweaked(); } },
+        on: { change: () => {
+            settings.path = path.value.trim();
+            followExtension();
+            refreshFileLabel();
+            hooks.tweaked();
+        } },
     });
 
     fileLabel = span('', 'dim mono');
@@ -117,6 +124,7 @@ function outputRows() {
                            on: { click: () => browse(path) } }),
             fileLabel,
         ])),
+        ...numberingRows(path),
         ...formatRows(),
         head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
             'data-f': 'formatopts',
@@ -124,6 +132,125 @@ function outputRows() {
             on: { click: () => { showFormatOptions = !showFormatOptions; drawForm(); } },
         }),
     ];
+}
+
+// ── writing a run of files ─────────────────────────────────────────────────
+//
+// `image2` is the one muxer whose output is not a file but a *set* of them,
+// and the only thing that says which is which is the filename: `out%04d.png`
+// is three hundred pictures and `out.png` is one picture written three hundred
+// times over itself. That is the whole reason these rows exist rather than
+// `update` and `start_number` being left in the option column where they
+// technically live.
+//
+// **What is shown is what will be on disk, not the pattern that produces it.**
+// `%04d` is exactly the kind of thing somebody gets wrong once and then never
+// trusts again, and the names come from `av_get_frame_filename2` — the same
+// function the muxer calls — so this is the answer rather than a second
+// implementation of it.
+
+/// The encoder follows the filename, for the one muxer where the filename
+/// names a codec.
+///
+/// **`image2` is the exception to how every other extension in libavformat
+/// works.** `.png` is PNG data and `.bmp` is BMP data through the same muxer,
+/// so the extension is a codec and not a container — which is why `ffmpeg`
+/// resolves it with `av_guess_codec` and why leaving the encoder on the
+/// muxer's declared default lands every image render on mjpeg whatever the
+/// file is called. Only for image2: everywhere else the extension is the
+/// container and the encoder is a decision of its own.
+function followExtension() {
+    if (settings.container !== 'image2' || !settings.path) return;
+    const guess = bro.ffmpeg.guessCodec('image2', settings.path);
+    if (guess && guess !== settings.videoCodec) settings.videoCodec = guess;
+}
+
+/// How many frames this render will write, which is what the preview counts.
+function outputFrames() {
+    const r = range();
+    const fps = outputFps();
+    return Math.max(0, Math.round(r.length * fps));
+}
+
+function startNumber() {
+    const n = Number(settings.extraFormat.start_number);
+    return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+function numberingRows(pathInput) {
+    // Only image2. Every other muxer writes one file, and offering to number
+    // it would be offering something the muxer has no idea about.
+    if (settings.container !== 'image2') return [];
+
+    const numbered = bro.ffmpeg.hasFramePattern(settings.path);
+    const setPath = (next) => {
+        settings.path = next;
+        pathInput.value = next;
+        refreshFileLabel();
+        hooks.changed();
+    };
+
+    const rows = [
+        head('Numbering'),
+        row('Writes', segmented('ex-imgmode', [
+            { v: 'seq', l: 'A file per frame', title: 'out%04d.png — a run of pictures' },
+            { v: 'one', l: 'One picture', title: '-update 1 — the same file, rewritten' },
+        ], numbered ? 'seq' : 'one', (v) => {
+            if (v === 'seq') {
+                delete settings.extraFormat.update;
+                setPath(withPattern(settings.path));
+                followExtension();
+            } else {
+                // `-update 1` is not optional for a single file: without it
+                // image2 says the name has no pattern in it and every frame
+                // after the first lands on top of the one before.
+                settings.extraFormat.update = '1';
+                setPath(withoutPattern(settings.path));
+            }
+        })),
+    ];
+
+    if (!numbered) {
+        rows.push(row('', span(
+            'One picture, rewritten on every frame of the range — so what is left is the ' +
+            'last frame. Set the range to a single frame for the picture at the playhead.',
+            'dim')));
+        return rows;
+    }
+
+    const start = startNumber();
+    const startField = el('input', {
+        cls: 'num', 'data-f': 'startnumber', type: 'text',
+        value: settings.extraFormat.start_number !== undefined
+                   ? String(settings.extraFormat.start_number) : '',
+        placeholder: '1',
+        on: { change: () => {
+            const v = startField.value.trim();
+            if (v) settings.extraFormat.start_number = v;
+            else delete settings.extraFormat.start_number;
+            hooks.changed();
+        } },
+    });
+    rows.push(row('-start_number', startField));
+
+    const total = outputFrames();
+    let names = [];
+    try {
+        names = bro.ffmpeg.frameNames(settings.path, start, Math.min(total || 1, 3));
+    } catch (e) { names = []; }
+    if (names.length) {
+        const last = total > names.length
+            ? bro.ffmpeg.frameNames(settings.path, start + total - 1, 1)[0] : '';
+        rows.push(row('Files', div('ex-filenames', [
+            ...names.map((n) => div('mono dim', basename(n))),
+            total > names.length + 1 ? div('dim', '…') : null,
+            last ? div('mono dim', basename(last)) : null,
+        ].filter(Boolean))));
+        rows.push(row('', span(
+            `${total} file${total === 1 ? '' : 's'} over ${range().length.toFixed(2)} s at ` +
+            `${outputFps().toFixed(3)} fps`, 'dim')));
+    }
+    return rows;
 }
 
 function browse(pathInput) {
@@ -325,6 +452,12 @@ function pickMuxer(name) {
     // stop the render dead at write_header, where an unknown key is an error.
     settings.extraFormat = {};
     if (settings.path) settings.path = withExtension(settings.path, outputExt());
+    // image2 writes one file per frame and the numbering is in the filename,
+    // so a path with no pattern in it is one picture overwritten on every
+    // frame of the range. Nobody means that by picking image2, and finding out
+    // afterwards means finding out from a folder with one file in it.
+    if (name === 'image2' && settings.path) settings.path = withPattern(settings.path);
+    followExtension();
     formatOpen = false;
     hooks.changed();
 }

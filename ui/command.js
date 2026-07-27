@@ -133,6 +133,12 @@ export function parts() {
         g.inputs.forEach((p, i) => {
             const src = (spec.inputs || [])[(g.inputRefs || [])[i]];
             if (src) {
+                // First of the input options, because it is the one that says
+                // there is more of this input than the file has in it. The
+                // rest — `-framerate`, `-start_number`, `-loop`, `-safe` —
+                // arrive through the option bag below, since every one of them
+                // is a demuxer option and travels the way `-probesize` does.
+                if (src.streamLoop) inputs.push('-stream_loop', String(src.streamLoop));
                 if (src.format) inputs.push('-f', arg(src.format));
                 for (const k of Object.keys(src.options || {}))
                     if (src.options[k] !== '' && src.options[k] !== undefined)
