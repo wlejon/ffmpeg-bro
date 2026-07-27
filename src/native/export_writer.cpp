@@ -466,6 +466,29 @@ bool Writer::hasAudio() const {
 
 // ── every destination the muxer opens ──────────────────────────────────────
 
+/// Should the parameter sets be in the stream's `extradata` rather than in the
+/// packets?
+///
+/// `AVFMT_GLOBALHEADER` is the muxer saying its file format keeps them up
+/// front, and for a hundred and seventy-five muxers that is the whole answer.
+/// The other five do not write the file they were named with at all: `tee`
+/// hands its packets to several muxers, `segment`, `hls` and `dash` hand them
+/// to a new one every few seconds, and `rtp` describes them in an SDP. None of
+/// them can answer for the format that eventually receives the packets, and
+/// **the flag they carry instead is `AVFMT_NOFILE`** — which is exactly the
+/// question "do you write what you were named?".
+///
+/// So the answer for those is the safe one: have the extradata. A muxer that
+/// wants the parameter sets in-band gets them from its own automatic bitstream
+/// filter, which is what an mpegts slave of a `tee` does; a muxer that wants
+/// them up front has nowhere else to look, and matroska behind a `tee` fails
+/// at `write_header` with "Invalid data found when processing input" and no
+/// mention of extradata anywhere in it.
+bool Writer::wantsGlobalHeader() const {
+    return oc_ && oc_->oformat &&
+           (oc_->oformat->flags & (AVFMT_GLOBALHEADER | AVFMT_NOFILE)) != 0;
+}
+
 int Writer::ioOpen(AVFormatContext* s, AVIOContext** pb, const char* url, int flags,
                    AVDictionary** options) {
     auto* self = static_cast<Writer*>(s->opaque);
@@ -527,8 +550,8 @@ void Writer::noteOpened(const std::string& url, AVIOContext* pb, AVDictionary* l
     const AVDictionaryEntry* e = nullptr;
     while ((e = av_dict_iterate(protocolOpts_, e))) {
         if (av_dict_get(leftover, e->key, nullptr, 0))
-            protocolErr_ = std::string("nothing reading '") + url + "' has an option '" +
-                           e->key + "'";
+            protocolErr_ = std::string("nothing that writes '") + url +
+                           "' has an option '" + e->key + "'";
     }
 }
 
@@ -671,8 +694,14 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // end, which is why it can be turned off.
     if (s.faststart && oc_->oformat->name && std::strstr(oc_->oformat->name, "mp4"))
         av_dict_set(&opts, "movflags", "+faststart", 0);
+    // The muxer's half only. The other half went to `protocolOpts_` at the top
+    // and has already been handed to every `avio_open2` this render did; left
+    // in here as well it would come back out of `write_header` unconsumed and
+    // be reported as an option the muxer does not have, which is true and
+    // useless.
     for (const auto& o : s.formatOptions)
-        if (!o.key.empty()) av_dict_set(&opts, o.key.c_str(), o.value.c_str(), 0);
+        if (!o.key.empty() && !av_dict_get(protocolOpts_, o.key.c_str(), nullptr, 0))
+            av_dict_set(&opts, o.key.c_str(), o.value.c_str(), 0);
     rc = avformat_write_header(oc_, &opts);
     // Whatever the muxer did not consume, it did not understand. Saying so
     // beats writing a file that quietly ignored half the request.
@@ -691,6 +720,18 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // here every destination this render is going to have has been tried at
     // least once and a key nothing took is a key nothing will ever take.
     if (!protocolErr_.empty()) { *err = protocolErr_; return false; }
+
+    // A key that reached nothing at all is the same failure one step earlier:
+    // the muxer did not know it, and there was no destination to hand it down
+    // to — which is what `-f null -` is, and what `-movflags` on it would be.
+    // Silence here is the "succeeded while ignoring what it was told" outcome
+    // that every other option bag in this binary refuses.
+    if (wrote_.empty() && protocolOpts_) {
+        const AVDictionaryEntry* e = av_dict_iterate(protocolOpts_, nullptr);
+        *err = std::string("the ") + oc_->oformat->name + " muxer has no option '" + e->key +
+               "', and it opens nothing for a protocol to have one";
+        return false;
+    }
 
     headerWritten_ = true;
     return true;
@@ -1042,8 +1083,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     if (!o.desc.preset.empty() && hasOption(codec, "preset"))
         av_opt_set(o.enc->priv_data, "preset", o.desc.preset.c_str(), 0);
 
-    if (oc_->oformat->flags & AVFMT_GLOBALHEADER)
-        o.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (wantsGlobalHeader()) o.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
     // `-pass` and `-passlogfile` come out of the bag before it is applied,
     // because neither is an option of any encoder. See setUpPasses.
@@ -1117,8 +1157,7 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     o.enc->bit_rate = int64_t(o.desc.bitrateKbps) * 1000;
     av_channel_layout_default(&o.enc->ch_layout, o.desc.channels);
     o.enc->time_base = AVRational{1, o.enc->sample_rate};
-    if (oc_->oformat->flags & AVFMT_GLOBALHEADER)
-        o.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (wantsGlobalHeader()) o.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
     if (!applyOptions(o.enc, o.desc.options, "audio", err)) return false;
 

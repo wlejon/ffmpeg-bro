@@ -2345,6 +2345,261 @@ int main(int argc, char* argv[]) {
                st.error.c_str());
     }
 
+    // ── where the render goes ──────────────────────────────────────────────
+    //
+    // A destination stopped being one file. Four muxers here write something
+    // else and each is a different shape of "else": `segment` and `image2`
+    // write a numbered run, `hls` writes a run and a playlist that names it,
+    // `tee` writes the same packets to several places at once. None of them is
+    // a second kind of render — they are muxers, chosen by name like any other
+    // — so what is checked is that the *reporting* follows: how many files
+    // arrived, how big they came to, and whether what came out opens.
+
+    std::printf("\na destination that is a set of files, and a playlist that names them\n");
+    {
+        std::error_code fec;
+        for (int i = 0; i < 64; ++i) {
+            char n[64];
+            std::snprintf(n, sizeof(n), "out/seg-%03d.ts", i);
+            std::filesystem::remove(n, fec);
+        }
+        std::filesystem::remove("out/seg.m3u8", fec);
+
+        ExportSettings sg = baseSettings("out/seg-%03d.ts");
+        sg.format = "segment";
+        sg.faststart = false;
+        // A segment can only start on a keyframe, and this renderer's default
+        // GOP is two seconds — longer than the whole test render, so without
+        // this the segmenter has exactly one place it is allowed to cut.
+        sg.videoOptions.push_back({"g", "10"});
+        sg.formatOptions.push_back({"segment_time", "0.4"});
+        sg.formatOptions.push_back({"segment_format", "mpegts"});
+        sg.formatOptions.push_back({"segment_list", "out/seg.m3u8"});
+        sg.formatOptions.push_back({"segment_list_type", "m3u8"});
+        const ExportStatus seg = render(sg, {leftHalf(first, srcDuration)});
+        checkf(seg.state == ExportStatus::State::Done, "a segmented render finishes (%s)",
+               seg.error.empty() ? "no error" : seg.error.c_str());
+
+        // Four segments of 0.4 s over 1.6 s, plus the playlist. Counted as
+        // libavformat opened them, which is the only count that does not have
+        // to know how this muxer numbers anything.
+        checkf(seg.piecesWritten >= 4, "it says how many files it opened (%lld)",
+               (long long)seg.piecesWritten);
+        checkf(seg.bytesWritten > 4096,
+               "and how big the run came to, which stat'ing the path could not answer (%lld)",
+               (long long)seg.bytesWritten);
+
+        std::ifstream listIn(std::filesystem::path("out/seg.m3u8"));
+        const std::string list((std::istreambuf_iterator<char>(listIn)),
+                               std::istreambuf_iterator<char>());
+        check(list.rfind("#EXTM3U", 0) == 0, "the playlist is a playlist");
+        check(list.find("seg-000.ts") != std::string::npos &&
+              list.find("seg-001.ts") != std::string::npos,
+              "and it names the segments that were written");
+
+        int named = 0, onDisk = 0;
+        size_t at = 0;
+        while ((at = list.find("seg-", at)) != std::string::npos) {
+            const size_t end = list.find(".ts", at);
+            if (end == std::string::npos) break;
+            const std::string name = list.substr(at, end - at + 3);
+            ++named;
+            if (std::filesystem::exists(std::filesystem::path("out/" + name))) ++onDisk;
+            at = end;
+        }
+        checkf(named > 1 && named == onDisk,
+               "every segment the playlist names is on disk (%d of %d)", onDisk, named);
+        checkf(seg.piecesWritten == named + 1,
+               "and the count is the segments plus the playlist (%lld for %d)",
+               (long long)seg.piecesWritten, named);
+
+        // Opened back through the playlist, which is what "open the result"
+        // means for a segmented render: the segments are pieces of one thing
+        // and only the playlist says which order they go in.
+        const Opened back("out/seg.m3u8");
+        check(!!back, "the playlist opens as media");
+        if (back) {
+            const int v = av_find_best_stream(back.fc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            checkf(v >= 0, "with a video stream in it (%u streams)", back.fc->nb_streams);
+            const double dur = back.fc->duration > 0
+                                   ? back.fc->duration / double(AV_TIME_BASE) : 0.0;
+            checkf(dur > kSpan * 0.5,
+                   "and the whole render's length rather than one segment's (%.2fs of %.2fs)",
+                   dur, kSpan);
+        }
+        // The first segment on its own is also a file — which is the other
+        // half of what a segmenter is for, and the reason the count matters.
+        const Opened one("out/seg-000.ts");
+        check(!!one, "and one segment opens on its own");
+    }
+
+    std::printf("\nhls: the same again, with the playlist as the thing you name\n");
+    {
+        std::error_code fec;
+        std::filesystem::remove("out/hls.m3u8", fec);
+        for (int i = 0; i < 32; ++i) {
+            char n[64];
+            std::snprintf(n, sizeof(n), "out/hls%d.ts", i);
+            std::filesystem::remove(n, fec);
+        }
+
+        ExportSettings sh = baseSettings("out/hls.m3u8");
+        sh.format = "hls";
+        sh.faststart = false;
+        sh.videoOptions.push_back({"g", "10"});
+        sh.formatOptions.push_back({"hls_time", "0.4"});
+        sh.formatOptions.push_back({"hls_list_size", "0"});
+        const ExportStatus h = render(sh, {leftHalf(first, srcDuration)});
+        checkf(h.state == ExportStatus::State::Done, "an hls render finishes (%s)",
+               h.error.empty() ? "no error" : h.error.c_str());
+        // The playlist *is* `path`, so it is not one of the pieces — the
+        // pieces are the segments, which is exactly the number worth showing.
+        checkf(h.piecesWritten >= 2, "the segments are counted and the playlist is not (%lld)",
+               (long long)h.piecesWritten);
+        checkf(h.bytesWritten > 4096, "the run has bytes in it (%lld)",
+               (long long)h.bytesWritten);
+        const Opened back("out/hls.m3u8");
+        check(!!back, "and what it wrote opens through the playlist it named");
+        if (back)
+            check(av_find_best_stream(back.fc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0) >= 0,
+                  "with a video stream in it");
+    }
+
+    std::printf("\none render, several destinations\n");
+    {
+        std::error_code fec;
+        std::filesystem::remove("out/tee-a.mkv", fec);
+        std::filesystem::remove("out/tee-b.ts", fec);
+
+        // **`tee` is one encode to several places, which is why it is the
+        // muxer and not two writers.** Two writers would be two encoders on the
+        // same frames: twice the work for a file that is supposed to be the
+        // same bytes in a different wrapper.
+        ExportSettings te = baseSettings("[f=matroska]out/tee-a.mkv|[f=mpegts]out/tee-b.ts");
+        te.format = "tee";
+        te.faststart = false;
+        const ExportStatus t = render(te, {leftHalf(first, srcDuration)});
+        checkf(t.state == ExportStatus::State::Done, "a tee render finishes (%s)",
+               t.error.empty() ? "no error" : t.error.c_str());
+        checkf(t.piecesWritten == 2, "both destinations are counted (%lld)",
+               (long long)t.piecesWritten);
+        check(std::filesystem::exists(std::filesystem::path("out/tee-a.mkv")) &&
+              std::filesystem::exists(std::filesystem::path("out/tee-b.ts")),
+              "and both are on disk");
+
+        const Opened a("out/tee-a.mkv");
+        const Opened b("out/tee-b.ts");
+        check(!!a && !!b, "both open");
+        if (a && b) {
+            const int av = av_find_best_stream(a.fc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            const int bv = av_find_best_stream(b.fc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            check(av >= 0 && bv >= 0, "both carry the picture");
+            if (av >= 0 && bv >= 0) {
+                const auto pa = packetsOf("out/tee-a.mkv", av);
+                const auto pb = packetsOf("out/tee-b.ts", bv);
+                checkf(!pa.empty() && pa.size() == pb.size(),
+                       "and the same packets reached both (%zu and %zu)", pa.size(), pb.size());
+            }
+        }
+
+        // The picture, not just the plumbing: a tee destination has to be the
+        // render, and the cheapest way to say so is to decode one and look.
+        VideoPipeline teePipe;
+        check(teePipe.open("out/tee-a.mkv"), "ffmpeg-bro can open a tee destination");
+        teePipe.advanceTo(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
+        if (teePipe.hasFrame()) {
+            const auto& tpx = teePipe.currentRgba();
+            const double empty = meanLuma(tpx, kW, kH, kW / 2 + 8, 0, kW, kH);
+            const double filled = brightestIn(tpx, kW, kH, 0, 0, kW / 2 - 8, kH);
+            checkf(empty >= 0 && empty < 6.0 && filled > 24.0,
+                   "and it is the render, in the rectangle the clip was given "
+                   "(empty %.2f, filled %.0f)", empty, filled);
+        } else {
+            check(false, "a frame decodes out of a tee destination");
+        }
+    }
+
+    std::printf("\na destination that is not on this machine\n");
+    {
+        // **Against a real listener, in this process.** A UDP socket bound
+        // before the render starts is the only version of this check that
+        // proves anything: writing to a port nobody is on succeeds, silently,
+        // whatever is wrong with the protocol plumbing.
+        bool haveUdp = false;
+        {
+            void* it = nullptr;
+            const char* name = nullptr;
+            while ((name = avio_enum_protocols(&it, 1)))
+                if (std::string(name) == "udp") haveUdp = true;
+        }
+        checkf(haveUdp, "this build has the udp output protocol");
+
+        if (haveUdp) {
+            const std::string url = "udp://127.0.0.1:45231";
+            AVIOContext* rx = nullptr;
+            AVDictionary* ropt = nullptr;
+            // Microseconds, and it is what stops the reader thread from
+            // outliving the render: there is no end-of-stream on a datagram
+            // socket, so the read has to give up on its own.
+            av_dict_set(&ropt, "timeout", "2000000", 0);
+            av_dict_set(&ropt, "buffer_size", "1048576", 0);
+            const int ro = avio_open2(&rx, url.c_str(), AVIO_FLAG_READ, nullptr, &ropt);
+            av_dict_free(&ropt);
+            checkf(ro >= 0, "a listener binds on the loopback (%s)",
+                   ro >= 0 ? "bound" : "could not bind");
+
+            if (ro >= 0) {
+                std::vector<uint8_t> got;
+                std::thread reader([&] {
+                    uint8_t buf[4096];
+                    for (;;) {
+                        const int n = avio_read(rx, buf, sizeof(buf));
+                        if (n <= 0) break;
+                        if (got.size() < (1u << 20)) got.insert(got.end(), buf, buf + n);
+                    }
+                });
+
+                ExportSettings sn = baseSettings(url);
+                sn.format = "mpegts";
+                sn.faststart = false;
+                // A protocol option, in the same bag the muxer's travel in —
+                // which is what the reading end already does, and the reason
+                // the bag is split by asking the muxer which keys are its own.
+                sn.formatOptions.push_back({"pkt_size", "1316"});
+                const ExportStatus n = render(sn, {leftHalf(first, srcDuration)});
+                checkf(n.state == ExportStatus::State::Done,
+                       "a render to udp:// finishes (%s)",
+                       n.error.empty() ? "no error" : n.error.c_str());
+                // There is no file, so there is nothing to stat: what a socket
+                // can say is what went through it.
+                checkf(n.bytesWritten > 4096, "and reports what it sent (%lld bytes)",
+                       (long long)n.bytesWritten);
+                checkf(n.piecesWritten == 0,
+                       "one destination, so nothing beside it was opened (%lld)",
+                       (long long)n.piecesWritten);
+
+                reader.join();
+                avio_closep(&rx);
+                checkf(got.size() > 4096, "and the listener received it (%zu bytes)", got.size());
+                check(!got.empty() && got[0] == 0x47,
+                      "starting with an MPEG-TS sync byte, which is what was asked for");
+            }
+        }
+
+        // An option nothing takes is an error, at this end too. The muxer did
+        // not know it and neither did the protocol, and a render that wrote a
+        // file while ignoring what it was told is the outcome every option bag
+        // in this binary is arranged to prevent.
+        ExportSettings junk = baseSettings("out/dest-never.mkv");
+        junk.format = "matroska";
+        junk.formatOptions.push_back({"no_such_protocol_option", "1"});
+        const ExportStatus jr = render(junk, {leftHalf(first, srcDuration)});
+        checkf(jr.state == ExportStatus::State::Failed &&
+                   jr.error.find("no_such_protocol_option") != std::string::npos,
+               "an option neither the muxer nor the protocol has is refused, named (%s)",
+               jr.error.c_str());
+    }
+
     std::printf("\nbad asks are refused, not crashed into\n");
     ExportSettings bad = baseSettings("out/export-never.mp4");
     check(!startExport(bad, {}, &err), "an empty timeline is refused");

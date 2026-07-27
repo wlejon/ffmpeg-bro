@@ -236,6 +236,13 @@ private:
     };
 
     void close();
+
+    /// Whether the encoders are opened with AV_CODEC_FLAG_GLOBAL_HEADER —
+    /// which is not only `AVFMT_GLOBALHEADER`. See the note above the
+    /// definition: a muxer that does not write the file it was named with
+    /// cannot answer for the format that eventually gets the packets.
+    bool wantsGlobalHeader() const;
+
     bool openVideoStream(Out& o, std::string* err);
     bool openAudioStream(Out& o, bool* skipped, std::string* err);
     bool openAttachment(Out& o, std::string* err);
