@@ -1576,11 +1576,15 @@ bool Writer::openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err)
     // not hold `subrip`. Only an actual no stops it: the third answer,
     // AVERROR_PATCHWELCOME, means the muxer was never taught to answer.
     if (avformat_query_codec(oc_->oformat, codec->id, FF_COMPLIANCE_NORMAL) == 0) {
+        // What it *does* hold, asked rather than read off the declaration —
+        // "mp4 will not hold subrip, it holds no subtitles at all" is what the
+        // declaration says and it is false: what mp4 holds is `mov_text`, and
+        // naming that is the difference between a refusal and a dead end.
+        const AVCodec* instead = defaultSubtitleEncoder(oc_->oformat->name);
         *err = std::string("the ") + oc_->oformat->name + " muxer will not hold " +
                codec->name + " subtitles" +
-               (oc_->oformat->subtitle_codec != AV_CODEC_ID_NONE
-                    ? std::string(" — it writes ") + avcodec_get_name(oc_->oformat->subtitle_codec)
-                    : std::string(" — it holds no subtitles at all"));
+               (instead ? std::string(" — it holds ") + instead->name
+                        : std::string(" — it holds no subtitles at all"));
         return false;
     }
 

@@ -348,6 +348,16 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // packets themselves. There is no output frame rate to walk, no canvas and
     // no encoder — the job is over when every copied stream has reached the end
     // of what it was asked for.
+    //
+    // **The clock this loop keeps is its own**, and that is not fussiness. It
+    // used to advance by half a second past wherever the copy had reached,
+    // which works while packets are dense and hangs the moment they are not: a
+    // subtitle track with a cue a second in writes its first cue at output zero
+    // and then has nothing to write until 4 s, so the position stays at zero,
+    // the window stays at half a second, and the loop asks the same question
+    // forever. A local clock is monotonic by construction and the pumps below
+    // simply have nothing to do in the seconds where nothing happens.
+    double upTo = 0.0;
     if (!composes && st.state == ExportStatus::State::Running) {
         while (!copies.done() || !subs.done()) {
             if (job::stopping()) {
@@ -358,9 +368,8 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             // Half a second at a time, so a Stop is answered promptly and the
             // status moves; the number is a polling interval and nothing else
             // depends on it.
-            const double at = std::max(copies.position(), subs.position());
-            if (!copies.pumpTo(at + 0.5, writer, &err) ||
-                !subs.pumpTo(at + 0.5, writer, &err)) {
+            upTo += 0.5;
+            if (!copies.pumpTo(upTo, writer, &err) || !subs.pumpTo(upTo, writer, &err)) {
                 st.state = ExportStatus::State::Failed;
                 st.error = err;
                 break;

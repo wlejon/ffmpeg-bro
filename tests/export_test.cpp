@@ -256,6 +256,88 @@ int streamIndexOf(const std::string& path, AVMediaType kind) {
     return idx;
 }
 
+/// One subtitle cue, read back out of a file.
+///
+/// **The only check worth making about a subtitle track is what it says and
+/// when.** A stream that exists, a codec that is the right one and a byte count
+/// that is not zero all pass for a track full of the wrong words at the wrong
+/// moments, which is exactly the failure a conversion has. So the file is
+/// decoded and the cues come back as times and text.
+struct Cue {
+    double from = 0, to = 0;
+    std::string text;
+};
+
+std::vector<Cue> cuesOf(const std::string& path) {
+    std::vector<Cue> out;
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0) return out;
+    if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); return out; }
+    const int idx = av_find_best_stream(fc, AVMEDIA_TYPE_SUBTITLE, -1, -1, nullptr, 0);
+    if (idx < 0) { avformat_close_input(&fc); return out; }
+
+    AVStream* st = fc->streams[idx];
+    const AVCodec* dec = avcodec_find_decoder(st->codecpar->codec_id);
+    AVCodecContext* ctx = dec ? avcodec_alloc_context3(dec) : nullptr;
+    if (ctx) {
+        avcodec_parameters_to_context(ctx, st->codecpar);
+        ctx->pkt_timebase = st->time_base;
+        if (avcodec_open2(ctx, dec, nullptr) < 0) avcodec_free_context(&ctx);
+    }
+    AVPacket* pkt = av_packet_alloc();
+    while (ctx && pkt && av_read_frame(fc, pkt) >= 0) {
+        if (pkt->stream_index == idx) {
+            AVSubtitle sub{};
+            int got = 0;
+            if (avcodec_decode_subtitle2(ctx, &sub, &got, pkt) >= 0 && got) {
+                const double base =
+                    sub.pts != AV_NOPTS_VALUE ? sub.pts / double(AV_TIME_BASE) : 0.0;
+                Cue c;
+                c.from = base + sub.start_display_time / 1000.0;
+                c.to = base + sub.end_display_time / 1000.0;
+                for (unsigned r = 0; r < sub.num_rects; ++r) {
+                    if (sub.rects[r]->ass) c.text += sub.rects[r]->ass;
+                    else if (sub.rects[r]->text) c.text += sub.rects[r]->text;
+                }
+                out.push_back(std::move(c));
+                avsubtitle_free(&sub);
+            }
+        }
+        av_packet_unref(pkt);
+    }
+    if (pkt) av_packet_free(&pkt);
+    if (ctx) avcodec_free_context(&ctx);
+    avformat_close_input(&fc);
+    return out;
+}
+
+std::string fileText(const std::string& path) {
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
+    if (!in) return "";
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+bool mentions(const std::string& haystack, const char* needle) {
+    return haystack.find(needle) != std::string::npos;
+}
+
+/// A path as a filter argument wants to hear it.
+///
+/// **A colon separates a filter's arguments**, so a Windows path with a drive
+/// letter in it goes into `subtitles=` unusable unless the colon is escaped —
+/// which is a trap rather than a detail: the render fails with libavfilter
+/// complaining about an option called `/fixtures/cues`, and nothing in that
+/// message mentions the drive letter. Quoted as well, because a path is also
+/// free to contain a comma, and a comma is what separates two filters.
+std::string filterPath(const std::filesystem::path& p) {
+    std::string out;
+    for (char c : p.generic_string()) {
+        if (c == ':' || c == '\'' || c == '\\') out += '\\';
+        out += c;
+    }
+    return "'" + out + "'";
+}
+
 ExportClip rightHalf(const std::string& path, double sourceDuration, double opacity) {
     ExportClip c = leftHalf(path, sourceDuration);
     c.x = kW / 2.0;
@@ -2619,6 +2701,345 @@ int main(int argc, char* argv[]) {
                    jr.error.find("no_such_protocol_option") != std::string::npos,
                "an option neither the muxer nor the protocol has is refused, named (%s)",
                jr.error.c_str());
+    }
+
+    // ── subtitles ───────────────────────────────────────────────────────────
+    //
+    // Three separate claims, and the second is the one that is easy to fake.
+    // A soft track has to arrive in the file with the words and the moments it
+    // went in with; a burn-in has to change the picture *at the cue and nowhere
+    // else*, which is the only measurement that distinguishes "the filter ran"
+    // from "the filter drew something"; and a conversion has to produce the
+    // other format's syntax rather than its input again.
+    {
+        std::printf("\nsubtitles\n");
+        const std::filesystem::path fixtures = std::filesystem::path(first).parent_path();
+        const std::filesystem::path srt = fixtures / "cues.srt";
+        const std::filesystem::path ass = fixtures / "cues.ass";
+        const bool haveCues = std::filesystem::exists(srt) && std::filesystem::exists(ass);
+        checkf(haveCues, "the subtitle fixtures are there (%s)", srt.string().c_str());
+
+        const auto sencs = availableSubtitleEncoders();
+        std::string names;
+        for (const auto& e : sencs) names += (names.empty() ? "" : " ") + e.id;
+        checkf(!sencs.empty(), "%zu subtitle encoders, discovered: %s", sencs.size(),
+               names.c_str());
+        auto encoderNamed = [&](const char* want) {
+            for (const auto& e : sencs) if (e.id == want) return true;
+            return false;
+        };
+        check(encoderNamed("mov_text") && encoderNamed("ass") && encoderNamed("webvtt") &&
+                  encoderNamed("srt"),
+              "including the four formats everything else converts between");
+        for (const auto& e : sencs) {
+            if (e.id == "ass")
+                check(e.textSub, "ass is reported as text");
+            if (e.id == "dvdsub")
+                check(!e.textSub, "and dvdsub as pictures of it");
+        }
+        // What the muxer *declares* and what it *answers* are different facts,
+        // and mp4 is the whole reason this matters: it declares no subtitle
+        // codec at all in this build.
+        for (const auto& m : availableMuxers()) {
+            if (m.name == "mp4") {
+                checkf(m.subtitleCodec == "mov_text",
+                       "mp4's subtitle codec is worked out from what it answers, not from "
+                       "what it declares (declares '%s', answers '%s')",
+                       m.defaultSubtitle.c_str(), m.subtitleCodec.c_str());
+            }
+            // `ssa` and `ass` are one codec under two encoder names — both are
+            // `AV_CODEC_ID_ASS` and both are `assenc.c` — so which of the two
+            // `avcodec_find_encoder` hands back is registry order and not a
+            // decision. Either is the right answer; a third would not be.
+            if (m.name == "matroska")
+                checkf(m.subtitleCodec == "ass" || m.subtitleCodec == "ssa",
+                       "matroska declares the ASS encoder (%s)", m.subtitleCodec.c_str());
+            if (m.name == "webm")
+                checkf(std::find(m.subtitleCodecs.begin(), m.subtitleCodecs.end(), "webvtt") !=
+                           m.subtitleCodecs.end(),
+                       "and WebM holds webvtt");
+        }
+
+        if (haveCues) {
+            const double srcDur = srcDuration;
+
+            // A soft track beside the picture, out of a file that is not the
+            // video. Two inputs, one of them a subtitle file, which is the
+            // ordinary shape: `ffmpeg -i clip.mp4 -i cues.srt -c:s mov_text`.
+            const std::string outSub = "out/export-subs.mp4";
+            ExportSettings ss = baseSettings(outSub);
+            ss.format = "mp4";
+            ss.inputs = {MediaInput{}, MediaInput{}};
+            ss.inputs[0].path = first;
+            ss.inputs[1].path = srt.string();
+            ss.endTime = 9.0;
+            ExportStream sv;
+            sv.kind = "video";
+            sv.source = "composite";
+            ExportStream sst;
+            sst.kind = "subtitle";
+            sst.source = "decode:1:0";
+            sst.language = "eng";
+            sst.disposition = "+default";
+            ss.streams = {sv, sst};
+            ExportClip whole = leftHalf(first, srcDur);
+            whole.input = 0;
+            whole.length = 9.0;
+            whole.w = kW;
+            st = render(ss, {whole});
+            checkf(st.state == ExportStatus::State::Done,
+                   "an .srt beside the picture writes a soft subtitle track (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+
+            if (st.state == ExportStatus::State::Done) {
+                Opened f(outSub);
+                check(!!f, "and the result opens");
+                int subIdx = -1;
+                if (f)
+                    for (unsigned i = 0; i < f.fc->nb_streams; ++i)
+                        if (f.fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+                            subIdx = int(i);
+                checkf(subIdx >= 0, "with a subtitle stream in it (index %d)", subIdx);
+                if (subIdx >= 0) {
+                    AVStream* sst2 = f.fc->streams[subIdx];
+                    checkf(sst2->codecpar->codec_id == AV_CODEC_ID_MOV_TEXT,
+                           "encoded as mov_text, which is what mp4 holds (%s)",
+                           avcodec_get_name(sst2->codecpar->codec_id));
+                    checkf(meta(sst2, "language") == "eng", "carrying its language (%s)",
+                           meta(sst2, "language").c_str());
+                    check((sst2->disposition & AV_DISPOSITION_DEFAULT) != 0,
+                          "and the default flag it was given");
+                }
+
+                const auto cues = cuesOf(outSub);
+                checkf(cues.size() == 3, "all three cues are in the file (%zu)", cues.size());
+                if (cues.size() == 3) {
+                    // The times the fixture was written with, to a frame.
+                    // Anything that lost the offset — an output zero taken from
+                    // the wrong end, a millisecond/second mix-up — lands
+                    // nowhere near these.
+                    checkf(std::fabs(cues[0].from - 1.0) < 0.05 &&
+                               std::fabs(cues[0].to - 2.0) < 0.05,
+                           "the first at 1.00→2.00 s (%.2f→%.2f)", cues[0].from, cues[0].to);
+                    checkf(std::fabs(cues[1].from - 4.0) < 0.05 &&
+                               std::fabs(cues[1].to - 5.5) < 0.05,
+                           "the second at 4.00→5.50 s (%.2f→%.2f)", cues[1].from, cues[1].to);
+                    checkf(std::fabs(cues[2].from - 7.0) < 0.05,
+                           "the third at 7.00 s (%.2f)", cues[2].from);
+                    check(mentions(cues[0].text, "first cue") &&
+                              mentions(cues[1].text, "second cue") &&
+                              mentions(cues[2].text, "third cue"),
+                          "and each says what it said in the .srt");
+                    check(mentions(cues[1].text, "and its second line"),
+                          "including the cue that is two lines long");
+                }
+            }
+
+            // The same file into Matroska as ASS, which is the conversion that
+            // has a header: the styles live in the encoder's `subtitle_header`
+            // and not in the cues, so a stream whose extradata is empty is one
+            // that kept every line of dialogue and lost how all of it looks.
+            const std::string outMkv = "out/export-subs.mkv";
+            ExportSettings ms = ss;
+            ms.path = outMkv;
+            ms.format = "matroska";
+            ms.faststart = false;
+            ms.streams[1].codec = "ass";
+            ms.streams[1].language = "fra";
+            st = render(ms, {whole});
+            checkf(st.state == ExportStatus::State::Done,
+                   "the same cues go into Matroska as ass (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+            if (st.state == ExportStatus::State::Done) {
+                Opened f(outMkv);
+                int subIdx = -1;
+                if (f)
+                    for (unsigned i = 0; i < f.fc->nb_streams; ++i)
+                        if (f.fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+                            subIdx = int(i);
+                if (subIdx >= 0) {
+                    AVStream* a = f.fc->streams[subIdx];
+                    checkf(a->codecpar->codec_id == AV_CODEC_ID_ASS, "as ass (%s)",
+                           avcodec_get_name(a->codecpar->codec_id));
+                    const std::string header(
+                        reinterpret_cast<const char*>(a->codecpar->extradata
+                                                          ? a->codecpar->extradata
+                                                          : reinterpret_cast<const uint8_t*>("")),
+                        a->codecpar->extradata_size > 0 ? size_t(a->codecpar->extradata_size) : 0);
+                    checkf(mentions(header, "[Script Info]") && mentions(header, "Style:"),
+                           "with the style header the decoder handed over (%d bytes)",
+                           a->codecpar->extradata_size);
+                    checkf(meta(a, "language") == "fre" || meta(a, "language") == "fra",
+                           "and its language (%s)", meta(a, "language").c_str());
+                }
+                const auto cues = cuesOf(outMkv);
+                checkf(cues.size() == 3 && mentions(cues[1].text, "second cue"),
+                       "and all three cues (%zu)", cues.size());
+            }
+
+            // A sidecar: a render whose only stream is a subtitle track. There
+            // is no canvas, no mix, no encoder and no frame clock — the cues
+            // drive the job — and this is what "extract the subtitles" is.
+            const std::string outVtt = "out/export-subs.vtt";
+            ExportSettings vs;
+            vs.path = outVtt;
+            vs.format = "webvtt";
+            vs.inputs = {MediaInput{}};
+            vs.inputs[0].path = srt.string();
+            ExportStream vst;
+            vst.kind = "subtitle";
+            vst.source = "decode:0:0";
+            vs.streams = {vst};
+            st = render(vs, {});
+            checkf(st.state == ExportStatus::State::Done,
+                   "a subtitle track on its own writes a sidecar with no picture in it (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+            const std::string vtt = fileText(outVtt);
+            checkf(mentions(vtt, "WEBVTT") && mentions(vtt, "00:01.000 --> 00:02.000") &&
+                       mentions(vtt, "first cue") && mentions(vtt, "third cue"),
+                   "in WebVTT's own syntax, with the times it went in with (%zu bytes)",
+                   vtt.size());
+            // The round trip: what came out is a file that opens as subtitles
+            // and says the same three things. A conversion that wrote its input
+            // back out unchanged would pass every check above and fail this one
+            // — `.vtt` read as SubRip would not parse at all.
+            const auto back = cuesOf(outVtt);
+            checkf(back.size() == 3 && std::fabs(back[1].from - 4.0) < 0.05,
+                   "and reads back as three cues on the same clock (%zu)", back.size());
+
+            // The other direction, from the .ass fixture rather than from a
+            // conversion of the .srt: the words differ between the two files
+            // on purpose, so a render that read the wrong one is visible here.
+            const std::string outSrt = "out/export-subs.srt";
+            ExportSettings as = vs;
+            as.path = outSrt;
+            as.format = "srt";
+            as.inputs[0].path = ass.string();
+            st = render(as, {});
+            checkf(st.state == ExportStatus::State::Done, "and .ass converts to .srt (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+            const std::string srtOut = fileText(outSrt);
+            checkf(mentions(srtOut, "00:00:01,000 --> 00:00:02,000") &&
+                       mentions(srtOut, "styled one") && mentions(srtOut, "styled three"),
+                   "carrying the .ass file's own words rather than the .srt's (%zu bytes)",
+                   srtOut.size());
+
+            // A subtitle track carried through as packets. Nothing is decoded,
+            // so this is the path that needed no encoder at all — and the only
+            // thing worth asserting is that what came out is what went in.
+            if (std::filesystem::exists(outMkv)) {
+                const std::string outCopy = "out/export-subs-copy.mkv";
+                ExportSettings cs;
+                cs.path = outCopy;
+                cs.format = "matroska";
+                cs.faststart = false;
+                cs.inputs = {MediaInput{}};
+                cs.inputs[0].path = outMkv;
+                const int wasAt = streamIndexOf(outMkv, AVMEDIA_TYPE_SUBTITLE);
+                ExportStream cst;
+                cst.kind = "subtitle";
+                cst.source = "copy:0:" + std::to_string(wasAt);
+                cs.streams = {cst};
+                st = render(cs, {});
+                checkf(st.state == ExportStatus::State::Done,
+                       "an existing subtitle track is copied through with no encoder (%s)",
+                       st.error.empty() ? "no error" : st.error.c_str());
+                const auto before = cuesOf(outMkv);
+                const auto after = cuesOf(outCopy);
+                checkf(before.size() == after.size() && !after.empty() &&
+                           before.front().text == after.front().text,
+                       "with the same cues (%zu → %zu)", before.size(), after.size());
+            }
+
+            // ── burned in ──────────────────────────────────────────────────
+            //
+            // The one measurement that says a subtitle was *drawn*. Two renders
+            // of the same seconds, one through `subtitles=` and one without, at
+            // an instant the cue does not cover and at one it does: identical
+            // outside it, and visibly different inside it. Either half alone
+            // proves nothing — a filter that did nothing passes the first, and
+            // a filter that changed every frame passes the second.
+            const std::string outPlain = "out/export-burn-off.mp4";
+            const std::string outBurn = "out/export-burn-on.mp4";
+            ExportSettings bs = baseSettings(outPlain);
+            bs.format = "mp4";
+            bs.endTime = 3.0;
+            bs.inputs = {MediaInput{}};
+            bs.inputs[0].path = first;
+            bs.includeAudio = false;
+            bs.filterInputs = {{"0:v", first, "v", 0.0, 0}};
+            char graph[1024];
+            std::snprintf(graph, sizeof(graph),
+                          "[0:v]scale=%d:%d,setsar=1[vout]", kW, kH);
+            bs.filterGraph = graph;
+            const ExportStatus plain = render(bs, {});
+            std::snprintf(graph, sizeof(graph), "[0:v]scale=%d:%d,setsar=1,subtitles=%s[vout]",
+                          kW, kH, filterPath(srt).c_str());
+            bs.path = outBurn;
+            bs.filterGraph = graph;
+            const ExportStatus burned = render(bs, {});
+            checkf(plain.state == ExportStatus::State::Done &&
+                       burned.state == ExportStatus::State::Done,
+                   "a subtitles filter is an ordinary node on the graph and renders (%s)",
+                   burned.error.empty() ? "no error" : burned.error.c_str());
+
+            if (plain.state == ExportStatus::State::Done &&
+                burned.state == ExportStatus::State::Done) {
+                VideoPipeline a, b;
+                if (a.open(outPlain) && b.open(outBurn)) {
+                    auto at = [&](double t) {
+                        a.advanceTo(static_cast<TimeNs>(t * 1e9));
+                        b.advanceTo(static_cast<TimeNs>(t * 1e9));
+                        if (!a.hasFrame() || !b.hasFrame()) return -1.0;
+                        return psnr(a.currentRgba(), b.currentRgba(), kW, kH);
+                    };
+                    const double before = at(0.4);
+                    const double during = at(1.5);
+                    std::printf("        0.4s: %.1f dB   1.5s: %.1f dB\n", before, during);
+                    checkf(before > 38.0,
+                           "and changes nothing before the cue begins (%.1f dB)", before);
+                    checkf(during > 0 && during < 34.0,
+                           "and draws over the picture while it is on (%.1f dB)", during);
+                    checkf(before - during > 4.0,
+                           "so the difference is the cue and not the encoder (%.1f dB apart)",
+                           before - during);
+                } else {
+                    check(false, "both burn-in renders open for comparison");
+                }
+            }
+
+            // ── what is refused ────────────────────────────────────────────
+            //
+            // There is no composed subtitle track, there is no OCR, and a
+            // container that will not hold a codec says so before the file is
+            // described rather than at `write_header`.
+            ExportSettings ns = ss;
+            ns.path = "out/export-subs-never.mp4";
+            ns.streams[1].source = "composite";
+            st = render(ns, {whole});
+            checkf(st.state == ExportStatus::State::Failed &&
+                       mentions(st.error, "decode:"),
+                   "a subtitle stream fed from the composite is refused, saying what one is "
+                   "fed from (%s)", st.error.c_str());
+
+            ns = ss;
+            ns.path = "out/export-subs-never.mp4";
+            ns.streams[1].codec = "subrip";
+            st = render(ns, {whole});
+            checkf(st.state == ExportStatus::State::Failed &&
+                       mentions(st.error, "subrip") && mentions(st.error, "mp4") &&
+                       mentions(st.error, "mov_text"),
+                   "and a codec the container will not hold is refused, saying what it does "
+                   "hold (%s)", st.error.c_str());
+
+            ns = ss;
+            ns.path = "out/export-subs-never.mp4";
+            ns.streams[1].source = "decode:0:0";
+            st = render(ns, {whole});
+            checkf(st.state == ExportStatus::State::Failed && mentions(st.error, "subtitle"),
+                   "and a picture stream asked to be a subtitle track is refused (%s)",
+                   st.error.c_str());
+        }
     }
 
     std::printf("\nbad asks are refused, not crashed into\n");
