@@ -42,7 +42,7 @@
 // pointer does not survive the crossing and the decoder answers EPERM. It is
 // detected by asking `probe()` what the codec is, not by a list.
 
-import { div, span, el, put, row, head, show, segmented } from './dom.js';
+import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename } from './format.js';
 import { optionColumn } from './opttable.js';
 
@@ -162,6 +162,22 @@ export function asInput() {
         options: Object.assign({}, capture.options),
         t: capture.seconds || 0,
     };
+}
+
+/// The encoder this recording will actually go through, and what it takes.
+///
+/// Nothing is chosen by default — a recording asks the muxer for its own —
+/// which means neither the command bar nor the spec can say `-crf` without
+/// knowing what the muxer would reach for. `MuxerOption::videoCodec` is that
+/// answer, worked out at startup against what this build can encode, and the
+/// encoder's own `crf` and `preset` booleans say whether those two words mean
+/// anything to it. **A `-crf` the encoder has never heard of is an error and
+/// not a shrug**, on both sides of this: the writer would refuse it and the
+/// command bar would be printing an argument that stops the render.
+function effectiveVideo() {
+    const id = capture.videoCodec ||
+        ((bro.ffmpeg.muxers || []).find((m) => m.name === capture.format) || {}).videoCodec || '';
+    return (bro.ffmpeg.encoders || []).find((c) => c.id === id) || null;
 }
 
 /// Can this device be asked for a region?
@@ -308,13 +324,17 @@ export function startRecording() {
     // in use, which reads as a broken application.
     stopPreview();
 
+    const enc = effectiveVideo();
     const spec = Object.assign({
         source: asInput(),
         path: capture.path,
         format: capture.format,
-        crf: capture.quality,
-        preset: 'veryfast',
-    }, capture.videoCodec ? { videoCodec: capture.videoCodec } : {},
+    }, enc && enc.crf ? { crf: capture.quality } : {},
+       // Fast on purpose and only where the encoder has the word: a capture
+       // encodes in real time beside whatever is being recorded, and a preset
+       // that cannot keep up drops frames off the front of the queue.
+       enc && enc.preset ? { preset: 'veryfast' } : {},
+       capture.videoCodec ? { videoCodec: capture.videoCodec } : {},
        capture.audioCodec ? { audioCodec: capture.audioCodec } : {});
 
     try {
@@ -568,7 +588,15 @@ function drawSettings() {
         rows.push(row('Container', muxerPicker()));
         rows.push(row('Video', codecPicker(false)));
         rows.push(row('Audio', codecPicker(true)));
-        rows.push(row('Quality', qualityField()));
+        // Only where the encoder has the word. An encoder with no `crf` — a
+        // hardware one, ProRes, FFV1 — would be handed a key it has never heard
+        // of, which is an error at both ends of this application, and a control
+        // that quietly did nothing would be worse than its absence.
+        const enc = effectiveVideo();
+        if (enc && enc.crf) rows.push(row('Quality', qualityField()));
+        else rows.push(row('Quality', span(
+            enc ? `${enc.label || enc.id} has no CRF — it is written at its own quality`
+                : 'the muxer’s default encoder decides', 'dim')));
         rows.push(row('', span(
             'A recording is its own pipeline: one input, no compositing, straight into the ' +
             'encoder. The Encode stage describes the render of the timeline, which is a ' +
@@ -863,11 +891,12 @@ export function commandParts() {
     if (capture.seconds) inputs.push('-t', String(capture.seconds));
     inputs.push('-i', arg(capture.source));
 
+    const enc = effectiveVideo();
     const out = [];
     if (capture.videoCodec) out.push('-c:v', capture.videoCodec);
     if (capture.audioCodec) out.push('-c:a', capture.audioCodec);
-    if (capture.quality) out.push('-crf', String(capture.quality));
-    out.push('-preset', 'veryfast');
+    if (enc && enc.crf && capture.quality) out.push('-crf', String(capture.quality));
+    if (enc && enc.preset) out.push('-preset', 'veryfast');
     if (capture.format) out.push('-f', capture.format);
     out.push(arg(capture.path || 'capture.mkv'));
 
