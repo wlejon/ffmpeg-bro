@@ -33,7 +33,8 @@ cmake --build build --config Release
 project's build. `BRO_BUILD_EXECUTABLES` stays off — no second `bro.exe` is produced.
 
 Targets: `ffmpeg-bro` (windowed), `ffmpeg-bro-headless` (scripted), `ffmpeg-bro-core`
-(the shared static lib), `ffmpeg-bro-decodetest`, `ffmpeg-bro-perftest`.
+(the shared static lib), `ffmpeg-bro-decodetest`, `ffmpeg-bro-hwtest`,
+`ffmpeg-bro-perftest`.
 
 ## Tests
 
@@ -172,7 +173,47 @@ against footage the fixtures do not resemble:
 # the Capture stage: choosing a device, its options in front of its -i, a
 # recording with no percentage, and a region dragged on the live screen
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js
+
+# native: the GPU. Which device types work on *this* machine, whether a
+# hardware decode is the same picture as a software one, a refusal where a
+# device or a codec is missing, and — printed, never asserted on — what each
+# path costs. Passes on a machine with no card at all.
+./build/Release/ffmpeg-bro-hwtest <file>
+
+# the two places a person decides about a card: the device an input decodes on
+# (Sources, in front of the -i) and the encoder a stream is written with
+# (Encode), plus the sentence saying which of the two is measured slower here
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>
 ```
+
+**`hwtest` is mostly a measurement and that changes how it is written.** CI has
+no graphics card and, unlike a camera, there is no `lavfi` to stand in for one —
+so the suite splits. Assertions are about the *shape* of the answer and run
+everywhere: enumeration answers something, a type reported present can be created
+and is shared rather than remade, a type reported absent refuses with a sentence,
+a codec the device cannot decode is refused before a packet is read. **Numbers are
+printed and never asserted on**, because a threshold on them would be a statement
+about the machine and not about the code; where they belong is README, beside the
+name of the hardware they came from. Do not turn one into a check.
+
+The one equivalence check needs its threshold explained rather than tuned. **A
+hardware decoder is not bit-exact with a software one and is not required to be**
+— NVDEC and the CPU implement the same standard and differ in rounding and
+deblocking arithmetic, all within what H.264 permits — so the floor is PSNR and
+it is 40 dB. Two conformant decoders of one bitstream score in the forties here;
+every mistake reachable in this code (a frame out of step, a plane swapped, a
+download that lost the colour tags) scores under twenty. The gap is where the
+threshold lives, and lowering it to make something pass would be removing the
+only thing the check does.
+
+**What the measurement said, because it is not what the folklore says.** On this
+machine — Ryzen 9 7950X3D, two RTX 4090s — hardware *decode* is two to six times
+slower than libavcodec threaded across thirty-two cores, and the readback
+everybody blames is 3–4% of it: NVDEC is a throughput engine being asked for one
+frame at a time. Hardware *encode* is two to three times faster above SD and
+slower below it. So the win is entirely the encoder, the two are separate
+decisions in the UI, and every comment in this repo that used to say "the
+readback is the cost" now says what was measured. README has the tables.
 
 **Testing capture is awkward and must not be fudged.** CI has no camera, so both
 suites drive `lavfi` — libavfilter's *input device* (`-f lavfi -i testsrc=…`), which
@@ -301,6 +342,7 @@ them to change alone:
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
 | `ffmpeg_capabilities.*` | what this build can write, read, reach, capture and put a picture through, asked of libav* |
 | `ffmpeg_report.*` | **what a render said** — libav's log, and the values filters attach to frames |
+| `ffmpeg_hardware.*` | **what this machine has**, as against what this build has — devices created rather than listed, shared once made, and which decoders, encoders and filters each one carries |
 
 **`export_timeline.h` is the seam a node graph attaches at**, and does. `runExport` asks a
 `FrameSource` two questions per output frame — the canvas at `t`, and the samples between
@@ -339,6 +381,39 @@ Four things about the graph path are load-bearing:
   every frame. On, the sink is asked and the writer is opened for the answer. That is what
   previewing a node in the middle of a graph needs, since nothing outside libavfilter
   knows how big the picture is half way through.
+- **The parse is `avfilter_graph_segment_*`, not `avfilter_graph_parse2`.** They do the
+  same thing; the difference is that the segment API stops between creating the filters
+  and initialising them, and that gap is the only moment `-filter_hw_device` can be
+  handed over. `hwupload` refuses to initialise without a device and takes no argument
+  that could name one, so a device assigned after `parse2` has already come too late —
+  "A hardware device reference is required to upload frames to", from inside a parse,
+  with nothing saying which filter meant it. This is `graph_parse()` in ffmpeg's own
+  `ffmpeg_filter.c` written out; with no device named it is three lines doing what one
+  did, which is why there is no fast path here to disagree with.
+
+**The picture that never comes down.** `FrameSource` has two more questions on it now,
+both optional and both defaulting to "no": `hwFrames()` — which device pool the pictures
+arrive in — and `nativeAt(t)` — the picture itself rather than a canvas. That is the whole
+of what encoding straight from the GPU needed from this seam, because a hardware encoder is
+*opened against a pool*: `Writer::open` takes the frames context, `avcodec_open2` builds
+its surfaces from it, and `writeVideoFrame` hands the graph's own frame to
+`avcodec_send_frame` with nothing written on it but the timestamp, the forced keyframe and
+the field order. Four things follow and each has a reason:
+
+- **All the composite-fed video streams or none.** A file with one hardware video stream
+  and one software one needs the picture in both places at once, which is a download per
+  frame on behalf of a render that asked for the opposite. `Writer::open` refuses it and
+  names the odd stream.
+- **A native render ends when its graph ends.** There is no black frame past the last
+  picture, because black would have to be made in system memory and uploaded once a frame.
+  `-shortest` is not consulted on this path; it is implied.
+- **`rgbaAt` means pixels and downloads whatever it is handed**, whatever the input asked
+  for. The two questions have different callers — the compositor asks `rgbaAt`, a graph
+  asks `nextRaw` — and an input configured for the graph would otherwise render every clip
+  on the timeline as a hole.
+- **Rotation on a device needs `transpose_<device>`.** `transpose` reads pixels and a
+  `cuda` frame has none, so a feed that is on a device gets the hardware member of the
+  family and a build without one refuses with a sentence rather than at graph config.
 
 **A file is a list of streams.** `ExportSettings::streams` is a
 `std::vector<ExportStream>` and the writer holds a `std::vector<Out>`;
@@ -1339,6 +1414,36 @@ about them:
   graph* — separately, because it is a different kind of thing — with the offer
   to make it an `-i`. Neither is a special case bolted on: both are the
   consequence of the decision in `graph/derive.js` about what a graph source is.
+
+  **And where an input's pictures are decoded**, which is `-hwaccel`,
+  `-hwaccel_device` and `-hwaccel_output_format` in three rows. Here for the reason
+  the decoder column is here, and beside a sentence saying that this is measured
+  *slower* than the CPU — see `hardware.js`.
+- `hardware.js` — **what this machine has, and an honest account of when it helps.**
+  Two things live here and the second is the unusual one.
+
+  The first is discovery. `bro.ffmpeg.hwaccels` is a fact about the *build* — every
+  device type a vcpkg ffmpeg is compiled with is in it on a machine with no card at
+  all — so nothing on the screen is drawn from it. `bro.ffmpeg.hardware()` creates a
+  device of each type and reports what happened, and every menu, every badge and
+  every filter-family question comes from that. There is no list of hardware
+  filters, encoders or decoders written down anywhere: each device reports its own,
+  built by walking libavcodec's `avcodec_get_hw_config` and libavfilter's registry.
+
+  The second is `decodeCost` and `encodeCost`, which are two sentences and are the
+  reason this file has an opinion. **A control labelled "hardware acceleration"
+  would be wrong about half of what it does**: measured (README has the numbers),
+  decoding on the card here is two to six times *slower* than libavcodec threaded
+  across thirty-two cores, and encoding on it is two to three times faster above SD.
+  So they are two decisions in the two places they belong — the device is on
+  Sources in front of the `-i`, the encoder is on Encode — and the one that is
+  usually a mistake carries its sentence to wherever it is drawn.
+
+  `deviceForRender()` is the third thing and it is a derivation, not a control.
+  `-filter_hw_device` has to be *something*, `hwupload` takes no argument that could
+  name it, and there are exactly two things in a render that name a device: an input
+  that decodes on one, and a filter that belongs to one. A separate control would be
+  a second place that has to be set to agree.
 - `opttable.js` — **one AVOption table, edited into one bag**, and the third instance
   of the pattern is what made it a component. libavutil describes an encoder, a muxer,
   a demuxer, a decoder, a protocol and a filter with the same structure, so the
@@ -1791,6 +1896,32 @@ about them:
   `streamsOf()` use: those survive a loop by giving up, which draws something
   and never says what, and a cycle has to be *named* because every other
   complaint about it is a consequence.
+
+  **And where the picture is.** A `cuda` frame arriving at `scale` produces four
+  hundred pixel format names, twice, with nothing in it saying the word
+  hardware — the single least readable failure in this application, and one
+  sentence to explain. So `memoryProblems()` carries one fact through the graph
+  (is the picture up or down) and names the first node where the two disagree.
+  Three things about it were learnt the hard way:
+
+  - **Resolve by asking upstream, not by walking `g.nodes` in order.** A node's
+    producers are earlier in the array for a graph the derivation built and are
+    *not* for one somebody edited, because `insertAfter` appends. Reading in
+    order made every node after an insertion answer "system memory" because
+    what fed it had not been reached — a wrong answer that looks exactly like a
+    right one.
+  - **Every input pad, not the first.** `overlay`'s canvas comes from a `color`
+    source and its clip comes from a chain that may have put itself on a card.
+    Reading only the first said nothing about the graph the check exists for.
+  - **Sound is never on a card.** An input that decodes its pictures on one
+    still decodes its soundtrack with libavcodec, and leaving that out reported
+    the `atrim` hanging off the same `-i` as a filter that could not read what
+    reached it.
+
+  It is deliberately conservative: only a filter that *belongs to a device*, or
+  one known to pass anything through (`trim`, `setpts`, `fps`…), is judged at
+  all. A false accusation about a graph that runs is worse than a missing note
+  about one that does not.
 
 - `graph/overlay.js` — the part of the graph a person made, held apart from the
   part that is derived, because **the skeleton is thrown away and rebuilt on
