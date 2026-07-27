@@ -97,7 +97,14 @@ bro.ffmpeg.openOnStart    // media file named on the command line, or null
 // taken afterwards.
 bro.ffmpeg.probe(path)               // in-process ffprobe: throws if it can't be read
 bro.ffmpeg.probe(path, { format, options })
-bro.ffmpeg.probe({ path, format, options, ss, t, to, itsoffset, streamLoop })
+bro.ffmpeg.probe({ path, format, options, decoderOptions,
+                   ss, t, to, itsoffset, streamLoop })
+// `decoderOptions` is the second bag on an input and a different one:
+// `-probesize` belongs to libavformat and `-skip_frame` to libavcodec, and
+// ffmpeg writes both in front of the same `-i` because both are decisions
+// taken while this input is being read. They reach every decoder opened for
+// this input — the two export readers and both playback decoders — so
+// `-skip_frame nokey` is the same decision on the timeline and in the file.
 // `format` forces the demuxer (`-f`), `options` are its own and the
 // protocol's (`probesize`, `analyzeduration`, `fflags`, `rw_timeout`…), and
 // **an unknown key throws** rather than being ignored — libavformat hands back
@@ -136,6 +143,7 @@ bro.ffmpeg.probe({ path, format, options, ss, t, to, itsoffset, streamLoop })
 ```js
 // What this build can write — asked of libavcodec, not hardcoded.
 bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
+                          //    codecName: "h264",   // the codec, not the encoder
                           //    crf, preset, qp, tune,          // booleans
                           //    hardware, intraOnly, lossless, alwaysLossless,
                           //    crfMin, crfMax, crfDefault,
@@ -170,6 +178,17 @@ bro.ffmpeg.muxerOptions("mp4")        // movflags, and libavformat's generic one
 bro.ffmpeg.demuxerOptions("mp4")      // and -fflags, for the other end
 bro.ffmpeg.decoderOptions("h264")     // -skip_frame, -skip_loop_filter, -thread_type
 bro.ffmpeg.protocolOptions("srt")     // what a destination is configured with
+bro.ffmpeg.bsfOptions("h264_metadata")   // and the stage between the two
+// → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
+//      values: [{ name, help, value }, ...] }, ...]
+
+// The stage of the pipeline that is neither an encoder nor a muxer: bitstream
+// filters work on packets that are already encoded, in between. `codecs` is
+// each filter's own `codec_ids`, and **empty means any** — `setts` and `noise`
+// declare no list at all, which is an answer and not an absence.
+bro.ffmpeg.bitstreamFilters
+// → [{ name: "h264_mp4toannexb", codecs: ["h264"] },
+//     { name: "setts", codecs: [] }, ...]
 // → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
 //      values: [{ name, help, value }, ...] }, ...]
 
@@ -251,7 +270,7 @@ bro.ffmpeg.render.start({ path,
                           // and a filter-graph input pad each name one by
                           // index; the demuxer, its options and the window
                           // are the input's, and a path cannot carry them.
-                          inputs: [{ path, format, options,
+                          inputs: [{ path, format, options, decoderOptions,
                                      ss, t, to, itsoffset, streamLoop }],
                           // Which muxer, by name — `-f matroska`. Empty falls
                           // back to guessing from the extension. Named because
@@ -270,6 +289,17 @@ bro.ffmpeg.render.start({ path,
                           audioOptions: { b: "192k" },
                           formatOptions: {},
                           metadata: { comment: "…" },   // the container's own
+                          // None of these five is an encoder option, which is
+                          // why each is a named field rather than a key in the
+                          // bag above. `-force_key_frames` sets a frame's
+                          // picture type before the encoder sees it; the field
+                          // order has to reach the frames as well as the
+                          // encoder; `-shortest` ends the loop the writer is
+                          // being fed from.
+                          forceKeyFrames: "1.5,4,8",     // or "expr:gte(t,n_forced*2)"
+                          fieldOrder: "tt",              // "" | tt | bb
+                          threads: 0, threadType: "",    // 0 is libavcodec's auto
+                          shortest: false,
                           streams: [...], chapters: [...] })
 bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openEnded,
                             //     elapsed, fps, bytes, path, stage, error, job,
@@ -388,8 +418,14 @@ streams: [
     language: "eng",                // ISO 639-2
     disposition: "+default+forced", // av_disposition_from_string, or "0"
     tag: "hvc1",                    // -tag:v, four characters
+    // `-bsf:v h264_mp4toannexb,dump_extra=freq=k` — a chain, per stream, in
+    // the order it runs. A list rather than the comma-separated string
+    // because it *is* a list: the order is the whole of the meaning and each
+    // entry has its own option table. A bare string is the same as `{ name }`.
+    bsf: [{ name: "h264_metadata", options: { level: "5.1" } }, "dump_extra"],
     // each of these takes the render's when it is absent
-    crf, bitrate, preset, pixelFormat, sampleRate, channels },
+    crf, bitrate, preset, pixelFormat, sampleRate, channels,
+    forceKeyFrames, fieldOrder, threads, threadType },
   { kind: "audio", source: "mix", codec: "aac", language: "fra",
     disposition: "+comment" },
   { kind: "attachment", path: "…/font.ttf", mimeType: "font/ttf" },
@@ -539,6 +575,20 @@ generic one, in the column the encoder's advanced options and the muxer's alread
 — and the protocol's beside it when the path is a URL, since libavformat passes what
 the demuxer does not recognise down to the AVIO layer and they travel in one bag.
 An unknown key stops the open and names itself.
+
+Under them, **the decoders** — one column per codec this input turned out to
+carry. `-skip_frame`, `-skip_loop_filter`, `-thread_type`, `-lowres`, and every
+private option of whichever decoder libavcodec picks. **A decoder belongs to an
+`-i`**, which is why they are here and not on the Encode stage: ffmpeg writes
+`-skip_frame` in front of the same `-i` that `-probesize` goes in front of, and
+for the same reason — both are decisions taken while this input is being read.
+They are a separate bag from the demuxer's because they are a separate object
+with a separate table, and they reach *both* the render and playback, so
+`-skip_frame nokey` is the same decision on the timeline and in the file that
+comes out. An unknown key is refused with the key named, as an unknown demuxer
+option is — and refused **before the render starts**, because the compositor
+deliberately draws an unopenable clip as the hole it is, which is right for a
+file that has gone missing and wrong for a setting somebody typed.
 
 Two clips from one file are one input, which is what ffmpeg would open. A second drop
 of the same file reuses it — unless something has been set on it, in which case a
@@ -1118,11 +1168,75 @@ the NVIDIA one is absent on a machine without one. Most renders are one of
 these, and the twenty controls below are for the render that is not.
 
 **Rate control** is offered as the modes the encoder actually has: constant
-quality, a bitrate target, a capped average for streaming (`-maxrate` and
-`-bufsize`), and lossless. NVENC has no CRF, so its quality mode is `-cq` with
-the bitrate target taken out of the way; x264's lossless is `-crf 0`; VP9's is
-`-lossless 1`. That mapping lives in one function, so the summary line, the
-preview and the export cannot describe three different renders.
+quality, a bitrate target, **two-pass**, a capped average for streaming
+(`-maxrate` and `-bufsize`), and lossless. NVENC has no CRF, so its quality mode
+is `-cq` with the bitrate target taken out of the way; x264's lossless is
+`-crf 0`; VP9's is `-lossless 1`. That mapping lives in one function, so the
+summary line, the preview and the export cannot describe three different
+renders.
+
+**Two-pass is a mode of that control and not a switch beside it**, because it is
+the same decision — spend this many bits — taken twice. The range is rendered
+once to measure where the bits are needed and once to spend them, and the
+statistics go between the two through a file on disk, which is the only way
+ffmpeg ever does it. It is one job here: one Stop, one progress bar, one file at
+the end, with the bar saying which pass it is in — a render that is going to do
+the whole thing again must not report 43% and leave the rest to be discovered.
+A checkbox instead would have let you ask for two passes of *constant quality*,
+which is two runs of an encoder that had nothing to learn from the first.
+
+One thing about it cannot be promised, and is said where it is chosen: **whether
+an encoder acts on `-pass` is the one capability libavcodec will not answer in
+advance.** There is no flag for it and no option to ask about. So the control
+does exactly what it says — it writes `-pass 1` and `-pass 2`, as the command
+line does — and a render whose encoder kept its statistics somewhere else says
+so in the report rather than pretending. x264 keeps its own log and is handed
+the filename; everything else uses libavcodec's own statistics pair; which of
+the two applies is asked of the encoder rather than looked up in a list here.
+
+**Where the keyframes go** is a different question from how often, and the more
+useful one. `-g` is the interval; `Force at` is the *places*:
+
+| | |
+|---|---|
+| **Off** | whatever the GOP length produces |
+| **Cut points** | one wherever the edit cuts — read from the timeline every time |
+| **Times** | a list of seconds into the output |
+| **Expression** | ffmpeg's own, evaluated per frame over `n`, `t`, `n_forced`… |
+
+**A keyframe where an edit cuts is what makes a file that can be cut again.**
+Every editor and every stream packager has to start a segment on one, so a cut
+that falls in the middle of a GOP costs a re-encode of everything up to it.
+Nothing is copied when you choose it: what is remembered is the *decision*, and
+the list is re-read from the timeline whenever it is asked for — so moving a
+clip moves the keyframe with it. A version that wrote the numbers down when the
+button was pressed would go on naming moments nothing cuts at.
+
+The times are seconds into the **output**, not into the timeline, which is what
+ffmpeg means by them and what makes the printed command run somewhere else and
+produce the same file.
+
+Under Advanced, four more that are not encoder options and could not be reached
+through the option column:
+
+- **Frame timing** is *stated*, not chosen. This renderer walks the range
+  forward at the output rate and stamps every frame with its number — both
+  paths do — so `-fps_mode cfr` is a fact about it rather than a setting, and
+  the command says so. A picker offering `vfr` or `passthrough` would be
+  offering two things neither render path can produce.
+- **Field order** — progressive, top field first, bottom field first. It is two
+  statements that travel together: the encoder goes into field mode
+  (`-flags +ildct+ilme`) *and* every frame is marked to match, because only the
+  first writes a file that claims to be interlaced without being coded that way.
+  What is composited here is progressive, so this is right for footage that was
+  interlaced and has come through untouched, and a claim about the picture
+  otherwise.
+- **Threads** — `-threads` and `-thread_type`. Zero is all cores, which is what
+  every render here has always done and remains the right default; this is for
+  the render that has to leave a core alone.
+- **Shortest** — end the file where the content ends rather than where the range
+  does. Off by default: a range is a decision somebody made, and quietly writing
+  less of it than was asked for is the wrong half of the trade.
 
 **Every option the encoder has** is available under Advanced. The list is
 `av_opt_next` over the encoder's `AVClass` — name, type, range, default, help
@@ -1245,6 +1359,25 @@ Open a row and it says what the stream carries:
   called out here rather than at `write_header`, where it arrives as "Invalid
   data found when processing input" with no mention of the tag.
 - **Metadata** — anything else, as key and value.
+- **Bitstream filters** — the packet chain, in the order it runs.
+
+**A bitstream filter is neither an encoder nor a muxer**, which is why it lives
+here rather than on the Encode stage: it works on packets that have already been
+encoded, in between the two, and nothing it does costs a re-encode.
+`h264_mp4toannexb` rewrites NAL framing, `hevc_metadata` edits the VUI without
+touching a pixel, `dump_extra` repeats the parameter sets so a stream can be
+joined mid-flight, `setts` rewrites timestamps. None of them is reachable
+through any option table, and before this there was no `av_bsf_*` anywhere in
+this binary.
+
+It is drawn as the ordered list it is — a row per filter, numbered, with the
+arrows to move one — because the order is the whole of the meaning:
+`h264_mp4toannexb,dump_extra` and the same two the other way round are different
+files. What is offered is narrowed to the codec this stream is actually encoded
+with, out of each filter's own declared list, so the menu cannot offer something
+the render will then refuse; a filter that declares no list runs on anything and
+is always there. Each carries its own option table, in the column the encoder's
+and the muxer's already use.
 
 **An attachment is a row and a chapter is not**, and that is the shape of the
 things rather than a layout choice. An attachment *is* a stream: it has an
@@ -1584,7 +1717,9 @@ will be written as before anything is rendered.
 
 `ui_sources.js` follows one input the length of the stage: typed in as a path
 with no clip near it, forced to a demuxer picked out of libavformat's own list,
-given `-probesize` out of the option column, cut to a two-second window, used on
+given `-probesize` out of the option column, given `-skip_frame` out of the
+*decoder's* column beside it — a separate bag, because a decoder is a separate
+object with a separate table — cut to a two-second window, used on
 the timeline, and then found in the spec with the clip pointing at it by index —
 and every one of those printed by the command bar **in front of** its `-i`,
 because the same words after it are output options meaning something else. It
@@ -1642,6 +1777,18 @@ is visible and attributed, that the whole of libav's chatter is kept and merely
 filtered, and that what the filter measured arrives as a named series sampled
 in order rather than as more log lines.
 
+`exporttest` also covers the four things on the encode side that are claims
+about bytes: a real two-pass encode at a bitrate target, which has to write its
+statistics where `-passlogfile` said, come out a different size from one pass
+and land closer to the target; a bitstream filter, checked by finding a level in
+the written SPS that the encoder did not put there; forced keyframes, read back
+out of the file's own packet flags rather than taken from the encoder, with a
+GOP longer than the render so that every keyframe past the first is one that was
+asked for; and `-shortest` stopping where the content does. Each refusal is
+checked too — a pass 2 with no statistics, a bitstream filter this build lacks,
+an option it does not have, an expression that will not parse, a decoder option
+no decoder takes.
+
 `exporttest` renders a timeline and then opens what it wrote, which is the only
 way to check the things nobody can see until the render is over: that a clip
 lands in the rectangle it was given and the rest of the canvas stays black,
@@ -1664,6 +1811,17 @@ description and by extension, that picking MPEG-TS sets `-f mpegts` rather than
 a filename somebody hopes will be guessed, that a muxer which never answered
 does not have the codec taken off it, and that the muxer's own options reach
 the spec, the command and a file that opens as an MPEG-TS.
+
+It also drives everything on the encode side that is not an encoder option: that
+two-pass is a *mode* of the rate control and that choosing it makes the spec say
+the range is walked twice with both passes naming one statistics file and the
+command bar printing two invocations; that a forced keyframe at a cut point
+**follows the clip when the clip moves**, which is the whole claim of deriving
+it rather than copying it; that the field order prints as the two things it is;
+that `-fps_mode` has no picker and is stated instead; and that a bitstream
+filter chain is offered only for the codec the stream is encoded with, runs in
+the order shown, carries libavcodec's own option table and prints as one
+`-bsf:v` the way `av_bsf_list_parse_str` takes it.
 
 ## Not yet
 
@@ -1780,15 +1938,28 @@ Honest list of what does not work:
   webcam and a USB interface — are two `-i`s, and a recording opens one.
 - **Capturing to more than one file.** The record button writes one output.
   Recording and streaming the same capture is `-f tee`, which is chunk 13's.
-- **Decoder options.** `-skip_frame`, `-skip_loop_filter`, `-thread_type` and
-  every private option of every decoder are reported by
-  `bro.ffmpeg.decoderOptions()`. Nothing sets one: playback and the render both
-  open their decoders with defaults.
-- **Two-pass encoding.** A bitrate target is one pass, so it is met on average
-  and not intelligently. Real two-pass needs the statistics file from pass one
-  fed into pass two — `-pass 1`/`-pass 2` with a `-passlogfile` — and the job
-  state machine now runs a render as a list of passes, so what is left is the
-  two option pairs and the control that sets them.
+- **Variable frame rate out.** `-fps_mode` has one honest value here and the
+  command says it: `cfr`. Both render paths walk the range forward at the output
+  rate and stamp each frame with its number — the compositor because it samples
+  the edit at *t*, the graph because the writer numbers what leaves the sink —
+  so a variable-rate output is not something either can express, and no control
+  offers it. Making one possible means the `FrameSource` seam handing over a
+  timestamp with each frame instead of being asked for an instant, which is a
+  change to the one interface both paths are measured against.
+- **Genuinely interlaced content.** The field-order control puts the encoder in
+  field mode and marks the frames, which is the whole of what ffmpeg does — but
+  what this application composites is a progressive RGBA canvas, so it is a true
+  statement only for footage that was interlaced and came through at its own
+  size. Anything scaled has had its fields woven together by the scaler first,
+  and a 4:2:0 output subsamples chroma across both fields either way. There is
+  no field-aware scaling path and no deinterlacer in playback; `yadif` on the
+  graph is the answer to the other half of that.
+- **A two-pass encoder that keeps its own statistics somewhere else.**
+  `-passlogfile` reaches x264, which takes the filename as an option, and every
+  encoder that uses libavcodec's own statistics pair. An encoder that does
+  neither writes its log wherever it likes and pass 2 reads an empty one — the
+  render says so, naming the encoder, because there is no capability to ask
+  first.
 - **Subtitle streams.** The Write stage's list can hold video, audio and
   attachments; a subtitle track is a kind it does not offer yet. The seam is
   there — a stream says what *kind* it is and where its content comes from —

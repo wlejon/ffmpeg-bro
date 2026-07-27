@@ -287,7 +287,7 @@ them to change alone:
 | `export_graph.*` | libavfilter's answer to the same two questions |
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
-| `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio** |
+| `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio**, plus the three stages that are neither: forced keyframes, two-pass, and the packet chain |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
 | `ffmpeg_capabilities.*` | what this build can write, read, reach, capture and put a picture through, asked of libav* |
 | `ffmpeg_report.*` | **what a render said** — libav's log, and the values filters attach to frames |
@@ -596,13 +596,15 @@ option bag merged on top, an encoder, a destination, or `discard` for `-f null -
 - **The handoff between passes is a file on disk, always.** `vidstabdetect`
   writes a `.trf` that `vidstabtransform` reads; `-pass 1` writes a statistics
   log that `-pass 2` reads. Nothing crosses between passes in memory, which is
-  why the mechanism is this small. **Chunk 11's encoder two-pass is
+  why the mechanism is this small. **The encoder two-pass built on it is
   `passes: [{label:"pass 1", videoOptions:{pass:"1", passlogfile:X}, discard:true},
-  {label:"pass 2", videoOptions:{pass:"2", passlogfile:X}}]` and needs nothing
-  new here.** `tests/export_test.cpp` proves the shape rather than vidstab —
-  a `--enable-` this build lacks — by having pass one write an intermediate file
-  and pass two read it, then requiring the output to be the second pass's answer
-  and measurably not the first's.
+  {label:"pass 2", videoOptions:{pass:"2", passlogfile:X}}]`, and it needed nothing
+  new here** — `ui/export/spec.js`'s `passesFor()` writes exactly that, and
+  `export_writer.cpp` takes the two keys out of the bag. `tests/export_test.cpp`
+  proves the shape both ways: with the graph, by having pass one write an
+  intermediate file and pass two read it (vidstab itself is a `--enable-` this build
+  lacks), and with the encoder, by requiring a real two-pass ABR render to hit its
+  bitrate target more closely than one pass at the same target.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -612,7 +614,8 @@ through one set of seek/timestamp/reordering semantics.
 
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
 `openOnStart`, `encoders`, `muxers`, `demuxers`, `decoders`, `protocols`, `devices`,
-`filters`, the five `*Options(name)` lookups, `deviceSources`, `inputs.*`, `render.*`,
+`filters`, `bitstreamFilters`, the six `*Options(name)` lookups, `deviceSources`,
+`inputs.*`, `render.*`,
 …) via `EngineConfig::installHostBindings`, so it exists in every realm including
 workers. `probe()` is synchronous on purpose, and takes an input rather than only a
 path — probing wrong is the reason demuxer options exist, so a Sources stage showing
@@ -622,12 +625,18 @@ playback registry; the ids are the UI's and the tokens are opaque strings to it.
 
 **The rule for what is built at startup and what is asked for on demand is the size of
 the answer, and the option tables are always the expensive part.** The registries —
-182 muxers, 364 demuxers, 532 decoders, 500 filters — are names, long names, extensions
-and flags, and are built once per process (function-local statics in
-`ffmpeg_capabilities.cpp`) and converted per realm. Every option table is a function:
+182 muxers, 364 demuxers, 532 decoders, 500 filters, 50 bitstream filters — are names,
+long names, extensions and flags, and are built once per process (function-local statics
+in `ffmpeg_capabilities.cpp`) and converted per realm. Every option table is a function:
 `encoderOptions`, `muxerOptions`, `demuxerOptions`, `decoderOptions`, `protocolOptions`,
-`filterOptions`. Building all of them at startup was most of a second before the window
+`filterOptions`, `bsfOptions`. Building all of them at startup was most of a second before the window
 opened when it was only the filters.
+
+**`optionsOf()`'s `require` flag has to be zero for a bitstream filter.** Every other
+walk narrows by direction — `AV_OPT_FLAG_ENCODING_PARAM` for an encoder,
+`FILTERING_PARAM` for a filter — because without it the table offers options the object
+does not take. A bsf's options carry none of those bits at all, so asking for one
+returns an empty table and the chain editor looks like it has nothing to configure.
 
 **Four things about the non-encoder capabilities are load-bearing:**
 
@@ -737,6 +746,77 @@ once to mix. Notable:
   generic `profile` option's constants: VP9's profile 2 and HEVC's Main 10 are both 2, and
   that "translation" confidently offered `main10` as a VP9 profile. Profiles come from the
   encoder's own private enum, or from x264/x265's documented vocabularies, or not at all.
+
+**Four things reach the output that are not options of an encoder or of a muxer**, and
+each one needed a named field rather than a key in a bag. They are worth knowing as a
+group, because the group is what the option bags cannot express and the next thing that
+looks like an option may well belong here:
+
+- **`-pass` and `-passlogfile` are ffmpeg's own**, taken *out* of the video option bag
+  by `takeOption()` before it is applied, exactly as the ffmpeg CLI treats them as its
+  own rather than the encoder's. They travel in the bag because that is where a command
+  line puts them; handing either to `av_opt_set` would be an unknown option, and an
+  unknown option is an error here.
+  **Which mechanism carries the statistics is asked of the encoder, never listed:**
+  `hasOption(codec, "stats")` is true for x264, which keeps its own log and is handed
+  the filename; everything else uses libavcodec's generic pair, `stats_out` appended
+  per packet and `stats_in` pointed at a `std::string` owned by the `Out` (and detached
+  before `avcodec_free_context`, so nothing has to know whether libavcodec would have
+  freed it). Two traps: **a pass 2 whose log is missing must be refused on *both*
+  branches** — x264 left to find out for itself fails at `avcodec_open2` with "Generic
+  error in an external library" and no mention of a statistics file — and **an encoder
+  that fills neither `stats_out` nor a `stats` option cannot be detected in advance**,
+  so a pass 1 that wrote nothing warns naming the encoder. That is the third place in
+  this repo where a capability genuinely cannot be queried.
+- **`-force_key_frames` sets `pict_type = I` on the frame** before it goes in, which is
+  the whole of what ffmpeg does with it. Both forms are parsed with libavutil's own
+  tools — `av_parse_time` in duration mode, `av_expr_parse` over ffmpeg's own variable
+  names — so an expression copied out of the documentation means here what it means
+  there. **The times are seconds into the output, not into the timeline**; whoever knows
+  there was a range subtracts its start, and `ui/export/options.js` is the only thing
+  that does. `source` and `chapters` are refused with a sentence, because this render
+  composites and has no input packets to take keyframes from.
+- **A field order is two statements that travel together**: `enc->field_order` plus
+  `+ildct+ilme`, *and* `AV_FRAME_FLAG_INTERLACED`/`TOP_FIELD_FIRST` on every frame
+  (`Out::frameFlags`, applied in `writeVideo`). Setting only the first writes a file
+  that claims to be interlaced and is not.
+- **`-shortest` is `FrameSource::exhausted(t)`, asked *after* `canvasAt`.**
+  `GraphSource` does not know its last input has ended until a pull has come back
+  empty, so the frame that discovered it is the black one this exists to stop being
+  written — a question asked before the canvas would always be one frame behind.
+
+**Bitstream filters are a chain per stream, built with `av_bsf_list_*`**, so what runs
+is what a comma-separated `-bsf:v` runs and `av_bsf_list_finalize` hands back one context
+whether there is one filter or five. Two things about it are load-bearing:
+
+- **The muxer is told about the far end of the chain, not the encoder.**
+  `avcodec_parameters_copy(st->codecpar, bsf->par_out)` and `st->time_base =
+  bsf->time_base_out`, because `h264_mp4toannexb` rewrites the extradata out of all
+  recognition and `hevc_metadata` can change the profile. A header written from the
+  encoder's parameters describes something that is not in the file.
+- **The chain gets its end-of-stream when the encoder drains.** `AVERROR_EOF` from
+  `avcodec_receive_packet` sends a null packet into the bsf and drains what falls out;
+  without it a filter that buffers loses its last packet.
+
+**Decoder options live on `MediaInput`, because a decoder belongs to an `-i`.** One
+`openDecoder()` in `ffmpeg_input.cpp` is the only place a decoder is opened in this
+binary — both export readers and both playback decoders — so `-skip_frame nokey` is the
+same decision on the timeline and in the file. Applied through an `AVDictionary` rather
+than `av_opt_set` for the reason the demuxer's are: a dictionary is the one call that
+reports back what nothing understood. `TrackPrivate` carries the whole `MediaInput`
+because a playback decoder is built from a `TrackInfo` long after the source has left
+the stack. **And they are checked in `runPass` before a frame is written**
+(`checkDecoderOptions`), because the compositor deliberately renders an unopenable clip
+as the hole it is — right for a file that has gone missing, wrong for a setting somebody
+typed, and the two cannot be told apart down where the clip is opened.
+
+**`encoderOptions()` returns the encoder's own table *and* libavcodec's generic one**, as
+`muxerOptions`, `demuxerOptions` and `decoderOptions` always did. It did not, and was
+short by ninety options — `flags` (where `+ildct`, `+ilme` and `+cgop` live), `g`, `bf`,
+`maxrate`, `bufsize`, `threads`, `thread_type`, `field_order`. Note the knock-on: `hasOpt`
+in `ui/export/capabilities.js` now sees `maxrate` on every encoder, so the "capped
+average" rate mode is offered wherever it works rather than only where an encoder has a
+private `rc`.
 
 **Licensing is a structural constraint, not a footnote.** libav* may only reach bro through
 `bro::video`'s codec-agnostic interfaces. Never add an ffmpeg dependency to anything under
@@ -918,7 +998,17 @@ about them:
   encoder that are not in
   `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
   colour tags and the conversion into them, the keyframe interval (two seconds here,
-  250 frames in x264), and the scaler, which is a flag rather than an option.
+  250 frames in x264), and the scaler, which is a flag rather than an option. Since
+  chunk 11 there are more of them and they are all named fields on the spec —
+  `-force_key_frames`, `-flags +ildct+ilme` with `-field_order`, `-threads`,
+  `-thread_type`, `-fps_mode cfr`, `-shortest`, `-bsf:v` and the decoder options in
+  front of the right `-i`.
+  **A two-pass render is two invocations and the bar prints two.** ffmpeg has no way to
+  say it in one, and the halves genuinely differ — the first writes statistics through
+  `-f null -` and keeps no file — so folding them into one line would print a command
+  that produces a different result. `parts()` therefore returns `tails` (one output tail
+  per pass) with `out` being the last of them, which is what every existing caller
+  wanted; `commandText()` joins them with newlines so a paste into a shell runs both.
   **It is written from `spec.streams` and not from the settings the list was built
   out of**, because the spec is what `render.start` is handed: a `-map` per stream,
   `-c:a:1`, `-metadata:s:`, `-disposition:`, `-tag:` and `-attach`, with the index
@@ -1038,6 +1128,15 @@ about them:
   are. A sequence's frame rate drawn as row 34 of an option table says the opposite
   of what it is, which is a decision nothing on disk can make for you.
 
+  **The decoders get a column too, one per codec the probe found**, under the
+  demuxer's and the protocol's. They are here because a decoder belongs to an `-i` —
+  ffmpeg writes `-skip_frame` in front of the same `-i` `-probesize` goes in front of
+  — and in a *separate bag* (`input.decoderOptions`), because a decoder is a separate
+  object with a separate table. The one trap: the column's `onChange` has to go
+  through `reprobe()` even though the probe will say the same thing, because
+  `reopen()` is also what re-registers the input for playback, and the token is the
+  only route an option has into the `<video>` elements the viewer is already holding.
+
   **The stage's claim is that it is every file this render opens**, and two things
   the graph can now do would quietly break it. An input the *graph* reads has no
   clip cut from it, so it says `read by the graph` rather than `unused`, is not
@@ -1110,6 +1209,32 @@ about them:
   it moved the preview's sample point back to the playhead on the way back from setting
   a filename.
 
+  **Two-pass is a fourth mode of `rateModes()`, not a checkbox beside it**, because it
+  is the same decision — spend this many bits — taken twice; a switch would let somebody
+  ask for two passes of *constant quality*, which is two runs of an encoder that had
+  nothing to learn from the first. `passesFor()` in `spec.js` is the one place a render
+  becomes two, for the reason the filter graph is attached there: there are three
+  renders on this stage and a reference or a candidate that quietly ran one pass would
+  be comparing against a different encode. It bows out when `over.videoOptions` is given
+  — the lossless reference names its own bag and has no bitrate for a second pass to
+  spend.
+
+  **`forceKeyFrames()` in `options.js` derives, it never copies.** `settings.keyframeMode`
+  is what is stored; `cuts` re-reads `project.clips` on every call, so a keyframe follows
+  the clip that moves. Written against the *window* being rendered rather than the range,
+  because ffmpeg's times are seconds into the output and a preview of the middle of the
+  range is a different output. A version that wrote the numbers into a field when the
+  button was pressed would go on naming moments nothing cuts at, which is the failure
+  this shape exists to avoid.
+
+  **`-fps_mode` is printed and not offered.** Both render paths walk the range forward at
+  the output rate and stamp each frame with its index — `TimelineSource` because it
+  samples the edit at *t*, `GraphSource` because the writer numbers what leaves the sink
+  — so `cfr` is a fact about this renderer, and a picker offering `vfr` would be offering
+  something neither path can produce. Making one possible is a change to the
+  `FrameSource` seam (a timestamp handed over with each frame rather than an instant
+  asked for), which is the one interface the 43 dB check is measured across.
+
   Four regions: the settings form (drawn from the selected encoder's reported capabilities,
   so it changes shape per codec), the A/B stage, the advanced option column, and the range
   strip across the bottom. The preview renders the same seconds twice — once at the chosen
@@ -1160,6 +1285,15 @@ about them:
     through `av_disposition_to_string`), the fourccs are `bro.ffmpeg.codecTags(ext,
     codec)`, the codecs are the encoder lists. A row cannot offer what the render
     would then refuse.
+  - **The bitstream filter chain is an ordered list and is drawn as one** — a
+    numbered row per filter with the arrows to move it — because the order is the
+    whole of the meaning: `h264_mp4toannexb,dump_extra` and the same two the other
+    way round are different files. It is here and not on the Encode stage because a
+    bsf is neither an encoder nor a muxer; it is per stream because `-bsf:v` and
+    `-bsf:a` are different chains on different packets. What is offered is narrowed
+    by `bsfsFor()` against each filter's own `codecs`, which is why
+    `bro.ffmpeg.encoders` reports `codecName`: `libx264` writes `h264` and nothing
+    else in the app could have said so. **An empty `codecs` is "any"**, not "none".
   - **`hooks.changed` rebuilds the rows; `hooks.restated` only re-says what will be
     written.** A language or a disposition changes what is *in* the file and not what
     the picture looks like, so it must not throw away a candidate render that cost
