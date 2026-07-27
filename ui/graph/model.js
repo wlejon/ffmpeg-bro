@@ -309,6 +309,55 @@ export function makeGraph(opts = {}) {
     return g;
 }
 
+/// Which stream each node is on, and which each *wire* carries.
+///
+/// Only the two ends of a graph say so themselves — an input names the streams
+/// it is read for, a sink names the one it maps — and everything between is
+/// whatever reached it. Here rather than in `layout.js` because it is a fact
+/// about the graph and not about where the graph is drawn, and because there
+/// are three callers now: the layout colours a wire with it, the card colours
+/// its dot, and `subgraph.js` uses it to decide whether a preview of a node is
+/// a picture or a waveform. Three implementations of that would be three
+/// answers.
+///
+/// Per wire as well as per node, because an input node is not on one stream: a
+/// file's picture and its sound leave the same card by different pads.
+///
+/// `of(node)` and `ofEdge(edge)`. Relaxed to a fixed point rather than sorted
+/// topologically: the pass is over a few dozen nodes, and a cycle in a
+/// hand-built graph should come out as a strange picture rather than as a hang.
+export function streamsOf(g) {
+    const s = new Map();
+    for (const n of g.nodes)
+        if (n.kind === 'input')
+            s.set(n.id, (n.outs && n.outs[0] && n.outs[0].stream) || n.stream || 'v');
+
+    // What leaves a node by a given pad. A file says so per pad; everything
+    // else has one output and it is whatever the node is on.
+    const outOf = (n, port) => {
+        if (!n) return null;
+        if (n.outs && n.outs.length) return (n.outs[port] || n.outs[0]).stream;
+        return s.get(n.id) || n.stream || null;
+    };
+
+    for (let pass = 0; pass <= g.nodes.length; pass++) {
+        let moved = false;
+        for (const e of g.edges) {
+            if (s.has(e.to)) continue;
+            const st = outOf(g.node(e.from), e.fromPort || 0);
+            if (st) { s.set(e.to, st); moved = true; }
+        }
+        if (!moved) break;
+    }
+
+    return {
+        // The generated canvas (`color`) has no producer and no input, so it
+        // falls back to video — which is what it is.
+        of: (n) => s.get(n.id) || n.stream || 'v',
+        ofEdge: (e) => outOf(g.node(e.from), e.fromPort || 0) || 'v',
+    };
+}
+
 /// A graph back from `toJSON()`. Ids are kept, which is what makes a restored
 /// overlay reconnectable to a skeleton derived after it.
 export function restore(json) {

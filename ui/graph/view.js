@@ -612,15 +612,16 @@ function insertButton(point, x, y) {
     });
 }
 
-/// What is worth a picture: everything on the picture side, the pad the muxer maps
-/// included — that node is the render, and it is the first thing anybody clicks.
-/// Asked for after the layout because it is the layout that says which stream a
-/// node is on, and at the width each card actually is, so a card dragged bigger
-/// gets a sharper render rather than a stretched one.
+/// What is worth a picture: every node, both sinks included — those two are the
+/// render, and they are the first things anybody clicks. The sound side gets a
+/// waveform rather than a frame, which `subgraph.js` decides and this does not
+/// need to know: a preview is a file with a picture in it either way.
+///
+/// Asked for after the layout at the width each card actually is, so a card
+/// dragged bigger gets a sharper render rather than a stretched one.
 function syncPreviews() {
     if (preview.isEnabled())
         preview.sync(placed.nodes
-            .filter((b) => b.stream === 'v')
             .map((b) => ({ key: panel.keyOf(b.node),
                            fit: previewFit(cardWidth(panel.keyOf(b.node))) }))
             .filter((w) => w.key));

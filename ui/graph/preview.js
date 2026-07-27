@@ -112,8 +112,10 @@ export function sync(wanted) {
     if (!on || !range || !hooks.spec) { queue.length = 0; return; }
     if (!wanted.length) { queue.length = 0; return; }
 
-    const d = derive(hooks.spec(range.start, range.end), hooks.sources(),
-                     { overlay: hooks.overlay() });
+    // The spec is kept, not just derived from: a waveform has to be drawn at
+    // the rate the render walks at, and the rate is the spec's.
+    const spec = hooks.spec(range.start, range.end);
+    const d = derive(spec, hooks.sources(), { overlay: hooks.overlay() });
     if (!d.ok) { queue.length = 0; return; }
 
     const live = new Set();
@@ -122,7 +124,7 @@ export function sync(wanted) {
     for (const { key, fit } of wanted) {
         const node = d.graph.node(key) || d.graph.byAnchor(key);
         if (!node) continue;
-        const g = previewGraph(d.graph, node, { fit });
+        const g = previewGraph(d.graph, node, { fit, fps: spec.fps });
         if (!g.ok) continue;
         live.add(key);
 
@@ -234,11 +236,12 @@ function nextSegment() {
 /// `trim` on every clip is cut at and what each input seeks to, and the
 /// derivation is the one place that knows how to work both out.
 function graphFor(key, from, to, fit) {
-    const d = derive(hooks.spec(from, to), hooks.sources(), { overlay: hooks.overlay() });
+    const spec = hooks.spec(from, to);
+    const d = derive(spec, hooks.sources(), { overlay: hooks.overlay() });
     if (!d.ok) return null;
     const node = d.graph.node(key) || d.graph.byAnchor(key);
     if (!node) return null;
-    const g = previewGraph(d.graph, node, { fit });
+    const g = previewGraph(d.graph, node, { fit, fps: spec.fps });
     return g.ok ? g : null;
 }
 
@@ -260,7 +263,17 @@ function launch(g, from, to) {
     spec.preset = 'ultrafast';
     spec.pixelFormat = 'yuv420p';
     spec.videoOptions = {};
-    spec.audio = false;
+    // A picture preview is silent — nothing on that side of the graph has a
+    // sound to carry, and an audio stream would be silence encoded nine times.
+    // A waveform preview is not: the pad it draws is also the pad it plays, and
+    // the whole point of pressing play on one is to hear it. Pinned to aac in
+    // the temp mp4 rather than taken from the Encode stage for the same reason
+    // the video codec is: a flac option on an aac preview is an unknown key,
+    // and an unknown key is an error.
+    spec.audio = !!g.audio;
+    spec.audioCodec = 'aac';
+    spec.audioBitrate = 128;
+    spec.audioOptions = {};
     spec.faststart = false;
     spec.title = '';
     spec.path = bro.ffmpeg.tempPath(`node-${++seq}.mp4`);

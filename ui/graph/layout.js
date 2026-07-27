@@ -20,6 +20,8 @@
 // shallow and almost planar already. A second sweep changed nothing on every
 // edit tried.
 
+import { streamsOf } from './model.js';
+
 /// What a card is when nothing has resized it. A column is as wide as its
 /// widest card rather than this, so that dragging one node bigger moves the
 /// rest of the graph out of its way instead of drawing over it.
@@ -61,49 +63,6 @@ function depths(g) {
     return d;
 }
 
-/// Which stream each node is on, and which each *wire* carries, carried forward
-/// from the input nodes. Only the two ends of the graph say so themselves;
-/// everything between is whatever reached it. The generated canvas (`color`)
-/// has no producer and no input, so it falls back to video — which is what it
-/// is.
-///
-/// Per wire as well as per node, because an input node is no longer on one
-/// stream: a file's picture and its sound leave the same card by different
-/// pads, and colouring both wires by the node they leave would draw the sound
-/// in the picture's blue.
-function streams(g) {
-    const s = new Map();
-    for (const n of g.nodes)
-        if (n.kind === 'input')
-            s.set(n.id, (n.outs && n.outs[0] && n.outs[0].stream) || n.stream || 'v');
-
-    // What leaves a node by a given pad. A file says so per pad; everything
-    // else has one output and it is whatever the node is on.
-    const outOf = (n, port) => {
-        if (!n) return null;
-        if (n.outs && n.outs.length) return (n.outs[port] || n.outs[0]).stream;
-        return s.get(n.id) || n.stream || null;
-    };
-
-    // Relaxed to a fixed point for the reason `depths` is: the pass is over a
-    // few dozen nodes and a cycle should come out as a strange picture rather
-    // than as a hang.
-    for (let pass = 0; pass <= g.nodes.length; pass++) {
-        let moved = false;
-        for (const e of g.edges) {
-            if (s.has(e.to)) continue;
-            const st = outOf(g.node(e.from), e.fromPort || 0);
-            if (st) { s.set(e.to, st); moved = true; }
-        }
-        if (!moved) break;
-    }
-
-    return {
-        of: (n) => s.get(n.id) || n.stream || 'v',
-        ofEdge: (e) => outOf(g.node(e.from), e.fromPort || 0) || 'v',
-    };
-}
-
 /// `sizeOf(node)` is asked once per node and must answer `{ w, h }` in pixels.
 ///
 /// Both, rather than a height and a constant width, because a card can be
@@ -122,7 +81,7 @@ function streams(g) {
 /// arrives at, so the caller draws curves and does no arithmetic.
 export function layout(g, sizeOf, pinOf) {
     const depth = depths(g);
-    const streamOf = streams(g);
+    const streamOf = streamsOf(g);
 
     // Column membership, in the order the nodes were made — which for a
     // derived graph is the order its chains print in, and so the order a

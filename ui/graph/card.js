@@ -36,6 +36,7 @@
 import { el, div, span } from '../dom.js';
 import { basename } from '../format.js';
 import { portY } from './layout.js';
+import { WAVE_ASPECT } from './subgraph.js';
 import { optionOf } from './filters.js';
 import * as overlay from './overlay.js';
 import * as preview from './preview.js';
@@ -68,10 +69,11 @@ const videos = new Map();
 
 export function pairOf(key) { return videos.get(key) || null; }
 
-function pairFor(key) {
+function pairFor(key, shot) {
     let p = videos.get(key);
     if (!p) { p = { a: newVideo(), b: null, front: 'a', playing: '' }; videos.set(key, p); }
-    if (preview.isPlaying(key)) {
+    const playing = preview.isPlaying(key);
+    if (playing) {
         if (!p.b) p.b = newVideo();
     } else if (p.b) {
         release(p.b);
@@ -79,6 +81,15 @@ function pairFor(key) {
         p.front = 'a';
         p.playing = '';
     }
+    // **Heard only while it is being played, and only on the sound side.** A
+    // waveform card carries the pad's own audio — that is what it is for — but
+    // nine of them looping their two seconds at once is a room nobody can think
+    // in, and one node plays at a time for the same reason. Everything on the
+    // picture side is silent whatever this says: those renders have no
+    // soundtrack to unmute.
+    const loud = playing && !!(shot && shot.graph && shot.graph.audio);
+    p.a.muted = !loud;
+    if (p.b) p.b.muted = !loud;
     return p;
 }
 
@@ -307,10 +318,12 @@ function shotView(key, width) {
     // invalidated — an edit elsewhere in the graph can do that, and taking the
     // elements out of the tree would leave the playback running somewhere nobody
     // can see it.
+    const wave = !!(shot.graph && shot.graph.audio);
     if (preview.isPlaying(key) || (shot.state === 'ready' && shot.w > 0)) {
-        const box = div('gn-shot');
-        box.style.height = `${Math.round(inner * (shot.w > 0 ? shot.h / shot.w : 9 / 16))}px`;
-        const pair = pairFor(key);
+        const box = div('gn-shot' + (wave ? ' gn-wave' : ''));
+        box.style.height = `${Math.round(inner * (shot.w > 0 ? shot.h / shot.w
+                                                             : wave ? WAVE_ASPECT : 9 / 16))}px`;
+        const pair = pairFor(key, shot);
         box.append(pair.a);
         if (pair.b) box.append(pair.b);
         // Left alone while it is playing: the frame loop owns which element is in
@@ -324,7 +337,7 @@ function shotView(key, width) {
     }
     const box = div('gn-shot gn-shot-' + (shot.state === 'failed' ? 'fail' : 'wait'),
                     span(shot.state === 'failed' ? (shot.reason || 'no picture') : '…', 'dim'));
-    box.style.height = `${Math.round(inner * 9 / 16)}px`;
+    box.style.height = `${Math.round(inner * (wave ? WAVE_ASPECT : 9 / 16))}px`;
     return box;
 }
 

@@ -1078,7 +1078,7 @@ console.log('\nwhat each node produces');
     const shots = qq('#gr-nodes .gn-shot');
     const videos = qq('#gr-nodes .gn-shot video');
     const failed = qq('#gr-nodes .gn-shot-fail');
-    ok(shots.length >= 5, `every picture-side node gets one (${shots.length} of ${cards.length})`);
+    same(shots.length, cards.length, `every node gets one (${shots.length} of ${cards.length})`);
     ok(failed.length === 0,
        `and none of them failed${failed.length ? ': ' + failed[0].textContent : ''}`);
     // A `<video>` per card, and the same count as boxes — this is the check
@@ -1086,11 +1086,25 @@ console.log('\nwhat each node produces');
     // which left eight of nine cards empty with nothing in the code to see.
     same(videos.length, shots.length, 'each with its own player, kept across redraws');
 
-    // Audio has no picture and must not pretend to. A waveform of a pad is a
-    // real thing to want and it is not a smaller version of this.
+    // The sound side gets a waveform `showwaves` drew from the very samples on
+    // that pad — a picture of the thing rather than no picture at all, which is
+    // what it used to be. Still a `<video>`, because it is one: the render
+    // carries the drawing and the sound it was drawn from.
     const audioCard = q('#gr-nodes [data-key$="/atrim"]');
-    ok(audioCard && !audioCard.querySelector('.gn-shot'),
-       'and the sound side has none, rather than a black rectangle');
+    const waveBox = audioCard && audioCard.querySelector('.gn-shot');
+    ok(!!waveBox, 'the sound side gets one too, rather than an empty card');
+    ok(waveBox && waveBox.classList.contains('gn-wave'),
+       'marked as a waveform rather than a picture of something');
+    ok(!!(waveBox && waveBox.querySelector('video')),
+       'and it is a video, because it plays and it is heard');
+
+    const aShot = A.graph.preview.shotFor(audioCard.getAttribute('data-key'));
+    ok(aShot && aShot.state === 'ready' && aShot.w > 0 && aShot.h > 0,
+       `rendered, at the size the card asked for (${aShot && aShot.w}x${aShot && aShot.h})`);
+    ok(aShot && aShot.graph && aShot.graph.audio === true,
+       'and it knows it has a soundtrack, which is what unmutes it on play');
+    // Wider than tall, and not the picture's shape: a waveform is read across.
+    ok(aShot && aShot.h < aShot.w, 'wider than tall, the way a waveform is read');
 
     screenshot('out/export-07-node-previews.png');
 }
@@ -1360,6 +1374,48 @@ console.log('\nplaying a node');
     A.graph.preview.stopPlay();
     A.graph.draw();
     pump(120);
+}
+
+// ── and the sound, played ──────────────────────────────────────────────────
+//
+// Same machinery, same button, same two-element swap — because a waveform
+// preview is a video with a soundtrack and not a special case of anything. What
+// is different is that it is *heard*, which is the one thing on this screen
+// that has to be true only while somebody asked for it: nine cards looping
+// their two seconds at once is a room nobody can think in.
+
+console.log('\nplaying a sound pad');
+{
+    const key = 'out:a';
+    const card = q(`#gr-nodes [data-key="${key}"]`);
+    ok(!!card, 'the pad the muxer maps on the sound side is on the screen');
+    const still = card && card.querySelector('.gn-shot video');
+    ok(still && still.muted === true, 'its waveform loops silently, like every other card');
+
+    const button = q(`#gr-nodes [data-play="${key}"]`);
+    ok(!!button, 'and it has the same play button the picture side has');
+    button.click();
+    pump(200);
+    same(A.graph.preview.playingKey(), key, 'clicking it plays that pad');
+
+    const box = q(`#gr-nodes [data-key="${key}"] .gn-shot`);
+    same(qq('video', box).length, 2, 'with the same two players');
+    let silent = 0;
+    for (const v of qq('video', box)) if (v.muted) silent++;
+    same(silent, 0, 'unmuted, because playing a sound pad is how you hear it');
+
+    const began = A.graph.preview.playStats().at;
+    waitFor('the sound playback to cross into a second rendered piece',
+            () => A.graph.preview.playStats() &&
+                  A.graph.preview.playStats().at > began + 2.1, 60000);
+    const st = A.graph.preview.playStats();
+    ok(st.at > began + 2.1, `the clock ran on (${began.toFixed(2)} → ${st.at.toFixed(2)})`);
+
+    q(`#gr-nodes [data-play="${key}"]`).click();
+    pump(200);
+    same(A.graph.preview.playingKey(), null, 'clicking again stops it');
+    const quiet = q(`#gr-nodes [data-key="${key}"] .gn-shot video`);
+    ok(quiet && quiet.muted === true, 'and the card goes quiet again');
 }
 
 console.log('\nturning them off');

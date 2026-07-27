@@ -1335,6 +1335,12 @@ select.gn-f { text-align: left; }
    would stop it decoding, which is the whole job. */
 .gn-shot video + video { position: absolute; left: 0; top: 0; }
 .gn-shot video.gn-off { opacity: 0; }
+/* A sound pad's preview is a waveform `showwaves` drew from the samples on it,
+   so it is still a video and still plays — but it is not a picture of anything,
+   and the dark green ground says which of the two you are looking at without a
+   label. Matches the timeline's A1 lane, which is the same waveform of the same
+   sound somewhere else. */
+.gn-wave { background: #12211a; }
 
 /* Play, on the picture. Over it rather than under, because the graph is laid
    out from measured card heights and a control that appears in the flow would

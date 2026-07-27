@@ -495,7 +495,11 @@ about them:
   `insertAfter`/`remove` move and heal only the wires on the pad in question —
   a filter dropped on a clip's picture that took its sound with it would put an
   `hflip` in front of `atrim`. `split` and `asplit` are what the model can now
-  say and the derivation does not yet write.
+  say and the derivation does not yet write. **`streamsOf(g)` lives here rather
+  than in `layout.js`**, because which stream a node is on is a fact about the
+  graph and not about where it is drawn, and there are three callers — the
+  layout colours a wire with it, the card colours its dot, and `subgraph.js`
+  uses it to decide whether a preview is a picture or a waveform.
 
 - `graph/overlay.js` — the part of the graph a person made, held apart from the
   part that is derived, because **the skeleton is thrown away and rebuilt on
@@ -622,10 +626,31 @@ about them:
   nothing starts until the graph has held still, or dragging a slider would render every
   value it passed through. The range is snapshotted when the stage opens rather than
   following the playhead, because a playhead move would otherwise invalidate every node.
-  Audio nodes get no picture: a waveform of a pad is a real thing to want and it is not a
-  smaller version of this. **A sink shows the pad it maps** — `video out` is the one node
-  on the screen that means *the render*, and it is the first thing anybody clicks; the
-  picture is its producer's, so `sync()` hands it that one rather than rendering it twice.
+  **A sink shows the pad it maps** — `video out` and `audio out` are the two nodes on the
+  screen that mean *the render*, and they are the first things anybody clicks; the picture
+  is the producer's, so `sync()` hands it that one rather than rendering it twice.
+
+  **A sound pad gets a waveform, and libavfilter draws it.** `volume=0.6` is a claim about
+  a sound in exactly the way a crop is a claim about a picture, so the tail of an audio
+  preview is `asplit` into two pads: one goes to `showwaves`, which turns those very
+  samples into a picture, and one is the sound itself. What comes out is an ordinary video
+  with an ordinary soundtrack, which is what lets a card play it through the same
+  `<video>`, the same two-element swap and the same play button every other node uses —
+  unmuted only while it is being played, because nine cards looping their two seconds at
+  once is a room nobody can think in. Three decisions there were made by what the
+  alternatives cost:
+  - **Not `showwavespic`.** It draws the whole window as one still, which is the nicer
+    picture, but it emits that frame only at end of input — so a looping card would show a
+    waveform for one frame and black for the rest.
+  - **Not our own canvas from `bro.media.peaks()`.** That decodes the render again to draw
+    a second version of what is already in it, and bro's `<video>` refuses a file with no
+    picture in it (`VideoPipeline::adoptSource` returns false without a video decoder), so
+    a sound-only render could not be played at all.
+  - **`showwaves` emits one blank frame before any waveform**, and that is exactly the
+    frame a paused or looping element sits on, so every waveform on the screen was a black
+    rectangle. `trim=start_frame=1,setpts,tpad=stop=-1:stop_mode=clone` drops it and holds
+    the last frame instead of leaving the render one short at the other end. Cloning rather
+    than counting: the render stops pulling when it has enough.
 - `graph/play.js` — a node **played** rather than looked at, which is a different question:
   a still answers "is the crop right" and only a run of seconds answers "does this hold up".
   The range is cut into pieces, each is rendered in front of the picture, and each plays at

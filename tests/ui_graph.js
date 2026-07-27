@@ -813,14 +813,62 @@ console.log('\nthe graph, cut off at one node');
     same(out.filterGraph, previewGraph(d.graph, d.graph.producers(d.graph.byAnchor('out:v'))[0])
          .filterGraph, 'and it is the same render as the node that feeds it');
 
-    same(previewGraph(d.graph, d.graph.byAnchor('out:a')).ok, false,
-         'the audio sink is refused — a waveform is not a smaller picture');
-    same(previewGraph(d.graph, null).ok, false, 'and so is nothing at all');
+    same(previewGraph(d.graph, null).ok, false, 'nothing at all is refused');
 
     // The card's width is what the picture is rendered at, so dragging one
     // wider is a sharper render rather than a stretched one.
     ok(at('clip:7/trim', { fit: 480 }).filterGraph.indexOf('min(480') > 0,
        'the fit is the size asked for');
+
+    // ── a sound pad ────────────────────────────────────────────────────────
+    //
+    // `volume=0.6` is a claim about a sound in exactly the way `crop` is a
+    // claim about a picture, so it gets the same treatment: split the pad,
+    // draw one half with `showwaves` and keep the other, and what comes out is
+    // an ordinary video with an ordinary soundtrack — which is what lets a card
+    // play it through the same element every other node uses.
+    const wave = at('clip:7/asetpts', { fit: 320, fps: 30 });
+    ok(wave.ok, 'a sound pad can be previewed too');
+    same(wave.audio, true, 'and says it carries a soundtrack, so a card can unmute it');
+    const wchains = wave.filterGraph.split(';');
+    same(wchains[0], '[0:a]atrim=start=0:end=4,asetpts=PTS-STARTPTS[a0]',
+         'the chain up to the node is the same chain the render runs');
+    same(wchains[1], '[a0]asplit=2[pa][pw]', 'split into what is heard and what is drawn');
+    ok(/^\[pw\]showwaves=s=320x120:.*rate=30.*\[pv\]$/.test(wchains[2]),
+       `and the drawing is libavfilter's own, at the render's rate: ${wchains[2]}`);
+    same(wchains.length, 3, 'and nothing else');
+    ok(wave.filterGraph.indexOf('scale=w=') < 0,
+       'no picture scaler — there was never a picture to fit');
+
+    // `showwaves` emits one blank frame before it emits any waveform, and that
+    // is the frame a paused or looping card sits on — so every waveform on the
+    // screen was a black rectangle until this was cut off the front. `tpad`
+    // puts the frame back on the end, where dropping one would otherwise land
+    // as a black flash at the end of the loop instead of the start.
+    ok(/,trim=start_frame=1,setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone\[pv\]$/
+        .test(wchains[2]),
+       'with showwaves’ blank first frame cut off and the last one held instead');
+
+    // The rate is not decoration. The writer stamps whatever arrives at the
+    // output rate, so a waveform drawn at 25 inside a 30 fps render is a
+    // picture running slow against its own sound — which reads as the filter
+    // being wrong rather than the preview being wrong.
+    ok(at('clip:7/asetpts', { fit: 320, fps: 25 }).filterGraph.indexOf('rate=25') > 0,
+       'the waveform is drawn at whatever rate the render walks at');
+
+    // Both sinks are worth a preview, and each shows what its producer hands
+    // it. The sound one used to be refused outright.
+    const aout = previewGraph(d.graph, d.graph.byAnchor('out:a'), { fit: 320, fps: 30 });
+    ok(aout.ok && aout.audio, 'the audio sink can be previewed — it is the render too');
+    same(aout.filterGraph, wave.filterGraph,
+         'and it is the same render as the pad that feeds it');
+
+    // Only the file's sound is opened. A waveform that decoded the picture as
+    // well would be the most expensive thing on the screen and would look
+    // identical.
+    same(JSON.stringify(wave.filterInputs),
+         JSON.stringify([{ label: '0:a', path: 'a.mp4', stream: 'a', from: 0 }]),
+         'reading one pad — the sound, not the picture beside it');
 }
 
 // ── the stage, with nothing to draw ────────────────────────────────────────

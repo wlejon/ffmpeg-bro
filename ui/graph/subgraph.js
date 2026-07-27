@@ -23,12 +23,39 @@
 //   is also why the render is told to take its size from the graph
 //   (`sizeFromGraph`) instead of being given one.
 //
-// The audio nodes get no picture. A waveform of a pad is a real thing to want
-// and it is not a smaller version of this: it needs the samples, not a file to
-// play, and `analysis.js` already knows how to draw one.
+// **A sound pad gets a waveform, and it is drawn by libavfilter.** The same
+// argument applies to `volume=0.6` as to a crop — it is a claim about a sound,
+// and a card that only restated the argument would be the thing worth
+// checking, unchecked. So the tail of an audio preview is `asplit` into two
+// pads: one goes to `showwaves`, which turns those very samples into a picture,
+// and one is the sound itself. The render that comes out is an ordinary video
+// with an ordinary soundtrack, which is what lets a card play it through the
+// same `<video>` and the same two-element swap every other node uses.
+//
+// Two things about that were decided by what the alternatives cost:
+//
+// - **Not `showwavespic`.** It draws the whole window as one still — which is
+//   what the timeline's A1 lane looks like and is the nicer picture — but it
+//   emits that frame only at end of input, so a card would show a waveform for
+//   one frame and black for the rest of the loop. `showwaves` draws as it goes.
+// - **Not our own canvas from `bro.media.peaks()`.** It would mean decoding the
+//   render again to draw a second version of what is in it, and — because
+//   bro's `<video>` refuses a file with no picture in it — a sound-only render
+//   could not be played at all. One render, one file, seen and heard.
 
 import { print } from './print.js';
+import { streamsOf } from './model.js';
 import { inputsOf } from '../filtergraph.js';
+
+/// `--good`, as libavfilter spells a colour. The waveform is the same green the
+/// timeline draws its audio lane in, because it is the same thing.
+const WAVE = '0x7ed6a0';
+
+/// How tall a waveform is next to how wide, and the aspect the card reserves
+/// for one before the render lands. Shorter than a picture on purpose: a
+/// waveform is read across, and 16:9 of mostly empty green is a card twice as
+/// tall as it needs to be.
+export const WAVE_ASPECT = 0.375;
 
 /// Everything `node` depends on, `node` included.
 function ancestors(g, node) {
@@ -65,9 +92,14 @@ function pruned(g, keep) {
 
 /// A graph that ends at `node`, ready to hand to `bro.ffmpeg.render.start`.
 ///
-/// Returns `{ ok: true, filterGraph, filterInputs, from, length }` or
-/// `{ ok: false, reason }`. `fit` is the longest side the picture is scaled
-/// into; `seconds` is how much of it to render.
+/// Returns `{ ok: true, filterGraph, filterInputs, pad, audio }` or
+/// `{ ok: false, reason }`. `opts.fit` is the longest side the picture is
+/// scaled into; `opts.fps` is the rate the render will walk at, which a
+/// waveform has to be drawn at or the file plays fast.
+///
+/// `audio` says the render carries a soundtrack as well as a picture — which is
+/// what a card needs to know to unmute it, and the only difference between the
+/// two kinds of preview once the file exists.
 ///
 /// The node's own label is dropped and replaced with one this owns, because
 /// the pad a preview maps has to be named whatever happens to be at the end —
@@ -75,19 +107,18 @@ function pruned(g, keep) {
 /// invent a name that nothing else here would know.
 export function previewGraph(g, node, opts = {}) {
     if (!node) return { ok: false, reason: 'no node' };
-    if (node.stream === 'a') return { ok: false, reason: 'a waveform is not a small picture' };
     // An input node is a file, not a stream, so which of its pads is being
     // asked about is a question that has to be answered rather than read off
-    // the node: a preview is a picture, and a picture comes from its video pad.
+    // the node: an input card shows the picture the file carries.
     const videoPort = node.kind === 'input'
         ? (node.outs || []).findIndex((o) => o.stream === 'v') : -1;
     if (node.kind === 'input' && videoPort < 0)
         return { ok: false, reason: 'this input is not read for a picture' };
     // A sink is not a picture of its own — it is the pad the muxer maps, and
     // what it shows is whatever its producer hands it. Following the wire is
-    // worth doing rather than refusing, because the sink at the end of the
-    // picture side is the one node on this screen that means *the render*, and
-    // it is the first thing anybody clicks.
+    // worth doing rather than refusing, because the sink at each end is the one
+    // node on that side of the screen that means *the render*, and it is the
+    // first thing anybody clicks.
     if (node.kind === 'sink') {
         const from = g.producers(node)[0];
         return from ? previewGraph(g, from, opts)
@@ -103,16 +134,11 @@ export function previewGraph(g, node, opts = {}) {
     // An input node is not a filter and cannot be a chain on its own, so
     // previewing one is previewing the stream itself: the tail chain reads
     // `[0:v]` directly and there is no body.
-    //
-    // `trunc(iw/2)*2` keeps the width even and `h=-2` keeps the height even
-    // and the aspect right, which between them are what stop an odd size
-    // reaching an encoder that has no half pixels.
     const fit = Math.max(64, Math.round(opts.fit || 320));
     const chains = node.kind === 'input' ? [] : print(view).chains;
     const head = node.kind === 'input'
         ? `${node.index}:${node.outs[videoPort].stream}`
         : padAtEndOf(chains, node);
-    chains.push(`[${head}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
 
     // The pads this subgraph reads, which for an input node previewed on its
     // own is the one the chain above names — the file's sound is not decoded to
@@ -121,7 +147,55 @@ export function previewGraph(g, node, opts = {}) {
         ? [{ label: head, path: node.path, stream: node.outs[videoPort].stream,
              from: node.from || 0 }]
         : inputsOf(view);
-    return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs, pad: '[pv]' };
+
+    if (streamsOf(g).of(node) === 'a') {
+        chains.push(...waveTail(head, fit, opts.fps));
+        return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs,
+                 pad: '[pv]', audio: true };
+    }
+
+    // `trunc(iw/2)*2` keeps the width even and `h=-2` keeps the height even
+    // and the aspect right, which between them are what stop an odd size
+    // reaching an encoder that has no half pixels.
+    chains.push(`[${head}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
+    return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs,
+             pad: '[pv]', audio: false };
+}
+
+/// The two chains that turn a sound pad into something a card can show and
+/// play: split it, draw one half, keep the other.
+///
+/// **`rate` has to be the render's own frame rate.** The writer stamps whatever
+/// arrives at the output rate, so a waveform drawn at 25 fps inside a 30 fps
+/// render is a picture that runs slow against its own sound — which reads as
+/// the filter being wrong rather than as the preview being wrong.
+///
+/// **`showwaves` emits one blank frame before it emits any waveform**, and the
+/// three filters after it are there for that and nothing else. It is one frame
+/// out of fifty and it is the *first*, which is precisely the one a card shows:
+/// a preview element that is paused, or looping, sits on frame zero, so every
+/// waveform on the screen was a black rectangle. `trim=start_frame=1` drops it,
+/// `setpts` puts what is left back at zero, and `tpad` clones the last frame
+/// for as long as anything asks — because dropping a frame from the front
+/// leaves the render one short at the back, where it would come out as a black
+/// flash at the end of the loop instead of at the start. Cloning rather than
+/// counting: the render stops pulling when it has enough, so there is no
+/// arithmetic to get wrong and a sound that ends before the range does freezes
+/// on its own last picture rather than going dark.
+///
+/// Sizes are even because yuv420p has no half pixels, and `sizeFromGraph` means
+/// this is the size the writer is opened for: an odd one is an encoder that
+/// refuses, not a picture that is a pixel off.
+function waveTail(head, fit, fps) {
+    const w = Math.max(64, fit - (fit & 1));
+    const h = Math.max(48, 2 * Math.round((fit * WAVE_ASPECT) / 2));
+    const rate = Number(fps) > 0 ? Number(fps) : 30;
+    return [
+        `[${head}]asplit=2[pa][pw]`,
+        `[pw]showwaves=s=${w}x${h}:mode=cline:rate=${rate}:` +
+        `colors=${WAVE}:draw=full:scale=lin,` +
+        `trim=start_frame=1,setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone[pv]`,
+    ];
 }
 
 /// What the node at the end of the last chain is called.
