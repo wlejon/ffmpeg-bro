@@ -1258,7 +1258,13 @@ body.fs #cropbox { display: none; }
 .rep-plot-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: var(--fs-xs); }
 .rep-key { display: flex; align-items: center; gap: 5px; color: var(--dim); }
 .rep-swatch { display: block; width: 10px; height: 3px; border-radius: 2px; flex-shrink: 0; }
-.rep-plot-foot { display: flex; align-items: baseline; gap: 10px; font-size: var(--fs-xs); }
+.rep-plot-foot {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: var(--fs-xs);
+}
 .rep-readout { color: var(--text); }
 .rep-plot-note { line-height: 1.4; }
 .rep-series-head { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sm); }

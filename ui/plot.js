@@ -21,13 +21,13 @@
 // shapes can be compared, the values cannot, and the readout under the pointer
 // gives the real numbers back.
 //
-// **Colour follows the series, not its position in the list.** A series is
-// coloured by its key, so unpicking one does not repaint the others — a reader
-// who has learnt that `lavfi.cropdetect.h` is the orange line must not have
-// that taken away by a filter. The palette is a validated categorical set
-// (adjacent-pair CVD ΔE ≥ 8 against this surface); past six lines a plot stops
-// being readable and the caller is expected to say so rather than inventing a
-// seventh hue.
+// **Colour follows the series, not its position in the list.** Slots are taken
+// in the palette's fixed order — the order *is* the colourblind-safety
+// mechanism, since the set was validated pair by pair as a sequence — and then
+// *remembered*, so unpicking one line does not repaint the others. A reader who
+// has learnt that `lavfi.cropdetect.h` is the orange line must not have that
+// taken away by a filter. Past six lines a plot stops being readable and the
+// caller is expected to say so rather than inventing a seventh hue.
 //
 // **The marks are the only loud thing.** Hairline grid one step off the
 // surface, solid rather than dashed — a dashed gridline reads as a threshold —
@@ -60,22 +60,22 @@ const CROSSHAIR = '#3d4450';
 
 const PAD = { l: 52, r: 12, t: 10, b: 18 };
 
-/// A colour for a series, by its key rather than by where it sits in a list.
+/// The next free slot, **in the fixed order above**.
 ///
-/// The hash is deliberate: two series picked in either order get the same two
-/// colours, and unpicking one leaves the other where it was. A counter would
-/// mean the plot repainted itself every time the selection changed, which is
-/// the single most common way a chart misleads somebody who has learnt it.
-export function colorFor(key, taken) {
-    let h = 0;
-    const s = String(key);
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-    const start = h % SERIES_COLORS.length;
-    for (let i = 0; i < SERIES_COLORS.length; i++) {
-        const c = SERIES_COLORS[(start + i) % SERIES_COLORS.length];
-        if (!taken || !taken.has(c)) return c;
-    }
-    return SERIES_COLORS[start];
+/// The order is the safety mechanism, not a preference: the palette was
+/// validated pair-by-pair *as an adjacent sequence*, so slots taken in order
+/// are guaranteed separable and slots taken at random are not — a hash over the
+/// series' name would put green beside aqua as readily as blue beside orange.
+/// So the first line on a plot is always blue and the second always orange.
+///
+/// Stability comes from the caller *remembering* what it handed out rather than
+/// from the choice being a function of the key: a colour is given when a series
+/// goes on the plot and kept until it comes off, so taking one line off never
+/// repaints the others. Recomputing on every draw is the single most common way
+/// a chart misleads somebody who has learnt it.
+export function nextColor(taken) {
+    for (const c of SERIES_COLORS) if (!taken || !taken.has(c)) return c;
+    return SERIES_COLORS[0];
 }
 
 /// Round a step to something a person reads without decoding: 1, 2, 5, 10, 20…
@@ -125,10 +125,17 @@ export function scaleOf(series) {
     if (series.length > 1 && span > 0) {
         for (const s of series) {
             if (!s.numeric) continue;
-            // A line whose whole excursion is under a fiftieth of the plot's
-            // height is drawn as a flat rule, which says "steady" about
-            // something that may have doubled.
-            if ((s.max - s.min) < span / 50) shared = false;
+            const own = s.max - s.min;
+            // **A series that never moved is not a reason to normalise.** It is
+            // a flat rule wherever it is put, and put at its own value it says
+            // something true — two constants at 180 and 320 on one axis are two
+            // readable lines, and normalised they are both a rule across the
+            // middle with the two laid over each other.
+            if (own <= 0) continue;
+            // One that *did* move, by under a fiftieth of the plot's height, is
+            // the case this is for: drawn on the shared axis it is a flat rule
+            // saying "steady" about something that may have doubled.
+            if (own < span / 50) shared = false;
         }
     }
     return { lo, hi, shared };

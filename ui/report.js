@@ -40,7 +40,8 @@
 // what you were about to read is a decision, not a side effect.
 
 import { el, div, span, put, show, fromTemplate, segmented } from './dom.js';
-import { drawPlot, sampleAt, colorFor, shortValue, MAX_SERIES } from './plot.js';
+import { drawPlot, sampleAt, nextColor, shortValue, MAX_SERIES,
+         SERIES_COLORS } from './plot.js';
 import * as measure from './measure.js';
 
 // libav's own numbering, which arrives on every record as `severity`: small is
@@ -414,7 +415,7 @@ function pick(key, on) {
     if (picked.size >= MAX_SERIES)
         return `A plot holds ${MAX_SERIES} lines — take one off first`;
     picked.add(key);
-    colors.set(key, colorFor(key, new Set(colors.values())));
+    colors.set(key, nextColor(new Set(colors.values())));
     return '';
 }
 
@@ -424,7 +425,7 @@ function plotted() {
     const out = [];
     for (const s of seriesForSubject()) {
         if (!picked.has(s.key) || !s.numeric || s.points.length < 2) continue;
-        out.push(Object.assign({}, s, { color: colors.get(s.key) || colorFor(s.key, null) }));
+        out.push(Object.assign({}, s, { color: colors.get(s.key) || SERIES_COLORS[0] }));
     }
     return out;
 }
