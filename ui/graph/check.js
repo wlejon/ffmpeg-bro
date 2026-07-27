@@ -28,7 +28,10 @@ import { padsOf } from './filters.js';
 /// looking at.
 export function nameOf(n) {
     if (!n) return 'a node';
-    if (n.kind === 'input') return `input ${n.index}`;
+    // An input the graph reads on its own account carries the name of the input
+    // it is, because "input 3" is a number in a list nobody has in front of them
+    // and "logo.png" is the thing they placed.
+    if (n.kind === 'input') return n.title ? `${n.title} (input ${n.index})` : `input ${n.index}`;
     if (n.kind === 'sink') return n.stream === 'a' ? 'audio out' : 'video out';
     return n.filter || 'a filter';
 }
@@ -95,7 +98,20 @@ export function problems(g, stranded = []) {
             // and this is also the state a node sits in for the moment between
             // being placed and being wired — so it has to read as "not finished
             // yet" rather than as an accusation.
-            if (!at.length) say(n, `nothing reads ${nameOf(n)}’s ${pad}`);
+            if (!at.length) {
+                // **An input's pads are ffmpeg's, not a filter's.** `[1:v]` and
+                // `[1:a]` are labels on a demuxer's streams, and a label nothing
+                // references is ordinary: a logo opened for its picture does not
+                // have to have its sound consumed by something. So an unread pad
+                // on an input is only worth a word when *none* of them is read —
+                // the file would then be opened and thrown away, which is also
+                // the state a source sits in between being placed and being
+                // wired.
+                if (n.kind !== 'input') say(n, `nothing reads ${nameOf(n)}’s ${pad}`);
+                else if (!leaving.length && p === 0)
+                    say(n, `nothing reads ${nameOf(n)} — wire one of its pads, ` +
+                           'or it is opened for nothing');
+            }
             // **The one people are surprised by.** A pad can be read once.
             // Reading it twice is what `split` is for, and ffmpeg says "Label
             // found twice" about a graph it has already half-parsed.

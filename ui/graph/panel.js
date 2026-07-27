@@ -34,7 +34,8 @@
 // won.
 
 import { el, div, span, put, head, row, fromTemplate } from '../dom.js';
-import { optionsOf, infoOf, allFilters, padsOf } from './filters.js';
+import { optionsOf, infoOf, allFilters, padsOf, isSource, sourceFilters } from './filters.js';
+import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import { nameOf } from './check.js';
 import * as overlay from './overlay.js';
 
@@ -137,6 +138,15 @@ function empty() {
             'Drag a node’s title bar to place it and Re-layout gives the whole graph ' +
             'back. Drag the background to select several, middle-drag to pan, wheel ' +
             'to zoom.'),
+        // A recipe rather than a feature. The whole argument of this stage is
+        // that the graph is the mechanism, so the common case is worth naming
+        // and is worth *not* being a button that does something private.
+        div('gp-hint dim',
+            'A watermark is two nodes and two wires: Add node offers every file you have ' +
+            'loaded and every source libavfilter has — place the logo, drag from the ' +
+            'composite into empty canvas and pick overlay, then drag the logo’s picture ' +
+            'socket onto overlay’s second input. A testsrc or a colour goes on the same ' +
+            'way, and a graph with nothing on the timeline behind it still renders.'),
         overlay.isEmpty() ? null : div('gp-hint dim', filtersNote()),
         overlay.isEmpty() ? null : el('button', {
             cls: 'tiny', text: 'Clear my filters and locks',
@@ -181,11 +191,32 @@ function nodePanel(node) {
         out.push(div('gp-hint dim', node.kind === 'input'
             ? `One file, as ffmpeg would open it — ${pads} — ${node.path || ''}`
             : 'The pad the muxer maps. What leaves here is what gets written.'));
+        // An input the graph reads on its own account rather than one a clip is
+        // cut from. Worth saying, because everything that decides how it opens
+        // is on another stage and this is where somebody is looking at it.
+        if (node.kind === 'input' && !node.derived) {
+            out.push(div('gp-hint dim',
+                'The graph reads this one; nothing on the timeline is cut from it. The ' +
+                'demuxer, its options and the window are the input’s — edit them on the ' +
+                'Sources stage and this follows.'));
+            out.push(...padRows(node));
+            out.push(div('gp-actions', [el('button', {
+                cls: 'tiny', text: 'Remove', 'data-f': 'remove',
+                on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
+            })]));
+        }
         return out;
     }
 
     const info = infoOf(node.filter);
     if (info && info.description) out.push(div('gp-hint dim', info.description));
+    if (node.filter === 'movie' || node.filter === 'amovie')
+        out.push(div('gp-hint dim',
+            'A movie opens the file itself, outside the input list — so nothing on the ' +
+            'Sources stage reaches it: no forced demuxer, no -probesize, no window, and a ' +
+            'path with a drive letter in it needs its colon escaped (C\\:/logo.png). The ' +
+            'same picture as an input node, with all of that and a row of its own, is one ' +
+            'drag from a socket away.'));
     out.push(...padRows(node));
 
     const options = optionsOf(node.filter);
@@ -443,6 +474,101 @@ function canTake(stream, dir) {
     });
 }
 
+// ── sources ────────────────────────────────────────────────────────────────
+//
+// **A source is a filter with no inputs, and libavfilter says which.** There is
+// no list of generators written down here any more than there is a list of
+// filters: `color`, `testsrc`, `smptebars`, `sine`, `anullsrc`, `mandelbrot`,
+// `movie` and the rest are simply the entries in the registry that read nothing,
+// so a build that gains one gains it here.
+//
+// They belong in this palette rather than beside it because placing one is the
+// same gesture as placing an `overlay`: it lands on the canvas, or on the end of
+// a wire you are dragging *backwards* out of an empty input. That second case is
+// what makes a watermark short — drag from `overlay`'s empty second input, let
+// go, and pick the file.
+//
+// The document's own inputs are offered first, and that is the `movie` decision
+// made visible: a file the graph reads is an `-i` with a demuxer, an option bag
+// and a window, already probed and already on the Sources stage. `movie` is
+// underneath with the other generators for anyone who wants it.
+
+/// Can a source of `stream` be attached to what is being held?
+///
+/// Nothing when the wire came off an *output* pad: a source has no input for it
+/// to land on, and offering one would be offering a connection that cannot be
+/// made.
+function wantsSource(pad) { return !pad.key || pad.dir === 'in'; }
+
+function sourceRows(pad, term) {
+    const stream = pad.key ? (pad.stream || 'v') : null;
+    const hit = (a, b) => !term || String(a).toLowerCase().indexOf(term) >= 0 ||
+                          String(b || '').toLowerCase().indexOf(term) >= 0;
+
+    const files = documentInputs.filter((i) =>
+        (!stream || streamKinds(i).indexOf(stream) >= 0) && hit(i.name, i.path));
+    const made = sourceFilters().filter((f) => {
+        const pads = padsOf(f.name);
+        return pads && (!stream || pads.outs.indexOf(stream) >= 0) &&
+               hit(f.name, f.description);
+    });
+    if (!files.length && !made.length) return [];
+
+    const rows = [head(`Sources · ${files.length + made.length}`)];
+    if (!term)
+        rows.push(div('gp-hint dim',
+            'A file the graph reads is an -i, with the demuxer, options and window it ' +
+            'has on the Sources stage — which is why it is here rather than a movie=. ' +
+            'Below it, everything libavfilter makes out of nothing.'));
+    for (const i of files) rows.push(inputRow(pad, i));
+    for (const f of made.slice(0, FILTER_LIMIT)) rows.push(padRow(pad, f));
+    if (made.length > FILTER_LIMIT)
+        rows.push(div('gp-hint dim', `and ${made.length - FILTER_LIMIT} more — narrow the search`));
+    return rows;
+}
+
+/// One of the document's inputs, offered as a node the graph reads.
+function inputRow(pad, input) {
+    const streams = streamKinds(input);
+    return el('button', {
+        cls: 'gp-filter', 'data-input': input.id,
+        on: { click: () => {
+            const rec = overlay.addSource(input.id);
+            sel = { kind: 'node', key: rec.id };
+            search = '';
+            if (hooks.placed) hooks.placed(rec, pad);
+            else changed();
+        } },
+    }, [span(input.name, 'gp-fname mono'),
+        span(streams.map((s) => (s === 'a' ? 'sound' : 'picture')).join(' · '), 'gp-badge'),
+        span(input.path, 'dim')]);
+}
+
+/// What the render already knows, written into a generator as it is placed.
+///
+/// A `testsrc` is 320x240 and 25 fps until it is told otherwise, and a graph
+/// whose last pad is a different size from the render is refused — correctly,
+/// because a writer opened for one size being handed another is a scaler
+/// quietly resizing every frame. Filling the size and rate in at the moment of
+/// placing means the ordinary case simply agrees, and changing them afterwards
+/// is a decision that gets said out loud.
+///
+/// Which options those are is read out of the filter's own table rather than
+/// tabled here: a video source has `size` and `rate`, a sound source has
+/// `sample_rate`, and a source with neither gets nothing.
+function sourceDefaults(filter) {
+    if (!isSource(filter) || !hooks.canvas) return {};
+    const c = hooks.canvas() || {};
+    const table = optionsOf(filter);
+    const has = (name) => table.some((o) => o.name === name);
+    const params = {};
+    if (c.width > 0 && c.height > 0 && has('size'))
+        params.size = `${Math.round(c.width)}x${Math.round(c.height)}`;
+    if (c.fps > 0 && has('rate')) params.rate = String(c.fps);
+    if (c.sampleRate > 0 && has('sample_rate')) params.sample_rate = String(c.sampleRate);
+    return params;
+}
+
 function padPalette(pad) {
     const all = pad.key ? canTake(pad.stream || 'v', pad.dir)
                         : allFilters().filter((f) => !!padsOf(f.name));
@@ -472,13 +598,21 @@ function padPalette(pad) {
 
 function padRowsFor(pad, all) {
     const term = search.trim().toLowerCase();
+    const out = [];
+    // Sources first, because a pad with nothing on it and a canvas with nothing
+    // on it are both places where the question is "where does the picture come
+    // from" before it is "what happens to it".
+    if (wantsSource(pad)) out.push(...sourceRows(pad, term));
+
+    const isMade = (f) => wantsSource(pad) && isSource(f.name);
     const matching = term
-        ? all.filter((f) => f.name.toLowerCase().indexOf(term) >= 0 ||
-                            (f.description || '').toLowerCase().indexOf(term) >= 0)
+        ? all.filter((f) => !isMade(f) &&
+                            (f.name.toLowerCase().indexOf(term) >= 0 ||
+                             (f.description || '').toLowerCase().indexOf(term) >= 0))
         : all.filter((f) => MULTI.indexOf(f.name) >= 0);
     const shown = matching.slice(0, FILTER_LIMIT);
 
-    const out = [];
+    if (out.length) out.push(head('Filters'));
     if (!term)
         out.push(div('gp-hint dim',
                      `The ones this is for, to start with. Type to search all ${all.length} ` +
@@ -499,7 +633,7 @@ function padRow(pad, f) {
     return el('button', {
         cls: 'gp-filter', 'data-filter': f.name,
         on: { click: () => {
-            const rec = overlay.addNode(f.name);
+            const rec = overlay.addNode(f.name, { params: sourceDefaults(f.name) });
             sel = { kind: 'node', key: rec.id };
             search = '';
             if (hooks.placed) hooks.placed(rec, pad);

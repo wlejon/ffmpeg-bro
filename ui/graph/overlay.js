@@ -144,6 +144,32 @@ export function addNode(filter, opts = {}) {
     return rec;
 }
 
+/// One of the document's inputs, read by the graph rather than by a clip.
+///
+/// This is how a watermark, a logo bug and a second angle are made, and it is
+/// deliberately not a `movie` filter — see the long argument in `derive.js`. In
+/// short: a `movie` node carries a filename and nothing else, while an input
+/// carries the demuxer, the option bag, `-loop`, `-ss` and `-t`, is probed with
+/// all of them in force, and already has a row on the Sources stage saying the
+/// render opens it.
+///
+/// Held by the input's **id** rather than by its index, because the index is the
+/// `-i` number and shifts when anything above it in the list is removed — the
+/// same reason a derived node is held by its anchor and not by its position.
+export function addSource(inputId) {
+    const rec = { id: `u${++seq}`, kind: 'input', input: String(inputId) };
+    state.nodes.push(rec);
+    changed('node');
+    return rec;
+}
+
+/// Which of the document's inputs the graph reads on its own account, by id.
+/// Asked by the Sources stage, so that "every file this render opens" stays a
+/// true statement once a file can be opened by the graph and by nothing else.
+export function sourceInputs() {
+    return state.nodes.filter((n) => n.kind === 'input').map((n) => n.input);
+}
+
 /// Take a node out, whichever kind it is — and every wire that touched it.
 ///
 /// Both kinds through one call because from the outside there is one gesture:
@@ -161,6 +187,13 @@ export function removeInsert(id) {
     if (!any) return false;
     for (let i = state.wires.length - 1; i >= 0; i--)
         if (state.wires[i].from === id || state.wires[i].to === id) state.wires.splice(i, 1);
+    // A node can itself carry insert points — an input the graph reads has one
+    // per pad — so removing it has to take what was spliced onto them. Left
+    // behind, those records name a point no derivation will ever declare again
+    // and would come back the moment the id was reused.
+    for (let i = state.inserts.length - 1; i >= 0; i--)
+        if (String(state.inserts[i].anchor).indexOf(`${id}/`) === 0)
+            state.inserts.splice(i, 1);
     delete state.sizes[id];
     delete state.pins[id];
     changed('remove');
@@ -383,7 +416,7 @@ export function cloneClip(fromId, toId) {
 /// away, because there are several — delete, a batch drop that clears the
 /// timeline, a project reset — and an overlay that grows every time one of them
 /// is missed is a localStorage blob that eventually costs a startup.
-export function retain(clipIds) {
+export function retain(clipIds, inputIds) {
     const live = new Set(Array.from(clipIds, String));
     const gone = (anchor) => {
         const m = /^clip:([^/]+)\//.exec(anchor) || /^composite\/overlay:(.+)$/.exec(anchor);
@@ -408,6 +441,24 @@ export function retain(clipIds) {
         if (gone(key)) { delete state.sizes[key]; any = true; }
     for (const key of Object.keys(state.pins))
         if (gone(key)) { delete state.pins[key]; any = true; }
+    // A source node whose input has been taken off the Sources stage. Removed
+    // rather than kept, which is the opposite of the rule for a clip out of
+    // range, and for a reason: a clip out of range comes back when the range
+    // moves, whereas a removed input is gone and the id will never be handed out
+    // again. Only checked when the caller says what the live inputs are, so that
+    // a call made before the input list exists cannot empty the graph.
+    if (inputIds) {
+        const liveIn = new Set(Array.from(inputIds, String));
+        for (let i = state.nodes.length - 1; i >= 0; i--) {
+            const rec = state.nodes[i];
+            if (rec.kind !== 'input' || liveIn.has(String(rec.input))) continue;
+            state.nodes.splice(i, 1);
+            for (let j = state.wires.length - 1; j >= 0; j--)
+                if (state.wires[j].from === rec.id || state.wires[j].to === rec.id)
+                    state.wires.splice(j, 1);
+            any = true;
+        }
+    }
     if (any) changed('retain');
 }
 
@@ -418,7 +469,14 @@ export function retain(clipIds) {
 /// application, and a record missing the field everything else indexes it by is
 /// a redraw that throws.
 function filterRec(n, withAnchor) {
-    if (!n || !n.id || !n.filter || (withAnchor && !n.anchor)) return null;
+    if (!n || !n.id || (withAnchor && !n.anchor)) return null;
+    // An input the graph reads is in the same list and has no filter name to be
+    // validated by: what it *is* is the input it names, and an id that no longer
+    // matches one is handled where the graph is derived rather than here — a
+    // removed input can be added again, and the node should come back with it.
+    if (!withAnchor && n.kind === 'input')
+        return n.input ? { id: String(n.id), kind: 'input', input: String(n.input) } : null;
+    if (!n.filter) return null;
     const rec = { id: String(n.id), filter: String(n.filter),
                   pos: Array.isArray(n.pos) ? n.pos.map(String) : [],
                   params: Object.assign({}, n.params) };
@@ -439,11 +497,26 @@ export function restore() {
         const blob = JSON.parse(saved);
         const list = (v, withAnchor) => (Array.isArray(v) ? v : [])
             .map((n) => filterRec(n, withAnchor)).filter(Boolean);
+        // **A node naming one of the document's inputs is not restored**, and
+        // that is not an oversight to be fixed by writing it out — there is
+        // still no project file, so the inputs themselves do not survive a
+        // restart and their ids are handed out from one again on every run. A
+        // restored `in3` would therefore name whichever file happened to be
+        // third next time, which is worse than losing the node: it is a graph
+        // that quietly reads a different file. This is the second thing that
+        // makes a project file worth having, and the first is on the line above.
+        const dropped = new Set();
+        const nodes = list(blob.nodes, false).filter((n) => {
+            if (n.kind !== 'input') return true;
+            dropped.add(n.id);
+            return false;
+        });
         state = {
             inserts: list(blob.inserts, true),
-            nodes: list(blob.nodes, false),
+            nodes,
             wires: (Array.isArray(blob.wires) ? blob.wires : [])
-                .filter((w) => w && w.id && w.from && w.to)
+                .filter((w) => w && w.id && w.from && w.to &&
+                               !dropped.has(String(w.from)) && !dropped.has(String(w.to)))
                 .map((w) => ({ id: String(w.id), from: String(w.from),
                                fromPort: Number(w.fromPort) || 0,
                                to: String(w.to), port: Number(w.port) || 0 })),

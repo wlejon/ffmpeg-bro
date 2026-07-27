@@ -243,7 +243,12 @@ onChange((what) => {
     // place a clip can go away — delete, a batch drop that clears the timeline,
     // a project reset — because there are several and the one that is missed is
     // the one that grows the stored overlay forever.
-    graphOverlay.retain(project.clips.map((c) => c.id));
+    // ...and a source node naming an input that has been taken off the Sources
+    // stage. The inputs are passed as well as the clips because the graph can
+    // now read a file no clip is cut from, which is exactly the file nothing
+    // else in this call would have noticed going away.
+    graphOverlay.retain(project.clips.map((c) => c.id),
+                        inputsModel.inputs.map((i) => i.id));
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
         // The selection ring lives on the picture, so a change of selection is
@@ -970,8 +975,13 @@ shell.initShell({
             return 'A recording is running — stop it first';
         if (!exporter.canLeave() && id !== 'write')
             return 'A render is running — stop it first';
-        if ((id === 'encode' || id === 'write') && !project.clips.length)
-            return 'Nothing on the timeline to encode';
+        // A timeline with nothing on it is not necessarily a render with
+        // nothing in it: a graph rooted in a generator produces pictures no
+        // clip accounts for, which is what `range()` falls back to. Refused
+        // only when neither has anything to say.
+        if ((id === 'encode' || id === 'write') &&
+            !project.clips.length && !exporter.range().length)
+            return 'Nothing on the timeline to encode, and nothing in the graph either';
         return null;
     },
     changed: (id, leaving) => {
@@ -1032,7 +1042,11 @@ function stageState(id) {
         const streams = list.reduce(
             (n, i) => n + ((i.probe && i.probe.streams) ? i.probe.streams.length : 0), 0);
         const set = list.filter((i) => inputsModel.summary(i)).length;
-        const unused = list.filter((i) => !clipsOf(i).length).length;
+        // An input the graph reads is in use even with no clip cut from it, so
+        // it is not counted here — the card says which, and a spine that called
+        // a watermark unused would be the same lie one line shorter.
+        const read = new Set(graphOverlay.sourceInputs());
+        const unused = list.filter((i) => !clipsOf(i).length && !read.has(i.id)).length;
         const tail = [set ? `${set} configured` : '', unused ? `${unused} unused` : '',
                       `${streams} streams`].filter(Boolean).join(' · ');
         return [`${list.length} input${list.length === 1 ? '' : 's'}`, tail];

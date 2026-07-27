@@ -6,14 +6,15 @@
 // to change one function and let the export follow for free.
 
 import { project, duration } from '../project.js';
-import { specInputs, indexOf as inputIndex } from '../inputs.js';
+import { inputs as documentInputs, specInputs, indexOf as inputIndex,
+         lengthOf as inputLength, streamKinds } from '../inputs.js';
 import * as viewer from '../viewer.js';
 import { settings, outputFps, outputExt } from './state.js';
 import { muxerInfo } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
 import { streamSpecs } from './streams.js';
 import { renderGraph } from '../filtergraph.js';
-import { current as overlayState, isEmpty } from '../graph/overlay.js';
+import { current as overlayState, isEmpty, nodes as overlayNodes } from '../graph/overlay.js';
 
 /// Swap a path's extension, keeping the directory and the name. Written
 /// against both separators because a path here came from a native file dialog
@@ -49,9 +50,42 @@ export function defaultPath() {
     return `${first.path.replace(/\.[^./\\]*$/, '')}-export.${outputExt()}`;
 }
 
+/// How long the graph says it is, for a render the timeline does not account
+/// for.
+///
+/// A `testsrc` into an encoder is a legitimate render and ffmpeg does it every
+/// day, but nothing about a generator says when it stops — it goes on producing
+/// for as long as it is asked to. That is the same problem a still and an
+/// endless `-stream_loop` posed two chunks ago, and the convention they left is
+/// followed rather than a third one invented: **`-t` is the only thing that can
+/// answer, and zero means nobody knows.** So a `color` or a `testsrc` is as long
+/// as its own `duration`/`d` argument, an input the graph reads is as long as
+/// the input is, and a graph that says neither has no length — which is refused
+/// with a sentence about `d` rather than papered over with a number somebody
+/// would have to notice was invented.
+export function graphLength() {
+    let best = 0;
+    for (const rec of overlayNodes()) {
+        if (rec.kind === 'input') {
+            const input = documentInputs.find((i) => i.id === rec.input);
+            if (input) best = Math.max(best, inputLength(input));
+            continue;
+        }
+        const p = rec.params || {};
+        const d = Number(p.duration !== undefined ? p.duration : p.d);
+        if (Number.isFinite(d) && d > 0) best = Math.max(best, d);
+    }
+    return best;
+}
+
 /// The part of the timeline that will be written.
+///
+/// With nothing on the timeline the graph's own length stands in, which is what
+/// makes a render rooted only in generators reachable at all — every range on
+/// this stage is measured against the document's duration, and a document whose
+/// content is in the graph has none.
 export function range() {
-    const total = Math.max(0, duration());
+    const total = Math.max(0, duration()) || graphLength();
     let a = Math.max(0, Math.min(settings.rangeIn, total));
     let b = settings.rangeOut > 0 ? Math.min(settings.rangeOut, total) : total;
     if (b <= a) { a = 0; b = total; }
@@ -69,6 +103,22 @@ export function range() {
 /// either of them being wrong on its own.
 export function specSources() {
     return project.clips.map((c) => (c.probe && c.probe.video) || null);
+}
+
+/// What the graph has to know about each `-i` beyond how to open it: which
+/// input it is, what streams came back, and its name.
+///
+/// Index-aligned with `specInputs()` — the same list, so the `-i` number is one
+/// fact rather than two. The streams are the probe's, because that is what
+/// decides how many sockets a source card draws: an input with no sound in it
+/// must not offer a pad the render cannot fill.
+function specInputInfo() {
+    return documentInputs.map((i) => ({
+        id: i.id,
+        name: i.name,
+        path: i.path,
+        streams: streamKinds(i),
+    }));
 }
 
 /// Everything the renderer needs.
@@ -132,6 +182,13 @@ export function buildSpec(over = {}) {
         // the clips point at, and dropping the unused ones would renumber the
         // rest. The renderer opens what is referenced and nothing else.
         inputs: over.inputs !== undefined ? over.inputs : specInputs(),
+        // The same list again, as the *document* knows it: an id that survives
+        // the list being reordered, the streams the probe found, and what to
+        // call it. Carried for `graph/derive.js`, which needs all three to build
+        // an input node the graph reads on its own account; the renderer ignores
+        // it exactly as it ignores `clip.id`, and for the same reason — it is a
+        // fact about the document rather than about the render.
+        inputInfo: over.inputInfo !== undefined ? over.inputInfo : specInputInfo(),
         // Which muxer, by name. Sent rather than left to the extension because
         // that is what `-f` means and because a hundred and eighty muxers
         // share about forty extensions between them — the file's name cannot

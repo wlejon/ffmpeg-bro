@@ -41,7 +41,7 @@
 // can be taken somewhere else and run.
 
 import { makeGraph, byKey, keyOf } from './model.js';
-import { padsOf } from './filters.js';
+import { padsOf, isSource } from './filters.js';
 import { problems } from './check.js';
 
 /// Numbers, short. ffmpeg's parser is happy with any of these, and a graph full
@@ -209,6 +209,21 @@ function audioSteps(clip, w, key) {
 const clipKey = (clip, i) =>
     `clip:${clip.id !== undefined && clip.id !== null ? clip.id : `#${i}`}`;
 
+/// One of the document's inputs, by the id the overlay wrote down.
+///
+/// `spec.inputInfo` runs parallel to `spec.inputs` and carries what the graph
+/// needs and the renderer does not: which input this is (an id survives a list
+/// being reordered where an index does not), what it turned out to contain, and
+/// what to call it. The renderer ignores it exactly as it ignores `clip.id`,
+/// and for the same reason — it is a fact about the document rather than about
+/// the render.
+function inputInfo(spec, id) {
+    const list = Array.isArray(spec.inputInfo) ? spec.inputInfo : [];
+    for (let i = 0; i < list.length; i++)
+        if (list[i] && list[i].id === id) return Object.assign({ index: i }, list[i]);
+    return null;
+}
+
 /// Which control on the properties panel a node's value came from — so that a
 /// lock can be reported *there*, against the field it outranks, rather than
 /// only on a stage the person editing may not be looking at.
@@ -318,9 +333,14 @@ function applyLocks(g, nodes, ov, overrides) {
 function applyStructure(g, ov, stranded) {
     ov = ov || {};
 
-    for (const rec of ov.nodes || [])
+    for (const rec of ov.nodes || []) {
+        // An input the graph reads is built up in `derive` itself, where the
+        // spec's input list and the `-i` numbering are: it is a *file*, not a
+        // filter, and a filter is all this loop knows how to make.
+        if (rec.kind === 'input') continue;
         g.add({ id: rec.id, filter: rec.filter, pos: rec.pos, params: rec.params,
                 derived: false });
+    }
 
     // Every graph gets its pads worked out, overlay or no overlay: what a node
     // reads is a fact about the filter, and the checker asks it of the skeleton
@@ -498,7 +518,23 @@ export function derive(spec, sources, opts = {}) {
         kept.push({ clip, w, i: kept.length, key: clipKey(clip, ci),
                     src: Array.isArray(sources) ? sources[ci] : null });
     }
-    if (!kept.length) return refuse('nothing on the timeline falls inside the range');
+    // **A render with nothing on the timeline is a legitimate render.** `ffmpeg
+    // -f lavfi -i testsrc -t 5 out.mp4` is a thing people do every day, and the
+    // moment the graph can hold a node that produces something out of nothing
+    // there is no reason this application cannot. So an empty range is only a
+    // refusal while there is also nothing in the graph that can produce a
+    // picture.
+    //
+    // **What counts is a node that produces**, not any node at all: an `hflip`
+    // somebody has placed and not yet wired cannot be the whole of a render, and
+    // a graph derived around it would report five separate problems where
+    // "there is nothing to render" is the one true sentence. So it is an input
+    // the graph reads, or a filter libavfilter says has no inputs — the same
+    // question `isSource` answers for the palette.
+    const placedNodes = (opts.overlay && opts.overlay.nodes) || [];
+    const produces = placedNodes.some((rec) => rec.kind === 'input' || isSource(rec.filter));
+    if (!kept.length && !produces)
+        return refuse('nothing on the timeline falls inside the range');
 
     const g = makeGraph({ derived: true });
 
@@ -507,10 +543,17 @@ export function derive(spec, sources, opts = {}) {
     // frame sync follows its first input, so the render walks forward at the
     // rate asked for rather than at whatever the topmost source happens to run
     // at — the same thing the renderer does by holding a fixed output clock.
-    const base = g.run([], [{
+    //
+    // **With nothing on the timeline there is no canvas either.** A black
+    // rectangle nothing is laid over is not the picture of an empty edit, it is
+    // a node in the way: the moment a `testsrc` was wired to the sink instead,
+    // the canvas would be a source nothing read, which is a graph libavfilter
+    // refuses. Left out, the sink is simply unwired, and "nothing is wired to
+    // video out" is exactly the state a graph you have not finished is in.
+    const base = kept.length ? g.run([], [{
         filter: 'color', anchor: 'base',
         params: { c: 'black', s: `${W}x${H}`, r: n(fps, 6), d: n(length, 6) },
-    }], 'base');
+    }], 'base') : null;
 
     // The named places on the wires where something can be put. `at`/`atPort`
     // are where the *next* insertion goes, which starts as the point's own node
@@ -559,6 +602,59 @@ export function derive(spec, sources, opts = {}) {
         return tail;
     });
 
+    // The files the *graph* reads that no clip accounts for — a logo laid over
+    // the picture, a second angle, a sound bed.
+    //
+    // **They are `-i`s, not `movie=` arguments, and that is the decision this
+    // whole chunk turns on.** ffmpeg writes both: `-i logo.png` with
+    // `[1:v]overlay`, and `movie=logo.png,overlay`. They are the same picture
+    // and they are not the same thing to reason about, because everything that
+    // decides *how a file is opened* belongs to the `-i` — the forced demuxer,
+    // `-probesize`, `-loop`, `-ss`, `-t`, `-stream_loop`, and for a URL the
+    // whole protocol option table. A `movie` node carries a filename and a
+    // `seek_point` and nothing else, so making it the mechanism would mean
+    // rebuilding all of that inside a filter argument, badly, beside an input
+    // model that already has it.
+    //
+    // The other half of the argument is the Sources stage. It claims to be
+    // every file this render opens; a `movie=` names a file that never appears
+    // there, cannot be probed with the options in force, and cannot be reused by
+    // a clip. Referencing an input means the row is already on that stage and
+    // the answer to "what will be opened" stays one list.
+    //
+    // `movie` is still reachable — it is a filter with no inputs and the palette
+    // offers every one of those — and `sources.js` reports whatever file such a
+    // node names, so the stage keeps telling the truth. It is just not what this
+    // application reaches for on your behalf.
+    const graphInputs = [];
+    for (const rec of placedNodes) {
+        if (rec.kind !== 'input') continue;
+        const info = inputInfo(spec, rec.input);
+        // An input somebody removed. Kept in the overlay rather than dropped,
+        // by the same rule an insert point out of range follows: put the input
+        // back and the node comes back with it.
+        if (!info) continue;
+        const streams = info.streams && info.streams.length ? info.streams : ['v'];
+        const node = g.add({
+            id: rec.id, kind: 'input', derived: false,
+            // Two numbers, counting different things, exactly as a clip's input
+            // node carries: `index` is the `-i` this graph gives the pad and
+            // `input` is which of the document's inputs that is.
+            index: kept.length + graphInputs.length,
+            input: info.index, path: info.path, title: info.name,
+            // Every stream the input turned out to have, because unlike a clip
+            // there is nothing here to say which of them will be used — you
+            // decide that by dragging a wire off one of the sockets. An `-i`
+            // pad nothing references is ordinary ffmpeg, so an unread one is
+            // not a complaint (see check.js).
+            outs: streams.map((s) => ({ stream: s })),
+        });
+        streams.forEach((s, i) =>
+            point(`${rec.id}/after-decode:${i}`, node, i, s,
+                  s === 'a' ? 'input sound' : 'after decode'));
+        graphInputs.push(node);
+    }
+
     const colour = outputColor(spec);
 
     let over = base;
@@ -587,7 +683,8 @@ export function derive(spec, sources, opts = {}) {
     // RGBA in the render you got. Two pictures from one insert point is worse
     // than one fewer insert point.
     point('composite/after-overlay', lastOverlay, 0, 'v', 'after compositing');
-    g.connect(over, g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' }), 0);
+    const vsink = g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' });
+    if (over) g.connect(over, vsink, 0);
 
     if (spec.audio !== false) {
         const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0);
@@ -620,7 +717,21 @@ export function derive(spec, sources, opts = {}) {
         // clip's own tail — which is the same wire the muxer maps and the right
         // place for something that applies to the whole soundtrack.
         point('audio/after-mix', out, 0, 'a', 'after mixing');
-        if (out) g.connect(out, g.add({ kind: 'sink', stream: 'a', anchor: 'out:a' }), 0);
+        // The pad the muxer maps exists when something maps it — either the
+        // edit's own soundtrack, or a wire somebody drew to it.
+        //
+        // That second case is what a `sine` or an `anullsrc` needs and could
+        // not have: with no audible clip there was no `out:a` in the graph at
+        // all, so a sound generator had nowhere to send what it made. Making
+        // the sink unconditional is the other obvious answer and the wrong one —
+        // every render of a silent timeline would then carry an unwired audio
+        // out and be refused for it.
+        const wanted = out || (opts.overlay && (opts.overlay.wires || [])
+            .some((w) => w.to === 'out:a'));
+        if (wanted) {
+            const sink = g.add({ kind: 'sink', stream: 'a', anchor: 'out:a' });
+            if (out) g.connect(out, sink, 0);
+        }
     }
 
     // The user's layer goes on last, over a skeleton that is complete — so an

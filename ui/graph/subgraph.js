@@ -45,6 +45,7 @@
 
 import { print } from './print.js';
 import { streamsOf } from './model.js';
+import { isSource } from './filters.js';
 import { inputsOf } from '../filtergraph.js';
 
 /// `--good`, as libavfilter spells a colour. The waveform is the same green the
@@ -127,8 +128,12 @@ export function previewGraph(g, node, opts = {}) {
 
     const keep = ancestors(g, node);
     const view = pruned(g, keep);
-    if (!view.nodes.some((n) => n.kind === 'input') &&
-        !view.nodes.some((n) => n.filter === 'color'))
+    // Something has to be producing frames at the top of it — a file, or a
+    // filter that makes pictures out of nothing. The second is asked of
+    // libavfilter rather than named, so a `testsrc` or a `mandelbrot` previews
+    // for the same reason the derived black canvas does.
+    if (!view.nodes.some((n) => n.kind === 'input' ||
+                                (n.kind === 'filter' && isSource(n.filter))))
         return { ok: false, reason: 'nothing feeds this node' };
 
     // An input node is not a filter and cannot be a chain on its own, so

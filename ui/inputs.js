@@ -187,6 +187,25 @@ export function lengthOf(input) {
     return (p.video && p.video.duration) || p.format.duration || 0;
 }
 
+/// Which kinds of stream this input turned out to carry — `['v']`, `['v','a']`,
+/// `['a']`.
+///
+/// One implementation, because three things ask: the spec's `inputInfo` (which
+/// decides how many sockets a source card on the Graph stage draws), the graph
+/// palette (which offers an input only for a pad it can fill), and anything
+/// after them. An unprobed input answers `['v']` rather than nothing — a file
+/// that has not been read yet is not a file with no picture in it.
+export function streamKinds(input) {
+    const p = input && input.probe;
+    if (!p) return ['v'];
+    const out = [];
+    for (const s of p.streams) {
+        const kind = s.kind === 'audio' ? 'a' : s.kind === 'video' ? 'v' : '';
+        if (kind && out.indexOf(kind) < 0) out.push(kind);
+    }
+    return out.length ? out : ['v'];
+}
+
 /// What this input is set to, in one line, for a card and for the spine.
 export function summary(input) {
     const bits = [];

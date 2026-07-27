@@ -46,6 +46,7 @@ import { layout, NODE_W } from './layout.js';
 import * as canvas from './canvas.js';
 import * as cards from './card.js';
 import { padsOf as filterPads } from './filters.js';
+import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import * as overlay from './overlay.js';
 import * as panel from './panel.js';
 import * as preview from './preview.js';
@@ -165,6 +166,16 @@ export function initGraphView(r, hooks = {}) {
         // where the wire was let go, and is joined to the pad it came from. The
         // panel knows which filter; only this knows where the pointer was.
         placed: (rec, pad) => placeFromPalette(rec, pad),
+        // What the render is, for a source that is about to be placed. A
+        // `testsrc` is 320x240 until it is told otherwise, and a graph whose
+        // last pad is a different size from the render is refused — so the
+        // answer the render already has is written in at the moment of placing
+        // rather than left to be discovered at the end of one.
+        canvas: () => {
+            const s = buildSpec();
+            return { width: s.width, height: s.height, fps: s.fps,
+                     sampleRate: s.sampleRate };
+        },
     });
 
     bindViewport();
@@ -487,7 +498,12 @@ function placeFromPalette(rec, pad) {
     // to, and inventing a connection for it would be inventing which of
     // `overlay`'s two inputs somebody meant.
     if (!pad.key) { select(rec.id, false); return drawGraph(); }
-    const pads = filterPads(rec.filter, rec.params, rec.pos);
+    // An input the graph reads is a file, not a filter: its pads are the streams
+    // the probe found, and which of them a wire leaves by is the whole reason a
+    // logo's picture does not arrive on a pad expecting sound.
+    const pads = rec.kind === 'input'
+        ? { ins: [], outs: streamKinds(documentInputs.find((i) => i.id === rec.input)) }
+        : filterPads(rec.filter, rec.params, rec.pos);
     const want = pad.dir === 'out' ? (pads && pads.ins) : (pads && pads.outs);
     let port = 0;
     if (want && want.length) {

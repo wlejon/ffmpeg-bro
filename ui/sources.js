@@ -28,6 +28,7 @@ import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 import { optionColumn } from './opttable.js';
+import * as graph from './graph/overlay.js';
 
 let refs = {};
 let hooks = {};
@@ -96,16 +97,31 @@ export function drawSources() {
 
 // ── the list ───────────────────────────────────────────────────────────────
 
+/// Which inputs the graph reads on its own account, by id.
+///
+/// **An input with no clip is not necessarily unused.** A logo laid over the
+/// picture is an `-i` that nothing on the timeline is cut from, and a card
+/// reading "unused" beside a file the render is about to open would be the one
+/// thing this stage cannot afford to get wrong.
+function graphReads() {
+    return new Set(graph.sourceInputs());
+}
+
 function drawList() {
     const current = chosen();
+    const reads = graphReads();
     put(refs.list, () => {
         if (!inputs.length)
-            return div('dim pad', 'No inputs. Add a path or a URL above, or drop a file ' +
-                                  'on the timeline.');
+            return [
+                div('dim pad', 'No inputs. Add a path or a URL above, or drop a file ' +
+                               'on the timeline.'),
+                ...graphFileRows(),
+            ];
         if (joinOpen) return joinRows();
-        return inputs.map((input) => {
+        return [...inputs.map((input) => {
             const node = fromTemplate('tpl-input');
             const used = hooks.clipsOf ? hooks.clipsOf(input).length : 0;
+            const inGraph = reads.has(input.id);
             node.classList.toggle('on', input === current);
             node.classList.toggle('bad', !!input.error);
             node.setAttribute('data-input', input.id);
@@ -118,15 +134,66 @@ function drawList() {
             node.querySelector('.src-set').textContent = summary(input);
             node.querySelector('.src-used').textContent =
                 input.error ? 'unreadable'
-                            : used ? `${used} clip${used === 1 ? '' : 's'}` : 'unused';
+                : [used ? `${used} clip${used === 1 ? '' : 's'}` : '',
+                   inGraph ? 'read by the graph' : ''].filter(Boolean).join(' · ') || 'unused';
             node.addEventListener('click', () => {
                 chosenId = input.id;
                 demuxerOpen = false;
                 drawSources();
             });
             return node;
-        });
+        }), ...graphFileRows()];
     });
+}
+
+/// A `movie` filter's filename, with the filtergraph escaping taken off.
+///
+/// `movie=C\:/logo.png` and `movie=C\://logo.png` are how a Windows path has to
+/// be written inside a filter argument, because a colon separates arguments.
+/// What is wanted here is the path.
+function unescapePath(text) {
+    return String(text || '').replace(/\\(.)/g, '$1');
+}
+
+/// Files the graph opens for itself, which are the one way this stage can stop
+/// being every file the render opens.
+///
+/// A `movie` filter is not an `-i`: it opens the file inside libavfilter, with
+/// none of the demuxer options, none of the window and none of the probing that
+/// the rows above are made of. The application does not reach for it — a source
+/// placed on the Graph stage is an input reference, for the reasons written in
+/// `graph/derive.js` — but it is an ordinary filter and the palette offers every
+/// one of those, so what it names is accounted for here rather than left off the
+/// list and quietly opened.
+function graphFileRows() {
+    const nodes = graph.nodes().filter((n) => n.filter === 'movie' || n.filter === 'amovie');
+    if (!nodes.length) return [];
+    return [
+        head('Opened by the graph'),
+        div('src-join-note dim',
+            'A movie filter opens its file inside libavfilter, so nothing above reaches it: ' +
+            'no forced demuxer, no -probesize, no window, no probe. Added as an input it ' +
+            'gets all of them, and the graph can read it as [n:v] instead.'),
+        ...nodes.map((n) => {
+            const named = (n.params && n.params.filename) || (n.pos && n.pos[0]) || '';
+            const path = unescapePath(named);
+            return div('src-demux', [
+                span(n.filter, 'mono'),
+                span(path || 'no file named yet', path ? 'dim' : 'src-missing'),
+                path ? el('button', {
+                    cls: 'tiny', 'data-f': 'srcadopt', text: 'Add as an input',
+                    title: 'Open it as an -i, with a demuxer, options and a window',
+                    on: { click: () => {
+                        const made = addInput(typedSpec(path));
+                        chosenId = made.id;
+                        if (made.error && hooks.flash) hooks.flash(made.error);
+                        if (hooks.changed) hooks.changed();
+                        drawSources();
+                    } },
+                }) : null,
+            ]);
+        }),
+    ];
 }
 
 /// Several files as one `-i`, in the order they are ticked.
@@ -536,6 +603,7 @@ function windowRows(input) {
 
 function actionRows(input) {
     const used = hooks.clipsOf ? hooks.clipsOf(input) : [];
+    const inGraph = graphReads().has(input.id);
     return [row('', div('src-actions', [
         el('button', {
             cls: 'tiny primary', 'data-f': 'srcuse', text: 'Use on the timeline',
@@ -548,10 +616,12 @@ function actionRows(input) {
         }),
         el('button', {
             cls: 'tiny', 'data-f': 'srcremove',
-            text: used.length ? `In use by ${used.length}` : 'Remove',
-            disabled: used.length > 0,
+            text: used.length ? `In use by ${used.length}` : inGraph ? 'In the graph' : 'Remove',
+            disabled: used.length > 0 || inGraph,
             title: used.length
                 ? 'Delete the clips cut from it first — a clip with no input has nothing to decode'
+                : inGraph
+                ? 'A node on the Graph stage reads this one — delete that node first'
                 : 'Take this input off the list',
             on: { click: () => {
                 removeInput(input);

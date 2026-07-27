@@ -86,6 +86,20 @@ export function optionOf(filter, name) {
 // written out below rather than approximated, because a graph drawn with the
 // wrong number of sockets is a graph you cannot wire.
 
+// `movie` and `amovie` are the second shape that does not fit, and they do not
+// fit for a different reason from `concat`: their pad count is a function of a
+// *string* whose grammar is ffmpeg's own stream-specifier syntax.
+// `movie=logo.png` is one video pad, `movie=in.mkv:s=v:0+a:0` is two of
+// different kinds, and there is no counting option in the table for `padCount`
+// to find — so left to the general rule they came out with **no output pads at
+// all**, which is a node that cannot be wired to anything.
+//
+// Written out rather than approximated, for the reason `concat` is: a graph
+// drawn with the wrong number of sockets is a graph you cannot wire. libavfilter
+// remains the authority — if it refuses the spec, the render says so — this only
+// decides how many dots to draw.
+const MOVIE = { movie: 'v', amovie: 'a' };
+
 const IN_COUNT = ['inputs', 'nb_inputs', 'n'];
 const OUT_COUNT = ['outputs', 'nb_outputs', 'n'];
 
@@ -143,6 +157,8 @@ export function padsOf(filter, params, pos) {
     if (!info) return null;
     const chars = (s) => String(s || '').split('');
 
+    if (MOVIE[filter]) return moviePads(filter, params);
+
     if (filter === 'concat') {
         const n = padCount(filter, ['n'], params, pos, 2) || 2;
         const v = params && params.v !== undefined ? count(params.v)
@@ -168,4 +184,47 @@ export function padsOf(filter, params, pos) {
         if (n !== outs.length) outs = new Array(n).fill(streamOf(info));
     }
     return { ins, outs };
+}
+
+/// What `movie`'s `streams` option asks for, as pads.
+///
+/// Empty is the filter's own default — one pad of the kind the filter is named
+/// for. Otherwise it is `+`-separated stream specifiers, and the only thing that
+/// has to be read out of each is whether it names sound: `da` and `a:0` do,
+/// `dv` and `v:0` do not, and a bare index is whatever ffmpeg picks, which for a
+/// `movie` is a picture.
+///
+/// The filename is `movie`'s first positional argument, so a stream list is
+/// never in `pos` — it is written by name or not at all.
+function moviePads(filter, params) {
+    const wanted = params && (params.streams !== undefined ? params.streams : params.s);
+    const text = String(wanted === undefined || wanted === null ? '' : wanted).trim();
+    if (!text) return { ins: [], outs: [MOVIE[filter]] };
+    const outs = text.split('+')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => (/^(da|a(:|$))/.test(s) ? 'a' : 'v'));
+    return { ins: [], outs: outs.length ? outs : [MOVIE[filter]] };
+}
+
+/// Does this filter produce pictures or sound out of nothing?
+///
+/// **Discovered, never listed.** `color`, `testsrc`, `smptebars`, `sine`,
+/// `anullsrc`, `mandelbrot`, `movie` and the thirty others are simply the
+/// filters libavfilter declares with no input pads, so a build that gains one
+/// gains it here. Read off the registry entry rather than through `padsOf`,
+/// because this is asked of every filter in the build at once and `padsOf`
+/// builds an option table for each dynamic one.
+///
+/// A dynamic-input filter is not a source however few pads it declares: `amix`
+/// and `hstack` declare none and grow as many as they are told.
+export function isSource(name) {
+    const info = infoOf(name);
+    if (!info) return false;
+    return !String(info.inputs || '').length && !info.dynamicInputs;
+}
+
+/// Every one of them, for the palette.
+export function sourceFilters() {
+    return allFilters().filter((f) => isSource(f.name));
 }
