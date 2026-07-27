@@ -464,11 +464,25 @@ function removeSelection() {
 /// rather than "the clip under the playhead" is what makes it work on a stack:
 /// one keypress can cut through four tracks at the same instant, or through
 /// exactly the one you picked.
-function splitAtPlayhead() {
-    const t = transport.t;
-    const targets = (project.selection.length ? project.selection : clipsAt(t))
+function splitAtPlayhead() { splitAt(transport.t, true); }
+
+/// The same cut, at a moment somebody handed over rather than at the playhead.
+///
+/// A measurement produces cut points — `blackdetect` found four stretches of
+/// black, `scdet` found nine changes — and acting on one means cutting there,
+/// which is this. It cuts every clip the moment falls inside rather than the
+/// selection, because a list of moments is not a statement about what is
+/// selected; `useSelection` is what the keyboard passes to keep `S` meaning
+/// what it has always meant. Returns how many clips were actually cut, so a
+/// caller applying nine points can say what happened rather than claiming nine.
+function splitAt(t, useSelection) {
+    const targets = ((useSelection && project.selection.length)
+                        ? project.selection : clipsAt(t))
         .filter((c) => t > c.start + 1e-3 && t < c.start + c.length - 1e-3);
-    if (!targets.length) { flash('Nothing to split here'); return; }
+    if (!targets.length) {
+        if (useSelection) flash('Nothing to split here');
+        return 0;
+    }
     const halves = [];
     for (const c of targets) {
         const right = splitClip(c, t, (n) => { n.peaks = c.peaks; n.film = c.film; viewer.attachClip(n); });
@@ -487,7 +501,8 @@ function splitAtPlayhead() {
     viewer.layout();
     setPlayhead(t);
     changed('split');
-    flash(halves.length === 1 ? 'Split' : `Split ${halves.length} clips`);
+    if (useSelection) flash(halves.length === 1 ? 'Split' : `Split ${halves.length} clips`);
+    return halves.length;
 }
 
 function setLayout(mode) {
@@ -1027,6 +1042,21 @@ report.initReport({
     head: el('rep-head'),
     body: el('rep-body'),
     toggle: el('rep-toggle'),
+}, {
+    // The verbs. A measurement that can only be read is a number; one that can
+    // be applied is a tool — and where it is applied is not the drawer. A crop
+    // goes on the graph where cropping is done, cut points go on the timeline,
+    // and loudnorm goes on the node beside the ebur128 that measured it. So the
+    // reading happens in one place and the acting happens in another, which is
+    // right, and these four calls are the whole of the join.
+    splitAt: (t) => splitAt(t, false),
+    seek: (t) => setPlayhead(Math.max(0, Math.min(duration(), t))),
+    flash,
+    picture: () => ({ width: project.width, height: project.height }),
+    // A filter put on the graph, or a value applied to one, is a change to the
+    // edit in exactly the way dragging a clip is: the graph redraws, the
+    // command bar reprints, and the spine re-counts.
+    changed: () => changed('measure'),
 });
 
 /// The two lines under a stage's name: what it is set to, in the terms that
@@ -1133,7 +1163,7 @@ globalThis.__ffmpegBro = {
     setPlayhead, play, pause, step,
     timeline, viewer,
     setCropMode, cropMode: () => cropMode,
-    splitAtPlayhead, setLayout, select, selectMany,
+    splitAtPlayhead, splitAt, setLayout, select, selectMany,
     showProperties, pending,
     exporter, capture,
     filtergraph, renderGraph, shell, command, report,

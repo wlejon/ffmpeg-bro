@@ -17,6 +17,7 @@ import { bytes, clock, elapsed, timecode } from '../format.js';
 import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps,
          outputExt } from './state.js';
 import { previewSpec, range } from './spec.js';
+import { qualitySpec, qualityResult, why as whyNoQuality, metrics } from './quality.js';
 
 let panes = {};
 let hooks = {};
@@ -64,6 +65,7 @@ export function invalidatePreview() {
     preview.refReady = false;
     preview.candReady = false;
     preview.stats = null;
+    preview.quality = null;
 }
 
 /// The candidate is stale but the reference is not: changing the quality does
@@ -71,6 +73,10 @@ export function invalidatePreview() {
 export function invalidateCandidate() {
     preview.candReady = false;
     preview.stats = null;
+    // The numbers are about a candidate that no longer exists. Kept, they would
+    // be the previous settings' score sitting under the new settings' picture,
+    // which is the one way this feature could mislead rather than inform.
+    preview.quality = null;
     if (preview.refKey !== referenceKey()) preview.refReady = false;
 }
 
@@ -129,6 +135,15 @@ export function previewFinished(p) {
         preview.refReady = true;
         return true;
     }
+    if (currentJob() === 'quality') {
+        // The answers are in the report as series; this is a reading of them
+        // rather than a second copy. `p.job` is the render they were measured
+        // during, so a stale series from an earlier comparison cannot be
+        // mistaken for this one's.
+        preview.quality = qualityResult(p.job || 0);
+        preview.measuring = false;
+        return false;
+    }
     const r = previewRange();
     preview.candReady = true;
     preview.stats = {
@@ -138,7 +153,28 @@ export function previewFinished(p) {
         elapsed: p.elapsed,
         frames: p.frames,
     };
-    return false;
+    // Straight on into the measurement, on the same one slot. It writes nothing
+    // and shows nothing while it runs — the two videos are already on screen
+    // and being played, and rebuilding the stage under them to say "measuring"
+    // would take the picture away to describe it.
+    return 'quality';
+}
+
+/// The third render: what the settings cost, measured on the very two files the
+/// wipe is showing.
+export function startQuality() {
+    const spec = qualitySpec(previewRange());
+    if (!spec) return false;
+    preview.measuring = true;
+    hooks.launch(spec, 'quality');
+    return true;
+}
+
+/// Only the numbers under the stage. Redrawing the whole preview would rebuild
+/// the two `<video>` elements, which are the decoders — so a measurement
+/// arriving would stop the playback it was measuring.
+export function drawPreviewStats() {
+    put(panes.stats, () => statLines());
 }
 
 // ── drawing ────────────────────────────────────────────────────────────────
@@ -275,6 +311,7 @@ function statLines() {
     const rate = kbps < 1000 ? `${kbps.toFixed(0)} kbps` : `${(kbps / 1000).toFixed(1)} Mbps`;
 
     return [
+        qualityLine(),
         div('', [span(`this ${s.seconds.toFixed(1)} s`, 'dim'), ` ${bytes(s.bytes)} · ${rate}`]),
         div('', [span('whole render', 'dim'), ' ', span(`≈ ${bytes(projected)}`, 'good'),
                  ` over ${clock(r.length)}`]),
@@ -283,6 +320,31 @@ function statLines() {
                              : `${(1 / Math.max(speed, 0.001)).toFixed(1)}× slower than real time`) +
                  (r.length > 0 && speed > 0 ? ` · about ${elapsed(r.length / speed)} for the lot` : '')]),
     ];
+}
+
+/// What the settings cost, in the terms a codec is argued about in.
+///
+/// It leads the stats because it is the answer to the question the whole stage
+/// exists for. Each figure carries what it means in its tooltip rather than in
+/// the line — three sentences under a wipe is a paragraph nobody reads — and
+/// the metric names are libavfilter's own, so a number here can be checked
+/// against `ffmpeg -lavfi psnr` on the same two files.
+function qualityLine() {
+    if (preview.measuring)
+        return div('', [span('measured', 'dim'),
+                        ' comparing the two halves, frame by frame…']);
+    const q = preview.quality;
+    if (!q || !q.length) {
+        const no = whyNoQuality();
+        return no && metrics().length === 0 ? div('dim', no) : null;
+    }
+    const bits = [];
+    for (const m of q) {
+        bits.push(el('span', { cls: 'ex-q', title: `${m.key} — ${m.hint}` },
+                     [span(m.label, 'dim'), ' ', span(m.text, 'good')]));
+    }
+    return div('ex-quality', [span('measured', 'dim'), ...bits,
+                              span('against the lossless half', 'dim')]);
 }
 
 // ── the two videos ─────────────────────────────────────────────────────────

@@ -33,9 +33,10 @@ import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
 import { initForm, drawForm } from './export/form.js';
 import { initStreams, drawStreams } from './export/streams.js';
-import { initPreview, drawPreview, chasePreview, startPreview, previewFinished,
-         previewRange, invalidatePreview, invalidateCandidate, stopPreviewPlayback,
-         renderCandidate, togglePreviewPlay, stepPreviewBy } from './export/preview.js';
+import { initPreview, drawPreview, drawPreviewStats, chasePreview, startPreview,
+         previewFinished, previewRange, invalidatePreview, invalidateCandidate,
+         stopPreviewPlayback, renderCandidate, startQuality, togglePreviewPlay,
+         stepPreviewBy } from './export/preview.js';
 import { initStrip, drawStrip, refitStrip, markPreviewAt } from './export/strip.js';
 import { initProgress, drawProgress } from './export/progress.js';
 
@@ -303,14 +304,31 @@ export function tick() {
         return;
     }
 
+    // The quality measurement is a render with nothing on screen to show for
+    // it: the two videos are already up and playing, and rebuilding the stage
+    // under them to draw a progress bar would take away the picture it is
+    // measuring. So it changes only the line of numbers, and only when it is
+    // over.
+    if (currentJob() === 'quality') {
+        if (p.state === 'running') return;
+        previewFinished(p);
+        setJob(null);
+        drawPreviewStats();
+        return;
+    }
+
     if (p.state === 'running') { drawPreview(); return; }
 
     // Clearing the slot first: a failed preview that left it set would mean
     // the workspace spends the rest of its life believing a render is in
     // progress, with the Export button disabled and no way back.
-    const chain = previewFinished(p);
+    const next = previewFinished(p);
     setJob(null);
-    if (chain) renderCandidate();       // straight on: one click, both halves
+    // Straight on: one click renders the reference, the candidate, and then
+    // measures one against the other.
+    if (next === true) renderCandidate();
+    else if (next === 'quality') { showPanel('form'); drawPreview(); updateSummary();
+                                   startQuality(); }
     else { showPanel('form'); drawPreview(); updateSummary(); }
 }
 

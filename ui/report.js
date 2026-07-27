@@ -40,6 +40,8 @@
 // what you were about to read is a decision, not a side effect.
 
 import { el, div, span, put, show, fromTemplate, segmented } from './dom.js';
+import { drawPlot, sampleAt, colorFor, shortValue, MAX_SERIES } from './plot.js';
+import * as measure from './measure.js';
 
 // libav's own numbering, which arrives on every record as `severity`: small is
 // severe. Kept as numbers rather than as a table of names here — the names come
@@ -69,13 +71,26 @@ const state = {
 };
 
 let refs = {};
+let hooks = {};
 let open = false;
 let level = WARNING;
 let mine = true;         // only the render that last said something
 let dirty = true;
 
-export function initReport(r) {
+// Which series are on the plot, and where the pointer is on it.
+//
+// **Held by key rather than by object**, for the reason the graph holds its
+// selection by anchor: a series object is rebuilt from the channel and a
+// reference to one would name whichever version happened to exist when it was
+// taken. It is also what makes a colour stick to a series across a redraw.
+const picked = new Set();
+let hoverT = null;
+let plotGeom = null;
+let plotCanvas = null;
+
+export function initReport(r, h) {
     refs = r;
+    hooks = h || {};
     refs.toggle.addEventListener('click', () => setOpen(!open));
     refs.head.addEventListener('click', () => setOpen(!open));
     draw();
@@ -267,6 +282,188 @@ export function draw() {
     // graph's cards already use, and for the same reason: a canvas has no width
     // until it is in the document.
     paintSparks();
+    paintPlot();
+}
+
+// ── what was measured, and what can be done about it ───────────────────────
+
+/// The row that starts a measurement.
+///
+/// **It puts the filter on the graph and does nothing else.** There is no
+/// private measuring path in this application, for the reason the node previews
+/// have none: a measurement that agreed with the render most of the time would
+/// be worse than none, because it would be trusted. So this is a shortcut to a
+/// gesture somebody could make on the Graph stage with the palette — placed
+/// where the answers appear, since that is where the wish for one occurs — and
+/// the card that appears on the graph is the proof it is the same gesture.
+function drawOffers() {
+    const list = measure.offers();
+    if (!list.length) return null;
+    return div('rep-measure', [
+        span('Measure', 'dim'),
+        ...list.map((o) => {
+            const on = measure.measuring(o.filter).length > 0;
+            return el('button', {
+                cls: 'tiny' + (on ? ' on' : ''),
+                'data-measure': o.filter,
+                title: on
+                    ? `${o.filter} is on the graph — click to take it off`
+                    : `${o.filter}: ${o.hint}`,
+                text: o.label,
+                on: { click: () => {
+                    if (on) measure.stopMeasuring(o.filter);
+                    else {
+                        measure.startMeasuring(o.filter);
+                        if (hooks.flash)
+                            hooks.flash(`${o.filter} is on the graph — render to measure`);
+                    }
+                    if (hooks.changed) hooks.changed();
+                    draw();
+                } },
+            });
+        }),
+    ]);
+}
+
+/// One measurement that can be acted on — or the reason it cannot.
+///
+/// The raw text it was read out of is always on the card. That is not
+/// decoration: the whole argument for this application is that ffmpeg stops
+/// being a thing you guess at, and a number handed over without the line it
+/// came from is exactly the sort of thing that has to be taken on trust.
+function findingCard(f) {
+    const head = div('rep-find-head', [
+        span(f.title, 'rep-find-name'),
+        span(f.filter, 'mono dim rep-find-filter'),
+        span('', 'spacer'),
+        f.ok && f.detail ? span(f.detail, 'rep-find-detail') : null,
+    ]);
+    const body = [];
+    if (f.raw) body.push(div('mono dim rep-find-raw', f.raw));
+    if (!f.ok) {
+        body.push(div('rep-find-no', f.reason));
+    } else if (f.reason) {
+        // Read, and nothing to do about it — which is a real answer and not a
+        // failure, so it is said in the same voice rather than as a warning.
+        body.push(div('dim rep-find-no', f.reason));
+    } else if (f.verb) {
+        body.push(el('button', {
+            cls: 'tiny primary', 'data-apply': f.id, title: f.verb.hint,
+            text: f.verb.label,
+            on: { click: () => { f.verb.apply(hooks); if (hooks.changed) hooks.changed(); draw(); } },
+        }));
+        body.push(span(f.verb.hint, 'dim rep-find-hint'));
+    }
+    return div('rep-find' + (f.ok ? '' : ' rep-find-refused'),
+               [head, ...body]);
+}
+
+function currentFindings() {
+    const job = subject();
+    const size = hooks.picture ? hooks.picture() : { width: 0, height: 0 };
+    return measure.findings({
+        series: state.series,
+        messages: state.messages.filter((m) => !mine || !job || m.job === job),
+        job: mine ? job : 0,
+        width: size.width, height: size.height,
+    });
+}
+
+// ── the plot ───────────────────────────────────────────────────────────────
+
+/// The series on the plot, in the order they were picked, each carrying the
+/// colour its key earns. Colour follows the series and not its position, so
+/// unpicking one leaves the rest where they were.
+function plotted() {
+    const taken = new Set();
+    const out = [];
+    for (const s of seriesForSubject()) {
+        if (!picked.has(s.key) || !s.numeric || s.points.length < 2) continue;
+        const color = colorFor(s.key, taken);
+        taken.add(color);
+        out.push(Object.assign({}, s, { color }));
+    }
+    return out;
+}
+
+function drawPlotPanel() {
+    const series = plotted();
+    if (!series.length) return null;
+
+    plotCanvas = el('canvas', { cls: 'rep-plot-c' });
+    plotCanvas.addEventListener('mousemove', (e) => {
+        if (!plotGeom || !plotGeom.timeAt) return;
+        const box = plotCanvas.getBoundingClientRect();
+        const t = plotGeom.timeAt(e.clientX - box.left);
+        hoverT = Math.max(plotGeom.t0, Math.min(plotGeom.t1, t));
+        paintPlot();
+        updateReadout();
+    });
+    plotCanvas.addEventListener('mouseout', () => { hoverT = null; paintPlot(); updateReadout(); });
+    // A measurement is about a moment, and the moment is on the timeline. So a
+    // click on the plot is the shortest path from "the number went wrong here"
+    // to looking at the frame it went wrong on.
+    plotCanvas.addEventListener('click', (e) => {
+        if (!plotGeom || !plotGeom.timeAt || !hooks.seek) return;
+        const box = plotCanvas.getBoundingClientRect();
+        hooks.seek(plotGeom.timeAt(e.clientX - box.left));
+    });
+
+    return div('rep-plot', [
+        div('rep-plot-legend', series.map((s) => div('rep-key', [
+            el('span', { cls: 'rep-swatch', style: { background: s.color } }),
+            span(s.key, 'mono'),
+        ]))),
+        plotCanvas,
+        div('rep-plot-foot', [
+            el('span', { cls: 'mono rep-readout' }),
+            span('', 'spacer'),
+            el('span', { cls: 'dim rep-plot-note' }),
+        ]),
+    ]);
+}
+
+/// The values under the pointer, in the series' own units — which is what makes
+/// a normalised plot honest rather than merely pretty: the shapes are compared
+/// on the axis and the numbers are read here.
+function updateReadout() {
+    if (!refs.body) return;
+    const out = refs.body.querySelector('.rep-readout');
+    if (!out) return;
+    const series = plotted();
+    if (hoverT === null || !series.length) {
+        out.textContent = series.length ? 'hover to read a value · click to go there' : '';
+        return;
+    }
+    const bits = [`${hoverT.toFixed(2)}s`];
+    for (const s of series) {
+        const p = sampleAt(s, hoverT);
+        bits.push(`${s.key.replace(/^lavfi\./, '')} ${p ? shortValue(p.v) : '—'}`);
+    }
+    out.textContent = bits.join('   ');
+}
+
+function paintPlot() {
+    if (!plotCanvas || !refs.body) return;
+    const series = plotted();
+    if (!series.length) return;
+    let t0 = Infinity, t1 = -Infinity;
+    for (const s of series) {
+        t0 = Math.min(t0, s.points[0].t);
+        t1 = Math.max(t1, s.points[s.points.length - 1].t);
+    }
+    if (!(t1 > t0)) t1 = t0 + 1;
+    plotGeom = drawPlot(plotCanvas, {
+        series, t0, t1, hoverT,
+        marks: measure.marksOf(currentFindings().filter((f) => f.ok)),
+    });
+    const note = refs.body.querySelector('.rep-plot-note');
+    if (note)
+        note.textContent = plotGeom.normalised
+            ? 'normalised: these do not share a scale, so the axis is each series’ own ' +
+              '0–100% and the numbers are on the left'
+            : '';
+    updateReadout();
 }
 
 function drawFilters() {
@@ -333,23 +530,49 @@ function drawMessages() {
 
 function drawSeries() {
     const list = seriesForSubject();
+    const found = currentFindings();
     const head = div('rep-col-head', [
         span('Measured'),
         span('', 'spacer'),
         span(list.length ? `${list.length} series` : '', 'dim'),
     ]);
-    if (!list.length) {
-        return [head, div('rep-empty dim',
-            'Nothing measured this render. Put cropdetect, blackdetect, ' +
-            'silencedetect, ebur128 or signalstats on the graph and what they ' +
-            'measure arrives here, sampled frame by frame.')];
+    const offers = drawOffers();
+    if (!list.length && !found.length) {
+        return [head, offers, div('rep-empty dim',
+            'Nothing measured this render. Any filter that answers a question rather ' +
+            'than changing a picture reports here — put one on the graph, or use the ' +
+            'row above, and what it measures arrives sampled frame by frame.')];
     }
-    return [head, div('rep-series-list', list.map(seriesRow))];
+    return [head, offers,
+            found.length ? div('rep-finds', found.map(findingCard)) : null,
+            drawPlotPanel(),
+            div('rep-series-list', list.map(seriesRow))];
 }
 
+/// One series, as the index into the plot rather than as the plot.
+///
+/// The sparkline is still the right shape here — eight of them in a column
+/// answer "did this change, and where" at a glance, which is what a list is
+/// for. Clicking one puts it on the plot above, where it can be read against
+/// the others and pointed at.
 function seriesRow(s) {
     const node = fromTemplate('tpl-rep-series');
     node.setAttribute('data-series', s.key);
+    const on = picked.has(s.key);
+    node.classList.toggle('on', on);
+    if (on) node.style.borderLeftColor = colorFor(s.key, null);
+    node.addEventListener('click', () => {
+        if (picked.has(s.key)) picked.delete(s.key);
+        else if (picked.size >= MAX_SERIES) {
+            // Past six lines a plot stops being readable: hue is the identity
+            // channel and a seventh is either a repeat or a colour nobody
+            // checked. Said, rather than quietly generated.
+            if (hooks.flash)
+                hooks.flash(`A plot holds ${MAX_SERIES} lines — take one off first`);
+            return;
+        } else picked.add(s.key);
+        draw();
+    });
     node.querySelector('.rep-series-name').textContent = s.key;
     const span0 = s.points.length ? s.points[0].t : 0;
     const span1 = s.points.length ? s.points[s.points.length - 1].t : 0;
@@ -428,6 +651,7 @@ export function chaseReport() {
     if (w <= 0 || w === lastWidth) return;
     lastWidth = w;
     paintSparks();
+    paintPlot();
 }
 
 // ── what the rest of the application asks ──────────────────────────────────
@@ -444,3 +668,20 @@ export function seriesList() { return seriesForSubject(); }
 export function seriesFor(key) { return state.series.get(key) || null; }
 export function messages() { return state.messages.slice(); }
 export function reportState() { return state; }
+
+/// What is on the plot, and putting something there. On the surface because a
+/// plot is drawn from it and a test has to be able to ask for one without
+/// finding a row and clicking it — the row *is* checked, separately, which is
+/// the thing that would otherwise go untested if this were the only way in.
+export function plotSeries(key, on) {
+    if (on === false) picked.delete(key);
+    else picked.add(key);
+    draw();
+}
+export function plotted_() { return Array.from(picked); }
+
+/// Every measurement this render supports, parsed — and the reason where it
+/// does not. The verbs hang off these, so this is what anything wanting to act
+/// on a measurement asks, rather than parsing the channel a second time.
+export { currentFindings as findings };
+export { measure };

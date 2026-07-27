@@ -992,6 +992,13 @@ body.fs #cropbox { display: none; }
 .ex-warnings .warn { color: var(--accent); font-size: var(--fs-base); line-height: 1.7; }
 .ex-verdict .ex-foot { border: 0; background: none; padding: 8px 0 0; justify-content: flex-end; }
 
+/* What the settings cost, as a number. It leads the stats under the wipe
+   because it is the answer to the question the whole stage exists for, and
+   each figure carries what it means in its tooltip rather than in the line —
+   three sentences under a comparison is a paragraph nobody reads. */
+.ex-quality { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.ex-q { display: inline-flex; align-items: baseline; gap: 4px; }
+
 /* ── the command bar ──────────────────────────────────────────────────────
 
    Under every stage, because the invocation is the point: an application whose
@@ -1121,7 +1128,7 @@ body.fs #cropbox { display: none; }
 .rep-body {
     border-top: 1px solid var(--line);
     padding: 6px 12px 8px;
-    max-height: 34vh;
+    max-height: 46vh;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -1161,6 +1168,11 @@ body.fs #cropbox { display: none; }
     max-height: 26vh;
     padding-right: 12px;
 }
+/* The measured column holds four things now — how to start one, what was
+   found, the plot and the list — so it scrolls as a whole rather than each
+   part scrolling inside itself, which is four scrollbars and one readable
+   panel's worth of room between them. */
+.rep-series { overflow-y: auto; padding-right: 12px; }
 
 /* A message is four columns and the first three are narrow on purpose: the
    sentence is what is being read, and level, source and time are what it is
@@ -1183,7 +1195,72 @@ body.fs #cropbox { display: none; }
 .rep-msg.dim  .rep-lv { color: var(--dim); }
 .rep-msg.dim  .rep-text { color: var(--dim); }
 
-.rep-series-row { padding: 4px 0 6px; border-bottom: 1px solid var(--line); }
+/* A series row is the index into the plot, so it says whether it is on one:
+   a left edge in the series' own colour, which is the same colour the line
+   above carries. Colour follows the series and not its place in the list. */
+.rep-series-row {
+    padding: 4px 0 6px 6px;
+    border-bottom: 1px solid var(--line);
+    border-left: 2px solid transparent;
+    cursor: pointer;
+}
+.rep-series-row:hover { background: #14171c; }
+.rep-series-row.on { background: #171a20; }
+
+/* Where a measurement is started. It puts a filter on the graph and does
+   nothing else, so it reads as a row of things rather than as a mode. */
+.rep-measure {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    padding: 6px 0;
+    font-size: var(--fs-sm);
+}
+
+/* What a measurement came to, and the verb that goes with it. The raw line it
+   was read out of is on the card because a number handed over without the text
+   it came from has to be taken on trust, which is the thing this application
+   is against. */
+.rep-finds { display: flex; flex-direction: column; gap: 6px; padding-bottom: 6px; }
+.rep-find {
+    background: #14171c;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--good);
+    padding: 5px 8px;
+    font-size: var(--fs-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.rep-find-refused { border-left-color: var(--dim); }
+.rep-find-head { display: flex; align-items: baseline; gap: 8px; }
+.rep-find-name { color: var(--text); font-size: var(--fs-base); }
+.rep-find-filter { font-size: var(--fs-xs); }
+.rep-find-detail { color: var(--good); }
+.rep-find-raw {
+    font-size: var(--fs-xs);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 44px;
+    overflow: hidden;
+    user-select: text;
+}
+.rep-find-no { color: var(--dim); line-height: 1.5; }
+.rep-find-hint { font-size: var(--fs-xs); line-height: 1.5; }
+
+/* The plot. A canvas with room to be read, a legend that is always there for
+   two or more lines, and a readout under the pointer — the values in their own
+   units, which is what makes a normalised axis honest instead of merely
+   convenient. */
+.rep-plot { display: flex; flex-direction: column; gap: 3px; padding: 2px 0 8px; }
+.rep-plot-c { display: block; width: 100%; height: 132px; cursor: crosshair; }
+.rep-plot-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: var(--fs-xs); }
+.rep-key { display: flex; align-items: center; gap: 5px; color: var(--dim); }
+.rep-swatch { display: block; width: 10px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+.rep-plot-foot { display: flex; align-items: baseline; gap: 10px; font-size: var(--fs-xs); }
+.rep-readout { color: var(--text); }
+.rep-plot-note { line-height: 1.4; }
 .rep-series-head { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sm); }
 .rep-series-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .rep-series-stat, .rep-series-span { font-size: var(--fs-xs); }

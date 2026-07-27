@@ -117,6 +117,13 @@ export const preview = {
     candReady: false,
     refReady: false,
     stats: null,                // {bytes, seconds, fps, elapsed}
+    // What the settings cost, measured rather than judged: psnr, ssim and —
+    // where the build has libvmaf — vmaf, computed on the very two files the
+    // wipe is showing. Null until the third render has run, and thrown away the
+    // moment the candidate is invalidated, because the previous settings' score
+    // under the new settings' picture is the one way this could mislead.
+    quality: null,
+    measuring: false,
     wipe: 0.5,
     mode: 'wipe',               // wipe | side
     playing: true,
@@ -127,7 +134,7 @@ export const preview = {
 // Which render the host's one job slot is currently being used for. The export
 // and both halves of the preview take turns through here rather than each
 // keeping its own idea of what is going on.
-let job = null;                 // null | 'export' | 'reference' | 'candidate'
+let job = null;   // null | 'export' | 'reference' | 'candidate' | 'quality'
 const watchers = [];
 
 export const currentJob = () => job;
