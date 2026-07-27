@@ -922,6 +922,16 @@ about them:
   own options — so the rows exist for what they *mean* rather than for what they
   are. A sequence's frame rate drawn as row 34 of an option table says the opposite
   of what it is, which is a decision nothing on disk can make for you.
+
+  **The stage's claim is that it is every file this render opens**, and two things
+  the graph can now do would quietly break it. An input the *graph* reads has no
+  clip cut from it, so it says `read by the graph` rather than `unused`, is not
+  counted as unused on the spine, and cannot be removed while a node names it.
+  And a `movie` filter opens its file inside libavfilter with none of this
+  stage's options reaching it, so what one names is listed under *Opened by the
+  graph* — separately, because it is a different kind of thing — with the offer
+  to make it an `-i`. Neither is a special case bolted on: both are the
+  consequence of the decision in `graph/derive.js` about what a graph source is.
 - `opttable.js` — **one AVOption table, edited into one bag**, and the third instance
   of the pattern is what made it a component. libavutil describes an encoder, a muxer,
   a demuxer, a decoder, a protocol and a filter with the same structure, so the
@@ -1068,7 +1078,10 @@ about them:
   reasons. `graph/model.js` is nodes and wires — **one node kind, because
   ffmpeg has one**: a `scale` node *is* a filter named `scale`, and the app's
   crop, opacity and stacking are `crop`, `colorchannelmixer` and `overlay`
-  rather than special cases of anything. `graph/derive.js` builds the skeleton
+  rather than special cases of anything. The two ends are the exceptions, and
+  an `input` node is no longer only the derivation's: a file the graph reads on
+  its own account is one too, carrying `input` (which of the document's `-i`s)
+  and `derived: false`. `graph/derive.js` builds the skeleton
   from the edit and owns every refusal and caveat; `graph/print.js` turns nodes
   into chains; `graph/check.js` says what is wrong with a finished one.
   `filtergraph.js` is the composition, with the shape callers want, so
@@ -1261,6 +1274,86 @@ about them:
   file**, and this was already the first thing that made one worth having; a
   hand-wired graph is work in the way a slider position is not, and the next
   agent to want one should say so rather than keep adding to a localStorage key.
+  **A node naming one of the document's inputs is the one thing not persisted**,
+  and that is not an omission to be fixed by writing it out: the inputs
+  themselves do not survive a restart and `inputs.js` hands ids out from one
+  again on every run, so a restored `in3` would name whichever file happened to
+  be third next time — a graph that quietly reads a different file, which is
+  worse than losing the node. That is the second reason a project file is owed.
+
+- **Sources in the graph — the `movie` decision, and it is the load-bearing one
+  in this area.** A file the graph reads that no clip is cut from is what a
+  watermark, a logo bug and an insert are made of. ffmpeg writes it both ways —
+  `-i logo.png` with `[1:v]overlay`, and `movie=logo.png,overlay` — and this
+  application makes it an **input reference**: `overlay.addSource(inputId)`
+  records `{ id, kind: 'input', input }`, and `derive()` turns it into an
+  `input` node with the next `-i` index after the clips', a pad per stream the
+  probe found, and `node.input` naming which of the document's inputs it is.
+  Two arguments, and the second is the one that generalises:
+
+  - Everything that decides *how a file opens* belongs to the `-i` — the forced
+    demuxer, `-probesize`, `-loop`, `-ss`, `-t`, `-stream_loop`, and for a URL
+    the whole protocol option table. A `movie` node carries a filename and a
+    seek point, so making it the mechanism means rebuilding all of that inside a
+    filter argument, badly, beside an input model that already has it.
+  - The Sources stage claims to be **every file this render opens**. A `movie=`
+    names one that never appears there. So `sources.js` reports what a `movie`
+    node names under *Opened by the graph*, says what it costs, and offers to
+    make it an `-i`; and an input the graph reads says `read by the graph` on
+    its card, is not counted as unused on the spine, and cannot be removed while
+    a node names it.
+
+  `movie` remains reachable — it is an ordinary filter with no inputs and the
+  palette offers every one of those. Two things about it needed writing down:
+  its pads come from the `streams` option, which is a *string* in ffmpeg's
+  stream-specifier grammar and not a count, so `padCount`'s general rule left it
+  with no output pads at all and it is written out in `filters.js` beside
+  `concat`; and a Windows path inside a filter argument needs its colon escaped
+  (`C\:/logo.png`), which the panel says where somebody is about to type one.
+
+  How the id reaches the derivation is `spec.inputInfo`, index-aligned with
+  `spec.inputs` and carrying `{ id, name, path, streams }`. An **id and not an
+  index**, because the index is the `-i` number and shifts when anything above it
+  is removed — the same reason a derived node is held by its anchor. The renderer
+  ignores the field exactly as it ignores `clip.id`.
+
+- **A source is a filter with no inputs, and libavfilter says which.**
+  `filters.js`'s `isSource()` reads it off the registry entry (`!inputs &&
+  !dynamicInputs`) rather than through `padsOf`, because it is asked of every
+  filter in the build at once and `padsOf` builds an option table for each
+  dynamic one. `amix` and `hstack` declare no inputs and are *not* sources —
+  they grow as many as they are told. There is no list of generators anywhere.
+
+  Three consequences worth keeping:
+
+  - **A placed generator carries the render's `size` and `rate`**, looked up in
+    the filter's own option table (`size`, `rate`, `sample_rate`) and written by
+    `panel.js`'s `sourceDefaults` from `hooks.canvas()`. A graph whose last pad
+    is a different size from the render is refused rather than rescaled — that
+    rule stays — so agreeing at the moment of placing is what makes the ordinary
+    case work without `sizeFromGraph`, which remains what the node previews use
+    and only they. For an export the size is a decision somebody made.
+  - **A generator has no length**, and the convention chunks 5 and 6 left is
+    followed rather than a third one invented: `-t` is the only thing that can
+    answer and zero means nobody knows. `export/spec.js`'s `graphLength()` is a
+    generator's own `duration`/`d` or a referenced input's length, and `range()`
+    falls back to it when the timeline has no duration. Nothing saying anything
+    is a refusal that names `d`.
+  - **With no clips there is no derived canvas.** `derive()` builds the black
+    `color` base only when something is laid over it: left in, the moment a
+    `testsrc` is wired to the sink instead, the canvas is a source nothing reads
+    — a graph libavfilter refuses. The video sink is simply unwired, which is
+    the honest state. The audio sink likewise exists when something maps it,
+    either an audible clip or an overlay wire to `out:a`, because an
+    unconditional one would refuse every silent render.
+
+  `derive()` only tolerates an empty timeline when the overlay holds a node that
+  *produces* — an input reference or an `isSource` filter. An unwired `hflip` on
+  its own is still "nothing on the timeline falls inside the range", because
+  deriving a graph around it would report five problems where one sentence is
+  true. And `check.js` treats an **input's pads as ffmpeg's, not a filter's**:
+  `[1:a]` that nothing references is ordinary, so only an input nothing reads at
+  all is worth a word.
 - `graph/view.js` + `graph/card.js` + `graph/canvas.js` + `graph/layout.js` — the Graph
   stage. Nothing here builds a graph; it asks `derive()` for one on every change and
   draws the answer, so a redraw throws away every node object and **nothing may be
@@ -1443,6 +1536,14 @@ about them:
   they are placed and wired rather than spliced, because there is no wire a
   two-input filter could be dropped onto. Both are filtered from libavfilter's
   own registry through `padsOf`, so neither is a list of what is supported.
+
+  **`canTake`'s palette leads with sources**, but only where one can attach:
+  `wantsSource()` is "no wire in the air, or a wire that came off an *input*
+  pad", because a source has no input for a wire off an output pad to land on.
+  The document's own inputs come first — that is the `movie` decision made
+  visible — and libavfilter's generators after them. Dragging backwards out of
+  an empty input and picking a file is what makes a watermark short: what you
+  get back is already wired to the pad you were trying to fill.
 
   A wire's panel says which pads it joins and whether it is yours or the
   derivation's, because that is what `Delete` means: forgetting a wire of your

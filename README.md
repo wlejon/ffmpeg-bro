@@ -516,6 +516,14 @@ Two clips from one file are one input, which is what ffmpeg would open. A second
 of the same file reuses it — unless something has been set on it, in which case a
 fresh one is made rather than silently inheriting somebody's decision.
 
+An input with no clip cut from it is **not necessarily unused**. The Graph stage
+can read one directly — that is what a watermark is — and such an input says
+`read by the graph` on its card and cannot be removed while the node naming it
+exists. Underneath the list, **Opened by the graph** accounts for the one way a
+file can be opened without being an `-i`: a `movie` filter, which opens its file
+inside libavfilter with none of this stage's options reaching it. It is listed
+rather than left off, with the offer to make it an input instead.
+
 ### An input that is not one file
 
 Three of ffmpeg's inputs are not a file, and each is *assembled* rather than opened.
@@ -770,7 +778,7 @@ the second pad to read. So they are placed and then wired:
   connects.
 - **Let a wire go over empty canvas** and the palette opens on what can take
   that pad, out of libavfilter's own registry. What you pick lands where you
-  let go and arrives already wired. `Add filter` is the same palette with
+  let go and arrives already wired. `Add node` is the same palette with
   nothing in the air.
 - **Click a wire to select it, `Delete` to cut it.** Cutting a wire the
   derivation made is *remembered*: the skeleton is rebuilt from the timeline on
@@ -783,6 +791,78 @@ ordinary option in the column beside the graph. **A wire whose pad stops
 existing does not vanish.** It is kept, reported by name — *amix has 2 inputs,
 so your wire at input 3 has nowhere to land* — and put back the moment the count
 goes up again, because a mistyped number should not be lost work.
+
+### A node that makes something out of nothing
+
+Some filters read no pad at all. `color` is a rectangle, `testsrc` and
+`smptebars` are test cards, `sine` is a tone, `anullsrc` is silence,
+`mandelbrot` is what it says — and there are about thirty of them in this build.
+They are **discovered, not listed**: a source here is simply a filter
+libavfilter declares with no input pads, so a build that gains one gains it in
+the palette without an edit.
+
+`Add node` opens on them, and so does letting a wire go from an *input* pad —
+which is the short way round, because what you get back is already wired to the
+pad you were trying to fill.
+
+A generator arrives carrying **the size and the frame rate the render is**, read
+out of the filter's own option table. That is not decoration: a graph whose last
+pad is a different size from the render is refused rather than quietly rescaled,
+so filling it in at the moment of placing means the ordinary case simply agrees
+and changing it afterwards is a decision you get told about.
+
+**A generator has no length.** It goes on producing for as long as it is asked
+to, so with clips on the timeline the render's range is what stops it, and with
+nothing on the timeline its own `duration`/`d` is the only thing that can — the
+same rule a still and a `-stream_loop -1` follow, and zero still means nobody
+knows. Say nothing and the stage says so: *the range is empty — with nothing on
+the timeline, a source's own duration (d) is the only thing that says how long a
+render would be*.
+
+**A render with nothing on the timeline is a real render.** `ffmpeg -f lavfi -i
+testsrc -t 5 out.mp4` is a thing people do every day, and a `testsrc` wired to
+`video out` writes a file here with no clip involved. With no clips there is no
+derived black canvas either — a rectangle nothing is laid over would be a source
+nothing reads the moment you wire your own to the sink — so `video out` is empty
+until you fill it, and the stage says which pad it is waiting on.
+
+### A file the graph reads
+
+A watermark, a logo bug, a picture-in-picture insert and a sound bed are one
+shape: a file the *graph* reads that nothing on the timeline is cut from.
+
+ffmpeg writes that two ways — `-i logo.png` with `[1:v]overlay`, and
+`movie=logo.png,overlay` — and **this application reaches for the first**. The
+reason is that everything deciding *how a file is opened* belongs to the `-i`:
+the forced demuxer, `-probesize`, `-loop`, `-ss`, `-t`, `-stream_loop`, and for
+a URL the whole protocol option table. A `movie` node carries a filename and a
+seek point, so making it the mechanism would mean rebuilding all of that inside
+a filter argument, badly, beside an input model that already has it. It also
+keeps the Sources stage honest: that stage claims to be every file this render
+opens, and a `movie=` names one that never appears there and cannot be probed
+with the options in force.
+
+So the palette's Sources list **leads with the inputs you already have**.
+Picking one places a node that is that input — a file, with a socket per stream
+the probe found, numbered as the `-i` it will be. Everything about how it opens
+stays on the Sources stage, and the card there says `read by the graph` and
+refuses to be removed out from under the node naming it.
+
+Placing a logo over the picture is then two nodes and two wires:
+
+1. `Add node` → the logo file. It lands on the canvas.
+2. Drag from the composite's output into empty canvas → pick `overlay`. It
+   lands wired to overlay's first input, which is what it draws *onto*.
+3. Drag the logo's picture socket onto overlay's second input.
+4. Drag overlay's output onto `video out`.
+
+`movie` and `amovie` are still there — they are ordinary filters with no inputs
+and the palette offers every one of those — and if you use one, the file it
+names is listed on the Sources stage under **Opened by the graph**, with what
+that costs said plainly and an offer to make it an `-i` instead. Two things to
+know if you do: nothing on the Sources stage reaches it, and a path with a drive
+letter in it has to have its colon escaped (`C\:/logo.png`) because a colon
+separates filter arguments.
 
 ### When it will not run
 
@@ -1444,13 +1524,23 @@ Honest list of what does not work:
   the graph overlay is not on that stack, so a wire cut by mistake is put back
   by wiring it again rather than by `Ctrl-Z`. `Give it back` covers the one case
   where "again" is ambiguous — a pad handed to the derivation.
-- **Filters that read no pad.** `color`, `testsrc`, `sine`, `movie` — a node
-  with zero inputs can be placed and wired now, and the palette will offer one,
-  but nothing about the *edit* knows what a generated source is: it has no clip,
-  no window and no row on the Sources stage.
+- **A generated source in the viewer.** A `testsrc` or a `movie` renders and
+  previews on its own card, and the *viewer* cannot show it for the same reason
+  it cannot show a filter: playback is the engine decoding a file into a
+  `<video>` and there is no filtergraph anywhere in that path. A render with
+  nothing on the timeline is therefore something you watch on the Graph stage
+  and on the Encode stage's preview, not on the program monitor.
+- **A generator that follows the render.** A source is placed carrying the
+  render's size and rate, and it does not chase them: change the output size
+  afterwards and the graph is refused with both numbers rather than rescaled.
+  Refusing is the right half of that; noticing before the render is not done.
 - **A project file.** What you insert, lock, place and wire is remembered in
   `localStorage`, which is per machine rather than per edit. It was the first
-  thing that made a document format worth having and is now most of the reason.
+  thing that made a document format worth having and is now most of the reason —
+  and a node naming one of your inputs is deliberately *not* written there,
+  because the inputs themselves do not survive a restart and their ids start
+  again from one, so a restored reference would name whichever file happened to
+  be third next time.
 - **Acting on what was measured.** A filter's numbers arrive as a series and
   are drawn as one, which is where it stops: `cropdetect` can tell you the
   black bars are 240 rows deep and nothing offers to crop them, `ebur128` can
