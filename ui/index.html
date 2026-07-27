@@ -21,6 +21,35 @@
     <nav id="spine"></nav>
 
     <div id="stages">
+    <!-- Capture: a device, what it can see, and the recording it becomes.
+
+         First on the spine, and it is the one card that is not a question
+         about the file coming out — it is the question about the file going
+         in, for when there is not one yet. The arrow into Sources is real: a
+         recording is written and then opened as an input, which is what
+         "Add to the timeline" does. See ui/capture.js.
+
+         Three columns like Sources, in the order the questions come: which
+         device and what it can see, what it is set to with its live picture,
+         and the demuxer's own option table beside it. -->
+    <section id="st-capture" class="stage-view hidden">
+        <div class="cap-main">
+            <div id="cap-list" class="cap-list"></div>
+            <div class="cap-mid">
+                <!-- The live picture, and the region dragged on it. Not a
+                     preview path of its own: an ordinary <video> playing the
+                     device through the same backend everything else uses. -->
+                <div id="cap-preview" class="cap-preview">
+                    <div id="cap-marquee" class="cap-marquee hidden"></div>
+                </div>
+                <div id="cap-note" class="cap-note-area"></div>
+                <div id="cap-bar" class="cap-bar"></div>
+                <div id="cap-settings" class="cap-settings"></div>
+            </div>
+            <div id="cap-options" class="ex-col ex-right"></div>
+        </div>
+    </section>
+
     <section id="st-sources" class="stage-view hidden">
         <!-- The inputs: the `-i`s, which is a different thing from "the files
              on the timeline" and the reason this stage stopped being derived

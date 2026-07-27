@@ -341,8 +341,30 @@ function assemblyRows(input) {
         case 'sequence': return sequenceRows(input);
         case 'still':    return stillRows(input);
         case 'concat':   return concatRows(input);
+        case 'device':   return deviceRows(input);
         default:         return [];
     }
+}
+
+/// A live device, which is an input this stage can describe and cannot use.
+///
+/// It is here because a device *is* an `-i` and this is where an `-i` is
+/// edited: forcing `-f dshow` by hand is a legitimate thing to do and the
+/// result should be understood rather than shown as a file that will not open.
+/// What it says is what is different about it — no end, so no clip — and where
+/// to go instead.
+function deviceRows(input) {
+    return [
+        head('Device'),
+        row('Demuxer', span(`-f ${input.format} · libavdevice`, 'mono')),
+        row('', span(
+            'A device never ends, so nothing can be cut from it: there is no length for a ' +
+            'clip to have and no way to seek back to a moment that has already gone. That is ' +
+            'not a gap in this stage — it is what a live input is.', 'dim')),
+        row('', span(
+            'The Capture stage is where one is watched and recorded. What it writes is a ' +
+            'file, and a file is an input like any other.', 'src-missing')),
+    ];
 }
 
 /// A numbered run of files, as the one `-i` it is.

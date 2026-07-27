@@ -208,6 +208,13 @@ set_tests_properties(decode export capabilities inputs sequences ui-player ui-so
 # round trip through storage, none of which has a printed form.
 add_test(NAME ui-filtergraph COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_filtergraph.js")
+# The Capture stage needs no media either — the device it records from is
+# `lavfi`, which makes its own pictures. It writes into out/, so it wants the
+# source directory.
+add_test(NAME ui-capture COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_capture.js")
+set_tests_properties(ui-capture PROPERTIES TIMEOUT 600
+                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME ui-graph COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_graph.js")
 set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)

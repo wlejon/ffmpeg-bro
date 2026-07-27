@@ -32,6 +32,8 @@ import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
 import { buildSpec, specSources } from './export/spec.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
+import { commandParts as captureParts } from './capture.js';
+import { currentStage } from './shell.js';
 
 // The space between one span and the next, non-breaking on purpose. The line
 // is three spans because it is three kinds of statement, and an ordinary space
@@ -235,11 +237,26 @@ export function parts() {
     return { spec, graph: g, pre, inputs, out };
 }
 
+/// What the bar is describing right now.
+///
+/// The Capture stage is not part of the render being configured — it is its
+/// own pipeline, one device into one file — so while it is up the bar prints
+/// *that*, and printing the timeline's render under it would be describing a
+/// command nobody is about to run. Everything in a capture is exact: there is
+/// no compositing and therefore no filtergraph to translate, which is why the
+/// shape is the same minus the one dimmed part.
+function describing() {
+    if (currentStage() !== 'capture') return null;
+    return captureParts();
+}
+
 /// The whole thing as one runnable string, which is what Copy puts on the
 /// clipboard. Anything outside this module wants `currentCommand()` — the
 /// string the bar is actually showing, rather than one built again from a
 /// model that may have moved since.
 function commandText() {
+    const cap = describing();
+    if (cap) return cap.pre.concat(cap.inputs, cap.out).join(' ');
     const p = parts();
     const bits = p.pre.concat(p.inputs);
     if (p.graph.ok) bits.push('-filter_complex', arg(p.graph.chains.join(';')));
@@ -248,6 +265,31 @@ function commandText() {
 
 export function draw() {
     if (!refs.line) return;
+
+    const cap = describing();
+    if (cap) {
+        show(refs.copy, true);
+        refs.bar.classList.remove('empty');
+        lastText = commandText();
+        put(refs.line, () => [
+            span(cap.pre.concat(cap.inputs).join(' ') + GAP, 'cmd-exact'),
+            span(cap.out.join(' '), 'cmd-exact'),
+            open ? div('cmd-note', [div('', [
+                span('Exact: ', 'lead'),
+                'all of it. A capture is one device into one file with nothing composited ' +
+                'in between, so there is no filtergraph here to be a translation of ' +
+                'anything — the device options are what av_opt_set is called with and the ' +
+                'encoder options are what the writer is given.',
+            ]), div('', [
+                span('Before the -i: ', 'lead'),
+                'everything the device is opened with, including -t. After it those same ' +
+                'words are output options meaning something else — -t after the -i limits ' +
+                'the output rather than the capture.',
+            ])]) : null,
+        ].filter(Boolean));
+        return;
+    }
+
     const empty = !project.clips.length;
     show(refs.copy, !empty);
     refs.bar.classList.toggle('empty', empty);

@@ -882,8 +882,11 @@ console.log('\nthe graph, cut off at one node');
 console.log('\nthe stage with nothing on the timeline');
 {
     const { shell } = globalThis.__ffmpegBro;
-    same(shell.stages().indexOf('graph'), 2,
+    const chain = shell.stages();
+    same(chain.indexOf('graph'), chain.indexOf('compose') + 1,
          'Graph sits between Compose and Encode, where it is in ffmpeg');
+    same(chain.indexOf('graph'), chain.indexOf('encode') - 1,
+         'and nothing has been slipped in between them');
     ok(shell.goTo('graph'), 'and it opens with nothing loaded — there is still something to say');
     pump(200);
 

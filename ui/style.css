@@ -810,6 +810,95 @@ body.fs #cropbox { display: none; }
    is has to be said where it is offered. */
 .src-join-note { padding: 4px 0 8px; line-height: 1.4; }
 
+/* ── Capture ─────────────────────────────────────────────────────────────
+   A device, what it can see, and the recording it becomes. Three columns like
+   Sources, except that the middle one is mostly a picture: the point of this
+   stage is that you can see the camera or the screen region before you commit
+   to recording it, so the preview gets the room and the fields sit under it. */
+.cap-main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+.cap-list {
+    width: 300px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 6px 8px 16px;
+    border-right: 1px solid var(--line);
+}
+.cap-mid {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 8px 12px 16px;
+}
+.cap-settings { flex: 1; overflow-y: auto; min-height: 0; }
+
+/* The live picture. Positioned, because the region marquee is dragged over it
+   and a rectangle in page coordinates would follow the window instead of the
+   screen it is framing. */
+.cap-preview {
+    position: relative;
+    flex-shrink: 0;
+    height: 42%;
+    min-height: 140px;
+    background: #0b0d11;
+    border: 1px solid var(--line);
+    overflow: hidden;
+}
+/* Placed in pixels by fitPreview(), not stretched to the box: a region is
+   dragged on this picture, and a picture that is not the shape of the screen
+   is a rectangle that is not the shape of the one you drew. */
+.cap-video { position: absolute; left: 0; top: 0; }
+/* The box being dragged. Drawn rather than described: the numbers it becomes
+   are in the panel below, and nobody frames a screen region by typing. */
+.cap-marquee {
+    position: absolute;
+    border: 1px solid var(--accent);
+    background: rgba(90, 160, 255, 0.15);
+    pointer-events: none;
+}
+.cap-marquee.hidden { display: none; }
+
+.cap-note-area { min-height: 0; }
+.cap-note { padding: 4px 0; line-height: 1.4; }
+.cap-error { color: var(--bad); padding: 6px 0; line-height: 1.4; }
+
+/* The record bar: the act, and the facts a recording can state honestly —
+   elapsed, frames, size. Deliberately no progress bar; see ui/capture.js. */
+.cap-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 6px;
+}
+.cap-elapsed { font-size: 15px; font-weight: 600; }
+
+/* One device, and one thing a device can see. Two and three lines, so both
+   need `height: auto` — the base button rule is a 26px single-line control. */
+.cap-device, .cap-source {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    height: auto;
+    text-align: left;
+    margin-bottom: 3px;
+    padding: 4px 6px;
+}
+.cap-source { flex-direction: row; align-items: baseline; gap: 6px; }
+#cap-settings input.wide, #cap-options input.wide { width: 100%; box-sizing: border-box; }
+#cap-settings select.wide { width: 100%; box-sizing: border-box; }
+
 /* The filenames a run of images will actually be written as. Shown because
    %04d is exactly the thing somebody gets wrong once and then never trusts
    again, so the answer is what is on screen and the pattern is not. */

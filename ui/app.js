@@ -31,6 +31,7 @@ import * as graphPreview from './graph/preview.js';
 import { previewGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
 import * as shell from './shell.js';
+import * as capture from './capture.js';
 import { initSources, drawSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
          applyAudio, applyAudioAll, tick as tickTransport } from './transport.js';
@@ -105,6 +106,27 @@ initSources({
     clipsOf,
     changed: () => { changed('inputs'); },
 });
+
+capture.initCapture({
+    list: el('cap-list'),
+    settings: el('cap-settings'),
+    preview: el('cap-preview'),
+    marquee: el('cap-marquee'),
+    bar: el('cap-bar'),
+    note: el('cap-note'),
+    options: el('cap-options'),
+}, {
+    flash,
+    // A recording is a file, and the arrow from Capture to Sources is followed
+    // by opening it: the fastest way to see what you just recorded is to be
+    // standing on the edit with it in front of you.
+    open: (path) => { shell.goTo('compose'); open(path); },
+    // What is set on this stage changes the two things that state it — the
+    // spine's card, and the command underneath, which prints the capture as
+    // the capture rather than the render.
+    changed: () => { shell.drawSpine(); command.draw(); },
+});
+capture.initRegionDrag(el('cap-preview'), el('cap-marquee'));
 
 // What was inserted and locked last time, before anything asks for a graph.
 graphOverlay.restore();
@@ -309,8 +331,20 @@ function openInput(input, opts = {}) {
     // `-loop` or a `-stream_loop` — is the other way round and has no length
     // for the opposite reason. Both are said plainly, and both are fixed in the
     // one place the number belongs, which is the input's own window.
+    // There are three ways for an input to have no length, and this is where
+    // they are told apart, because the answer to each is somewhere different.
+    // A single picture *is* no time at all: libavformat says so, and bro's
+    // `<video>` agrees, since it drives its clock from decoded pictures and one
+    // picture is nothing to advance through. An endless input — a `-loop` or a
+    // `-stream_loop` — is the other way round and is fixed on the input's own
+    // window. And a **live device** has no length that a number could give it:
+    // nothing has happened yet, so there is nothing to cut. Its answer is not
+    // "set -to", it is "record it, and then this is a file".
     if (inputsModel.lengthOf(input) <= 0) {
-        flash(inputsModel.endless(input)
+        flash(inputsModel.kindOf(input) === 'device'
+                  ? `${input.name} is a live device — it has no end, so there is nothing to ` +
+                    'lay out. Record it on the Capture stage and the recording is a file.'
+              : inputsModel.endless(input)
                   ? `${input.name} never ends — set -to on the Sources stage to say how ` +
                     'long it is'
                   : `${input.name} is one picture and no time at all — Sources ▸ Still ` +
@@ -827,6 +861,10 @@ function frame(now) {
     // The render is on a thread of its own in the host binary; this is the
     // only thing that looks at it, and only while its dialog is up.
     exporter.tick();
+    // A recording is the same job slot watched from the same place, and it is
+    // watched wherever you are standing: unlike a preview it cannot be
+    // abandoned by walking away from the stage that started it.
+    capture.tick();
     // What the render said, drained here rather than beside the progress bar:
     // a render started from the Write stage keeps going while you walk back to
     // the edit, and probing and playback log from wherever you are, so a
@@ -904,6 +942,7 @@ el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 shell.initShell({
     bar: el('spine'),
     views: {
+        capture: el('st-capture'),
         sources: el('st-sources'),
         compose: el('st-compose'),
         graph: el('st-graph'),
@@ -916,17 +955,29 @@ shell.initShell({
     // one, so the door is refused with a reason rather than offered and then
     // found locked.
     blocked: (id) => {
+        // A recording holds the one job slot, and that is deliberate rather
+        // than a limitation to work around: a capture is the only job in this
+        // application with a real-time deadline and it cannot be re-run, so it
+        // gets the machine. The door is refused with the reason rather than
+        // offered and then found locked.
+        if (capture.isRecording() && id !== 'capture')
+            return 'A recording is running — stop it first';
         if (!exporter.canLeave() && id !== 'write')
             return 'A render is running — stop it first';
         if ((id === 'encode' || id === 'write') && !project.clips.length)
             return 'Nothing on the timeline to encode';
         return null;
     },
-    changed: (id) => {
+    changed: (id, leaving) => {
         if (id === 'encode' || id === 'write') exporter.prepare();
         else exporter.closeExport();
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
         if (id === 'sources') drawSources();
+        // The device is opened when you arrive and given back when you leave.
+        // A camera held by a preview on a stage nobody is looking at is a
+        // camera the recording — or another application — cannot open.
+        if (id === 'capture') capture.arrive();
+        else if (leaving === 'capture') capture.leave();
         // Every height the layout needs measures zero while the stage is
         // hidden, so the graph is built on the way in and not before. The
         // previews are taken from wherever the playhead is standing, snapshotted
@@ -965,6 +1016,7 @@ report.initReport({
 /// a bar that can disagree with the render is worse than one that is rebuilt.
 function stageState(id) {
     const clips = project.clips;
+    if (id === 'capture') return capture.summary();
     if (id === 'sources') {
         // The inputs, not the files on the timeline: an input with no clip is
         // an ordinary state and a card that only counted what was in use would
@@ -1055,7 +1107,7 @@ globalThis.__ffmpegBro = {
     setCropMode, cropMode: () => cropMode,
     splitAtPlayhead, setLayout, select, selectMany,
     showProperties, pending,
-    exporter,
+    exporter, capture,
     filtergraph, renderGraph, shell, command, report,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.

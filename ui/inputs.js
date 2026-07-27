@@ -207,6 +207,11 @@ export function summary(input) {
 /// still is an image file that is not one — so a `kind` field would be a
 /// second place for the same fact to live and the two would drift.
 export function kindOf(input) {
+    // A device first, because it is the one kind that is not read off the path
+    // at all: `-f gdigrab -i desktop` is a device and `-i desktop` is a file
+    // that is not there. The demuxer is what says which, and the list of
+    // devices is libavdevice's own.
+    if (isDeviceFormat(input.format)) return 'device';
     if (input.format === 'concat') return 'concat';
     if (bro.ffmpeg.hasFramePattern(input.path)) return 'sequence';
     if ((input.options.pattern_type || '') === 'glob') return 'sequence';
@@ -224,8 +229,23 @@ export function kindOf(input) {
 /// does not produce.
 export function endless(input) {
     if (input.streamLoop) return true;
+    // A device does not end — a camera, a screen grabber and a sound card go
+    // on producing for as long as they are asked to. Same rule as the native
+    // `inputIsEndless`, which asks libavdevice the same question.
+    if (isDeviceFormat(input.format)) return true;
     const loop = input.options.loop;
     return loop !== undefined && loop !== '' && String(loop) !== '0';
+}
+
+/// Does this `-f` name one of libavdevice's input devices?
+///
+/// Against `bro.ffmpeg.devices`, which is the registry walk, so a build with
+/// more of them needs no edit here — and so this cannot disagree with the
+/// native side, which asks the same registry.
+export function isDeviceFormat(format) {
+    if (!format) return false;
+    return (bro.ffmpeg.devices || []).some(
+        (d) => d.direction === 'input' && d.name === format);
 }
 
 /// Does this path name a still picture? The extensions are libavformat's own

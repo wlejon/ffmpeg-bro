@@ -28,6 +28,14 @@ import { el, div, span, put, show } from './dom.js';
 /// field by field — a spine that can disagree with the render is worse than
 /// one that is rebuilt.
 const STAGES = [
+    // Before Sources, because it is where an input comes from when there is
+    // not one yet — and it is the one card on this bar that is not a question
+    // about the file coming out. `ffmpeg -f gdigrab -i desktop out.mkv` is a
+    // whole pipeline whose output is a file, and then you open that file; the
+    // arrow into Sources is that, crossed at a different time. When nothing is
+    // being recorded the card says so, which is a statement about the machine
+    // rather than a claim about this render.
+    { id: 'capture', name: 'Capture' },
     { id: 'sources', name: 'Sources' },
     { id: 'compose', name: 'Compose' },
     // Between the edit and the encoder, which is where it is in ffmpeg: the

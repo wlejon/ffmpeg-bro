@@ -664,7 +664,9 @@ pump(20);
 
 console.log('\nthe graph stage');
 {
-    ok(A.shell.stages().indexOf('graph') === 2,
+    const chain = A.shell.stages();
+    ok(chain.indexOf('graph') === chain.indexOf('compose') + 1 &&
+       chain.indexOf('graph') === chain.indexOf('encode') - 1,
        'Graph sits between Compose and Encode, where it is in ffmpeg');
 
     // Through the keyboard, because a stage you can only reach by clicking a
