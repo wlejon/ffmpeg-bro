@@ -257,6 +257,51 @@ function launch(spec, kind) {
     else drawPreview();
 }
 
+/// Run the graph over the range and keep nothing but what it measured.
+///
+/// **How a measurement is started.** Today it meant knowing to put `cropdetect`
+/// on the graph and then rendering a file you did not want, which is honest and
+/// is most of a reason not to bother. This is the same render with the output
+/// thrown away — `-f null -` through `wrapped_avframe`, exactly what an analysis
+/// pass does — so it costs the decode and the filters and nothing else.
+///
+/// It is deliberately not a private path: the filters it runs are the ones on
+/// the graph, through `buildSpec()` like every other render here, so what it
+/// measures is what an export of the same edit would measure. A graph with
+/// nothing of yours in it renders through the compositor, where there are no
+/// filters to hang metadata on anything, and that is refused with the reason
+/// rather than run to produce an empty report.
+export function startMeasurement() {
+    if (isRendering()) return 'something is already using the one render slot';
+    const r = range();
+    if (!(r.length > 0)) return 'the range to measure is empty';
+    const spec = previewSpec({ start: r.start, end: r.end });
+    if (!spec.filterGraph)
+        return 'there is no measuring filter on the graph — this render would go through ' +
+               'the internal compositor, where there is nothing to hang a measurement on';
+    // Everything about the *output*, taken away. The encoder is the one that
+    // encodes nothing and the muxer is the one that writes nothing, and the
+    // option bags go with the encoder they were written for: an option table
+    // belongs to an encoder, and x264's `preset` on `wrapped_avframe` is an
+    // unknown option, which is an error here rather than a shrug.
+    spec.path = bro.ffmpeg.tempPath('measure.null');
+    spec.format = 'null';
+    spec.videoCodec = 'wrapped_avframe';
+    spec.audioCodec = 'pcm_s16le';
+    spec.videoOptions = {};
+    spec.audioOptions = {};
+    spec.formatOptions = {};
+    spec.faststart = false;
+    try {
+        bro.ffmpeg.render.start(spec);
+    } catch (e) {
+        return String(e.message || e);
+    }
+    setJob('measure');
+    lastPoll = bro.ffmpeg.render.poll();
+    return '';
+}
+
 function begin() {
     if (isRendering()) return;
     const spec = buildSpec();
@@ -309,6 +354,18 @@ export function tick() {
     // under them to draw a progress bar would take away the picture it is
     // measuring. So it changes only the line of numbers, and only when it is
     // over.
+    // A measurement writes nothing and has nothing on screen of its own: what
+    // it produces arrives in the Report drawer, which drains the channel from
+    // the frame loop whether or not this workspace is open.
+    if (currentJob() === 'measure') {
+        if (p.state === 'running') return;
+        setJob(null);
+        if (hooks.flash)
+            hooks.flash(p.state === 'done' ? 'Measured — R for what it found'
+                                           : `The measurement ${p.state}`);
+        return;
+    }
+
     if (currentJob() === 'quality') {
         if (p.state === 'running') return;
         previewFinished(p);
@@ -348,4 +405,9 @@ export function currentSettings() { return settings; }
 /// into `settings` directly has changed the model behind the form's back.
 export function redraw() { if (open) drawAll(); }
 export function currentOptions() { return videoOptions(activeVideoCodec()); }
+
+/// Which objective metrics this build can compare the two halves with. Asked of
+/// libavfilter rather than written down, so a build without libvmaf offers two
+/// numbers instead of promising three.
+export { metrics as qualityMetrics } from './export/quality.js';
 export function previewState() { return preview; }

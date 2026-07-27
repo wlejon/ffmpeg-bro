@@ -198,8 +198,15 @@ add_test(NAME ui-sequence COMMAND ffmpeg-bro-headless
 add_test(NAME ui-report COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_report.js"
          -- "${FIXTURE_A}")
+# Filters whose output is information, from putting one on the graph to acting
+# on what it found: a measurement started, a plot drawn, a crop applied, a
+# refusal shown instead of a silent rewrite, and the A/B comparison measured
+# with psnr/ssim rather than judged by eye.
+add_test(NAME ui-measure COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_measure.js"
+         -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences ui-player ui-sources
-                     ui-export ui-sequence ui-report PROPERTIES
+                     ui-export ui-sequence ui-report ui-measure PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -229,5 +236,5 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED media TIMEOUT 300)
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences ui-player ui-sources ui-export
-                     ui-sequence ui-report
+                     ui-sequence ui-report ui-measure
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

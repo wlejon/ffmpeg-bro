@@ -84,6 +84,14 @@ let dirty = true;
 // reference to one would name whichever version happened to exist when it was
 // taken. It is also what makes a colour stick to a series across a redraw.
 const picked = new Set();
+/// The colour each picked series was given, **assigned once and remembered**.
+///
+/// Recomputing it from the picked list would make colour follow rank: unpick
+/// the blue one and the orange one becomes blue, which takes away what a reader
+/// has just learnt. So a series is given a colour when it goes on the plot and
+/// keeps it until it comes off, and the only thing the rest of the list decides
+/// is which colours are still free.
+const colors = new Map();
 let hoverT = null;
 let plotGeom = null;
 let plotCanvas = null;
@@ -299,6 +307,7 @@ export function draw() {
 function drawOffers() {
     const list = measure.offers();
     if (!list.length) return null;
+    const on = list.filter((o) => measure.measuring(o.filter).length > 0);
     return div('rep-measure', [
         span('Measure', 'dim'),
         ...list.map((o) => {
@@ -322,6 +331,24 @@ function drawOffers() {
                 } },
             });
         }),
+        // Rendering a file you did not want, to find out what a filter thought
+        // of it, is most of a reason not to bother. This is the same render
+        // with the output thrown away — the graph, the range, `-f null -` — so
+        // starting a measurement costs the decode and the filters and nothing
+        // else. It is the ordinary path with the file taken off the end, not a
+        // private one: what it measures is what an export would measure.
+        on.length ? el('button', {
+            cls: 'tiny primary', 'data-f': 'measure-now',
+            title: 'render the range through the graph, keep nothing but what the ' +
+                   'measuring filters found',
+            text: 'Measure now',
+            on: { click: () => {
+                const no = hooks.measureNow ? hooks.measureNow() : 'nothing to measure with';
+                if (no && hooks.flash) hooks.flash(no);
+                draw();
+            } },
+        }) : null,
+        on.length ? span(`${on.map((o) => o.filter).join(', ')} on the graph`, 'dim') : null,
     ]);
 }
 
@@ -371,17 +398,33 @@ function currentFindings() {
 
 // ── the plot ───────────────────────────────────────────────────────────────
 
-/// The series on the plot, in the order they were picked, each carrying the
-/// colour its key earns. Colour follows the series and not its position, so
-/// unpicking one leaves the rest where they were.
+/// Put a series on the plot, or take it off. One call for the row click and for
+/// the surface tests drive, so a colour cannot be assigned two ways.
+///
+/// Returns a reason when it will not: past six lines hue stops being an identity
+/// channel and a seventh is either a repeat or a colour nobody validated, which
+/// is said rather than quietly generated.
+function pick(key, on) {
+    if (on === false || (on === undefined && picked.has(key))) {
+        picked.delete(key);
+        colors.delete(key);
+        return '';
+    }
+    if (picked.has(key)) return '';
+    if (picked.size >= MAX_SERIES)
+        return `A plot holds ${MAX_SERIES} lines — take one off first`;
+    picked.add(key);
+    colors.set(key, colorFor(key, new Set(colors.values())));
+    return '';
+}
+
+/// The series on the plot, each carrying the colour it was given when it was
+/// picked. Colour follows the series and not its position in the list.
 function plotted() {
-    const taken = new Set();
     const out = [];
     for (const s of seriesForSubject()) {
         if (!picked.has(s.key) || !s.numeric || s.points.length < 2) continue;
-        const color = colorFor(s.key, taken);
-        taken.add(color);
-        out.push(Object.assign({}, s, { color }));
+        out.push(Object.assign({}, s, { color: colors.get(s.key) || colorFor(s.key, null) }));
     }
     return out;
 }
@@ -560,17 +603,10 @@ function seriesRow(s) {
     node.setAttribute('data-series', s.key);
     const on = picked.has(s.key);
     node.classList.toggle('on', on);
-    if (on) node.style.borderLeftColor = colorFor(s.key, null);
+    if (on) node.style.borderLeftColor = colors.get(s.key) || '';
     node.addEventListener('click', () => {
-        if (picked.has(s.key)) picked.delete(s.key);
-        else if (picked.size >= MAX_SERIES) {
-            // Past six lines a plot stops being readable: hue is the identity
-            // channel and a seventh is either a repeat or a colour nobody
-            // checked. Said, rather than quietly generated.
-            if (hooks.flash)
-                hooks.flash(`A plot holds ${MAX_SERIES} lines — take one off first`);
-            return;
-        } else picked.add(s.key);
+        const no = pick(s.key);
+        if (no && hooks.flash) hooks.flash(no);
         draw();
     });
     node.querySelector('.rep-series-name').textContent = s.key;
@@ -674,9 +710,9 @@ export function reportState() { return state; }
 /// finding a row and clicking it — the row *is* checked, separately, which is
 /// the thing that would otherwise go untested if this were the only way in.
 export function plotSeries(key, on) {
-    if (on === false) picked.delete(key);
-    else picked.add(key);
+    const no = pick(key, on === undefined ? true : on);
     draw();
+    return no;
 }
 export function plotted_() { return Array.from(picked); }
 

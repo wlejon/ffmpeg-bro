@@ -1052,7 +1052,18 @@ report.initReport({
     splitAt: (t) => splitAt(t, false),
     seek: (t) => setPlayhead(Math.max(0, Math.min(duration(), t))),
     flash,
-    picture: () => ({ width: project.width, height: project.height }),
+    // The size of the picture a measurement was taken *of*, which is the
+    // render's and not the project canvas's: they differ for every preview, and
+    // a crop that reaches every edge of a 320-wide render is not a crop that
+    // reaches every edge of a 1920-wide one.
+    picture: () => {
+        const s = exporter.currentSettings();
+        return { width: s.width || project.width, height: s.height || project.height };
+    },
+    // Running the graph over the range and keeping only what it measured. The
+    // export workspace owns the spec and the one job slot, so it is asked
+    // rather than a second spec being built here.
+    measureNow: () => exporter.startMeasurement(),
     // A filter put on the graph, or a value applied to one, is a change to the
     // edit in exactly the way dragging a clip is: the graph redraws, the
     // command bar reprints, and the spine re-counts.

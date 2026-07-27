@@ -460,12 +460,20 @@ const SPANS = [
 /// channel and is needed to say whether a crop would take anything off.
 export function findings(ctx) {
     const out = [];
-    const has = (filter) => ctx.messages.some((m) => m.source &&
-                              m.source.indexOf(`Parsed_${filter}_`) === 0) ||
-                            measuring(filter).length > 0;
-    if (has('cropdetect')) out.push(cropFinding(ctx));
-    if (has('ebur128')) out.push(loudnessFinding(ctx));
-    for (const spec of SPANS) if (has(spec.filter)) out.push(spanFinding(ctx, spec));
+    // Three ways a measurement can be present, and all of them count: the
+    // filter is on the graph, it said something in the log, or a series it
+    // names arrived. The last matters because a filter's metadata keys are not
+    // its name — `ebur128` hangs `lavfi.r128.*` on a frame — so a render whose
+    // graph has since changed still has its answers read.
+    const has = (filter, prefix) =>
+        measuring(filter).length > 0 ||
+        ctx.messages.some((m) => m.source && m.source.indexOf(`Parsed_${filter}_`) === 0) ||
+        (ctx.series.keys ? Array.from(ctx.series.keys())
+            .some((k) => k.indexOf(prefix) === 0) : false);
+    if (has('cropdetect', 'lavfi.cropdetect.')) out.push(cropFinding(ctx));
+    if (has('ebur128', 'lavfi.r128.')) out.push(loudnessFinding(ctx));
+    for (const spec of SPANS)
+        if (has(spec.filter, spec.start)) out.push(spanFinding(ctx, spec));
     return out;
 }
 
