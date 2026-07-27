@@ -151,6 +151,14 @@ export function parts() {
     const pre = ['ffmpeg'];
     if (settings.scaler && settings.scaler !== 'bicubic')
         pre.push('-sws_flags', settings.scaler);
+    // `-filter_hw_device`, which is a *global* option in ffmpeg's grammar and
+    // is therefore here rather than in front of an `-i` or after the graph.
+    // `hwupload` takes no argument that could name a device and reads this
+    // instead, so a command that left it out would parse and then refuse with
+    // "A hardware device reference is required to upload frames to".
+    if (spec.filterHwDevice)
+        pre.push('-filter_hw_device', spec.filterHwDevice +
+                 (spec.filterHwDeviceIndex ? ':' + spec.filterHwDeviceIndex : ''));
 
     // Which `-i`s a copied stream needs, and where they land in the printed
     // numbering.
@@ -214,6 +222,19 @@ export function parts() {
                 // is a demuxer option and travels the way `-probesize` does.
                 if (src.streamLoop) inputs.push('-stream_loop', String(src.streamLoop));
                 if (src.format) inputs.push('-f', arg(src.format));
+                // Where this input's pictures are decoded, and whether they
+                // come back down. In front of the `-i` like everything else
+                // here, and for the same reason: they configure the decoder
+                // this input's packets go through, and there is no such thing
+                // as choosing that afterwards. `-hwaccel_output_format` is the
+                // one that changes what the *graph* is handed, so a command
+                // that printed it in the wrong place would run and produce
+                // something else.
+                if (src.hwaccel) inputs.push('-hwaccel', arg(src.hwaccel));
+                if (src.hwaccelDevice)
+                    inputs.push('-hwaccel_device', arg(src.hwaccelDevice));
+                if (src.hwaccelOutputFormat)
+                    inputs.push('-hwaccel_output_format', arg(src.hwaccelOutputFormat));
                 for (const k of Object.keys(src.options || {}))
                     if (src.options[k] !== '' && src.options[k] !== undefined)
                         inputs.push(`-${k}`, arg(src.options[k]));

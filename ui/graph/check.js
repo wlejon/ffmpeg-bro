@@ -23,6 +23,8 @@
 import { streamsOf, keyOf } from './model.js';
 import { padsOf } from './filters.js';
 import { supportsTimeline } from './enable.js';
+import { deviceOfFilter, isCrossing, present } from '../hardware.js';
+import { inputs as documentInputs } from '../inputs.js';
 
 /// What to call a node in a sentence. A filter is its own name; the two ends
 /// are named the way their cards are, because that is what the person is
@@ -136,6 +138,8 @@ export function problems(g, stranded = []) {
         }
     }
 
+    for (const p of memoryProblems(g, streams)) out.push(p);
+
     for (const s of stranded) {
         const node = s.node;
         const has = node ? g.inPorts(node) : 0;
@@ -148,6 +152,134 @@ export function problems(g, stranded = []) {
         say(cycle[0], `these feed each other in a circle: ${cycle.map(nameOf).join(' → ')} → ` +
                       `${nameOf(cycle[0])}`);
 
+    return out;
+}
+
+/// Where the picture is, and who can read it there.
+///
+/// **libavfilter's own message for getting this wrong is four hundred pixel
+/// format names and no filter.** A `cuda` frame arriving at `scale` produces
+/// "Impossible to convert between the formats supported by the filter
+/// 'Parsed_setpts_1' and the filter 'auto_scale_0'", followed by every format
+/// swscale has ever heard of, and nothing in it says the word hardware. It is
+/// the single least readable failure in this application, and it is one
+/// sentence to explain: a picture on a card is a handle, not pixels, and a
+/// filter that reads pixels cannot have it.
+///
+/// So this walks the graph carrying one fact — is the picture up or down —
+/// and names the first node where the two disagree. Three things move it:
+/// a source that decodes on a device starts it up, `hwupload` puts it up and
+/// `hwdownload` brings it down. A filter belonging to a device wants it up;
+/// everything else wants it down.
+///
+/// **`trim`, `setpts` and their kind want neither**, and that is not a
+/// special case bolted on — a filter with no pixel format constraints passes
+/// whatever it is given, which is exactly why a render can keep its picture on
+/// the card through a build that has no `scale_cuda` in it. They are told apart
+/// by having no formats of their own to negotiate, which is a fact this side
+/// cannot ask libavfilter for; so the rule here is the conservative one, and
+/// only a filter that *belongs to a device* or is known to read pixels is
+/// judged. A filter nobody has an opinion about is left alone, because a false
+/// accusation on a graph that runs is worse than a missing note on one that
+/// does not.
+function memoryProblems(g, streams) {
+    const out = [];
+    // Nothing to say on a machine with no device: every picture is in system
+    // memory and every filter can read it.
+    if (!present().length) return out;
+
+    const passesAnything = new Set(['trim', 'setpts', 'settb', 'fps', 'select',
+                                    'null', 'copy', 'metadata', 'realtime']);
+    const where = new Map();      // node id → 'device' | 'memory'
+    const busy = new Set();
+
+    // **Resolved by asking upstream, not by walking the array in order.** A
+    // node's producers are earlier in `g.nodes` for a graph the derivation
+    // built and are *not* for one somebody edited: `insertAfter` appends, so a
+    // filter spliced onto the first wire sits at the end of the list. Reading
+    // the array in order therefore had every node after an insertion answering
+    // "in system memory" because the thing feeding it had not been reached yet,
+    // which is a wrong answer that looks exactly like a right one.
+    const at = (n) => {
+        if (!n) return 'memory';
+        if (where.has(n.id)) return where.get(n.id);
+        if (busy.has(n.id)) return 'memory';      // a cycle; `cycles()` names it
+        busy.add(n.id);
+        const answer = resolve(n);
+        busy.delete(n.id);
+        where.set(n.id, answer);
+        return answer;
+    };
+
+    /// Where every picture arriving at `n` is. **A list, not one answer**: an
+    /// `overlay` has two inputs and they are not interchangeable — the canvas
+    /// comes from a `color` source in system memory and the clip comes from a
+    /// chain that may have put itself on a card. Reading only the first said
+    /// "system memory" about a node whose second input was a CUDA surface,
+    /// which is the exact graph this check exists for.
+    const arrivingAll = (n) => {
+        const seen = [];
+        for (const e of g.inEdges(n)) {
+            const from = g.node(e.from);
+            if (from) seen.push(at(from));
+        }
+        return seen;
+    };
+    const arrivingAt = (n) => arrivingAll(n)[0] || 'memory';
+
+    function resolve(n) {
+        if (n.kind === 'input') {
+            // A node's `input` is an index into the document's list, which is
+            // index-aligned with the spec's — so this is the same `-i` the
+            // render will open, and its `-hwaccel_output_format` is the only
+            // thing that decides where its pictures start out.
+            const src = documentInputs[n.input];
+            return src && src.hwaccelOutputFormat ? 'device' : 'memory';
+        }
+        const filter = n.filter || '';
+        if (filter === 'hwupload' || /^hwupload_/.test(filter)) return 'device';
+        if (filter === 'hwdownload') return 'memory';
+        if (passesAnything.has(filter)) return arrivingAt(n);
+        return deviceOfFilter(filter) ? 'device' : 'memory';
+    }
+
+    for (const n of g.nodes) {
+        if (n.kind === 'input' || n.kind === 'sink') continue;
+        // **Sound is never on a card.** An input that decodes its pictures on
+        // one still decodes its soundtrack with libavcodec — there is no
+        // hardware AAC decoder and asking for one would refuse every file with
+        // a track in it — so the whole of this walk is about the picture. Left
+        // out, an `atrim` hanging off the same `-i` was reported as a filter
+        // that could not read what was reaching it, which is the sort of
+        // confident nonsense a checker exists to avoid.
+        if (streams.of(n) === 'a') continue;
+
+        const filter = n.filter || '';
+        const arriving = arrivingAll(n);
+        if (filter === 'hwdownload') {
+            if (!arriving.some((a) => a === 'device'))
+                out.push({ key: keyOf(n), id: n.id, node: n,
+                           reason: `${nameOf(n)} brings a picture down off a card and the ` +
+                                   'picture reaching it is already in system memory — ' +
+                                   'libavfilter refuses that outright' });
+            continue;
+        }
+        if (isCrossing(filter) || passesAnything.has(filter)) continue;
+
+        const wants = deviceOfFilter(filter) ? 'device' : 'memory';
+        // Every input, because a filter with two of them is refused for the one
+        // that disagrees and says nothing about which.
+        const wrong = arriving.find((a) => a !== wants);
+        if (wrong)
+            out.push({ key: keyOf(n), id: n.id, node: n,
+                       reason: wrong === 'device'
+                           ? `the picture reaching ${nameOf(n)} is on a card, and ${filter} ` +
+                             'reads pixels — put an hwdownload in front of it, or a filter ' +
+                             'from the card’s own family'
+                           : `${filter} works on pictures that are already on a card, and ` +
+                             `the one reaching ${nameOf(n)} is in system memory — put an ` +
+                             'hwupload in front of it' });
+    }
     return out;
 }
 

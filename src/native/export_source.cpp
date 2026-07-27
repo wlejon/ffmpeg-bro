@@ -68,6 +68,18 @@ const Rgba* SourceVideo::rgbaAt(double t) {
     if (!advanceTo(t)) return nullptr;
     if (haveRgba_ && rgbaPts_ == curPts_) return result_;
 
+    // **`rgbaAt` means pixels**, so a reader told to keep its pictures on the
+    // card still brings this one down. The two questions are asked by different
+    // callers — the compositor asks this, a filter graph asks `nextRaw` — and
+    // an input configured for the graph would otherwise make every clip on the
+    // timeline render as a hole. Once per picture and cached like the
+    // conversion below it, so a 30 fps render off a 60 fps source downloads
+    // each frame once.
+    if (cur_->hw_frames_ctx) {
+        std::string why;
+        if (!downloadFrame(&cur_, &swap_, &why)) return nullptr;
+    }
+
     const int w = cur_->width, h = cur_->height;
     if (w <= 0 || h <= 0) return nullptr;
 

@@ -22,7 +22,9 @@
 //     with the options in force, so the stream list under them is the file as
 //     this input opens it and not as libavformat's defaults see it.
 
-import { div, span, el, put, row, head, fromTemplate, show, segmented } from './dom.js';
+import { div, span, el, put, row, head, fromTemplate, show, segmented,
+         select } from './dom.js';
+import { devicesFor, deviceNamed, decodeCost } from './hardware.js';
 import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless } from './inputs.js';
@@ -301,6 +303,7 @@ function drawDetail() {
         ...whereRows(input),
         ...demuxerRows(input),
         ...assemblyRows(input),
+        ...decodeRows(input),
         ...windowRows(input),
         ...actionRows(input),
         ...contentRows(input),
@@ -648,6 +651,85 @@ function concatRows(input) {
 }
 
 /// The window: which part of the input there is.
+/// Where this input's pictures are decoded — `-hwaccel`, and the two words that
+/// go with it.
+///
+/// **Here rather than on the Encode stage, because a decoder belongs to an
+/// input.** ffmpeg writes `-hwaccel` in front of the `-i` for the same reason it
+/// writes `-probesize` there, and two clips cut from one file cannot be decoded
+/// one way and the other.
+///
+/// **And the cost is stated where the choice is made.** Every application with
+/// a "hardware acceleration" switch reads as offering an optimisation; on this
+/// machine, measured, decoding on the card is several times *slower* than
+/// libavcodec threaded across every core, and the readback everybody blames for
+/// that is 3–4% of it. Saying nothing would be the dishonest option. The device
+/// is still offered, because the numbers are this machine's and somebody else's
+/// laptop with four cores and a QSV block has different ones — and because it is
+/// the only way to feed a hardware filter graph without an upload.
+function decodeRows(input) {
+    const codec = input.probe && input.probe.video && input.probe.video.codec;
+    const usable = devicesFor(input);
+    const rows = [head('Decoding')];
+
+    // Only what this machine has *and* can decode this codec with. A menu
+    // offering `cuda` for a ProRes file is a menu that fails at the last step,
+    // and the two RTX 4090s in this machine still have no CUDA ProRes decoder.
+    const choices = [{ id: '', label: 'CPU' }]
+        .concat(usable.map((d) => ({ id: d.name, label: d.name })));
+    const picker = select({
+        'data-f': 'srchw',
+        on: { change: () => change(input, {
+            hwaccel: picker.value,
+            // The output format goes with the device that named it. Left
+            // behind, it is a pixel format belonging to a device this input no
+            // longer decodes on, which the native side refuses — correctly, and
+            // confusingly.
+            hwaccelOutputFormat: '',
+        }) },
+    }, choices, input.hwaccel || '');
+    rows.push(row('-hwaccel', picker));
+
+    if (!usable.length)
+        rows.push(row('', span(
+            codec ? `Nothing on this machine decodes ${codec} on a device.`
+                  : 'Nothing on this machine has a decoder for this input.', 'dim')));
+    else
+        rows.push(row('', span(decodeCost, 'dim')));
+
+    if (input.hwaccel) {
+        const dev = deviceNamed(input.hwaccel);
+        const which = el('input', {
+            cls: 'num', 'data-f': 'srchwdev', type: 'text', value: input.hwaccelDevice || '',
+            placeholder: 'the default one',
+            on: { change: () => change(input, { hwaccelDevice: which.value.trim() }) },
+        });
+        rows.push(row('-hwaccel_device', which));
+        // The second decision, and the one that decides whether a render can
+        // keep the picture on the card at all. Off, every frame comes down as
+        // it is decoded, which is what the compositor, a software filter and
+        // the viewer all need. On, only a graph of this device's own filters —
+        // or an `hwdownload` — can read them.
+        //
+        // Two named states rather than a checkbox, because neither of them is
+        // "the default with a thing switched on": bringing the picture down and
+        // leaving it up are two different renders, and the second one is what
+        // the value of `-hwaccel_output_format` literally is.
+        rows.push(row('-hwaccel_output_format', segmented('srchwkeep', [
+            { v: '', l: 'bring them down' },
+            { v: dev ? dev.pixelFormat : '', l: `leave them on the card` },
+        ], input.hwaccelOutputFormat || '',
+            (v) => change(input, { hwaccelOutputFormat: v }))));
+        rows.push(row('', span(
+            'Leave the pictures on the card. Only ' +
+            `${input.hwaccel}'s own filters, or an hwdownload, can read them — the ` +
+            'compositor and the viewer cannot, so a clip on the timeline goes black. ' +
+            'It is what lets a render reach a hardware encoder without a copy.',
+            'dim')));
+    }
+    return rows;
+}
+
 function windowRows(input) {
     const number = (name, key, value, hint) => {
         const field = el('input', {

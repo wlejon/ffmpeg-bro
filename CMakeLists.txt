@@ -195,6 +195,12 @@ add_test(NAME ui-player COMMAND ffmpeg-bro-headless
 add_test(NAME ui-sources COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_sources.js"
          -- "${FIXTURE_A}")
+# The GPU from the two places a person decides about it: which device an input
+# decodes on, which encoder a stream is written with, and the one sentence that
+# says a hardware decode is measured slower here than the CPU.
+add_test(NAME ui-hardware COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_hardware.js"
+         -- "${FIXTURE_A}")
 add_test(NAME ui-export COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
          -- "${FIXTURE_A}")
@@ -224,7 +230,7 @@ add_test(NAME ui-measure COMMAND ffmpeg-bro-headless
 add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_subtitles.js"
          -- "${FIXTURE_DIR}")
-set_tests_properties(decode export capabilities inputs sequences hardware ui-player ui-sources
+set_tests_properties(decode export capabilities inputs sequences hardware ui-player ui-sources ui-hardware
                      ui-export ui-sequence ui-report ui-measure ui-subtitles PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
@@ -254,6 +260,6 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED media TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
-set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-export
+set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-hardware ui-export
                      ui-sequence ui-report ui-measure ui-subtitles
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

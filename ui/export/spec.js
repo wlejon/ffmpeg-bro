@@ -15,6 +15,7 @@ import { videoOptions, audioOptions, forceKeyFrames } from './options.js';
 import { streamSpecs } from './streams.js';
 import { outputTarget } from './destination.js';
 import { renderGraph } from '../filtergraph.js';
+import { deviceForRender } from '../hardware.js';
 import { current as overlayState, isEmpty, nodes as overlayNodes } from '../graph/overlay.js';
 
 /// Swap a path's extension, keeping the directory and the name. Written
@@ -316,6 +317,24 @@ export function buildSpec(over = {}) {
             spec.filterGraph = g.filterGraph;
             spec.filterInputs = g.filterInputs;
         }
+    }
+
+    // `-filter_hw_device`, derived rather than asked for. Two things in a
+    // render name a device — an input that decodes on one, and a filter that
+    // belongs to one — and `hwupload` takes no argument that could name a
+    // third, so there is nothing for a separate control to add except a second
+    // place that has to be set to agree. Derived here for the reason the graph
+    // above is attached here: there are three `render.start`s and a preview
+    // that ran without the device would be a preview of a graph that will not
+    // configure.
+    const device = deviceForRender(spec.filterGraph, spec.inputs);
+    if (device) {
+        spec.filterHwDevice = device;
+        // Which one, when an input said. A graph that named a device by its
+        // filters has no index to take, and the default device is what ffmpeg
+        // would use for the same command.
+        const named = (spec.inputs || []).find((i) => i.hwaccel === device && i.hwaccelDevice);
+        if (named) spec.filterHwDeviceIndex = named.hwaccelDevice;
     }
     return spec;
 }

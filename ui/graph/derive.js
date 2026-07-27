@@ -139,17 +139,34 @@ function sourceColor(src) {
 /// renders the whole range, and non-zero for the short windows the preview and
 /// the A/B comparison render, which have to carry the same clock or a filter
 /// whose `enable=` names a moment would come on at a different one.
-function videoSteps(clip, w, src, key, off) {
+function videoSteps(clip, w, src, key, off, onDevice) {
     const c = cropOf(clip);
     const keepW = 1 - c.l - c.r;
     const keepH = 1 - c.t - c.b;
 
-    const steps = [
+    const steps = [];
+    // An input told to keep its pictures on the card starts with them coming
+    // back off it, because the next four filters read pixels: `crop` is
+    // arithmetic on plane pointers, `scale` is swscale, `format` is a
+    // conversion. **This is the same thing the compositor does** — `rgbaAt`
+    // downloads whatever it is handed — so the printed command and the render
+    // agree, which is the whole claim the two paths are measured against.
+    //
+    // Written here rather than left for the person to insert, because it is not
+    // a choice: a graph without it does not run, and libavfilter's message for
+    // it is four hundred pixel format names and no filter. Where somebody wants
+    // the picture to stay up, they put `hwupload` back on the wire — which is a
+    // thing they did on purpose and can see.
+    if (onDevice) {
+        steps.push({ filter: 'hwdownload', anchor: `${key}/hwdownload` });
+        steps.push({ filter: 'format', anchor: `${key}/hwformat`,
+                     posNames: ['pix_fmts'], pos: ['nv12'] });
+    }
+    steps.push(
         { filter: 'trim', anchor: `${key}/trim`,
           params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
         { filter: 'setpts', anchor: `${key}/setpts`, posNames: ['expr'],
-          pos: [`PTS-STARTPTS+${n(w.offset + off, 6)}/TB`] },
-    ];
+          pos: [`PTS-STARTPTS+${n(w.offset + off, 6)}/TB`] });
     if (keepW < 1 || keepH < 1)
         steps.push({ filter: 'crop', anchor: `${key}/crop`,
                      posNames: ['w', 'h', 'x', 'y'],
@@ -637,7 +654,13 @@ export function derive(spec, sources, opts = {}) {
                               anchor: `${key}/in`, from: w.srcIn,
                               outs: [{ stream: 'v' }] });
         inputs.set(key, input);
-        const tail = g.run(input, videoSteps(clip, w, src, key, off), `v${i}`);
+        // Whether this clip's `-i` was told to keep its pictures on the card.
+        // Read off the spec's input list, which is what the render is handed,
+        // so the graph and the render cannot disagree about where the picture
+        // starts out.
+        const from = (spec.inputs || [])[clip.input];
+        const onDevice = !!(from && from.hwaccel && from.hwaccelOutputFormat);
+        const tail = g.run(input, videoSteps(clip, w, src, key, off, onDevice), `v${i}`);
         // Two points per clip, and they are two different pictures: before the
         // scale a filter sees the source at its own size, in its own pixel
         // format and colour; after it, the clip as it will be composited —

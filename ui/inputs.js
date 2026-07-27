@@ -58,6 +58,14 @@ export function asInput(i) {
         // libavcodec's — and ffmpeg writes both in front of the same `-i`
         // because both are decisions about this input.
         decoderOptions: i.decoderOptions || {},
+        // The device this input's pictures are decoded on, and whether they
+        // come back down. Three more things that go in front of the `-i`,
+        // because all three configure the decoder this input's packets go
+        // through — and because two clips cut from one file cannot be decoded
+        // one way and the other.
+        hwaccel: i.hwaccel || '',
+        hwaccelDevice: i.hwaccelDevice || '',
+        hwaccelOutputFormat: i.hwaccelOutputFormat || '',
         ss: i.ss || 0,
         to: i.to || 0,
         itsoffset: i.itsoffset || 0,
@@ -84,6 +92,9 @@ export function addInput(spec) {
         format: spec.format || '',
         options: Object.assign({}, spec.options),
         decoderOptions: Object.assign({}, spec.decoderOptions),
+        hwaccel: spec.hwaccel || '',
+        hwaccelDevice: spec.hwaccelDevice || '',
+        hwaccelOutputFormat: spec.hwaccelOutputFormat || '',
         ss: spec.ss || 0,
         to: spec.to || 0,
         itsoffset: spec.itsoffset || 0,
@@ -186,7 +197,8 @@ export function byId(id) { return inputs.find((i) => i.id === id) || null; }
 /// a decision somebody took, and a second drop must not silently inherit it.
 export function plainInputFor(path) {
     return inputs.find((i) => i.path === path && !i.format && !i.ss && !i.to &&
-                              !i.itsoffset && !Object.keys(i.options).length &&
+                              !i.itsoffset && !i.hwaccel &&
+                              !Object.keys(i.options).length &&
                               !Object.keys(i.decoderOptions || {}).length) || null;
 }
 
@@ -221,6 +233,10 @@ export function summary(input) {
     const bits = [];
     if (input.streamLoop) bits.push(`-stream_loop ${input.streamLoop}`);
     if (input.format) bits.push(`-f ${input.format}`);
+    if (input.hwaccel) bits.push(`-hwaccel ${input.hwaccel}`);
+    if (input.hwaccelDevice) bits.push(`-hwaccel_device ${input.hwaccelDevice}`);
+    if (input.hwaccelOutputFormat)
+        bits.push(`-hwaccel_output_format ${input.hwaccelOutputFormat}`);
     for (const k of Object.keys(input.options)) bits.push(`-${k} ${input.options[k]}`);
     for (const k of Object.keys(input.decoderOptions || {}))
         bits.push(`-${k} ${input.decoderOptions[k]}`);

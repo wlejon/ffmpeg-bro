@@ -25,6 +25,7 @@ import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
 import { defaultPath, withExtension, withPattern, withoutPattern,
          range } from './spec.js';
 import { cutPoints } from './options.js';
+import { isHardwareEncoder, deviceOfEncoder, encodeCost } from '../hardware.js';
 import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
 import { kindOf, describeKind, schemeOf, protocolLinked, teeSpec,
@@ -665,14 +666,22 @@ function videoRows(codec, info, cont) {
     // Codecs the chosen container will actually hold come first; the rest are
     // still listed, because refusing to show them hides the reason the one you
     // wanted is missing.
+    // And an encoder that runs on a card says so in the menu. It is not a
+    // decoration: which encoder this is decides whether the render can keep its
+    // pictures on the card at all, and it is the *only* hardware decision in
+    // this application that is measurably a win.
     const label = (e, legal) =>
-        e.label + (legal.indexOf(e.id) < 0 ? `  (not in ${settings.container})` : '');
+        e.label + (isHardwareEncoder(e.id) ? `  · ${deviceOfEncoder(e.id)}` : '') +
+        (legal.indexOf(e.id) < 0 ? `  (not in ${settings.container})` : '');
 
     rows.push(row('Codec', select(
         { 'data-f': 'vcodec', on: { change: (e) => { settings.videoCodec = e.target.value; hooks.changed(); } } },
         videoEncoders().map((e) => ({ id: e.id, label: label(e, cont.videoCodecs) })),
         codec)));
     if (info.longName) rows.push(row('', note(info.longName)));
+    if (isHardwareEncoder(codec))
+        rows.push(row('', span(encodeCost + ' A graph that ends on the same card hands ' +
+                               'this encoder its frames without a copy.', 'dim')));
 
     rows.push(...rateRows(codec, info));
 
