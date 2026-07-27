@@ -86,7 +86,11 @@ target_include_directories(ffmpeg-bro-decodetest PRIVATE "${BRO_DIR}/src")
 # mix, cancellation, and that what came out is a file this app can read back.
 add_executable(ffmpeg-bro-exporttest tests/export_test.cpp)
 target_link_libraries(ffmpeg-bro-exporttest PRIVATE ffmpeg-bro-core bro_video)
-target_include_directories(ffmpeg-bro-exporttest PRIVATE "${BRO_DIR}/src")
+# libav's headers as well as bro's: a multi-stream file is checked by opening it
+# with libavformat and reading the dispositions and codec tags off the streams,
+# which probeMedia() deliberately does not report.
+target_include_directories(ffmpeg-bro-exporttest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)

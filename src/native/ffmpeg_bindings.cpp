@@ -182,9 +182,14 @@ ExportClip clipFromJs(JSContext* ctx, JSValueConst o) {
 /// `{ g: 60, bf: 2, "x264-params": "aq-mode=3" }` — the natural JS shape for a
 /// bag of ffmpeg arguments. Numbers are stringified here rather than in the UI
 /// so that a control emitting 23 and one emitting "23" mean the same thing.
-std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst spec, const char* key) {
+///
+/// `owner` is whatever object the bag hangs off: the spec for the render's own
+/// options and metadata, and a stream for its own. Same shape, same rules —
+/// which is why the writer can apply `-metadata:s:a:1 title=…` and
+/// `-x264-params …` through one reader.
+std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst owner, const char* key) {
     std::vector<ExportOption> out;
-    JSValue obj = JS_GetPropertyStr(ctx, spec, key);
+    JSValue obj = JS_GetPropertyStr(ctx, owner, key);
     if (!JS_IsObject(obj)) { JS_FreeValue(ctx, obj); return out; }
 
     JSPropertyEnum* props = nullptr;
@@ -212,6 +217,135 @@ std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst spec, const
     return out;
 }
 
+/// How long a JS array says it is. Three copies of these four lines were
+/// enough.
+uint32_t arrayLength(JSContext* ctx, JSValueConst arr) {
+    JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenv);
+    JS_FreeValue(ctx, lenv);
+    return len;
+}
+
+/// `spec.streams` — what the file is made of, one entry per stream the muxer
+/// will number.
+///
+/// Absent is not "no streams": it means the render this application wrote
+/// before there was a list at all, and `outputStreams()` synthesises one video
+/// stream from the composite and one audio stream from the mix out of the named
+/// fields. Present, it is authoritative — the order here is the order a player
+/// shows in its track menu.
+///
+/// **A malformed entry is an error with a reason, never a stream quietly left
+/// out.** The whole value of writing down what is in the output is that the
+/// output is what was written down, and a render that succeeded while dropping
+/// the second audio track is the one outcome worse than a refusal.
+bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>* out,
+                   std::string* err) {
+    JSValue arr = JS_GetPropertyStr(ctx, spec, "streams");
+    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { JS_FreeValue(ctx, arr); return true; }
+    if (!JS_IsArray(arr)) {
+        JS_FreeValue(ctx, arr);
+        *err = "spec.streams has to be an array of streams";
+        return false;
+    }
+
+    const uint32_t len = arrayLength(ctx, arr);
+    bool ok = true;
+    for (uint32_t i = 0; i < len && ok; ++i) {
+        JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+        const std::string where = "streams[" + std::to_string(i) + "]";
+        if (!JS_IsObject(item)) {
+            *err = where + " is not a stream";
+            ok = false;
+        } else {
+            ExportStream st;
+            st.kind = strProp(ctx, item, "kind", "");
+            // Checked here as well as in the writer, because this is where the
+            // index of the offending entry is still in hand: "streams[3] is a
+            // 'subtitle'" says where to look and "there is no such thing as a
+            // 'subtitle' output stream" does not.
+            if (st.kind != "video" && st.kind != "audio" && st.kind != "attachment") {
+                *err = where + " is a '" + st.kind +
+                       "', and this build writes video, audio and attachment streams";
+                ok = false;
+            } else {
+                st.source = strProp(ctx, item, "source", "");
+                st.codec = strProp(ctx, item, "codec", "");
+                st.options = optionsFromJs(ctx, item, "options");
+                st.metadata = optionsFromJs(ctx, item, "metadata");
+                st.language = strProp(ctx, item, "language", "");
+                st.disposition = strProp(ctx, item, "disposition", "");
+                st.tag = strProp(ctx, item, "tag", "");
+                // Every one of these has a sentinel meaning "take the render's",
+                // so a list that says nothing new about them is a list somebody
+                // would write by hand.
+                st.crf = static_cast<int>(numProp(ctx, item, "crf", -1));
+                st.bitrateKbps = static_cast<int>(numProp(ctx, item, "bitrate", 0));
+                st.preset = strProp(ctx, item, "preset", "");
+                st.pixelFormat = strProp(ctx, item, "pixelFormat", "");
+                st.sampleRate = static_cast<int>(numProp(ctx, item, "sampleRate", 0));
+                st.channels = static_cast<int>(numProp(ctx, item, "channels", 0));
+                st.path = strProp(ctx, item, "path", "");
+                st.mimeType = strProp(ctx, item, "mimeType", "");
+                if (st.kind == "attachment" && st.path.empty()) {
+                    *err = where + " is an attachment with no file to attach";
+                    ok = false;
+                } else {
+                    out->push_back(std::move(st));
+                }
+            }
+        }
+        JS_FreeValue(ctx, item);
+    }
+    JS_FreeValue(ctx, arr);
+    return ok;
+}
+
+/// `spec.chapters` — `[{ start, end, title }, …]`, in output-timeline seconds.
+///
+/// Beside the streams rather than among them, because that is what a chapter
+/// is: a table in the container with no index, nothing mapped to it and no
+/// packets of its own.
+bool chaptersFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportChapter>* out,
+                    std::string* err) {
+    JSValue arr = JS_GetPropertyStr(ctx, spec, "chapters");
+    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { JS_FreeValue(ctx, arr); return true; }
+    if (!JS_IsArray(arr)) {
+        JS_FreeValue(ctx, arr);
+        *err = "spec.chapters has to be an array of chapter marks";
+        return false;
+    }
+
+    const uint32_t len = arrayLength(ctx, arr);
+    bool ok = true;
+    for (uint32_t i = 0; i < len && ok; ++i) {
+        JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+        const std::string where = "chapters[" + std::to_string(i) + "]";
+        if (!JS_IsObject(item)) {
+            *err = where + " is not a chapter mark";
+            ok = false;
+        } else {
+            ExportChapter c;
+            c.start = numProp(ctx, item, "start", 0);
+            c.end = numProp(ctx, item, "end", 0);
+            c.title = strProp(ctx, item, "title", "");
+            // A mark that ends before it begins is a mistake somewhere above,
+            // and a muxer asked to write one produces a file whose chapter list
+            // no player agrees about.
+            if (!(c.end > c.start)) {
+                *err = where + " ends at or before it starts";
+                ok = false;
+            } else {
+                out->push_back(std::move(c));
+            }
+        }
+        JS_FreeValue(ctx, item);
+    }
+    JS_FreeValue(ctx, arr);
+    return ok;
+}
+
 /// `spec.filterInputs` — `[{ label: "0:v", path: "…", stream: "v" }, …]`, which
 /// is what the graph's own input nodes carry. Given rather than inferred from
 /// the clip order, for the reason ExportGraphInput states.
@@ -219,10 +353,7 @@ std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spe
     std::vector<ExportGraphInput> out;
     JSValue arr = JS_GetPropertyStr(ctx, spec, "filterInputs");
     if (JS_IsArray(arr)) {
-        JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
-        uint32_t len = 0;
-        JS_ToUint32(ctx, &len, lenv);
-        JS_FreeValue(ctx, lenv);
+        const uint32_t len = arrayLength(ctx, arr);
         for (uint32_t i = 0; i < len; ++i) {
             JSValue item = JS_GetPropertyUint32(ctx, arr, i);
             if (JS_IsObject(item)) {
@@ -273,14 +404,20 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     s.filterGraph = strProp(ctx, spec, "filterGraph", "");
     s.filterInputs = graphInputsFromJs(ctx, spec);
     s.sizeFromGraph = boolProp(ctx, spec, "sizeFromGraph", false);
+    s.metadata = optionsFromJs(ctx, spec, "metadata");
+
+    // Read before anything is started, so a list that cannot be honoured is a
+    // thrown TypeError with the offending entry named rather than a job that
+    // fails a second later with the index long gone.
+    std::string bad;
+    if (!streamsFromJs(ctx, spec, &s.streams, &bad) ||
+        !chaptersFromJs(ctx, spec, &s.chapters, &bad))
+        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
 
     std::vector<ExportClip> clips;
     JSValue arr = JS_GetPropertyStr(ctx, spec, "clips");
     if (JS_IsArray(arr)) {
-        JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
-        uint32_t len = 0;
-        JS_ToUint32(ctx, &len, lenv);
-        JS_FreeValue(ctx, lenv);
+        const uint32_t len = arrayLength(ctx, arr);
         for (uint32_t i = 0; i < len; ++i) {
             JSValue item = JS_GetPropertyUint32(ctx, arr, i);
             if (JS_IsObject(item)) clips.push_back(clipFromJs(ctx, item));
@@ -438,6 +575,22 @@ JSValue js_filterOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     return optionsToJs(ctx, filterOptions(name));
 }
 
+/// bro.ffmpeg.codecTags(container, codec) — the fourccs this muxer will take
+/// for this codec, first being what it writes by itself. The `-tag:v hvc1`
+/// control is drawn from this rather than being a four-character text box: a
+/// tag nobody has seen before is a tag nobody types.
+JSValue js_codecTags(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1]))
+        return JS_ThrowTypeError(ctx, "codecTags(container, codec) requires both names");
+    const char* ext = JS_ToCString(ctx, argv[0]);
+    const char* codec = JS_ToCString(ctx, argv[1]);
+    JSValue out = JS_NULL;
+    if (ext && codec) out = stringsToJs(ctx, codecTags(ext, codec));
+    if (ext) JS_FreeCString(ctx, ext);
+    if (codec) JS_FreeCString(ctx, codec);
+    return JS_IsNull(out) ? JS_NewArray(ctx) : out;
+}
+
 JSValue filtersToJs(JSContext* ctx) {
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
@@ -517,6 +670,8 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, ns, "containers", containers);
     JS_SetPropertyStr(ctx, ns, "encoderOptions",
                       JS_NewCFunction(ctx, js_encoderOptions, "encoderOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "codecTags",
+                      JS_NewCFunction(ctx, js_codecTags, "codecTags", 2));
 
     // What this build can put a picture *through*, which is the palette the
     // graph stage picks from. A list of names and pad shapes is small; the

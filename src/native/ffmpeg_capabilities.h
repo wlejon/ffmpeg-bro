@@ -147,6 +147,25 @@ struct ContainerOption {
 
 std::vector<ContainerOption> availableContainers();
 
+/// The four-character codes this muxer will accept for this codec — the
+/// vocabulary a `-tag:v` control can offer instead of a blank box.
+///
+/// `hvc1` and `hev1` are the same HEVC bitstream and only the first plays on
+/// Apple hardware, so a tag is a decision somebody has to be able to take; and
+/// nobody types a fourcc they have not seen before. The first entry is what the
+/// muxer writes when nothing is set.
+///
+/// **This is the one capability libavformat will not enumerate.** `AVCodecTag`
+/// is an opaque struct — `av_codec_get_tag2` asks "what is this codec's tag
+/// here" and `av_codec_get_id` asks "what codec is this tag here", and there is
+/// no way to walk a muxer's table. So the alternates are *candidates*, and
+/// every one of them is put back through `av_codec_get_id` against this
+/// muxer's own tables before it is offered: nothing reaches the caller that the
+/// container does not agree means this codec, and a candidate that is wrong for
+/// a format simply does not appear in it.
+std::vector<std::string> codecTags(const std::string& containerExt,
+                                   const std::string& codecName);
+
 /// A path under the OS temp directory, for the preview renders the export
 /// workspace throws away. Deterministic for a given name so a preview
 /// overwrites the last one rather than filling the disk with them; the

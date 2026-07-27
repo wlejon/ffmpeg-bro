@@ -20,7 +20,13 @@
 #include "video/media_analysis.h"
 #include "video/video_pipeline.h"
 
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavutil/dict.h>
+}
+
 #include <algorithm>
+#include <fstream>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
@@ -175,6 +181,31 @@ ExportClip leftHalf(const std::string& path, double sourceDuration) {
     c.h = kH;
     c.z = 0;
     return c;
+}
+
+/// A file opened with libavformat, closed when it goes out of scope.
+///
+/// probeMedia() answers the questions playback asks, and a stream list has to
+/// be checked against the ones it does not: a disposition beyond "default", the
+/// fourcc in codecpar, the attachment's mimetype, the chapter table. Those are
+/// what the writer was told to put in the file, so they are what reading it
+/// back has to look at.
+struct Opened {
+    AVFormatContext* fc = nullptr;
+    explicit Opened(const std::string& path) {
+        if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0) { fc = nullptr; return; }
+        if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); fc = nullptr; }
+    }
+    ~Opened() { if (fc) avformat_close_input(&fc); }
+    Opened(const Opened&) = delete;
+    Opened& operator=(const Opened&) = delete;
+    explicit operator bool() const { return fc != nullptr; }
+};
+
+/// One metadata value off a stream, or "" — the shape every check below wants.
+std::string meta(const AVStream* st, const char* key) {
+    const AVDictionaryEntry* e = st ? av_dict_get(st->metadata, key, nullptr, 0) : nullptr;
+    return e && e->value ? e->value : "";
 }
 
 ExportClip rightHalf(const std::string& path, double sourceDuration, double opacity) {
@@ -627,6 +658,251 @@ int main(int argc, char* argv[]) {
                "a second render starts the instant the first reports done (%s)",
                started ? "accepted" : chainErr.c_str());
         waitForExport();
+    }
+
+    // ── a file that is a list of streams ───────────────────────────────────
+    //
+    // The renderer used to write exactly one video stream and one audio
+    // stream. What it writes now is whatever the list says, so the checks are
+    // the ones nobody can make by looking at a picture: that a second audio
+    // track exists at all, that each carries the language and the disposition
+    // it was given, that an attachment travels as a stream with the muxer's two
+    // naming tags on it, and that a chapter table came out the other side.
+    //
+    // Matroska rather than mp4, because mp4 cannot hold an attachment and does
+    // not round-trip a forced flag. The list is the same either way; what a
+    // container will keep of it is the container's business, and this is the
+    // one that keeps all of it.
+    if (srcHasAudio) {
+        std::printf("\na file that is a list of streams\n");
+
+        // Something to attach. Written rather than found: an attachment test
+        // that depends on a font being installed passes on one machine.
+        const std::string attachPath = "out/export-attachment.txt";
+        {
+            std::ofstream f(attachPath, std::ios::binary);
+            f << "ffmpeg-bro attachment fixture\n";
+        }
+
+        const std::string outM = "out/export-streams.mkv";
+        ExportSettings sm = baseSettings(outM);
+        sm.endTime = sm.startTime + 0.6;
+        sm.title = "a multi-stream render";
+        sm.metadata = {{"comment", "written by the export test"}};
+
+        ExportStream v;
+        v.kind = "video";
+        v.source = "composite";
+        v.codec = "libx264";
+        v.language = "eng";
+        v.metadata = {{"title", "programme"}};
+        v.disposition = "default";
+
+        // Two audio streams that disagree about everything a track menu shows.
+        ExportStream a1;
+        a1.kind = "audio";
+        a1.source = "mix";
+        a1.codec = "aac";
+        a1.language = "eng";
+        a1.disposition = "default";
+        a1.bitrateKbps = 128;
+        a1.metadata = {{"title", "English"}};
+
+        ExportStream a2 = a1;
+        a2.language = "fra";
+        // Two flags at once, parsed by av_disposition_from_string rather than
+        // against any table here.
+        a2.disposition = "+forced+comment";
+        a2.bitrateKbps = 64;
+        a2.metadata = {{"title", "Français"}};
+
+        ExportStream att;
+        att.kind = "attachment";
+        att.path = attachPath;
+        att.mimeType = "text/plain";
+
+        sm.streams = {v, a1, a2, att};
+        sm.chapters = {{0.0, 0.3, "first"}, {0.3, 0.6, "second"}};
+
+        st = render(sm, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a four-stream render finishes (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            Opened m(outM);
+            check(!!m, "and the file opens");
+            if (m) {
+                std::vector<const AVStream*> audio;
+                const AVStream* video = nullptr;
+                const AVStream* attached = nullptr;
+                for (unsigned i = 0; i < m.fc->nb_streams; ++i) {
+                    const AVStream* s = m.fc->streams[i];
+                    if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) video = s;
+                    if (s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) audio.push_back(s);
+                    if (s->codecpar->codec_type == AVMEDIA_TYPE_ATTACHMENT) attached = s;
+                }
+                checkf(m.fc->nb_streams == 4, "with four streams in it (%u)", m.fc->nb_streams);
+                checkf(audio.size() == 2, "two of them audio (%zu)", audio.size());
+                check(video != nullptr, "one of them the picture");
+
+                if (audio.size() == 2) {
+                    // The order the list was written in is the order the muxer
+                    // numbered them, which is what makes -metadata:s:a:1 mean
+                    // the stream the UI drew second.
+                    checkf(meta(audio[0], "language") == "eng" &&
+                               meta(audio[1], "language") == "fra",
+                           "each audio track carries its own language (%s, %s)",
+                           meta(audio[0], "language").c_str(),
+                           meta(audio[1], "language").c_str());
+                    checkf(meta(audio[0], "title") == "English",
+                           "and its own name (%s)", meta(audio[0], "title").c_str());
+                    check((audio[0]->disposition & AV_DISPOSITION_DEFAULT) != 0,
+                          "the first is the default track");
+                    check((audio[1]->disposition & AV_DISPOSITION_FORCED) != 0 &&
+                              (audio[1]->disposition & AV_DISPOSITION_COMMENT) != 0,
+                          "and the second is forced and a commentary, both flags at once");
+                    check((audio[1]->disposition & AV_DISPOSITION_DEFAULT) == 0,
+                          "which is not also the default, because it did not say so");
+                    check(audio[0]->codecpar->bit_rate != audio[1]->codecpar->bit_rate ||
+                              audio[0]->codecpar->bit_rate == 0,
+                          "and they were encoded to their own bitrates");
+                }
+                check(attached != nullptr, "the attachment is a stream of its own");
+                if (attached) {
+                    checkf(meta(attached, "filename") == "export-attachment.txt",
+                           "named for the file it came from (%s)",
+                           meta(attached, "filename").c_str());
+                    checkf(meta(attached, "mimetype") == "text/plain",
+                           "with the mime type it was given (%s)",
+                           meta(attached, "mimetype").c_str());
+                    check(attached->codecpar->extradata_size > 0,
+                          "and the bytes themselves travelled with it");
+                }
+                checkf(m.fc->nb_chapters == 2, "the chapter table came out too (%u)",
+                       m.fc->nb_chapters);
+                if (m.fc->nb_chapters == 2) {
+                    const AVDictionaryEntry* t =
+                        av_dict_get(m.fc->chapters[1]->metadata, "title", nullptr, 0);
+                    check(t && std::string(t->value) == "second", "with its marks named");
+                }
+                const AVDictionaryEntry* c =
+                    av_dict_get(m.fc->metadata, "comment", nullptr, 0);
+                check(c && std::string(c->value) == "written by the export test",
+                      "and the container's own metadata is there");
+            }
+        }
+
+        // A fourcc is not an encoder option and there was nowhere to say it
+        // before there was a stream list. mp4, because that is where it
+        // matters: hvc1 and hev1 are the same HEVC bitstream and only the first
+        // plays on Apple hardware.
+        {
+            const auto tags = codecTags("mp4", "libx264");
+            checkf(!tags.empty(), "the mp4 muxer names the tags it takes for h264 (%s)",
+                   tags.empty() ? "none" : tags.front().c_str());
+            const bool hasAvc3 = std::find(tags.begin(), tags.end(), "avc3") != tags.end();
+
+            const std::string outT = "out/export-tagged.mp4";
+            ExportSettings sT = baseSettings(outT);
+            sT.endTime = sT.startTime + 0.4;
+            ExportStream tv;
+            tv.kind = "video";
+            tv.source = "composite";
+            tv.codec = "libx264";
+            tv.tag = hasAvc3 ? "avc3" : (tags.empty() ? "avc1" : tags.front());
+            sT.streams = {tv};
+            const ExportStatus tst = render(sT, clipsA);
+            checkf(tst.state == ExportStatus::State::Done, "a tagged render finishes (%s)",
+                   tst.error.empty() ? "no error" : tst.error.c_str());
+            Opened t(outT);
+            if (t && t.fc->nb_streams >= 1) {
+                char buf[AV_FOURCC_MAX_STRING_SIZE] = {0};
+                av_fourcc_make_string(buf, t.fc->streams[0]->codecpar->codec_tag);
+                checkf(std::string(buf) == tv.tag,
+                       "and the fourcc in the file is the one that was asked for (%s)", buf);
+            } else {
+                check(false, "the tagged file opens");
+            }
+            // The list said one stream, so one stream is what there is — even
+            // though the source has sound and every other render here mixes it.
+            checkf(t && t.fc->nb_streams == 1,
+                   "a list with no audio in it writes no audio (%u streams)",
+                   t ? t.fc->nb_streams : 0);
+        }
+
+        // Taking the *video* out is the other half of the same claim, and the
+        // one a sound-only export needs.
+        {
+            const std::string outAo = "out/export-audio-only.mkv";
+            ExportSettings sAo = baseSettings(outAo);
+            sAo.endTime = sAo.startTime + 0.4;
+            ExportStream only;
+            only.kind = "audio";
+            only.source = "mix";
+            only.codec = "aac";
+            sAo.streams = {only};
+            const ExportStatus ast = render(sAo, clipsA);
+            checkf(ast.state == ExportStatus::State::Done,
+                   "a list with no picture in it renders (%s)",
+                   ast.error.empty() ? "no error" : ast.error.c_str());
+            Opened ao(outAo);
+            if (ao) {
+                checkf(ao.fc->nb_streams == 1 &&
+                           ao.fc->streams[0]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO,
+                       "and writes sound and nothing else (%u streams)", ao.fc->nb_streams);
+            } else {
+                check(false, "the audio-only file opens");
+            }
+        }
+
+        // Every way of getting the list wrong arrives as a sentence. A render
+        // that succeeded while dropping a stream it was told to write is the
+        // one outcome worse than a refusal.
+        {
+            ExportSettings bad1 = baseSettings("out/export-streams-bad.mkv");
+            bad1.endTime = bad1.startTime + 0.3;
+            ExportStream junk;
+            junk.kind = "subtitle";
+            bad1.streams = {junk};
+            ExportStatus b = render(bad1, clipsA);
+            checkf(b.state == ExportStatus::State::Failed,
+                   "a kind this build cannot write is refused (%s)", b.error.c_str());
+
+            ExportSettings bad2 = baseSettings("out/export-streams-bad.mkv");
+            bad2.endTime = bad2.startTime + 0.3;
+            ExportStream d;
+            d.kind = "video";
+            d.source = "composite";
+            d.codec = "libx264";
+            d.disposition = "not-a-disposition";
+            bad2.streams = {d};
+            b = render(bad2, clipsA);
+            checkf(b.state == ExportStatus::State::Failed,
+                   "and so is a disposition libavformat does not know (%s)", b.error.c_str());
+
+            ExportSettings bad3 = baseSettings("out/export-streams-bad.mkv");
+            bad3.endTime = bad3.startTime + 0.3;
+            ExportStream t;
+            t.kind = "video";
+            t.source = "composite";
+            t.codec = "libx264";
+            t.tag = "toolong";
+            bad3.streams = {t};
+            b = render(bad3, clipsA);
+            checkf(b.state == ExportStatus::State::Failed,
+                   "and a fourcc that is not four characters (%s)", b.error.c_str());
+
+            ExportSettings bad4 = baseSettings("out/export-streams-bad.mkv");
+            bad4.endTime = bad4.startTime + 0.3;
+            ExportStream miss;
+            miss.kind = "attachment";
+            miss.path = "out/there-is-no-such-file.ttf";
+            bad4.streams = {miss};
+            b = render(bad4, clipsA);
+            checkf(b.state == ExportStatus::State::Failed,
+                   "and an attachment that is not there (%s)", b.error.c_str());
+        }
     }
 
     // ── the same edit, rendered through libavfilter ────────────────────────

@@ -127,6 +127,12 @@ bro.ffmpeg.encoderOptions("libx265")
 // → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
 //      values: [{ name, help, value }, ...] }, ...]
 
+// The fourccs a muxer will take for a codec — `-tag:v`. First is what it
+// writes by itself. `hvc1` and `hev1` are the same HEVC bitstream and only
+// the first plays on Apple hardware, so this is a decision somebody has to
+// be able to take, and nobody types a fourcc they have not seen.
+bro.ffmpeg.codecTags("mp4", "libx265")   // → ["hev1", "hvc1"]
+
 bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
 
 // Rendering the timeline. Runs on its own thread; poll it.
@@ -139,11 +145,53 @@ bro.ffmpeg.render.start({ path, width, height, fps, start, end,
                           // writing surface, not a subset with named fields.
                           videoOptions: { crf: 20, preset: "slow" },
                           audioOptions: { b: "192k" },
-                          formatOptions: {} })
+                          formatOptions: {},
+                          metadata: { comment: "…" },   // the container's own
+                          streams: [...], chapters: [...] })
 bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames,
                             //     elapsed, fps, bytes, path, stage, error }
 bro.ffmpeg.render.cancel()
 ```
+
+**`streams` is what the file is made of**, one entry per stream the muxer will
+number, in that order. Leaving it out is not "no streams" — it means the file
+this renderer has always written, one video stream fed from the composite and
+one audio stream fed from the mix, synthesised out of the named fields above.
+Given, it is authoritative:
+
+```js
+streams: [
+  { kind: "video",                  // "video" | "audio" | "attachment"
+    source: "composite",            // where the content comes from: "composite"
+                                    // (the canvas) or "mix" (the whole
+                                    // soundtrack). Composed, so named rather
+                                    // than numbered — no input index means
+                                    // "everything, stacked".
+    codec: "libx265",               // empty asks the muxer for its default
+    options: { crf: 22 },           // this stream's encoder options
+    metadata: { title: "Programme" },
+    language: "eng",                // ISO 639-2
+    disposition: "+default+forced", // av_disposition_from_string, or "0"
+    tag: "hvc1",                    // -tag:v, four characters
+    // each of these takes the render's when it is absent
+    crf, bitrate, preset, pixelFormat, sampleRate, channels },
+  { kind: "audio", source: "mix", codec: "aac", language: "fra",
+    disposition: "+comment" },
+  { kind: "attachment", path: "…/font.ttf", mimeType: "font/ttf" },
+]
+chapters: [{ start: 0, end: 12.5, title: "Opening" }, ...]
+```
+
+A malformed entry is a `TypeError` naming it — `streams[2] is a 'subtitle'` —
+never a stream quietly missing from the file. An unknown disposition, a fourcc
+that is not four characters and an attachment that is not there all stop the
+render rather than being dropped: the whole value of writing down what is in
+the output is that the output is what was written down.
+
+An attachment is a stream because that is what `-attach` produces — it has an
+index and the muxer writes it out of the stream's extradata at header time.
+A chapter is not: it is a table beside the streams with no index and nothing
+mapped to it, so it travels in `chapters`.
 
 `render.start` throws if a job is already running. It stops being one the
 instant `poll()` reports a terminal state — the run slot is released before

@@ -7,6 +7,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 }
@@ -486,6 +487,45 @@ std::vector<ContainerOption> availableContainers() {
                 o.audioCodecs.push_back(a.id);
 
         out.push_back(std::move(o));
+    }
+    return out;
+}
+
+std::vector<std::string> codecTags(const std::string& containerExt,
+                                   const std::string& codecName) {
+    std::vector<std::string> out;
+    const std::string probe = std::string("x.") + containerExt;
+    const AVOutputFormat* ofmt = av_guess_format(nullptr, probe.c_str(), nullptr);
+    const AVCodec* codec = avcodec_find_encoder_by_name(codecName.c_str());
+    if (!ofmt || !codec || !ofmt->codec_tag) return out;
+
+    auto add = [&out](unsigned int tag) {
+        char buf[AV_FOURCC_MAX_STRING_SIZE] = {0};
+        av_fourcc_make_string(buf, tag);
+        std::string s(buf);
+        for (char ch : s)
+            if (static_cast<unsigned char>(ch) < 0x21 ||
+                static_cast<unsigned char>(ch) > 0x7e) return;
+        if (std::find(out.begin(), out.end(), s) == out.end()) out.push_back(std::move(s));
+    };
+
+    // What the muxer writes when nobody says otherwise, first, because that is
+    // what "auto" comes to and a menu whose first entry is not the current
+    // behaviour is a menu that misreports the file.
+    unsigned int fallback = 0;
+    if (av_codec_get_tag2(ofmt->codec_tag, codec->id, &fallback) && fallback) add(fallback);
+
+    // The alternates worth taking a decision about. Every one is checked back
+    // against *this* muxer's tables below, so this is a list of things to ask
+    // rather than a list of answers: `hvc1` appears for HEVC in mp4 and mov and
+    // is absent from Matroska, without any of that being written down here.
+    static const char* kCandidates[] = {
+        "hvc1", "hev1", "avc1", "avc3", "av01", "vp09", "mp4v", "jpeg", "mjpa",
+        "dvh1", "dvhe", "apch", "apcn", "apcs", "apco", "ap4h", "ap4x", "s263",
+    };
+    for (const char* c : kCandidates) {
+        const unsigned int tag = MKTAG(c[0], c[1], c[2], c[3]);
+        if (av_codec_get_id(ofmt->codec_tag, tag) == codec->id) add(tag);
     }
     return out;
 }
