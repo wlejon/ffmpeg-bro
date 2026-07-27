@@ -55,6 +55,22 @@ int scalerFlag(const std::string& name);
 // ── An RGBA picture, however it was stored on the way in ───────────────────
 
 struct Rgba {
+    /// Slack past the last row, because libswscale writes its output a whole
+    /// SIMD block at a time.
+    ///
+    /// A row writer emits sixteen or thirty-two pixels per store, so a width
+    /// that is not a multiple of that has its final store spill past the end of
+    /// the row. On every row but the last the spill lands in the row below and
+    /// is overwritten a moment later, which is why it is invisible; on the last
+    /// row it lands past the end of the allocation. A 640-wide canvas is a
+    /// whole number of blocks and never showed it. A 360-wide one corrupted the
+    /// heap on the first frame it converted, and did it far enough from the
+    /// write that it read as a bug in the audio seek that happened next.
+    ///
+    /// This is the padding av_image_alloc would have added; sizing a buffer for
+    /// libav* to write into at exactly width*height is the mistake.
+    static constexpr size_t kSwsSlack = 256;
+
     std::vector<uint8_t> data;
     int width = 0;
     int height = 0;
@@ -64,7 +80,7 @@ struct Rgba {
         width = w;
         height = h;
         stride = w * 4;
-        data.resize(static_cast<size_t>(stride) * h);
+        data.resize(static_cast<size_t>(stride) * h + kSwsSlack);
     }
     bool empty() const { return width <= 0 || height <= 0; }
 };

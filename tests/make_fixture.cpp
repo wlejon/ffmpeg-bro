@@ -18,7 +18,11 @@
 //     says and a resampler that went wrong is audible in the result.
 //   - **The two files differ in every way a render cares about**: size, aspect,
 //     frame rate and duration. A test that passes only because both inputs are
-//     1080p25 is a test that has not been run.
+//     1080p25 is a test that has not been run. This one is not decoration: the
+//     portrait file is 360 wide, which is not a whole number of libswscale's
+//     output blocks, and that is what caught buffers sized to exactly
+//     width*height writing past their end. The 640-wide file passed the same
+//     code every time. Keep a fixture whose width is not a multiple of sixteen.
 //
 // It writes through the same Writer the renderer uses, which is worth noting:
 // the fixture generator is thirty lines of "make a canvas, hand it over"

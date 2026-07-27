@@ -260,6 +260,11 @@ void testFile(const std::string& path) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Unbuffered, because a test that dies mid-run has to have said how far it
+    // got. Through a pipe stdout is fully buffered, so a crash discards every
+    // line printed before it and the failure reads as "nothing ran".
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <media-file> [more...]\n", argv[0]);
         return 2;

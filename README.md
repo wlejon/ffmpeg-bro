@@ -504,18 +504,6 @@ file that comes out can be dropped straight back on the timeline.
 
 Honest list of what does not work:
 
-- **Two crashes, both found the day `ctest` was wired up.** Every suite used to be run
-  through a shell pipe, which swallows the exit code, so a process that printed all its
-  passes and then died on the way out looked green. Both are real and both predate the
-  test wiring:
-  - **A seek into some audio streams crashes the renderer.** Rendering a clip whose
-    in-point is not zero corrupts the heap for some files and not others — the same file
-    at one in-point renders and at another does not. It is in the export's own audio
-    reader, which is the one path `<video>` playback does not share, so playback is
-    unaffected.
-  - **The headless binary crashes at shutdown** once it has loaded media, after every
-    check has passed. `ui_filtergraph`, which loads none, exits cleanly.
-
 - **Audio-only files.** bro's `<video>` drives its clock from decoded pictures,
   so a file with no video track has nothing to advance. The UI says so rather
   than sitting at 0:00.

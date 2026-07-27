@@ -37,6 +37,10 @@ void report(const char* label, double totalMs, int ops) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Unbuffered: see tests/decode_test.cpp. A run that dies part way through
+    // has to leave behind what it managed to measure.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <media-file>\n", argv[0]);
         return 2;

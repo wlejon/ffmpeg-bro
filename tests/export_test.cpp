@@ -155,6 +155,11 @@ int main(int argc, char* argv[]) {
             "Usage: ffmpeg-bro-exporttest <media-file> [<second-file>]\n");
         return 2;
     }
+    // Unbuffered, because a test that dies mid-run has to have said how far it
+    // got. Through a pipe stdout is fully buffered, so a crash discards every
+    // line printed before it and the failure reads as "nothing ran".
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     registerFfmpegBackend();
     // Everything here writes into out/, which is where the UI test puts its
     // screenshots and which a fresh checkout does not have.

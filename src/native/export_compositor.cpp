@@ -15,7 +15,9 @@ void Compositor::clear() {
     // Opaque black, so a canvas nothing covers exports as letterbox rather
     // than as whatever the encoder makes of zero alpha.
     auto* p = reinterpret_cast<uint32_t*>(canvas_.data.data());
-    const size_t n = canvas_.data.size() / 4;
+    // The picture, not the allocation: Rgba carries slack past the last row
+    // for libswscale to spill into, and clearing it would be meaningless work.
+    const size_t n = static_cast<size_t>(canvas_.stride) * canvas_.height / 4;
     const uint32_t black = 0xFF000000u;      // little-endian RGBA: A=255
     for (size_t i = 0; i < n; ++i) p[i] = black;
 }

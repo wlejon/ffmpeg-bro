@@ -52,22 +52,41 @@ broken mixer, and a source that is mostly black makes a picture check pass for t
 reason. The generator writes through the renderer's own `Writer`, which is why it is
 eighty lines.
 
-**`ctest` is currently red, and correctly so.** Wiring it up found two crashes on its
-first run, both of which predate it and both of which were invisible because every suite
-was run through a shell pipe — which reports the exit status of the pipe, not of the
-program, so a process that printed all its passes and then died on the way out looked
-green. Neither is a test-harness problem:
+**Wiring `ctest` up found two crashes on its first run**, both of which predated it and
+both of which were invisible because every suite used to be run through a shell pipe —
+which reports the exit status of the pipe, not of the program, so a process that printed
+all its passes and then died on the way out looked green. Both are fixed; what they were
+is worth keeping, because each is a mistake that is easy to make again:
 
-- **A seek into some audio streams corrupts the heap** (`export`, `ui-export`). It is in
-  `SourceAudio`, the export's own audio reader — the one path `<video>` playback does not
-  share, which is why playback is fine. Reproduces on the portrait fixture at several
-  in-points and not at others, and not at all on the landscape one, so it depends on where
-  in a particular file the seek lands. `noaudio`, `muted` and `inPoint 0` renders all pass.
-- **The headless binary crashes at shutdown** once it has loaded media (`ui-player`), after
-  every check has passed. `ui-filtergraph`, which loads none, exits cleanly. This one
-  happens with real media too and has been happening for some time.
+- **Buffers handed to libav* need slack past the end.** Both libswscale and libswresample
+  work a SIMD block at a time, so the last store of a row — or of a run of samples — goes
+  past what was asked for. A `std::vector` sized to exactly `width*height`, or to exactly
+  the sample count, is therefore too small however carefully the count was worked out.
+  `Rgba::kSwsSlack` and `ffmpeg_backend.cpp`'s `kSwsSlack` are the padding
+  `av_image_alloc` and `av_samples_alloc` would have added. A 640-wide fixture is a whole
+  number of blocks and never showed it; the 360-wide one corrupted the heap on the first
+  frame it converted — far enough from the write that it read as a bug in the audio seek
+  that happened next. **Where three planes are packed into one allocation, each of them
+  needs the slack**, not just the last: one plane's spill lands in the next.
+- **The engine destroyed its audio engine before its document.** `~ElVideo` calls
+  `closeStreamingAudio()`, whose first act is `audioEngine_->closeStream(id)` through a
+  non-owning pointer, so every document that had ever played sound corrupted the heap on
+  the way out. Fixed in bro's `Engine::~Engine` (`document_.reset()` now precedes
+  `audioEngine_.reset()`), which is why this repo needs a bro at least that new. A silent
+  file never showed it: with no audio track there is no stream to close.
 
-Do not "fix" either by making a test tolerate a bad exit code.
+The technique that found both, after bisection stalled, is worth repeating: a standalone
+CMake project that compiles `src/native/export_*.cpp` directly against ffmpeg with a
+twenty-line stub for `util/log.h`, so a render can be run in two seconds without the
+engine. **Note that AddressSanitizer hid it** — MSVC's ASan replaces the allocator, so the
+overflow stopped being fatal and was never reported, since the store came from an
+uninstrumented DLL. The plain Release build of the same sources crashed on demand.
+
+Do not "fix" a crash like these by making a test tolerate a bad exit code.
+
+Tests print unbuffered (`setvbuf(stdout, nullptr, _IONBF, 0)`). Through a pipe stdout is
+fully buffered, so a process that dies mid-run discards every line it printed and the
+failure reads as "nothing ran" — which is precisely the information needed to find it.
 
 Each suite also runs standalone against any real file, which is how to check behaviour
 against footage the fixtures do not resemble:
@@ -220,9 +239,10 @@ listener has to be found and re-attached in a second pass — a pass that is fre
 out of step with the first. Controls here carry their own listeners, made in the same call
 that makes the control, so a control that moves between panels takes its behaviour with it.
 
-**Three bugs this app found in bro, each of which cost an afternoon. All three are fixed
-upstream** — bro `87d60e5` and htmlayout `2f881f7` — so this app needs a bro at least that
-new. What the fixes were, and what the code here still does about them:
+**Four bugs this app found in bro, each of which cost an afternoon. All four are fixed
+upstream** — bro `87d60e5` and htmlayout `2f881f7` for the first three, and the shutdown
+order in `Engine::~Engine` for the fourth — so this app needs a bro at least that new.
+What the fixes were, and what the code here still does about them:
 
 - **`getElementById` went stale on a redraw.** The index kept one element per id and erased
   by the id *string*, so removing an element unregistered whatever element currently
@@ -252,6 +272,12 @@ new. What the fixes were, and what the code here still does about them:
   for a different reason: the strip repaints when the *stage* resizes, which is not when it
   was built. Anything that genuinely needs a frame to have happened (a rendered video's
   first picture, a screenshot) still has to wait for one.
+- **The engine outlived its own audio engine by one member.** `~Engine` reset
+  `audioEngine_` before `document_`, and `~ElVideo` calls `closeStream` on it through a
+  non-owning pointer, so any document that had played sound corrupted the heap at exit —
+  which surfaced as this app's headless binary dying after every check had passed. The
+  general shape is worth remembering: **a shutdown that frees a service before the objects
+  that call into it fails silently and blames whatever ran last.**
 
 - `shell.js` — the pipeline, as the thing you navigate. Four stages — Sources,
   Compose, Encode, Write — and the spine is both the diagram and the navigation:

@@ -45,6 +45,19 @@ namespace {
 // bro's timestamps are nanoseconds from the start of the stream.
 constexpr AVRational kNsTimeBase{1, 1000000000};
 
+/// Slack to leave past the end of anything libav* is asked to write into.
+///
+/// Both libswscale and libswresample work a whole SIMD block at a time, so the
+/// last store of a row — or of a run of samples — can go past the end of what
+/// was asked for. A buffer sized to exactly width*height, or to exactly the
+/// sample count, is therefore too small however carefully the count was worked
+/// out. This is the padding av_image_alloc and av_samples_alloc would have
+/// added, and it is not optional: a 640-wide file is a whole number of blocks
+/// and never showed it, while a 360-wide one corrupted the heap on the first
+/// frame — far enough from the write that it surfaced at process shutdown,
+/// which is where this cost two afternoons.
+constexpr size_t kSwsSlack = 256;
+
 TimeNs toNs(int64_t ts, AVRational tb) {
     if (ts == AV_NOPTS_VALUE) return AV_NOPTS_VALUE;
     return av_rescale_q(ts, tb, kNsTimeBase);
@@ -394,10 +407,16 @@ private:
         const size_t ySize = static_cast<size_t>(w) * h;
         const int cw = (w + 1) / 2, ch = (h + 1) / 2;
         const size_t cSize = static_cast<size_t>(cw) * ch;
-        auto buf = std::make_shared<std::vector<uint8_t>>(ySize + cSize * 2);
 
-        uint8_t* dst[4] = {buf->data(), buf->data() + ySize,
-                           buf->data() + ySize + cSize, nullptr};
+        // Every plane gets slack after it, not just the last: three planes
+        // packed back to back means one plane's spill lands in the next, and
+        // the last one's lands outside the allocation. See kSwsSlack.
+        const size_t yPlane = ySize + kSwsSlack;
+        const size_t cPlane = cSize + kSwsSlack;
+        auto buf = std::make_shared<std::vector<uint8_t>>(yPlane + cPlane * 2);
+
+        uint8_t* dst[4] = {buf->data(), buf->data() + yPlane,
+                           buf->data() + yPlane + cPlane, nullptr};
         int dstStride[4] = {w, cw, cw, 0};
         int rc = sws_scale(sws_, frame_->data, frame_->linesize, 0, h, dst, dstStride);
         if (rc <= 0) return false;
@@ -563,8 +582,13 @@ private:
             av_rescale_rnd(delay + frame_->nb_samples, rate_, frame_->sample_rate, AV_ROUND_UP));
         if (maxOut <= 0) return true;
 
+        // Grown with slack, converted into, then shrunk to what was actually
+        // written — so the buffer libswresample writes into is bigger than the
+        // sample count while `samples.size()` stays honest about how many there
+        // are. Shrinking a vector never reallocates, so the slack survives as
+        // spare capacity. See kSwsSlack.
         const size_t base = out.samples.size();
-        out.samples.resize(base + static_cast<size_t>(maxOut) * channels_);
+        out.samples.resize(base + static_cast<size_t>(maxOut) * channels_ + kSwsSlack);
         auto* dst = reinterpret_cast<uint8_t*>(out.samples.data() + base);
         int written = swr_convert(swr_, &dst, maxOut,
                                   const_cast<const uint8_t**>(frame_->extended_data),
