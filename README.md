@@ -90,7 +90,20 @@ bro.ffmpeg.configuration  // the build's ./configure line
 bro.ffmpeg.hwaccels       // ["cuda", "d3d11va", "dxva2", "qsv", ...]
 bro.ffmpeg.openOnStart    // media file named on the command line, or null
 
-bro.ffmpeg.probe(path)    // in-process ffprobe: throws if the file can't be read
+// An input is an `-i`: a path or a URL, a demuxer, that demuxer's options and
+// the part of the file you want. Everything here appears *before* the `-i` on
+// a command line, which is not trivia about argument order — these are the
+// decisions taken while the file is being opened, and none of them can be
+// taken afterwards.
+bro.ffmpeg.probe(path)               // in-process ffprobe: throws if it can't be read
+bro.ffmpeg.probe(path, { format, options })
+bro.ffmpeg.probe({ path, format, options, ss, t, to, itsoffset })
+// `format` forces the demuxer (`-f`), `options` are its own and the
+// protocol's (`probesize`, `analyzeduration`, `fflags`, `rw_timeout`…), and
+// **an unknown key throws** rather than being ignored — libavformat hands back
+// what nothing consumed, which is the one place it will say whether an option
+// was used. The window is reported as the window: probing with `ss: 1, to: 3`
+// gives a two-second file, because that is what the input is.
 // → { path, format: {name, longName, duration, bitRate, size},
 //     streams: [{index, kind, codec, codecLong, profile, bitRate, language,
 //                title, default,
@@ -164,10 +177,26 @@ bro.ffmpeg.deviceSources("dshow")
 // be able to take, and nobody types a fourcc they have not seen.
 bro.ffmpeg.codecTags("mp4", "libx265")   // → ["hev1", "hvc1"]
 
+// The inputs playback knows about. `<video src>` is only a string and the
+// media backend is registered generically, so the string names the input and
+// the backend swaps it for the URL and its options on the way into
+// libavformat. That is also what lets a URL be a src at all: bro resolves
+// anything not starting with `/` or `x:` against the document, so
+// `https://…` would otherwise become a path under `ui/`.
+bro.ffmpeg.inputs.define("in3", { path, format, options, ss, to, itsoffset })
+// → "/@input/in3", to use as a <video src> or a bro.media path
+bro.ffmpeg.inputs.forget("in3")
+bro.ffmpeg.inputs.token("in3")
+
 bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
 
 // Rendering the timeline. Runs on its own thread; poll it.
 bro.ffmpeg.render.start({ path,
+                          // The `-i`s, in the order they are numbered. A clip
+                          // and a filter-graph input pad each name one by
+                          // index; the demuxer, its options and the window
+                          // are the input's, and a path cannot carry them.
+                          inputs: [{ path, format, options, ss, t, to, itsoffset }],
                           // Which muxer, by name — `-f matroska`. Empty falls
                           // back to guessing from the extension. Named because
                           // that is what identifies one: nothing in
@@ -272,9 +301,11 @@ instant `poll()` reports a terminal state — the run slot is released before
 the status is published, so chaining a second render off the first's `done` is
 safe, which is what the preview does.
 
-A clip in a render spec is a file, a slice of it, and a rectangle in the output
-canvas — `{ path, start, length, inPoint, x, y, w, h, crop, opacity, volume,
-muted, z }`. Rectangles rather than fit/zoom/pan modes on purpose: the layout
+A clip in a render spec is an input, a slice of it, and a rectangle in the output
+canvas — `{ input, start, length, inPoint, x, y, w, h, crop, opacity, volume,
+muted, z }`. `input` indexes `inputs`; a clip carrying a `path` and no index is
+that path opened plainly, which is what every spec written before inputs existed
+means and still does. Rectangles rather than fit/zoom/pan modes on purpose: the layout
 is worked out once, in `ui/viewer.js`, and both the screen and the encoder are
 driven from the same answer.
 
@@ -290,14 +321,52 @@ stream reports.
 
 ## Sources
 
-`I` (or the first card on the spine) is what is actually in the files: container,
-duration, size, bitrate, and then every stream — codec, profile, dimensions, frame
-rate, pixel format, colour tags, sample rate, channel layout. Straight out of
-`probe()`, which runs in-process, so it is there the moment a file lands rather than
-after a subprocess has been waited on.
+`I` (or the first card on the spine) is the **inputs** — the `-i`s. Not "the files on
+the timeline": an input is a thing in its own right, it carries a demuxer and that
+demuxer's options and a window, it can be a URL, and it exists whether or not
+anything is cut from it. Adding one and using one are two acts, and `Use on the
+timeline` is how the second happens.
 
-Every file on the timeline, once each, with the number of clips cut from it. Two clips
-from one file are one source, which is what ffmpeg would open.
+Three columns, in the order the questions come.
+
+**The list.** Every input, numbered the way `-i` numbers them, each saying where it
+comes from, what has been set on it in ffmpeg's own words (`-f matroska -probesize
+5000000 -ss 12`) and whether anything is cut from it. **Unused is a normal state and
+says so** rather than being hidden or collected — opening a file to see what is in it
+is a thing people do.
+
+**The input.** What it is:
+
+- **Path or URL.** Anything a protocol this build links can reach — `https`, `srt`,
+  `rtmp`, `udp`, `tcp`, thirty-six of them — and the panel says which protocol a URL
+  names and whether it is one of them, because a URL naming a protocol that is absent
+  otherwise fails at open with a message about a filename.
+- **Demuxer.** What it probed as, and a search over all three hundred and fifty to
+  force another. Searched rather than listed for the reason the muxer picker and the
+  filter palette are: there is no list of the good ones anywhere. `Probe it` hands the
+  choice back to libavformat.
+- **Window** — `-ss`, `-to`, `-itsoffset`, named as ffmpeg names them because that is
+  what they are and the command bar prints them a foot below. **An input seek is not a
+  clip's in-point**, and this is where the difference is legible: `-ss` moves the
+  input's zero, so the input becomes shorter and a clip is cut from what is left.
+  Trimming a clip picks a moment out of an input; `-ss` decides what the input is.
+  `-itsoffset` delays it, which is how a camera and a separately recorded soundtrack
+  are lined up.
+- **What came back** — container, duration, size, bitrate, and then every stream:
+  codec, profile, dimensions, frame rate, pixel format, colour tags, sample rate,
+  channel layout. Straight out of `probe()`, run **with the options in force**, so it
+  is the answer to "what did the thing I just set do" rather than a description of the
+  file as libavformat's defaults see it.
+
+**The options.** The demuxer's own table, out of its `AVClass` and libavformat's
+generic one, in the column the encoder's advanced options and the muxer's already use
+— and the protocol's beside it when the path is a URL, since libavformat passes what
+the demuxer does not recognise down to the AVIO layer and they travel in one bag.
+An unknown key stops the open and names itself.
+
+Two clips from one file are one input, which is what ffmpeg would open. A second drop
+of the same file reuses it — unless something has been set on it, in which case a
+fresh one is made rather than silently inheriting somebody's decision.
 
 ## The timeline
 
@@ -901,7 +970,9 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-decodetest <file>          # backend: demux, decode, seek, audio
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
+./build/Release/ffmpeg-bro-inputtest <file>          # an -i: forced demuxer, options, window, token
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -927,6 +998,22 @@ picker puts in `-f` is the name libavformat answers to, that an option table is
 the muxer's own and not the last one asked for — and then it renders into
 Matroska and MPEG-TS by name and opens what came out, because a picker over a
 hundred and eighty is only worth having if what it offers can be written.
+
+`inputtest` is what an `-i` is: a demuxer forced and a name this build does not
+have refused, an option reaching the demuxer and an unknown one stopping the open
+with the key named, `-ss` and `-t` moving the input's own clock — checked in
+pixels, by asking a seeked reader for its zero and an unseeked one for the same
+moment — and the token bro's media backend opens a registered input by.
+
+`ui_sources.js` follows one input the length of the stage: typed in as a path
+with no clip near it, forced to a demuxer picked out of libavformat's own list,
+given `-probesize` out of the option column, cut to a two-second window, used on
+the timeline, and then found in the spec with the clip pointing at it by index —
+and every one of those printed by the command bar **in front of** its `-i`,
+because the same words after it are output options meaning something else. It
+also adds a URL, to check that it survives as written rather than being resolved
+against the document, that the protocol is named, and that its own option table
+is offered.
 
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
@@ -1008,15 +1095,28 @@ Honest list of what does not work:
   black bars are 240 rows deep and nothing offers to crop them, `ebur128` can
   tell you the loudness and nothing offers to normalise it. The channel and
   the data model are there; what is missing is the verb.
-- **Opening anything that is not a file on disk.** Every protocol this build
-  links is now reported — `https`, `rtmp`, `srt`, `tcp`, `udp`, thirty-six in
-  and thirty out — and every capture device is registered and enumerable, but
-  a source is still a path that came from a drop. Reading a URL, naming a
-  demuxer for an input, and pointing a render at a socket are three different
-  jobs and none of them is wired.
+- **Reading a URL that is far away.** A URL is an ordinary input now — typed in
+  on the Sources stage, opened through whichever of the thirty-six protocols it
+  names, with that protocol's own options beside the demuxer's. What has not
+  been looked at is what a *slow* one costs: `probe()` is synchronous on
+  purpose, so a URL that takes four seconds to answer takes the UI with it, and
+  nothing yet says "connecting" or offers to stop. A local file was never long
+  enough for that to matter.
+- **Writing to one.** `AVFMT_NOFILE` muxers are in the picker and thirty output
+  protocols are reported, but a render still writes to a path. Pointing one at
+  a socket is chunk 13's.
+- **An input that is not one file.** `-stream_loop`, an image sequence
+  (`img%03d.png` with its own `-framerate`), a still, and `concat` are each an
+  input whose *content* is assembled rather than opened, which is the one thing
+  `MediaInput` deliberately does not say yet. The same goes for `-r` on an
+  input: forcing a rate is how a sequence is given one, and it means nothing
+  for a container that carries its own timestamps.
 - **Capturing.** `gdigrab`, `dshow`, `vfwcap` and `lavfi` are registered and
-  listed, and `bro.ffmpeg.deviceSources()` will say what each can see. Nothing
-  opens one, so a screen recording is not yet a thing this application does.
+  listed, and `bro.ffmpeg.deviceSources()` will say what each can see. A device
+  is an input with its name forced as the demuxer and its settings as the
+  option bag, so the model is now the right shape for one — but nothing opens
+  one, and a live input is not a file with a duration, which is what everything
+  above the model still assumes.
 - **Decoder options.** `-skip_frame`, `-skip_loop_filter`, `-thread_type` and
   every private option of every decoder are reported by
   `bro.ffmpeg.decoderOptions()`. Nothing sets one: playback and the render both

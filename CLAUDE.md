@@ -95,6 +95,11 @@ against footage the fixtures do not resemble:
 # native: demux, decode, reorder, seek, audio, backend precedence
 ./build/Release/ffmpeg-bro-decodetest <file> [more files...]
 
+# native: an -i — a forced demuxer, an option bag whose unknown keys are
+# errors, a window that moves the input's own clock, and the token playback
+# opens a registered input by
+./build/Release/ffmpeg-bro-inputtest <file>
+
 # native: render a timeline and open the result — geometry, opacity, audio
 # mixing, cancellation, capability reporting, whether options reach the
 # encoder, and what a multi-stream file came out as. Writes into out/.
@@ -119,6 +124,11 @@ against footage the fixtures do not resemble:
 # the advanced option editor, the command bar, both halves of the A/B preview,
 # and loading the result back
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
+
+# the Sources stage as the input editor: an input added by typing a path with
+# nothing on the timeline, a demuxer forced, an option set, a window cut, and
+# every one of those printed in front of its own -i
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 
 # the equivalent filtergraph, against specs written out by hand. Needs no
 # media: buildSpec()'s output is a plain object and the module is pure.
@@ -145,7 +155,7 @@ Test scripts use bro's headless globals (`dropFiles`, `wallSleep`, `advanceTime`
 on the **real** clock: `advanceTime()` moves bro's virtual time and the decoder ignores it,
 so every wait must be `wallSleep()` + `flush()` (that is what `pump()` in the test does).
 
-Three traps when writing headless tests here:
+Six traps when writing headless tests here:
 
 - **`document.dispatchEvent` does not exist.** bro gives `Document` `addEventListener` but
   not `dispatchEvent`, so the node `app.js` binds its keyboard to cannot be aimed at
@@ -166,6 +176,12 @@ Three traps when writing headless tests here:
   quality slider was not drawn and an assertion four hundred lines earlier failed.
   `rm ui/.storage.json` before believing a failure, and leave the settings as you found
   them at the end of a section.
+- **A comma inside an attribute selector starts a second selector.** A demuxer's
+  name is `mov,mp4,m4a,3gp,3g2,mj2`, and `querySelector('[data-demuxer="mov,mp4,…"]')`
+  does not find the button carrying it. `ui_sources.js` walks `querySelectorAll` and
+  compares `getAttribute` instead, which is what anything keyed by an ffmpeg name has
+  to do.
+
 
 The app exposes `globalThis.__ffmpegBro` (model, transport, and the operations) and
 `__ffmpegBroReady` purely so tests drive it through a stable surface instead of DOM ids
@@ -187,6 +203,7 @@ them to change alone:
 
 | File | What |
 |---|---|
+| `ffmpeg_input.h` | **what an `-i` is**, the one function that opens one, and the registry playback resolves a token through |
 | `ffmpeg_export.h` | the description a render is given, and the four calls that run one |
 | `ffmpeg_export.cpp` | the job: one slot, one thread, the status the UI polls |
 | `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
@@ -324,6 +341,47 @@ Four properties are load-bearing:
   that was written. `poll()` without an argument builds no arrays, so the three
   callers that only want a progress bar pay nothing.
 
+### Inputs
+
+**An input is an `-i`, and one function opens one.** `openInput()` in
+`ffmpeg_input.cpp` is the only `avformat_open_input` call left with an argument list
+of its own: everything else — the two readers, the playback backend, `probe()` — goes
+through it. That is what makes a forced demuxer, an option bag and a window facts
+about *an input* rather than four separate features:
+
+- **An option nothing consumed is an error naming the key.** `avformat_open_input`
+  hands back the `AVDictionary` entries the demuxer, the protocol and libavformat's
+  generic table all declined, which is the one place in libav where "was that option
+  used?" has an answer. It is asked, and the open is refused. A demuxer name this
+  build does not have is refused too, rather than falling back to probing.
+- **`-ss`, `-t` and `-itsoffset` are arithmetic on a reader's clock**, not options —
+  libav has no idea about any of them. `inputEpoch()` and `inputLimit()` are that
+  arithmetic, in one place, and both readers and the playback source use them: the
+  input's zero moves to `ss`, which is precisely what makes an input seek a different
+  thing from a clip's in-point. `probe()` reports the window too, so the duration a
+  clip's length comes from is the input's and not the file's.
+- **`ExportSettings::inputs` is the list and `ExportClip::input` is an index into
+  it**, with `resolveInput()` the one place that turns either an index or a bare path
+  into a `MediaInput`. A spec whose clips carry paths and no list renders exactly as
+  it always did — the fixture generator, the node previews and every hand-written
+  spec in `tests/` still do. Same shape as `outputStreams()`, for the same reason.
+
+**How an input's options reach playback, and why it is a token.** bro's `<video>`
+takes a src *string* and the media backend is registered generically, so there is
+nowhere to pass an options object: the string has to name the input. `defineInput()`
+registers one and hands back `/@input/<id>`; the backend's `open` resolves it and
+opens the real URL with the real options. Three things that buys, and the third is
+the one that decided it:
+
+- two inputs on one file with two different option bags are two different srcs;
+- `bro.media`'s filmstrip and waveform go through the same registry one level down,
+  so a strip is of the file *as the input opens it* — the registry is process-global
+  and mutex-guarded because that decode runs in a Worker, on another thread;
+- **a URL could not be a `<video src>` at all.** `Element::resolveUrl` treats a src
+  as absolute only if it starts with `/`, `\` or `x:`, so `https://example.com/a.mp4`
+  is resolved against the document and becomes a path under `ui/`. The leading slash
+  in the token is not decoration — it is why this works without touching bro.
+
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
 registers a `bro::video::MediaBackend` at **priority 100**, above bro's built-in WebM
@@ -332,9 +390,13 @@ through one set of seek/timestamp/reordering semantics.
 
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
 `openOnStart`, `encoders`, `muxers`, `demuxers`, `decoders`, `protocols`, `devices`,
-`filters`, the five `*Options(name)` lookups, `deviceSources`, `render.*`, …) via
-`EngineConfig::installHostBindings`, so it exists in every realm including workers.
-`probe()` is synchronous on purpose.
+`filters`, the five `*Options(name)` lookups, `deviceSources`, `inputs.*`, `render.*`,
+…) via `EngineConfig::installHostBindings`, so it exists in every realm including
+workers. `probe()` is synchronous on purpose, and takes an input rather than only a
+path — probing wrong is the reason demuxer options exist, so a Sources stage showing
+what libavformat's defaults made of a file while the render opened it with `-f` and a
+`-probesize` would be describing a different file. `inputs.define/forget/token` is the
+playback registry; the ids are the UI's and the tokens are opaque strings to it.
 
 **The rule for what is built at startup and what is asked for on demand is the size of
 the answer, and the option tables are always the expensive part.** The registries —
@@ -441,8 +503,34 @@ once to mix. Notable:
 
 ### UI side
 
-`ui/project.js` is the single source of truth: clips, selection, the output canvas, the
-layout mode. Everything else reads it and nothing else.
+`ui/inputs.js` and `ui/project.js` are the model: the `-i`s, and what is on the
+timeline. **A clip references an input rather than carrying a path** — what is opened,
+with which demuxer, with which options and over which window is the input's business,
+and two clips cut from one file are two clips of one `-i`. Four rules there are
+load-bearing:
+
+- **The index in `inputs` is the `-i` number.** `buildSpec()` sends the whole list and
+  a `clip.input` index into it, the graph's input nodes carry the same index, and
+  `graph/print.js` returns `inputRefs` so the command bar can put `-f`, the demuxer's
+  options, `-ss`, `-to` and `-itsoffset` **in front of** the right `-i`. Nothing may
+  reorder the list under a spec built from it. All of them are sent, including the
+  unused ones: dropping those would renumber the rest.
+- **An input with no clip is an ordinary state.** Nothing garbage-collects the list
+  against the timeline, and `Use on the timeline` is an action rather than a
+  consequence. Removing one is refused while a clip is cut from it, because a clip
+  with no input has nothing to decode.
+- **A clip's `src` is the input's token, not its path**, and `applyInput()` puts the
+  input's answer back into the clips when it is reopened — including the length, since
+  `-ss 30` on a ten-second input leaves nothing to lay out. `app.js` rebuilds the
+  `<video>` rather than re-pointing it: the element *is* the decoder, and it is
+  holding the file as it was opened before.
+- **`graph/model.js`'s `add()` copies only the fields it knows.** That is the right
+  rule — a stray field on a spec must not quietly become part of the model — and it is
+  why an input node's index arrived as -1 and the command printed no `-f` at all until
+  `input` was added to the list. Anything new on a node has to be added there too.
+
+`ui/project.js` is the single source of truth for the edit: clips, selection, the
+output canvas, the layout mode. Everything else reads it and nothing else.
 
 **No markup in strings.** Structure that repeats lives in a `<template>` in `index.html`
 and is cloned; everything else is built with the helpers in `ui/dom.js` (`el`, `div`,
@@ -562,11 +650,24 @@ about them:
     built-then-measured-then-painted (the range strip's split) and repainted only when
     the measured width changes, since eight canvases at 60 Hz is a frame loop nobody
     can explain.
-- `sources.js` — the Sources stage: every file on the timeline, once each, read out of
-  `probe()`. Distinct by path, so two clips cut from one file are one source — which is
-  what ffmpeg would open. **It is not driven by the selection**, which is why it is not
-  in `inspector.js` any more: a panel hanging off the primary selection can only ever
-  describe one file, and the stage's own card in the spine counts them all.
+- `sources.js` — the Sources stage, which is the **input editor**: three columns for
+  the list, what this input is set to and what came back, and the demuxer's option
+  table beside it. It was a read-only list derived from the timeline, which is an
+  NLE's idea of a source and the wrong end of ffmpeg. **It is not driven by the
+  selection and it is not derived from the timeline** — the two things it exists to
+  make legible are that an input can be configured (and re-probed, so the stream list
+  under the options is the answer to what they did) and that an input seek is not a
+  clip's in-point.
+- `opttable.js` — **one AVOption table, edited into one bag**, and the third instance
+  of the pattern is what made it a component. libavutil describes an encoder, a muxer,
+  a demuxer, a decoder, a protocol and a filter with the same structure, so the
+  encoder's advanced column, the muxer's on Write and the demuxer's on Sources are the
+  same rows over the same kind of data; `export/form.js` was migrated onto it rather
+  than left as a fourth copy. Three copies would be three sets of decisions about which
+  control a type gets, arrived at from one table by different routes, and they would
+  drift in the direction of whichever one somebody last had a reason to touch. The
+  search term lives in the component, keyed by the column's `data-f` name, because it
+  is about the *list* and has to survive the column being rebuilt.
 - `transport.js` — the playhead, and what has to be true of every decoder while it moves.
   **The one part of the application that is not an edit**: play, pause, step, shuttle and
   loop are how you look at the timeline, not what it says, which is why a render exports a
