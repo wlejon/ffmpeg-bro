@@ -350,6 +350,61 @@ console.log('\n-stream_loop is how much of an input there is');
     clearAll();
 }
 
+// ── the input editor ───────────────────────────────────────────────────────
+
+console.log('\nthe Sources stage edits them as the input options they are');
+{
+    clearAll();
+    A.shell.goTo('sources');
+    pump(120);
+
+    const seq = A.assemble.openables([frames])
+                 .find((it) => it.kind === 'sequence' && /shot_/.test(it.seq.pattern));
+    const input = A.inputs.addInput(seq.spec);
+    A.drawSources();
+    pump(150);
+
+    const fps = document.querySelector('#src-detail [data-f="seqfps"]');
+    const start = document.querySelector('#src-detail [data-f="seqstart"]');
+    ok(!!fps && !!start, 'a sequence gets its frame rate and start number as rows');
+    eq(fps.value, '25', 'showing what is set');
+
+    // Typed into, it goes into the option bag under the name ffmpeg gives it —
+    // which is the whole claim: these are demuxer options and not a feature of
+    // this application.
+    fps.value = '10';
+    fps.dispatchEvent(new Event('change'));
+    pump(150);
+    eq(input.options.framerate, '10', 'and editing one writes the demuxer option');
+    ok(Math.abs(A.inputs.lengthOf(input) - 1.2) < 0.05,
+       `so the input is twelve frames at 10 fps (${A.inputs.lengthOf(input).toFixed(2)} s)`);
+
+    const glob = Array.from(document.querySelectorAll('#src-detail [data-seg="src-pattern"]'))
+                      .find((b) => b.getAttribute('data-v') === 'glob');
+    ok(!!glob, 'pattern_type is offered as the demuxer offers it');
+    eq(!!glob.disabled, !bro.ffmpeg.globPatterns,
+       `and glob is ${bro.ffmpeg.globPatterns ? 'available' : 'refused'} exactly as this ` +
+       'build has it');
+
+    // And the still, whose one row is the one thing about it that is not a fact.
+    const held = A.inputs.addInput(A.assemble.stillSpec(still));
+    A.drawSources();
+    pump(150);
+    // The list draws newest last; the detail follows whichever is chosen, so
+    // pick it the way a click would.
+    document.querySelector(`[data-input="${held.id}"]`).click();
+    pump(150);
+    const hold = document.querySelector('#src-detail [data-f="stillhold"]');
+    ok(!!hold, 'a still gets one row, which is how long it is held');
+    hold.value = '2';
+    hold.dispatchEvent(new Event('change'));
+    pump(150);
+    eq(held.to, 2, 'and it writes -to, because that is what the decision is');
+    ok(Math.abs(A.inputs.lengthOf(held) - 2) < 0.02, 'so the input is two seconds');
+
+    clearAll();
+}
+
 // ── the concat demuxer ─────────────────────────────────────────────────────
 
 console.log('\nseveral files as one -i, and which concat that is');
