@@ -1,6 +1,7 @@
 #include "ffmpeg_bindings.h"
 
 #include "ffmpeg_backend.h"
+#include "ffmpeg_capture.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
@@ -468,12 +469,15 @@ bool inputsFromJs(JSContext* ctx, JSValueConst spec, std::vector<MediaInput>* ou
     return ok;
 }
 
-JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsObject(argv[0]))
-        return JS_ThrowTypeError(ctx, "render.start(spec) requires a spec object");
-    JSValueConst spec = argv[0];
-
-    ExportSettings s;
+/// Everything about the *output* of a job: the file, the muxer, the encoders,
+/// their options and the stream list.
+///
+/// One reader for two callers, because a recording writes its file exactly the
+/// way a render writes one — same encoders, same muxer, same `-key value` bags,
+/// same stream list — and a second copy of this would be a second set of
+/// defaults for a capture to quietly disagree with an export about.
+bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::string* err) {
+    ExportSettings& s = *out;
     s.path = strProp(ctx, spec, "path", "");
     s.format = strProp(ctx, spec, "format", "");
     s.width = static_cast<int>(numProp(ctx, spec, "width", 1920));
@@ -507,10 +511,19 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     // Read before anything is started, so a list that cannot be honoured is a
     // thrown TypeError with the offending entry named rather than a job that
     // fails a second later with the index long gone.
+    return inputsFromJs(ctx, spec, &s.inputs, err) &&
+           streamsFromJs(ctx, spec, &s.streams, err) &&
+           chaptersFromJs(ctx, spec, &s.chapters, err);
+}
+
+JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "render.start(spec) requires a spec object");
+    JSValueConst spec = argv[0];
+
+    ExportSettings s;
     std::string bad;
-    if (!inputsFromJs(ctx, spec, &s.inputs, &bad) ||
-        !streamsFromJs(ctx, spec, &s.streams, &bad) ||
-        !chaptersFromJs(ctx, spec, &s.chapters, &bad))
+    if (!outputFromJs(ctx, spec, &s, &bad))
         return JS_ThrowTypeError(ctx, "%s", bad.c_str());
 
     std::vector<ExportClip> clips;
@@ -613,6 +626,11 @@ JSValue js_renderPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     JS_SetPropertyStr(ctx, o, "progress", JS_NewFloat64(ctx, st.progress));
     JS_SetPropertyStr(ctx, o, "frames", JS_NewInt64(ctx, st.framesDone));
     JS_SetPropertyStr(ctx, o, "totalFrames", JS_NewInt64(ctx, st.framesTotal));
+    // This job runs until somebody stops it, so `progress` and `totalFrames`
+    // are not answers. Read it before drawing a bar: a fraction of an unknown
+    // total is zero, and a bar at zero for ten minutes says "stuck" rather
+    // than "recording". See ffmpeg_capture.h.
+    JS_SetPropertyStr(ctx, o, "openEnded", JS_NewBool(ctx, st.openEnded));
     JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, st.elapsedSec));
     JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, st.encodeFps));
     JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, st.bytesWritten));
@@ -633,6 +651,52 @@ JSValue js_renderPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
 
 JSValue js_renderCancel(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     cancelExport();
+    return JS_UNDEFINED;
+}
+
+// ── bro.ffmpeg.record ──────────────────────────────────────────────────────
+//
+// A recording is a second kind of job in the same slot: it is polled through
+// `render.poll()`, it is refused while a render holds the slot, and it reports
+// through the same status. It is a separate pair of calls rather than a flag on
+// `render.start` because what it is given is different — one device and no
+// timeline — and because **stop is the normal end of a recording**, which is a
+// different act from cancelling a render even though it is the same signal.
+// See ffmpeg_capture.h.
+
+JSValue js_recordStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "record.start(spec) requires a spec object");
+    JSValueConst spec = argv[0];
+
+    CaptureSettings c;
+    std::string bad;
+    if (!outputFromJs(ctx, spec, &c.output, &bad))
+        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
+
+    // Zero rather than 1920×1080 and 30: a capture is not composited into a
+    // canvas, so the device's own picture and rate are the answer unless
+    // somebody has said otherwise, and only the device knows them.
+    c.output.width = static_cast<int>(numProp(ctx, spec, "width", 0));
+    c.output.height = static_cast<int>(numProp(ctx, spec, "height", 0));
+    c.output.fps = numProp(ctx, spec, "fps", 0);
+
+    JSValue src = JS_GetPropertyStr(ctx, spec, "source");
+    if (!JS_IsObject(src)) {
+        JS_FreeValue(ctx, src);
+        return JS_ThrowTypeError(ctx, "record.start(spec) needs a source: the device as an -i");
+    }
+    c.source = inputFromJs(ctx, src);
+    JS_FreeValue(ctx, src);
+
+    std::string err;
+    if (!startCapture(c, &err))
+        return JS_ThrowTypeError(ctx, "cannot start recording: %s", err.c_str());
+    return JS_TRUE;
+}
+
+JSValue js_recordStop(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    stopCapture();
     return JS_UNDEFINED;
 }
 
@@ -1227,6 +1291,14 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, render, "poll", JS_NewCFunction(ctx, js_renderPoll, "poll", 1));
     JS_SetPropertyStr(ctx, render, "cancel", JS_NewCFunction(ctx, js_renderCancel, "cancel", 0));
     JS_SetPropertyStr(ctx, ns, "render", render);
+
+    // Recording shares `render.poll()` on purpose: there is one job slot and
+    // one status, and a second poll would be a second answer to "is something
+    // running?" — which is the question every door in the UI asks.
+    JSValue record = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, record, "start", JS_NewCFunction(ctx, js_recordStart, "start", 1));
+    JS_SetPropertyStr(ctx, record, "stop", JS_NewCFunction(ctx, js_recordStop, "stop", 0));
+    JS_SetPropertyStr(ctx, ns, "record", record);
     JS_SetPropertyStr(ctx, ns, "openOnStart",
                       g_initialMedia.empty()
                           ? JS_NULL

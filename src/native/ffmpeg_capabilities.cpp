@@ -830,6 +830,18 @@ std::vector<DeviceInfo> availableDevices() {
     return cached;
 }
 
+bool isInputDevice(const std::string& name) {
+    if (name.empty()) return false;
+    // Against the registered input-device formats rather than against a list of
+    // names, so a build with more of them (v4l2, avfoundation, x11grab) needs no
+    // edit here. `av_find_input_format` first because a demuxer's name is a
+    // comma-separated set of alternatives and only the format itself knows
+    // which names answer to it.
+    const AVInputFormat* ifmt = av_find_input_format(name.c_str());
+    if (!ifmt) return false;
+    return isKnownDevice(inputDeviceFormats(), ifmt);
+}
+
 DeviceSourceList deviceSources(const std::string& name) {
     ensureDevices();
     DeviceSourceList out;

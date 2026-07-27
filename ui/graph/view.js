@@ -518,6 +518,9 @@ export function drawGraph() {
     // measurement so heights come back in graph coordinates whatever the zoom is —
     // a card read at 1.4× and then positioned at 1.4× would compound.
     const built = new Map();
+    // Whoever caused this redraw, the field somebody is typing into survives
+    // it. See cards.noteFocus: a preview arriving is a redraw too.
+    cards.noteFocus(refs.nodes);
     refs.nodes.style.transform = 'none';
     refs.nodes.classList.toggle('lod-min', lod === 'min');
     put(refs.nodes, () => d.graph.nodes.map((n) => {

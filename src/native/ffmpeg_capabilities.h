@@ -281,6 +281,16 @@ struct DeviceInfo {
 
 std::vector<DeviceInfo> availableDevices();
 
+/// Is this the name of an *input* device — a camera, a screen grabber, a sound
+/// card, libavfilter's virtual one?
+///
+/// Asked because `-f dshow` is the only thing that distinguishes a device from
+/// an ordinary demuxer in a `MediaInput`, and everything above the model has to
+/// know: a device never ends, so it has no duration, so it cannot be laid out
+/// on a timeline and it cannot be given a progress bar. See `inputIsEndless` in
+/// ffmpeg_input.h, which is the one place that asks.
+bool isInputDevice(const std::string& name);
+
 /// What one device can actually see right now: the cameras plugged in, the
 /// windows on the screen, the sound cards.
 ///

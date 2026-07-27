@@ -8,7 +8,8 @@
 // **One job at a time** because the UI polls a single slot and chains renders
 // off it — the preview runs a lossless reference into a candidate the instant
 // the first reports done. That chaining is why the slot is freed *before* the
-// terminal status is published, and not after.
+// terminal status is published, and not after. The slot itself is
+// ffmpeg_job.h's, because a recording is a second kind of job in the same one.
 
 #include "ffmpeg_export.h"
 
@@ -17,19 +18,17 @@
 #include "export_timeline.h"
 #include "export_writer.h"
 
+#include "ffmpeg_job.h"
 #include "ffmpeg_report.h"
 
 #include "util/log.h"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace ffmpegbro {
@@ -43,47 +42,14 @@ MediaInput resolveInput(const ExportSettings& s, int index, const std::string& p
 
 namespace {
 
-struct Job {
-    std::mutex mu;
-    ExportStatus status;
-    std::atomic<bool> cancel{false};
-    std::atomic<bool> running{false};
-    std::thread thread;
-};
-
-Job& job() {
-    static Job j;
-    return j;
-}
-
-void setStatus(const ExportStatus& s) {
-    Job& j = job();
-    std::lock_guard<std::mutex> lock(j.mu);
-    j.status = s;
-}
-
-/// Clears the running flag however the job leaves — including the early return
-/// when the file cannot be opened at all. Without this, one failed render (a
-/// codec this build lacks, a path that cannot be written) leaves the flag set
-/// and every export after it is refused with "already running".
-///
-/// It closes the report's render number too, and it is declared *first* in
-/// `runExport` so that it runs *last*: the writer is torn down before this, and
-/// what libav says while a muxer closes a file belongs to the render that
-/// opened it.
-struct RunningFlag {
-    ~RunningFlag() {
-        endRenderReport();
-        job().running.store(false);
-    }
-};
+void setStatus(const ExportStatus& s) { job::publish(s); }
 
 /// The whole render, as a walk: ask the edit what the output looks like at
 /// this instant, hand it to the writer, say how far along it is. Every step
 /// past "how far along" belongs to something else, which is what keeps this
 /// readable as the sequence it is.
 void runExport(ExportSettings s, std::vector<ExportClip> clips) {
-    RunningFlag clearOnExit;
+    job::Held slot;
     const auto began = std::chrono::steady_clock::now();
     const auto secondsSince = [&began] {
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
@@ -144,7 +110,7 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
     setStatus(st);
 
     for (int64_t n = 0; n < total; ++n) {
-        if (job().cancel.load()) {
+        if (job::stopping()) {
             st.state = ExportStatus::State::Cancelled;
             st.stage = "cancelled";
             break;
@@ -236,10 +202,10 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
     // workspace's preview does, chaining a lossless reference into the
     // candidate. With the flag cleared afterwards there is a window, short but
     // perfectly reachable, where the status says finished and the next start is
-    // refused with "an export is already running". The RunningFlag guard still
+    // refused with "an export is already running". The `job::Held` guard still
     // covers every path that leaves without getting here; storing false twice
     // costs nothing.
-    job().running.store(false);
+    job::release();
     setStatus(st);
 
     // The report's last word about this render, said after the file is closed
@@ -272,14 +238,6 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
 
 bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& clips,
                  std::string* error) {
-    Job& j = job();
-    if (j.running.load()) {
-        if (error) *error = "an export is already running";
-        return false;
-    }
-    // The previous thread has set running=false but may not have returned yet.
-    if (j.thread.joinable()) j.thread.join();
-
     ExportSettings s = settings;
     // yuv420p has no half pixels, and an odd canvas is a failure at
     // avcodec_open2 with an unhelpful message. Round rather than refuse —
@@ -306,35 +264,24 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
         return false;
     }
 
-    j.cancel.store(false);
-    j.running.store(true);
-    // Numbered before the thread exists, so that the first thing the render
-    // says — which is often the reason it will not start — already carries the
-    // render it belongs to.
-    beginRenderReport();
+    if (!job::claim(s.path, error)) return false;
     {
-        std::lock_guard<std::mutex> lock(j.mu);
-        j.status = ExportStatus{};
-        j.status.state = ExportStatus::State::Running;
-        j.status.path = s.path;
-        j.status.stage = "starting";
-        j.status.framesTotal = std::max<int64_t>(1, std::llround((s.endTime - s.startTime) * s.fps));
+        // A render knows how long it is before it starts, which is the whole
+        // difference between it and a recording: this number is what makes a
+        // percentage and an estimate mean anything, and a job with no end
+        // leaves it at zero rather than inventing one. See ffmpeg_capture.h.
+        ExportStatus st = job::status();
+        st.framesTotal = std::max<int64_t>(1, std::llround((s.endTime - s.startTime) * s.fps));
+        job::publish(st);
     }
-    j.thread = std::thread(runExport, s, clips);
+    job::run([s, clips] { runExport(s, clips); });
     return true;
 }
 
-ExportStatus exportStatus() {
-    Job& j = job();
-    std::lock_guard<std::mutex> lock(j.mu);
-    return j.status;
-}
+ExportStatus exportStatus() { return job::status(); }
 
-void cancelExport() { job().cancel.store(true); }
+void cancelExport() { job::stop(); }
 
-void waitForExport() {
-    Job& j = job();
-    if (j.thread.joinable()) j.thread.join();
-}
+void waitForExport() { job::wait(); }
 
 } // namespace ffmpegbro

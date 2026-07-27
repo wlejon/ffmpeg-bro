@@ -124,12 +124,51 @@ let wanted = null;
 
 function wantFocus(key, name) { wanted = { key, name }; }
 
+/// What is being used *now* — which field, and what is half-typed into it —
+/// taken before the cards are thrown away.
+///
+/// `wantFocus` above records the intent of an edit, which covers the redraw
+/// that edit causes and no other. It is not the only thing that redraws this
+/// stage: a node preview arriving a second later rebuilds every card too, and
+/// it does it while somebody is in the middle of typing into one of them.
+///
+/// **Both halves of "the field you are using" have to survive that**, and the
+/// value is the half that bites. A card is built from the model, and what has
+/// been typed and not yet committed is not in the model — commits are on
+/// `change`, deliberately, because committing on `input` locks the node
+/// between keystrokes. So a preview arriving mid-word rebuilds the field from
+/// the last committed value and silently eats the rest of what was typed. The
+/// value is read off the document rather than tracked, because the document is
+/// the only thing that knows it.
+///
+/// Only for a redraw nobody asked for: a redraw *caused by* an edit has
+/// `wanted` already set by `wantFocus`, and putting the old text back over the
+/// value that edit just committed would be undoing it.
+export function noteFocus(root) {
+    if (wanted || !root) return;
+    const active = document.activeElement;
+    if (!active || !active.getAttribute) return;
+    const name = active.getAttribute('data-f-name');
+    if (!name) return;
+    // Only a field on a card, and only one still in this container: a search
+    // box in the panel beside the graph is not something a card rebuild
+    // disturbs, and refocusing it would be taking focus rather than keeping it.
+    let card = active.parentNode;
+    while (card && card.getAttribute && !card.getAttribute('data-key')) card = card.parentNode;
+    if (!card || !card.getAttribute) return;
+    if (!root.contains || !root.contains(card)) return;
+    wanted = { key: card.getAttribute('data-key'), name, value: active.value };
+}
+
 export function restoreFocus(root) {
     if (!wanted || !root) return;
-    const { key, name } = wanted;
+    const { key, name, value } = wanted;
     wanted = null;
     const node = root.querySelector(`[data-key="${key}"] [data-f-name="${name}"]`);
-    if (node && node.focus) { try { node.focus(); } catch (e) { /* not focusable here */ } }
+    if (!node) return;
+    if (value !== undefined && node.value !== undefined && node.value !== value)
+        node.value = value;
+    if (node.focus) { try { node.focus(); } catch (e) { /* not focusable here */ } }
 }
 
 // ── the card ───────────────────────────────────────────────────────────────

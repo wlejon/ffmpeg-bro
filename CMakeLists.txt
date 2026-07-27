@@ -38,8 +38,10 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
     src/native/ffmpeg_bindings.cpp
     src/native/ffmpeg_capabilities.cpp
+    src/native/ffmpeg_capture.cpp
     src/native/ffmpeg_export.cpp
     src/native/ffmpeg_input.cpp
+    src/native/ffmpeg_job.cpp
     src/native/ffmpeg_report.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
@@ -121,6 +123,18 @@ target_link_libraries(ffmpeg-bro-seqtest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-seqtest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# A device is an input and recording is a job: an endless input reported as
+# endless, a bounded capture that ends by itself, and a stopped one that still
+# leaves a file with an index in it. Driven by `lavfi`, which is a device and
+# exists on every machine.
+add_executable(ffmpeg-bro-capturetest tests/capture_test.cpp)
+target_link_libraries(ffmpeg-bro-capturetest PRIVATE ffmpeg-bro-core bro_video)
+# libav's headers as well: what was recorded is checked by opening it and
+# asking libavformat whether it can seek back to the start, which is what
+# having an index means.
+target_include_directories(ffmpeg-bro-capturetest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
 target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
@@ -155,6 +169,11 @@ add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}"
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
+# Needs no fixture: the device it records from is `lavfi`, which produces its
+# own pictures. It writes into out/, so it wants the source directory.
+add_test(NAME capture COMMAND ffmpeg-bro-capturetest "out")
+set_tests_properties(capture PROPERTIES TIMEOUT 300
+                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME ui-player COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")

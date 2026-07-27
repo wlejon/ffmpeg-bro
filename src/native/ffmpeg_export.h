@@ -367,9 +367,25 @@ struct ExportStatus {
     enum class State { Idle, Running, Done, Failed, Cancelled };
 
     State state = State::Idle;
-    double progress = 0.0;          // 0..1
+    double progress = 0.0;          // 0..1, and meaningless when `openEnded`
     int64_t framesDone = 0;
+
+    /// How many frames this job will write, or **0 for "nobody knows"**.
+    ///
+    /// The same rule `inputDuration` follows, and for the same reason: zero is
+    /// the honest answer for a job with no end, not a number to be papered
+    /// over further up. A render always knows; a recording only knows when the
+    /// device was given a `-t`.
     int64_t framesTotal = 0;
+
+    /// This job runs until somebody stops it.
+    ///
+    /// True for a recording with no `-t` — see ffmpeg_capture.h — and it is
+    /// what chunk 13's streaming output will set for the same reason. Anything
+    /// drawing a progress bar has to read it: a fraction of an unknown total is
+    /// zero, and a bar sitting at zero for ten minutes says the job is stuck.
+    bool openEnded = false;
+
     double elapsedSec = 0.0;
     double encodeFps = 0.0;         // output frames per second of wall clock
     int64_t bytesWritten = 0;

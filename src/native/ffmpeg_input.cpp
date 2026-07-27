@@ -3,6 +3,7 @@
 #include "ffmpeg_input.h"
 
 #include "export_frame.h"       // avErr
+#include "ffmpeg_capabilities.h"  // isInputDevice
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -116,6 +117,15 @@ double inputLimit(const MediaInput& in) {
 
 bool inputIsEndless(const MediaInput& in) {
     if (in.streamLoop != 0) return true;
+    // A device does not end. A camera, a screen grabber and a sound card go on
+    // producing for as long as they are asked to, and libavformat reports no
+    // duration for any of them — which is the same *state* an unplayed still
+    // is in and a completely different *fact*: a still has one picture and
+    // nobody has said how long to hold it, and a device has no last picture at
+    // all. Both come out here, because what everything above the model needs
+    // to know is the same in both cases: `-t` is the only thing that can say
+    // how long this input is.
+    if (isInputDevice(in.format)) return true;
     // `-loop 1` is the `image2` demuxer's own option and travels in the bag,
     // which is right — it is exactly what the command line says and exactly
     // what `av_dict_set` is handed. So this reads the bag rather than a field
