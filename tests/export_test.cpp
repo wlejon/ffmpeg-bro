@@ -1073,6 +1073,119 @@ int main(int argc, char* argv[]) {
                "and so is an input nothing feeds (%s)", st.error.c_str());
     }
 
+    // ── a graph nothing derived ────────────────────────────────────────────
+    //
+    // Everything above renders a graph the *derivation* wrote: one shape, with
+    // every pad wired the moment it was made. The Graph stage can now be wired
+    // by hand, which means the renderer is going to be handed shapes nothing in
+    // this application has ever produced — several inputs meeting at a filter
+    // that is not `overlay`, a picture and a sound arriving at different
+    // multi-input filters, and an output whose size no clip and no setting
+    // decides.
+    //
+    // So: two reads of one file, stacked side by side and mixed together,
+    // written as a person would wire it. The picture is twice as wide as
+    // anything the settings say, which is the whole reason `sizeFromGraph`
+    // exists — nothing outside libavfilter knows how big the picture is half
+    // way through a graph, and a writer opened for the wrong size is a scaler
+    // quietly resizing every frame.
+    {
+        std::printf("\na multi-input graph nobody derived\n");
+
+        const std::string outH = "out/export-graph-stack.mp4";
+        char text[1024];
+        std::snprintf(text, sizeof(text),
+            "[0:v]trim=start=0:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,format=rgba[l];"
+            "[1:v]trim=start=0:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,hflip,format=rgba[r];"
+            "[l][r]hstack=inputs=2[vout]"
+            "%s",
+            kSpan, kW / 2, kH,
+            kSpan, kW / 2, kH,
+            srcHasAudio
+                ? ";[0:a]atrim=start=0:end=2,asetpts=PTS-STARTPTS[a1];"
+                  "[1:a]atrim=start=0:end=2,asetpts=PTS-STARTPTS,volume=0.5[a2];"
+                  "[a1][a2]amix=inputs=2:normalize=0[aout]"
+                : "");
+
+        ExportSettings sh = baseSettings(outH);
+        sh.endTime = 1.0;
+        // The size is the graph's, not the settings'. Asked of the sink after
+        // the graph is configured, which is the only thing that knows.
+        sh.sizeFromGraph = true;
+        // One file, read twice, as two inputs. That is what two `-i` of the
+        // same path means to ffmpeg and it is what a person wiring two reads of
+        // one clip into an `hstack` is asking for.
+        sh.filterInputs = {{"0:v", first, "v"}, {"1:v", first, "v"}};
+        if (srcHasAudio) {
+            sh.filterInputs.push_back({"0:a", first, "a"});
+            sh.filterInputs.push_back({"1:a", first, "a"});
+        }
+        sh.filterGraph = text;
+
+        st = render(sh, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a hand-wired multi-input graph renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            const ProbeResult oh = probeMedia(outH);
+            const StreamSummary* ov = nullptr;
+            for (const auto& s2 : oh.streams) if (s2.kind == "video") { ov = &s2; break; }
+            check(oh.ok && ov, "and the result opens as media");
+            if (ov) {
+                // Twice as wide as the render was configured for, because the
+                // graph said so and was asked. An `hstack` whose answer was not
+                // asked for comes out squeezed into the settings' width, which
+                // is a picture rather than an error.
+                checkf(ov->width == (kW / 2) * 2 && ov->height == kH,
+                       "at the size the graph produces rather than the size the "
+                       "settings asked for (%dx%d)", ov->width, ov->height);
+            }
+            // Both halves are real pictures. The right one is the same frame
+            // flipped, so a stack that dropped one input would be black down
+            // one side — which the size check above cannot see.
+            VideoPipeline v;
+            if (v.open(outH)) {
+                v.advanceTo(static_cast<TimeNs>(0.5 * 1e9));
+                if (v.hasFrame()) {
+                    const auto& rgba = v.currentRgba();
+                    const int w = ov ? ov->width : 0;
+                    double left = 0, right = 0;
+                    int lit = 0;
+                    for (int y = 8; y < kH; y += 16)
+                        for (int x = 4; x < w / 2; x += 8) {
+                            const size_t a = (size_t(y) * w + x) * 4;
+                            const size_t b = (size_t(y) * w + (w - 1 - x)) * 4;
+                            if (a + 2 >= rgba.size() || b + 2 >= rgba.size()) continue;
+                            left += rgba[a] + rgba[a + 1] + rgba[a + 2];
+                            right += rgba[b] + rgba[b + 1] + rgba[b + 2];
+                            lit++;
+                        }
+                    // `hflip` on the right half means the mirrored sample is the
+                    // same source pixel, so the two sides agree closely — and
+                    // both being lit at all is what says two inputs arrived.
+                    const double avg = lit ? (left + right) / (2 * lit) : 0;
+                    checkf(lit > 0 && avg > 6.0,
+                           "with a picture in both halves (mean %.1f over %d samples)",
+                           avg, lit);
+                    checkf(lit > 0 && std::fabs(left - right) < std::max(left, right) * 0.35,
+                           "and the flipped half is the same picture (%.0f vs %.0f)",
+                           left, right);
+                }
+            } else {
+                check(false, "the stacked render opens for comparison");
+            }
+
+            if (srcHasAudio && srcAudible) {
+                AudioPeaks pk;
+                bool loud = false;
+                if (analyzeAudioPeaks(outH, 32, pk))
+                    for (float v2 : pk.rms) if (v2 > 0.0005f) { loud = true; break; }
+                check(loud, "and the two sounds the amix was handed are in it");
+            }
+        }
+    }
+
     // ── what the render said ───────────────────────────────────────────────
     //
     // A render used to be able to report four numbers and, on failure, one
