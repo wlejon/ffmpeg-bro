@@ -131,7 +131,7 @@ against footage the fixtures do not resemble:
 
 # the encode side end to end: the spine's stages, controls -> ffmpeg options,
 # the advanced option editor, the command bar, both halves of the A/B preview,
-# and loading the result back
+# the stream list and the copy decision on it, and loading the result back
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 
 # the Sources stage as the input editor: an input added by typing a path with
@@ -285,6 +285,7 @@ them to change alone:
 | `ffmpeg_capture.*` | recording a device: the job whose end is somebody pressing stop |
 | `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
 | `export_graph.*` | libavfilter's answer to the same two questions |
+| `export_copy.*` | **the packet path** — streams that are not made at all, and where a copy can start |
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
 | `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio**, plus the three stages that are neither: forced keyframes, two-pass, and the packet chain |
@@ -344,11 +345,10 @@ a list. Four things about it are load-bearing:
   UI's `previewSpec()` uses to say "a render about the picture".
 - **`ExportStream::source` is `-map` written down.** "composite" and "mix" are
   *composed* sources rather than input streams, which is why they are named and
-  not numbered — no input index means "everything, stacked". The vocabulary has
-  room in it for `copy:0:1`, which is where chunk 12's packet path attaches: the
-  writer branches on the prefix rather than growing a second list beside this
-  one. `openVideoStream`/`openAudioStream` already refuse anything else *with
-  that sentence in the error*, so the branch has a named place to go.
+  not numbered — no input index means "everything, stacked". `copy:0:1` is the
+  third answer and it is an input and a stream in it: the writer branches on the
+  prefix in `Writer::open` rather than growing a second list beside this one.
+  See the packet path below.
 - **The list order is the muxer's numbering.** Streams are created in list
   order and there is no second sorting pass anywhere, which is what makes
   `-metadata:s:a:1` mean the stream the UI drew second.
@@ -357,6 +357,62 @@ a list. Four things about it are load-bearing:
   "Invalid data found when processing input" and no mention of the tag.
   `ui/export/warnings.js` says so before the render; `codecTags()` is what it
   asks.
+
+**The packet path is a stream that is never made.** `export_copy.*` is the whole
+of it: a `CopyStreams` opens one demuxer per input — however many streams are
+taken from it, because that is what `-i` means — and pumps packets into the
+writer, which puts them through the same bitstream chain and the same
+`av_interleaved_write_frame` an encoder's packets go through. It cost the writer
+one branch and one field (`Out::srcTimeBase`, an encoder's time base or an input
+stream's), because `writePacket`/`drainBsf` were already packet-level and
+codec-agnostic. Six things here are load-bearing:
+
+- **There are two loops in `runPass` and only one of them is about frames.** A
+  copy is not fed per output frame, so `copies.pumpTo(t)` runs *beside* the frame
+  loop, catching up to the frame just written: `av_interleaved_write_frame`
+  queues a stream that runs ahead of its neighbours, so writing a whole copied
+  track first would hold an hour of packets in memory. `composesAnything()`
+  decides whether there is a frame loop at all — a render whose every stream is
+  copied never builds a `FrameSource` and never opens a decoder, and its progress
+  comes from the copy's own clock with `framesTotal` at zero.
+- **Two clocks had to be told apart, and both cost an afternoon.** A packet's dts
+  begins a *reorder delay before* the container's `start_time` — 80 ms, two
+  frames, in every mp4 this application writes — so measuring a copy the way
+  every other reader here measures an input put the first keyframe at −0.08 s,
+  outside a window starting at zero, and offered the file's *second* keyframe as
+  the first place a cut could start. `streamOrigin()` counts from the stream's own
+  first packet instead (index entry zero, or `start_time`). Worse, and separately:
+  **mp4's seek takes a presentation timestamp while its index holds decode ones.**
+  `mov_read_seek` subtracts the edit-list offset itself before searching, so an
+  index timestamp handed to it verbatim searched two frames early, found no
+  keyframe, walked *backwards to the start of the file*, and returned success — a
+  cut two seconds in silently copied the whole thing. `seekTarget()` is the
+  moment as the timeline means it and `streamZero()` is the moment as the index
+  reports it; they are different functions on purpose.
+- **A copy can only start at a keyframe, and the seek is backward.** So it lands
+  at or *before* the in-point and can never skip a frame the copy wanted — safe by
+  construction, exactly as `ExportGraphInput::from` is. What that costs is the
+  caller's to show, which is what `keyframesOf()` and `bro.ffmpeg.keyframes` exist
+  for.
+- **The first packet decides the file's zero, one zero per input.** Two streams
+  copied out of one file keep the offset they had, which is the whole of A/V sync;
+  a zero taken per stream would move a soundtrack by however far the picture's
+  first keyframe was from it.
+- **A copied audio stream is not the mix.** `outputStreams()` drops audio streams
+  on a silent timeline and must not drop this one; `Writer::hasAudio()` reports
+  only mix-fed streams, or a render would decode every clip's sound to hand it to
+  nobody. Both are one-line exceptions and both are load-bearing: "replace the
+  audio" and "extract the soundtrack" are impossible without them.
+- **A codec named on a copied stream is an error.** There is no encoder, so it
+  would be a setting that silently did nothing — the failure every option bag in
+  this repo is written against. Likewise `avformat_query_codec` returning a
+  definite no stops the render with the muxer and the codec both named;
+  `AVERROR_PATCHWELCOME` is carried through as the shrug it is.
+
+Two refusals deliberately *do not* live here. A copy conflicting with the edit —
+two clips, a filter on the graph, a crop, an output of a different size — is the
+UI's, in `ui/export/warnings.js`, because the standing rule is that a refusal
+arrives where the decision is made and not at render time.
 
 **`AVCodecTag` is opaque and its tables cannot be walked.** `av_codec_get_tag2`
 asks "what tag for this codec here" and `av_codec_get_id` asks "what codec for
@@ -615,7 +671,7 @@ through one set of seek/timestamp/reordering semantics.
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
 `openOnStart`, `encoders`, `muxers`, `demuxers`, `decoders`, `protocols`, `devices`,
 `filters`, `bitstreamFilters`, the six `*Options(name)` lookups, `deviceSources`,
-`inputs.*`, `render.*`,
+`keyframes`, `inputs.*`, `render.*`,
 …) via `EngineConfig::installHostBindings`, so it exists in every realm including
 workers. `probe()` is synchronous on purpose, and takes an input rather than only a
 path — probing wrong is the reason demuxer options exist, so a Sources stage showing
@@ -1272,9 +1328,17 @@ about them:
 - `export/streams.js` — **the Write stage is the output's stream list**, one row per
   stream the muxer will number, in that order. `#ex-streams` is the middle column of
   `#st-write`, between the destination and the verdict. This is the surface stream
-  copy (12), destinations (13) and subtitle tracks (14) attach to, so its shape
-  matters more than its polish. Five things here are decisions rather than layout:
+  copy (12) attached to and destinations (13) and subtitle tracks (14) will, so its
+  shape matters more than its polish. Six things here are decisions rather than
+  layout:
 
+  - **The first control on a row is where its content comes from**, and it changes
+    what the rest of the row can be: made (the composite, the mix, through an
+    encoder) or copied (`copy:0:1`, no encoder at all). A copied row states its
+    codec instead of offering one — there is nothing to choose, and a disabled menu
+    would say a choice was being withheld. `setSource()` is the one place that
+    moves a row between the two, and it drops what does not apply on the way: the
+    encoder going in, the span coming out.
   - **A row is a sentence, not a grid of labelled inputs** — "A2 · the mix, through
     aac · fra · “Commentary” · forced" — because what a person checks on this stage
     is whether that sentence is the one they meant. What a stream *has* is behind a
@@ -1287,10 +1351,12 @@ about them:
     the streams, so it is drawn beside them, and `ExportSettings` holds it the same
     way. Drawn among the streams it would invite "what is chapter 2's language",
     which has no answer.
-  - **`settings.audio` and the audio rows are one fact.** The Encode stage's Include
-    switch goes through `setAudioIncluded()`, which empties or refills the rows. Two
-    switches for one decision is how a render comes out silent while a track list
-    insists it should not have.
+  - **`settings.audio` and the audio rows are one fact** — the *mix-fed* ones. The
+    Encode stage's Include switch goes through `setAudioIncluded()`, which empties or
+    refills them. Two switches for one decision is how a render comes out silent
+    while a track list insists it should not have. A **copied** audio row is outside
+    it in both directions: the switch is about the thing the encoder is fed, and a
+    stream whose packets come out of a demuxer is not made of it.
   - **Nothing is tabled.** The dispositions are `bro.ffmpeg.dispositions` (every bit,
     through `av_disposition_to_string`), the fourccs are `bro.ffmpeg.codecTags(ext,
     codec)`, the codecs are the encoder lists. A row cannot offer what the render
@@ -1310,6 +1376,46 @@ about them:
     ten seconds. Which is also why the detail's fields commit on `change` and rewrite
     the row's tail in place rather than redrawing the list under the caret — the same
     build/measure split the range strip and the graph cards use.
+
+- `export/copy.js` — **the decision to copy a stream rather than encode it**, and
+  where a copy can start. `parseCopy`/`copySource` are the one place that reads and
+  writes `copy:<input>:<stream>`; `keyframesFor()` caches `bro.ffmpeg.keyframes`
+  against the input's *opening key* and the stream, so a re-probe with a different
+  demuxer answers again and a redraw does not. Three things about the surface:
+
+  - **The keyframes are drawn as the places they are.** `.ex-kf-strip` is the input's
+    own clock with a mark per keyframe and a line for the in-point; the gap between
+    them is exactly what the cut costs, and `inPointNote()` says it in words because
+    a strip answers "where" and only a sentence answers "and what does that mean".
+    Marks are DOM buttons rather than something drawn into a canvas, for the reason
+    the Graph stage's `+` is: hit-testing them by hand is work with a DOM node's
+    name on it.
+  - **The refusals live in `export/warnings.js`, not in the renderer.** A copy
+    contradicts the edit — a second clip, a filter on the graph, a crop, an output
+    of a different size — and every one of those is a setting somebody made that
+    will not be in the file. Said here because a render that dropped them would
+    *succeed* and hand back the input again, which is the worst outcome this stage
+    has. It also means `wantsVideo`/`wantsAudio` in that file count only the streams
+    an encoder is opened for: a container holding no encoder this build has is no
+    obstacle to a copy, and reading the encoder list at it would refuse the render
+    that works.
+  - **`Rewrap <file>` is a shortcut and not a mode.** It writes ordinary rows with
+    ordinary `copy:` sources into `settings.streams` and nothing on the stage
+    behaves differently afterwards — the same rule the Report drawer's measurement
+    shortcuts follow, where what you get is an ordinary node on the graph. It
+    deliberately leaves the container alone: which muxer to write is the whole of
+    the remaining decision and it is taken on its own control a foot away.
+
+  `ui/command.js` grew an input *plan* for this. A `-map` counts input files on the
+  command line and the graph's `[0:v]` counts the same list, so a copied input has to
+  be printed as one of those `-i`s and know its own printed index — graph inputs
+  first, copied ones appended, a file both read once. `-ss`/`-to` for a copy go in
+  front of the `-i` and are added to the input's own, because **an input seek is not
+  an output seek**: before the `-i` the demuxer jumps to the keyframe, which is why a
+  copy starts there; after it, the whole file is read and the front discarded. And
+  `graphUsed` decides whether a `-filter_complex` is printed at all — a rewrap maps
+  input pads and nothing else, so printing a composition nothing reads would describe
+  work the render is not doing.
 
   **`previewSpec()` in `export/spec.js` is how a preview avoids inheriting an
   eight-stream output.** The A/B comparison and every node preview exist to show what

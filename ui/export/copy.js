@@ -18,7 +18,7 @@
 //     demuxer's own index, and it is cached per input and stream because the
 //     stream list is rebuilt on every keystroke in a language field.
 
-import { inputs, asInput, lengthOf } from '../inputs.js';
+import { inputs, asInput } from '../inputs.js';
 
 /// `copy:0:1` → `{ input: 0, stream: 1 }`, or null for a composed source.
 export function parseCopy(source) {
@@ -100,8 +100,6 @@ export function keyframesFor(row) {
     return cache.get(key);
 }
 
-export function forgetKeyframes() { cache.clear(); }
-
 /// The keyframe a copy starting at `t` would actually begin on.
 ///
 /// At or *before*, never after: the seek is backward, because landing after
@@ -115,12 +113,6 @@ export function keyframeAtOrBefore(list, t) {
         else break;
     }
     return best;
-}
-
-export function keyframeAtOrAfter(list, t) {
-    if (!list || !list.times) return null;
-    for (const k of list.times) if (k >= t - 1e-6) return k;
-    return null;
 }
 
 /// What the in-point costs, as a sentence, or '' when it costs nothing.
@@ -144,15 +136,6 @@ export function inPointNote(row) {
     return `the nearest keyframe at or before ${want.toFixed(2)} s is ${land.toFixed(2)} s — ` +
            `a copy can only start on one, so ${slip.toFixed(2)} s more than you asked for ` +
            'will be at the front of the file';
-}
-
-/// How long this row's copy is, in seconds, or 0 for "to the end".
-export function copyLength(row) {
-    const to = Number(row.copyTo) || 0;
-    if (to > 0) return Math.max(0, to - (Number(row.copyFrom) || 0));
-    const input = copiedInput(row);
-    const total = input ? lengthOf(input) : 0;
-    return total > 0 ? Math.max(0, total - (Number(row.copyFrom) || 0)) : 0;
 }
 
 /// Turn the whole output into a copy of one input — the rewrap.

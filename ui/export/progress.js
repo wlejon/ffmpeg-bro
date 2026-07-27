@@ -74,7 +74,13 @@ function running(p, pct) {
     return [
         bar(pct),
         twoPass,
-        line(`${pct}% · frame ${p.frames} of ${p.totalFrames}`, 'mono'),
+        // A render that copies packets has no output frames to count — what it
+        // writes is packets and how many there are is not a thing anybody knows
+        // before reading them, which is why `totalFrames` is zero. "frame 40 of
+        // 0" is the sort of readout that looks like a bug in the progress bar,
+        // so it says what it is counting instead.
+        line(p.totalFrames ? `${pct}% · frame ${p.frames} of ${p.totalFrames}`
+                           : `${pct}% · ${p.frames} packets copied`, 'mono'),
         line(`${p.fps.toFixed(1)} fps · ${elapsed(p.elapsed)} so far` +
              (left > 0.5 ? ` · about ${elapsed(left)} left` : '') +
              ` · ${bytes(p.bytes)}`, 'mono dim'),
@@ -86,7 +92,7 @@ function done(p) {
     return [
         bar(100, 'done'),
         line(`Wrote ${basename(p.path)}`, 'good'),
-        line(`${p.frames} frames · ${bytes(p.bytes)} · ` +
+        line(`${p.frames} ${p.totalFrames ? 'frames' : 'packets'} · ${bytes(p.bytes)} · ` +
              `${elapsed(p.elapsed)} at ${p.fps.toFixed(1)} fps`, 'mono dim'),
         line(p.path, 'dim'),
         said(),
@@ -105,8 +111,9 @@ function stopped(p, pct) {
         bar(pct, 'stopped'),
         line((cancelled ? 'Stopped' : 'Export failed') + (p.error ? `: ${p.error}` : ''),
              cancelled ? 'dim' : 'ex-failed'),
-        cancelled ? line(`${p.frames} of ${p.totalFrames} frames were written, and the ` +
-                         `part it got to is playable`, 'mono dim') : null,
+        cancelled ? line((p.totalFrames ? `${p.frames} of ${p.totalFrames} frames were written`
+                                        : `${p.frames} packets were copied`) +
+                         ', and the part it got to is playable', 'mono dim') : null,
         cancelled ? line(p.path, 'dim') : null,
         said(),
         div('ex-line', el('button', { cls: 'tiny', 'data-f': 'back', text: 'Back to settings',
