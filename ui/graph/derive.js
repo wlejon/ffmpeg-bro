@@ -246,24 +246,7 @@ export function clipOf(anchor) {
 /// wolf on every field anyone had ever touched.
 function applyOverlay(g, points, ov, overrides) {
     if (!ov) return;
-
-    for (const node of g.nodes) {
-        const lock = node.anchor && ov.locks ? ov.locks[node.anchor] : null;
-        if (!lock) continue;
-        const keys = [];
-        for (const k of Object.keys(lock.params || {}))
-            if (String(node.params[k]) !== String(lock.params[k])) keys.push(k);
-        // Joined on a character no argument can contain, and written as an
-        // escape rather than as itself: a literal NUL in the source makes every
-        // tool that reads this file treat it as a binary and refuse to search it.
-        if (lock.pos && lock.pos.join('\u0000') !== node.pos.join('\u0000'))
-            keys.push('arguments');
-        Object.assign(node.params, lock.params);
-        if (lock.pos) node.pos = lock.pos.slice();
-        node.locked = true;
-        overrides.push({ anchor: node.anchor, filter: node.filter,
-                         clip: clipOf(node.anchor), control: controlOf(node.anchor), keys });
-    }
+    applyLocks(g, g.nodes, ov, overrides);
 
     for (const rec of ov.inserts || []) {
         const point = points.find((p) => p.id === rec.anchor);
@@ -286,6 +269,35 @@ function applyOverlay(g, points, ov, overrides) {
         // node is a filter, so what leaves it leaves by its only pad.
         point.at = node.id;
         point.atPort = 0;
+    }
+}
+
+/// The locks over a given set of nodes.
+///
+/// Taken as a list rather than reaching for `g.nodes` because it is run twice:
+/// the skeleton is locked before anything is spliced into it, and the output
+/// colour conversion is not part of the skeleton — it is attached at the very
+/// end, after the user's own structure, for reasons written where it happens.
+/// A node that arrives after the pass has run would otherwise be the one node
+/// on the screen that cannot be edited.
+function applyLocks(g, nodes, ov, overrides) {
+    if (!ov || !ov.locks) return;
+    for (const node of nodes) {
+        const lock = node.anchor && ov.locks ? ov.locks[node.anchor] : null;
+        if (!lock) continue;
+        const keys = [];
+        for (const k of Object.keys(lock.params || {}))
+            if (String(node.params[k]) !== String(lock.params[k])) keys.push(k);
+        // Joined on a character no argument can contain, and written as an
+        // escape rather than as itself: a literal NUL in the source makes every
+        // tool that reads this file treat it as a binary and refuse to search it.
+        if (lock.pos && lock.pos.join('\u0000') !== node.pos.join('\u0000'))
+            keys.push('arguments');
+        Object.assign(node.params, lock.params);
+        if (lock.pos) node.pos = lock.pos.slice();
+        node.locked = true;
+        overrides.push({ anchor: node.anchor, filter: node.filter,
+                         clip: clipOf(node.anchor), control: controlOf(node.anchor), keys });
     }
 }
 
@@ -357,6 +369,43 @@ function declarePads(g) {
         n.ins = pads.ins.map((s) => ({ stream: s }));
         n.outs = pads.outs.map((s) => ({ stream: s }));
     }
+}
+
+/// The conversion out of the compositing space and into the encoder's, spliced
+/// in front of the video sink.
+///
+/// This is the step that decides what colour the render is: left to swscale's
+/// default it is BT.601 whatever the tag says, and the picture comes back green
+/// in the shadows. It is only in the *printed* graph, because on this
+/// application's own path the writer does it — see `forRender` — which is why
+/// it is attached here rather than built into the skeleton, and why there is no
+/// insert point and no socket anywhere behind it.
+///
+/// Returns the nodes it made, so the caller can offer them to the locks: a node
+/// that arrives after the lock pass has run would be the one node on the screen
+/// that cannot be edited.
+function outputColour(g, spec, colour) {
+    const sink = g.byAnchor('out:v');
+    const e = sink ? g.inEdges(sink)[0] : null;
+    // Nothing is mapped — a wire somebody cut. The checker says so; putting a
+    // colour conversion on the end of nothing would not.
+    if (!e) return [];
+    const src = g.node(e.from);
+    if (!src) return [];
+
+    const steps = [{
+        filter: 'scale', anchor: 'output/color',
+        params: { in_range: 'full', out_color_matrix: colour.sws, out_range: colour.range },
+    }];
+    if (spec.pixelFormat)
+        steps.push({ filter: 'format', anchor: 'output/format',
+                     posNames: ['pix_fmts'], pos: [spec.pixelFormat] });
+
+    const before = g.nodes.length;
+    const tail = g.run({ node: src, out: e.fromPort || 0 }, steps);
+    g.disconnectAt(sink, 0);
+    g.connect(tail, sink, 0);
+    return g.nodes.slice(before);
 }
 
 /// A pad name belongs at the end of the run that produces it.
@@ -510,21 +559,7 @@ export function derive(spec, sources, opts = {}) {
         return tail;
     });
 
-    // The last overlay carries the conversion out of the compositing space and
-    // into the encoder's, which is the step that decides what colour the render
-    // is. Left to swscale's default it is BT.601 whatever the tag says, and the
-    // picture comes back green in the shadows.
     const colour = outputColor(spec);
-    const toEncoder = [];
-    if (!opts.forRender) {
-        toEncoder.push({
-            filter: 'scale', anchor: 'output/color',
-            params: { in_range: 'full', out_color_matrix: colour.sws, out_range: colour.range },
-        });
-        if (spec.pixelFormat)
-            toEncoder.push({ filter: 'format', anchor: 'output/format',
-                             posNames: ['pix_fmts'], pos: [spec.pixelFormat] });
-    }
 
     let over = base;
     let lastOverlay = null;
@@ -540,7 +575,6 @@ export function derive(spec, sources, opts = {}) {
         const steps = [{ filter: 'overlay', anchor: `composite/overlay:${key.slice(5)}`,
                          posNames: ['x', 'y'], pos: [px(x), px(y)],
                          params: { eof_action: 'pass' } }];
-        if (last) steps.push(...toEncoder);
         over = g.run([over, heads[i]], steps, last ? 'vout' : `o${i}`);
         lastOverlay = g.byAnchor(`composite/overlay:${key.slice(5)}`);
     });
@@ -596,6 +630,26 @@ export function derive(spec, sources, opts = {}) {
     applyOverlay(g, points, opts.overlay, overrides);
     const stranded = [];
     applyStructure(g, opts.overlay, stranded);
+    // **The conversion into the encoder's colour goes on last, in front of the
+    // sink, after everything a person did.**
+    //
+    // It used to ride on the back of the last derived `overlay`, which was
+    // right while the only thing that could be added to a graph was a filter
+    // spliced onto a wire — there was no wire after it, deliberately, so
+    // nothing could get between the conversion and the encoder.
+    //
+    // A hand-made wire can. And the moment it can, those two nodes become the
+    // one place on the screen it must not be joined to: they exist in the graph
+    // this application *prints* and not in the one it *runs*, so a wire ending
+    // on `output/color` is a wire that is there in the command you copied and
+    // absent from the render you got. Attaching them here — after the user's
+    // structure, to whatever ends up feeding the sink — makes that unreachable
+    // rather than something to be checked for, and keeps the two forms of the
+    // graph differing by exactly the one chain they are supposed to.
+    if (!opts.forRender) {
+        applyLocks(g, outputColour(g, spec, colour), opts.overlay, overrides);
+        declarePads(g);
+    }
     moveLabelsToChainEnds(g);
 
     // What is known to differ about *this* render, rather than a fixed

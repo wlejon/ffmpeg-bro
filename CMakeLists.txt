@@ -215,9 +215,16 @@ add_test(NAME ui-capture COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_capture.js")
 set_tests_properties(ui-capture PROPERTIES TIMEOUT 600
                      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# ui-graph is mostly the model, which needs nothing, but the wiring gesture is
+# a gesture: sockets have to be somewhere before a wire can be dragged between
+# them, and nothing is anywhere until there is an edit to derive a graph from.
+# So it takes a fixture and skips that half without one, which is what keeps it
+# runnable by hand against a real file.
 add_test(NAME ui-graph COMMAND ffmpeg-bro-headless
-         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_graph.js")
-set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_graph.js"
+         -- "${FIXTURE_A}")
+set_tests_properties(ui-filtergraph PROPERTIES TIMEOUT 300)
+set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED media TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.

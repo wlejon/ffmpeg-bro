@@ -11,8 +11,12 @@
 // only ever produces one shape and the chain rule has to be right for shapes it
 // does not produce yet.
 //
-// Usage: ffmpeg-bro-headless ui/ tests/ui_graph.js
-//        (no media file — nothing here decodes anything)
+// Usage: ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <media-file>]
+//
+// Most of it needs no media: a graph is a plain object and every question below
+// is about the shape of one. The last section is the wiring *gesture*, which
+// needs sockets to exist somewhere on a screen — and nothing is anywhere until
+// there is an edit to derive a graph from — so it is skipped without a file.
 
 function pump(ms) {
     const steps = Math.max(1, Math.ceil(ms / 20));
@@ -45,8 +49,51 @@ function same(actual, expected, what) {
 }
 
 waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
-const { makeGraph, restore, derive, print, layout, portY } = globalThis.__ffmpegBro.graph;
+const { makeGraph, restore, derive, print, layout, portY,
+        problems, padsOf, socketAt } = globalThis.__ffmpegBro.graph;
 ok(typeof makeGraph === 'function', 'the graph model is on the test surface');
+
+// ── how many pads a filter has ─────────────────────────────────────────────
+//
+// The question the whole of the free graph rests on, and the one thing on this
+// screen that libavfilter does not simply answer: a dynamic filter's pad count
+// is a function of an option value, and nothing in the metadata says which
+// option.
+
+console.log('\npads');
+{
+    same(JSON.stringify(padsOf('overlay')), '{"ins":["v","v"],"outs":["v"]}',
+         'a fixed filter is what libavfilter declares');
+    same(JSON.stringify(padsOf('color')), '{"ins":[],"outs":["v"]}',
+         'a source reads nothing');
+    same(padsOf('nosuchfilterhere'), null,
+         'and a filter this build does not have gets no shape invented for it');
+
+    // **The dynamic flag is not the count.** `scale` carries
+    // AVFILTER_FLAG_DYNAMIC_INPUTS — it grows a pad for `scale2ref` — while
+    // declaring one input and having nothing in its option table that counts
+    // anything. Read as a count, its first positional argument made
+    // `scale=1920:1080` a node with 1920 input sockets, clamped to 64 and
+    // reported as sixty-three empty pads on every graph the application drew.
+    same(padsOf('scale', {}, ['1920', '1080']).ins.length, 1,
+         'a filter that is dynamic and says nothing about how many keeps the pads it declares');
+
+    same(padsOf('amix').ins.length, 2, 'amix takes what its own option table defaults to');
+    same(padsOf('amix', { inputs: '3' }).ins.length, 3, 'and what it is told');
+    same(padsOf('amix', {}, ['4']).ins.length, 4,
+         'including as a positional argument — amix=4 is amix=inputs=4');
+    same(padsOf('amix').ins.join(''), 'aa', 'its pads carry the stream it produces');
+    same(padsOf('split', {}, ['3']).outs.length, 3, 'split counts on the way out');
+    same(padsOf('hstack', { inputs: '3' }).ins.join(''), 'vvv', 'and a picture filter is a picture');
+
+    // concat is the one that does not fit a single count, because its count
+    // multiplies: three segments of one picture and one sound is six pads in
+    // and two out, and the pads are grouped per segment.
+    same(padsOf('concat', { n: '3', v: '1', a: '1' }).ins.join(''), 'vavava',
+         'concat groups its pads per segment');
+    same(padsOf('concat', { n: '3', v: '1', a: '1' }).outs.join(''), 'va',
+         'and produces one set of them');
+}
 
 // ── nodes and wires ────────────────────────────────────────────────────────
 
@@ -212,6 +259,131 @@ console.log('\nan unlabelled chain end still prints');
     ok(/^\[0:v\]hflip\[\w+\]$/.test(p.chains[0]), `a name is invented: ${p.chains[0]}`);
     same(p.video, `[${p.chains[0].match(/\[(\w+)\]$/)[1]}]`,
          'and the sink reports the same invented one, not a second one');
+}
+
+// ── what a graph will not run for ──────────────────────────────────────────
+//
+// The printer prints whatever it is given, because half of what asks it is a
+// *pruned* view where outputs deliberately go nowhere — that is what previewing
+// one node means. So refusal lives beside it, is asked only of a whole graph,
+// and every shape below is one ffmpeg itself rejects.
+//
+// The rule is refusal, not approximation. A filtergraph is worth showing
+// because it can be taken elsewhere and run, and one ffmpeg would reject is
+// worse than no graph at all because it looks like one.
+
+console.log('\nan empty input pad');
+{
+    const g = makeGraph();
+    const a = g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4', outs: [{ stream: 'v' }] });
+    // Declared pads rather than counted wires, which is the whole difference:
+    // an overlay with one wire on it has an *empty pad*, and a node drawn from
+    // its wires cannot say so because there is nothing there to draw.
+    const o = g.add({ filter: 'overlay', ins: [{ stream: 'v' }, { stream: 'v' }],
+                      outs: [{ stream: 'v' }], label: 'out' });
+    g.connect(a, o, 0);
+    g.connect(o, g.add({ kind: 'sink', stream: 'v' }), 0);
+
+    const found = problems(g);
+    same(found.length, 1, 'one thing is wrong');
+    ok(/overlay has nothing wired to its input 2 of 2/.test(found[0].reason),
+       `and it names the node and the pad: ${found[0].reason}`);
+    same(found[0].key, o.id, 'against the node it is about, so a card can be marked');
+
+    const b = g.add({ kind: 'input', stream: 'v', index: 1, path: 'b.mp4', outs: [{ stream: 'v' }] });
+    g.connect(b, o, 1);
+    same(problems(g).length, 0, 'and filling it is the whole of the fix');
+}
+
+console.log('\na pad read twice');
+{
+    // Two consumers of one pad is what `split` is for. ffmpeg says "Label found
+    // twice" about a graph it has already half-parsed, which is a sentence about
+    // its own parser rather than about the picture.
+    const g = makeGraph();
+    const src = g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4', outs: [{ stream: 'v' }] });
+    const fork = g.run(src, [{ filter: 'hflip', ins: [{ stream: 'v' }], outs: [{ stream: 'v' }] }], 'fork');
+    const one = g.run(fork, [{ filter: 'negate', ins: [{ stream: 'v' }], outs: [{ stream: 'v' }] }], 'one');
+    g.run(fork, [{ filter: 'vflip', ins: [{ stream: 'v' }], outs: [{ stream: 'v' }] }], 'two');
+    g.connect(one, g.add({ kind: 'sink', stream: 'v' }), 0);
+
+    const said = problems(g).map((p) => p.reason).join(' | ');
+    ok(/hflip’s output is read by 2 filters/.test(said), `the fork is named: ${said}`);
+    ok(/put a split in between/.test(said), 'and so is what to do about it');
+    // The printer still prints it — it prints what it is given, and what it
+    // gives back for this is three chains that name `[fork]` twice.
+    same(print(g).chains.length, 3, 'while the printer still prints the shape it is given');
+}
+
+console.log('\na pad nothing reads');
+{
+    const g = makeGraph();
+    const src = g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4', outs: [{ stream: 'v' }] });
+    const s = g.run(src, [{ filter: 'split', ins: [{ stream: 'v' }],
+                            outs: [{ stream: 'v' }, { stream: 'v' }] }], 'a');
+    g.connect(s, g.add({ kind: 'sink', stream: 'v' }), 0, 0);
+
+    const said = problems(g).map((p) => p.reason).join(' | ');
+    ok(/nothing reads split’s output 2 of 2/.test(said),
+       `a split whose second output goes nowhere is refused: ${said}`);
+}
+
+console.log('\na picture wire in an audio pad');
+{
+    const g = makeGraph();
+    const file = g.add({ kind: 'input', index: 0, path: 'a.mp4',
+                         outs: [{ stream: 'v' }, { stream: 'a' }] });
+    const mix = g.add({ filter: 'amix', ins: [{ stream: 'a' }, { stream: 'a' }],
+                        outs: [{ stream: 'a' }], label: 'aout' });
+    g.connect(file, mix, 0, 1);       // the sound, correctly
+    g.connect(file, mix, 1, 0);       // the picture, into an audio pad
+    g.connect(mix, g.add({ kind: 'sink', stream: 'a' }), 0);
+
+    const said = problems(g).map((p) => p.reason).join(' | ');
+    ok(/a picture wire arrives at amix’s input 2 of 2, which takes sound/.test(said),
+       `named as what it is rather than as a pad index: ${said}`);
+}
+
+console.log('\na circle');
+{
+    const g = makeGraph();
+    const src = g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4', outs: [{ stream: 'v' }] });
+    const a = g.add({ filter: 'hflip', ins: [{ stream: 'v' }], outs: [{ stream: 'v' }] });
+    const b = g.add({ filter: 'vflip', ins: [{ stream: 'v' }], outs: [{ stream: 'v' }] });
+    g.connect(src, a, 0);
+    g.connect(a, b, 0);
+    g.connect(b, a, 0);               // back to where it came from
+
+    const said = problems(g).map((p) => p.reason).join(' | ');
+    ok(/feed each other in a circle/.test(said), `a cycle is named rather than hung on: ${said}`);
+    ok(/hflip/.test(said) && /vflip/.test(said), 'and both nodes are in the sentence');
+    // The layout and the stream walk both survive one by giving up after a
+    // bounded number of passes, which is what stops the stage hanging while
+    // this is being said.
+    ok(layout(g, () => ({ w: 100, h: 40 }), () => null).nodes.length === 3,
+       'and the layout still draws something');
+}
+
+console.log('\na filter this build does not have');
+{
+    const g = makeGraph();
+    const src = g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4', outs: [{ stream: 'v' }] });
+    const bad = g.run(src, [{ filter: 'unsharpenator' }], 'out');
+    g.connect(bad, g.add({ kind: 'sink', stream: 'v' }), 0);
+    const said = problems(g).map((p) => p.reason).join(' | ');
+    ok(/has no filter called “unsharpenator”/.test(said),
+       `an unknown filter is an error, not a shrug: ${said}`);
+}
+
+console.log('\na sink with nothing on it');
+{
+    const g = makeGraph();
+    g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4', outs: [{ stream: 'v' }] });
+    g.add({ kind: 'sink', stream: 'v' });
+    const said = problems(g).map((p) => p.reason).join(' | ');
+    ok(/nothing is wired to video out/.test(said),
+       `a render with nothing mapped is refused: ${said}`);
+    ok(/no picture to write/.test(said), 'and said in terms of what would be written');
 }
 
 // ── editing ────────────────────────────────────────────────────────────────
@@ -611,6 +783,249 @@ console.log('\nnodes pinned to a clip that is gone');
     overlay.insert('composite/after-overlay', 'vignette');
     overlay.retain([]);
     same(overlay.insertCount(), 1, 'and what belongs to the whole render survives an empty timeline');
+}
+
+// ── structure a person made ────────────────────────────────────────────────
+//
+// The step past splicing. A filter with two inputs cannot be dropped on a wire,
+// so it is placed and then wired — which means the overlay has to hold nodes
+// that are on no wire, wires nobody derived, and derived wires somebody took
+// off. All three have to survive the skeleton being thrown away and rebuilt,
+// and the only string that survives that is a key: an anchor for a derived node,
+// an id for one of yours.
+
+/// The video sink's producer, as the chain that ends up feeding it.
+const videoChain = (d) => print(d.graph).chains.find((c) => c.endsWith(print(d.graph).video));
+
+console.log('\na node on no wire, wired by hand');
+{
+    overlay.clear();
+    // A picture laid over the finished composite: a `color` source and an
+    // `overlay` that reads it, spliced in front of the sink. Neither of them
+    // can be reached by splicing — `color` has no input to be spliced onto and
+    // `overlay` has two — which is exactly the gap this closes.
+    const bg = overlay.addNode('color', { params: { c: 'red', s: '64x64', d: '4' } });
+    const over = overlay.addNode('overlay', { pos: ['16', '16'] });
+    overlay.wire(bg.id, 0, over.id, 1);
+    overlay.wire('composite/overlay:7', 0, over.id, 0);
+    overlay.wire(over.id, 0, 'out:v', 0);
+
+    const spec = oneClip();
+    spec.pixelFormat = 'yuv420p';
+    const d = derive(spec, null, { overlay: overlay.current() });
+    ok(d.ok, 'the graph still derives with hand-made structure in it');
+    same(d.problems.length, 0, `and nothing is wrong with it: ${
+        d.problems.map((p) => p.reason).join(' | ')}`);
+
+    const chains = print(d.graph).chains;
+    ok(chains.some((c) => /^color=/.test(c)), `the placed source is a chain of its own: ${
+        chains.filter((c) => /color=c=red/.test(c)).join('')}`);
+    ok(/overlay=16:16/.test(videoChain(d)),
+       `and the picture goes through the overlay you wired: ${videoChain(d)}`);
+    // The derived wire into the sink was replaced rather than joined: an input
+    // pad holds one wire, which is what makes wiring something *between* two
+    // derived nodes a single gesture.
+    same(d.graph.inEdges(d.graph.byAnchor('out:v')).length, 1,
+         'the sink still reads exactly one thing');
+    // The colour conversion is attached *after* everything a person did, which
+    // is what makes it impossible to wire something behind it — those two nodes
+    // are in the printed graph and not in the one this binary runs, so a wire
+    // ending on one of them would be a wire that is in the command you copied
+    // and absent from the render you got.
+    same(d.graph.producers(d.graph.byAnchor('output/color'))[0].id, over.id,
+         'and what feeds the encoder’s colour conversion is the node you put there');
+
+    // The whole point. A timeline edit throws the skeleton away and derives a
+    // new one with entirely different ids; anchors and user ids are what carry
+    // across.
+    const movedSpec = oneClip({ w: 640, h: 360 });
+    movedSpec.pixelFormat = 'yuv420p';
+    const moved = derive(movedSpec, null, { overlay: overlay.current() });
+    ok(/overlay=16:16/.test(videoChain(moved)),
+       'a timeline edit rebuilds the skeleton and the hand wiring is still on it');
+    same(moved.problems.length, 0, 'and still runs');
+
+    // ...and the *render* graph, which is the one that decides whether a render
+    // goes through libavfilter, carries it too.
+    const run = globalThis.__ffmpegBro.renderGraph(spec, null, { overlay: overlay.current() });
+    ok(run.ok && /overlay=16:16/.test(run.filterGraph),
+       'and so does the graph the renderer is handed');
+}
+
+console.log('\na wire taken off is remembered as a cut');
+{
+    overlay.clear();
+    ok(overlay.isEmpty(), 'nothing to begin with');
+    overlay.unwire('out:v', 0);
+    ok(!overlay.isEmpty(),
+       'a cut is structure — the render goes through libavfilter for one, ' +
+       'because the graph is no longer the one the compositor would produce');
+
+    const d = derive(oneClip(), null, { overlay: overlay.current() });
+    ok(d.ok, 'the graph still derives');
+    ok(d.problems.some((p) => /nothing is wired to video out/.test(p.reason)),
+       `and says what is now missing: ${d.problems.map((p) => p.reason).join(' | ')}`);
+    // Refused rather than rendered. A render that quietly put the wire back
+    // would be rendering something other than what is on the screen.
+    same(globalThis.__ffmpegBro.renderGraph(oneClip(), null, { overlay: overlay.current() }).ok,
+         false, 'and a render is refused rather than made from a graph that will not run');
+
+    // The skeleton grows the wire back on every rebuild, so the absence has to
+    // be written down — which is why a cut is a thing rather than the lack of
+    // one.
+    same(derive(oneClip(), null, { overlay: overlay.current() })
+            .graph.inEdges(derive(oneClip()).graph.byAnchor('out:v')).length, 0,
+         'a rebuild does not put it back');
+
+    overlay.reconnect('out:v', 0);
+    ok(overlay.isEmpty(), 'and giving the pad back is giving it back');
+    same(derive(oneClip(), null, { overlay: overlay.current() }).problems.length, 0,
+         'the derivation fills it in again');
+}
+
+console.log('\na pad count that changes under a wire');
+{
+    overlay.clear();
+    const mix = overlay.addNode('amix', { params: { inputs: '3', normalize: '0' } });
+    overlay.wire('audio/after-mix', 0, mix.id, 2);
+    overlay.wire(mix.id, 0, 'out:a', 0);
+    // `audio/after-mix` is a point, not a node — the wire has to name the node
+    // the point sits on, which for one audible clip is that clip's own tail.
+    const tail = derive(oneClip()).graph.byAnchor('clip:7/asetpts');
+    overlay.reconnect(mix.id, 2);
+    overlay.wire(keyOfNode(tail), 0, mix.id, 2);
+
+    let d = derive(oneClip(), null, { overlay: overlay.current() });
+    ok(d.graph.node(mix.id), 'a three-input mixer is in the graph');
+    same(d.graph.inPorts(d.graph.node(mix.id)), 3, 'with the three pads it was told to have');
+    ok(d.problems.some((p) => /amix has nothing wired to its input 1 of 3/.test(p.reason)),
+       'and the two you have not filled are named');
+
+    // Now take a pad away under the wire. The wire cannot be applied, and the
+    // one thing it must not do is vanish: putting the count back has to bring
+    // it back, or a mistyped number is lost work.
+    overlay.edit({ id: mix.id, derived: false }, { params: { inputs: '2' } });
+    d = derive(oneClip(), null, { overlay: overlay.current() });
+    const stranded = d.problems.find((p) => /nowhere to land/.test(p.reason));
+    ok(!!stranded, `the wire is reported rather than dropped: ${stranded && stranded.reason}`);
+    ok(/amix has 2 inputs/.test(stranded.reason) && /input 3/.test(stranded.reason),
+       'naming the node, what it has and where the wire wanted to go');
+    same(overlay.wires().filter((w) => w.to === mix.id && w.port === 2).length, 1,
+         'and the wire is still in the overlay');
+
+    overlay.edit({ id: mix.id, derived: false }, { params: { inputs: '3' } });
+    d = derive(oneClip(), null, { overlay: overlay.current() });
+    ok(!d.problems.some((p) => /nowhere to land/.test(p.reason)),
+       'putting the count back puts the wire back');
+    same(d.graph.inEdges(d.graph.node(mix.id)).filter((e) => e.port === 2).length, 1,
+         'on the pad it named');
+}
+
+/// A node's key, which is what a wire's ends are written as.
+function keyOfNode(n) { return n.derived ? n.anchor : n.id; }
+
+console.log('\na node taken out takes its wires');
+{
+    overlay.clear();
+    const a = overlay.addNode('hflip');
+    overlay.wire('composite/overlay:7', 0, a.id, 0);
+    overlay.wire(a.id, 0, 'out:v', 0);
+    same(overlay.wireCount(), 2, 'two wires');
+
+    overlay.removeInsert(a.id);
+    same(overlay.nodeCount(), 0, 'the node goes');
+    same(overlay.wireCount(), 0, 'and so do the wires that ended on it — an endpoint ' +
+                                 'naming a node that will never exist again is not kept');
+    same(derive(oneClip(), null, { overlay: overlay.current() }).problems.length, 0,
+         'and the derivation is whole again');
+}
+
+console.log('\nan endpoint whose clip is out of range');
+{
+    overlay.clear();
+    const flip = overlay.addNode('hflip');
+    overlay.wire('clip:7/format', 0, flip.id, 0);
+    overlay.wire(flip.id, 0, 'composite/overlay:7', 1);
+
+    const away = oneClip();
+    away.start = 10;
+    away.end = 14;
+    same(derive(away, null, { overlay: overlay.current() }).ok, false,
+         'nothing falls inside the range, so there is no graph');
+    same(overlay.wireCount(), 2, 'and the wires are still there for when the clip comes back');
+
+    const back = derive(oneClip(), null, { overlay: overlay.current() });
+    same(back.problems.length, 0, `which it does, unchanged: ${
+        back.problems.map((p) => p.reason).join(' | ')}`);
+    ok(/format=rgba,hflip\[/.test(print(back.graph).chains.join(';')),
+       'and the hand-made wiring is back on the rebuilt skeleton');
+
+    // A clip that is deleted rather than trimmed out is different: the anchor
+    // will never mean anything again, so the wire goes with it.
+    overlay.retain([]);
+    same(overlay.wireCount(), 0, 'a wire on a clip that is gone goes with it');
+    same(overlay.nodeCount(), 1, 'while a node of yours, which belongs to no clip, stays');
+    overlay.clear();
+}
+
+console.log('\na split does not copy the wiring');
+{
+    overlay.clear();
+    overlay.insert('clip:3/after-scale', 'hflip');
+    const mine = overlay.addNode('overlay');
+    overlay.wire('clip:3/format', 0, mine.id, 0);
+    overlay.cloneClip(3, 4);
+
+    same(overlay.insertCount(), 2, 'a cut copies the filters, because a cut should not ' +
+                                   'change how either half looks');
+    same(overlay.wires().length, 1,
+         'and does not copy the wires — an input pad holds one wire, so a copy of one ' +
+         'would be a second producer arriving at a pad that already has one');
+    overlay.clear();
+}
+
+console.log('\nstructure survives a reload');
+{
+    overlay.clear();
+    const node = overlay.addNode('overlay', { pos: ['4', '4'] });
+    overlay.wire('composite/overlay:7', 0, node.id, 0);
+    overlay.unwire('composite/overlay:7', 1);
+    overlay.restore();
+
+    same(overlay.nodeCount(), 1, 'a node you placed comes back');
+    same(overlay.nodes()[0].pos.join(':'), '4:4', 'configured as it was');
+    same(overlay.wires().length, 1, 'so does the wire');
+    same(overlay.wires()[0].from, 'composite/overlay:7', 'with both of its ends');
+    same(overlay.wires()[0].to, node.id, 'written as keys rather than as objects');
+    ok(overlay.isCut('composite/overlay:7', 1), 'and so does the cut');
+
+    // Ids come out of one counter for everything in this file, so that no two
+    // things in it can be told apart by their id and then turn out not to be.
+    const after = overlay.addNode('hflip');
+    ok(after.id !== node.id, `a restore takes its ids out of circulation (${after.id})`);
+    overlay.clear();
+}
+
+console.log('\na blob written before any of this still loads');
+{
+    // The shape grew rather than changing, which is what makes an overlay
+    // somebody spent an afternoon on survive an upgrade. Three keys it has
+    // never heard of come back empty and everything it does know behaves the
+    // way it always did.
+    overlay.clear();
+    localStorage.setItem('ffmpeg-bro.graph', JSON.stringify({
+        inserts: [{ id: 'u77', anchor: 'clip:3/after-scale', filter: 'eq',
+                    pos: [], params: { contrast: '1.2' } }],
+        locks: { 'clip:3/scale': { params: {}, pos: ['800', '600'] } },
+        sizes: {}, pins: {},
+    }));
+    overlay.restore();
+    same(overlay.insertCount(), 1, 'the old shape loads');
+    same(overlay.inserts()[0].params.contrast, '1.2', 'with what was in it');
+    same(overlay.lockCount(), 1, 'locks and all');
+    same(overlay.nodeCount(), 0, 'and the things it had never heard of are empty');
+    same(overlay.wires().length, 0, 'rather than undefined');
+    overlay.clear();
 }
 
 // ── where the cards are ────────────────────────────────────────────────────
