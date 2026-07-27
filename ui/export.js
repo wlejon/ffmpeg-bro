@@ -291,6 +291,11 @@ export function startMeasurement() {
     spec.videoOptions = {};
     spec.audioOptions = {};
     spec.formatOptions = {};
+    // And the passes, for the same reason: a two-pass encode is a decision
+    // about how to spend a bitrate, and this render encodes nothing at all.
+    // Walking the range twice would double what a measurement costs to learn
+    // exactly what it learned the first time.
+    spec.passes = [];
     spec.faststart = false;
     try {
         bro.ffmpeg.render.start(spec);

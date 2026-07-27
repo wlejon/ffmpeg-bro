@@ -269,6 +269,11 @@ function launch(g, from, to) {
     spec.preset = 'ultrafast';
     spec.pixelFormat = 'yuv420p';
     spec.videoOptions = {};
+    // And however many times the *export* is set to walk the range. A node
+    // preview is a claim about what a filter does to a picture, and two passes
+    // of it is the same picture rendered twice — nine cards paying twice over
+    // for a bitrate decision none of them is about.
+    spec.passes = [];
     // A picture preview is silent — nothing on that side of the graph has a
     // sound to carry, and an audio stream would be silence encoded nine times.
     // A waveform preview is not: the pad it draws is also the pad it plays, and
