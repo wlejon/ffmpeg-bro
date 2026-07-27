@@ -122,9 +122,15 @@ function filtersNote() {
 // ── a node ─────────────────────────────────────────────────────────────────
 
 function nodePanel(node) {
-    const name = node.kind === 'input' ? `input ${node.index}:${node.stream}`
+    // An input is a file with a pad per stream it is read for, so it is named
+    // for the input it is rather than for one of its pads.
+    const name = node.kind === 'input' ? `input ${node.index}`
                : node.kind === 'sink' ? (node.stream === 'a' ? 'audio out' : 'video out')
                : node.filter;
+    const pads = node.kind === 'input'
+        ? (node.outs || [{ stream: node.stream || 'v' }])
+              .map((o) => `${node.index}:${o.stream}`).join(', ')
+        : '';
 
     const out = [
         div('gp-head', [
@@ -137,7 +143,7 @@ function nodePanel(node) {
 
     if (node.kind !== 'filter') {
         out.push(div('gp-hint dim', node.kind === 'input'
-            ? `The decoded stream, as ffmpeg would open it: ${node.path || ''}`
+            ? `One file, as ffmpeg would open it — ${pads} — ${node.path || ''}`
             : 'The pad the muxer maps. What leaves here is what gets written.'));
         return out;
     }

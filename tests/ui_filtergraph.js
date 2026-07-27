@@ -319,10 +319,13 @@ console.log('\nthe same graph, to run rather than to print');
          'scale=in_range=full:out_color_matrix=bt709:out_range=tv[vout]',
          'where the printed one goes on into the encoder’s');
 
+    // A pad each, grouped by input, because an input node *is* one file: the
+    // picture and the sound of clip zero are two outputs of one `-i` rather
+    // than two things that happen to name the same path.
     same(JSON.stringify(run.filterInputs),
          JSON.stringify([{ label: '0:v', path: 'a.mp4', stream: 'v', from: 0 },
-                         { label: '1:v', path: 'a.mp4', stream: 'v', from: 0 },
                          { label: '0:a', path: 'a.mp4', stream: 'a', from: 0 },
+                         { label: '1:v', path: 'a.mp4', stream: 'v', from: 0 },
                          { label: '1:a', path: 'a.mp4', stream: 'a', from: 0 }]),
          'every pad the graph reads says which file and which kind of stream feeds it');
 

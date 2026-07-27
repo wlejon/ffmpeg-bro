@@ -53,15 +53,13 @@ function pruned(g, keep) {
     const idOf = (n) => (typeof n === 'string' ? n : n && n.id);
     view.node = (n) => nodes.find((x) => x.id === idOf(n)) || null;
     view.byAnchor = (a) => (a ? nodes.find((x) => x.anchor === a) || null : null);
-    view.producers = (n) => {
+    view.inEdges = (n) => {
         const id = idOf(n);
-        return edges.filter((e) => e.to === id).sort((a, b) => a.port - b.port)
-                    .map((e) => view.node(e.from)).filter(Boolean);
+        return edges.filter((e) => e.to === id).sort((a, b) => a.port - b.port);
     };
-    view.consumers = (n) => {
-        const id = idOf(n);
-        return edges.filter((e) => e.from === id).map((e) => view.node(e.to)).filter(Boolean);
-    };
+    view.outEdges = (n) => edges.filter((e) => e.from === idOf(n));
+    view.producers = (n) => view.inEdges(n).map((e) => view.node(e.from)).filter(Boolean);
+    view.consumers = (n) => view.outEdges(n).map((e) => view.node(e.to)).filter(Boolean);
     return view;
 }
 
@@ -78,6 +76,13 @@ function pruned(g, keep) {
 export function previewGraph(g, node, opts = {}) {
     if (!node) return { ok: false, reason: 'no node' };
     if (node.stream === 'a') return { ok: false, reason: 'a waveform is not a small picture' };
+    // An input node is a file, not a stream, so which of its pads is being
+    // asked about is a question that has to be answered rather than read off
+    // the node: a preview is a picture, and a picture comes from its video pad.
+    const videoPort = node.kind === 'input'
+        ? (node.outs || []).findIndex((o) => o.stream === 'v') : -1;
+    if (node.kind === 'input' && videoPort < 0)
+        return { ok: false, reason: 'this input is not read for a picture' };
     // A sink is not a picture of its own — it is the pad the muxer maps, and
     // what it shows is whatever its producer hands it. Following the wire is
     // worth doing rather than refusing, because the sink at the end of the
@@ -96,9 +101,6 @@ export function previewGraph(g, node, opts = {}) {
         return { ok: false, reason: 'nothing feeds this node' };
 
     // An input node is not a filter and cannot be a chain on its own, so
-    // previewing one is previewing a `null` that reads it. Cheaper than it
-    // looks: `null` is a pointer copy.
-    // An input node is not a filter and cannot be a chain on its own, so
     // previewing one is previewing the stream itself: the tail chain reads
     // `[0:v]` directly and there is no body.
     //
@@ -108,12 +110,18 @@ export function previewGraph(g, node, opts = {}) {
     const fit = Math.max(64, Math.round(opts.fit || 320));
     const chains = node.kind === 'input' ? [] : print(view).chains;
     const head = node.kind === 'input'
-        ? `${node.index}:${node.stream}`
+        ? `${node.index}:${node.outs[videoPort].stream}`
         : padAtEndOf(chains, node);
     chains.push(`[${head}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
 
-    return { ok: true, filterGraph: chains.join(';'),
-             filterInputs: inputsOf(view), pad: '[pv]' };
+    // The pads this subgraph reads, which for an input node previewed on its
+    // own is the one the chain above names — the file's sound is not decoded to
+    // draw a still of its picture.
+    const inputs = node.kind === 'input'
+        ? [{ label: head, path: node.path, stream: node.outs[videoPort].stream,
+             from: node.from || 0 }]
+        : inputsOf(view);
+    return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs, pad: '[pv]' };
 }
 
 /// What the node at the end of the last chain is called.

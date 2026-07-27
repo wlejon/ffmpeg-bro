@@ -976,6 +976,20 @@ console.log('\na filter inserted on the graph');
         path: bro.appDir + '/../out/ui-export-inserted.mp4',
     });
     ok(r.filterGraph.indexOf('hflip') > 0, 'a preview-sized spec carries it too');
+
+    // The sound goes with it. A clip's picture and its sound leave one input
+    // node by two pads, and the whole of that being right is `[0:a]` naming the
+    // *audio* pad of input zero: get the port wrong and this chain reads the
+    // picture, which parses, renders nothing, and comes out as a silent file
+    // that nobody looks at because the picture is fine.
+    ok(/(^|;)\[0:a\]atrim=/.test(r.filterGraph),
+       `and the clip’s sound, read from its own pad: ${r.filterGraph.split(';')
+           .filter((c) => c.indexOf('[0:a]') === 0).join(';') || '(no audio chain)'}`);
+    const aPads = (r.filterInputs || []).filter((i) => i.stream === 'a');
+    same(aPads.length, 1, 'one audio pad, on the same file the picture comes from');
+    ok(aPads.length === 1 && aPads[0].path === (r.filterInputs[0] || {}).path,
+       'which is the same `-i` — one file, two outputs, not two inputs');
+
     let started = '';
     try { bro.ffmpeg.render.start(r); } catch (e) { started = String(e); }
     ok(!started, `the renderer accepted it (${started || 'accepted'})`);
@@ -986,6 +1000,12 @@ console.log('\na filter inserted on the graph');
         ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
         const p = bro.ffmpeg.probe(r.path);
         ok(!!p.video && p.video.width === 320, 'and wrote a file with the filter in it');
+        // The other half of the file. `hasAudio()` on this path is "did a chain
+        // end on a sound pad", so a graph whose audio side never reached the
+        // renderer writes a video-only file and every picture check still
+        // passes.
+        const heard = (p.streams || []).filter((s) => s.kind === 'audio');
+        same(heard.length, 1, 'with the soundtrack the graph describes');
     }
 }
 

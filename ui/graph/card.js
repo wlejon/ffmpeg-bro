@@ -162,7 +162,12 @@ function header(n, g, key) {
                : n.kind === 'sink' ? (n.stream === 'a' ? 'audio out' : 'video out')
                : n.filter;
     const mapped = n.kind === 'sink' && g.producers(n)[0];
-    const pad = n.kind === 'input' ? `[${n.index}:${n.stream}]`
+    // A file produces one pad per stream it is read for, so it states all of
+    // them: `[0:v] [0:a]` is what the chains in the command bar say, and this
+    // screen is worth nothing if the two cannot be read against each other.
+    const pad = n.kind === 'input'
+                ? (n.outs || [{ stream: n.stream || 'v' }])
+                      .map((o) => `[${n.index}:${o.stream}]`).join(' ')
               : mapped && mapped.label ? `[${mapped.label}]`
               : n.label ? `[${n.label}]` : '';
 
@@ -237,29 +242,42 @@ function enumControl(o, value) {
 
 // ── sockets ────────────────────────────────────────────────────────────────
 
-/// A dot per port. Their vertical positions are not known here — a node is as
-/// tall as what is in it and the height arrives from the measurement — so they
-/// carry their port number and `placeSockets()` finishes them.
+/// A dot per port, on both edges. Their vertical positions are not known here —
+/// a node is as tall as what is in it and the height arrives from the
+/// measurement — so they carry their port number and `placeSockets()` finishes
+/// them.
+///
+/// An input node has an output per stream it is read for, and each of them is
+/// coloured by that stream: a file's picture and its sound leave one card, and
+/// two identical dots would say the two wires were interchangeable when the
+/// whole point of drawing a file as one node is that they come from one `-i`
+/// and are not the same pad.
 function sockets(n, g) {
     const ins = g.producers(n).length;
-    const outs = g.consumers(n).length ? 1 : (n.kind === 'sink' ? 0 : 1);
+    const outs = n.kind === 'sink' ? [] : (n.outs && n.outs.length ? n.outs : [{}]);
     const out = [];
     for (let i = 0; i < ins; i++)
         out.push(el('span', { cls: 'gn-sock gn-sock-in', 'data-port': String(i),
                               'data-ports': String(ins) }));
-    if (outs)
-        out.push(el('span', { cls: 'gn-sock gn-sock-out', 'data-port': '0', 'data-ports': '1' }));
+    outs.forEach((o, i) => {
+        out.push(el('span', {
+            cls: 'gn-sock gn-sock-out' + (o.stream ? ` gn-sock-${o.stream}` : ''),
+            'data-port': String(i), 'data-ports': String(outs.length),
+            title: n.kind === 'input' && o.stream ? `${n.index}:${o.stream}` : undefined,
+        }));
+    });
     return out;
 }
 
 /// Once the card has been measured and placed, put every socket where its wire
-/// will land. `portY` is the same function `layout.js` computed the wire with.
+/// will land. `portY` is the same function `layout.js` computed the wire with,
+/// on both edges — a dot anywhere else says this wire goes to that pad when it
+/// does not.
 export function placeSockets(node, h) {
     for (const s of node.querySelectorAll('.gn-sock')) {
         const port = Number(s.getAttribute('data-port')) || 0;
         const ports = Number(s.getAttribute('data-ports')) || 1;
-        const y = s.classList.contains('gn-sock-out') ? h / 2 : portY(h, port, ports);
-        s.style.top = `${Math.round(y) - 4}px`;
+        s.style.top = `${Math.round(portY(h, port, ports)) - 4}px`;
     }
 }
 

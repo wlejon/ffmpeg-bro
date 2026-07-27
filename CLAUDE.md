@@ -473,7 +473,10 @@ about them:
   chains, stopping in the compositing space, plus the `filterInputs` list that
   says which file feeds `[0:v]` — because on that path the writer converts, and
   doing it in both places does it twice. They differ by exactly one chain, and
-  `tests/ui_filtergraph.js` asserts that.
+  `tests/ui_filtergraph.js` asserts that. `filterInputs` is **one entry per pad
+  that is read**, not per node and not per stream the file happens to carry:
+  a subgraph cut down to one clip's picture must not be the reason its sound is
+  decoded, and a muted clip is not read for sound at all.
 
   Three things about the model are load-bearing rather than incidental.
   **Arguments are positional-then-named because ffmpeg's are** — `crop`'s four
@@ -483,10 +486,16 @@ about them:
   continues while the wire is private (one producer, one consumer, both
   filters) and a private pad has no name to carry; that rule is what puts the
   output colour conversion on the back of the last `overlay` instead of in a
-  chain of its own. And **a node has one output**, which is enough for anything
-  derived from a timeline and is not enough for `split` — when an edge learns
-  to name which output it leaves by, the chain rule does not change, only
-  `connect` and `padOf`.
+  chain of its own. And **a node may have more than one output, and an edge
+  says which it leaves by** — `node.outs` and `edge.fromPort`. An **input node
+  is a file, not a stream**: `[0:v]` and `[0:a]` are two pads of one `-i`, one
+  demuxer and one seek, and drawing them as two nodes reading the same path
+  said they had nothing to do with each other. The chain rule did not change
+  when the port arrived; `padOf` takes it, `connect` records it, and
+  `insertAfter`/`remove` move and heal only the wires on the pad in question —
+  a filter dropped on a clip's picture that took its sound with it would put an
+  `hflip` in front of `atrim`. `split` and `asplit` are what the model can now
+  say and the derivation does not yet write.
 
 - `graph/overlay.js` — the part of the graph a person made, held apart from the
   part that is derived, because **the skeleton is thrown away and rebuilt on
@@ -551,8 +560,11 @@ about them:
   Four things about how it is built are load-bearing:
 
   - **`portY()` is exported from `layout.js` and used by both the wire and the socket
-    it lands on.** A dot anywhere else says this wire goes to that port when it does
-    not. The same line found a bug that had been there since the layout was written:
+    it lands on — at both ends.** A dot anywhere else says this wire goes to that port
+    when it does not, which a source card cannot afford either: its picture and its
+    sound leave the same edge, coloured by the pad rather than by the card, and two
+    dots at one point would say the two wires were interchangeable.
+    The same line found a bug that had been there since the layout was written:
     `g.producers(b)` was being handed a *box*, which has no `id`, so the model matched
     nothing, the port count came back zero and every arrival was clamped to the middle
     — the comment above it had been claiming the opposite the whole time.

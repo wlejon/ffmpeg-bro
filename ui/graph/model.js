@@ -10,8 +10,18 @@
 // **One node kind, because ffmpeg has one.** A `scale` node is a filter node
 // named `scale`; the app's crop and opacity and stacking are not special cases
 // of anything, they are `crop`, `colorchannelmixer` and `overlay`. The only
-// nodes that are not filters are the two ends: an `input` is a decoded stream
-// (`[0:v]`), a `sink` is a pad the muxer maps.
+// nodes that are not filters are the two ends: an `input` is a *file* — `-i
+// something.mp4`, with an output per stream it is read for — and a `sink` is a
+// pad the muxer maps.
+//
+// **A node can have more than one output, and an edge says which it leaves
+// by.** That was written down as the thing this model could not do for as long
+// as an input node was one stream: a file's picture and its sound were two
+// nodes reading the same path, which draws `-i a.mp4` twice and says the two
+// have nothing to do with each other. They do — `[0:v]` and `[0:a]` are one
+// `-i`, one demuxer and one seek. `outs` is what a node produces and
+// `edge.fromPort` is which of them a wire carries; a filter has one output and
+// says nothing, which is why almost everything below reads as it did.
 //
 // **Arguments are positional-then-named because ffmpeg's are.** `crop`'s four
 // numbers and `scale`'s two are the first entries of the same option table the
@@ -93,6 +103,13 @@ export function makeGraph(opts = {}) {
         // `crop`'s `x` "h". The derivation knows what it wrote; nothing else
         // has to guess.
         if (spec.posNames) node.posNames = spec.posNames.slice();
+        // What this node produces, one entry per output pad, where it has more
+        // than the one every filter has. An input carries the streams it is
+        // read for — `[{stream:'v'}, {stream:'a'}]` for a file whose picture
+        // and sound are both used — and `edge.fromPort` indexes into it.
+        // Copied rather than shared: two derivations of one timeline must not
+        // be able to reach each other's arrays.
+        if (spec.outs) node.outs = spec.outs.map((o) => ({ stream: o.stream }));
         // What only one kind has. Copied rather than merged wholesale so a
         // stray field on a spec cannot quietly become part of the model.
         if (spec.stream) node.stream = spec.stream;
@@ -113,15 +130,13 @@ export function makeGraph(opts = {}) {
     /// is what it draws onto and its second is what it draws. Getting them the
     /// wrong way round is a picture, not an error.
     ///
-    /// There is no port on the *from* side, which is to say a node has one
-    /// output. That is enough for everything derived from a timeline and it is
-    /// not enough for ffmpeg: `split` and `asplit` exist precisely to read one
-    /// pad twice, and until an edge can name which output it leaves by they
-    /// cannot be expressed. The printer already breaks its chain at a pad with
-    /// two readers, so when the port arrives it arrives here and in `padOf`,
-    /// and the chain rule does not change.
-    g.connect = (from, to, port = 0) => {
-        const edge = { from: idOf(from), to: idOf(to), port };
+    /// `fromPort` is the output index on `from`, and it matters for the same
+    /// reason at the other end: a file's picture and its sound leave the same
+    /// node by different pads, and a wire that did not say which would make
+    /// `[0:v]` and `[0:a]` the same claim. A filter has one output and every
+    /// call about one leaves this at zero.
+    g.connect = (from, to, port = 0, fromPort = 0) => {
+        const edge = { from: idOf(from), to: idOf(to), port, fromPort };
         edges.push(edge);
         return edge;
     };
@@ -132,26 +147,44 @@ export function makeGraph(opts = {}) {
             if (edges[i].from === a && edges[i].to === b) edges.splice(i, 1);
     };
 
-    /// What feeds a node, in port order. The sort is not decoration: edges are
-    /// stored in the order they were made, and a graph rebuilt after an edit
-    /// has no obligation to make them in the same order twice.
-    g.producers = (n) => {
+    /// The wires arriving at a node, in port order. The sort is not decoration:
+    /// edges are stored in the order they were made, and a graph rebuilt after
+    /// an edit has no obligation to make them in the same order twice.
+    ///
+    /// The edges rather than the nodes, for anything that has to know which pad
+    /// on the far end it is reading — which is the printer, and nothing else.
+    g.inEdges = (n) => {
         const id = idOf(n);
-        return edges.filter((e) => e.to === id)
-                    .sort((a, b) => a.port - b.port)
-                    .map((e) => g.node(e.from))
-                    .filter(Boolean);
+        return edges.filter((e) => e.to === id).sort((a, b) => a.port - b.port);
     };
 
-    g.consumers = (n) => {
+    g.outEdges = (n) => {
         const id = idOf(n);
-        return edges.filter((e) => e.from === id).map((e) => g.node(e.to)).filter(Boolean);
+        return edges.filter((e) => e.from === id);
+    };
+
+    /// What feeds a node, in port order.
+    g.producers = (n) => g.inEdges(n).map((e) => g.node(e.from)).filter(Boolean);
+
+    g.consumers = (n) => g.outEdges(n).map((e) => g.node(e.to)).filter(Boolean);
+
+    /// How many output pads a node has. One unless it said otherwise, which is
+    /// every filter ever derived here and is what keeps the layout, the sockets
+    /// and the printer from each needing to know about `outs`.
+    g.outPorts = (n) => {
+        const node = g.node(n) || (n && n.id ? n : null);
+        return node && node.outs && node.outs.length ? node.outs.length : 1;
     };
 
     /// A straight run of filters, each reading the one before it, fed by `from`
     /// — one node, or several for a filter that takes several inputs. The last
     /// one gets `label`, because a run is exactly what ffmpeg calls a chain and
     /// a chain is the only thing that needs its output named.
+    ///
+    /// A source is a node, or `{ node, out }` where the node has more than one
+    /// output and this run wants a particular one. Written that way round so
+    /// that every caller reading a filter's single output — which is all of
+    /// them but the sound of a clip — says nothing at all.
     ///
     /// This exists so the skeleton reads as the sentence it is ("cut it, move
     /// it, crop it, size it") instead of as twenty add/connect pairs.
@@ -160,7 +193,12 @@ export function makeGraph(opts = {}) {
         let prev = null;
         for (const step of steps) {
             const node = g.add(step);
-            if (!prev) sources.forEach((src, port) => src && g.connect(src, node, port));
+            if (!prev)
+                sources.forEach((src, port) => {
+                    if (!src) return;
+                    const one = src.node || src;
+                    g.connect(one, node, port, src.node ? src.out || 0 : 0);
+                });
             else g.connect(prev, node, 0);
             prev = node;
         }
@@ -193,31 +231,41 @@ export function makeGraph(opts = {}) {
         return node;
     };
 
-    /// Splice a node into the wire leaving `after`. Its consumers are moved to
-    /// read from the new node instead, which is what "insert here" means on a
-    /// wire and is not what connecting to both ends would do.
-    g.insertAfter = (after, spec) => {
+    /// Splice a node into the wire leaving `after` by `fromPort`. Its consumers
+    /// are moved to read from the new node instead, which is what "insert here"
+    /// means on a wire and is not what connecting to both ends would do.
+    ///
+    /// The port is why this cannot simply move every edge leaving the node: a
+    /// file's picture and its sound leave one input node, and a filter dropped
+    /// on the picture that took the sound with it would put an `hflip` in front
+    /// of `atrim`.
+    g.insertAfter = (after, spec, fromPort = 0) => {
         const src = g.node(after);
         if (!src) return null;
         const node = g.add(Object.assign({ derived: false }, spec));
         for (const e of edges)
-            if (e.from === src.id && e.to !== node.id) e.from = node.id;
-        g.connect(src, node, 0);
+            if (e.from === src.id && (e.fromPort || 0) === fromPort && e.to !== node.id) {
+                e.from = node.id;
+                e.fromPort = 0;
+            }
+        g.connect(src, node, 0, fromPort);
         g.changed('insert');
         return node;
     };
 
-    /// Take a node out and heal the wire through it: its first producer feeds
-    /// whatever it fed. Removing a node should not cut the graph in two.
+    /// Take a node out and heal the wire through it: what fed its first input
+    /// feeds whatever it fed, by the same pad it arrived on. Removing a node
+    /// should not cut the graph in two, and it should not silently move a wire
+    /// from one of a file's streams to another.
     g.remove = (n) => {
         const node = g.node(n);
         if (!node) return false;
-        const upstream = g.producers(node)[0];
+        const up = g.inEdges(node)[0] || null;
         for (let i = edges.length - 1; i >= 0; i--) {
             const e = edges[i];
             if (e.to === node.id) edges.splice(i, 1);
             else if (e.from === node.id) {
-                if (upstream) e.from = upstream.id;
+                if (up) { e.from = up.from; e.fromPort = up.fromPort || 0; }
                 else edges.splice(i, 1);
             }
         }
@@ -246,7 +294,11 @@ export function makeGraph(opts = {}) {
     /// storing the skeleton would mean restoring a picture of the timeline as
     /// it was rather than deriving one from the timeline as it is.
     g.toJSON = () => ({
-        nodes: nodes.map((n) => Object.assign({}, n, { params: Object.assign({}, n.params), pos: n.pos.slice() })),
+        nodes: nodes.map((n) => Object.assign({}, n, {
+            params: Object.assign({}, n.params),
+            pos: n.pos.slice(),
+            outs: n.outs ? n.outs.map((o) => ({ stream: o.stream })) : undefined,
+        })),
         edges: edges.map((e) => Object.assign({}, e)),
     });
 
@@ -263,7 +315,7 @@ export function restore(json) {
     const g = makeGraph();
     if (!json || !Array.isArray(json.nodes)) return g;
     for (const n of json.nodes) g.add(n);
-    for (const e of json.edges || []) g.connect(e.from, e.to, e.port || 0);
+    for (const e of json.edges || []) g.connect(e.from, e.to, e.port || 0, e.fromPort || 0);
     // Ids handed back to us must not be handed out again.
     for (const n of json.nodes) {
         const m = /^n(\d+)$/.exec(String(n.id || ''));

@@ -582,7 +582,11 @@ export function drawGraph() {
 /// exactly that reason.
 function drawInsertPoints(d, boxes) {
     for (const p of d.points) {
-        const wire = placed.wires.find((w) => w.edge.from === p.at);
+        // The pad as well as the node: a file's picture and its sound leave one
+        // input node, and a point matched on the node alone would put the `+`
+        // for "after decode" on whichever of the two wires came first.
+        const wire = placed.wires.find(
+            (w) => w.edge.from === p.at && (w.edge.fromPort || 0) === (p.atPort || 0));
         const from = boxes.get(p.at);
         if (!from) continue;
         if (panel.selectedPoint() !== p.id && hoverPoint !== p.id) continue;
@@ -637,7 +641,8 @@ function shapeOf(g) {
     // refit on every redraw.
     const at = new Map(g.nodes.map((n, i) => [n.id, i]));
     return g.nodes.map((n) => `${n.kind}:${n.filter}`).join(',') + '|' +
-           g.edges.map((e) => `${at.get(e.from)}>${at.get(e.to)}:${e.port}`).join(',');
+           g.edges.map((e) => `${at.get(e.from)}:${e.fromPort || 0}>${at.get(e.to)}:${e.port}`)
+                  .join(',');
 }
 
 // ── the frame loop ─────────────────────────────────────────────────────────
@@ -795,7 +800,8 @@ function hover(e) {
     // hovering it offers nothing — which is itself the answer to "why is there no
     // + here", and better than a `+` that turns out to be unclickable.
     const point = wire && lastPoints
-        ? lastPoints.find((p) => p.at === wire.edge.from) : null;
+        ? lastPoints.find((p) => p.at === wire.edge.from &&
+                                 (p.atPort || 0) === (wire.edge.fromPort || 0)) : null;
     hoverPoint = point ? point.id : null;
     if (was === hoverPoint) return;
     // The `+` is a DOM element in the card container, so a change of hovered wire
@@ -830,7 +836,9 @@ function paint() {
 function hoveredWire() {
     if (!hoverPoint || !placed || !lastPoints) return null;
     const point = lastPoints.find((p) => p.id === hoverPoint);
-    return point ? placed.wires.find((w) => w.edge.from === point.at) || null : null;
+    if (!point) return null;
+    return placed.wires.find((w) => w.edge.from === point.at &&
+                                    (w.edge.fromPort || 0) === (point.atPort || 0)) || null;
 }
 
 /// A wire belongs to the selection when either end of it does. With nothing

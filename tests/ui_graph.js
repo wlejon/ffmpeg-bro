@@ -81,6 +81,39 @@ console.log('\nports');
          'edges made out of order still read in port order');
 }
 
+console.log('\nports on the way out');
+{
+    // A node can have more than one output, and an edge says which it left by.
+    // An input is the one that does: `[0:v]` and `[0:a]` are two pads of one
+    // `-i`, and a graph that drew them as two nodes was saying a file's picture
+    // and its sound had nothing to do with each other.
+    const g = makeGraph();
+    const file = g.add({ kind: 'input', index: 0, path: 'a.mp4',
+                         outs: [{ stream: 'v' }, { stream: 'a' }] });
+    const pic = g.add({ filter: 'hflip', label: 'v0' });
+    const snd = g.add({ filter: 'volume', label: 'a0' });
+    g.connect(file, pic, 0, 0);
+    g.connect(file, snd, 0, 1);
+
+    same(g.outPorts(file), 2, 'a node reports how many outputs it has');
+    same(g.outPorts(pic), 1, 'and a filter has the one it never mentions');
+    const chains = print(g).chains.slice().sort().join(' ');
+    same(chains, '[0:a]volume[a0] [0:v]hflip[v0]',
+         'each chain names the pad its wire left by');
+
+    // Splicing has to respect it too. A filter dropped on the picture that took
+    // the sound with it would put an `hflip` in front of `volume`.
+    g.insertAfter(file, { id: 'u1', filter: 'crop' }, 0);
+    same(print(g).chains.slice().sort().join(' '), '[0:a]volume[a0] [0:v]crop,hflip[v0]',
+         'and an insertion moves only the wires leaving that one');
+
+    // ...and so does healing. Removing the spliced node must put the picture
+    // back on the picture pad, not on whichever pad came first.
+    g.remove('u1');
+    same(print(g).chains.slice().sort().join(' '), '[0:a]volume[a0] [0:v]hflip[v0]',
+         'removing it wires the picture back to the pad it came from');
+}
+
 console.log('\nruns');
 {
     const g = makeGraph();
@@ -146,11 +179,12 @@ console.log('\na wire read by a filter with two inputs is named');
 
 console.log('\na wire read twice is named');
 {
-    // Two consumers of one pad is not valid ffmpeg without a `split` — which
-    // this model cannot express yet, because an edge names an input port and a
-    // node has one output. The chain rule still has to break here rather than
-    // print two chains that both claim to end at the same anonymous pad, and
-    // when split arrives it arrives as a printer change and not a rule change.
+    // Two consumers of *one* pad is not valid ffmpeg without a `split`. The
+    // model can now say what split needs — a node with two outputs and edges
+    // that name which they leave by, which is what an input node uses — so
+    // this is a graph somebody could write by hand rather than one that cannot
+    // exist. The chain rule still has to break here rather than print two
+    // chains that both claim to end at the same anonymous pad.
     const g = makeGraph();
     const src = g.add({ kind: 'input', stream: 'v', index: 0, path: 'a.mp4' });
     const fork = g.run(src, [{ filter: 'hflip' }], 'fork');
@@ -268,6 +302,18 @@ console.log('\nround trip');
     same(same7.anchor, 'clip:7/after-scale', 'so is the anchor it was pinned to');
     same(back.node(node.id).locked, true, 'and the lock');
 
+    // Outputs and the pad each wire leaves by, which is what a two-stream input
+    // node is made of. A round trip that dropped either would come back as a
+    // graph whose sound reads the picture.
+    const f = makeGraph();
+    const file = f.add({ kind: 'input', index: 0, path: 'a.mp4',
+                         outs: [{ stream: 'v' }, { stream: 'a' }] });
+    f.run(file, [{ filter: 'hflip' }], 'v0');
+    f.run({ node: file, out: 1 }, [{ filter: 'volume' }], 'a0');
+    same(print(restore(JSON.parse(JSON.stringify(f.toJSON())))).chains.slice().sort().join(' '),
+         print(f).chains.slice().sort().join(' '),
+         'a node’s outputs and the pad each wire leaves by survive the round trip');
+
     // Ids come from a counter that starts at zero in a fresh process, and a
     // graph read back out of localStorage was numbered by a previous one.
     // Handing one of its ids out again would make "is this the same node" a
@@ -307,8 +353,26 @@ console.log('\nwhat derive() builds');
 
     const kinds = {};
     for (const n of g.nodes) kinds[n.kind] = (kinds[n.kind] || 0) + 1;
-    same(kinds.input, 4, 'one input node per clip per stream — two clips, video and audio');
+    // One node per *file*, because one file is one `-i`. Its picture and its
+    // sound are two outputs of it rather than two nodes that happen to name the
+    // same path — which is what `[0:v]` and `[0:a]` already meant, and what the
+    // graph drew as two unrelated things until an edge could say which pad it
+    // left by.
+    same(kinds.input, 2, 'one input node per clip, however many streams it is read for');
+    const ins = g.nodes.filter((n) => n.kind === 'input');
+    same(ins.map((n) => n.outs.map((o) => o.stream).join('')).join(' '), 'va va',
+         'each of them with an output per stream — the picture and the sound');
+    same(g.outPorts(ins[0]), 2, 'which the model reports as two output ports');
     same(kinds.sink, 2, 'and one sink per stream the muxer maps');
+
+    // The sound leaves by the second pad, and the printer says so. This is the
+    // whole of what `fromPort` buys: without it both wires out of one node
+    // print as `[0:v]`, and the audio chain reads the picture.
+    const chains = print(g).chains;
+    ok(chains.some((c) => c.indexOf('[0:a]atrim=') === 0),
+       `the first clip’s sound is read from its own pad: ${chains.join(';')}`);
+    ok(chains.some((c) => c.indexOf('[1:a]atrim=') === 0),
+       'and the second clip’s from its own');
     ok(g.nodes.every((n) => n.derived), 'every node the derivation makes is marked derived');
     ok(g.nodes.every((n) => !n.locked), 'and none of them is locked');
 
@@ -407,6 +471,19 @@ console.log('\na filter put on a wire lands on that wire');
     ok(/loudnorm\[a0\]$/.test(chainFor(sound, 'a0')),
        `sound is the same mechanism on a different stream: ${chainFor(sound, 'a0')}`);
     same(print(sound.graph).audio, '[a0]', 'and the muxer still maps the end of it');
+
+    // A clip's picture and its sound now leave one input node by two pads, so
+    // an insertion on either has to name which. Put on the sound, it must not
+    // take the picture with it — the failure that would be is an `atempo` in
+    // front of the trim of the *video* chain, which parses and renders nothing.
+    const onSound = derive(oneClip(), null, {
+        overlay: { inserts: [{ id: 'u1', anchor: 'clip:7/audio', filter: 'aecho',
+                               pos: [], params: {} }], locks: {} },
+    });
+    ok(/^\[0:a\]aecho,atrim=/.test(chainFor(onSound, 'a0')),
+       `a filter on the clip’s sound lands on its audio pad: ${chainFor(onSound, 'a0')}`);
+    ok(/^\[0:v\]trim=/.test(chainFor(onSound, 'v0')),
+       `and the picture leaves the same node untouched: ${chainFor(onSound, 'v0')}`);
 }
 
 console.log('\ntwo filters at one point run in the order they were added');
@@ -623,6 +700,16 @@ console.log('\nthe layout, with something pinned');
         ok(Math.abs(off - portY(80, w.edge.port, 2)) < 1e-6,
            `port ${w.edge.port} lands where portY says it does (${off.toFixed(2)})`);
     }
+
+    // The same on the way out, which is new: a clip's picture and its sound
+    // leave one input node, and two wires drawn from one point would say they
+    // were the same stream.
+    const file = d.graph.byAnchor('clip:7/in');
+    const outOf = free.wires.filter((w) => w.edge.from === file.id);
+    same(outOf.length, 2, 'the file is read twice');
+    ok(outOf[0].y1 !== outOf[1].y1, 'and the two wires leave it at different heights');
+    same(outOf.map((w) => w.stream).sort().join(''), 'av',
+         'each carrying the stream of the pad it left by');
 }
 
 console.log('\nremembered');
@@ -713,7 +800,7 @@ console.log('\nthe graph, cut off at one node');
 
     // An input is not a filter and cannot be a chain, so there is nothing to
     // print in front of the scale that fits it.
-    const source = at('clip:7/in:v');
+    const source = at('clip:7/in');
     ok(source.ok, 'an input node can be previewed');
     ok(/^\[0:v\]scale=/.test(source.filterGraph),
        `which is the stream itself: ${source.filterGraph}`);

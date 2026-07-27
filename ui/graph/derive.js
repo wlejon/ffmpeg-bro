@@ -274,14 +274,16 @@ function applyOverlay(g, points, ov, overrides) {
         const node = g.insertAfter(after, {
             id: rec.id, anchor: rec.anchor, filter: rec.filter,
             pos: rec.pos, params: rec.params, derived: false,
-        });
+        }, point.atPort || 0);
         // The label goes with the end of the chain, not with the node that used
         // to be there. Left behind it would be a name no chain produces, and
         // the pad the muxer maps would be invented instead of `vout`.
         if (after.label) { node.label = after.label; after.label = null; }
         // Two nodes at one point run in the order they were added, so the next
-        // one goes after this one rather than in front of it.
+        // one goes after this one rather than in front of it — and the spliced
+        // node is a filter, so what leaves it leaves by its only pad.
         point.at = node.id;
+        point.atPort = 0;
     }
 }
 
@@ -358,28 +360,44 @@ export function derive(spec, sources, opts = {}) {
         params: { c: 'black', s: `${W}x${H}`, r: n(fps, 6), d: n(length, 6) },
     }], 'base');
 
-    // The named places on the wires where something can be put. `at` is where
-    // the *next* insertion goes, which starts as the point's own node and moves
-    // along as nodes are spliced in.
+    // The named places on the wires where something can be put. `at`/`atPort`
+    // are where the *next* insertion goes, which starts as the point's own node
+    // and the pad it leaves by, and moves along as nodes are spliced in.
+    //
+    // The pad is not optional now that one node produces two of them: a clip's
+    // picture and its sound both leave its input node, and a point that named
+    // only the node would put a `+` on whichever of the two wires happened to
+    // be found first.
     const points = [];
-    const point = (id, after, stream, title) => {
-        if (after) points.push({ id, after: after.id, at: after.id, stream, title });
+    const point = (id, after, atPort, stream, title) => {
+        if (after)
+            points.push({ id, after: after.id, at: after.id, atPort, stream, title });
     };
+
+    // One node per clip, because one file is one `-i`. Its outputs are the
+    // streams this graph reads it for — the picture always, the sound below if
+    // the clip is audible — and every wire leaving it says which. Two nodes
+    // reading one path was the older shape, and it drew a file as two unrelated
+    // things when the whole of `[0:v]` and `[0:a]` being one input is that they
+    // are not: one demuxer, one seek, one row on the Sources stage.
+    const inputs = new Map();
 
     // Nodes are pushed in the order their chains are printed in, and print.js
     // walks the array — so a clip's whole run goes down before the next clip's,
     // and the overlays after all of them.
     const heads = kept.map(({ clip, w, src, i, key }) => {
-        const input = g.add({ kind: 'input', stream: 'v', index: i, path: clip.path,
-                              anchor: `${key}/in:v`, from: w.srcIn });
+        const input = g.add({ kind: 'input', index: i, path: clip.path,
+                              anchor: `${key}/in`, from: w.srcIn,
+                              outs: [{ stream: 'v' }] });
+        inputs.set(key, input);
         const tail = g.run(input, videoSteps(clip, w, src, key), `v${i}`);
         // Two points per clip, and they are two different pictures: before the
         // scale a filter sees the source at its own size, in its own pixel
         // format and colour; after it, the clip as it will be composited —
         // RGBA, at the size it occupies on the canvas. `hflip` does not care;
         // anything that works in pixels does.
-        point(`${key}/after-decode`, input, 'v', 'after decode');
-        point(`${key}/after-scale`, g.byAnchor(`${key}/format`), 'v', 'after scale');
+        point(`${key}/after-decode`, input, 0, 'v', 'after decode');
+        point(`${key}/after-scale`, g.byAnchor(`${key}/format`), 0, 'v', 'after scale');
         return tail;
     });
 
@@ -425,16 +443,22 @@ export function derive(spec, sources, opts = {}) {
     // there would sit in the encoder's colour in the command you copied and in
     // RGBA in the render you got. Two pictures from one insert point is worse
     // than one fewer insert point.
-    point('composite/after-overlay', lastOverlay, 'v', 'after compositing');
+    point('composite/after-overlay', lastOverlay, 0, 'v', 'after compositing');
     g.connect(over, g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' }), 0);
 
     if (spec.audio !== false) {
         const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0);
         const tails = heard.map(({ clip, w, i, key }) => {
-            const input = g.add({ kind: 'input', stream: 'a', index: i, path: clip.path,
-                                  anchor: `${key}/in:a`, from: w.srcIn });
-            const tail = g.run(input, audioSteps(clip, w, key), `a${i}`);
-            point(`${key}/audio`, input, 'a', 'clip audio');
+            // The clip's own input node, given a second output. A pad is added
+            // when something reads it rather than for every stream the file
+            // happens to carry: a muted clip is not read for its sound, and a
+            // socket wired to nothing would be a claim about the render that
+            // the render does not make.
+            const input = inputs.get(key);
+            const out = input.outs.length;
+            input.outs.push({ stream: 'a' });
+            const tail = g.run({ node: input, out }, audioSteps(clip, w, key), `a${i}`);
+            point(`${key}/audio`, input, out, 'a', 'clip audio');
             return tail;
         });
         let out = null;
@@ -452,7 +476,7 @@ export function derive(spec, sources, opts = {}) {
         // With one audible clip there is no mixer, and this point sits on that
         // clip's own tail — which is the same wire the muxer maps and the right
         // place for something that applies to the whole soundtrack.
-        point('audio/after-mix', out, 'a', 'after mixing');
+        point('audio/after-mix', out, 0, 'a', 'after mixing');
         if (out) g.connect(out, g.add({ kind: 'sink', stream: 'a', anchor: 'out:a' }), 0);
     }
 

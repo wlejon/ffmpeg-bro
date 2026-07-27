@@ -33,12 +33,26 @@ export { outputColor };
 /// rather than in the printed chains because a command line says it with `-ss`
 /// and this application says it by handing the renderer a number.
 ///
+/// One entry per *pad that is read*, not per node: an input node is a file and
+/// a file has an output per stream, so `[0:v]` and `[0:a]` are two lines here
+/// and one `-i`. A pad nothing in the graph reads is left out rather than
+/// listed and ignored — the renderer opens a reader per entry, and a subgraph
+/// cut down to one clip's picture must not be the reason its sound is decoded.
+///
 /// Exported because a preview of one node needs the same list for a subgraph.
 export function inputsOf(graph) {
-    return graph.nodes
-        .filter((n) => n.kind === 'input' && n.path)
-        .map((n) => ({ label: `${n.index}:${n.stream}`, path: n.path,
-                       stream: n.stream, from: n.from || 0 }));
+    const out = [];
+    for (const n of graph.nodes) {
+        if (n.kind !== 'input' || !n.path) continue;
+        const outs = n.outs && n.outs.length ? n.outs : [{ stream: n.stream || 'v' }];
+        const read = new Set(graph.outEdges(n).map((e) => e.fromPort || 0));
+        outs.forEach((o, i) => {
+            if (!read.has(i)) return;
+            out.push({ label: `${n.index}:${o.stream}`, path: n.path,
+                       stream: o.stream, from: n.from || 0 });
+        });
+    }
+    return out;
 }
 
 /// `buildSpec()`'s output → the inputs and the graph that would render it.

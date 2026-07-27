@@ -61,24 +61,47 @@ function depths(g) {
     return d;
 }
 
-/// Which stream each node is on, carried forward from the input nodes. Only
-/// the two ends of the graph say so themselves; everything between is whatever
-/// reached it. The generated canvas (`color`) has no producer and no input, so
-/// it falls back to video — which is what it is.
+/// Which stream each node is on, and which each *wire* carries, carried forward
+/// from the input nodes. Only the two ends of the graph say so themselves;
+/// everything between is whatever reached it. The generated canvas (`color`)
+/// has no producer and no input, so it falls back to video — which is what it
+/// is.
+///
+/// Per wire as well as per node, because an input node is no longer on one
+/// stream: a file's picture and its sound leave the same card by different
+/// pads, and colouring both wires by the node they leave would draw the sound
+/// in the picture's blue.
 function streams(g) {
     const s = new Map();
-    const queue = [];
     for (const n of g.nodes)
-        if (n.kind === 'input' && n.stream) { s.set(n.id, n.stream); queue.push(n); }
-    while (queue.length) {
-        const n = queue.shift();
-        for (const c of g.consumers(n)) {
-            if (s.has(c.id)) continue;
-            s.set(c.id, s.get(n.id));
-            queue.push(c);
+        if (n.kind === 'input')
+            s.set(n.id, (n.outs && n.outs[0] && n.outs[0].stream) || n.stream || 'v');
+
+    // What leaves a node by a given pad. A file says so per pad; everything
+    // else has one output and it is whatever the node is on.
+    const outOf = (n, port) => {
+        if (!n) return null;
+        if (n.outs && n.outs.length) return (n.outs[port] || n.outs[0]).stream;
+        return s.get(n.id) || n.stream || null;
+    };
+
+    // Relaxed to a fixed point for the reason `depths` is: the pass is over a
+    // few dozen nodes and a cycle should come out as a strange picture rather
+    // than as a hang.
+    for (let pass = 0; pass <= g.nodes.length; pass++) {
+        let moved = false;
+        for (const e of g.edges) {
+            if (s.has(e.to)) continue;
+            const st = outOf(g.node(e.from), e.fromPort || 0);
+            if (st) { s.set(e.to, st); moved = true; }
         }
+        if (!moved) break;
     }
-    return (n) => s.get(n.id) || n.stream || 'v';
+
+    return {
+        of: (n) => s.get(n.id) || n.stream || 'v',
+        ofEdge: (e) => outOf(g.node(e.from), e.fromPort || 0) || 'v',
+    };
 }
 
 /// `sizeOf(node)` is asked once per node and must answer `{ w, h }` in pixels.
@@ -167,7 +190,7 @@ export function layout(g, sizeOf, pinOf) {
             node: n,
             col: depth.get(n.id),
             row: row.get(n.id),
-            stream: streamOf(n),
+            stream: streamOf.of(n),
             pinned: !!pin,
             x: pin ? pin.x : colLeft[depth.get(n.id)],
             y: pin ? pin.y : rowTop[row.get(n.id)],
@@ -195,11 +218,15 @@ export function layout(g, sizeOf, pinOf) {
         // landed on top of each other. Which is the exact thing the comment above
         // says this code exists to prevent: it had been saying so and not doing it
         // since the day it was written.
-        const oy1 = a.h / 2;
+        //
+        // The same spacing on the way out, because a node can have more than
+        // one: a file's picture and its sound leave one card and two wires
+        // drawn from one point would say they were the same stream.
+        const oy1 = portY(a.h, e.fromPort || 0, g.outPorts(a.node));
         const oy2 = portY(b.h, e.port, g.producers(b.node).length);
         wires.push({
             edge: e,
-            stream: a.stream,
+            stream: streamOf.ofEdge(e),
             oy1, oy2,
             x1: a.x + a.w, y1: a.y + oy1,
             x2: b.x, y2: b.y + oy2,

@@ -33,11 +33,17 @@ export function filterArgs(node) {
     return parts.length ? `${node.filter}=${parts.join(':')}` : node.filter;
 }
 
-/// What a pad is called when something has to name it. An input node names the
-/// stream ffmpeg gave it; a filter node names its own label.
-function padOf(node, invented) {
+/// What a pad is called when something has to name it, given the output it is
+/// read from. An input node names the file and the stream ffmpeg would give it
+/// — `0:v` and `0:a` are two pads of one `-i`, which is why the port is a
+/// parameter here and not a property of the node. A filter node has one output
+/// and names its own label.
+function padOf(node, invented, fromPort = 0) {
     if (!node) return '';
-    if (node.kind === 'input') return `${node.index}:${node.stream}`;
+    if (node.kind === 'input') {
+        const out = node.outs && node.outs[fromPort];
+        return `${node.index}:${out ? out.stream : node.stream || 'v'}`;
+    }
     if (node.label) return node.label;
     return invented(node);
 }
@@ -89,7 +95,10 @@ export function print(g) {
             done.add(next.id);
         }
 
-        const head = g.producers(run[0]).map((p) => `[${padOf(p, nameFor)}]`).join('');
+        // The edges rather than the producers: two chains can read one input
+        // node, and which pad each of them names is the edge's business.
+        const head = g.inEdges(run[0])
+            .map((e) => `[${padOf(g.node(e.from), nameFor, e.fromPort || 0)}]`).join('');
         const tail = `[${padOf(run[run.length - 1], nameFor)}]`;
         chains.push(head + run.map(filterArgs).join(',') + tail);
     }
@@ -108,8 +117,8 @@ export function print(g) {
     const pad = (stream) => {
         for (const node of g.nodes) {
             if (node.kind !== 'sink' || node.stream !== stream) continue;
-            const src = g.producers(node)[0];
-            if (src) return `[${padOf(src, nameFor)}]`;
+            const e = g.inEdges(node)[0];
+            if (e) return `[${padOf(g.node(e.from), nameFor, e.fromPort || 0)}]`;
         }
         return null;
     };

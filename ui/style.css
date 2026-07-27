@@ -1215,7 +1215,17 @@ button.text.primary:hover { background: #ffa063; }
     overflow: hidden;
     white-space: nowrap;
 }
-.gn-pad { font-size: var(--fs-xs); color: var(--dim); margin-left: auto; }
+/* The pad this node produces — or the pads, for an input node, which is a file
+   and has one per stream it is read for. One line, whatever it says: wrapped,
+   `[0:v] [0:a]` makes the header of a source card two lines taller than every
+   other card's, and a header is a row of the layout. */
+.gn-pad {
+    font-size: var(--fs-xs);
+    color: var(--dim);
+    margin-left: auto;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
 
 /* One value. The label is the UI font because it is a word and the control is
    mono because it is a value — a distinction the old card, all in mono, could
@@ -1270,6 +1280,12 @@ select.gn-f { text-align: left; }
 }
 .gn-sock-in { left: -5px; }
 .gn-sock-out { right: -5px; }
+/* A socket that names its own stream wins over the card's, because an input node
+   is not on one stream: a file's picture and its sound leave the same card, and
+   two blue dots would say the two wires were interchangeable. Written after the
+   `.gn-a` rule above so it outranks it at equal specificity. */
+.gn-sock-v, .gn-a .gn-sock-v { background: var(--blue); }
+.gn-sock-a, .gn-a .gn-sock-a { background: var(--good); }
 
 /* Zoomed out, a card is its name and its picture. Nine cards of 10px argument
    text at 0.4x is nine grey smudges; nine legible names is a graph. */
