@@ -1053,6 +1053,68 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // ── a filter that is on for part of the render ─────────────────────
+        //
+        // `enable=` is libavfilter's timeline support and it is the nearest
+        // thing ffmpeg has to a keyframe: the filter is stepped over on frames
+        // whose timestamp the expression says no to. The whole claim the UI
+        // makes about it is that it changes *those frames and no others*, and
+        // the only way to know that is to render one and look at both sides of
+        // the boundary in the written file.
+        //
+        // Measured against the plain graph render rather than against a
+        // threshold of its own: inside the span the two must be visibly
+        // different pictures, outside it they must be the same picture twice.
+        // A filter that was applied to everything passes neither check, and one
+        // that was silently dropped — which is what libavfilter does to
+        // `enable` on a filter without the flag — passes only the second.
+        {
+            const std::string outE = "out/export-graph-enable.mp4";
+            const double kOn = 0.6;                 // the span, in output seconds
+            char enabled[1200];
+            std::snprintf(enabled, sizeof(enabled),
+                "color=c=black:s=%dx%d:r=%g:d=%g[base];"
+                "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS+0/TB,"
+                "scale=%d:%d:in_color_matrix=%s:in_range=%s:out_range=full,format=rgba,"
+                "negate=enable='between(t,0,%g)'[v0];"
+                "[base][v0]overlay=0:0:eof_action=pass[vout]",
+                kW, kH, kFps, kSpan,
+                c.inPoint, c.inPoint + c.length,
+                static_cast<int>(c.w), static_cast<int>(c.h), matrix.c_str(), range.c_str(),
+                kOn);
+
+            ExportSettings se = sg;
+            se.path = outE;
+            se.filterGraph = enabled;
+            // Only the picture: the sound is the same on both sides of the
+            // boundary and an audio pad here would only be a second thing to
+            // keep in step.
+            se.filterInputs = {{"0:v", first, "v"}};
+            se.includeAudio = false;
+            const ExportStatus est = render(se, clipsA);
+            checkf(est.state == ExportStatus::State::Done,
+                   "a graph with a filter enabled for part of the range renders (%s)",
+                   est.error.empty() ? "no error" : est.error.c_str());
+
+            VideoPipeline a, b;
+            if (est.state == ExportStatus::State::Done && a.open(outG) && b.open(outE)) {
+                const auto at = [&](double t) {
+                    a.advanceTo(static_cast<TimeNs>(t * 1e9));
+                    b.advanceTo(static_cast<TimeNs>(t * 1e9));
+                    return (a.hasFrame() && b.hasFrame())
+                        ? psnr(a.currentRgba(), b.currentRgba(), kW, kH) : -1.0;
+                };
+                const double inside = at(0.25);
+                const double outside = at(kSpan - 0.2);
+                checkf(inside >= 0 && inside < 15.0,
+                       "the frames inside the span are a different picture (%.1f dB)", inside);
+                checkf(outside > 40.0,
+                       "and the frames outside it are the same picture (%.1f dB)", outside);
+            } else {
+                check(false, "both renders open for comparison");
+            }
+        }
+
         // The graph is text the user can edit, so every way of getting it wrong
         // has to arrive as a sentence rather than as a render that produces
         // nothing.
