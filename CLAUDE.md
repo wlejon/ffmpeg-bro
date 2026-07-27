@@ -114,6 +114,10 @@ against footage the fixtures do not resemble:
 # the equivalent filtergraph, against specs written out by hand. Needs no
 # media: buildSpec()'s output is a plain object and the module is pure.
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js
+
+# the graph underneath it: the model, the printer's chain rule on graphs the
+# derivation does not produce, locks, insertion, removal, the round trip
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js
 ```
 
 `tests/ui_player.js` is the main regression suite: it drops files on the real UI, plays,
@@ -353,17 +357,46 @@ What the fixes were, and what the code here still does about them:
   would compare a picture against a squashed copy of itself. Because they are placed in
   pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
   refits when the measured stage changes.
-- `filtergraph.js` — `buildSpec()`'s output written as the `-filter_complex`
-  that would produce it, for showing (and copying) what the render amounts to
-  in ffmpeg's own terms. The app composites internally rather than shelling
-  out, so this is a *translation*, and how good a one was settled by measuring:
-  render the same edit both ways and compare. Naming every colour conversion
-  is worth 24.1 dB → 39.1 dB, which is why `probe()` reports each source's
-  colour tags and why they are threaded in here. A rate change is the one
+- `graph/` + `filtergraph.js` — `buildSpec()`'s output written as the
+  `-filter_complex` that would produce it, for showing (and copying) what the
+  render amounts to in ffmpeg's own terms. The app composites internally rather
+  than shelling out, so this is a *translation*, and how good a one was settled
+  by measuring: render the same edit both ways and compare. Naming every colour
+  conversion is worth 24.1 dB → 39.1 dB, which is why `probe()` reports each
+  source's colour tags and why they are threaded in. A rate change is the one
   difference no option closes — a fixed-rate walk and a frame-sync pick
   different frames — so it is reported as a caveat instead. **An edit it
   cannot express faithfully returns a refusal, not an approximation**: the
   whole value of printing a command is that it can be taken elsewhere and run.
+
+  It is a graph before it is a string, in three parts that change for different
+  reasons. `graph/model.js` is nodes and wires — **one node kind, because
+  ffmpeg has one**: a `scale` node *is* a filter named `scale`, and the app's
+  crop, opacity and stacking are `crop`, `colorchannelmixer` and `overlay`
+  rather than special cases of anything. `graph/derive.js` builds the skeleton
+  from the edit and owns every refusal and caveat; `graph/print.js` turns nodes
+  into chains. `filtergraph.js` is the two composed, with the shape callers
+  want, so `command.js` does not know a graph exists.
+
+  Three things about the model are load-bearing rather than incidental.
+  **Arguments are positional-then-named because ffmpeg's are** — `crop`'s four
+  numbers are the first entries of the same option table the named ones come
+  from, and normalising them would print something other than what was written.
+  **Only chain-final nodes carry a label**, because print's rule is that a run
+  continues while the wire is private (one producer, one consumer, both
+  filters) and a private pad has no name to carry; that rule is what puts the
+  output colour conversion on the back of the last `overlay` instead of in a
+  chain of its own. And **a node has one output**, which is enough for anything
+  derived from a timeline and is not enough for `split` — when an edge learns
+  to name which output it leaves by, the chain rule does not change, only
+  `connect` and `padOf`.
+
+  `derived`, `locked` and `anchor` are on every node for the milestone that
+  follows: the skeleton is rebuilt whenever the timeline moves, so a node you
+  touched has to be findable afterwards, and a position in an array is not
+  findable. Editing a param locks its node — a value you typed that the next
+  timeline edit silently reverted is worse than the edit not applying, because
+  at least that is visible.
 - `format.js`, `icons.js` — timecode/byte formatting, and SVG icons painted from
   `data-icon` attributes. `icons.js` is the one place that still writes markup as a
   string: the icons are `<svg>` path data, closer to an asset than to a UI, and

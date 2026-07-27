@@ -128,10 +128,14 @@ set_tests_properties(decode export ui-player ui-export PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
-# translation into a filter graph is a pure function of it.
+# translation into a filter graph is a pure function of it. ui-graph is the
+# same code from underneath — the model, the printer's chain rule and the
+# round trip through storage, none of which has a printed form.
 add_test(NAME ui-filtergraph COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_filtergraph.js")
-set_tests_properties(ui-filtergraph PROPERTIES TIMEOUT 300)
+add_test(NAME ui-graph COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_graph.js")
+set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.

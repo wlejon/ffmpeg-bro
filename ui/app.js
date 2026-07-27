@@ -18,6 +18,9 @@ import { initInspector, showProperties, showTransform, subjects } from './inspec
 import { clock, timecode, basename, bytes } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
 import { filtergraph } from './filtergraph.js';
+import { makeGraph, restore } from './graph/model.js';
+import { derive } from './graph/derive.js';
+import { print } from './graph/print.js';
 import * as shell from './shell.js';
 import { initSources, drawSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
@@ -793,5 +796,8 @@ globalThis.__ffmpegBro = {
     showProperties, pending,
     exporter,
     filtergraph, shell, command,
+    // The graph beneath filtergraph(): tests written against the model itself
+    // do not have to go through a spec and a printed string to reach it.
+    graph: { makeGraph, restore, derive, print },
 };
 globalThis.__ffmpegBroReady = true;
