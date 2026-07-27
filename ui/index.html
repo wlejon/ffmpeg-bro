@@ -36,6 +36,13 @@
             <input id="src-path" class="wide" type="text"
                    placeholder="a file path, or a URL &mdash; https://, srt://, udp://, rtmp://">
             <button id="src-add" class="tiny primary">Add</button>
+            <!-- Several files as one `-i`, through the concat demuxer. Beside
+                 Add because it makes an input in the same way, and never in a
+                 menu: the three things called concat here — this demuxer, the
+                 filter, and two clips laid end to end on the timeline — are
+                 different renders, and the one being offered has to say which
+                 it is where it is offered. -->
+            <button id="src-join" class="tiny">Join…</button>
         </div>
         <div class="src-main">
             <div id="src-list" class="src-list"></div>

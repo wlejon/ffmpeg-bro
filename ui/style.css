@@ -805,6 +805,16 @@ body.fs #cropbox { display: none; }
 }
 .src-missing { color: var(--bad); }
 
+/* Joining files into one -i. The note comes first and is not decoration: three
+   different things in this application are called concat, and which one this
+   is has to be said where it is offered. */
+.src-join-note { padding: 4px 0 8px; line-height: 1.4; }
+
+/* The filenames a run of images will actually be written as. Shown because
+   %04d is exactly the thing somebody gets wrong once and then never trusts
+   again, so the answer is what is on screen and the pattern is not. */
+.ex-filenames { display: flex; flex-direction: column; gap: 1px; }
+
 /* Write: what the file is made of, where it goes, and the act of going. Three
    columns — the destination on the left, the stream list in the middle where
    the room is, and on the right the statement of what is about to happen with

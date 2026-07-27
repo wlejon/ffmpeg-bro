@@ -87,6 +87,7 @@ initSources({
     options: el('src-options'),
     add: el('src-add'),
     addPath: el('src-path'),
+    join: el('src-join'),
 }, {
     flash,
     // An input that was reopened with a different demuxer, option or window is

@@ -350,5 +350,46 @@ console.log('\n-stream_loop is how much of an input there is');
     clearAll();
 }
 
+// ── the concat demuxer ─────────────────────────────────────────────────────
+
+console.log('\nseveral files as one -i, and which concat that is');
+{
+    clearAll();
+    A.shell.goTo('sources');
+    pump(120);
+    A.inputs.addInput({ path: `${fixtures}/landscape.mp4` });
+    A.inputs.addInput({ path: `${fixtures}/portrait.mp4` });
+    A.drawSources();
+    pump(120);
+
+    document.getElementById('src-join').click();
+    pump(120);
+    const note = document.querySelector('#src-list .src-join-note');
+    ok(!!note, 'the join panel opens with what it is doing stated first');
+    ok(note.textContent.indexOf('before') > 0 && note.textContent.indexOf('timeline') > 0,
+       'saying that it reads the files before decoding, and where to go if that is wrong');
+
+    const ticks = Array.from(document.querySelectorAll('#src-list [data-join]'));
+    eq(ticks.length, 2, 'with the two inputs there are to join');
+    ticks[0].click(); pump(40);
+    ticks[1].click(); pump(40);
+    document.querySelector('[data-f="srcjoingo"]').click();
+    pump(300);
+
+    const joined = A.inputs.inputs[A.inputs.inputs.length - 1];
+    eq(A.inputs.kindOf(joined), 'concat', 'joining makes a concat input');
+    eq(joined.format, 'concat', 'opened with -f concat');
+    eq(joined.options.safe, '0', 'with -safe 0, because the paths are absolute');
+    eq((joined.parts || []).length, 2, 'out of the two files that were ticked');
+    // Ten seconds plus eight. The durations are written into the list because
+    // without them the demuxer reports none at all until it has read to the end.
+    ok(Math.abs(A.inputs.lengthOf(joined) - 18) < 0.3,
+       `and it is as long as both of them (${A.inputs.lengthOf(joined).toFixed(2)} s)`);
+
+    clearAll();
+    A.shell.goTo('compose');
+    pump(80);
+}
+
 console.log(`\n${failures ? `FAILED (${failures})` : 'all sequence UI checks passed'}`);
 assert(!failures, `${failures} check(s) failed`);

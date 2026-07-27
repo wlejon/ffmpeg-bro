@@ -26,7 +26,7 @@ import { div, span, el, put, row, head, fromTemplate, show, segmented } from './
 import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless } from './inputs.js';
-import { typedSpec, SEQUENCE_FPS } from './sequence.js';
+import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 import { optionColumn } from './opttable.js';
 
 let refs = {};
@@ -70,7 +70,18 @@ export function initSources(nodes, h) {
         // like this fails.
         refs.addPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
     }
+
+    if (refs.join) refs.join.addEventListener('click', () => {
+        joinOpen = !joinOpen;
+        drawSources();
+    });
 }
+
+// Which inputs the join is about, by id. Held here rather than on the inputs
+// because it is a gesture in progress and not part of the document — the same
+// reason the demuxer picker's search term is not in the model.
+let joinOpen = false;
+const joining = new Set();
 
 /// The input the panel is about: the one chosen, or the first one there is.
 function chosen() {
@@ -91,6 +102,7 @@ function drawList() {
         if (!inputs.length)
             return div('dim pad', 'No inputs. Add a path or a URL above, or drop a file ' +
                                   'on the timeline.');
+        if (joinOpen) return joinRows();
         return inputs.map((input) => {
             const node = fromTemplate('tpl-input');
             const used = hooks.clipsOf ? hooks.clipsOf(input).length : 0;
@@ -115,6 +127,66 @@ function drawList() {
             return node;
         });
     });
+}
+
+/// Several files as one `-i`, in the order they are ticked.
+///
+/// **This is the concat *demuxer*, and saying so is the point of the panel.**
+/// It reads the listed files one after another before anything is decoded, so
+/// they have to be encoded compatibly; the concat *filter* joins decoded
+/// streams inside the graph and does not care; and two clips laid end to end
+/// on the timeline is neither, because that is an edit and goes through the
+/// compositor. All three are reachable from this application, and somebody
+/// reaching for "join these two files" can mean any of them.
+function joinRows() {
+    const candidates = inputs.filter((i) => kindOf(i) !== 'concat' && i.probe);
+    const chosenPaths = () =>
+        candidates.filter((i) => joining.has(i.id)).map((i) => i.path);
+
+    const rows = [
+        div('src-join-note dim',
+            'The concat demuxer reads these files one after another as a single -i, before ' +
+            'anything is decoded — so they have to be encoded compatibly. To join clips ' +
+            'that are not, lay them end to end on the timeline instead; that is an edit ' +
+            'and goes through the compositor.'),
+        ...candidates.map((input) => el('button', {
+            cls: 'src-demuxer tiny' + (joining.has(input.id) ? ' on' : ''),
+            'data-join': input.id,
+            on: { click: () => {
+                if (joining.has(input.id)) joining.delete(input.id);
+                else joining.add(input.id);
+                drawSources();
+            } },
+        }, [
+            span(joining.has(input.id) ? '✓' : '·', 'mono'),
+            span(input.name),
+            span(clock(lengthOf(input)), 'dim mono'),
+        ])),
+    ];
+
+    if (!candidates.length)
+        rows.push(div('dim pad', 'Nothing to join yet — add two files above.'));
+
+    rows.push(div('src-actions', [
+        el('button', {
+            cls: 'tiny primary', 'data-f': 'srcjoingo', text: 'Join as one -i',
+            disabled: chosenPaths().length < 2,
+            on: { click: () => {
+                const made = addInput(concatSpec(chosenPaths()));
+                joining.clear();
+                joinOpen = false;
+                chosenId = made.id;
+                if (made.error && hooks.flash) hooks.flash(made.error);
+                if (hooks.changed) hooks.changed();
+                drawSources();
+            } },
+        }),
+        el('button', {
+            cls: 'tiny', 'data-f': 'srcjoincancel', text: 'Cancel',
+            on: { click: () => { joining.clear(); joinOpen = false; drawSources(); } },
+        }),
+    ]));
+    return rows;
 }
 
 // ── the input ──────────────────────────────────────────────────────────────
