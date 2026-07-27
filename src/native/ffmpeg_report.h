@@ -92,6 +92,23 @@ struct MetaRecord {
     std::string value;
 };
 
+/// Silence this thread's half of the channel for the length of a scope.
+///
+/// There is exactly one capability in this binary that cannot be enumerated
+/// and can only be asked by *trying*: whether this build's `image2` demuxer
+/// was compiled with globbing. libav answers `ENOSYS` at `read_header` and
+/// nowhere else, and on the way out it says so at error level about a file
+/// nobody asked to open. A question the application put to itself is not
+/// something a render said, so it does not belong in the report — and it is
+/// per-thread, so a render running beside the question keeps every word.
+class LogQuiet {
+public:
+    LogQuiet();
+    ~LogQuiet();
+    LogQuiet(const LogQuiet&) = delete;
+    LogQuiet& operator=(const LogQuiet&) = delete;
+};
+
 /// Take over `av_log`. Safe to call more than once; the second call does
 /// nothing. Call it before the engine exists, so that startup has somewhere to
 /// say things too.

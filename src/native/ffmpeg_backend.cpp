@@ -158,17 +158,24 @@ public:
             llround(inputEpoch(in, fmt_->start_time != AV_NOPTS_VALUE
                                        ? fmt_->start_time / double(AV_TIME_BASE) : 0.0) * 1e9));
         limitNs_ = static_cast<TimeNs>(llround(inputLimit(in) * 1e9));
+        loop_.configure(fmt_, in);
+        // `-stream_loop` and `-loop 1` both make an input that outlives what
+        // the container says it is, so the cut at `-t` is the only thing that
+        // ends it — and without a `-t` there is nothing to end it at, which is
+        // reported as a duration of zero rather than papered over.
+        endless_ = inputIsEndless(in);
 
         // A window makes the tracks as long as the window, because a clip's
         // length comes from its video track's duration and an input cut down
         // by `-t` is not as long as its file. Seeking is left to land where it
         // lands: the pipeline asks for times on this clock and `seekTo` puts
         // the offset back.
-        TimeNs formatDuration =
+        const double formatSeconds =
             fmt_->duration != AV_NOPTS_VALUE
-                ? av_rescale_q(fmt_->duration, AV_TIME_BASE_Q, kNsTimeBase)
-                : 0;
-        if (limitNs_ > 0) formatDuration = limitNs_;
+                ? fmt_->duration / double(AV_TIME_BASE)
+                : 0.0;
+        const TimeNs formatDuration =
+            static_cast<TimeNs>(llround(inputDuration(in, formatSeconds) * 1e9));
 
         for (unsigned i = 0; i < fmt_->nb_streams; ++i) {
             AVStream* st = fmt_->streams[i];
@@ -202,10 +209,10 @@ public:
                 t.codecPrivate.assign(par->extradata,
                                       par->extradata + par->extradata_size);
             }
-            t.durationNs = st->duration != AV_NOPTS_VALUE
-                               ? toNs(st->duration, st->time_base)
+            t.durationNs = st->duration != AV_NOPTS_VALUE && !endless_
+                               ? static_cast<TimeNs>(llround(
+                                     inputDuration(in, st->duration * av_q2d(st->time_base)) * 1e9))
                                : formatDuration;
-            if (limitNs_ > 0 && t.durationNs > limitNs_) t.durationNs = limitNs_;
 
             auto priv = std::make_shared<TrackPrivate>();
             priv->par = avcodec_parameters_alloc();
@@ -227,7 +234,7 @@ public:
         if (!fmt_ || !pkt_) return false;
         for (;;) {
             av_packet_unref(pkt_);
-            int rc = av_read_frame(fmt_, pkt_);
+            int rc = loop_.read(fmt_, pkt_);
             if (rc < 0) return false;   // EOF or hard read error
 
             const uint32_t trackId = static_cast<uint32_t>(pkt_->stream_index) + 1;
@@ -269,6 +276,15 @@ public:
     bool seekTo(TimeNs pts) override {
         if (!fmt_) return false;
         const int idx = videoStreamIndex_;
+        // With `-stream_loop` the clock above here is continuous across the
+        // passes and the file's is not, so the loop is told first which pass
+        // the target is in and the demuxer is only ever asked for a moment
+        // inside one.
+        if (loop_.looping()) {
+            double within = 0;
+            loop_.seekTo(pts / 1e9, &within);
+            pts = static_cast<TimeNs>(llround(within * 1e9));
+        }
         // Rounded DOWN, not to nearest. The contract is "at or before", and a
         // container tick is tens of microseconds wide — rounding to nearest
         // can carry a target that sits just below a frame up onto it, and a
@@ -290,9 +306,11 @@ private:
     AVFormatContext* fmt_ = nullptr;
     AVPacket* pkt_ = nullptr;
     std::vector<TrackInfo> tracks_;
+    InputLoop loop_;
     int videoStreamIndex_ = -1;
     TimeNs startOffsetNs_ = 0;
     TimeNs limitNs_ = 0;
+    bool endless_ = false;
 };
 
 // ── VideoDecoder ───────────────────────────────────────────────────────────
@@ -727,14 +745,10 @@ ProbeResult probeMedia(const MediaInput& in) {
     // How long the *input* is, which is how long the file is only when nothing
     // has been said about a window. A clip's length comes from this, so an
     // input trimmed with `-ss`/`-t` has to report the trimmed length here or
-    // the timeline would lay out a clip running past the end of its own input.
-    const double limit = inputLimit(in);
-    const auto window = [&](double d) {
-        if (!(d > 0.0)) return 0.0;
-        d = d - in.ss + in.itsoffset;
-        if (limit > 0.0) d = std::min(d, limit);
-        return std::max(0.0, d);
-    };
+    // the timeline would lay out a clip running past the end of its own input
+    // — and an input that loops has no measured length at all, so `-t` is the
+    // whole of the answer. Both rules live in `inputDuration`.
+    const auto window = [&](double d) { return inputDuration(in, d); };
 
     const double rawDuration =
         fmt->duration != AV_NOPTS_VALUE ? fmt->duration / double(AV_TIME_BASE) : 0.0;

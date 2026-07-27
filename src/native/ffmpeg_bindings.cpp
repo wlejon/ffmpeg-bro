@@ -4,6 +4,7 @@
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
+#include "ffmpeg_sequence.h"
 
 #include <algorithm>
 #include <string>
@@ -154,6 +155,12 @@ MediaInput inputFromJs(JSContext* ctx, JSValueConst o) {
     const double to = numProp(ctx, o, "to", 0);
     if (to > 0.0) in.duration = std::max(0.0, to - in.ss);
     in.itsoffset = numProp(ctx, o, "itsoffset", 0);
+    // `-stream_loop`, the one thing here libavformat has never heard of.
+    // Everything an image sequence or a still needs — `-framerate`,
+    // `-start_number`, `-pattern_type`, `-loop` — is an `image2` demuxer
+    // option and arrives in `options` above, unchanged from what a command
+    // line would say.
+    in.streamLoop = static_cast<int>(numProp(ctx, o, "streamLoop", 0));
     return in;
 }
 
@@ -976,6 +983,117 @@ JSValue js_tempPath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
     return JS_NewStringLen(ctx, out.data(), out.size());
 }
 
+// ── files that are one input ───────────────────────────────────────────────
+//
+// A drop of three hundred numbered PNGs is one `-i`, not three hundred, and
+// working that out is the single most-used path into image sequences. What is
+// exposed is the *scan* rather than a directory listing, because the guess and
+// its refusals belong in one place: see ffmpeg_sequence.h for the rules.
+
+JSValue js_sequences(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "sequences(paths) requires paths");
+    std::vector<std::string> paths;
+    if (JS_IsString(argv[0])) {
+        const char* one = JS_ToCString(ctx, argv[0]);
+        if (!one) return JS_EXCEPTION;
+        paths.emplace_back(one);
+        JS_FreeCString(ctx, one);
+    } else {
+        uint32_t n = 0;
+        JSValue len = JS_GetPropertyStr(ctx, argv[0], "length");
+        JS_ToUint32(ctx, &n, len);
+        JS_FreeValue(ctx, len);
+        for (uint32_t i = 0; i < n; ++i) {
+            JSValue v = JS_GetPropertyUint32(ctx, argv[0], i);
+            const char* one = JS_ToCString(ctx, v);
+            if (one) { paths.emplace_back(one); JS_FreeCString(ctx, one); }
+            JS_FreeValue(ctx, v);
+        }
+    }
+
+    const SequenceScan scan = scanForSequences(paths);
+    JSValue out = JS_NewObject(ctx);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& q : scan.sequences) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "dir", q.dir);
+        setStr(ctx, o, "pattern", q.pattern);
+        setStr(ctx, o, "prefix", q.prefix);
+        setStr(ctx, o, "suffix", q.suffix);
+        setStr(ctx, o, "first", q.first);
+        JS_SetPropertyStr(ctx, o, "digits", JS_NewInt32(ctx, q.digits));
+        JS_SetPropertyStr(ctx, o, "start", JS_NewInt64(ctx, q.start));
+        JS_SetPropertyStr(ctx, o, "end", JS_NewInt64(ctx, q.end));
+        JS_SetPropertyStr(ctx, o, "count", JS_NewInt32(ctx, q.count));
+        JS_SetPropertyStr(ctx, o, "missing", JS_NewInt32(ctx, q.missing));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    JS_SetPropertyStr(ctx, out, "sequences", arr);
+    JSValue singles = JS_NewArray(ctx);
+    i = 0;
+    for (const auto& one : scan.singles)
+        JS_SetPropertyUint32(ctx, singles, i++,
+                             JS_NewStringLen(ctx, one.data(), one.size()));
+    JS_SetPropertyStr(ctx, out, "singles", singles);
+    return out;
+}
+
+JSValue js_frameNames(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "frameNames(pattern, start, count) requires a pattern");
+    const char* pattern = JS_ToCString(ctx, argv[0]);
+    if (!pattern) return JS_EXCEPTION;
+    int64_t start = 1;
+    int32_t count = 3;
+    if (argc >= 2) JS_ToInt64(ctx, &start, argv[1]);
+    if (argc >= 3) JS_ToInt32(ctx, &count, argv[2]);
+    std::string err;
+    const auto names = frameFilenames(pattern, start, std::max(0, std::min(count, 4096)), &err);
+    JS_FreeCString(ctx, pattern);
+    if (names.empty() && !err.empty()) return JS_ThrowTypeError(ctx, "%s", err.c_str());
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& n : names)
+        JS_SetPropertyUint32(ctx, arr, i++, JS_NewStringLen(ctx, n.data(), n.size()));
+    return arr;
+}
+
+JSValue js_concatList(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "concatList(path, files) requires a path and files");
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+    // Either a path or `{ path, duration }`. The duration is worth having and
+    // is not decoration: without one the concat demuxer reports no length at
+    // all until something has read to the end of the last file — see
+    // ffmpeg_sequence.h.
+    std::vector<ConcatEntry> files;
+    uint32_t n = 0;
+    JSValue len = JS_GetPropertyStr(ctx, argv[1], "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (uint32_t i = 0; i < n; ++i) {
+        JSValue v = JS_GetPropertyUint32(ctx, argv[1], i);
+        ConcatEntry entry;
+        if (JS_IsObject(v)) {
+            entry.path = strProp(ctx, v, "path", "");
+            entry.duration = numProp(ctx, v, "duration", 0);
+        } else if (const char* one = JS_ToCString(ctx, v)) {
+            entry.path = one;
+            JS_FreeCString(ctx, one);
+        }
+        if (!entry.path.empty()) files.push_back(std::move(entry));
+        JS_FreeValue(ctx, v);
+    }
+    std::string err;
+    const bool ok = writeConcatList(path, files, &err);
+    const std::string written = path;
+    JS_FreeCString(ctx, path);
+    if (!ok) return JS_ThrowTypeError(ctx, "%s", err.c_str());
+    return JS_NewStringLen(ctx, written.data(), written.size());
+}
+
 std::string g_initialMedia;
 
 } // namespace
@@ -1049,6 +1167,20 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, ns, "filterOptions",
                       JS_NewCFunction(ctx, js_filterOptions, "filterOptions", 1));
     JS_SetPropertyStr(ctx, ns, "tempPath", JS_NewCFunction(ctx, js_tempPath, "tempPath", 1));
+
+    // What a drop of files and folders amounts to, and the two things that
+    // make an assembled input out of the answer. `globPatterns` is the one
+    // capability here that cannot be enumerated and is asked by trying — see
+    // ffmpeg_sequence.h.
+    JS_SetPropertyStr(ctx, ns, "sequences",
+                      JS_NewCFunction(ctx, js_sequences, "sequences", 1));
+    JS_SetPropertyStr(ctx, ns, "frameNames",
+                      JS_NewCFunction(ctx, js_frameNames, "frameNames", 3));
+    JS_SetPropertyStr(ctx, ns, "concatList",
+                      JS_NewCFunction(ctx, js_concatList, "concatList", 2));
+    JS_SetPropertyStr(ctx, ns, "imageExtensions", stringsToJs(ctx, imageExtensions()));
+    JS_SetPropertyStr(ctx, ns, "globPatterns",
+                      JS_NewBool(ctx, globPatternsSupported()));
 
     // The inputs playback knows about. Registered rather than passed, because
     // `<video src>` is a string — see the note above these functions.

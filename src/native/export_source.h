@@ -100,6 +100,7 @@ private:
     AVFormatContext* fmt_ = nullptr;
     AVCodecContext* dec_ = nullptr;
     AVPacket* pkt_ = nullptr;
+    InputLoop loop_;
     AVFrame* cur_ = nullptr;
     AVFrame* pending_ = nullptr;
     SwsContext* toRgba_ = nullptr;
@@ -163,6 +164,7 @@ private:
     AVFormatContext* fmt_ = nullptr;
     AVCodecContext* dec_ = nullptr;
     AVPacket* pkt_ = nullptr;
+    InputLoop loop_;
     AVFrame* frame_ = nullptr;
     SwrContext* swr_ = nullptr;
     AVChannelLayout outLayout_{};

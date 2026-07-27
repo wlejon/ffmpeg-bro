@@ -78,6 +78,11 @@ public:
     /// quarters of a megabyte.
     int64_t bytesSoFar() const;
 
+    /// What was written, on disk. A path with a frame-number pattern in it is
+    /// a run of files rather than one, so it is measured as one — see the note
+    /// in `finish()`.
+    static int64_t sizeOnDisk(const std::string& path, int64_t startNumber);
+
     /// The rate the mixer should produce, which is the render's rather than any
     /// one encoder's: every audio stream resamples from it to whatever it can
     /// take, so two streams at different rates cost one mix and two resamplers.

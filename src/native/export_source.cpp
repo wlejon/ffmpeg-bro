@@ -29,6 +29,7 @@ bool SourceVideo::open(const MediaInput& in, std::string* err) {
     startOffset_ = inputEpoch(in, fmt_->start_time != AV_NOPTS_VALUE
                                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0);
     limit_ = inputLimit(in);
+    loop_.configure(fmt_, in);
 
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!codec) { if (err) *err = path + ": no decoder for this video"; return false; }
@@ -126,6 +127,10 @@ double SourceVideo::ptsOf(const AVFrame* f) const {
 }
 
 void SourceVideo::seekTo(double t) {
+    // With `-stream_loop` the clock this reader answers on is continuous
+    // across the passes and the file's is not, so the loop is asked which pass
+    // the target is in and the demuxer is only ever given a moment inside one.
+    loop_.seekTo(t, &t);
     const int64_t target = static_cast<int64_t>(
         std::llround(std::max(0.0, t + startOffset_) / av_q2d(timeBase_)));
     av_seek_frame(fmt_, stream_, target, AVSEEK_FLAG_BACKWARD);
@@ -180,7 +185,7 @@ bool SourceVideo::decodeOne() {
         }
 
         av_packet_unref(pkt_);
-        rc = av_read_frame(fmt_, pkt_);
+        rc = loop_.read(fmt_, pkt_);
         if (rc < 0) { eof_ = true; continue; }
         if (pkt_->stream_index != stream_) continue;
         if (avcodec_send_packet(dec_, pkt_) < 0) {
@@ -210,6 +215,7 @@ bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels) {
     startOffset_ = inputEpoch(in, fmt_->start_time != AV_NOPTS_VALUE
                                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0);
     limit_ = inputLimit(in);
+    loop_.configure(fmt_, in);
 
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!codec) return false;
@@ -230,6 +236,8 @@ bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels) {
 }
 
 void SourceAudio::seekTo(double srcSeconds) {
+    const double asked = srcSeconds;
+    loop_.seekTo(srcSeconds, &srcSeconds);
     const int64_t target = static_cast<int64_t>(
         std::llround(std::max(0.0, srcSeconds + startOffset_) / av_q2d(timeBase_)));
     av_seek_frame(fmt_, stream_, target, AVSEEK_FLAG_BACKWARD);
@@ -241,8 +249,11 @@ void SourceAudio::seekTo(double srcSeconds) {
     head_ = 0;
     eof_ = drained_ = false;
     // How much of the first decoded frame to throw away is only knowable
-    // once we see where the seek actually landed.
-    seekTarget_ = srcSeconds;
+    // once we see where the seek actually landed — and it is measured against
+    // the clock this reader answers on, which `InputLoop` keeps continuous
+    // across the passes, not against the moment inside one that the demuxer
+    // was given.
+    seekTarget_ = asked;
     awaitingSeek_ = true;
 }
 
@@ -341,7 +352,7 @@ bool SourceAudio::decodeOne() {
         }
 
         av_packet_unref(pkt_);
-        rc = av_read_frame(fmt_, pkt_);
+        rc = loop_.read(fmt_, pkt_);
         if (rc < 0) { eof_ = true; continue; }
         if (pkt_->stream_index != stream_) continue;
         if (avcodec_send_packet(dec_, pkt_) < 0) continue;

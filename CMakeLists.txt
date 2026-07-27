@@ -41,6 +41,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_export.cpp
     src/native/ffmpeg_input.cpp
     src/native/ffmpeg_report.cpp
+    src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
     src/native/export_frame.cpp
     src/native/export_graph.cpp
@@ -112,6 +113,14 @@ target_link_libraries(ffmpeg-bro-inputtest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-inputtest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# Inputs whose content is assembled rather than opened: an image sequence, a
+# still held for a chosen length, `-stream_loop`, the concat demuxer, and a
+# render that writes a run of files rather than one.
+add_executable(ffmpeg-bro-seqtest tests/sequence_test.cpp)
+target_link_libraries(ffmpeg-bro-seqtest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-seqtest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
 target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
@@ -145,6 +154,7 @@ add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}")
 add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
+add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
 add_test(NAME ui-player COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
@@ -163,7 +173,7 @@ add_test(NAME ui-export COMMAND ffmpeg-bro-headless
 add_test(NAME ui-report COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_report.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export capabilities inputs ui-player ui-sources
+set_tests_properties(decode export capabilities inputs sequences ui-player ui-sources
                      ui-export ui-report PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
@@ -179,5 +189,6 @@ set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
-set_tests_properties(export capabilities ui-player ui-sources ui-export ui-report
+set_tests_properties(export capabilities sequences ui-player ui-sources ui-export
+                     ui-report
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

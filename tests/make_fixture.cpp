@@ -16,6 +16,13 @@
 //   - **The sound is audible and is a known tone.** -6 dBFS at a frequency
 //     that divides the sample rate evenly, so a peak-RMS check means what it
 //     says and a resampler that went wrong is audible in the result.
+//   - **The image fixtures are about the shape of a *drop*, not about the
+//     picture.** A padded run, a file beside it that is not part of one, and
+//     an unpadded run whose numbers cross from one digit to two — because what
+//     the sequence scan has to get right is which files belong together, and
+//     that is a property of the names rather than of the pixels. They are
+//     written by the same `Writer` through the `image2` muxer, which makes
+//     them the check that the picture side of it works at all.
 //   - **The two files differ in every way a render cares about**: size, aspect,
 //     frame rate and duration. A test that passes only because both inputs are
 //     1080p25 is a test that has not been run. This one is not decoration: the
@@ -140,6 +147,54 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
     return true;
 }
 
+/// A run of stills, written the way this application writes one: the `image2`
+/// muxer, a frame-number pattern for a path, and `-start_number` said out loud
+/// rather than left to a default nobody can see.
+///
+/// `count == 1` writes exactly one file, which needs `-update 1`: without it
+/// image2 says the name has no pattern in it and the *next* frame would land
+/// on top of the first. A still is the degenerate sequence, and the muxer
+/// treats it as one.
+bool writeStills(const std::filesystem::path& pattern, int count, int width, int height,
+                 int startNumber, uint8_t tint) {
+    ExportSettings s;
+    s.path = pattern.string();
+    s.format = "image2";
+    s.width = width;
+    s.height = height;
+    s.fps = 25.0;
+    s.startTime = 0;
+    s.endTime = count / 25.0;
+    s.videoCodec = "png";
+    s.includeAudio = false;
+    if (count == 1) s.formatOptions.push_back({"update", "1"});
+    else s.formatOptions.push_back({"start_number", std::to_string(startNumber)});
+
+    Writer writer;
+    std::string err;
+    if (!writer.open(s, false, &err)) {
+        std::fprintf(stderr, "%s: %s\n", pattern.string().c_str(), err.c_str());
+        return false;
+    }
+    Rgba canvas;
+    canvas.resize(width, height);
+    for (int n = 0; n < count; ++n) {
+        paint(canvas, double(n) / double(count > 1 ? count - 1 : 1), tint);
+        if (!writer.writeVideo(canvas, n, &err)) {
+            std::fprintf(stderr, "%s: %s\n", pattern.string().c_str(), err.c_str());
+            return false;
+        }
+    }
+    if (!writer.finish(&err)) {
+        std::fprintf(stderr, "%s: %s\n", pattern.string().c_str(), err.c_str());
+        return false;
+    }
+    std::printf("  %s  %d file%s %dx%d  %lld bytes\n", pattern.filename().string().c_str(),
+                count, count == 1 ? "" : "s", width, height,
+                static_cast<long long>(writer.bytesSoFar()));
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -162,5 +217,17 @@ int main(int argc, char* argv[]) {
     std::printf("writing fixtures into %s\n", dir.string().c_str());
     for (const auto& r : recipes)
         if (!write(r, dir / r.name)) return 1;
+
+    // Stills, in the arrangement a sequence scan has to make sense of: a
+    // padded run, a file beside it that is not part of one, and an unpadded
+    // run whose numbers cross from one digit to two. The third is the case
+    // that decides whether the scan is any good — grouped by digit width it
+    // comes out as two inputs, and nobody would be able to say why.
+    const std::filesystem::path frames = dir / "frames";
+    std::filesystem::create_directories(frames, ec);
+    if (!writeStills(frames / "shot_%04d.png", 12, 320, 180, 1, 1)) return 1;
+    if (!writeStills(frames / "plate%d.png", 12, 160, 90, 1, 2)) return 1;
+    if (!writeStills(frames / "logo.png", 1, 64, 64, 1, 0)) return 1;
+    if (!writeStills(dir / "still.png", 1, 320, 180, 1, 2)) return 1;
     return 0;
 }

@@ -3,6 +3,7 @@
 #include "export_writer.h"
 
 #include "ffmpeg_capabilities.h"
+#include "ffmpeg_sequence.h"
 
 #include "util/log.h"
 
@@ -419,19 +420,44 @@ bool Writer::finish(std::string* err) {
         if (rc < 0) note(std::string("cannot finish the file: ") + avErr(rc));
     }
     const std::string path = settings_.path;
+    // Asked of the muxer while it still exists, because a numbered output does
+    // not have to start at one and only image2 knows what it was told.
+    int64_t startNumber = 1;
+    if (oc_ && oc_->priv_data)
+        av_opt_get_int(oc_->priv_data, "start_number", 0, &startNumber);
     close();
 
-    // How big it came out is asked of the file, not of avio_tell.
+    // How big it came out is asked of the files, not of avio_tell.
     // +faststart rewrites the whole file after the trailer goes down, so
     // the position left behind bears no relation to the result — an mp4
     // that is three quarters of a megabyte on disk reported itself as
-    // three kilobytes.
-    std::error_code ec;
-    const auto size = std::filesystem::file_size(std::filesystem::path(path), ec);
-    bytes_ = ec ? 0 : static_cast<int64_t>(size);
+    // three kilobytes. A render into `out%04d.png` has the opposite problem:
+    // there is no file called that, so it reported nothing at all. What is on
+    // disk is a run of files, and a run is what is measured.
+    bytes_ = sizeOnDisk(path, startNumber);
 
     if (!failure.empty()) { *err = failure; return false; }
     return true;
+}
+
+int64_t Writer::sizeOnDisk(const std::string& path, int64_t startNumber) {
+    std::error_code ec;
+    if (!hasFramePattern(path)) {
+        const auto size = std::filesystem::file_size(std::filesystem::path(path), ec);
+        return ec ? 0 : static_cast<int64_t>(size);
+    }
+    // image2 numbers contiguously from wherever it was told to start, so the
+    // first name that is not there is the end of what was written.
+    int64_t total = 0;
+    std::string err;
+    for (int64_t n = startNumber;; ++n) {
+        const auto names = frameFilenames(path, n, 1, &err);
+        if (names.empty()) break;
+        const auto size = std::filesystem::file_size(std::filesystem::path(names[0]), ec);
+        if (ec) break;
+        total += static_cast<int64_t>(size);
+    }
+    return total;
 }
 
 int64_t Writer::bytesSoFar() const {

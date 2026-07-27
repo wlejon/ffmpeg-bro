@@ -158,7 +158,13 @@ const char* sourceOf(void* ptr) {
     return name ? name : "";
 }
 
+/// How many `LogQuiet` guards this thread is inside. Per-thread on purpose:
+/// asking libav a question on the UI thread must not cost the render thread
+/// its words.
+thread_local int g_quiet = 0;
+
 void capture(void* ptr, int level, const char* fmt, va_list vl) {
+    if (g_quiet > 0) return;
     // The console and the report want different amounts of the same stream, and
     // this is the only place that can serve both: `av_log_set_level` governs
     // what is *printed* — warnings and errors, so that a windowed build's log
@@ -212,6 +218,9 @@ void capture(void* ptr, int level, const char* fmt, va_list vl) {
 }
 
 } // namespace
+
+LogQuiet::LogQuiet() { g_quiet++; }
+LogQuiet::~LogQuiet() { g_quiet--; }
 
 void installLogCapture() {
     Channel& c = channel();

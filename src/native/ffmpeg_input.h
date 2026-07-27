@@ -27,6 +27,7 @@
 #include <vector>
 
 struct AVFormatContext;
+struct AVPacket;
 
 namespace ffmpegbro {
 
@@ -82,15 +83,23 @@ struct MediaInput {
     /// soundtrack are lined up.
     double itsoffset = 0.0;
 
-    // Seams, named rather than built. `-stream_loop` and an image sequence's
-    // own frame rate are chunk 5's; a device is a `format` naming one of
-    // libavdevice's demuxers plus its options, which is chunk 6's and needs
-    // nothing new here.
+    /// `-stream_loop`: how many *more* times to read this input after the
+    /// first. 0 is once through, -1 is forever.
+    ///
+    /// This is the one thing in this struct libavformat has never heard of.
+    /// `-framerate`, `-start_number`, `-pattern_type` and `-loop` — everything
+    /// that makes a numbered run of files or a single still into an input —
+    /// are options of the `image2` demuxer and travel in the bag above, which
+    /// is why an image sequence needed nothing added here. Looping a *stream*
+    /// is not: ffmpeg's own CLI implements it by seeking the input back to the
+    /// start when it ends and shifting every timestamp forward by one pass,
+    /// and `InputLoop` below is this binary's one copy of that arithmetic.
+    int streamLoop = 0;
 
     bool operator==(const MediaInput& o) const {
         return path == o.path && format == o.format && ss == o.ss &&
                duration == o.duration && itsoffset == o.itsoffset &&
-               sameOptions(o);
+               streamLoop == o.streamLoop && sameOptions(o);
     }
 
 private:
@@ -125,6 +134,67 @@ double inputEpoch(const MediaInput& in, double containerStart);
 
 /// Where this input ends on its own clock, or 0 for "at the end of the file".
 double inputLimit(const MediaInput& in);
+
+/// True when this input goes on producing frames for as long as it is asked to.
+///
+/// `-loop 1` on an image and `-stream_loop -1` on anything make an input with
+/// no length of its own: libavformat reports one pass — for a still, one frame
+/// — and everything above the model believes it, because everything above the
+/// model was written when a duration was a fact discovered by probing.
+///
+/// It is not a fact here. **`-t` is the only thing that can say how long such
+/// an input is, and it is a decision rather than a measurement**, which is
+/// exactly why it lives on the input beside the options that made it endless
+/// and is not invented somewhere further up to make a timeline comfortable.
+/// `probeMedia` and the playback source both ask this before believing a
+/// container's duration; see `inputDuration`.
+bool inputIsEndless(const MediaInput& in);
+
+/// How long this input is, given what the container said its own length was.
+///
+/// One rule in one place, because a clip's length comes from it and the
+/// timeline, the renderer and playback each ask separately: the window is
+/// applied to what was measured, and an endless input is as long as `-t` says
+/// and no longer. Zero means "nobody knows" — which for a still with no `-t` is
+/// the honest answer and not a number to paper over.
+double inputDuration(const MediaInput& in, double containerDuration);
+
+/// `-stream_loop`, folded into the packet read.
+///
+/// Three things in this binary read packets — the two export readers and the
+/// playback source — and looping is arithmetic on timestamps rather than a
+/// demuxer feature, so without a shared implementation each would get it
+/// slightly differently and a soundtrack would end up shifted by a different
+/// amount from the picture it belongs to.
+///
+/// A pass is as long as the container says, or as long as the furthest packet
+/// seen if it will not say — which is what makes this work on the formats that
+/// report no duration at all.
+class InputLoop {
+public:
+    /// What the input asked for, and how long one pass is. Safe to call with
+    /// `streamLoop == 0`, where every call below is `av_read_frame` verbatim.
+    void configure(AVFormatContext* fmt, const MediaInput& in);
+
+    bool looping() const { return passes_ != 1; }
+
+    /// `av_read_frame`, plus the seek back and the timestamp shift when a pass
+    /// ends and another is owed. Returns libav's own code, so `AVERROR_EOF`
+    /// still means the input has genuinely ended.
+    int read(AVFormatContext* fmt, AVPacket* pkt);
+
+    /// Where a seek to `seconds` on the input's continuous clock actually
+    /// lands: which pass it is in, and the moment within that pass. Call before
+    /// seeking and seek to `*within` instead.
+    void seekTo(double seconds, double* within);
+
+private:
+    int64_t passes_ = 1;      ///< total passes; 0 is forever
+    int64_t done_ = 0;        ///< passes finished
+    int64_t shift_ = 0;       ///< AV_TIME_BASE units added to every timestamp
+    int64_t passLen_ = 0;     ///< AV_TIME_BASE units, 0 until something is known
+    int64_t furthest_ = 0;    ///< the end of the furthest packet seen, same units
+};
 
 // ── The playback registry ──────────────────────────────────────────────────
 //

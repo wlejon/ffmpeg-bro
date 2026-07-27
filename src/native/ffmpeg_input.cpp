@@ -9,6 +9,7 @@ extern "C" {
 #include <libavutil/dict.h>
 }
 
+#include <algorithm>
 #include <map>
 #include <mutex>
 
@@ -111,6 +112,94 @@ double inputEpoch(const MediaInput& in, double containerStart) {
 
 double inputLimit(const MediaInput& in) {
     return in.duration > 0.0 ? in.duration + in.itsoffset : 0.0;
+}
+
+bool inputIsEndless(const MediaInput& in) {
+    if (in.streamLoop != 0) return true;
+    // `-loop 1` is the `image2` demuxer's own option and travels in the bag,
+    // which is right — it is exactly what the command line says and exactly
+    // what `av_dict_set` is handed. So this reads the bag rather than a field
+    // of its own: a second field would be a second place to say the same thing
+    // and the two would eventually disagree.
+    for (const auto& o : in.options)
+        if (o.key == "loop" && !o.value.empty() && o.value != "0") return true;
+    return false;
+}
+
+double inputDuration(const MediaInput& in, double containerDuration) {
+    const double limit = inputLimit(in);
+    // An endless input has no measured length to trim: `-t` is the whole
+    // answer, and without one nobody knows — which is a truth worth reporting
+    // rather than a zero to be replaced with a guess further up.
+    if (inputIsEndless(in)) return limit > 0.0 ? limit - in.ss + in.itsoffset : 0.0;
+    if (!(containerDuration > 0.0)) return 0.0;
+    double d = containerDuration - in.ss + in.itsoffset;
+    if (limit > 0.0) d = std::min(d, limit);
+    return std::max(0.0, d);
+}
+
+// ── -stream_loop ───────────────────────────────────────────────────────────
+
+void InputLoop::configure(AVFormatContext* fmt, const MediaInput& in) {
+    passes_ = in.streamLoop < 0 ? 0 : int64_t(in.streamLoop) + 1;
+    done_ = 0;
+    shift_ = 0;
+    furthest_ = 0;
+    passLen_ = fmt && fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0 ? fmt->duration : 0;
+}
+
+int InputLoop::read(AVFormatContext* fmt, AVPacket* pkt) {
+    for (;;) {
+        const int rc = av_read_frame(fmt, pkt);
+        if (rc >= 0) {
+            AVStream* st = fmt->streams[pkt->stream_index];
+            if (passes_ != 1) {
+                // How long a pass is, measured, for the formats that will not
+                // say: the furthest a packet reached. Taken on every pass and
+                // not only the first, because a demuxer that reports nothing
+                // reports nothing consistently and the answer only improves.
+                const int64_t ts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+                if (ts != AV_NOPTS_VALUE) {
+                    const int64_t end = av_rescale_q(ts + std::max<int64_t>(pkt->duration, 0),
+                                                     st->time_base, AV_TIME_BASE_Q) - shift_;
+                    if (end > furthest_) furthest_ = end;
+                }
+                if (shift_) {
+                    const int64_t d = av_rescale_q(shift_, AV_TIME_BASE_Q, st->time_base);
+                    if (pkt->pts != AV_NOPTS_VALUE) pkt->pts += d;
+                    if (pkt->dts != AV_NOPTS_VALUE) pkt->dts += d;
+                }
+            }
+            return rc;
+        }
+        if (rc != AVERROR_EOF) return rc;
+
+        done_++;
+        if (passes_ != 0 && done_ >= passes_) return AVERROR_EOF;
+
+        const int64_t len = passLen_ > 0 ? passLen_ : furthest_;
+        if (len <= 0) return AVERROR_EOF;   // nothing measurable; one pass is all there is
+        // Seeking to before the beginning rather than to zero: a container
+        // whose first timestamp is not zero would otherwise start the second
+        // pass a little into itself.
+        const int rs = avformat_seek_file(fmt, -1, INT64_MIN, INT64_MIN, INT64_MIN, 0);
+        if (rs < 0) return AVERROR_EOF;
+        shift_ += len;
+    }
+}
+
+void InputLoop::seekTo(double seconds, double* within) {
+    if (within) *within = seconds;
+    if (passes_ == 1) return;
+    const int64_t len = passLen_ > 0 ? passLen_ : furthest_;
+    if (len <= 0) return;
+    const double passSeconds = double(len) / double(AV_TIME_BASE);
+    int64_t pass = int64_t(seconds / passSeconds);
+    if (pass < 0) pass = 0;
+    if (passes_ != 0 && pass > passes_ - 1) pass = passes_ - 1;
+    done_ = pass;
+    shift_ = pass * len;
+    if (within) *within = seconds - double(pass) * passSeconds;
 }
 
 std::string inputToken(const std::string& id) {
