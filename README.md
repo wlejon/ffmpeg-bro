@@ -265,12 +265,20 @@ decode throughput, not the transport.
 
 ## Output
 
-`Output` — the second tab in the title bar, or `Export`, or `E` — is a screen
-of its own, not a dialog. `Esc` or the `Edit` tab goes back. Choosing an
-encoder setting means looking at what it does to the picture, and the
-comparison that shows you is the whole point of the screen, so it gets the
-middle of the window: settings down the left, every option the encoder has down
-the right when you want them, the range across the bottom.
+`Encode` and `Write` are two of the four stages on the spine — the row under
+the title bar that *is* the pipeline: **Sources → Compose → Encode → Write**.
+Each card says what its stage is currently set to, so the bar reads as one
+statement of the whole render, and clicking the part that is wrong is how you
+go and change it. `E` goes to Encode, `[` and `]` step along the chain, `Esc`
+comes back to the edit.
+
+Choosing an encoder setting means looking at what it does to the picture, and
+the comparison that shows you is the whole point of the Encode stage, so it
+gets the middle of the window: settings down the left, every option the encoder
+has down the right when you want them, the range across the bottom. Where the
+file goes is the *next* stage, because it is a different decision taken at a
+different moment — you settle what the picture is by looking at it, and then
+you say where to put it.
 
 Everything the viewer is showing is what gets written: the track stack
 composited bottom-up, each clip in the rectangle its fit, scale, position and
@@ -324,6 +332,38 @@ summary at the bottom shows the result as a command line, because that is the
 shortest complete statement of what is about to happen. An option the encoder
 does not have is an error, not a shrug: a render that succeeds while silently
 ignoring half of what it was told is the worst of the three outcomes.
+
+### The command
+
+Under every stage, live, is the invocation. Not a summary line at the bottom of
+one screen — the whole argument of this application is that ffmpeg should stop
+being a thing you guess at, and that argument is made by never hiding what is
+about to run. Open it and it lays the filtergraph out a chain per line; `Copy`
+puts the whole thing on the clipboard, so a render built here can be taken to a
+server and run.
+
+It is **two kinds of statement and it is drawn as two**, because they are not
+equally true:
+
+- **Exact** — everything but the filtergraph. Those keys are literally what
+  `av_opt_set` is called with, which is the same path the `ffmpeg` command line
+  uses for its own arguments. Not a description of the render; the render.
+- **Equivalent** — the composition. This binary composites internally rather
+  than building a filter graph, so the graph shown is a translation, and it is
+  dimmed to say so.
+
+How good a translation was measured rather than asserted: render the same edit
+both ways and compare. Naming every colour conversion is the difference between
+24.1 dB and 39.1 dB — a visible cast, not rounding — which is why `probe()`
+reports each source's colour tags and why they are threaded into the graph. One
+difference cannot be closed at all: the renderer walks forward at a fixed output
+rate and `overlay`'s frame sync picks by timestamp, so a 30 fps source in a
+25 fps render gives the two different frames to composite. That is said out
+loud, under the command, when it applies.
+
+An edit the graph cannot express faithfully produces **no graph and a reason**
+rather than an approximation. A command that is nearly right is worse than no
+command, because the only reason to print one is that it can be run.
 
 ### Preview
 
@@ -393,8 +433,10 @@ upright, from the container's display matrix.
 | `C` | crop handles on the picture (`Esc` leaves) |
 | `S` | split the selection at the playhead |
 | `G` | grid / stacked layout |
-| `E` | the Output workspace (`Esc` goes back to the edit) |
-| `Space` `←` `→` | on the Output screen: play / pause and step the comparison |
+| `E` | the Encode stage (`Esc` goes back to the edit) |
+| `I` | the Sources stage — what is actually in the files |
+| `[` `]` | one step back / forward along the pipeline |
+| `Space` `←` `→` | on the Encode stage: play / pause and step the comparison |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
 | `Delete` | remove the selection |
 

@@ -59,9 +59,12 @@ export function drawForm() {
     const info = encoderInfo(codec) || { presets: [], tunes: [], profiles: [], pixelFormats: [] };
     const cont = containerInfo(settings.container) || { videoCodecs: [], audioCodecs: [] };
 
+    // Where it goes belongs to the Write stage, not to this one. Encode is
+    // about what the picture is put through, and a filename at the top of that
+    // column was the first thing asked for and the last thing decided.
+    put(panes.dest, () => [head('Destination'), ...outputRows()]);
+
     put(panes.settings, () => [
-        head('Output'),
-        ...outputRows(),
         head('Video'),
         ...videoRows(codec, info, cont),
         head('Audio'),

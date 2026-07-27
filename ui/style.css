@@ -13,6 +13,15 @@
     --blue:      #4a9eff;
     --good:      #57c98a;
     --bad:       #ff6b6b;
+
+    /* A scale, so that something can be more important than something else.
+       Everything used to be 10–13px, which is why every panel read as one
+       undifferentiated column: a hierarchy needs sizes to build it out of. */
+    --fs-xs:    10px;   /* ruler ticks, option types, stage state */
+    --fs-sm:    11px;   /* labels, notes */
+    --fs-base:  13px;   /* values and controls */
+    --fs-md:    15px;   /* the thing a panel is about */
+    --fs-lg:    19px;
 }
 
 * { box-sizing: border-box; }
@@ -76,6 +85,97 @@ body { display: flex; flex-direction: column; }
 .chip.hot { color: var(--accent); border-color: var(--accent-dim); }
 
 #libav { font-size: 11px; }
+
+/* ── the spine ────────────────────────────────────────────────────────────
+
+   The pipeline, which is what this application is a picture of. Each card
+   states what its stage is currently set to, so the bar reads as one sentence
+   about the whole render and clicking a part of it is how you go and change
+   that part. */
+
+#spine {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 6px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+/* Not a tab. A tab says "look at this instead"; these say what the render is,
+   and are clickable because the thing you want to change is the part of the
+   statement that is wrong. */
+button.st {
+    display: block;
+    text-align: left;
+    height: auto;
+    min-width: 132px;
+    padding: 5px 10px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+}
+button.st:hover { background: var(--panel-hi); }
+button.st.on {
+    background: var(--panel-hi);
+    border-color: var(--line);
+}
+button.st.on .st-name { color: var(--accent); }
+button.st.warn .st-name::after {
+    content: " !";
+    color: var(--accent);
+}
+.st-name {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+    line-height: 1.5;
+}
+/* Both lines are always present, even empty, so a card does not change height
+   as its state fills in and shove the whole window up and down. */
+.st-state {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+}
+.st-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    color: var(--line);
+    font-size: var(--fs-base);
+}
+
+/* ── the stages ───────────────────────────────────────────────────────────
+
+   Four views that hide each other, never unmounted — the viewer's <video>
+   elements *are* the decoders, and tearing them down to look at an encoder
+   setting would mean rebuilding and re-seeking every one on the way back.
+   Which is why anything in the frame loop that measures a panel has to ignore
+   a measurement of zero: most of the window is display:none at any moment. */
+
+#stages {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+.stage-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--bg);
+}
+.stage-view.hidden { display: none; }
 
 /* ── main row: viewer + inspector ─────────────────────────────────────── */
 
@@ -562,6 +662,8 @@ input[type=range] { width: 130px; }
 /* ── fullscreen: picture only ─────────────────────────────────────────── */
 
 body.fs #topbar,
+body.fs #spine,
+body.fs #commandbar,
 body.fs #inspector,
 body.fs #controls { display: none; }
 body.fs #viewer { background: #000; }
@@ -578,23 +680,109 @@ body.fs #cropbox { display: none; }
    flank it and scroll on their own; the range and the summary run the full
    width underneath, where a timeline belongs. */
 
-#output {
+/* Sources: what is in the files. A stage rather than the bottom two thirds of
+   a 290px column, which is where it used to be and where it was scrolled past
+   every time. */
+.sources {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 4px 0 20px;
+    max-width: 900px;
+}
+
+/* Write: where it goes, and the act of going. Two columns — the destination on
+   the left, and on the right the statement of what is about to happen with the
+   button that makes it happen underneath, so the last thing under the pointer
+   before the click is the description of what the click does. */
+.ex-write {
     flex: 1;
     display: flex;
-    flex-direction: column;
     min-height: 0;
-    background: var(--bg);
+    overflow: hidden;
 }
-#output.hidden { display: none; }
+.ex-write.hidden { display: none; }
+.ex-dest { width: 460px; flex-shrink: 0; padding: 4px 12px 16px; }
+.ex-verdict {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 16px 12px;
+    border-left: 1px solid var(--line);
+}
+.ex-verdict .section-head { padding-left: 0; padding-right: 0; }
+.ex-warnings { padding: 6px 0; }
+.ex-warnings .warn { color: var(--accent); font-size: var(--fs-base); line-height: 1.7; }
+.ex-verdict .ex-foot { border: 0; background: none; padding: 8px 0 0; justify-content: flex-end; }
 
-/* One workspace at a time. Hiding rather than unmounting: the viewer's
-   <video> elements are the decoders, and tearing them down to look at an
-   export would mean rebuilding and re-seeking every one of them on the way
-   back. */
-body.ws-output #main,
-body.ws-output #controls { display: none; }
+/* ── the command bar ──────────────────────────────────────────────────────
 
-#workspaces { flex-shrink: 0; }
+   Under every stage, because the invocation is the point: an application whose
+   whole argument is that ffmpeg should stop being a thing you guess at cannot
+   keep what it is about to run in a footnote on one screen.
+
+   Two kinds of statement, drawn as two. `.cmd-exact` is what the encoder is
+   actually told — those keys go to av_opt_set. `.cmd-equiv` is the
+   composition, which this binary performs itself, so the filtergraph is a
+   translation and is dimmed to say so. */
+.cmd {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 5px 12px;
+    background: #101216;
+    border-top: 1px solid var(--line);
+    max-height: 34vh;
+}
+.cmd-toggle {
+    min-width: 20px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--dim);
+    font-size: var(--fs-base);
+    flex-shrink: 0;
+}
+.cmd-toggle:hover { background: none; color: var(--accent); }
+.cmd-line {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-sm);
+    line-height: 1.6;
+    color: var(--text);
+    /* Collapsed it is one line and elided; opened it wraps and scrolls. A
+       command that is eight hundred characters long is not a status bar. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-top: 2px;
+}
+.cmd.open { align-items: flex-start; }
+.cmd.open .cmd-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-y: auto;
+    max-height: 30vh;
+}
+.cmd-exact { color: var(--text); }
+.cmd-equiv { color: var(--dim); }
+.cmd-note {
+    display: block;
+    color: var(--dim);
+    font-size: var(--fs-xs);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    line-height: 1.6;
+    padding-top: 5px;
+    white-space: normal;
+}
+.cmd-note .lead { color: var(--accent); }
+/* Nothing to describe until there is an edit. */
+body.stage-sources .cmd,
+.cmd.empty { display: none; }
 
 /* The presets. Six buttons that between them cover most renders, so the
    twenty controls below them are for the render that is not one of the six. */

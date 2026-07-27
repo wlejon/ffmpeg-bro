@@ -15,9 +15,11 @@ import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
 import * as exporter from './export.js';
 import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
-import { clock, timecode, basename } from './format.js';
+import { clock, timecode, basename, bytes } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
 import { filtergraph } from './filtergraph.js';
+import * as shell from './shell.js';
+import * as command from './command.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -93,14 +95,15 @@ timeline.initTimeline({
 });
 
 exporter.initExport({
-    screen: el('output'),
-    form: el('ex-form'),
     settings: el('ex-settings'),
     advanced: el('ex-advanced'),
+    dest: el('ex-dest'),
+    write: el('ex-write'),
     intentList: el('ex-intent-list'),
     intentCustom: el('ex-intent-custom'),
     strip: el('ex-strip'),
     summary: el('ex-summary'),
+    warnings: el('ex-warnings'),
     progress: el('ex-progress'),
     cancel: el('ex-cancel'),
     go: el('ex-go'),
@@ -108,10 +111,18 @@ exporter.initExport({
     pause,
     flash,
     workspace: syncWorkspace,
+    // "Back" from Write is a step along the chain, not a door out of a dialog.
+    leave: () => shell.goTo('encode'),
+    // Anything that changes what will be written changes the two things that
+    // state it: the spine's cards and the command underneath them.
+    described: () => { shell.drawSpine(); command.draw(); },
     // The preview starts where you were looking, which is nearly always the
     // part of the render worth checking.
     playhead: () => transport.t,
-    open: (path) => { open(path); },
+    // Putting the result back on the timeline is a move along the chain as
+    // well as an import: the fastest way to see what you just made is to be
+    // standing on the edit with it in front of you.
+    open: (path) => { shell.goTo('compose'); open(path); },
     finished: (p) => {
         if (p.state === 'done') flash(`Exported ${basename(p.path)}`);
         else if (p.state === 'cancelled') flash('Export stopped');
@@ -131,6 +142,13 @@ onChange((what) => {
     }
     timeline.draw();
     syncUI();
+    // The spine states the whole render and the command states it exactly, so
+    // both are downstream of every change to the model — not just the ones
+    // made on the encode side. Here rather than in syncUI() because that runs
+    // from the frame loop, and rebuilding a spec sixty times a second to
+    // discover it has not changed is work for nothing.
+    shell.drawSpine();
+    command.draw();
 });
 
 // A file named on the command line, handed over by the host binding.
@@ -550,13 +568,25 @@ document.addEventListener('keydown', (e) => {
     const tag = e.target && e.target.tagName;
     if (tag === 'SELECT' || tag === 'INPUT') return;
 
-    // The Output workspace owns the keyboard while it is the screen you are
-    // on: Space must not start playback on a timeline nobody can see, and
-    // Delete must not remove the clips being rendered. Escape is the way back.
-    // ...except for the keys that mean the same thing on it. Space plays the
+    // Along the chain, wherever you are. The pipeline has an order and this
+    // follows it, rather than cycling a list of tabs.
+    if (e.key === '[' || e.key === ']') {
+        shell.step(e.key === ']' ? 1 : -1);
+        e.preventDefault();
+        return;
+    }
+    if (shell.currentStage() === 'sources') {
+        if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
+        return;
+    }
+
+    // The encode side owns the keyboard while it is the stage you are on:
+    // Space must not start playback on a timeline nobody can see, and Delete
+    // must not remove the clips being rendered. Escape is the way back.
+    // ...except for the keys that mean the same thing there. Space plays the
     // comparison rather than the timeline, and the arrows step it.
     if (exporter.isOpen()) {
-        if (e.key === 'Escape') { exporter.closeExport(); e.preventDefault(); }
+        if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
         else if (e.key === ' ') { exporter.togglePreviewPlay(); e.preventDefault(); }
         else if (e.key === 'ArrowLeft') { exporter.stepPreviewBy(-1); e.preventDefault(); }
         else if (e.key === 'ArrowRight') { exporter.stepPreviewBy(1); e.preventDefault(); }
@@ -579,7 +609,8 @@ document.addEventListener('keydown', (e) => {
         case 'c':          setCropMode(!cropMode); break;
         case 's':          splitAtPlayhead(); break;
         case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
-        case 'e':          exporter.openExport(); break;
+        case 'e':          shell.goTo('encode'); break;
+        case 'i':          shell.goTo('sources'); break;
         case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
                            else return;
                            break;
@@ -790,28 +821,92 @@ el('btn-zoom-fit').addEventListener('click', () => timeline.fitView());
 el('btn-split').addEventListener('click', splitAtPlayhead);
 el('btn-grid').addEventListener('click',
     () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
-el('btn-export').addEventListener('click', () => exporter.openExport());
+el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 
-// ── workspaces ─────────────────────────────────────────────────────────────
+// ── the pipeline ───────────────────────────────────────────────────────────
 //
-// Two screens over one project. The tabs are the only thing that knows there
-// are two: the export module opens and closes itself, and tells us when it
-// did so the tabs cannot come to disagree with what is on screen.
+// Four stages over one project, and the spine is both the map and the way
+// through. Each card says what its stage is currently set to, so the bar reads
+// as one statement of the whole render — which is the thing this application
+// is for, and the reason the command runs underneath it rather than in a
+// footnote on one screen.
 
-const wsEdit = el('ws-edit');
-const wsOutput = el('ws-output');
+shell.initShell({
+    bar: el('spine'),
+    views: {
+        sources: el('st-sources'),
+        compose: el('st-compose'),
+        encode: el('st-encode'),
+        write: el('st-write'),
+    },
+}, {
+    flash,
+    // A render holds the host's one job slot and Stop is the only way out of
+    // one, so the door is refused with a reason rather than offered and then
+    // found locked.
+    blocked: (id) => {
+        if (!exporter.canLeave() && id !== 'write')
+            return 'A render is running — stop it first';
+        if ((id === 'encode' || id === 'write') && !project.clips.length)
+            return 'Nothing on the timeline to encode';
+        return null;
+    },
+    changed: (id) => {
+        if (id === 'encode' || id === 'write') exporter.prepare();
+        else exporter.closeExport();
+        if (id === 'compose') { viewer.layout(); timeline.draw(); }
+        command.draw();
+    },
+    state: stageState,
+    warnings: (id) => (id === 'encode' || id === 'write' ? exporter.currentWarnings() : null),
+});
 
-wsEdit.addEventListener('click', () => exporter.closeExport());
-wsOutput.addEventListener('click', () => exporter.openExport());
+command.initCommand({
+    bar: el('commandbar'),
+    line: el('cmd-line'),
+    toggle: el('cmd-toggle'),
+    copy: el('cmd-copy'),
+    flash,
+});
 
+/// The two lines under a stage's name: what it is set to, in the terms that
+/// stage is about. Read from the model every time the spine is drawn, because
+/// a bar that can disagree with the render is worse than one that is rebuilt.
+function stageState(id) {
+    const clips = project.clips;
+    if (id === 'sources') {
+        if (!clips.length) return ['nothing loaded', ''];
+        const files = new Set(clips.map((c) => c.path)).size;
+        const streams = clips.reduce(
+            (n, c) => n + ((c.probe && c.probe.streams) ? c.probe.streams.length : 0), 0);
+        return [`${files} file${files === 1 ? '' : 's'}`, `${streams} streams`];
+    }
+    if (id === 'compose') {
+        if (!clips.length) return ['empty', ''];
+        const v = trackCount();
+        return [`${project.width}×${project.height} · ${(project.fps || 30).toFixed(0)}p`,
+                `${v} V · ${clips.length} clip${clips.length === 1 ? '' : 's'} · ` +
+                clock(duration())];
+    }
+    if (!clips.length) return ['—', ''];
+    const s = exporter.currentSettings();
+    if (id === 'encode') {
+        const rate = s.rate === 'quality' ? `q ${s.quality}`
+                   : s.rate === 'lossless' ? 'lossless'
+                   : `${s.videoBitrate}k`;
+        return [s.videoCodec || '—', `${rate}${s.preset ? ' · ' + s.preset : ''}`];
+    }
+    const p = exporter.lastStatus();
+    const size = p && p.state === 'done' && p.bytes ? bytes(p.bytes) : '';
+    return [s.container || '—', size || (s.path ? basename(s.path) : 'no file chosen')];
+}
+
+/// Kept because the export module still calls it when its job state changes:
+/// the spine has to know a render is holding the slot on the frame that
+/// becomes true, not the next time something redraws.
 function syncWorkspace() {
-    const out = exporter.isOpen();
-    wsEdit.classList.toggle('on', !out);
-    wsOutput.classList.toggle('on', out);
-    // A render holds the host's one job slot, and the Stop button is the way
-    // out of one. Offering a door that will not open is worse than not
-    // offering it, so it is shut for as long as that is true.
-    wsEdit.disabled = out && exporter.isRunning();
+    shell.drawSpine();
+    command.draw();
 }
 
 function flash(message) {
@@ -835,6 +930,6 @@ globalThis.__ffmpegBro = {
     splitAtPlayhead, setLayout, select, selectMany,
     showProperties, pending,
     exporter,
-    filtergraph,
+    filtergraph, shell, command,
 };
 globalThis.__ffmpegBroReady = true;

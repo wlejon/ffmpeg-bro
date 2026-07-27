@@ -55,8 +55,9 @@ media file as an argument.
 # the whole UI, driven like a person — writes screenshots to out/
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 
-# the Output workspace end to end: controls -> ffmpeg options, the advanced
-# option editor, both halves of the A/B preview, and loading the result back
+# the encode side end to end: the spine's stages, controls -> ffmpeg options,
+# the advanced option editor, the command bar, both halves of the A/B preview,
+# and loading the result back
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 
 # the equivalent filtergraph, against specs written out by hand. Needs no
@@ -196,6 +197,23 @@ new. What the fixes were, and what the code here still does about them:
   was built. Anything that genuinely needs a frame to have happened (a rendered video's
   first picture, a screenshot) still has to wait for one.
 
+- `shell.js` — the pipeline, as the thing you navigate. Four stages — Sources,
+  Compose, Encode, Write — and the spine is both the diagram and the navigation:
+  each card states what its stage is set to, so the bar reads as one statement of
+  the whole render and clicking the part that is wrong is how you go and change it.
+  **This replaced the Edit/Output tabs**, which were a modal in disguise. The reason
+  is structural: ffmpeg's model is inputs → streams → a filter graph → encoders → a
+  muxer, and an NLE's is a lossy projection of it — which is exactly why every item
+  on README's "Not yet" list (stream copy, `-map`, two-pass, filters, hardware paths)
+  had nowhere to live.
+- `command.js` — the invocation, under every stage, live. Not a summary line: this
+  application's argument is that ffmpeg should stop being a thing you guess at, and
+  that argument is made by never hiding what is about to run. Drawn as two kinds of
+  statement because it is two — the options are exact (those keys go to `av_opt_set`),
+  the filtergraph is equivalent. **Three things reach the encoder that are not in
+  `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
+  colour tags and the conversion into them, the keyframe interval (two seconds here,
+  250 frames in x264), and the scaler, which is a flag rather than an option.
 - `app.js` — orchestration: transport, keyboard, drag/drop, the frame loop, the inspector.
 - `viewer.js` — the program monitor. Each clip is a `<video>` inside a crop window (a div
   with `overflow:hidden`). Fit/zoom/pan/crop/opacity/stacking are **style writes on those
@@ -214,14 +232,16 @@ new. What the fixes were, and what the code here still does about them:
   `state` (settings and the render slot), `capabilities` (what libavcodec says this build
   can do), `options` (settings → `-key value`), `spec` (the model → what the renderer
   wants), `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress`.
-  `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **A screen, not
-  a modal**: `#output` is a sibling of
-  `#main`, and `body.ws-output` is what hides the edit. The two workspaces hide each other
-  rather than unmounting — the viewer's `<video>` elements *are* the decoders, and tearing
-  them down to look at an export would mean rebuilding and re-seeking every one on the way
-  back. Consequences: anything in the frame loop that measures a panel has to ignore a
-  measurement of zero, and `openExport`/`closeExport` are the only things that switch, with
-  the tabs following through the `workspace` hook rather than setting their own state.
+  `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **Two stages,
+  not a modal**: what the picture is put through (Encode) and where it goes (Write) are
+  different decisions taken at different moments, so `#st-encode` and `#st-write` are
+  siblings of `#st-compose` under `#stages`. The four hide each other rather than
+  unmounting — the viewer's `<video>` elements *are* the decoders, and tearing them down to
+  look at an export would mean rebuilding and re-seeking every one on the way back.
+  Consequences: anything in the frame loop that measures a panel has to ignore a
+  measurement of zero (most of the window is `display:none` at any moment), and
+  `shell.goTo` is the only thing that switches — `export.js` offers `prepare()` and
+  `canLeave()` and has no opinion about what is on screen.
 
   Four regions: the settings form (drawn from the selected encoder's reported capabilities,
   so it changes shape per codec), the A/B stage, the advanced option column, and the range

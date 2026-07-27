@@ -11,15 +11,26 @@
         <span id="filename" class="dim">no media</span>
         <span id="chips"></span>
         <span class="spacer"></span>
-        <!-- Two screens, not a screen and a dialog. Which one you are on is a
-             property of the window, so it is stated where the window is named. -->
-        <div id="workspaces" class="seg">
-            <button id="ws-edit" class="tiny on" title="The timeline (Esc)">Edit</button>
-            <button id="ws-output" class="tiny" title="Choose what to write (E)">Output</button>
-        </div>
         <span id="libav" class="dim mono"></span>
     </header>
 
+    <!-- The pipeline: what this application is a picture of. Both the diagram
+         and the navigation, because the stage you want to change is the part
+         of the statement that is wrong. Built by shell.js from the model, so
+         it cannot come to describe a render other than the one in hand. -->
+    <nav id="spine"></nav>
+
+    <div id="stages">
+    <section id="st-sources" class="stage-view hidden">
+        <!-- What is in the files. `mediainfo` is what the inspector used to
+             hold; the Sources stage is where it belongs, with room to be read
+             rather than scrolled past. -->
+        <div id="sources" class="sources">
+            <div id="mediainfo" class="dim pad">Nothing loaded.</div>
+        </div>
+    </section>
+
+    <section id="st-compose" class="stage-view">
     <div id="main">
         <section id="viewer">
             <!-- The output canvas. Clips are placed inside it, each in its own
@@ -47,12 +58,11 @@
             <div id="osd" class="hidden"></div>
         </section>
 
-        <!-- Transform above Media: the transform is what you reach for, and a
-             file with seven streams would otherwise push it off the bottom. -->
+        <!-- Only the transform now. What is *in* the file is a stage of its
+             own: it was the bottom two thirds of this column, scrolled past
+             every time, and it is the first thing anyone wants to know. -->
         <aside id="inspector">
             <div id="transform"></div>
-            <div class="panel-title">Media</div>
-            <div id="mediainfo" class="dim pad">Nothing loaded.</div>
         </aside>
     </div>
 
@@ -148,14 +158,15 @@
             </div>
         </div>
     </footer>
+    </section>
 
-    <!-- The Output workspace. A screen rather than a modal, because encoder
-         settings are chosen by looking at what they do to the picture: the A/B
-         comparison is the whole reason the thing exists, and it wants the
-         window, not a box in the middle of one. The advanced option list gets
-         a column of its own for the same reason — there are eighty of them for
-         x265 and they were being read through a slot. -->
-    <section id="output" class="hidden">
+    <!-- Encode: what the picture is going to be put through. The A/B
+         comparison is the reason this is a stage of the window rather than a
+         box in the middle of one — an encoder setting is chosen by looking at
+         what it does — and the advanced option list gets a column for the same
+         reason: there are eighty of them for x265 and they were being read
+         through a slot. -->
+    <section id="st-encode" class="stage-view hidden">
         <div id="ex-intent" class="ex-intent">
             <span class="ex-intent-label dim">Start from</span>
             <span id="ex-intent-list" class="ex-intent-list"></span>
@@ -171,7 +182,6 @@
             </div>
             <div id="ex-advanced" class="ex-col ex-right hidden"></div>
         </div>
-        <div id="ex-progress" class="ex-progress hidden"></div>
         <div id="ex-strip" class="ex-strip-bar">
             <div class="section-head">Range</div>
             <div class="ex-strip-wrap">
@@ -188,13 +198,45 @@
                 <button class="tiny" id="ex-range-all">Whole timeline</button>
             </div>
         </div>
-        <div class="ex-foot">
-            <div id="ex-summary" class="ex-summary mono dim"></div>
-            <span class="spacer"></span>
-            <button id="ex-cancel" class="text">Close</button>
-            <button id="ex-go" class="text primary">Export</button>
-        </div>
     </section>
+
+    <!-- Write: where it goes, and the act of going. Separated from Encode
+         because they are different decisions taken at different moments — you
+         settle what the picture is by looking at it, and then you say where to
+         put it — and because a render in progress wants the window rather than
+         a strip under a form it has stopped being about. -->
+    <section id="st-write" class="stage-view hidden">
+        <div id="ex-write" class="ex-write">
+            <div id="ex-dest" class="ex-col ex-dest"></div>
+            <div id="ex-verdict" class="ex-verdict">
+                <div class="section-head">What will be written</div>
+                <div id="ex-summary" class="ex-summary mono dim"></div>
+                <div id="ex-warnings" class="ex-warnings"></div>
+                <span class="spacer"></span>
+                <div class="ex-foot">
+                    <button id="ex-cancel" class="text">Back</button>
+                    <button id="ex-go" class="text primary">Export</button>
+                </div>
+            </div>
+        </div>
+        <div id="ex-progress" class="ex-progress hidden"></div>
+    </section>
+    </div>
+
+    <!-- What the render amounts to, in ffmpeg's own terms. Not a summary line
+         at the bottom of one form: the whole point of the application is that
+         the invocation is never hidden and never a surprise, so it runs under
+         every stage and is as long as it needs to be when opened.
+
+         Two kinds of statement, drawn as two. The options are exact — they are
+         the keys handed to av_opt_set. The filtergraph is equivalent: this
+         binary composites internally, so the graph is a translation, and how
+         close a one is measured rather than asserted. See ui/filtergraph.js. -->
+    <footer id="commandbar" class="cmd">
+        <button id="cmd-toggle" class="cmd-toggle" title="Show the whole command">&#9656;</button>
+        <div id="cmd-line" class="cmd-line mono"></div>
+        <button id="cmd-copy" class="tiny">Copy</button>
+    </footer>
 
     <!-- The structures the UI clones rather than writes out as strings. What
          is here is anything with a shape: nesting, a class on a child, an

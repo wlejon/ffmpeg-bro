@@ -44,8 +44,11 @@ const el = (id) => document.getElementById(id);
 // quietly matching something else.
 const q = (sel, root) => (root || document).querySelector(sel);
 const qq = (sel, root) => (root || document).querySelectorAll(sel);
-/// One of the Output workspace's form controls, by its data-f name.
-const f = (name) => q(`#output [data-f="${name}"]`);
+/// One of the encode side's form controls, by its data-f name. Searched
+/// across the document rather than under one section: the controls now live on
+/// two stages — what the picture is put through, and where it goes — and a
+/// data-f name is unique whichever stage is holding it.
+const f = (name) => q(`[data-f="${name}"]`);
 let checks = 0;
 function ok(cond, what) {
     checks++;
@@ -144,31 +147,50 @@ ok(Math.abs(spec.clips[0].opacity - 0.5) < 1e-6, 'opacity is carried through');
 clip.xform.crop.l = 0;
 clip.xform.opacity = 1;
 
-// ── the Output workspace ───────────────────────────────────────────────────
+// ── the Encode stage ───────────────────────────────────────────────────────
+//
+// Four stages over one project, and the spine is both the map and the way
+// through. Which one is up is a property of the window, so it is asserted on
+// the window rather than on a module's idea of itself.
 
-console.log('\nthe Output workspace');
+console.log('\nthe Encode stage');
 ok(!!el('btn-export'), 'there is an Export button');
-ok(el('output').className.indexOf('hidden') >= 0, 'the workspace starts closed');
-ok(el('ws-edit').className.indexOf('on') >= 0, 'and the Edit tab is the one lit');
+ok(A.shell.currentStage() === 'compose', 'the edit is where you start');
+ok(el('st-encode').className.indexOf('hidden') >= 0, 'and Encode is not on screen');
 
 el('btn-export').click();
 pump(80);
-ok(el('output').className.indexOf('hidden') < 0, 'clicking Export opens it');
-ok(A.exporter.isOpen(), 'and the module agrees it is open');
-ok(document.body.className.indexOf('ws-output') >= 0,
-   'the body says which workspace is up, which is what hides the edit');
-ok(el('ws-output').className.indexOf('on') >= 0 && el('ws-edit').className.indexOf('on') < 0,
-   'and the tabs followed it without being clicked');
-ok(!!f('path') && f('path').value.length > 0,
-   `an output path is proposed (${f('path').value})`);
-ok(!!f('container') && !!f('vcodec'), 'format and codec menus are there');
-ok(el('ex-summary').textContent.indexOf('frames') >= 0,
-   `the summary says what will be written: ` +
-   el('ex-summary').textContent.replace(/\s+/g, ' ').trim());
+ok(A.shell.currentStage() === 'encode', 'clicking Export goes to Encode');
+ok(el('st-encode').className.indexOf('hidden') < 0, 'which is now the stage on screen');
+ok(el('st-compose').className.indexOf('hidden') >= 0, 'and the edit is not');
+ok(A.exporter.isOpen(), 'and the module agrees it is up');
+ok(document.body.className.indexOf('stage-encode') >= 0,
+   'the body says which stage is up, for the chrome that has an opinion about it');
+ok(q('#spine [data-stage="encode"]').className.indexOf('on') >= 0,
+   'and the spine followed without being clicked');
 
-// The picture would otherwise keep playing on a screen nobody is looking at,
+// The destination belongs to Write. Encode is what the picture is put
+// through; a filename at the top of that column was the first thing asked for
+// and the last thing decided.
+ok(!!q('#st-encode [data-f="vcodec"]') && !!q('#st-encode [data-f="quality"]'),
+   'the codec and its quality are on this stage');
+ok(!q('#st-encode [data-f="path"]') && !!q('#st-write [data-f="path"]'),
+   'and the destination is on the next one');
+
+A.shell.goTo('write');
+pump(80);
+ok(!!f('path') && f('path').value.length > 0,
+   `Write proposes an output path (${f('path').value})`);
+ok(!!f('container'), 'and the container menu');
+ok(el('ex-summary').textContent.indexOf('frames') >= 0,
+   `it states what will be written: ` +
+   el('ex-summary').textContent.replace(/\s+/g, ' ').trim());
+A.shell.goTo('encode');
+pump(40);
+
+// The picture would otherwise keep playing on a stage nobody is looking at,
 // which is CPU the encoder wants.
-ok(!A.transport.playing, 'opening the workspace pauses playback');
+ok(!A.transport.playing, 'leaving the edit pauses playback');
 
 // The whole reason it is a screen: the comparison gets the window.
 const stageBox = el('ex-preview').getBoundingClientRect();
@@ -333,11 +355,88 @@ f('optsearch').dispatchEvent(new Event('input'));
 pump(40);
 screenshot('out/export-01b-advanced.png');
 // The form redraws on its own when this is toggled, without the summary. The
-// filename beside "Choose…" belongs to the form and used to come back blank.
-ok(q('#ex-settings .ex-dir').textContent.length > 0,
-   `the form redraws complete on its own (${q('#ex-settings .ex-dir').textContent})`);
+// filename beside "Choose…" belongs to the form and used to come back blank —
+// and it is drawn onto the Write stage now, so a redraw triggered from Encode
+// has to reach a pane that is not on screen.
+ok(q('#ex-dest .ex-dir').textContent.length > 0,
+   `the form redraws complete on its own, across both stages ` +
+   `(${q('#ex-dest .ex-dir').textContent})`);
 f('advanced').click();
 pump(40);
+
+// ── the command bar ────────────────────────────────────────────────────────
+//
+// The application's argument is that ffmpeg should stop being a thing you
+// guess at, and that argument is not made by a friendly form — every ffmpeg
+// GUI has one. It is made by never hiding the invocation. So the thing worth
+// testing is that the printed command and the render cannot drift: every key
+// the encoder is told must appear, and it must appear with the value the
+// encoder was told.
+
+console.log('\nthe command says what will happen');
+{
+    S.videoCodec = 'libx264';
+    S.rate = 'quality';
+    S.quality = 22;
+    S.preset = 'slow';
+    S.extraVideo = {};
+    f('container').dispatchEvent(new Event('change'));
+    pump(60);
+
+    const text = A.command.currentCommand();
+    ok(text.indexOf('ffmpeg ') === 0, 'it is an ffmpeg command');
+    ok(text.indexOf('-c:v libx264') > 0, `the codec is named (${text.slice(0, 40)}…)`);
+
+    // Key for key against what the encoder is actually handed. A command that
+    // is missing an option describes a different render from the one the
+    // preview measured, and looks entirely plausible while doing it.
+    const opts = A.exporter.currentOptions();
+    for (const k of Object.keys(opts))
+        ok(text.indexOf(`-${k} ${opts[k]}`) > 0,
+           `-${k} ${opts[k]} reaches the command, as it reaches the encoder`);
+
+    // Three things the renderer applies that are *not* in the option bag. They
+    // are named fields on the spec, so a command built from the bag alone is
+    // quietly incomplete — and each one changes the file.
+    ok(/-colorspace \S+ -color_primaries \S+ -color_trc \S+ -color_range \S+/.test(text),
+       'the colour tags are there, which the option bag does not carry');
+    ok(/ -g \d+/.test(text),
+       'and the keyframe interval, which defaults to two seconds here and to 250 in x264');
+
+    // The two halves have to be distinguishable on screen, or the exact part
+    // and the translated part read as one claim.
+    A.shell.goTo('encode');
+    pump(40);
+    el('cmd-toggle').click();
+    pump(60);
+    ok(!!q('#cmd-line .cmd-exact') && !!q('#cmd-line .cmd-equiv'),
+       'the exact half and the equivalent half are drawn apart');
+    ok(q('#cmd-line .cmd-equiv').textContent.indexOf('overlay=') > 0,
+       'the composition is the half marked as a translation');
+    ok(q('#cmd-line .cmd-note').textContent.indexOf('av_opt_set') > 0,
+       'and the note says which half is which');
+    el('cmd-toggle').click();
+    pump(40);
+
+    // A graph it cannot express faithfully must produce no graph rather than a
+    // wrong one: the only reason to print a command is that it can be run.
+    const graph = A.filtergraph(A.exporter.buildSpec());
+    ok(graph.ok, 'the current edit can be described');
+    ok(graph.chains.join(';').indexOf('amix') < 0 || A.project.clips.length > 1,
+       'and a single clip needs no mixer');
+
+    // Put back what this section moved. The script is straight-line and later
+    // sections stand on the state earlier ones leave. `slow` in particular is
+    // not neutral to leave behind: with it set, the cancellation check further
+    // down stopped a render after 24 of 200 frames and the file it left would
+    // not open — which is the one thing that section exists to disprove. Why
+    // that happens at one preset and not another is not established here; what
+    // is established is that this section must not decide it.
+    S.quality = 20;
+    S.preset = 'medium';
+    f('container').dispatchEvent(new Event('change'));
+    pump(40);
+}
 
 // ── warnings ───────────────────────────────────────────────────────────────
 //
@@ -352,8 +451,13 @@ console.log('\nwhat it warns about');
     A.exporter.buildSpec();
     f('container').dispatchEvent(new Event('change'));   // forces a redraw
     pump(60);
-    ok(el('ex-summary').textContent.indexOf('even dimensions') >= 0,
+    // Warnings belong to the stage that caused them now, not to a blob under a
+    // form — they are on Write, beside the statement of what is about to
+    // happen, and they light the spine's card from wherever you are standing.
+    ok(el('ex-warnings').textContent.indexOf('even dimensions') >= 0,
        'an odd size with 4:2:0 chroma is called out before the encoder refuses it');
+    ok(q('#spine [data-stage="write"]').className.indexOf('warn') >= 0,
+       'and the spine marks the stage it belongs to');
     S.pixelFormat = '';
     S.width = A.project.width;
     S.height = A.project.height;
@@ -423,8 +527,8 @@ ok(done.frames === done.totalFrames && done.frames > 10,
    `every frame was written (${done.frames} of ${done.totalFrames})`);
 ok(done.bytes > 1024, `the file has bytes in it (${done.bytes})`);
 // "Stop" left under a finished green bar reads as though it is still running.
-ok(el('ex-cancel').textContent === 'Close',
-   `the Stop button goes back to Close when it is over (${el('ex-cancel').textContent})`);
+ok(el('ex-cancel').textContent === 'Back',
+   `the Stop button goes back to Back when it is over (${el('ex-cancel').textContent})`);
 ok(el('ex-progress').textContent.indexOf('00:00:00') < 0,
    'a sub-second render does not report taking no time at all');
 console.log(`        ${done.fps.toFixed(1)} fps, ${done.elapsed.toFixed(2)}s wall`);
@@ -454,8 +558,9 @@ waitFor('the export to load as a clip', () => A.project.clips.length > before);
 const added = A.project.clips[A.project.clips.length - 1];
 ok(added.width === 320 && added.height === 180,
    `it opened as a ${added.width}x${added.height} clip`);
-ok(el('output').className.indexOf('hidden') >= 0, 'and the workspace closed behind it');
-ok(el('ws-edit').className.indexOf('on') >= 0, 'putting you back on the edit');
+ok(A.shell.currentStage() === 'compose',
+   'and it put you back on the edit, which is the fastest way to see what you made');
+ok(el('st-compose').className.indexOf('hidden') < 0, 'with the timeline on screen again');
 
 // ── the preview ────────────────────────────────────────────────────────────
 //
@@ -590,10 +695,12 @@ console.log('\nthe A/B preview');
        'changing the output size invalidates the reference too');
 
     ok(!A.exporter.isRunning(), 'and nothing is left running');
-    el('ws-edit').click();
+    // Back along the chain by clicking the spine, which is the navigation as
+    // well as the diagram.
+    q('#spine [data-stage="compose"]').click();
     pump(40);
-    ok(!A.exporter.isOpen(), 'the Edit tab goes back afterwards');
-    ok(document.body.className.indexOf('ws-output') < 0, 'and the edit is on screen again');
+    ok(!A.exporter.isOpen(), 'clicking Compose on the spine goes back');
+    ok(document.body.className.indexOf('stage-compose') >= 0, 'and the edit is on screen again');
 }
 
 // ── stopping one ───────────────────────────────────────────────────────────
@@ -611,6 +718,8 @@ console.log('\nstopping a render');
     waitFor('the file to reload', () => A.project.clips.length === 1);
 
     el('btn-export').click();
+    pump(60);
+    A.shell.goTo('write');
     pump(60);
     f('path').value = bro.appDir + '/../out/ui-export-stopped.mp4';
     f('path').dispatchEvent(new Event('change'));
@@ -630,8 +739,11 @@ console.log('\nstopping a render');
 
     const partial = bro.ffmpeg.probe(bro.appDir + '/../out/ui-export-stopped.mp4');
     ok(!!partial.video, 'and what it wrote is still openable');
-    ok(A.exporter.isOpen(), 'the workspace stays up to say so');
-    el('ws-edit').click();
+    ok(A.exporter.isOpen(), 'the stage stays up to say so');
+    // A render holds the host's one job slot and Stop is the way out of one, so
+    // the spine refuses the door with a reason rather than offering one that
+    // will not open. Now that it has stopped, it opens.
+    q('#spine [data-stage="compose"]').click();
     pump(40);
     ok(!A.exporter.isOpen(), 'leaving works once the render is not running');
 }

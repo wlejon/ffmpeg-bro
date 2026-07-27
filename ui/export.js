@@ -26,7 +26,7 @@ import { bytes, clock } from './format.js';
 
 import { settings, preview, currentJob, setJob, onJobChange, isRendering } from './export/state.js';
 import { containerInfo } from './export/capabilities.js';
-import { videoOptions, commandLine } from './export/options.js';
+import { videoOptions } from './export/options.js';
 import { buildSpec, range, defaultPath } from './export/spec.js';
 import { intents, activeIntent, applyIntent, clampToEncoder } from './export/presets.js';
 import { warnings } from './export/warnings.js';
@@ -49,7 +49,7 @@ export function initExport(refs, h) {
 
     el_.cancel.addEventListener('click', () => {
         if (isRendering()) bro.ffmpeg.render.cancel();
-        else closeExport();
+        else if (hooks.leave) hooks.leave();
     });
     el_.go.addEventListener('click', begin);
 
@@ -57,7 +57,7 @@ export function initExport(refs, h) {
     // the frame that becomes true, not the next time something redraws.
     onJobChange(() => { if (hooks.workspace) hooks.workspace(); });
 
-    initForm({ settings: el_.settings, advanced: el_.advanced }, {
+    initForm({ settings: el_.settings, advanced: el_.advanced, dest: el_.dest }, {
         changed: after,
         tweaked: () => { invalidateCandidate(); updateSummary(); },
     });
@@ -85,17 +85,13 @@ export function initExport(refs, h) {
 export function isOpen() { return open; }
 export { isRendering as isRunning };
 
-export function openExport() {
-    if (!project.clips.length) {
-        if (hooks.flash) hooks.flash('Nothing on the timeline to export');
-        return;
-    }
+/// Everything that has to be true before the Encode or Write stage is looked
+/// at. Called by the shell on the way in rather than by a tab: which stage is
+/// up is the shell's business, and this module's is what is on it.
+export function prepare() {
+    if (!project.clips.length) return false;
     if (hooks.pause) hooks.pause();
     open = true;
-    // The class on <body> is what hides the edit; the section's own `hidden`
-    // is what stops it being measured while it is not on screen.
-    document.body.classList.add('ws-output');
-    show(el_.screen, true);
 
     if (!settings.path) settings.path = defaultPath();
     if (!settings.width) { settings.width = project.width; settings.height = project.height; }
@@ -124,28 +120,31 @@ export function openExport() {
     showPanel('form');
     drawAll();
     if (hooks.workspace) hooks.workspace();
+    return true;
 }
 
+/// Leaving the encode side altogether. Refused while a render holds the host's
+/// one job slot — Stop is the way out of one — so the shell can ask first.
+export function canLeave() { return !isRendering(); }
+
 export function closeExport() {
-    if (isRendering()) return;     // the Stop button is the way out of a render
+    if (isRendering()) return;
     open = false;
     stopPreviewPlayback();
-    show(el_.screen, false);
-    document.body.classList.remove('ws-output');
     if (hooks.workspace) hooks.workspace();
 }
 
+/// Within the Write stage: the destination and the verdict, or the render in
+/// progress. Not a stage of its own — a render is the Write stage happening,
+/// not a fifth thing.
 function showPanel(which) {
-    show(el_.form, which === 'form');
+    show(el_.write, which === 'form');
     show(el_.progress, which === 'progress');
     show(el_.go, which === 'form');
-    // The range belongs to the settings, not to the render: while one is
-    // running it is a picture of a decision already taken.
-    show(el_.strip, which === 'form');
     // The button is Stop only while there is something to stop. A finished
     // render leaving "Stop" under a green bar reads as though it is still
     // going.
-    el_.cancel.textContent = isRendering() ? 'Stop' : 'Close';
+    el_.cancel.textContent = isRendering() ? 'Stop' : 'Back';
 }
 
 function drawAll() {
@@ -196,16 +195,21 @@ function updateSummary() {
         size = ` · ≈ ${bytes((settings.videoBitrate +
                               (settings.audio ? settings.audioCodecBitrate : 0)) * 1000 * r.length / 8)}`;
 
+    // No command line here any more. It runs under every stage now, in full and
+    // in two colours, which is the whole of what this line was gesturing at.
     put(el_.summary, () => [
         div('mono', `${settings.width}×${settings.height} · ${fps.toFixed(3)} fps · ` +
                     `${clock(r.length)} · ${frames} frames${size}`),
         div('mono dim', `${codec || '?'}` +
             (settings.audio && settings.audioCodec ? ` + ${settings.audioCodec}` : ' · silent') +
-            ` · ${settings.container} · ${clips} clip${clips === 1 ? '' : 's'} flattened · ` +
-            commandLine(codec)),
-        ...warnings().map((t) => div('warn', t)),
+            ` · ${settings.container} · ${clips} clip${clips === 1 ? '' : 's'} flattened`),
     ]);
+    put(el_.warnings, () => warnings().map((t) => div('warn', t)));
+    if (hooks.described) hooks.described();
 }
+
+/// What the spine's Encode and Write cards say, and what they warn about.
+export { warnings as currentWarnings };
 
 // ── running ────────────────────────────────────────────────────────────────
 
