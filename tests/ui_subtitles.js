@@ -227,6 +227,22 @@ ok(warned.indexOf('viewer cannot show') >= 0,
 ok(warned.indexOf('no subtitle path in playback') >= 0,
    'and says why, rather than leaving it looking like the track was not written');
 
+// The one thing an attachment is for, said where the ASS row was added. A
+// styled track that carries no font looks different on every machine, and an
+// `+ Attachment` button on its own gives nobody a reason to press it.
+A.exporter.currentSettings().container = 'matroska';
+choose(q(`[data-stream="${srow.id}"] [data-f="stream-source"]`), 'decode:1:0');
+srow.codec = 'ass';
+A.exporter.redraw();
+pump(60);
+const styled = A.exporter.currentWarnings().join(' | ');
+ok(styled.indexOf('names its fonts by name') >= 0,
+   'an ASS track with no font attached says what that costs');
+srow.codec = '';
+A.exporter.currentSettings().container = 'mp4';
+A.exporter.redraw();
+pump(60);
+
 // ── the render ─────────────────────────────────────────────────────────────
 
 console.log('\nthe file that comes out');

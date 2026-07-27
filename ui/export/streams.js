@@ -572,6 +572,11 @@ function detailRows(s, tail) {
                 'An attachment is a stream with no packets in it: the muxer writes the whole ' +
                 'file out of the stream at header time, which is what ffmpeg’s -attach does. ' +
                 'Matroska holds them; mp4 does not.'),
+            div('ex-note dim',
+                'The reason to embed one is an ASS subtitle track: it names its fonts by ' +
+                'name and carries none of them, so a player without that font substitutes ' +
+                'and every line of text moves. A font travelling in the file is the only ' +
+                'thing that makes styled subtitles look the same anywhere.'),
         ];
     }
 

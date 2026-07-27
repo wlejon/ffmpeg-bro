@@ -152,6 +152,18 @@ bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
 bro.ffmpeg.audioEncoders  // [{ id: "aac", label, sampleRates, channelCounts,
                           //    lossless, containers }, ...]
 
+// The third encoder list, and the first that is not a judgement about which
+// entries are worth offering. The two above start from a candidate list
+// because "the useful video encoders" is not a thing libavcodec can be asked;
+// there are nine subtitle encoders and every one of them is a named
+// interchange format, so this is the registry walk.
+bro.ffmpeg.subtitleEncoders
+// → [{ id: "mov_text", label, longName, textSub: true, containers }, ...]
+// `textSub` is AV_CODEC_PROP_TEXT_SUB and it is the one fact that decides
+// whether a conversion is possible at all: `subrip`, `ass` and `webvtt` are
+// text, `dvdsub` and `hdmv_pgs_subtitle` are pictures of text, and turning one
+// into the other is optical character recognition.
+
 // Every muxer this build links — a hundred and eighty of them — by the name
 // `-f` takes. `containers` was four of these written down in C++, and MPEG-TS,
 // MXF, AVI, FLV, GIF, image2, WAV and ADTS were compiled in and unreachable
@@ -161,7 +173,15 @@ bro.ffmpeg.muxers
 //      mimeType, videoCodec, audioCodec,        // encoders to default to
 //      defaultVideo, defaultAudio, defaultSubtitle,   // what the muxer asks for
 //      noFile, globalHeader, noTimestamps, stills, device,
+//      subtitleCodec, subtitleCodecs,
 //      videoCodecs, audioCodecs, answersCodecs }, ...]
+// **A muxer's declaration and a muxer's answer are different facts**, and mp4
+// is where that costs: its `subtitle_codec` is AV_CODEC_ID_NONE in this build
+// and yet `avformat_query_codec` says it holds `mov_text`. `defaultSubtitle`
+// is the declaration; `subtitleCodec` is what a picker and the writer should
+// act on — the declaration where there is one, and otherwise the first codec
+// the muxer answers for, preferring text over pictures because mp4 also
+// accepts `dvdsub` and that is first in libavcodec's order.
 
 bro.ffmpeg.demuxers       // [{ name, longName, extensions, mimeType,
                           //    noFile, device }, ...]
@@ -440,7 +460,7 @@ Given, it is authoritative:
 
 ```js
 streams: [
-  { kind: "video",                  // "video" | "audio" | "attachment"
+  { kind: "video",                  // "video" | "audio" | "subtitle" | "attachment"
     source: "composite",            // where the content comes from: "composite"
                                     // (the canvas), "mix" (the whole
                                     // soundtrack), or "copy:0:1" — an input and
@@ -480,12 +500,36 @@ streams: [
     forceKeyFrames, fieldOrder, threads, threadType },
   { kind: "audio", source: "mix", codec: "aac", language: "fra",
     disposition: "+comment" },
+  // A subtitle stream, which is the one kind with **no composed source**: a
+  // picture is made and a soundtrack is made, and there is no third thing here
+  // that makes cues. So it always reads something that already exists, and
+  // there are exactly two ways to read it — the same `-map` either way, and
+  // the difference is `-c:s`:
+  //
+  //   copy:0:2     the packets that are already there, into the new container
+  //                unchanged, which needs no decoder at all
+  //   decode:1:0   decoded and written again in `codec`, or in whatever the
+  //                container holds when `codec` is empty — an .srt becoming
+  //                mov_text in an mp4, ass in a Matroska file, webvtt in a
+  //                sidecar with nothing else in it
+  //
+  // `copyFrom`/`copyTo` mean here what they mean on a copy: the span read out
+  // of the input, on the input's own clock, with `copyFrom` also being the
+  // output's zero. Unlike a copied picture there are no keyframes to land on —
+  // every cue stands on its own — so a subtitle window can begin anywhere.
+  //
+  // **Pictures of text are refused rather than converted.** `dvdsub` and
+  // `hdmv_pgs_subtitle` carry bitmaps; the pairing is refused by name before
+  // anything opens, because arriving as "Bitmap subtitle required" at the
+  // first cue is true and unusable.
+  { kind: "subtitle", source: "decode:1:0", codec: "mov_text", language: "eng",
+    disposition: "+default" },
   { kind: "attachment", path: "…/font.ttf", mimeType: "font/ttf" },
 ]
 chapters: [{ start: 0, end: 12.5, title: "Opening" }, ...]
 ```
 
-A malformed entry is a `TypeError` naming it — `streams[2] is a 'subtitle'` —
+A malformed entry is a `TypeError` naming it — `streams[2] is a 'data'` —
 never a stream quietly missing from the file. An unknown disposition, a fourcc
 that is not four characters and an attachment that is not there all stop the
 render rather than being dropped: the whole value of writing down what is in
@@ -1501,7 +1545,8 @@ A row reads as a statement rather than as a grid of labelled inputs:
 
 The usual two — the composite through one video encoder, the mix through one
 audio encoder — arrive without anyone asking, because that is what nearly
-every render is. `+ Video`, `+ Audio` and `+ Attachment` add one; `×` takes one
+every render is. `+ Video`, `+ Audio`, `+ Subtitle` and `+ Attachment` add one;
+`×` takes one
 away, including the last video stream, which is what a sound-only render is.
 Everything a row does not say it takes from the Encode stage, so a second audio
 track is one click and not twenty controls.
@@ -1513,6 +1558,115 @@ packets, going into the file exactly as they came out, which is `-map 0:1`
 and `-c:v copy`. Picking one changes the rest of the sentence, because a
 copied stream has no encoder to choose: the codec in the file is the codec that
 was in the input, so it is stated rather than offered.
+
+## Subtitles
+
+There are three things people mean by subtitles, they are three different
+mechanisms in ffmpeg, and each of them lives where its decision is taken. Doing
+that badly is the ordinary way an application ends up with a "Subtitles" panel
+that quietly does one of the three.
+
+| | |
+|---|---|
+| **A track beside the picture** | a stream in the output, which a player can turn off — a row on the Write stage |
+| **Burned into the image** | a `subtitles` filter on the Graph stage, like every other filter |
+| **A file on its own** | a render whose only stream is subtitles: extracting one, and converting the format |
+
+### A file of cues is an `-i`
+
+Add an `.srt`, a `.vtt` or an `.ass` on the Sources stage and it is an input
+like any other: the demuxer can be forced, `-ss` shifts every cue, the command
+bar prints all of it in front of the same `-i`. What it is not is a clip —
+there is no picture to lay out and no sound to mix — so nothing appears on the
+timeline and the panel says so rather than offering `Use on the timeline`.
+
+Which it is, is read off **what libavformat found in the file** rather than off
+the extension: an input whose every stream is subtitles is a subtitle file.
+
+A card that nothing is cut from stops calling itself unused the moment a stream
+row is written from it or a `subtitles=` node reads it. Both are ways an input
+is used without a clip existing, and "unused" beside a file the render is about
+to open is the one thing the Sources stage cannot afford to get wrong.
+
+### A track beside the picture
+
+`+ Subtitle` on the Write stage adds a row that says which track it reads and
+what it comes out as. **Carrying and converting are one control**, because they
+are one decision with one question behind it:
+
+| | |
+|---|---|
+| **carry** | `-c:s copy` — the packets that are already there, instant and lossless, and only possible where the output container holds the codec the input has |
+| **convert** | `-c:s mov_text` — decoded and written again in whatever the container does hold |
+
+A new row answers that question by asking `avformat_query_codec`, not by
+preferring one: an `.ass` track going into Matroska is carried, and the same
+track going into an mp4 is converted, because mp4 holds exactly one subtitle
+codec and it is `mov_text`. The codec menu is the same query, so a row cannot
+offer something the muxer will refuse at `write_header`.
+
+Where `+ Subtitle` is not offered, the reason is written in its place — a
+container that holds none, or no subtitle file open yet. A stage with no button
+on it reads as an application that cannot write subtitles at all.
+
+**Pictures of text cannot be converted.** `dvdsub` and `hdmv_pgs_subtitle`
+carry bitmaps rather than characters, and turning one of those into `subrip`
+is optical character recognition, which neither this nor ffmpeg does. Such a
+track can be carried into a container that holds it, or burned into the
+picture; asking for it as text is refused by name, before anything opens.
+Which family a codec is in is libavcodec's own `AV_CODEC_PROP_TEXT_SUB`.
+
+### Burning them in
+
+`Burn it into the picture` on a subtitle input places a `subtitles` filter at
+the point where the whole canvas is, and takes you to the Graph stage where the
+node now is. **What it places is an ordinary node** — it is printed by the
+command bar, it can be moved, configured and deleted, and nothing about the
+render behaves differently because a button rather than the palette put it
+there. A shortcut that produced something you could not then find would be
+worse than no shortcut.
+
+Burned-in subtitles *are* visible in this application, because a node preview
+and the export preview are real renders. Playing the node is how you watch them
+come and go.
+
+One thing is escaped on your behalf and shown so that it is not a mystery: **a
+filtergraph separates a filter's arguments with `:`**, so a Windows path with a
+drive letter in it goes into `subtitles=` unusable and libavfilter complains
+about an option named after half the path without ever mentioning the colon.
+The path is written `subtitles=filename='D\:/media/cues.srt'`, quoted as well
+because a filename may contain a comma and a comma ends the filter.
+
+### Out on its own
+
+A render whose only stream is a subtitle track has no canvas, no mix, no
+encoder and no frame clock — the cues drive it. That is what extracting a
+track is, and it is also what converting one is: `.srt` in, `.vtt` out, with
+`-f webvtt` and a filename that ends in `.vtt`. The three formats everything
+converts between — SubRip, WebVTT and ASS — are all muxers this build links,
+and the picker shows them among the other hundred and eighty.
+
+### What the viewer cannot do
+
+**A soft subtitle track is invisible in the viewer, and always will be until
+playback grows a path of its own.** bro's `<video>` decodes into an element and
+there is no subtitle path anywhere in it — the same structural reason a filter
+cannot be previewed there. The track is in the file and plays in any player;
+what this application can show you is the render, not the timeline.
+
+That is said on the Write stage, out loud, with the reason. Somebody who adds a
+subtitle row, looks at the viewer, sees nothing and concludes the track was not
+written is the failure this is against — and a fake overlay would be worse,
+because it would then disagree with the render in every detail of position,
+font and line breaking.
+
+### A font travelling with the text
+
+An ASS track names its fonts by name — `Style: Default,Arial,48,…` — and
+carries none of them, so a player without that font substitutes one and every
+line, break and position moves with it. Embedding the font is what `-attach`
+is for, it is an **attachment stream** on the Write stage, and Matroska holds
+them. An ASS row with no attachment beside it says so.
 
 ### Copying instead of encoding
 
@@ -1875,6 +2029,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js         # needs no media
@@ -1905,6 +2060,23 @@ the control strip's geometry — that every icon button drew its icon, that the
 transport buttons are one width, that the transport is on the window's centre
 line and the zoom controls on the timeline's left edge — because a mistyped
 icon name or a stray width breaks none of the behaviour and all of the look.
+
+`ui_subtitles.js` is the three things people mean by subtitles, each of which is
+a different mechanism: the cue file arriving as an `-i` and being recognised
+from what libavformat found in it, the stream row that carries or converts it,
+the container narrowing the codec menu, the command bar printing the `-i`, the
+`-map` and the `-c:s`, and the burn-in placed as an ordinary node with its path
+escaped the way libavfilter needs it. It renders both and reads the results
+back, because a subtitle track that is described correctly and not written is
+the failure worth catching.
+
+The fixture generator writes `cues.srt` and `cues.ass` beside the video, with
+the cues placed so that a burn-in is **measurable**: a second of picture with
+nothing over it, a second with a line over it, a second with nothing again. The
+export suite renders the same seconds with the filter and without it and
+compares them at both moments — 99 dB apart before the cue and 31 dB during it.
+Either half alone proves nothing, because a filter that did nothing passes the
+first and a filter that ruined every frame passes the second.
 
 `captest` is what this build can write, read, reach and capture, and it prints
 as much as it asserts: how many muxers, which of them write pictures, which
@@ -2163,6 +2335,31 @@ Honest list of what does not work:
   buffers. Both are what `-reconnect`, `-rw_timeout` and the `fifo` muxer exist
   for, and all three are reachable as ordinary options — none of them is
   surfaced as anything better than that.
+- **Subtitles in the viewer.** A soft subtitle track is written correctly,
+  plays in any player and is invisible here for the whole time you are working
+  on it: bro's `<video>` decodes into an element and there is no subtitle path
+  anywhere in that pipeline, which is the same structural reason a filter
+  cannot be previewed. Burned-in subtitles *are* visible, because a node
+  preview and the export preview are real renders. The Write stage says which
+  of the two you are looking at rather than leaving the viewer to imply the
+  track was not written.
+- **An editor for the cues themselves.** Everything here reads a subtitle file
+  and writes one; nothing lets you type a line, retime one against the
+  waveform, or split a cue at the playhead. The timeline has the lane that
+  would make it possible — A1 is where you would judge a timing — and none of
+  it is built. What a person with a file that is a second and a half out has
+  here is `-itsoffset` on the input, which shifts the whole track and is the
+  right tool for exactly that one problem and no other.
+- **Picture subtitles converted to text.** `dvdsub` and `hdmv_pgs_subtitle`
+  can be carried into a container that holds them and burned into the picture;
+  they cannot become `subrip`, because that is optical character recognition.
+  The refusal names the reason rather than failing at the first cue.
+- **A subtitle stream on the packet path's terms.** A copied subtitle track is
+  the whole track: `copyFrom`/`copyTo` cut the *span* read out of it, which is
+  what the renderer does, but nothing on the Write stage draws that against the
+  cues the way the keyframe strip draws a copied picture. There is nothing to
+  snap to, so a strip would be decoration; a list of where the cues are would
+  not be, and it is not built.
 - **Two outputs at different settings.** `-f tee` is one encode to several
   destinations, which is what the Write stage builds. The same render written
   *twice* — a 1080p master and a 720p proxy — is two encodes and is a different

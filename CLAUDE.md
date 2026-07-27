@@ -297,6 +297,7 @@ them to change alone:
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
 | `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio**, plus the three stages that are neither: forced keyframes, two-pass, and the packet chain. Also **every destination the muxer opens**: one writer is one muxer, which is not the same thing as one file |
+| `export_subtitle.*` | **cues, decoded and written again** — the one stream kind with no composed source |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
 | `ffmpeg_capabilities.*` | what this build can write, read, reach, capture and put a picture through, asked of libav* |
 | `ffmpeg_report.*` | **what a render said** — libav's log, and the values filters attach to frames |
@@ -887,6 +888,57 @@ once to mix. Notable:
   generic `profile` option's constants: VP9's profile 2 and HEVC's Main 10 are both 2, and
   that "translation" confidently offered `main10` as a VP9 profile. Profiles come from the
   encoder's own private enum, or from x264/x265's documented vocabularies, or not at all.
+
+**Subtitles are the fourth stream kind, and the only one with no composed source.**
+`ExportStream::kind` gained `"subtitle"` and `ExportStream::source` gained one form —
+`decode:<input>:<stream>`, beside `copy:<input>:<stream>`. That pair is exactly the
+distinction ffmpeg's command line draws between `-c:s copy` and `-c:s mov_text`: the
+`-map` is the same either way and what differs is whether anything is decoded. There is
+no third form and there must not be, because a picture is *made* here (the canvas) and a
+soundtrack is *made* here (the mix) and there is nothing in this binary that makes cues.
+
+Six things about `export_subtitle.*` are load-bearing:
+
+- **A cue is not a frame**, so `SubtitleStreams::pumpTo` is driven beside the frame loop
+  exactly as `CopyStreams::pumpTo` is — up to the time of the frame just written, which
+  keeps the muxer's interleaving sane. A render whose only stream is subtitles has no
+  frame loop at all and is driven by the cues, which is what "extract them" and "convert
+  the format" both are.
+- **The loop that drives a render with nothing composed in it keeps its own clock.** It
+  used to advance half a second past wherever the copy had reached, which works while
+  packets are dense and hangs the moment they are not: a subtitle track writes its first
+  cue at output zero and then has nothing until four seconds, so the position stayed at
+  zero, the window stayed at half a second, and it asked the same question forever. This
+  is a hazard for anything sparse, not only for subtitles.
+- **The decoder's `subtitle_header` becomes the encoder's.** An ASS file's styles — the
+  fonts, the colours, the margins, the resolution every position is measured against —
+  live in the header and not in the cues, so an `ass`→`ass` pass that opened a fresh
+  encoder keeps every line of dialogue and silently loses how all of it looks.
+- **Timing is the packet's, not the subtitle's.** `avcodec_encode_subtitle` refuses a
+  non-zero `start_display_time` outright and every text encoder ignores `pts`; the moment
+  a line appears is `pkt->pts` and how long it stays is `pkt->duration`. So a cue leaves
+  `SubtitleStreams` as two millisecond stamps and the stream's `srcTimeBase` is `1/1000`,
+  which puts it through the rescale `writePacket` already does.
+- **Text and pictures are not interchangeable**, and the pairing is refused *by name*
+  before anything opens rather than arriving as "Bitmap subtitle required" at the first
+  cue. Which family a codec is in is libavcodec's `AV_CODEC_PROP_TEXT_SUB`, reported
+  through `CodecOption::textSub`.
+- **A muxer's declaration and a muxer's answer are different facts.** mp4's
+  `subtitle_codec` is `AV_CODEC_ID_NONE` in this build while `avformat_query_codec` says
+  it holds `mov_text` — so `defaultSubtitleEncoder()` uses the declaration where there is
+  one and asks the registry where there is not, preferring a text encoder because mp4
+  also accepts `dvdsub` and that is first in libavcodec's order. Both the writer and
+  `MuxerOption::subtitleCodec` go through that one function, so the picker and the render
+  cannot disagree.
+
+Burning subtitles in needed **no native work at all**: `subtitles=` is an ordinary
+libavfilter filter, this build has libass (verified — `subtitles`, `ass`, `drawtext` are
+all in `availableFilters()`), and `GraphSource` parses whatever it is given. The UI side
+is `ui/export/subtitles.js`, which owns `filterPath()` — the escaping — because a
+filtergraph separates a filter's arguments with `:` and a Windows drive letter therefore
+makes `subtitles=` unusable with an error message that names half a path and never
+mentions the colon. One function, used by the Sources panel, the burn-in shortcut and
+the command bar.
 
 **Four things reach the output that are not options of an encoder or of a muxer**, and
 each one needed a named field rather than a key in a bag. They are worth knowing as a
@@ -1544,6 +1596,41 @@ about them:
   and one audio stream. One place decides it, for the reason `buildSpec()` is one
   place: there are four callers and a preview rendered from a different description
   is a preview of something else.
+- `export/subtitles.js` — **where a subtitle track comes from, and what it can be
+  written as.** The counterpart of `copy.js` one stream kind over, and it is a
+  separate file because the decisions are different ones: there is no composed
+  subtitle source, so a row is always reading something that exists and the only
+  question is whether the container holds the codec that is already there.
+  `defaultSubtitleSource()` answers exactly that with `avformat_query_codec` — an
+  `.ass` into Matroska is carried, the same track into an mp4 is converted — because
+  defaulting to either one unconditionally means half the rows arrive wrong, and the
+  wrong-but-still-renders half (a needless re-encode) is the half nobody notices.
+
+  Four things here are load-bearing:
+
+  - **`filterPath()` is the escaping, and it lives here because three callers need
+    it.** A filtergraph separates a filter's arguments with `:` and its filters with
+    `,`, so `C:/media/cues.srt` reaches libavfilter as a filter option called `C` and
+    the complaint names half a path without ever mentioning the drive letter. The
+    Sources panel, the `Burn it into the picture` shortcut and `ui/command.js` all
+    call it, so the printed command and the render cannot escape differently. The
+    same rule the Sources stage already recorded for `movie=`.
+  - **Burning in is a filter and stays one.** `burnIn()` in `sources.js` calls
+    `overlay.insert('composite/after-overlay', 'subtitles', …)` and goes to the Graph
+    stage — an ordinary node, printed by the command bar, movable and deletable. The
+    rule chunk 10's measurement offers follow: a shortcut that produced something you
+    could not then find is worse than no shortcut.
+  - **`subtitleExtensions()` asks libavformat.** Which files are subtitles is the
+    muxers that declare a subtitle codec and neither a video nor an audio one, so
+    mp4 and Matroska are correctly *not* in it — dropping one of those is dropping a
+    video. `inputs.js`'s `kindOf()` answers the same question from the probe instead,
+    which is better where there is one: an input whose every stream is subtitles is a
+    subtitle file whatever it is called.
+  - **The viewer cannot show a soft track and `warnings.js` says so.** There is no
+    subtitle path in playback — the same structural reason there is no filter path —
+    so the honest move is the sentence, not an overlay that would then disagree with
+    the render in every detail of position, font and line breaking. The `fx` badge is
+    the same pattern one stage over.
 - `graph/` + `filtergraph.js` — `buildSpec()`'s output written as the
   `-filter_complex` that would produce it, for showing (and copying) what the
   render amounts to in ffmpeg's own terms. The app composites internally rather

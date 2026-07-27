@@ -159,6 +159,25 @@ function subtitleWarnings(list) {
         }
     }
 
+    // **The one thing an attachment is for.** An ASS track names its fonts by
+    // name — `Style: Default,Arial,48,…` — and nothing about the font travels
+    // in the cues, so a player without that font substitutes one and every
+    // position, line break and timing of the text moves with it. Embedding the
+    // font as an attachment stream is what `-attach` is for and it is the only
+    // way to make an ASS track look the same anywhere. Said here because this
+    // is where the ASS row was added, and because an attachment row on its own
+    // gives nobody a reason to add one.
+    const styled = subs.some((s) => {
+        const codec = isCopy(s) ? (readStream(s) || {}).codec
+                                : (s.codec || defaultSubtitleCodec(settings.container));
+        return codec === 'ass' || codec === 'ssa';
+    });
+    const fonts = list.filter((s) => s.kind === 'attachment' && s.path).length;
+    if (styled && !fonts)
+        out.push('an ASS track names its fonts by name and carries none of them, so a ' +
+                 'player without them substitutes and every line moves — attach the fonts ' +
+                 'as streams (+ Attachment), which is what ffmpeg’s -attach is for');
+
     if (!holds.length)
         out.push(`${settings.container} holds no subtitle codec this build can write, so ` +
                  `${subs.length === 1 ? 'this subtitle stream' : 'these subtitle streams'} ` +

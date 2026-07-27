@@ -2877,6 +2877,43 @@ int main(int argc, char* argv[]) {
                        "and all three cues (%zu)", cues.size());
             }
 
+            // **A styled track and the font it names, in one file.** This is
+            // the whole reason an attachment stream exists: an ASS style says
+            // `Arial` and carries nothing of it, so a player without that font
+            // substitutes and every line moves. The two are written together
+            // here because that is the only arrangement worth checking —
+            // either alone already worked and neither alone is useful.
+            {
+                const std::string fontPath = "out/export-subs-font.ttf";
+                {
+                    std::ofstream f(fontPath, std::ios::binary);
+                    f << "not a real font, but a real attachment";
+                }
+                const std::string outFont = "out/export-subs-font.mkv";
+                ExportSettings fs = ms;
+                fs.path = outFont;
+                ExportStream att;
+                att.kind = "attachment";
+                att.path = fontPath;
+                att.mimeType = "font/ttf";
+                fs.streams.push_back(att);
+                st = render(fs, {whole});
+                checkf(st.state == ExportStatus::State::Done,
+                       "an ass track travels with the font it names (%s)",
+                       st.error.empty() ? "no error" : st.error.c_str());
+                Opened f(outFont);
+                int nSub = 0, nAtt = 0;
+                if (f)
+                    for (unsigned i = 0; i < f.fc->nb_streams; ++i) {
+                        const AVMediaType t = f.fc->streams[i]->codecpar->codec_type;
+                        if (t == AVMEDIA_TYPE_SUBTITLE) ++nSub;
+                        if (t == AVMEDIA_TYPE_ATTACHMENT) ++nAtt;
+                    }
+                checkf(nSub == 1 && nAtt == 1,
+                       "and both are streams the muxer numbered (%d subtitle, %d attachment)",
+                       nSub, nAtt);
+            }
+
             // A sidecar: a render whose only stream is a subtitle track. There
             // is no canvas, no mix, no encoder and no frame clock — the cues
             // drive the job — and this is what "extract the subtitles" is.
