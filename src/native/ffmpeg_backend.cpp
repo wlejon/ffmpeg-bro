@@ -1,5 +1,7 @@
 #include "ffmpeg_backend.h"
 
+#include "ffmpeg_report.h"
+
 #include "util/log.h"
 #include "video/audio_decoder.h"
 #include "video/media_backend.h"
@@ -613,23 +615,6 @@ private:
     AVRational timeBase_{1, 1000};
 };
 
-// ── libav logging → bro's logger ───────────────────────────────────────────
-
-void avLogToBro(void* avcl, int level, const char* fmt, va_list args) {
-    if (level > av_log_get_level()) return;
-    char line[1024];
-    int printPrefix = 1;
-    av_log_format_line2(avcl, level, fmt, args, line, sizeof(line), &printPrefix);
-    // Trim the trailing newline libav includes; bro's logger adds its own.
-    size_t n = std::strlen(line);
-    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
-    if (n == 0) return;
-
-    if (level <= AV_LOG_ERROR)      LOG_ERROR("ffmpeg: %s", line);
-    else if (level <= AV_LOG_WARNING) LOG_WARN("ffmpeg: %s", line);
-    else                              LOG_INFO("ffmpeg: %s", line);
-}
-
 } // namespace
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -642,8 +627,15 @@ void registerFfmpegBackend() {
     // libav writes to stderr by default, which for a windowed build goes
     // nowhere. Route it into bro.log with everything else, at a level that
     // reports real problems without narrating every packet.
+    //
+    // There is exactly one `av_log` callback in the process and it lives in
+    // ffmpeg_report.cpp, because the console and the report want different
+    // amounts of the same stream: this level governs what is *printed*, while
+    // the report keeps everything down to AV_LOG_INFO whether or not it is on
+    // screen. Installed here as well as from `main` so that no order of the two
+    // can leave the callback un-installed — it is idempotent.
     av_log_set_level(AV_LOG_WARNING);
-    av_log_set_callback(avLogToBro);
+    installLogCapture();
 
     MediaBackend backend;
     backend.name = "ffmpeg";

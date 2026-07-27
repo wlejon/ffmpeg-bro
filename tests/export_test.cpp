@@ -16,13 +16,16 @@
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
+#include "ffmpeg_report.h"
 
 #include "video/media_analysis.h"
 #include "video/video_pipeline.h"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
+#include <libavutil/log.h>
 }
 
 #include <algorithm>
@@ -229,6 +232,10 @@ int main(int argc, char* argv[]) {
     // line printed before it and the failure reads as "nothing ran".
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
+    // Before anything logs, exactly as main.cpp does it. The report is checked
+    // below, and a capture installed half way through would only ever hold the
+    // second half of the story.
+    installLogCapture();
     registerFfmpegBackend();
     // Everything here writes into out/, which is where the UI test puts its
     // screenshots and which a fresh checkout does not have.
@@ -1064,6 +1071,151 @@ int main(int argc, char* argv[]) {
         st = render(unfed, clipsA);
         checkf(st.state == ExportStatus::State::Failed,
                "and so is an input nothing feeds (%s)", st.error.c_str());
+    }
+
+    // ── what the render said ───────────────────────────────────────────────
+    //
+    // A render used to be able to report four numbers and, on failure, one
+    // string. Everything libav* had to say went to stderr and nowhere an
+    // application could reach, and the whole family of filters that measures
+    // rather than changes a picture had nowhere to put its answer at all.
+    //
+    // Both halves are checked here, and the second is the one that matters:
+    // frame metadata is a *time series*, and a series that arrives without
+    // timestamps, or with somebody else's, is worse than no series.
+    {
+        std::printf("\nthe render's back-channel\n");
+
+        // Where the rings are now. Everything below is measured from here, so
+        // that the checks do not depend on what the eight hundred lines above
+        // happened to log.
+        constexpr int kAll = 1 << 20;
+        ReportDrain d = drainReport(0, 0, kAll);
+        const uint64_t logFrom = d.logCursor, metaFrom = d.metaCursor;
+
+        // The callback, round-tripped. A message with a context attached has to
+        // come back attributed: "a warning" and "a warning from libx264" are
+        // not the same fact, and the second is the one worth having.
+        av_log(nullptr, AV_LOG_WARNING, "exporttest: a warning with nobody behind it\n");
+        const AVCodec* x264 = avcodec_find_encoder_by_name("libx264");
+        if (x264) {
+            AVCodecContext* cc = avcodec_alloc_context3(x264);
+            av_log(cc, AV_LOG_ERROR, "exporttest: %s\n", "an error from an encoder");
+            avcodec_free_context(&cc);
+        }
+        // libav writes some lines in pieces. A channel that committed a record
+        // per call would split them, so it joins on the newline instead.
+        av_log(nullptr, AV_LOG_WARNING, "exporttest: split ");
+        av_log(nullptr, AV_LOG_WARNING, "across two calls\n");
+        // Below the capture threshold, and the level check has to be ours: a
+        // custom callback is handed every level libav ever emits, because the
+        // check against av_log_get_level() lives in the default callback that
+        // has just been replaced.
+        av_log(nullptr, AV_LOG_DEBUG, "exporttest: a debug line nobody asked for\n");
+
+        d = drainReport(logFrom, metaFrom, kAll);
+        bool sawPlain = false, sawAttributed = false, sawJoined = false, sawDebug = false;
+        for (const auto& m : d.logs) {
+            if (m.text.find("nobody behind it") != std::string::npos)
+                sawPlain = m.level == AV_LOG_WARNING && m.source.empty();
+            if (m.text.find("an error from an encoder") != std::string::npos)
+                sawAttributed = m.level == AV_LOG_ERROR && m.source == "libx264";
+            if (m.text == "exporttest: split across two calls") sawJoined = true;
+            if (m.text.find("nobody asked for") != std::string::npos) sawDebug = true;
+        }
+        check(sawPlain, "a libav message reaches the report with its level");
+        if (x264) check(sawAttributed, "and one with a context on it is labelled libx264");
+        check(sawJoined, "a line written in pieces arrives as one message");
+        check(!sawDebug, "and a debug line is dropped before it is even formatted");
+
+        // Bounded, and honest about it. A long render with a chatty filter will
+        // outrun any buffer; the only wrong answer is to grow forever or to
+        // lose records without saying so.
+        const uint64_t floodFrom = d.logCursor;
+        const int flood = logCapacity() + 8;
+        for (int i = 0; i < flood; ++i) av_log(nullptr, AV_LOG_WARNING, "exporttest: %d\n", i);
+        d = drainReport(floodFrom, metaFrom, kAll);
+        checkf(static_cast<int>(d.logs.size()) == logCapacity() && d.logsDropped == 8,
+               "the log ring is bounded and says what it dropped (%d kept, %llu dropped)",
+               static_cast<int>(d.logs.size()), (unsigned long long)d.logsDropped);
+        bool ordered = true;
+        for (size_t i = 1; i < d.logs.size(); ++i)
+            if (d.logs[i].seq != d.logs[i - 1].seq + 1) ordered = false;
+        check(ordered, "and what survives is still consecutively numbered");
+
+        // The half chunk 10 is built on: a filter that measures rather than
+        // paints, and the numbers it hangs on every frame that goes past.
+        const uint64_t measureLog = d.logCursor;
+        const uint64_t measureMeta = d.metaCursor;
+        char text[512];
+        std::snprintf(text, sizeof(text),
+            "[0:v]cropdetect=limit=24:round=2:reset=1,scale=%d:%d[vout]", kW, kH);
+        ExportSettings sm = baseSettings("out/export-measure.mp4");
+        sm.endTime = 1.0;
+        sm.filterGraph = text;
+        sm.filterInputs = {{"0:v", first, "v"}};
+        st = render(sm, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a graph with a measuring filter in it renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        d = drainReport(measureLog, measureMeta, kAll);
+        int samples = 0;
+        double firstAt = -1, lastAt = -1;
+        bool ascending = true, allVideo = true, oneJob = true, keyed = true;
+        uint64_t job = 0;
+        for (const auto& m : d.meta) {
+            if (m.key.rfind("lavfi.cropdetect.", 0) != 0) { keyed = false; continue; }
+            ++samples;
+            if (firstAt < 0) { firstAt = m.at; job = m.job; }
+            if (m.at + 1e-6 < lastAt) ascending = false;
+            lastAt = m.at;
+            if (m.stream != "video") allVideo = false;
+            if (m.job == 0 || m.job != job) oneJob = false;
+        }
+        checkf(samples > 0, "and every value it measured arrives as a series (%d samples)",
+               samples);
+        check(keyed, "under libavfilter's own names, verbatim");
+        checkf(firstAt >= -1e-9 && lastAt <= sm.endTime + 0.5 && ascending,
+               "sampled at the timestamps of the frames they came off (%.3f to %.3f s)",
+               firstAt, lastAt);
+        check(allVideo, "on the stream they left by");
+        check(oneJob, "and pinned to the render that produced them");
+
+        // The render is a speaker too, and it says the same things into this
+        // channel that it says to the console — including the ones that are
+        // only explicable if somebody wrote them down while they happened.
+        bool wrote = false;
+        for (const auto& m : d.logs)
+            if (m.source == "render" && m.text.find("wrote") != std::string::npos &&
+                m.job == job && job != 0)
+                wrote = true;
+        check(wrote, "the render's own last word is in the channel, under this render");
+
+        // Draining after the job has gone is an ordinary read: the rings belong
+        // to the process, not to the thread. A render's last messages are
+        // exactly the ones somebody wants, and they arrive after it is over.
+        const ReportDrain again = drainReport(measureLog, measureMeta, kAll);
+        checkf(again.logs.size() == d.logs.size() && again.meta.size() == d.meta.size(),
+               "and a second reader gets the same records after the job is gone (%d, %d)",
+               static_cast<int>(again.logs.size()), static_cast<int>(again.meta.size()));
+
+        // A graph that disagrees with the render about how many frames a second
+        // is: not fatal, invisible until the file plays fast, and now said.
+        const uint64_t rateFrom = drainReport(0, 0, kAll).logCursor;
+        std::snprintf(text, sizeof(text), "[0:v]fps=%g,scale=%d:%d[vout]", kFps / 2, kW, kH);
+        ExportSettings sr = baseSettings("out/export-rate-warning.mp4");
+        sr.endTime = 0.4;
+        sr.filterGraph = text;
+        sr.filterInputs = {{"0:v", first, "v"}};
+        render(sr, clipsA);
+        d = drainReport(rateFrom, 0, kAll);
+        bool warned = false;
+        for (const auto& m : d.logs)
+            if (m.source == "graph" && m.level == AV_LOG_WARNING &&
+                m.text.find("fps") != std::string::npos && m.job != 0)
+                warned = true;
+        check(warned, "a graph running at a different rate from the render says so");
     }
 
     std::printf("\nbad asks are refused, not crashed into\n");

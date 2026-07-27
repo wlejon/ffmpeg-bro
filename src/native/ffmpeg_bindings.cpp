@@ -3,7 +3,9 @@
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
+#include "ffmpeg_report.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -443,7 +445,69 @@ const char* stateName(ExportStatus::State s) {
     return "idle";
 }
 
-JSValue js_renderPoll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+/// What a render said, drained onto the object `poll()` already returns.
+///
+/// `poll()` is the marshalling point for the same reason it is the only way to
+/// watch a render at all: the job runs on its own thread and QuickJS has one, so
+/// a callback would have to be posted onto this thread and looked at from the
+/// animation frame — which is where the caller already is. Draining here costs
+/// the poll it was going to make anyway.
+///
+/// **A cursor rather than a flush.** The caller says what it has already seen
+/// and gets what it has not, so two consumers cannot take each other's messages
+/// and a poll that is dropped on the floor loses nothing. It is also why a
+/// render's last words survive the job: the rings belong to the process, and
+/// draining them after the thread has gone is an ordinary read.
+void attachReport(JSContext* ctx, JSValue o, JSValueConst since) {
+    uint64_t log = 0, meta = 0;
+    int max = 512;
+    if (JS_IsObject(since)) {
+        log = static_cast<uint64_t>(std::max(0.0, numProp(ctx, since, "log", 0)));
+        meta = static_cast<uint64_t>(std::max(0.0, numProp(ctx, since, "meta", 0)));
+        max = static_cast<int>(numProp(ctx, since, "max", 512));
+    }
+    const ReportDrain d = drainReport(log, meta, max);
+
+    JSValue logs = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& r : d.logs) {
+        JSValue m = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, m, "seq", JS_NewInt64(ctx, static_cast<int64_t>(r.seq)));
+        JS_SetPropertyStr(ctx, m, "job", JS_NewInt64(ctx, static_cast<int64_t>(r.job)));
+        JS_SetPropertyStr(ctx, m, "at", JS_NewFloat64(ctx, r.at));
+        setStr(ctx, m, "level", logLevelName(r.level));
+        JS_SetPropertyStr(ctx, m, "severity", JS_NewInt32(ctx, r.level));
+        setStr(ctx, m, "source", r.source);
+        setStr(ctx, m, "text", r.text);
+        JS_SetPropertyUint32(ctx, logs, i++, m);
+    }
+    JS_SetPropertyStr(ctx, o, "log", logs);
+
+    JSValue series = JS_NewArray(ctx);
+    i = 0;
+    for (const auto& r : d.meta) {
+        JSValue m = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, m, "seq", JS_NewInt64(ctx, static_cast<int64_t>(r.seq)));
+        JS_SetPropertyStr(ctx, m, "job", JS_NewInt64(ctx, static_cast<int64_t>(r.job)));
+        JS_SetPropertyStr(ctx, m, "at", JS_NewFloat64(ctx, r.at));
+        setStr(ctx, m, "stream", r.stream);
+        setStr(ctx, m, "key", r.key);
+        setStr(ctx, m, "value", r.value);
+        JS_SetPropertyUint32(ctx, series, i++, m);
+    }
+    JS_SetPropertyStr(ctx, o, "meta", series);
+
+    JSValue cur = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, cur, "log", JS_NewInt64(ctx, static_cast<int64_t>(d.logCursor)));
+    JS_SetPropertyStr(ctx, cur, "meta", JS_NewInt64(ctx, static_cast<int64_t>(d.metaCursor)));
+    JS_SetPropertyStr(ctx, cur, "logDropped",
+                      JS_NewInt64(ctx, static_cast<int64_t>(d.logsDropped)));
+    JS_SetPropertyStr(ctx, cur, "metaDropped",
+                      JS_NewInt64(ctx, static_cast<int64_t>(d.metaDropped)));
+    JS_SetPropertyStr(ctx, o, "cursor", cur);
+}
+
+JSValue js_renderPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     const ExportStatus st = exportStatus();
     JSValue o = JS_NewObject(ctx);
     setStr(ctx, o, "state", stateName(st.state));
@@ -458,6 +522,15 @@ JSValue js_renderPoll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     setStr(ctx, o, "path", st.path);
     setStr(ctx, o, "stage", st.stage);
     setStr(ctx, o, "error", st.error);
+    // Which render this is, so that what the channel below says can be pinned
+    // to it. Zero while nothing is running — a probe and a decoder warning are
+    // worth reading too, and they belong to no render.
+    JS_SetPropertyStr(ctx, o, "job",
+                      JS_NewInt64(ctx, static_cast<int64_t>(currentRenderJob())));
+    // Only when asked. Every caller that wants a progress bar and nothing else
+    // — and there are three of them — should not pay for building two arrays
+    // sixty times a second.
+    if (argc >= 1) attachReport(ctx, o, argv[0]);
     return o;
 }
 
@@ -686,7 +759,7 @@ void installFfmpegBindings(JSContext* ctx) {
 
     JSValue render = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, render, "start", JS_NewCFunction(ctx, js_renderStart, "start", 1));
-    JS_SetPropertyStr(ctx, render, "poll", JS_NewCFunction(ctx, js_renderPoll, "poll", 0));
+    JS_SetPropertyStr(ctx, render, "poll", JS_NewCFunction(ctx, js_renderPoll, "poll", 1));
     JS_SetPropertyStr(ctx, render, "cancel", JS_NewCFunction(ctx, js_renderCancel, "cancel", 0));
     JS_SetPropertyStr(ctx, ns, "render", render);
     JS_SetPropertyStr(ctx, ns, "openOnStart",

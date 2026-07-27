@@ -19,6 +19,7 @@
 
 #include "ffmpeg_backend.h"
 #include "ffmpeg_bindings.h"
+#include "ffmpeg_report.h"
 
 #include <cstdio>
 #include <cstring>
@@ -47,6 +48,13 @@ int main(int argc, char* argv[]) {
             "Usage: ffmpeg-bro [media-file]\n");
         return 0;
     }
+
+    // First of all, because everything below this line logs: a build's
+    // configuration, a demuxer that could not probe a file, an encoder that
+    // clamped what it was given. Without the callback installed libav says all
+    // of that to stderr and nowhere the application can reach, which is why a
+    // render that came out wrong used to have nothing to look at.
+    ffmpegbro::installLogCapture();
 
     // Before the Engine exists, so the first <video> in the first document
     // already finds it. bro's own WebM backend stays registered underneath.

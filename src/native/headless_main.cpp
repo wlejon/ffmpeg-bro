@@ -10,12 +10,18 @@
 
 #include "ffmpeg_backend.h"
 #include "ffmpeg_bindings.h"
+#include "ffmpeg_report.h"
 
 int main(int argc, char* argv[]) {
     bro::engine::HeadlessHooks hooks;
     hooks.programName = "ffmpeg-bro-headless";
     hooks.tagline = "scripted ffmpeg-bro: bro headless with libav linked in";
-    hooks.beforeEngine = [] { ffmpegbro::registerFfmpegBackend(); };
+    // The log capture first, for the reason main.cpp gives: what a script is
+    // testing is often what libav had to say about it.
+    hooks.beforeEngine = [] {
+        ffmpegbro::installLogCapture();
+        ffmpegbro::registerFfmpegBackend();
+    };
     hooks.installHostBindings = ffmpegbro::installFfmpegBindings;
     return bro::engine::runHeadless(argc, argv, hooks);
 }

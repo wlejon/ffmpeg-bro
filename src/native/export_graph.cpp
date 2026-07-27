@@ -4,6 +4,7 @@
 #include "export_graph.h"
 
 #include "export_source.h"
+#include "ffmpeg_report.h"
 
 #include "util/log.h"
 
@@ -13,6 +14,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace ffmpegbro {
@@ -30,6 +32,18 @@ AVMediaType typeOfOutput(const AVFilterInOut* io) {
 }
 
 const char* nameOf(const AVFilterInOut* io) { return io->name ? io->name : ""; }
+
+/// When a frame leaving a sink says it happened, in seconds.
+///
+/// The sink's time base, not the render's: what a measuring filter attached to
+/// this frame is a fact about *this* frame, and the honest timestamp for it is
+/// the one the graph produced. A derived graph starts at zero because every
+/// chain begins `setpts=PTS-STARTPTS`, so it reads as time into the render.
+double frameTime(const AVFilterContext* sink, const AVFrame* f) {
+    if (!f || f->pts == AV_NOPTS_VALUE) return -1.0;
+    const AVRational tb = av_buffersink_get_time_base(sink);
+    return tb.den > 0 ? f->pts * av_q2d(tb) : -1.0;
+}
 
 } // namespace
 
@@ -103,8 +117,15 @@ bool GraphSource::build(std::string* err) {
         // Not fatal — the frames are stamped by the writer at the output rate
         // whatever arrives — but it means the graph and the render disagree
         // about how many frames a second is, and the result runs fast or slow.
-        LOG_WARN("export: the graph runs at %.3f fps and the render at %.3f",
-                 av_q2d(r), settings_.fps);
+        // Said into the report as well as the console, because it is exactly
+        // the kind of thing that is only noticed at the end of a render and
+        // only explicable if somebody wrote it down while it happened.
+        char said[256];
+        std::snprintf(said, sizeof(said),
+                      "the graph runs at %.3f fps and the render at %.3f, so the result "
+                      "will run fast or slow", av_q2d(r), settings_.fps);
+        LOG_WARN("export: %s", said);
+        reportNote(AV_LOG_WARNING, "graph", said);
     }
     return true;
 }
@@ -318,7 +339,21 @@ bool GraphSource::pushSome() {
 int GraphSource::pull(AVFilterContext* sink, AVFrame* into) {
     for (;;) {
         const int rc = av_buffersink_get_frame(sink, into);
-        if (rc != AVERROR(EAGAIN)) return rc;
+        if (rc != AVERROR(EAGAIN)) {
+            // Whatever the graph measured about this frame, on its way past.
+            //
+            // A whole family of filters — cropdetect, blackdetect,
+            // silencedetect, ebur128, signalstats, psnr, ssim — answers a
+            // question rather than changing a picture, and libavfilter's way of
+            // answering is to hang the numbers on the frame. Harvested here, in
+            // the one place both sinks are read from, so that adding a measuring
+            // filter to a graph is all anybody has to do to see its numbers.
+            // Costs a null check per frame when there are none, which is every
+            // render that is not measuring anything.
+            if (rc >= 0 && into->metadata)
+                reportFrameMetadata(sink == asink_, frameTime(sink, into), into->metadata);
+            return rc;
+        }
         if (!pushSome()) return AVERROR_EOF;
     }
 }

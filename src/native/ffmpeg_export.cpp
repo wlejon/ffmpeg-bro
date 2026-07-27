@@ -17,12 +17,15 @@
 #include "export_timeline.h"
 #include "export_writer.h"
 
+#include "ffmpeg_report.h"
+
 #include "util/log.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -55,8 +58,16 @@ void setStatus(const ExportStatus& s) {
 /// when the file cannot be opened at all. Without this, one failed render (a
 /// codec this build lacks, a path that cannot be written) leaves the flag set
 /// and every export after it is refused with "already running".
+///
+/// It closes the report's render number too, and it is declared *first* in
+/// `runExport` so that it runs *last*: the writer is torn down before this, and
+/// what libav says while a muxer closes a file belongs to the render that
+/// opened it.
 struct RunningFlag {
-    ~RunningFlag() { job().running.store(false); }
+    ~RunningFlag() {
+        endRenderReport();
+        job().running.store(false);
+    }
 };
 
 /// The whole render, as a walk: ask the edit what the output looks like at
@@ -91,6 +102,7 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
             st.elapsedSec = secondsSince();
             setStatus(st);
             LOG_ERROR("export failed: %s", err.c_str());
+            reportNote(AV_LOG_ERROR, "render", err);
             return;
         }
         // What the graph turned out to be. The writer is opened next and has
@@ -111,6 +123,7 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         st.elapsedSec = secondsSince();
         setStatus(st);
         LOG_ERROR("export failed: %s", err.c_str());
+        reportNote(AV_LOG_ERROR, "render", err);
         return;
     }
 
@@ -190,8 +203,11 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         // status it reports — but it is not nothing either, and swallowing it
         // entirely is how a file that came out unopenable came to look like a
         // clean cancellation.
-        if (aborted) LOG_WARN("export: %s (while finishing a stopped render)", finishErr.c_str());
-        else {
+        if (aborted) {
+            LOG_WARN("export: %s (while finishing a stopped render)", finishErr.c_str());
+            reportNote(AV_LOG_WARNING, "render",
+                       finishErr + " (while finishing a stopped render)");
+        } else {
             st.state = ExportStatus::State::Failed;
             st.error = finishErr;
         }
@@ -218,12 +234,27 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
     job().running.store(false);
     setStatus(st);
 
+    // The report's last word about this render, said after the file is closed
+    // and the slot is free, so that a surface reading the channel sees the same
+    // ordering a surface reading the status does.
+    char said[512];
     if (st.state == ExportStatus::State::Done) {
         LOG_INFO("export: wrote %s (%lld frames, %.1f s, %.1f MB)", s.path.c_str(),
                  static_cast<long long>(st.framesDone), st.elapsedSec,
                  st.bytesWritten / 1048576.0);
+        std::snprintf(said, sizeof(said), "wrote %s — %lld frames in %.1f s, %.1f MB",
+                      s.path.c_str(), static_cast<long long>(st.framesDone), st.elapsedSec,
+                      st.bytesWritten / 1048576.0);
+        reportNote(AV_LOG_INFO, "render", said);
     } else if (st.state == ExportStatus::State::Failed) {
         LOG_ERROR("export failed: %s", st.error.c_str());
+        reportNote(AV_LOG_ERROR, "render", st.error);
+    } else if (st.state == ExportStatus::State::Cancelled) {
+        std::snprintf(said, sizeof(said),
+                      "stopped after %lld of %lld frames; %s was closed properly and plays",
+                      static_cast<long long>(st.framesDone),
+                      static_cast<long long>(st.framesTotal), s.path.c_str());
+        reportNote(AV_LOG_WARNING, "render", said);
     }
 }
 
@@ -269,6 +300,10 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
 
     j.cancel.store(false);
     j.running.store(true);
+    // Numbered before the thread exists, so that the first thing the render
+    // says — which is often the reason it will not start — already carries the
+    // render it belongs to.
+    beginRenderReport();
     {
         std::lock_guard<std::mutex> lock(j.mu);
         j.status = ExportStatus{};
