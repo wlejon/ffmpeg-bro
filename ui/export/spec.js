@@ -8,7 +8,7 @@
 import { project, duration } from '../project.js';
 import * as viewer from '../viewer.js';
 import { settings, outputFps, outputExt } from './state.js';
-import { muxerInfo, extOf } from './capabilities.js';
+import { muxerInfo } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
 import { streamSpecs } from './streams.js';
 import { renderGraph } from '../filtergraph.js';

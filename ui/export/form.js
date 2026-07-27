@@ -19,7 +19,7 @@ import { basename } from '../format.js';
 import { btns, num, note } from './controls.js';
 import { settings, activeVideoCodec, activeAudioCodec, outputExt } from './state.js';
 import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
-         muxerInfo, extOf, optionsOf, formatOptionsOf,
+         muxerInfo, optionsOf, formatOptionsOf,
          rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension } from './spec.js';
 import { setAudioIncluded } from './streams.js';
