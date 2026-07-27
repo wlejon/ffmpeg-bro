@@ -97,13 +97,26 @@ bro.ffmpeg.openOnStart    // media file named on the command line, or null
 // taken afterwards.
 bro.ffmpeg.probe(path)               // in-process ffprobe: throws if it can't be read
 bro.ffmpeg.probe(path, { format, options })
-bro.ffmpeg.probe({ path, format, options, ss, t, to, itsoffset })
+bro.ffmpeg.probe({ path, format, options, ss, t, to, itsoffset, streamLoop })
 // `format` forces the demuxer (`-f`), `options` are its own and the
 // protocol's (`probesize`, `analyzeduration`, `fflags`, `rw_timeout`…), and
 // **an unknown key throws** rather than being ignored — libavformat hands back
 // what nothing consumed, which is the one place it will say whether an option
 // was used. The window is reported as the window: probing with `ss: 1, to: 3`
 // gives a two-second file, because that is what the input is.
+//
+// `streamLoop` is `-stream_loop`: how many *more* times to read the input
+// after the first, -1 for forever. It is the one field here libavformat has
+// never heard of — everything an image sequence or a still needs
+// (`framerate`, `start_number`, `pattern_type`, `loop`) is an option of the
+// `image2` demuxer and goes in `options`, unchanged from what a command line
+// would say.
+//
+// **A duration is reported and never invented.** A finite `-stream_loop` is
+// the file over again a known number of times, so it is measured. `-loop 1`
+// and `-stream_loop -1` never end: libavformat reports one pass — for a still,
+// one frame — so `-t` is the whole of how long they are, and with no `-t` the
+// duration comes back **zero**, meaning nobody knows.
 // → { path, format: {name, longName, duration, bitRate, size},
 //     streams: [{index, kind, codec, codecLong, profile, bitRate, language,
 //                title, default,
@@ -177,6 +190,48 @@ bro.ffmpeg.deviceSources("dshow")
 // be able to take, and nobody types a fourcc they have not seen.
 bro.ffmpeg.codecTags("mp4", "libx265")   // → ["hev1", "hvc1"]
 
+// The encoder libavformat itself would reach for, given a muxer and a
+// filename — `av_guess_codec`, which is what the `ffmpeg` CLI uses. It matters
+// for one muxer: **`image2`'s extension names a codec, not a container**, so
+// `.png` is PNG data and `.bmp` is BMP data through the same muxer, and
+// leaving the encoder on image2's declared default lands every picture render
+// on mjpeg whatever the file is called.
+bro.ffmpeg.guessCodec("image2", "out%04d.png")   // → "png"
+
+// Files that are one input. A drop of three hundred numbered PNGs is one `-i`,
+// and working that out is the most-used path into image sequences.
+bro.ffmpeg.sequences([path, folder, ...])
+// → { sequences: [{ dir, pattern: "…/shot_%04d.png", prefix, suffix, first,
+//                   digits, start, end, count, missing }],
+//     singles: [path, ...] }
+// The rules are refusals rather than cleverness: the number is the *last* run
+// of digits in the name, a run of one file is a still, zero padding is
+// meaningful and unpadded numbering is not (`plate1`…`plate12` is one `%d`), a
+// gap is reported and never closed, folders are read one level deep and never
+// crossed, and only files with an image extension take part. **The frame rate
+// is deliberately absent**: three hundred pictures are three hundred pictures
+// and nothing on disk says how long each is on screen, so `-framerate` is a
+// decision and inventing one here would be making it quietly.
+
+bro.ffmpeg.imageExtensions   // libavformat's own: the image2 muxer's list plus
+                             // every `*_pipe` demuxer's name
+bro.ffmpeg.globPatterns      // whether this build's image2 can do
+                             // pattern_type=glob. The one capability here that
+                             // cannot be enumerated — it is HAVE_GLOB at
+                             // compile time, reported as ENOSYS from
+                             // read_header and nowhere else — so it is asked
+                             // once, by trying.
+
+bro.ffmpeg.hasFramePattern("out%04d.png")        // → true
+bro.ffmpeg.frameNames("out%04d.png", 1, 3)       // → the names image2 will write
+// `av_get_frame_filename2`, the same function the muxer calls, so this is the
+// answer rather than a second implementation of `%04d`.
+
+bro.ffmpeg.concatList(listPath, [{ path, duration }, ...])   // → listPath
+// An `ffconcat version 1.0` list for the concat *demuxer*. Each duration is
+// written because without one the demuxer reports no length at all until
+// something has read to the end of the last file.
+
 // The inputs playback knows about. `<video src>` is only a string and the
 // media backend is registered generically, so the string names the input and
 // the backend swaps it for the URL and its options on the way into
@@ -196,7 +251,8 @@ bro.ffmpeg.render.start({ path,
                           // and a filter-graph input pad each name one by
                           // index; the demuxer, its options and the window
                           // are the input's, and a path cannot carry them.
-                          inputs: [{ path, format, options, ss, t, to, itsoffset }],
+                          inputs: [{ path, format, options,
+                                     ss, t, to, itsoffset, streamLoop }],
                           // Which muxer, by name — `-f matroska`. Empty falls
                           // back to guessing from the extension. Named because
                           // that is what identifies one: nothing in
@@ -345,13 +401,15 @@ is a thing people do.
   force another. Searched rather than listed for the reason the muxer picker and the
   filter palette are: there is no list of the good ones anywhere. `Probe it` hands the
   choice back to libavformat.
-- **Window** — `-ss`, `-to`, `-itsoffset`, named as ffmpeg names them because that is
+- **Window** — `-ss`, `-to`, `-itsoffset`, `-stream_loop`, named as ffmpeg names them
+  because that is
   what they are and the command bar prints them a foot below. **An input seek is not a
   clip's in-point**, and this is where the difference is legible: `-ss` moves the
   input's zero, so the input becomes shorter and a clip is cut from what is left.
   Trimming a clip picks a moment out of an input; `-ss` decides what the input is.
   `-itsoffset` delays it, which is how a camera and a separately recorded soundtrack
-  are lined up.
+  are lined up. `-stream_loop` is the other half of the same question — how much of
+  this input there is — and `-1` is forever, which has no length at all.
 - **What came back** — container, duration, size, bitrate, and then every stream:
   codec, profile, dimensions, frame rate, pixel format, colour tags, sample rate,
   channel layout. Straight out of `probe()`, run **with the options in force**, so it
@@ -367,6 +425,67 @@ An unknown key stops the open and names itself.
 Two clips from one file are one input, which is what ffmpeg would open. A second drop
 of the same file reuses it — unless something has been set on it, in which case a
 fresh one is made rather than silently inheriting somebody's decision.
+
+### An input that is not one file
+
+Three of ffmpeg's inputs are not a file, and each is *assembled* rather than opened.
+Every one of them is set with ordinary demuxer options — `-framerate`,
+`-start_number`, `-pattern_type` and `-loop` belong to `image2`, `safe` belongs to
+`concat` — so they travel in the same bag `-probesize` does and are printed in front
+of the same `-i`. They get rows of their own for what they *mean*, not for what they
+are.
+
+**An image sequence.** Drop a folder of numbered frames, or the frames themselves, and
+they arrive as one input rather than three hundred. Working out which files belong
+together is the part that has to be right, so the grouping is a set of refusals:
+
+| | |
+|---|---|
+| the number is the **last** run of digits | `shot2_0007.png` is frame 7 of `shot2_`, not frame 2 of `shot` |
+| a run of one file is not a sequence | it is a still, which is a different input with a different question on it |
+| zero padding is meaningful, unpadded numbering is not | `007` and `0007` are two runs; `plate1`…`plate12` is one, written `%d` |
+| a gap is reported, never closed | `image2` stops at the first missing number, so a run of 300 with 12 absent is not 300 frames |
+| folders are read one level deep and never crossed | two levels of folder is a project layout, not a sequence |
+| only image extensions take part | and they are libavformat's own, not a list written down here |
+
+So a logo sitting beside three hundred frames stays a file of its own, and a folder
+holding two sequences is two inputs.
+
+**A sequence has no frame rate.** Twelve pictures are twelve pictures; nothing on disk
+says how long each is on screen. `-framerate` is what decides, it is an *input option*,
+and the same files are one second or two depending only on it. `-start_number` is set
+out loud too, because `image2` looks for the first five numbers from zero and then
+gives up — a run beginning at 1000 is unopenable without it, and one beginning at 1
+opens only by accident.
+
+`-pattern_type glob` is offered where the build has it. This one does not: globbing is
+a compile-time feature of libavformat, reported as "Function not implemented" from
+`read_header` and from nowhere else, so it is asked by trying and the control says so
+rather than failing at open.
+
+**A still is a decision about how long it is.** A single picture is no time at all —
+libavformat says so, and bro's `<video>` agrees, because it drives its clock from
+decoded pictures and one picture is nothing to advance through. So a still is opened
+as `-loop 1` with a `-t`: the loop makes the input go on producing the same picture,
+and the `-t` is the only thing that can say how long it lasts. Five seconds to begin
+with, on the input, in ffmpeg's own words, where the command bar prints it and the
+Sources stage changes it. Take the loop away and the input has no length; the
+application says so and will not lay it out, rather than putting a clip of nothing on
+the timeline.
+
+**Several files as one input.** `Join…` writes a list file and adds it as
+`-f concat -safe 0`. **Three things here are called concat and they are not each
+other**, so the panel says which this is before it offers to do it:
+
+| | |
+|---|---|
+| the concat **demuxer** | reads the listed files one after another *before* anything is decoded — they have to be encoded compatibly |
+| the concat **filter** | joins decoded streams inside the graph, and does not care what they were |
+| two clips **end to end** on the timeline | is neither: that is an edit, and it renders through the compositor |
+
+Each entry in the list carries its own duration. Without them the demuxer opens the
+first file at header time, discovers the rest as it reaches them, and reports no
+length at all — so the joined input would lay out as no clip.
 
 ## The timeline
 
@@ -746,6 +865,31 @@ unknown key stops the render rather than being ignored. Changing the muxer
 empties the bag, because `movflags` in Matroska is an error and not a carried
 preference.
 
+### Writing pictures
+
+`image2` is the one muxer whose output is not a file but a *set* of them, and the only
+thing that says which is which is the filename: `out%04d.png` is a run of pictures and
+`out.png` is one picture written over itself on every frame. So picking image2 puts a
+frame number in the name, and **Numbering** says which of the two you meant —
+`A file per frame`, or `One picture`, which is `-update 1` and is not optional for a
+single file.
+
+Under it, **the names that will actually be on disk**. Not the pattern: `%04d` is
+exactly the kind of thing somebody gets wrong once and then never trusts again, so the
+panel shows the first few and the last, from `av_get_frame_filename2` — the same
+function the muxer calls. `-start_number` is beside them, since a run does not have to
+begin at one.
+
+One PNG of the frame at the playhead is the degenerate case and is the fastest way to
+get a still out of an edit: `One picture`, and a range of one frame.
+
+**Here alone, the extension chooses the encoder.** `.png` is PNG data and `.bmp` is BMP
+data through the same muxer, so image2's extension names a *codec* rather than a
+container — the opposite of how every other extension in libavformat works. The
+encoder follows the filename through `av_guess_codec`, which is what `ffmpeg` itself
+does; without it every picture render lands on mjpeg, which is what image2 declares as
+its default whatever the file is called.
+
 ### What is in the file
 
 `Write` is the output's **stream list**: one row per stream the muxer will
@@ -971,8 +1115,10 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-inputtest <file>          # an -i: forced demuxer, options, window, token
+./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -1004,6 +1150,23 @@ have refused, an option reaching the demuxer and an unknown one stopping the ope
 with the key named, `-ss` and `-t` moving the input's own clock — checked in
 pixels, by asking a seeked reader for its zero and an unseeked one for the same
 moment — and the token bro's media backend opens a registered input by.
+
+`seqtest` is the inputs whose content is assembled, and most of what it asserts
+is what the grouping *refuses*: a lone numbered file is a still, a folder of two
+runs and a stray picture is two sequences, and an unpadded run crossing from one
+digit to two is one input rather than two. Then that a sequence's length is its
+`-framerate` and nothing else, that a still probes as no time at all and is as
+long as its `-t` and no longer, that `-stream_loop 1` is twice through and then
+the end, that a concat list with no durations in it reports none — and the round
+trip, since what the writer means by a sequence and what the reader means by one
+have to be the same thing or every half of this works alone and none of it works
+together.
+
+`ui_sequence.js` is the same subject from the drop inwards: twelve files becoming
+one `-i` with its options printed in front of it, a still that plays because it
+is held and is refused when it is not, a sequence played through the same
+`<video>` everything else uses, and the Write stage listing the filenames a run
+will be written as before anything is rendered.
 
 `ui_sources.js` follows one input the length of the stage: typed in as a path
 with no clip near it, forced to a demuxer picked out of libavformat's own list,
@@ -1105,12 +1268,19 @@ Honest list of what does not work:
 - **Writing to one.** `AVFMT_NOFILE` muxers are in the picker and thirty output
   protocols are reported, but a render still writes to a path. Pointing one at
   a socket is chunk 13's.
-- **An input that is not one file.** `-stream_loop`, an image sequence
-  (`img%03d.png` with its own `-framerate`), a still, and `concat` are each an
-  input whose *content* is assembled rather than opened, which is the one thing
-  `MediaInput` deliberately does not say yet. The same goes for `-r` on an
-  input: forcing a rate is how a sequence is given one, and it means nothing
-  for a container that carries its own timestamps.
+- **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
+  `<video>` drives its clock from decoded pictures, so a file with exactly one
+  has nothing to advance through, and the element shows the frame and reports
+  itself ended. Held with `-loop 1` and a `-t` it plays like anything else, which
+  is why that is what a dropped picture becomes — but an input somebody has taken
+  the loop off is refused with a sentence rather than laid out as a clip of
+  nothing. The same is true of `-stream_loop -1`.
+- **`pattern_type=glob` on this build.** Globbing is compiled into libavformat or
+  it is not, and this build's is not. The control says so instead of offering a
+  pattern type that fails at open.
+- **A sound sequence.** An image sequence is pictures. Giving a run of frames a
+  separate soundtrack means two inputs and a `-map` per stream, which the Write
+  stage can say and nothing yet joins up.
 - **Capturing.** `gdigrab`, `dshow`, `vfwcap` and `lavfi` are registered and
   listed, and `bro.ffmpeg.deviceSources()` will say what each can see. A device
   is an input with its name forced as the demuxer and its settings as the

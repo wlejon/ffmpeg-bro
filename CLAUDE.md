@@ -42,9 +42,13 @@ Targets: `ffmpeg-bro` (windowed), `ffmpeg-bro-headless` (scripted), `ffmpeg-bro-
 cmake --build build --config Release && ctest --test-dir build -C Release
 ```
 
-`ctest` writes two fixture files into `build/fixtures/` (a CTest `FIXTURES_SETUP` test, so
-they are made once and only when something will use them) and runs every suite against
-them. They are generated rather than checked in, and generated with **known content** —
+`ctest` writes the fixture media into `build/fixtures/` (a CTest `FIXTURES_SETUP` test, so
+it is made once and only when something will use it) and runs every suite against it —
+two mp4s, plus a folder of stills for the sequence work: a padded run, an unpadded run
+whose numbers cross from one digit to two, and a file beside them that is part of
+neither. The third of those is the case that decides whether the sequence scan is any
+good, and it is written by the same `Writer` through the `image2` muxer, which makes the
+fixtures the check that the picture side of that works at all. They are generated rather than checked in, and generated with **known content** —
 a moving bar over a gradient, a 440/660 Hz tone at -6 dBFS, two different sizes, aspects,
 rates and lengths. What that buys is in tests/make_fixture.cpp: a source whose audio track
 is digitally silent turns the export test's mixer check into a failure that reads as a
@@ -100,6 +104,11 @@ against footage the fixtures do not resemble:
 # opens a registered input by
 ./build/Release/ffmpeg-bro-inputtest <file>
 
+# native: inputs whose content is assembled — the sequence scan and what it
+# refuses to guess, a still that has no length until somebody gives it one,
+# -stream_loop, the concat demuxer, and a render that writes a run of files
+./build/Release/ffmpeg-bro-seqtest <fixture-directory>
+
 # native: render a timeline and open the result — geometry, opacity, audio
 # mixing, cancellation, capability reporting, whether options reach the
 # encoder, and what a multi-stream file came out as. Writes into out/.
@@ -129,6 +138,12 @@ against footage the fixtures do not resemble:
 # nothing on the timeline, a demuxer forced, an option set, a window cut, and
 # every one of those printed in front of its own -i
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
+
+# the same subject from the drop inwards: twelve files becoming one -i, a
+# still that plays because it is held and is refused when it is not, a
+# sequence played, and the Write stage naming the files it will produce.
+# Takes the fixture *directory*, because what it is about is a folder.
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-directory>
 
 # the equivalent filtergraph, against specs written out by hand. Needs no
 # media: buildSpec()'s output is a plain object and the module is pure.
@@ -203,7 +218,8 @@ them to change alone:
 
 | File | What |
 |---|---|
-| `ffmpeg_input.h` | **what an `-i` is**, the one function that opens one, and the registry playback resolves a token through |
+| `ffmpeg_input.h` | **what an `-i` is**, the one function that opens one, `-stream_loop`, where a duration comes from, and the registry playback resolves a token through |
+| `ffmpeg_sequence.*` | **files that are one input** — the sequence scan and its refusals, the concat list, the frame-name pattern, and whether this build has glob |
 | `ffmpeg_export.h` | the description a render is given, and the four calls that run one |
 | `ffmpeg_export.cpp` | the job: one slot, one thread, the status the UI polls |
 | `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
@@ -366,6 +382,57 @@ about *an input* rather than four separate features:
   it always did — the fixture generator, the node previews and every hand-written
   spec in `tests/` still do. Same shape as `outputStreams()`, for the same reason.
 
+**An input whose content is assembled needed almost nothing added to the model,
+and that is the finding worth keeping.** `-framerate`, `-start_number`,
+`-pattern_type` and `-loop` are options of the `image2` demuxer; `safe` and
+`auto_convert` are `concat`'s. They reach libavformat through the option bag
+above, unchanged from what a command line writes, so an image sequence is not a
+feature of this application — it is a demuxer with options, and the Sources
+stage edits it as one. Four things *were* missing:
+
+- **`MediaInput::streamLoop` is the one field libavformat has never heard of.**
+  `-stream_loop` is implemented in ffmpeg's own CLI by seeking the input back to
+  the start when it ends and shifting every timestamp forward by one pass, and
+  `InputLoop` is this binary's single copy of that arithmetic. Three things read
+  packets — `SourceVideo`, `SourceAudio` and the playback `FFmpegSource` — and
+  each holds one, because a soundtrack shifted by a different amount from the
+  picture it belongs to is the failure. A pass is as long as the container says
+  or as long as the furthest packet seen, so it works on formats that report no
+  duration; a seek is mapped into the pass it lands in (`InputLoop::seekTo`)
+  rather than the demuxer being asked for a moment it has no idea about.
+- **`inputDuration()` is the one place a length is decided**, and it says
+  "nobody knows" out loud. An ordinary input is as long as it measured, cut down
+  by the window. A *finite* `-stream_loop` is that over again a known number of
+  times, which is measurable and is measured. `-loop 1` and `-stream_loop -1`
+  never end — libavformat reports one pass, and for a still one frame — so `-t`
+  is the whole of their length and **zero when there is no `-t`**. `probeMedia`
+  and `FFmpegSource::open` both ask it, because a clip's length comes from it and
+  a UI that disagreed with the renderer about it would lay out a clip the render
+  will not produce. **Do not replace that zero with a default here**: a chosen
+  duration belongs where somebody chose it, which is `-t` on the input.
+- **`scanForSequences()` is the guess, and it is mostly refusals.** The number is
+  the *last* run of digits in the name; a run of one file is a still; zero
+  padding is meaningful and unpadded numbering is not (so `plate1`…`plate12` is
+  one `%d` and `007` beside `0007` is two runs); a gap is reported and never
+  closed, because image2 stops at the first missing number; folders are read one
+  level deep and never crossed. The image extensions are libavformat's own — the
+  `image2` muxer's `extensions` string plus every `*_pipe` demuxer's name with
+  the suffix off, which is where `webp` and `psd` come from.
+- **The concat demuxer reports no duration until something has read to the end.**
+  It opens the first file at header time and discovers the rest as it reaches
+  them, so a joined input laid out as no clip at all. `writeConcatList()`
+  therefore writes a `duration` line per entry, out of numbers the caller got by
+  probing each file. Found by measuring, not by reading.
+
+**`globPatternsSupported()` is the only capability in this repo that can be
+neither enumerated nor asked directly.** `pattern_type=glob` is in the demuxer's
+option table on every build because the table is unconditional; whether it
+*works* is `HAVE_GLOB` at compile time and surfaces as `ENOSYS` from
+`read_header` and nowhere else. So it is asked by trying, once, on a filename no
+filesystem can hold — and behind `LogQuiet`, which is a thread-local mute on the
+report channel added for exactly this: a question the application put to itself
+is not something a render said.
+
 **How an input's options reach playback, and why it is a token.** bro's `<video>`
 takes a src *string* and the media backend is registered generically, so there is
 nowhere to pass an options object: the string has to name the input. `defineInput()`
@@ -439,6 +506,15 @@ The encoder menu is a named list *plus every muxer's own default encoder*, which
 makes gif, image2, mpegts and the raw writers pick-able at all. That second half is asked
 of libavformat, so it grows with the build.
 
+**`image2` is the one muxer whose extension names a codec rather than a container.**
+`.png` is PNG data and `.bmp` is BMP data through the same muxer, which is the opposite
+of how every other extension in libavformat works — so `guessEncoder()` wraps
+`av_guess_codec`, the call ffmpeg's own CLI uses, and `ui/export/form.js`'s
+`followExtension()` applies it *only* for image2. Without it every picture render
+inherits image2's declared default of mjpeg whatever the file is called. Do not
+generalise it to other muxers: elsewhere the extension is the container and the encoder
+is a decision of its own.
+
 `avformat_query_codec` for *attachments* does not exist and there is no flag for it
 either — ffmpeg's own CLI adds the stream and lets the muxer complain — so
 `ui/export/warnings.js` names Matroska and WebM. It is the second place in this repo
@@ -492,6 +568,16 @@ once to mix. Notable:
 - **Output size is stat'd from the file, not taken from `avio_tell`.** `+faststart`
   rewrites an mp4 after the trailer goes down; the write position left behind reported
   three kilobytes for a file of three quarters of a megabyte.
+- **A `yuvj*` pixel format is the statement that the picture is full range**, so the
+  writer does not also say limited range alongside one. mjpeg is the encoder that
+  refuses the contradiction, and it refuses it as `EINVAL` from `avcodec_open2` —
+  which arrives as "cannot open the mjpeg encoder: Invalid argument" with no mention
+  of colour. Reachable in two clicks, because picking image2 lands on mjpeg.
+- **Output size is measured over the run of files, not stat'd from the path.** A
+  render into `out%04d.png` writes many files and there is no file called that;
+  `Writer::sizeOnDisk` walks the names from the muxer's own `start_number` — asked
+  of `oc_->priv_data` before `close()`, because only image2 knows what it was told —
+  and stops at the first one that is not there.
 - **Profile ids are numbered per codec.** Do not resolve `codec->profiles` against the
   generic `profile` option's constants: VP9's profile 2 and HEVC's Main 10 are both 2, and
   that "translation" confidently offered `main10` as a VP9 profile. Profiles come from the
@@ -524,6 +610,22 @@ load-bearing:
   `-ss 30` on a ten-second input leaves nothing to lay out. `app.js` rebuilds the
   `<video>` rather than re-pointing it: the element *is* the decoder, and it is
   holding the file as it was opened before.
+- **`ui/sequence.js` turns a drop into inputs, and `kindOf()` is derived, never
+  stored.** A sequence is a path with `%04d` in it, a still is an image file that is
+  not one, a concat input is `-f concat` — all three are consequences of the path,
+  the demuxer and the option bag, so a `kind` field would be a second place for the
+  same fact to live. `openables()` is the one route a drop takes; `typedSpec()` is the
+  same rules for a path typed in or named on the command line, so `open()`,
+  `openBatch()` and the Sources stage's Add cannot come to three different answers
+  about what a `.png` is. **The batch-becomes-a-grid count is taken after the
+  grouping**, or a folder of three hundred frames would be three hundred tracks.
+- **Two numbers in `ui/sequence.js` are decisions and are written into the input's own
+  option bag.** A sequence's `-framerate` (25) and a still's `-loop 1 -t 5`. They live
+  there rather than anywhere private so the command bar prints them and the Sources
+  stage edits them — which is the whole answer to "where does a still's duration come
+  from": from where somebody chose it. `app.js` refuses to lay out an input whose
+  length is zero and says which of the two reasons it is, because a clip of nothing is
+  worse than a sentence.
 - **`graph/model.js`'s `add()` copies only the fields it knows.** That is the right
   rule — a stray field on a spec must not quietly become part of the model — and it is
   why an input node's index arrived as -1 and the command printed no `-f` at all until
@@ -658,6 +760,13 @@ about them:
   make legible are that an input can be configured (and re-probed, so the stream list
   under the options is the answer to what they did) and that an input seek is not a
   clip's in-point.
+  It also holds the three inputs whose content is assembled, in rows of their own
+  under the demuxer: a sequence's `-framerate`, `-start_number` and `-pattern_type`,
+  a still's hold, and what a concat list is made of. Everything they write goes into
+  the same option bag `-probesize` goes into — they are `image2`'s and `concat`'s
+  own options — so the rows exist for what they *mean* rather than for what they
+  are. A sequence's frame rate drawn as row 34 of an option table says the opposite
+  of what it is, which is a decision nothing on disk can make for you.
 - `opttable.js` — **one AVOption table, edited into one bag**, and the third instance
   of the pattern is what made it a component. libavutil describes an encoder, a muxer,
   a demuxer, a decoder, a protocol and a filter with the same structure, so the
