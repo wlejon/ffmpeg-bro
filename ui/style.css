@@ -445,6 +445,17 @@ button.st.warn .st-name::after {
 
 .group { display: flex; align-items: center; gap: 6px; }
 
+/* The default button is a control: one line, 26px tall, never narrower than a
+   thumb. Which makes two rules mandatory for anything that is not one, and both
+   have been forgotten once each — a two-line button came out as a 26px box with
+   its contents crammed into it and half of every glyph clipped, which reads as a
+   font problem rather than a height problem:
+
+     more than one line of text  ->  height: auto
+     a round or square button    ->  min-width: 0
+
+   `button.st` says the first, `.gp-filter` did not, and the whole filter palette
+   was illegible for it. */
 button {
     display: inline-flex;
     align-items: center;
@@ -1149,53 +1160,120 @@ button.text.primary:hover { background: #ffa063; }
     transform-origin: 0 0;
 }
 
+/* A node, with the anatomy every node editor has: a header that is also the
+   handle, a body of values, and sockets on the edges where the wires land. What
+   was here before was a bordered box with the arguments listed as text, wires
+   arriving at nothing in particular, and nothing to take hold of. */
 .gn {
     position: absolute;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-left: 3px solid var(--blue);
-    border-radius: 4px;
-    padding: 4px 6px 5px;
+    border-radius: 5px;
     cursor: default;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
 }
-/* Audio is a different colour rather than a different shape, because it is the
-   same kind of thing happening to a different stream. */
-.gn-a { border-left-color: var(--good); }
 /* The two ends of the graph are not filters and should not read as filters. */
 .gn-input, .gn-sink { background: var(--panel-hi); }
-.gn-sink { border-left-style: double; }
 /* A value set by hand outranks the derivation, and the graph has to say so —
    losing the lock silently is the one outcome worth designing against. */
 .gn-locked { border-color: var(--accent); }
-.gn-user { border-style: dashed; border-left-style: solid; }
-/* The one the panel is about. Brighter than the lock badge on purpose: a
-   selection is where you are and a lock is what is true. */
-.gn.on { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.gn-user { border-style: dashed; }
+/* Selected, and the one the panel is about. Two levels because a marquee can
+   take in eight nodes and only one of them is what the column is showing. */
+.gn.on { border-color: var(--blue); }
+.gn.primary { box-shadow: 0 0 0 1px var(--blue), 0 2px 8px rgba(0, 0, 0, 0.45); }
 .gn-lock { color: var(--accent); font-size: 8px; }
 
+/* The header. Also the drag handle — and the only one, so a field can be dragged
+   through without the card coming with it. */
 .gn-head {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
-}
-.gn-name {
-    font-size: 12px;
-    font-weight: 600;
-    word-break: break-all;
-}
-.gn-pad { font-size: 10px; color: var(--dim); margin-left: auto; }
-
-.gn-args { margin-top: 3px; }
-.gn-arg {
-    display: flex;
+    align-items: center;
     gap: 5px;
-    font-size: 10px;
-    line-height: 1.45;
+    padding: 4px 7px;
+    border-radius: 4px 4px 0 0;
+    background: rgba(255, 255, 255, 0.045);
+    border-bottom: 1px solid var(--line);
+    cursor: move;
 }
-.gn-k { color: var(--dim); }
-/* The value is the part being read, so it takes what is left and wraps rather
-   than being pushed off the side of a fixed-width card. */
-.gn-v { flex: 1; word-break: break-all; }
+.gn-body + .gn-shot, .gn-head + .gn-shot { margin-top: 0; }
+/* Which stream, as a dot on the title rather than as a coloured edge: an edge
+   competes with the selection ring, and a dot is what the sockets are too. */
+.gn-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--blue);
+    flex-shrink: 0;
+}
+.gn-a .gn-dot, .gn-a .gn-sock { background: var(--good); }
+.gn-name {
+    font-size: var(--fs-base);
+    font-weight: 600;
+    /* One line, cut rather than wrapped: a card that is two lines taller because
+       of a long filename is a row of the layout two lines taller. */
+    overflow: hidden;
+    white-space: nowrap;
+}
+.gn-pad { font-size: var(--fs-xs); color: var(--dim); margin-left: auto; }
+
+/* One value. The label is the UI font because it is a word and the control is
+   mono because it is a value — a distinction the old card, all in mono, could
+   not make. */
+.gn-body { padding: 3px 7px 5px; }
+.gn-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+.gn-k {
+    font-size: 10.5px;
+    color: var(--dim);
+    flex: 0 0 auto;
+    max-width: 46%;
+    overflow: hidden;
+    white-space: nowrap;
+}
+/* The field takes what is left. Small, flat and borderless until you are on it:
+   nine cards of boxed inputs is a form, and this is a graph. */
+.gn-f {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 17px;
+    padding: 0 4px;
+    font-size: 10.5px;
+    text-align: right;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+}
+.gn-f:hover { background: var(--bg); border-color: var(--line); }
+.gn-f:focus { background: var(--bg); border-color: var(--blue); text-align: left; }
+select.gn-f { text-align: left; }
+
+/* The sockets. Placed by `card.js` at `portY()` — the same function the wire's
+   endpoint came from, which is the whole point of them: a dot anywhere else
+   would say this wire goes to that port when it does not. */
+.gn-sock {
+    position: absolute;
+    /* Spelled out: this engine does not blockify an absolutely positioned inline
+       element, so a `<span>` with a width and a height came out one pixel square.
+       `.gn-dot` gets away without it only because a flex item is blockified. */
+    display: block;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--blue);
+    border: 1px solid var(--bg);
+}
+.gn-sock-in { left: -5px; }
+.gn-sock-out { right: -5px; }
+
+/* Zoomed out, a card is its name and its picture. Nine cards of 10px argument
+   text at 0.4x is nine grey smudges; nine legible names is a graph. */
+.lod-min .gn-head { border-bottom: none; }
 
 /* The refusal, in the middle of an empty stage. Same words the command bar
    prints, because an edit that cannot be described is one fact and not two. */
@@ -1208,11 +1286,22 @@ button.text.primary:hover { background: #ffa063; }
     font-size: 13px;
 }
 
+/* Where you are, when the graph is wider than the window — which it is with two
+   clips on the timeline. Over the canvas in the corner, as in every editor that
+   has one. */
+.gr-mini {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
 /* The picture a node produces. Sized by the card, not by itself: the whole
    point of dragging a card wider is that the media follows. */
 .gn-shot {
     position: relative;
-    margin-top: 4px;
+    margin: 0 6px 6px;
     background: #000;
     border-radius: 2px;
     overflow: hidden;
@@ -1240,6 +1329,7 @@ button.text.primary:hover { background: #ffa063; }
     bottom: 3px;
     width: 16px;
     height: 16px;
+    min-width: 0;
     padding: 0;
     line-height: 14px;
     text-align: center;
@@ -1301,6 +1391,7 @@ button.text.primary:hover { background: #ffa063; }
     position: absolute;
     width: 18px;
     height: 18px;
+    min-width: 0;
     padding: 0;
     line-height: 15px;
     text-align: center;
@@ -1341,22 +1432,33 @@ button.text.primary:hover { background: #ffa063; }
 .gp-actions { display: flex; gap: 5px; margin: 8px 0 4px; }
 
 /* One filter in the palette: what it is called and what libavfilter says it
-   does, on one clickable row. */
+   does, on one clickable row. `height: auto` and `min-width: 0` are not optional
+   — see the note on the base button rule. */
 .gp-filter {
     display: block;
     width: 100%;
+    height: auto;
+    min-width: 0;
     text-align: left;
-    padding: 4px 6px;
-    margin-bottom: 2px;
+    padding: 4px 7px 5px;
+    margin-bottom: 1px;
     border: 1px solid transparent;
     border-radius: 3px;
     background: none;
-    color: var(--fg);
-    font-size: 11px;
-    line-height: 1.4;
+    color: var(--text);
+    font-size: var(--fs-sm);
+    line-height: 1.35;
     cursor: pointer;
 }
 .gp-filter:hover { background: var(--panel-hi); border-color: var(--line); }
+/* The name is what you are looking for and the description is what confirms it,
+   so the name is the larger of the two. It was the smaller, and dim, and clipped. */
+.gp-filter .gp-fname {
+    display: block;
+    font-size: var(--fs-base);
+    font-weight: 600;
+    color: var(--text);
+}
 .gp-filter .dim { display: block; font-size: 10.5px; }
 
 .gr-mine { color: var(--accent); }

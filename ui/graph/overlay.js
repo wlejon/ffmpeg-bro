@@ -34,13 +34,15 @@ const KEY = 'ffmpeg-bro.graph';
 
 /// `inserts` is ordered: several nodes at one insert point are spliced in in
 /// the order they were added, which is the order they will run in.
-/// `sizes` is how wide each node's card was dragged to, keyed the same way a
-/// selection is. It is here rather than beside the view because it is a thing a
-/// person set and expects to find again, which is what everything in this file
-/// is — but it is deliberately *not* part of `isEmpty()`: how big you like
-/// looking at a node has nothing to do with which of the renderer's two paths
-/// the render takes.
-let state = { inserts: [], locks: {}, sizes: {} };
+///
+/// `sizes` and `pins` are how you have arranged the picture — how wide a card was
+/// dragged and where it was dropped — keyed the same way a selection is. They are
+/// here rather than beside the view because they are things a person set and
+/// expects to find again, which is what everything in this file is. But they are
+/// deliberately *not* part of `isEmpty()`: how big you like looking at a node, and
+/// where you like it, have nothing to do with which of the renderer's two paths
+/// the render takes, and a card nudged sideways must not change what comes out.
+let state = { inserts: [], locks: {}, sizes: {}, pins: {} };
 
 /// Ids that are stable across a rebuild, and that cannot collide with the
 /// derivation's — it hands out `n1`, `n2`… from a counter that starts fresh
@@ -140,15 +142,20 @@ export function unlock(anchor) {
     return true;
 }
 
-/// Everything a person put *into* the graph. Card widths stay: they are how
-/// you like looking at it, not part of it, and throwing them away with the
-/// filters would be a second surprise on top of an intended one.
+/// Everything a person put *into* the graph. Card sizes and positions stay: they
+/// are how you like looking at it, not part of it, and throwing them away with
+/// the filters would be a second surprise on top of an intended one.
 export function clear() {
-    state = { inserts: [], locks: {}, sizes: state.sizes };
+    state = { inserts: [], locks: {}, sizes: state.sizes, pins: state.pins };
     changed('clear');
 }
 
-// ── how big each card is ───────────────────────────────────────────────────
+// ── how the picture is arranged ────────────────────────────────────────────
+//
+// Two things, and neither is part of the graph: how wide a card was dragged, and
+// where it was dropped. Both keyed by anchor, so they survive the skeleton being
+// rebuilt on the next timeline edit — which is the whole reason they are in this
+// file and not in the view.
 
 export function sizeOf(key) { return (key && state.sizes[key]) || 0; }
 
@@ -160,12 +167,49 @@ export function setSize(key, width) {
     changed('size');
 }
 
+/// Where a node was dropped, in graph coordinates, or null for "wherever the
+/// layout puts it". Null rather than a default, because "not pinned" and "pinned
+/// at 0,0" are different states and only one of them follows the layout.
+export function pinOf(key) {
+    const p = key ? state.pins[key] : null;
+    return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? p : null;
+}
+
+export function setPin(key, x, y) {
+    if (!key) return;
+    state.pins[key] = { x: Math.round(x), y: Math.round(y) };
+    changed('pin');
+}
+
+export function unpin(key) {
+    if (!key || !state.pins[key]) return false;
+    delete state.pins[key];
+    changed('pin');
+    return true;
+}
+
+export function pinCount() { return Object.keys(state.pins).length; }
+
+/// Give the whole graph back to the layout.
+export function unpinAll() {
+    if (!Object.keys(state.pins).length) return false;
+    state.pins = {};
+    changed('pin');
+    return true;
+}
+
 /// Everything pinned to one clip, copied onto another.
 ///
 /// A split makes a second clip out of one, and a cut should not change how
 /// either half looks — so both halves keep the filters the whole had. Called
 /// from the split rather than inferred here, because nothing in this file knows
 /// what a clip is.
+///
+/// **Pins are not copied**, and that is the one thing here that is not symmetric.
+/// A filter applies to both halves; a *position* cannot, because two cards cannot
+/// be in one place and copying it would drop the new clip's whole chain exactly on
+/// top of the old one's. The new half is laid out, which is where an unpinned node
+/// belongs.
 export function cloneClip(fromId, toId) {
     const from = `clip:${fromId}`, to = `clip:${toId}`;
     const swap = (a) => (a.indexOf(`${from}/`) === 0 ? to + a.slice(from.length) : null);
@@ -207,6 +251,8 @@ export function retain(clipIds) {
         if (gone(anchor)) { delete state.locks[anchor]; any = true; }
     for (const key of Object.keys(state.sizes))
         if (gone(key)) { delete state.sizes[key]; any = true; }
+    for (const key of Object.keys(state.pins))
+        if (gone(key)) { delete state.pins[key]; any = true; }
     if (any) changed('retain');
 }
 
@@ -227,6 +273,7 @@ export function restore() {
                 : [],
             locks: (blob.locks && typeof blob.locks === 'object') ? blob.locks : {},
             sizes: (blob.sizes && typeof blob.sizes === 'object') ? blob.sizes : {},
+            pins: (blob.pins && typeof blob.pins === 'object') ? blob.pins : {},
         };
         // Ids handed back to us must not be handed out again.
         for (const rec of state.inserts) {

@@ -35,6 +35,14 @@ function waitFor(what, predicate, timeoutMs = 10000) {
 
 const el = (id) => document.getElementById(id);
 
+/// A key press, the way the app hears one. Dispatched on `<body>` rather than on
+/// `document` — which is where app.js listens — because this engine implements
+/// `Document.addEventListener` but not `Document.dispatchEvent`. It bubbles, so
+/// it arrives; a real key press takes the same route.
+const key = (k, opts) =>
+    document.body.dispatchEvent(
+        new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, opts)));
+
 // Anything the UI builds at runtime is found by selector, never by id —
 // because it does not have an id to be found by. Several of these controls
 // exist at once (both halves of the preview, a form drawn twice for two
@@ -857,6 +865,53 @@ console.log('\nthe same edit, through libavfilter');
 // produces is different from the one without it, and that the command bar stops
 // calling itself a translation — because on this path it is not one.
 
+/// Bring up the `+` on the wire that carries a named insert point.
+///
+/// They appear on the wire under the pointer rather than on every wire at once —
+/// five of them permanently on screen read as part of the graph, and n8n, which
+/// is where the gesture is from, shows it on hover for the same reason. So a test
+/// has to do what a person does: move along the wires until the one it wants
+/// shows itself.
+function revealPoint(id) {
+    const seen = {};
+    const rect = q('#gr-viewport').getBoundingClientRect();
+    const count = (A.graph.placement() || { wires: [] }).wires.length;
+    for (let i = 0; i < count; i++) {
+        // Several points along the curve, not only its middle: a short wire
+        // between two tall cards has its middle underneath one of them, and a
+        // pointer over a card is not over a wire.
+        for (const t of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+            // Read afresh every time. A preview landing on any card redraws the
+            // stage and re-lays it out, so a placement captured before the loop
+            // describes where the wires *were* — which is how this test spent a
+            // while hovering empty canvas.
+            const pl = A.graph.placement();
+            if (!pl || !pl.wires[i]) break;
+            const p = onWire(pl.wires[i], t, pl);
+            mouseMove(rect.left + p.x, rect.top + p.y);
+            pump(30);
+            for (const b of qq('#gr-nodes .gp-plus')) seen[b.getAttribute('data-point')] = 1;
+            const at = q(`#gr-nodes [data-point="${id}"]`);
+            if (at) return at;
+        }
+    }
+    console.log(`    (wanted ${id}; the wires offered ${Object.keys(seen).join(', ') || 'nothing'})`);
+    return null;
+}
+
+/// A point on a wire, in viewport pixels — the same cubic `graph/canvas.js`
+/// strokes and hit-tests, with the same horizontal control points.
+function onWire(w, t, pl) {
+    const x1 = w.x1 * pl.zoom + pl.panX, y1 = w.y1 * pl.zoom + pl.panY;
+    const x2 = w.x2 * pl.zoom + pl.panX, y2 = w.y2 * pl.zoom + pl.panY;
+    const reach = Math.max(24, Math.abs(x2 - x1) * 0.45);
+    const u = 1 - t;
+    return {
+        x: u * u * u * x1 + 3 * u * u * t * (x1 + reach) + 3 * u * t * t * (x2 - reach) + t * t * t * x2,
+        y: u * u * u * y1 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y2,
+    };
+}
+
 console.log('\na filter inserted on the graph');
 {
     A.graph.overlay.clear();
@@ -864,10 +919,14 @@ console.log('\na filter inserted on the graph');
     pump(300);
 
     const clipId = A.project.clips[0].id;
-    const plus = qq('#gr-nodes .gp-plus');
-    ok(plus.length >= 3, `every wire that can take a filter offers one (${plus.length} points)`);
-    const at = q(`#gr-nodes [data-point="clip:${clipId}/after-scale"]`);
-    ok(!!at, 'including the one after the clip is sized, in the compositing space');
+    same(qq('#gr-nodes .gp-plus').length, 0,
+         'no + until the pointer is on a wire — otherwise they read as the graph');
+    const at = revealPoint(`clip:${clipId}/after-scale`);
+    ok(!!at, 'hovering the right wire brings up the one after the clip is sized');
+    same(qq('#gr-nodes .gp-plus').length, 1, 'and only that one');
+    const plusBox = at.getBoundingClientRect();
+    ok(Math.abs(plusBox.width - plusBox.height) < 1.5,
+       `which is round rather than an oval (${Math.round(plusBox.width)}x${Math.round(plusBox.height)})`);
 
     at.click();
     pump(60);
@@ -1057,6 +1116,160 @@ console.log('\na node resized to the size that helps');
     A.graph.overlay.setSize(key, 0);
     A.graph.draw();
     pump(120);
+}
+
+// ── the conventions a node editor is expected to have ──────────────────────
+//
+// Sockets, a header you can drag, fields on the card, a minimap and a level of
+// detail. None of this is decoration: a graph with wires arriving at a bare edge
+// cannot say which of `overlay`'s two inputs is the canvas, and a graph you
+// cannot rearrange is one you cannot pull apart to read.
+
+console.log('\nsockets, where the wires land');
+{
+    const pl = A.graph.placement();
+    const overlayBox = pl.nodes.find((b) => b.node.filter === 'overlay');
+    const card = q(`#gr-nodes [data-node="${overlayBox.node.id}"]`);
+    const ins = qq('.gn-sock-in', card);
+    same(ins.length, 2, 'the compositor shows a socket for each of its two inputs');
+    same(qq('.gn-sock-out', card).length, 1, 'and one for what it produces');
+
+    // The point of drawing them at all: a dot somewhere other than where the
+    // curve lands would say this wire goes to that port when it does not.
+    const wires = pl.wires.filter((w) => w.edge.to === overlayBox.node.id)
+                          .sort((a, b) => a.edge.port - b.edge.port);
+    same(wires.length, 2, 'and two wires arrive');
+    const tops = Array.from(ins, (s) => parseFloat(s.style.top) + 4).sort((a, b) => a - b);
+    const lands = wires.map((w) => w.y2 - overlayBox.y).sort((a, b) => a - b);
+    for (let i = 0; i < 2; i++)
+        ok(Math.abs(tops[i] - lands[i]) < 1.5,
+           `socket ${i} is where its wire lands (${tops[i].toFixed(1)} vs ${lands[i].toFixed(1)})`);
+
+    const sinkCard = q('#gr-nodes [data-key="out:v"]');
+    same(qq('.gn-sock-out', sinkCard).length, 0, 'and the muxer’s pad produces nothing further');
+}
+
+console.log('\na value typed on the card itself');
+{
+    const key = `clip:${A.project.clips[0].id}/scale`;
+    const field = q(`#gr-nodes [data-key="${key}"] [data-f-name="pos:0"]`);
+    ok(!!field, 'the width is a field on the card, not only in the column');
+
+    field.value = '900';
+    field.dispatchEvent(new Event('change'));
+    pump(200);
+    ok(A.graph.overlay.isLocked(key), 'typing in it locks the node, as the column does');
+    ok(A.command.currentCommand().indexOf('scale=900:') > 0,
+       'and the command bar is already printing it');
+
+    // The edit rebuilt every card. If the field you were using did not come back
+    // focused, a second value cannot be typed without finding it again — which is
+    // the difference between a control and a form you have to keep clicking.
+    textInput('1');
+    pump(80);
+    const again = q(`#gr-nodes [data-key="${key}"] [data-f-name="pos:0"]`);
+    same(again.value, '9001', 'and the field it rebuilt is still the one you are typing into');
+    again.value = '900';
+    again.dispatchEvent(new Event('change'));
+    pump(150);
+
+    // Through the button rather than through `overlay.unlock()`: the command bar
+    // is redrawn by the application's own change hook, so a test that reaches
+    // past the UI to the model asks a stale string whether the edit took.
+    q(`#gr-nodes [data-key="${key}"]`).click();
+    pump(80);
+    q('#gr-panel [data-f="unlock"]').click();
+    pump(150);
+    same(A.graph.summary().locks, 0, 'and unlocking hands it back to the derivation');
+    ok(A.command.currentCommand().indexOf('scale=900:') < 0, 'command and all');
+}
+
+console.log('\na node dragged where you want it');
+{
+    const key = `clip:${A.project.clips[0].id}/trim`;
+    const card = () => q(`#gr-nodes [data-key="${key}"]`);
+    const before = parseFloat(card().style.left);
+    const head = q('.gn-head', card()).getBoundingClientRect();
+
+    mouseDown(head.left + head.width / 2, head.top + head.height / 2);
+    mouseMove(head.left + head.width / 2 + 60, head.top + head.height / 2 + 120);
+    pump(60);
+    mouseUp(head.left + head.width / 2 + 60, head.top + head.height / 2 + 120);
+    pump(200);
+
+    const pin = A.graph.overlay.pinOf(key);
+    ok(!!pin, 'letting go pins it where it was dropped');
+    ok(Math.abs(parseFloat(card().style.left) - before) > 20,
+       `and it is drawn there (${before} → ${card().style.left})`);
+
+    // The whole reason a pin is keyed by anchor: this is what a timeline edit
+    // does to the graph, and the node it made is not the node that was dragged.
+    A.graph.draw();
+    pump(120);
+    same(A.graph.overlay.pinOf(key).x, pin.x, 'and it survives the skeleton being rebuilt');
+
+    // A pin is visual. Nothing that was not dragged moves for it.
+    q('#gr-relayout').click();
+    pump(200);
+    same(A.graph.overlay.pinCount(), 0, 'Re-layout gives the whole graph back to the layout');
+}
+
+console.log('\nselecting several at once');
+{
+    // Left-drag on the background is a rubber band, as it is in Nuke, Houdini
+    // and Blender — which is why middle-drag is what pans.
+    const vp = q('#gr-viewport').getBoundingClientRect();
+    mouseDown(vp.left + 4, vp.top + 4);
+    mouseMove(vp.left + vp.width - 8, vp.top + vp.height - 8);
+    pump(60);
+    mouseUp(vp.left + vp.width - 8, vp.top + vp.height - 8);
+    pump(120);
+    ok(qq('#gr-nodes .gn.on').length > 4,
+       `a band over the graph takes in what it covers (${qq('#gr-nodes .gn.on').length})`);
+    same(qq('#gr-nodes .gn.primary').length, 1, 'with one of them the one the column is about');
+    ok(q('#gr-panel .gp-badge').textContent.indexOf('more') > 0,
+       `and the column says there are others: "${q('#gr-panel .gp-badge').textContent}"`);
+
+    // Delete takes away what a person put there and leaves the derivation alone:
+    // a derived node *is* the edit, and the way to be rid of one is to change it.
+    const before = A.graph.summary().nodes;
+    key('Delete');
+    pump(150);
+    same(A.graph.summary().nodes, before,
+         'Delete over a selection of derived nodes removes none of them');
+
+    key('Escape');
+    pump(80);
+    same(qq('#gr-nodes .gn.on').length, 0, 'Escape clears the selection');
+    ok(!q('#st-graph.hidden'), 'and stays on the stage — the second Escape is the one that leaves');
+}
+
+console.log('\nfinding your way around it');
+{
+    ok(!!q('#gr-mini'), 'there is a minimap');
+    const mini = q('#gr-mini').getBoundingClientRect();
+    ok(mini.width > 100 && mini.height > 60, `and it has a size (${mini.width}x${mini.height})`);
+
+    q('#gr-zoom').click();
+    pump(120);
+    same(q('#gr-zoom').textContent, '100%', 'the readout is a button back to 1:1');
+    ok(qq('#gr-nodes .gn-f').length > 0, 'at which every value is on its card');
+
+    // Zoomed out far enough that 10px argument text stops being text, the cards
+    // are their names and their pictures. Nine grey smudges is not a graph.
+    for (let i = 0; i < 6; i++) { q('#gr-zoom-out').click(); pump(50); }
+    pump(150);
+    ok(parseInt(q('#gr-zoom').textContent, 10) < 60, `and it zooms out (${q('#gr-zoom').textContent})`);
+    same(qq('#gr-nodes .gn-f').length, 0, 'where the bodies are not drawn at all');
+    ok(qq('#gr-nodes .gn-name').length > 5, 'but every node is still named');
+    screenshot('out/export-09-graph-zoomed-out.png');
+
+    q('#gr-fit').click();
+    pump(200);
+    ok(qq('#gr-nodes .gn-f').length > 0, 'and Fit brings the values back');
+    ok(parseInt(q('#gr-zoom').textContent, 10) >= 60,
+       'because Fit never crosses the threshold it would have to measure twice for');
+    screenshot('out/export-10-graph.png');
 }
 
 // ── and the whole render, played ───────────────────────────────────────────

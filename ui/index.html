@@ -161,15 +161,16 @@
 
     <!-- Graph: what the edit comes to, in ffmpeg's own terms. The command bar
          has always been able to state this, but only as one long line; here it
-         is the shape it actually is. Derived from the timeline and read-only
-         for now — the cards over the canvas, and the canvas only for the
-         wires, because a node is a small panel and panels are what the DOM is
-         for. -->
+         is the shape it actually is. The cards are DOM over a canvas that draws
+         the grid and the wires, because a node is a small panel and panels are
+         what the DOM is for — and a curve is not. The minimap is a second
+         canvas because a graph this wide runs off the screen. -->
     <section id="st-graph" class="stage-view hidden">
         <div class="gr-main">
             <div id="gr-viewport" class="gr-viewport">
                 <canvas id="gr-wires" class="gr-wires"></canvas>
                 <div id="gr-nodes" class="gr-nodes"></div>
+                <canvas id="gr-mini" class="gr-mini" width="180" height="120"></canvas>
                 <div id="gr-note" class="gr-note dim hidden"></div>
             </div>
             <!-- What the selected node is set to, or what can go on the wire
@@ -182,6 +183,13 @@
             <span class="spacer"></span>
             <button id="gr-at-playhead" class="tiny">At playhead</button>
             <button id="gr-previews" class="tiny">Previews</button>
+            <button id="gr-relayout" class="tiny" title="Give every node back to the layout">Re-layout</button>
+            <!-- Out, the percentage, in, frame. The readout is a button because
+                 a number that says how far you are from 1:1 should be the way
+                 back to it. -->
+            <button id="gr-zoom-out" class="tiny icon" title="Zoom out">−</button>
+            <button id="gr-zoom" class="tiny" title="Back to 1:1">100%</button>
+            <button id="gr-zoom-in" class="tiny icon" title="Zoom in">+</button>
             <button id="gr-fit" class="tiny">Fit</button>
         </div>
     </section>

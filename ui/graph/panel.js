@@ -28,6 +28,7 @@
 // won.
 
 import { el, div, span, put, head, row, fromTemplate } from '../dom.js';
+import { optionsOf, infoOf, allFilters } from './filters.js';
 import * as overlay from './overlay.js';
 
 let refs = {};
@@ -39,6 +40,10 @@ let hooks = {};
 let sel = null;
 let search = '';
 let graph = null;
+/// How many nodes are selected in total. The panel is about one of them — a
+/// column of forty options for four nodes at once is not a thing — but it has to
+/// say that there are others, or a `Delete` that takes four away is a surprise.
+let selectedCount = 0;
 
 /// What survives a rebuild. A user node's id does; a derived node's does not,
 /// but its anchor does.
@@ -54,8 +59,9 @@ export function initPanel(r, h) {
 export function selectedKey() { return sel && sel.kind === 'node' ? sel.key : null; }
 export function selectedPoint() { return sel && sel.kind === 'point' ? sel.point.id : null; }
 
-export function selectNode(key) {
+export function selectNode(key, count) {
     sel = key ? { kind: 'node', key } : null;
+    selectedCount = count === undefined ? (key ? 1 : 0) : count;
     draw(graph);
 }
 
@@ -89,8 +95,14 @@ function empty() {
     return [
         head('Graph'),
         div('gp-hint dim',
-            'Click a node to see what it is set to, or a + on a wire to put a filter there. ' +
-            'Everything here is derived from the edit until you change it.'),
+            'Click a node to see what it is set to, or hover a wire and click its + to put ' +
+            'a filter there. Values can be typed on the cards themselves; this column is ' +
+            'every other option the filter has. Everything here is derived from the edit ' +
+            'until you change it.'),
+        div('gp-hint dim',
+            'Drag a node’s title bar to place it and Re-layout gives the whole graph ' +
+            'back. Drag the background to select several, middle-drag to pan, wheel ' +
+            'to zoom.'),
         overlay.isEmpty() ? null : div('gp-hint dim', filtersNote()),
         overlay.isEmpty() ? null : el('button', {
             cls: 'tiny', text: 'Clear my filters and locks',
@@ -119,6 +131,7 @@ function nodePanel(node) {
             span(name, 'gp-name mono'),
             node.locked ? span('locked', 'gp-badge locked') : null,
             !node.derived ? span('yours', 'gp-badge user') : null,
+            selectedCount > 1 ? span(`+${selectedCount - 1} more`, 'gp-badge') : null,
         ]),
     ];
 
@@ -129,7 +142,7 @@ function nodePanel(node) {
         return out;
     }
 
-    const info = filterInfo(node.filter);
+    const info = infoOf(node.filter);
     if (info && info.description) out.push(div('gp-hint dim', info.description));
 
     const options = optionsOf(node.filter);
@@ -233,14 +246,26 @@ function optionRows(node, options) {
     return out;
 }
 
+/// The bounds, where they are worth stating.
+///
+/// libavfilter gives every unbounded numeric option the whole of its type as a
+/// range, so `trim`'s `start` reports ±9223372036854775807 — twenty digits of
+/// nothing, twice, wrapping onto three lines and pushing the column about. That
+/// is not a range, it is the absence of one, and saying so at that length is
+/// worse than not saying it.
+function rangeOf(o) {
+    if (!o.hasRange || o.type === 'enum') return '';
+    if (Math.abs(Number(o.min)) > 1e15 && Math.abs(Number(o.max)) > 1e15) return '';
+    return `[${o.min}…${o.max}]`;
+}
+
 function optionRow(node, o) {
     const item = fromTemplate('tpl-option');
     const cur = node.params[o.name] !== undefined ? String(node.params[o.name]) : '';
 
     item.querySelector('.opt-name').textContent = o.name;
     item.querySelector('.opt-type').textContent = o.type;
-    item.querySelector('.opt-range').textContent =
-        o.hasRange && o.type !== 'enum' ? `[${o.min}…${o.max}]` : '';
+    item.querySelector('.opt-range').textContent = rangeOf(o);
     item.querySelector('.ex-opt-help').textContent = o.help || '';
     if (cur !== '') item.classList.add('set');
 
@@ -280,9 +305,8 @@ function optionRow(node, o) {
 /// can express and this stage cannot yet draw. `amix` and `split` arrive with
 /// the editor that can make a wire by dragging one.
 function spliceable(stream) {
-    const all = (typeof bro !== 'undefined' && bro.ffmpeg && bro.ffmpeg.filters) || [];
-    return all.filter((f) => f.inputs === stream && f.outputs === stream &&
-                             !f.dynamicInputs && !f.dynamicOutputs);
+    return allFilters().filter((f) => f.inputs === stream && f.outputs === stream &&
+                                      !f.dynamicInputs && !f.dynamicOutputs);
 }
 
 function palette(point) {
@@ -329,7 +353,7 @@ function filterRows(point, all) {
                 search = '';
                 changed();
             } },
-        }, [span(f.name, 'mono'), span(f.description || '', 'dim')]));
+        }, [span(f.name, 'gp-fname mono'), span(f.description || '', 'dim')]));
     if (matching.length > FILTER_LIMIT)
         out.push(div('gp-hint dim', `and ${matching.length - FILTER_LIMIT} more — narrow the search`));
     return out;
@@ -343,32 +367,5 @@ const COMMON = ['hflip', 'vflip', 'eq', 'curves', 'colorbalance', 'hue', 'unshar
                 'transpose', 'rotate', 'deshake', 'hqdn3d',
                 'volume', 'highpass', 'lowpass', 'acompressor', 'afade', 'aecho',
                 'anlmdn', 'atempo', 'dynaudnorm', 'loudnorm', 'speechnorm'];
-
-// ── what the host knows ────────────────────────────────────────────────────
-//
-// Asked once each and kept: `filterOptions` builds an option table on demand
-// because there are five hundred filters and building every table at startup
-// was most of a second, and a panel that re-asks on every keystroke would spend
-// it a character at a time.
-
-const optionCache = new Map();
-const infoCache = new Map();
-
-function optionsOf(name) {
-    if (!optionCache.has(name)) {
-        let list = [];
-        try { list = bro.ffmpeg.filterOptions(name) || []; } catch (e) { list = []; }
-        optionCache.set(name, list);
-    }
-    return optionCache.get(name);
-}
-
-function filterInfo(name) {
-    if (!infoCache.size) {
-        const all = (typeof bro !== 'undefined' && bro.ffmpeg && bro.ffmpeg.filters) || [];
-        for (const f of all) infoCache.set(f.name, f);
-    }
-    return infoCache.get(name) || null;
-}
 
 function changed() { if (hooks.changed) hooks.changed(); }

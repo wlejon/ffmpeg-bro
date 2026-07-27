@@ -45,7 +45,7 @@ function same(actual, expected, what) {
 }
 
 waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
-const { makeGraph, restore, derive, print } = globalThis.__ffmpegBro.graph;
+const { makeGraph, restore, derive, print, layout, portY } = globalThis.__ffmpegBro.graph;
 ok(typeof makeGraph === 'function', 'the graph model is on the test surface');
 
 // ── nodes and wires ────────────────────────────────────────────────────────
@@ -534,6 +534,95 @@ console.log('\nnodes pinned to a clip that is gone');
     overlay.insert('composite/after-overlay', 'vignette');
     overlay.retain([]);
     same(overlay.insertCount(), 1, 'and what belongs to the whole render survives an empty timeline');
+}
+
+// ── where the cards are ────────────────────────────────────────────────────
+//
+// A position is not part of the graph and must never be mistaken for one. It is
+// kept the way a card's width is — against the anchor, so it survives the
+// skeleton being thrown away — and it is deliberately outside `isEmpty()`,
+// because that is what decides which of the renderer's two paths a render takes
+// and a card nudged sideways must not change what comes out of the encoder.
+
+console.log('\na node dragged somewhere stays there');
+{
+    overlay.clear();
+    overlay.unpinAll();
+    same(overlay.pinOf('clip:3/scale'), null, 'nothing is pinned to begin with');
+
+    overlay.setPin('clip:3/scale', 420, 96);
+    same(overlay.pinOf('clip:3/scale').x, 420, 'a node remembers where it was put');
+    same(overlay.pinCount(), 1, 'and the stage can count them');
+
+    // The whole reason it is keyed by anchor: this is what a timeline edit does.
+    overlay.restore();
+    same(overlay.pinOf('clip:3/scale').y, 96, 'and it comes back after a reload');
+
+    ok(overlay.isEmpty(),
+       'a placed node is not a graph edit — isEmpty() ignores it, so the render ' +
+       'still goes through the compositor');
+
+    overlay.unpinAll();
+    same(overlay.pinCount(), 0, 'Re-layout gives the whole graph back');
+
+    // A filter applies to both halves of a cut; a position cannot, because two
+    // cards cannot be in one place.
+    overlay.setPin('clip:3/scale', 10, 10);
+    overlay.insert('clip:3/after-scale', 'hflip');
+    overlay.cloneClip(3, 4);
+    same(overlay.insertCount(), 2, 'a split copies the filters');
+    same(overlay.pinOf('clip:4/scale'), null, 'and does not copy the position onto them');
+
+    // And a pin goes when its clip does, or the blob grows forever.
+    overlay.retain([]);
+    same(overlay.pinCount(), 0, 'a pin on a clip that is gone goes with it');
+    overlay.clear();
+}
+
+console.log('\nthe layout, with something pinned');
+{
+    const d = derive(oneClip());
+    const size = () => ({ w: 176, h: 80 });
+    const free = layout(d.graph, size, () => null);
+    const scale = d.graph.byAnchor('clip:7/scale');
+
+    const pinned = layout(d.graph, size, (n) => (n === scale ? { x: -300, y: 500 } : null));
+    const box = pinned.nodes.find((b) => b.node === scale);
+    same(box.x, -300, 'a pinned node is where it was put');
+    ok(box.pinned, 'and says so, so the card can show it');
+
+    // A pin is visual. The nodes you did not touch do not move, which is the
+    // difference between placing one node and rearranging the eight you were
+    // happy with.
+    const other = d.graph.byAnchor('clip:7/trim');
+    same(pinned.nodes.find((b) => b.node === other).x,
+         free.nodes.find((b) => b.node === other).x,
+         'and nothing else moves for it');
+
+    // Fit has to frame what is drawn, so a card dragged left of the first column
+    // is part of the extent rather than off the edge of it.
+    same(pinned.left, -300, 'the extent reaches out to it');
+    ok(pinned.height >= 580, `and down to it (${Math.round(pinned.height)})`);
+
+    // The one formula the wire and the socket both use. A dot anywhere other
+    // than where the curve lands says this wire goes to that port when it does
+    // not — and `overlay`'s two inputs are the canvas and the clip, which are
+    // not interchangeable.
+    same(portY(100, 0, 2), 100 / 3, 'the first of two ports is a third of the way down');
+    same(portY(100, 1, 2), 200 / 3, 'and the second two thirds');
+    same(portY(100, 0, 1), 50, 'a single port is halfway');
+
+    const into = free.wires.filter((w) => w.edge.to === d.graph.byAnchor('composite/overlay:7').id);
+    same(into.length, 2, 'the compositor reads two wires');
+    ok(into[0].y2 !== into[1].y2, 'and they arrive at different heights');
+    for (const w of into) {
+        const off = w.y2 - free.nodes.find((b) => b.node.id === w.edge.to).y;
+        // A tolerance rather than equality: the endpoint was added to the node's
+        // top and is being taken off again, and a third of eighty does not
+        // survive that exactly.
+        ok(Math.abs(off - portY(80, w.edge.port, 2)) < 1e-6,
+           `port ${w.edge.port} lands where portY says it does (${off.toFixed(2)})`);
+    }
 }
 
 console.log('\nremembered');

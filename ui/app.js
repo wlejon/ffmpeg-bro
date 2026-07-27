@@ -21,8 +21,9 @@ import { filtergraph, renderGraph } from './filtergraph.js';
 import { makeGraph, restore } from './graph/model.js';
 import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
-import { initGraphView, drawGraph, chaseGraph, graphSummary, fitView,
-         outrankedControls, tickGraph } from './graph/view.js';
+import { layout, portY } from './graph/layout.js';
+import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
+         outrankedControls, tickGraph, graphKey } from './graph/view.js';
 import * as graphPreview from './graph/preview.js';
 import { previewGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
@@ -88,9 +89,14 @@ initGraphView({
     note: el('gr-note'),
     status: el('gr-status'),
     panel: el('gr-panel'),
+    mini: el('gr-mini'),
     fit: el('gr-fit'),
     previews: el('gr-previews'),
     atPlayhead: el('gr-at-playhead'),
+    relayout: el('gr-relayout'),
+    zoomIn: el('gr-zoom-in'),
+    zoomOut: el('gr-zoom-out'),
+    zoomLabel: el('gr-zoom'),
 }, {
     // A node preview is the least important render in the application, so it
     // waits for anything that wants the host's one job slot.
@@ -571,10 +577,12 @@ document.addEventListener('keydown', (e) => {
     }
     // The graph owns the keyboard while it is up, for the reason the encode
     // side does: Space must not start playback on a timeline nobody can see.
-    // `0` frames the view, which is what it does on the timeline too.
+    // It is asked first and says whether it took the key, so that Escape clears
+    // a selection when there is one and leaves the stage when there is not —
+    // which is the order every editor uses and the only one that lets you both.
     if (shell.currentStage() === 'graph') {
+        if (graphKey(e)) { e.preventDefault(); return; }
         if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
-        else if (e.key === '0') { fitView(); e.preventDefault(); }
         return;
     }
 
@@ -897,8 +905,9 @@ globalThis.__ffmpegBro = {
     filtergraph, renderGraph, shell, command,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.
-    graph: { makeGraph, restore, derive, print,
+    graph: { makeGraph, restore, derive, print, layout, portY,
              overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
+             placement: graphPlacement,
              outranked: outrankedControls, preview: graphPreview, previewGraph },
 };
 globalThis.__ffmpegBroReady = true;

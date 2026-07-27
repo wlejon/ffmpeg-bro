@@ -284,18 +284,49 @@ prints along the bottom, laid out so they can be read.
 It is **derived from the timeline and rebuilt whenever the timeline moves**.
 Nothing on this screen invents a graph; it asks for one on every change and
 draws the answer, which is what makes it a picture of the edit as it is now
-rather than a copy of the edit as it was. Drag the background to pan, scroll to
-zoom, `0` to fit, `Esc` back to the edit.
+rather than a copy of the edit as it was.
+
+### Getting around it
+
+It works the way a node editor works. Nothing here is invented — Blender, Nuke,
+Houdini, Unreal and n8n all agree on this much, and knowing one of them should
+be enough to use this.
+
+| | |
+|---|---|
+| drag the background | select what the band covers |
+| middle-drag | pan, from anywhere including over a node |
+| wheel | zoom about the pointer |
+| drag a node's title bar | place it — and everything else selected with it |
+| click a value on a card | change it |
+| hover a wire | its `+` |
+| `Fit`, or `0` | frame the whole graph |
+| the percentage | back to 1:1 |
+| `Re-layout` | give every node back to the layout |
+| `Esc` | clear the selection, then leave the stage |
+
+Nodes carry a socket for every port, and wires land on them — which matters most
+at `overlay`, whose two inputs are the canvas and the clip and are not
+interchangeable. **Where you put a node is remembered**, against the node rather
+than against a position, so it survives the graph being rebuilt by the next
+timeline edit; a placed node does not move for anything except you and
+`Re-layout`. Zoomed out far enough that the values stop being readable the cards
+become their names and their pictures, and the minimap in the corner is where
+you are.
 
 ### Putting a filter in it
 
-Every wire that can take one carries a `+`. Click it and pick a filter out of
+Hover a wire that can take one and it offers a `+`. Click it and pick a filter out of
 **libavfilter's own list** — five hundred of them in this build, searchable by
 name and by what libavfilter says each one does; there is no list of supported
 filters written down anywhere in this application. The filter appears on the
 wire, selected, with its whole option table beside it, read out of the filter's
 own `AVClass` exactly as the encoder's advanced column is read out of an
 encoder's.
+
+What is *set* is on the card and can be typed there; what the filter *has* is in
+the column, because `scale` has thirty options and a card with thirty rows is not
+a card. Typing on either locks the node — see below.
 
 There are five places a filter can go, and they are five different pictures:
 

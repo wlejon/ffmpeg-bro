@@ -521,22 +521,79 @@ about them:
   `splitAtPlayhead`) — a cut should not change how either half looks. Persisted
   in `localStorage` under `ffmpeg-bro.graph`; there is still **no project
   file**, and this is the first thing that makes one worth having.
-- `graph/view.js` + `graph/layout.js` — the Graph stage: the same graph, drawn,
-  and now edited. Nothing here builds a graph; it asks `derive()` for one on
-  every change and draws the answer, so a redraw throws away every node object
-  and **nothing may be remembered by reference** — the selection is held by
-  `panel.keyOf()`, which is the anchor for a derived node and the id for a user
-  one. `layout.js` is pure geometry — a graph and a `heightOf()` in, positions
-  out — so the view can build its cards, measure them and only then place them,
-  which is the build/measure split the range strip already uses and is
-  necessary for the same reason: a node is as tall as the arguments its filter
-  was given — and now as tall as the picture in it, at whatever width the card
-  was dragged to, which is why `layout()` asks for a `{w, h}` and a column is as
-  wide as its widest card rather than a constant. Columns are longest-path
-  depth; within a column a node wants the average row of what feeds it, which is
-  what keeps a clip's whole chain on one line. The `+` on a wire is a DOM element in the transformed card container
-  rather than something drawn into the canvas, because hit-testing a bezier by
-  hand to find out which wire was meant is work with a DOM node's name on it.
+- `graph/view.js` + `graph/card.js` + `graph/canvas.js` + `graph/layout.js` — the Graph
+  stage. Nothing here builds a graph; it asks `derive()` for one on every change and
+  draws the answer, so a redraw throws away every node object and **nothing may be
+  remembered by reference** — the selection is held by `panel.keyOf()`, which is the
+  anchor for a derived node and the id for a user one, and the hovered insert point is
+  held by *its* id for the same reason (holding the wire object meant a preview landing
+  on any card made the `+` you were reaching for vanish irrecoverably).
+
+  **A node editor is a solved interface and this one now does what the solved one
+  does.** Blender, Nuke, Houdini, TouchDesigner, Unreal, n8n and React Flow agree on
+  the same handful of things and the version invented here was missing most of them.
+  What was adopted, and the reason each is not decoration:
+
+  | | |
+  |---|---|
+  | sockets, one per port, typed by colour | wires arrived at a bare edge, so `overlay`'s two inputs — the canvas and the clip, not interchangeable — were one point |
+  | a header that is also the handle | dragging anywhere would mean a field could not be dragged through |
+  | fields on the card | reading a value and changing it were two places |
+  | drag to place, `Re-layout` to give it back | positions were computed and could not be argued with |
+  | a dotted grid | nothing said the canvas was moving |
+  | a minimap | a nine-node graph runs off the screen |
+  | zoom readout, `−` `+` `Fit` | `Fit` was the only control |
+  | level of detail | nine cards of 10px argument text at 0.4× is nine smudges |
+  | the selection's wires lit, the rest dimmed | every wire was equally loud |
+  | `+` on the wire under the pointer | five of them, always, read as part of the graph |
+  | left-drag marquee, middle-drag pan | selecting eight nodes was eight clicks |
+
+  Four things about how it is built are load-bearing:
+
+  - **`portY()` is exported from `layout.js` and used by both the wire and the socket
+    it lands on.** A dot anywhere else says this wire goes to that port when it does
+    not. The same line found a bug that had been there since the layout was written:
+    `g.producers(b)` was being handed a *box*, which has no `id`, so the model matched
+    nothing, the port count came back zero and every arrival was clamped to the middle
+    — the comment above it had been claiming the opposite the whole time.
+  - **`Fit` never crosses the level-of-detail threshold** (`FIT_FLOOR` *is* the
+    threshold). That removes the only loop this design can have — cards measured at one
+    detail, framed at a zoom that implies the other, rebuilt, framed differently — by
+    making it unreachable rather than by detecting it. Going below is a thing only the
+    wheel can do, where no fit is running to argue with.
+  - **Editing on a card commits on `change`, never on `input`, and restores focus
+    afterwards.** An edit locks the node, a lock redraws the graph, and a redraw throws
+    away every card: on `input` the field vanishes between keystrokes, and without the
+    restore a `<select>` loses focus mid-gesture. Controls also stop `mousedown`
+    propagating, or using one drags the node it is on.
+  - **A pin is visual.** `layout()` puts a pinned node where it was dropped and changes
+    nothing else — the flow does not part to make room. That is what Nuke does; a layout
+    that reflowed around pins would mean dragging one node rearranged the eight you were
+    happy with. Pins live in `overlay` next to the card sizes, keyed by anchor so they
+    survive the rebuild, and **outside `isEmpty()`**: where a card sits must never
+    change which of the renderer's two paths runs. A split copies a clip's filters and
+    *not* its pins, because two cards cannot be in one place.
+
+  `layout.js` stays pure geometry — a graph, a `sizeOf()` and a `pinOf()` in, positions
+  out — so the view can build its cards, measure them and only then place them, which
+  is the build/measure split the range strip already uses: a node is as tall as the
+  arguments its filter was given and as tall as the picture in it. Columns are
+  longest-path depth; within a column a node wants the average row of what feeds it,
+  which keeps a clip's whole chain on one line. `canvas.js` draws the grid, the wires
+  and the minimap in screen coordinates against an untransformed canvas, while the
+  cards live in a container with a `transform`: a curve stroked into a scaled canvas is
+  a blurred curve and the reason to zoom in on a graph is to read it. The `+` is a DOM
+  element in the transformed container rather than something drawn into the canvas,
+  because hit-testing a bezier by hand to find out which wire was meant is work with a
+  DOM node's name on it.
+
+  **Two subset traps found here, both worth knowing before styling anything.** The base
+  `button` rule is a 26px single-line control, so a button holding two lines needs
+  `height: auto` and a round one needs `min-width: 0` — the filter palette was
+  unreadable for want of the first and every `+` was an oval for want of the second.
+  And this engine does not blockify an absolutely positioned inline element: a `<span>`
+  socket with a width and a height came out one pixel square until it said
+  `display: block`.
 - `graph/subgraph.js` + `graph/preview.js` — **what each node actually produces**, drawn
   in the card. A node states what a filter is configured with, which is not the same as
   knowing what comes out of it: `crop=iw*0.8:ih*0.5:iw*0.1:ih*0.25` is a claim about a
@@ -579,12 +636,16 @@ about them:
   the graph and re-measures every card, so the clock is written into the element in place
   and only starting and stopping change the card's structure. The still already on a card
   is handed over as the first piece, so pressing play starts on that frame.
-- `graph/panel.js` — the column beside the graph: what the selected node is set
-  to, or what can go on the wire whose `+` was clicked. One panel for both,
-  because inserting a filter and configuring it are one gesture with a pause in
-  it. The filter list and every option table come from `bro.ffmpeg.filters` and
-  `bro.ffmpeg.filterOptions(name)` — libavfilter's own, cached per filter — so
-  there is no list of supported filters written down anywhere. The palette
+- `graph/panel.js` + `graph/filters.js` — the column beside the graph: what the
+  selected node is set to, or what can go on the wire whose `+` was clicked. One
+  panel for both, because inserting a filter and configuring it are one gesture
+  with a pause in it. Now that values are also edited on the cards, the division
+  is that a card shows what is *set* and the column shows everything the filter
+  *has* — thirty options for `scale` is a column, not a card. The filter list and
+  every option table come from `bro.ffmpeg.filters` and
+  `bro.ffmpeg.filterOptions(name)` — libavfilter's own, cached in `filters.js`
+  because there are two callers now and two caches would be two answers to what a
+  filter takes — so there is no list of supported filters written down anywhere. The palette
   offers what can be *spliced*: one input and one output of the wire's stream,
   which is what splicing means rather than a simplification of ffmpeg.
   Positional arguments are edited in place and labelled from the node's

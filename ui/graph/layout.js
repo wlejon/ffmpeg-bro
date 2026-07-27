@@ -23,9 +23,19 @@
 /// What a card is when nothing has resized it. A column is as wide as its
 /// widest card rather than this, so that dragging one node bigger moves the
 /// rest of the graph out of its way instead of drawing over it.
-export const NODE_W = 156;
-const COL_GAP = 54;
-const ROW_GAP = 16;
+export const NODE_W = 176;
+const COL_GAP = 62;
+const ROW_GAP = 20;
+
+/// Where a port sits down a node's edge, as a fraction of its height.
+///
+/// Exported and used by both the wire and the socket that the wire arrives at,
+/// because a dot drawn anywhere other than where the curve lands is worse than no
+/// dot at all: it makes the picture say that this wire goes to that port when it
+/// does not. One formula, two callers, no possibility of drift.
+export function portY(h, port, ports) {
+    return (h * (port + 1)) / (Math.max(1, ports) + 1);
+}
 
 /// The longest path to each node from a source. Longest rather than shortest:
 /// a node must be drawn to the right of *everything* it waits for, and the
@@ -77,10 +87,17 @@ function streams(g) {
 /// dragged wider to see the picture in it — and a wider card is a wider column,
 /// or the next column is drawn on top of it.
 ///
+/// `pinOf(node)` may answer `{ x, y }` for a node that was dragged somewhere. A
+/// pin **overrides where the layout put it and changes nothing else**: the flow
+/// does not part to make room, and the nodes you did not touch do not move. That
+/// is what Nuke and Houdini do, and the alternative — a layout that reflowed
+/// around every pin — would mean dragging one node rearranged the eight you were
+/// happy with, which is the opposite of what dragging it was for.
+///
 /// Returns `{ nodes, wires, width, height }` — `nodes` carrying the node and
 /// its box, `wires` the endpoints of every edge already resolved to the port it
 /// arrives at, so the caller draws curves and does no arithmetic.
-export function layout(g, sizeOf) {
+export function layout(g, sizeOf, pinOf) {
     const depth = depths(g);
     const streamOf = streams(g);
 
@@ -145,13 +162,15 @@ export function layout(g, sizeOf) {
 
     const boxes = new Map();
     const nodes = g.nodes.map((n) => {
+        const pin = pinOf ? pinOf(n) : null;
         const box = {
             node: n,
             col: depth.get(n.id),
             row: row.get(n.id),
             stream: streamOf(n),
-            x: colLeft[depth.get(n.id)],
-            y: rowTop[row.get(n.id)],
+            pinned: !!pin,
+            x: pin ? pin.x : colLeft[depth.get(n.id)],
+            y: pin ? pin.y : rowTop[row.get(n.id)],
             w: sizes.get(n.id).w,
             h: sizes.get(n.id).h,
         };
@@ -166,18 +185,48 @@ export function layout(g, sizeOf) {
     for (const e of g.edges) {
         const a = boxes.get(e.from), b = boxes.get(e.to);
         if (!a || !b) continue;
-        const ports = g.producers(b).length || 1;
+        // `oy1`/`oy2` are the endpoints as offsets *into* their nodes, kept because
+        // dragging a card has to move its wires without re-deriving anything: the
+        // view moves the boxes and adds these back. Recovering them by subtracting
+        // afterwards does not work — by then the box has moved.
+        // `b.node`, not `b`. Asking the graph about a *box* answers nothing — the
+        // model looks for an `id` and a box has none — so the port count came back
+        // zero, every arrival was clamped to one port, and `overlay`'s two inputs
+        // landed on top of each other. Which is the exact thing the comment above
+        // says this code exists to prevent: it had been saying so and not doing it
+        // since the day it was written.
+        const oy1 = a.h / 2;
+        const oy2 = portY(b.h, e.port, g.producers(b.node).length);
         wires.push({
             edge: e,
             stream: a.stream,
-            x1: a.x + a.w, y1: a.y + a.h / 2,
-            x2: b.x, y2: b.y + (b.h * (e.port + 1)) / (ports + 1),
+            oy1, oy2,
+            x1: a.x + a.w, y1: a.y + oy1,
+            x2: b.x, y2: b.y + oy2,
         });
+    }
+
+    // The extent of what was drawn, pins included: a card dragged out past the
+    // last column is still part of the picture, and a `Fit` that framed the
+    // columns and left it off screen would be framing something else.
+    let right = Math.max(0, x - COL_GAP);
+    let bottom = Math.max(0, y - ROW_GAP);
+    let left = 0, top = 0;
+    for (const b of nodes) {
+        if (!b.pinned) continue;
+        left = Math.min(left, b.x);
+        top = Math.min(top, b.y);
+        right = Math.max(right, b.x + b.w);
+        bottom = Math.max(bottom, b.y + b.h);
     }
 
     return {
         nodes, wires,
-        width: Math.max(0, x - COL_GAP),
-        height: Math.max(0, y - ROW_GAP),
+        // Where the drawing starts, which is 0,0 until something is dragged left
+        // of the first column. The view offsets by it rather than letting a
+        // negative coordinate fall off the edge of the viewport.
+        left, top,
+        width: right - left,
+        height: bottom - top,
     };
 }

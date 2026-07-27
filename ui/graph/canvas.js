@@ -1,0 +1,174 @@
+// Everything on the Graph stage that is drawn rather than built.
+//
+// The cards are DOM because a node is a small panel and panels are what the DOM
+// is for. These three are not: a dotted background, a few dozen bezier curves and
+// a minimap are pixels, and doing them in elements would mean a thousand divs for
+// the grid and re-implementing curve rasterisation for the wires.
+//
+// **All three are drawn in screen coordinates against an untransformed canvas**,
+// while the cards live in a container with a `transform` on it. That asymmetry is
+// deliberate and it is about sharpness: a curve stroked into a scaled canvas is a
+// blurred curve, and the reason to zoom in on a graph is to read it. The cost is
+// redrawing on every pan, which is a few dozen curves and one filled path.
+//
+// What each of them is for, since none of it was here and the stage was hard to
+// use without all three:
+//
+// - **The grid** is the only thing that says the canvas is moving. Without it a
+//   pan on an empty area looks like nothing happening, and there is no sense of
+//   scale to tell 0.5× from 1×. Faded out when the dots get close enough together
+//   to read as noise instead of as a grid.
+// - **Wire emphasis.** Every wire being equally loud means a nine-node graph is a
+//   thicket. The selected node's wires come forward and the rest go back, which is
+//   what Nuke and Houdini do and is most of how a big graph stays readable.
+// - **The minimap** is where you are. A graph wider than the viewport — which
+//   this one is with two clips on the timeline — has no other answer than
+//   panning around until you recognise something.
+
+/// The palette's --blue and --good. Canvas takes colours, not custom properties,
+/// and a wire whose colour drifts from the node it leaves is worse than one
+/// written down in two places.
+const WIRE = { v: '#4a9eff', a: '#57c98a' };
+const WIRE_DIM = { v: '#2c5f99', a: '#357a55' };
+const GRID = 'rgba(255, 255, 255, 0.17)';
+const MINI_BG = 'rgba(0, 0, 0, 0.35)';
+const MINI_EDGE = 'rgba(255, 255, 255, 0.18)';
+const MINI_VIEW = '#ff8c42';
+
+/// The graph grid, in graph pixels. 32 rather than 24 so that a card of the
+/// default width is a whole number of cells across at 1×, which is what makes a
+/// dragged node look placed rather than dropped.
+const GRID_STEP = 32;
+
+/// Where a wire is, in screen space. `view` is `{ zoom, panX, panY }`.
+const sx = (x, view) => x * view.zoom + view.panX;
+const sy = (y, view) => y * view.zoom + view.panY;
+
+/// The control points a wire is drawn with. Horizontal, so a wire leaves a node
+/// sideways and arrives sideways however far apart they are — which is what makes
+/// a graph with one long edge in it still readable.
+function curve(w, view) {
+    const x1 = sx(w.x1, view), y1 = sy(w.y1, view);
+    const x2 = sx(w.x2, view), y2 = sy(w.y2, view);
+    const reach = Math.max(24, Math.abs(x2 - x1) * 0.45);
+    return { x1, y1, x2, y2, c1: x1 + reach, c2: x2 - reach };
+}
+
+export function paintGrid(ctx, w, h, view) {
+    const step = GRID_STEP * view.zoom;
+    // Under about eight pixels the dots stop being a grid and start being a
+    // texture, which is worse than nothing behind a graph you are trying to read.
+    if (step < 8) return;
+    ctx.fillStyle = GRID;
+    const x0 = view.panX - Math.floor(view.panX / step) * step;
+    const y0 = view.panY - Math.floor(view.panY / step) * step;
+    const r = view.zoom > 1.2 ? 2 : 1;
+    // A fill per dot rather than one accumulated path. About fifteen hundred of
+    // them across a full window, which measures as nothing, and it is the version
+    // whose output can be checked a pixel at a time — which mattered, because a
+    // grid this quiet is invisible in a screenshot whether it is drawn or not.
+    for (let y = y0; y < h; y += step)
+        for (let x = x0; x < w; x += step) ctx.fillRect(x, y, r, r);
+}
+
+/// `lit(wire)` says whether a wire belongs to what is selected. Everything else
+/// is drawn first and dimmer, so the lit ones are on top rather than merely
+/// brighter.
+export function paintWires(ctx, placed, view, lit, hovered) {
+    if (!placed) return;
+    const order = placed.wires.slice().sort((a, b) => (lit(a) ? 1 : 0) - (lit(b) ? 1 : 0));
+    for (const w of order) {
+        const on = lit(w);
+        const c = curve(w, view);
+        ctx.lineWidth = Math.max(1, (on ? 2.2 : 1.4) * view.zoom);
+        ctx.strokeStyle = on ? (WIRE[w.stream] || WIRE.v) : (WIRE_DIM[w.stream] || WIRE_DIM.v);
+        ctx.beginPath();
+        ctx.moveTo(c.x1, c.y1);
+        ctx.bezierCurveTo(c.c1, c.y1, c.c2, c.y2, c.x2, c.y2);
+        ctx.stroke();
+
+        // The wire under the pointer is the one a `+` is about to be offered on,
+        // so it says which one that is before you click.
+        if (hovered && hovered === w) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = Math.max(1, 1 * view.zoom);
+            ctx.stroke();
+        }
+    }
+}
+
+/// Which wire is under a screen point, or null.
+///
+/// Sampled rather than solved: a cubic's distance to a point has a closed form
+/// nobody should write twice, and sixteen points per wire over a few dozen wires
+/// is a few hundred subtractions on a mouse move. The tolerance is in screen
+/// pixels so that a wire is as easy to hit when zoomed out as in.
+export function wireAt(placed, px, py, view, tol = 7) {
+    if (!placed) return null;
+    let best = null, bestD = tol * tol;
+    for (const w of placed.wires) {
+        const c = curve(w, view);
+        for (let i = 0; i <= 16; i++) {
+            const t = i / 16, u = 1 - t;
+            const x = u * u * u * c.x1 + 3 * u * u * t * c.c1 + 3 * u * t * t * c.c2 + t * t * t * c.x2;
+            const y = u * u * u * c.y1 + 3 * u * u * t * c.y1 + 3 * u * t * t * c.y2 + t * t * t * c.y2;
+            const d = (x - px) * (x - px) + (y - py) * (y - py);
+            if (d < bestD) { bestD = d; best = w; }
+        }
+    }
+    return best;
+}
+
+// ── the minimap ────────────────────────────────────────────────────────────
+
+/// The transform that fits the whole graph into the map, plus a margin so a node
+/// on the edge is not drawn half off it.
+function miniFit(placed, w, h) {
+    const pad = 4;
+    const gw = Math.max(1, placed.width), gh = Math.max(1, placed.height);
+    const k = Math.min((w - pad * 2) / gw, (h - pad * 2) / gh);
+    return {
+        k,
+        ox: pad + (w - pad * 2 - gw * k) / 2 - placed.left * k,
+        oy: pad + (h - pad * 2 - gh * k) / 2 - placed.top * k,
+    };
+}
+
+export function paintMini(canvas, placed, view, port) {
+    const w = canvas.width, h = canvas.height;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = MINI_BG;
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = MINI_EDGE;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+    if (!placed || !placed.nodes.length) return;
+
+    const m = miniFit(placed, w, h);
+    // Nodes only, no wires: at this size a wire is a smudge between two blocks
+    // that are already touching, and the shape of the graph is what a minimap is
+    // for. Every editor with one draws it this way.
+    for (const b of placed.nodes) {
+        ctx.fillStyle = WIRE_DIM[b.stream] || WIRE_DIM.v;
+        ctx.fillRect(b.x * m.k + m.ox, b.y * m.k + m.oy,
+                     Math.max(2, b.w * m.k), Math.max(2, b.h * m.k));
+    }
+
+    // What is on screen, in graph coordinates, put through the same transform.
+    const vx = (-view.panX) / view.zoom, vy = (-view.panY) / view.zoom;
+    ctx.strokeStyle = MINI_VIEW;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(vx * m.k + m.ox) + 0.5, Math.round(vy * m.k + m.oy) + 0.5,
+                   Math.max(3, (port.w / view.zoom) * m.k), Math.max(3, (port.h / view.zoom) * m.k));
+}
+
+/// A point on the minimap, as the pan that centres the view there. Returned
+/// rather than applied so the caller keeps every write to the view in one place.
+export function miniPan(canvas, placed, view, port, mx, my) {
+    if (!placed) return null;
+    const m = miniFit(placed, canvas.width, canvas.height);
+    if (!(m.k > 0)) return null;
+    const gx = (mx - m.ox) / m.k, gy = (my - m.oy) / m.k;
+    return { panX: port.w / 2 - gx * view.zoom, panY: port.h / 2 - gy * view.zoom };
+}
