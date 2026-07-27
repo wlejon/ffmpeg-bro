@@ -117,15 +117,44 @@ bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
                           //    containers }, ...]
 bro.ffmpeg.audioEncoders  // [{ id: "aac", label, sampleRates, channelCounts,
                           //    lossless, containers }, ...]
-bro.ffmpeg.containers     // [{ ext: "mp4", label, videoCodec, audioCodec,
-                          //    videoCodecs, audioCodecs }, ...]
 
-// Every private option of one encoder, out of its AVClass. On demand: x265
-// alone has enough of them that building all of these at startup would be
-// work nobody asked for.
+// Every muxer this build links — a hundred and eighty of them — by the name
+// `-f` takes. `containers` was four of these written down in C++, and MPEG-TS,
+// MXF, AVI, FLV, GIF, image2, WAV and ADTS were compiled in and unreachable
+// because of it.
+bro.ffmpeg.muxers
+// → [{ name: "matroska", label, longName, ext: "mkv", extensions: ["mkv"],
+//      mimeType, videoCodec, audioCodec,        // encoders to default to
+//      defaultVideo, defaultAudio, defaultSubtitle,   // what the muxer asks for
+//      noFile, globalHeader, noTimestamps, stills, device,
+//      videoCodecs, audioCodecs, answersCodecs }, ...]
+
+bro.ffmpeg.demuxers       // [{ name, longName, extensions, mimeType,
+                          //    noFile, device }, ...]
+bro.ffmpeg.decoders       // [{ name, longName, type, hardware, experimental }, ...]
+bro.ffmpeg.protocols      // { input: ["file","https","srt",...], output: [...] }
+bro.ffmpeg.devices        // [{ name: "gdigrab", longName, kind: "video",
+                          //    direction: "input" }, ...]
+
+// Option tables, one at a time. Same walk, four more kinds of thing: there are
+// a hundred and eighty muxers and three hundred and fifty demuxers, and their
+// option tables are the expensive part of describing any of them.
 bro.ffmpeg.encoderOptions("libx265")
+bro.ffmpeg.muxerOptions("mp4")        // movflags, and libavformat's generic ones
+bro.ffmpeg.demuxerOptions("mp4")      // and -fflags, for the other end
+bro.ffmpeg.decoderOptions("h264")     // -skip_frame, -skip_loop_filter, -thread_type
+bro.ffmpeg.protocolOptions("srt")     // what a destination is configured with
 // → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
 //      values: [{ name, help, value }, ...] }, ...]
+
+// What one capture device can see right now. A function and not a list,
+// because it is the one query here that talks to hardware — enumerating
+// DirectShow asks every camera driver on the machine.
+bro.ffmpeg.deviceSources("dshow")
+// → { ok, error, sources: [{ name, description }, ...] }
+// A device with nothing to enumerate — gdigrab takes a rectangle, not a name —
+// answers `ok: false` with a reason, because an empty list reads as a machine
+// with no cameras in it.
 
 // The fourccs a muxer will take for a codec — `-tag:v`. First is what it
 // writes by itself. `hvc1` and `hev1` are the same HEVC bitstream and only
@@ -136,7 +165,14 @@ bro.ffmpeg.codecTags("mp4", "libx265")   // → ["hev1", "hvc1"]
 bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
 
 // Rendering the timeline. Runs on its own thread; poll it.
-bro.ffmpeg.render.start({ path, width, height, fps, start, end,
+bro.ffmpeg.render.start({ path,
+                          // Which muxer, by name — `-f matroska`. Empty falls
+                          // back to guessing from the extension. Named because
+                          // that is what identifies one: nothing in
+                          // libavformat is called "mkv", forty-seven muxers
+                          // have no extension at all, and several share one.
+                          format: "matroska",
+                          width, height, fps, start, end,
                           videoCodec, audioCodec, audio, clips: [...],
                           pixelFormat, scaler, colorspace, colorRange,
                           faststart, title, sampleRate, channels,
@@ -550,9 +586,9 @@ The encoders are the reason this repo is GPL, and they are all here:
 
 | | |
 |---|---|
-| Video | x264, x265, AV1 (SVT / libaom), VP9, ProRes, MJPEG, MPEG-4 — plus NVENC, AMF and QSV when the build has them |
+| Video | x264, x265, AV1 (SVT / libaom), VP9, ProRes, MJPEG, MPEG-4 — plus NVENC, AMF and QSV when the build has them, and every muxer's own default encoder |
 | Audio | AAC, Opus, MP3, Vorbis, FLAC, PCM |
-| Containers | MP4, Matroska, QuickTime, WebM |
+| Containers | **every muxer this build links** — 182 of them |
 
 The menu is built by asking libavcodec what this binary actually has rather
 than from a list, so it cannot offer an encoder that then fails at the last
@@ -591,6 +627,53 @@ summary at the bottom shows the result as a command line, because that is the
 shortest complete statement of what is about to happen. An option the encoder
 does not have is an error, not a shrug: a render that succeeds while silently
 ignoring half of what it was told is the worst of the three outcomes.
+
+### Which container
+
+The format control was four entries — MP4, Matroska, QuickTime, WebM — written
+down in C++ beside a codec list that was genuinely asked of libavcodec. MPEG-TS,
+MXF, AVI, FLV, GIF, image2, WAV, ADTS and a hundred and seventy others were
+compiled into this binary and unreachable because of that one line. They are all
+here now, and the picker is the shape the filter palette already uses, because
+it is the same problem one stage later: **there is no list of the good ones
+anywhere.**
+
+A muxer is chosen **by name**, which is what `-f matroska` means and the only
+thing that identifies one: nothing in libavformat is called "mkv", forty-seven
+muxers have no extension at all, and several share one. The extension is a
+consequence — what the file gets called — and it follows the choice.
+
+What you can group a hundred and eighty by, all of it asked rather than decided:
+
+| | |
+|---|---|
+| **Fits** | `avformat_query_codec` says it will hold the codecs this render is set to |
+| **Files** | it has an extension and writes a file it opens itself |
+| **Pictures** | an intra-only video codec and no audio codec at all — image2, gif, the single-frame writers |
+| **Streaming** | `AVFMT_NOFILE`: it writes through a protocol rather than to a file |
+| **Devices** | libavdevice's own, which only exist once `avdevice_register_all()` has run |
+
+and a search over the name, libavformat's own description and the extensions —
+so "mkv" finds Matroska even though nothing is called that.
+
+**`avformat_query_codec` has three answers and only two of them are yes and
+no.** A muxer with neither a `query_codec` function nor a codec tag table
+returns `AVERROR_PATCHWELCOME`, which means *not taught to answer*. Over four
+well-known containers that never came up; over a hundred and eighty it does —
+MPEG-TS is one, and reading its shrug as a refusal is how a picker comes to
+insist that MPEG-TS will not hold H.264. So it is carried through as itself:
+nothing is filtered where it applies, the codec in hand is left alone, and the
+row says *does not say*. A muxer that genuinely answers no still narrows the
+codec lists, and the codecs it refuses are shown marked rather than hidden —
+hiding them hides the reason the one you wanted is missing.
+
+Beside the picker, **every option the muxer has**, in a column, exactly as the
+encoder's are: `movflags`, `hls_time`, `mpegts_service_id`, plus libavformat's
+generic ones, walked out of the muxer's own `AVClass`. They reach it through
+the same `av_opt_set`-with-children route ffmpeg's own arguments take, and an
+unknown key stops the render rather than being ignored. Changing the muxer
+empties the bag, because `movflags` in Matroska is an error and not a carried
+preference.
 
 ### What is in the file
 
@@ -815,6 +898,7 @@ against footage the fixtures do not resemble:
 ```
 ./build/Release/ffmpeg-bro-decodetest <file>          # backend: demux, decode, seek, audio
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
+./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
@@ -830,6 +914,17 @@ the control strip's geometry — that every icon button drew its icon, that the
 transport buttons are one width, that the transport is on the window's centre
 line and the zoom controls on the timeline's left edge — because a mistyped
 icon name or a stray width breaks none of the behaviour and all of the look.
+
+`captest` is what this build can write, read, reach and capture, and it prints
+as much as it asserts: how many muxers, which of them write pictures, which
+protocols are in and out, what capture devices the machine has. The numbers
+are printed rather than demanded, because how many muxers a build has depends
+on how it was configured; what is asserted is the *shape* — that a muxer's
+extensions are split rather than handed over as one string, that the name a
+picker puts in `-f` is the name libavformat answers to, that an option table is
+the muxer's own and not the last one asked for — and then it renders into
+Matroska and MPEG-TS by name and opens what came out, because a picker over a
+hundred and eighty is only worth having if what it offers can be written.
 
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
@@ -869,7 +964,13 @@ file that comes out can be dropped straight back on the timeline. It also
 drives the Write stage's stream list: a second audio track added, given a
 language, a name and two flags at once, and then rendered and opened to find
 both tracks in it — and every one of those printed by the command bar, because
-anything reaching the muxer the bar does not print is a bug.
+anything reaching the muxer the bar does not print is a bug. And the muxer
+picker: that the default group is only muxers `avformat_query_codec` said yes
+to, that searching reaches the other hundred and forty by name, by libavformat's
+description and by extension, that picking MPEG-TS sets `-f mpegts` rather than
+a filename somebody hopes will be guessed, that a muxer which never answered
+does not have the codec taken off it, and that the muxer's own options reach
+the spec, the command and a file that opens as an MPEG-TS.
 
 ## Not yet
 
@@ -905,6 +1006,19 @@ Honest list of what does not work:
   black bars are 240 rows deep and nothing offers to crop them, `ebur128` can
   tell you the loudness and nothing offers to normalise it. The channel and
   the data model are there; what is missing is the verb.
+- **Opening anything that is not a file on disk.** Every protocol this build
+  links is now reported — `https`, `rtmp`, `srt`, `tcp`, `udp`, thirty-six in
+  and thirty out — and every capture device is registered and enumerable, but
+  a source is still a path that came from a drop. Reading a URL, naming a
+  demuxer for an input, and pointing a render at a socket are three different
+  jobs and none of them is wired.
+- **Capturing.** `gdigrab`, `dshow`, `vfwcap` and `lavfi` are registered and
+  listed, and `bro.ffmpeg.deviceSources()` will say what each can see. Nothing
+  opens one, so a screen recording is not yet a thing this application does.
+- **Decoder options.** `-skip_frame`, `-skip_loop_filter`, `-thread_type` and
+  every private option of every decoder are reported by
+  `bro.ffmpeg.decoderOptions()`. Nothing sets one: playback and the render both
+  open their decoders with defaults.
 - **Two-pass encoding.** A bitrate target is one pass, so it is met on average
   and not intelligently. Real two-pass needs the stats file from pass one fed
   into pass two, which means a job that is two jobs, and the job state machine

@@ -104,6 +104,11 @@ against footage the fixtures do not resemble:
 # test binaries takes ${FFMPEG_INCLUDE_DIRS}.
 ./build/Release/ffmpeg-bro-exporttest <file> [<second-file>]
 
+# native: what this build can write, read, reach and capture — the muxer,
+# demuxer, protocol, device and decoder registries, their option tables, and
+# a render into a muxer named rather than guessed from the filename
+./build/Release/ffmpeg-bro-captest <file>
+
 # native: where the time in a seek goes (demux vs decode vs YUV->RGB)
 ./build/Release/ffmpeg-bro-perftest <file>
 
@@ -153,6 +158,14 @@ Three traps when writing headless tests here:
 - **Paths handed to `<video src>` must be absolute.** `bro.ffmpeg.probe()` resolves relative
   to the process cwd but `<video src>` resolves relative to the *document* (`ui/`), so a
   relative path silently probes fine and plays black. Use `bro.appDir + '/../out/x.mp4'`.
+- **`ui/.storage.json` carries state between runs.** It is this engine's `localStorage`,
+  it is not in git, and `ui_export.js` renders — which calls `remember()`. So a run that
+  leaves the export settings somewhere odd hands them to the *next* run, and a suite that
+  passes on a clean checkout can fail on the second run for a reason nothing in the diff
+  explains. One botched run left `videoCodec: mpeg2video` behind, which has no CRF, so the
+  quality slider was not drawn and an assertion four hundred lines earlier failed.
+  `rm ui/.storage.json` before believing a failure, and leave the settings as you found
+  them at the end of a section.
 
 The app exposes `globalThis.__ffmpegBro` (model, transport, and the operations) and
 `__ffmpegBroReady` purely so tests drive it through a stable surface instead of DOM ids
@@ -182,7 +195,7 @@ them to change alone:
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
 | `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio** |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
-| `ffmpeg_capabilities.*` | what this build can write and what it can put a picture through, asked of libav* |
+| `ffmpeg_capabilities.*` | what this build can write, read, reach, capture and put a picture through, asked of libav* |
 | `ffmpeg_report.*` | **what a render said** — libav's log, and the values filters attach to frames |
 
 **`export_timeline.h` is the seam a node graph attaches at**, and does. `runExport` asks a
@@ -318,12 +331,57 @@ backend, which is why `<video src="anything.mkv">` just works and why every cont
 through one set of seek/timestamp/reordering semantics.
 
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
-`openOnStart`, `encoders`, `containers`, `filters`, `filterOptions`, `render.*`, …) via
+`openOnStart`, `encoders`, `muxers`, `demuxers`, `decoders`, `protocols`, `devices`,
+`filters`, the five `*Options(name)` lookups, `deviceSources`, `render.*`, …) via
 `EngineConfig::installHostBindings`, so it exists in every realm including workers.
-`probe()` is synchronous on purpose. `filters` is a list of names and pad shapes built at
-startup because it is small; `filterOptions(name)` is asked one filter at a time because
-there are five hundred of them and building every option table would be most of a second
-before the window opened.
+`probe()` is synchronous on purpose.
+
+**The rule for what is built at startup and what is asked for on demand is the size of
+the answer, and the option tables are always the expensive part.** The registries —
+182 muxers, 364 demuxers, 532 decoders, 500 filters — are names, long names, extensions
+and flags, and are built once per process (function-local statics in
+`ffmpeg_capabilities.cpp`) and converted per realm. Every option table is a function:
+`encoderOptions`, `muxerOptions`, `demuxerOptions`, `decoderOptions`, `protocolOptions`,
+`filterOptions`. Building all of them at startup was most of a second before the window
+opened when it was only the filters.
+
+**Four things about the non-encoder capabilities are load-bearing:**
+
+- **A muxer is identified by its name, never by an extension.** `-f matroska` is what
+  ffmpeg is told; nothing in libavformat is called "mkv", 47 muxers have no extension at
+  all and several share one. So `ExportSettings::format` carries the name and
+  `Writer::open` passes it to `avformat_alloc_output_context2`; the extension is a
+  consequence (`MuxerOption::ext`, the first of `extensions`) and is what a file gets
+  called. **A spec with `path: "x.mkv"` and `format: "mp4"` writes an mp4**, exactly as
+  `ffmpeg -f mp4 out.mkv` does — which caught `tests/ui_export.js` out, and is why
+  `buildSpec()` sends `format` and `withExtension()` is called whenever the muxer changes.
+- **`avformat_query_codec` has three answers, not two.** Yes and no come from a muxer's
+  `query_codec` function or its codec tag table; a muxer with neither returns
+  `AVERROR_PATCHWELCOME` for everything except the codecs it names as defaults, and that
+  means *not taught to answer*. Over the four containers the old table held it never came
+  up; over 182 it does — mpegts is one — and reading the shrug as "no" makes the app
+  insist MPEG-TS will not hold H.264. `MuxerOption::answersCodecs` carries the
+  distinction, the codec lists are *everything offered* when it is false, and the UI says
+  "does not say". Do not collapse this back to a boolean.
+- **Two muxers can share a name.** "matroska" is both the Matroska muxer and the Matroska
+  Audio one, and `-f matroska` reaches the first because that is what `av_guess_format`
+  returns — so the second is not a duplicate row, it is a row that cannot be chosen.
+  `availableMuxers()` drops it.
+- **`avdevice_register_all()` must run before anything enumerates.** libavdevice registers
+  gdigrab and dshow *as* formats, so without it they are absent from `av_muxer_iterate`,
+  from `av_demuxer_iterate` and from `av_find_input_format` — not merely unlisted but
+  unopenable. `registerFfmpegBackend()` calls `registerDevices()`, and every enumeration
+  in `ffmpeg_capabilities.cpp` calls it again through a `std::once_flag`.
+
+The encoder menu is a named list *plus every muxer's own default encoder*, which is what
+makes gif, image2, mpegts and the raw writers pick-able at all. That second half is asked
+of libavformat, so it grows with the build.
+
+`avformat_query_codec` for *attachments* does not exist and there is no flag for it
+either — ffmpeg's own CLI adds the stream and lets the muxer complain — so
+`ui/export/warnings.js` names Matroska and WebM. It is the second place in this repo
+where a capability genuinely cannot be asked for (the first is `codecTags`' candidate
+fourccs, since `AVCodecTag` is opaque). Both say so where they do it.
 
 `ffmpeg_export.cpp` is the encode half: decode each clip → composite into an RGBA canvas →
 swscale to the encoder's pixel format → encode → mux. It owns its own readers rather than
@@ -539,10 +597,11 @@ about them:
   the model and the viewer still follows it, so a control you could not touch would be a
   lie in the other direction.
 - `export.js` + `export/` — the Output workspace. `export.js` is the wiring; the parts are
-  `state` (settings, the render slot, and the three readers — `activeVideoCodec()`,
-  `activeAudioCodec()`, `outputFps()` — that say what the settings *come to*, because
-  a fallback chain written out at each point of use is a fallback chain that can
-  disagree with itself), `capabilities` (what libavcodec says this build can do),
+  `state` (settings, the render slot, and the four readers — `activeVideoCodec()`,
+  `activeAudioCodec()`, `outputFps()`, `outputExt()` — that say what the settings *come
+  to*, because a fallback chain written out at each point of use is a fallback chain that
+  can disagree with itself), `capabilities` (what libavcodec and libavformat say this
+  build can do — `muxers()`, `muxerInfo()`, `extOf()`, `formatOptionsOf()`),
   `options` (settings → `-key value`), `spec` (the model → what the renderer
   wants), `streams` (what the file is made of), `presets`, `warnings`, `store`,
   `form`, `preview`, `strip`, `progress`.
@@ -571,6 +630,20 @@ about them:
   would compare a picture against a squashed copy of itself. Because they are placed in
   pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
   refits when the measured stage changes.
+  **The muxer picker lives in `form.js`'s `outputRows()`, drawn into `#ex-dest` on the
+  Write stage**, with the muxer's own option table in `#ex-format-opts` beside it — the
+  same relationship the encoder's advanced column has to the settings form, and the same
+  rows (`bagRows`/`optionRow` take the bag now, so the encoder's `extraVideo` and the
+  muxer's `extraFormat` are one mechanism). It is the filter palette's shape rather than
+  a `<select>`, because 182 entries is the palette's problem one stage later: a statement
+  of what is chosen, a search over name, long name and extension, and facets that are
+  each a query (`fits` is `avformat_query_codec`, `stills`/`noFile`/`device` are flags).
+  Two rules there are not decoration — **a search ignores the facet**, because a facet is
+  a way of not having to name what you want and narrowing a named answer hides it; and
+  under `Fits` **the muxers that answered come before the ones that never did**, or the
+  list opens on `avm2` and `crc`. Picking one clears `settings.extraFormat`, since an
+  option is the previous muxer's and an unknown key is an error.
+
 - `export/streams.js` — **the Write stage is the output's stream list**, one row per
   stream the muxer will number, in that order. `#ex-streams` is the middle column of
   `#st-write`, between the destination and the verdict. This is the surface stream
