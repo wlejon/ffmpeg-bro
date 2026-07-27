@@ -46,3 +46,24 @@ export function filtergraph(spec, sources) {
     return { ok: true, inputs, chains, video, audio,
              colour: d.colour, caveats: d.caveats, graph: d.graph };
 }
+
+/// The same graph, in the two fields `bro.ffmpeg.render.start` wants to render
+/// *through* libavfilter rather than through the internal compositor:
+/// `{ ok: true, filterGraph, filterInputs }`.
+///
+/// Two differences from what `filtergraph()` returns, both of them because the
+/// renderer is not a standalone ffmpeg. The graph stops in the compositing
+/// space — see `derive`'s `forRender` — and the inputs are named rather than
+/// numbered, because `[0:v]` and `-i` number zero are one fact on a command
+/// line and two separate statements here. Taking both from the graph's own
+/// input nodes is what keeps them from disagreeing.
+export function renderGraph(spec, sources) {
+    const d = derive(spec, sources, { forRender: true });
+    if (!d.ok) return d;
+    const { chains } = print(d.graph);
+    const filterInputs = d.graph.nodes
+        .filter((n) => n.kind === 'input' && n.path)
+        .map((n) => ({ label: `${n.index}:${n.stream}`, path: n.path, stream: n.stream }));
+    return { ok: true, filterGraph: chains.join(';'), filterInputs,
+             caveats: d.caveats, graph: d.graph };
+}

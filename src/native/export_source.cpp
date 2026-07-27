@@ -86,6 +86,19 @@ const Rgba* SourceVideo::rgbaAt(double t) {
     return result_;
 }
 
+const AVFrame* SourceVideo::nextRaw() {
+    if (!havePending_ && !decodeOne()) return nullptr;
+    havePending_ = false;
+    started_ = true;
+    // Every clock this application writes down — a clip's in-point, a graph's
+    // `trim` — counts from the first picture, not from whatever the container
+    // decided the epoch was. `ptsOf` already takes the start offset off; this
+    // puts the answer back in the stream's own units, which is what a buffersrc
+    // configured with `timeBase()` will read it as.
+    pending_->pts = static_cast<int64_t>(std::llround(pendingPts_ / av_q2d(timeBase_)));
+    return pending_;
+}
+
 void SourceVideo::close() {
     if (toRgba_) sws_freeContext(toRgba_);
     if (cur_) av_frame_free(&cur_);
@@ -268,14 +281,29 @@ void SourceAudio::compact() {
 }
 
 bool SourceAudio::fill() {
+    while (decodeOne()) {
+        append();
+        av_frame_unref(frame_);
+        if (available() > 0) return true;
+        // else the whole frame was skipped past; keep going
+    }
+    return false;
+}
+
+const AVFrame* SourceAudio::nextRaw() {
+    if (!decodeOne()) return nullptr;
+    const int64_t ts = frame_->best_effort_timestamp != AV_NOPTS_VALUE
+                           ? frame_->best_effort_timestamp : frame_->pts;
+    if (ts != AV_NOPTS_VALUE)
+        frame_->pts = ts - static_cast<int64_t>(
+                               std::llround(startOffset_ / av_q2d(timeBase_)));
+    return frame_;
+}
+
+bool SourceAudio::decodeOne() {
     for (;;) {
         int rc = avcodec_receive_frame(dec_, frame_);
-        if (rc == 0) {
-            append();
-            av_frame_unref(frame_);
-            if (available() > 0) return true;
-            continue;       // the whole frame was skipped past
-        }
+        if (rc == 0) return true;
         if (rc == AVERROR_EOF) return false;
         if (rc != AVERROR(EAGAIN)) return false;
         if (eof_) {

@@ -38,8 +38,13 @@ struct OptionValue {
     int64_t value = 0;
 };
 
-/// One AVOption of an encoder, in the shape a form control needs.
-struct EncoderOption {
+/// One AVOption, in the shape a form control needs.
+///
+/// Encoders and filters are described by the same structure because libavutil
+/// describes them with the same structure: an AVClass with an option table. A
+/// second copy of this for filters would be a second set of type names to keep
+/// in step with the first.
+struct OptionInfo {
     std::string name;
     std::string help;
     std::string type;           // "int", "double", "string", "bool", "enum",
@@ -56,7 +61,40 @@ struct EncoderOption {
 /// the surface the UI's advanced editor is drawn from — nothing here is a list
 /// maintained by hand, so an ffmpeg upgrade that adds an option to x265 adds it
 /// to the app.
-std::vector<EncoderOption> encoderOptions(const std::string& codecName);
+std::vector<OptionInfo> encoderOptions(const std::string& codecName);
+
+// ── What this build can put a picture through ──────────────────────────────
+//
+// The same argument as the encoder list, one stage earlier. A filter palette
+// written down here would be a list of what libavfilter had on the day it was
+// typed; asked of libavfilter it is what this build actually links, which is
+// the only list that cannot offer a filter the render will then refuse.
+
+/// One filter, in the shape a palette needs: what it is called, what it does,
+/// and what it can be wired to.
+struct FilterInfo {
+    std::string name;
+    std::string description;
+
+    /// One character per pad, in order: 'v' or 'a'. Empty with `dynamicInputs`
+    /// means "as many as you ask for" (amix, concat); empty without it means a
+    /// source that takes nothing (color, sine).
+    std::string inputs;
+    std::string outputs;
+
+    bool dynamicInputs = false;
+    bool dynamicOutputs = false;
+    /// Takes `enable=`: it can be switched on and off over time.
+    bool timeline = false;
+};
+
+/// Every filter this build links, in libavfilter's own order.
+std::vector<FilterInfo> availableFilters();
+
+/// One filter's options, straight out of its AVClass — the same walk
+/// `encoderOptions` does, and drawn by the UI in the same way. A filter with
+/// no private class (`null`, `copy`) has none, which is not an error.
+std::vector<OptionInfo> filterOptions(const std::string& name);
 
 struct CodecOption {
     std::string id;         // what to put in ExportSettings

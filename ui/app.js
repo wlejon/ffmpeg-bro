@@ -17,7 +17,7 @@ import * as exporter from './export.js';
 import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
 import { clock, timecode, basename, bytes } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
-import { filtergraph } from './filtergraph.js';
+import { filtergraph, renderGraph } from './filtergraph.js';
 import { makeGraph, restore } from './graph/model.js';
 import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
@@ -837,7 +837,7 @@ globalThis.__ffmpegBro = {
     splitAtPlayhead, setLayout, select, selectMany,
     showProperties, pending,
     exporter,
-    filtergraph, shell, command,
+    filtergraph, renderGraph, shell, command,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.
     graph: { makeGraph, restore, derive, print },

@@ -5,6 +5,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
@@ -276,18 +277,23 @@ std::string tempPath(const std::string& name) {
     return (dir / leaf).string();
 }
 
-std::vector<EncoderOption> encoderOptions(const std::string& codecName) {
-    std::vector<EncoderOption> out;
-    const AVCodec* codec = avcodec_find_encoder_by_name(codecName.c_str());
-    if (!codec || !codec->priv_class) return out;
+namespace {
 
-    for (const AVOption* o = nextOption(codec->priv_class, nullptr); o;
-         o = nextOption(codec->priv_class, o)) {
+/// One AVClass's whole option table, in the shape a form control needs.
+///
+/// `require` is the flag that says the option is one this kind of object
+/// actually takes — AV_OPT_FLAG_ENCODING_PARAM for an encoder,
+/// AV_OPT_FLAG_FILTERING_PARAM for a filter. Without it the walk would offer a
+/// decoder-only option on an encoder, which is a control that does nothing.
+std::vector<OptionInfo> optionsOf(const AVClass* cls, int require) {
+    std::vector<OptionInfo> out;
+    if (!cls) return out;
+    for (const AVOption* o = nextOption(cls, nullptr); o; o = nextOption(cls, o)) {
         if (o->type == AV_OPT_TYPE_CONST) continue;   // listed under their option
-        if (!(o->flags & AV_OPT_FLAG_ENCODING_PARAM)) continue;
+        if (require && !(o->flags & require)) continue;
         if (o->flags & AV_OPT_FLAG_DEPRECATED) continue;
 
-        EncoderOption e;
+        OptionInfo e;
         e.name = o->name ? o->name : "";
         e.help = o->help ? o->help : "";
         e.type = optionTypeName(o);
@@ -296,10 +302,56 @@ std::vector<EncoderOption> encoderOptions(const std::string& codecName) {
         e.max = o->max;
         e.hasRange = o->max > o->min;
         e.defaultValue = optionDefault(o);
-        if (o->unit) e.values = constantsOf(codec->priv_class, o->unit);
+        if (o->unit) e.values = constantsOf(cls, o->unit);
         out.push_back(std::move(e));
     }
     return out;
+}
+
+/// The pad types of one side of a filter, as one character each. A filter with
+/// dynamic pads has none to report: how many there are is decided by the
+/// arguments it is given, which is why the flag is reported alongside.
+std::string padsOf(const AVFilter* f, int isOutput) {
+    std::string out;
+    const unsigned n = avfilter_filter_pad_count(f, isOutput);
+    for (unsigned i = 0; i < n; ++i) {
+        const AVFilterPad* pads = isOutput ? f->outputs : f->inputs;
+        out.push_back(avfilter_pad_get_type(pads, static_cast<int>(i)) == AVMEDIA_TYPE_AUDIO
+                          ? 'a' : 'v');
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<OptionInfo> encoderOptions(const std::string& codecName) {
+    const AVCodec* codec = avcodec_find_encoder_by_name(codecName.c_str());
+    return codec ? optionsOf(codec->priv_class, AV_OPT_FLAG_ENCODING_PARAM)
+                 : std::vector<OptionInfo>{};
+}
+
+std::vector<FilterInfo> availableFilters() {
+    std::vector<FilterInfo> out;
+    void* opaque = nullptr;
+    while (const AVFilter* f = av_filter_iterate(&opaque)) {
+        if (!f->name) continue;
+        FilterInfo info;
+        info.name = f->name;
+        info.description = f->description ? f->description : "";
+        info.inputs = padsOf(f, 0);
+        info.outputs = padsOf(f, 1);
+        info.dynamicInputs = (f->flags & AVFILTER_FLAG_DYNAMIC_INPUTS) != 0;
+        info.dynamicOutputs = (f->flags & AVFILTER_FLAG_DYNAMIC_OUTPUTS) != 0;
+        info.timeline = (f->flags & AVFILTER_FLAG_SUPPORT_TIMELINE) != 0;
+        out.push_back(std::move(info));
+    }
+    return out;
+}
+
+std::vector<OptionInfo> filterOptions(const std::string& name) {
+    const AVFilter* f = avfilter_get_by_name(name.c_str());
+    return f ? optionsOf(f->priv_class, AV_OPT_FLAG_FILTERING_PARAM)
+             : std::vector<OptionInfo>{};
 }
 
 std::vector<CodecOption> availableVideoEncoders() {

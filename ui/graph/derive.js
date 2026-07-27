@@ -191,7 +191,16 @@ function audioSteps(clip, w) {
 /// colour tags come from. Without it the graph is still correct in geometry and
 /// timing but leaves the source matrices to swscale's guess, and `caveats` says
 /// so — the difference is a visible colour cast, not rounding.
-export function derive(spec, sources) {
+///
+/// `opts.forRender` asks for the graph *this application* will run rather than
+/// the one it prints. They differ by exactly one thing, and only because the
+/// two have different things downstream of them: a standalone ffmpeg hands the
+/// last pad straight to its encoder, so the conversion into the encoder's
+/// colour has to be the last filter; here the last pad is handed to the writer,
+/// which converts out of the compositing space itself, exactly as it does for a
+/// render with no graph at all. Leaving the tail on for a render would convert
+/// twice and come out slightly worse than either.
+export function derive(spec, sources, opts = {}) {
     if (!spec || !Array.isArray(spec.clips)) return refuse('there is no edit to describe');
 
     const start = Number(spec.start) || 0;
@@ -249,11 +258,14 @@ export function derive(spec, sources) {
     // is. Left to swscale's default it is BT.601 whatever the tag says, and the
     // picture comes back green in the shadows.
     const colour = outputColor(spec);
-    const toEncoder = [{
-        filter: 'scale',
-        params: { in_range: 'full', out_color_matrix: colour.sws, out_range: colour.range },
-    }];
-    if (spec.pixelFormat) toEncoder.push({ filter: 'format', pos: [spec.pixelFormat] });
+    const toEncoder = [];
+    if (!opts.forRender) {
+        toEncoder.push({
+            filter: 'scale',
+            params: { in_range: 'full', out_color_matrix: colour.sws, out_range: colour.range },
+        });
+        if (spec.pixelFormat) toEncoder.push({ filter: 'format', pos: [spec.pixelFormat] });
+    }
 
     let over = base;
     kept.forEach(({ clip }, i) => {

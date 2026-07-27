@@ -212,6 +212,33 @@ std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst spec, const
     return out;
 }
 
+/// `spec.filterInputs` — `[{ label: "0:v", path: "…", stream: "v" }, …]`, which
+/// is what the graph's own input nodes carry. Given rather than inferred from
+/// the clip order, for the reason ExportGraphInput states.
+std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spec) {
+    std::vector<ExportGraphInput> out;
+    JSValue arr = JS_GetPropertyStr(ctx, spec, "filterInputs");
+    if (JS_IsArray(arr)) {
+        JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
+        uint32_t len = 0;
+        JS_ToUint32(ctx, &len, lenv);
+        JS_FreeValue(ctx, lenv);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+            if (JS_IsObject(item)) {
+                ExportGraphInput g;
+                g.label = strProp(ctx, item, "label", "");
+                g.path = strProp(ctx, item, "path", "");
+                g.stream = strProp(ctx, item, "stream", "v");
+                out.push_back(std::move(g));
+            }
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, arr);
+    return out;
+}
+
 JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "render.start(spec) requires a spec object");
@@ -242,6 +269,8 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     s.videoOptions = optionsFromJs(ctx, spec, "videoOptions");
     s.audioOptions = optionsFromJs(ctx, spec, "audioOptions");
     s.formatOptions = optionsFromJs(ctx, spec, "formatOptions");
+    s.filterGraph = strProp(ctx, spec, "filterGraph", "");
+    s.filterInputs = graphInputsFromJs(ctx, spec);
 
     std::vector<ExportClip> clips;
     JSValue arr = JS_GetPropertyStr(ctx, spec, "clips");
@@ -346,17 +375,7 @@ JSValue codecListToJs(JSContext* ctx, const std::vector<CodecOption>& list) {
     return arr;
 }
 
-/// bro.ffmpeg.encoderOptions(name) — every private option of one encoder.
-/// Looked up on demand rather than built for all of them at startup: x265
-/// alone has some eighty, and the dialog only ever shows one encoder's.
-JSValue js_encoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsString(argv[0]))
-        return JS_ThrowTypeError(ctx, "encoderOptions(name) requires an encoder name");
-    const char* name = JS_ToCString(ctx, argv[0]);
-    if (!name) return JS_EXCEPTION;
-    const auto opts = encoderOptions(name);
-    JS_FreeCString(ctx, name);
-
+JSValue optionsToJs(JSContext* ctx, const std::vector<OptionInfo>& opts) {
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
     for (const auto& o : opts) {
@@ -381,6 +400,55 @@ JSValue js_encoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
         }
         JS_SetPropertyStr(ctx, e, "values", vals);
         JS_SetPropertyUint32(ctx, arr, i++, e);
+    }
+    return arr;
+}
+
+/// A name argument, or an exception. Both option lookups take one and neither
+/// should answer for the empty string.
+bool takeName(JSContext* ctx, int argc, JSValueConst* argv, std::string* out) {
+    if (argc < 1 || !JS_IsString(argv[0])) return false;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return false;
+    *out = s;
+    JS_FreeCString(ctx, s);
+    return true;
+}
+
+/// bro.ffmpeg.encoderOptions(name) — every private option of one encoder.
+/// Looked up on demand rather than built for all of them at startup: x265
+/// alone has some eighty, and the dialog only ever shows one encoder's.
+JSValue js_encoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "encoderOptions(name) requires an encoder name");
+    return optionsToJs(ctx, encoderOptions(name));
+}
+
+/// bro.ffmpeg.filterOptions(name) — one filter's arguments, for the same
+/// reason and drawn the same way. On demand for a stronger reason than the
+/// encoders': there are some five hundred filters, and building every option
+/// table at startup would be most of a second before the window opened.
+JSValue js_filterOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "filterOptions(name) requires a filter name");
+    return optionsToJs(ctx, filterOptions(name));
+}
+
+JSValue filtersToJs(JSContext* ctx) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& f : availableFilters()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", f.name);
+        setStr(ctx, o, "description", f.description);
+        setStr(ctx, o, "inputs", f.inputs);
+        setStr(ctx, o, "outputs", f.outputs);
+        JS_SetPropertyStr(ctx, o, "dynamicInputs", JS_NewBool(ctx, f.dynamicInputs));
+        JS_SetPropertyStr(ctx, o, "dynamicOutputs", JS_NewBool(ctx, f.dynamicOutputs));
+        JS_SetPropertyStr(ctx, o, "timeline", JS_NewBool(ctx, f.timeline));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;
 }
@@ -447,6 +515,13 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, ns, "containers", containers);
     JS_SetPropertyStr(ctx, ns, "encoderOptions",
                       JS_NewCFunction(ctx, js_encoderOptions, "encoderOptions", 1));
+
+    // What this build can put a picture *through*, which is the palette the
+    // graph stage picks from. A list of names and pad shapes is small; the
+    // options behind each are asked for one filter at a time.
+    JS_SetPropertyStr(ctx, ns, "filters", filtersToJs(ctx));
+    JS_SetPropertyStr(ctx, ns, "filterOptions",
+                      JS_NewCFunction(ctx, js_filterOptions, "filterOptions", 1));
     JS_SetPropertyStr(ctx, ns, "tempPath", JS_NewCFunction(ctx, js_tempPath, "tempPath", 1));
 
     JSValue render = JS_NewObject(ctx);

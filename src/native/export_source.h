@@ -12,6 +12,14 @@
 // open(), and the reason these are one class each rather than one class for
 // both: an input with two audio tracks is two SourceAudio, not one that has
 // learned about tracks.
+//
+// **Each of these is walked one way or the other, never both.** `rgbaAt` and
+// `mixInto` are the compositor's way: ask for a moment, get what belongs at
+// it, already converted. `nextRaw` is a filter graph's: hand over every frame
+// as decoded and let the graph do its own converting, because a conversion
+// done here would be one the graph then has to undo. The two share a decoder
+// and a position in the file, so mixing them within one instance would have
+// each stealing frames from the other.
 #pragma once
 
 #include "export_frame.h"
@@ -45,6 +53,23 @@ public:
     /// exporting 30 fps from a 60 fps source asks for the same picture twice
     /// and converts it once.
     const Rgba* rgbaAt(double t);
+
+    /// The next frame as it was decoded, in the stream's own pixel format,
+    /// with its timestamp rewritten into `timeBase()` units counted from zero
+    /// — the clock a clip's in-point and a graph's `trim` are both written
+    /// against. Null at the end of the file.
+    ///
+    /// The frame belongs to this reader and is reused on the next call, so
+    /// anything that keeps it has to take its own reference.
+    ///
+    /// Rotation is *not* applied: the display matrix is reported by
+    /// `rotation()` and belongs in the graph, the way `ffmpeg`'s own autorotate
+    /// puts it there, so that what runs and what is printed are the same
+    /// picture.
+    const AVFrame* nextRaw();
+
+    AVRational timeBase() const { return timeBase_; }
+    int rotation() const { return rotation_; }
 
 private:
     void close();
@@ -97,10 +122,19 @@ public:
     /// needs so an unmuted one after it in the same file stays lined up.
     void skip(int frames);
 
+    /// The next frame as decoded, in the file's own sample format and rate,
+    /// timestamped in `timeBase()` units from zero. See the note at the top of
+    /// this file: a reader walked this way is not also mixed from.
+    const AVFrame* nextRaw();
+
+    AVRational timeBase() const { return timeBase_; }
+
 private:
     void close();
     int available() const;
     void compact();
+    /// Leave the next decoded frame in `frame_`. False at end of file.
+    bool decodeOne();
     /// Decode one packet's worth into the fifo. False at end of file.
     bool fill();
     /// Resample the decoded frame to the output rate and layout and append it,

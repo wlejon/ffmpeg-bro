@@ -785,4 +785,57 @@ pump(200);
     screenshot('out/export-04-back-on-the-edit.png');
 }
 
+// ── and the same edit, rendered through libavfilter ────────────────────────
+//
+// The other end of the graph work: `renderGraph()` produces the same graph the
+// command bar prints, and `render.start` runs it through libavfilter instead of
+// the internal compositor. export_test.cpp is what proves the two paths make
+// the same picture; what is proved here is that the graph this application
+// *writes* is one libavfilter will take — a string that renders in C++ says
+// nothing about the string the UI produces.
+
+console.log('\nthe same edit, through libavfilter');
+{
+    ok(Array.isArray(bro.ffmpeg.filters) && bro.ffmpeg.filters.length > 100,
+       `libavfilter's own filter list is exposed (${bro.ffmpeg.filters.length})`);
+    ok(bro.ffmpeg.filterOptions('scale').some((o) => o.name === 'in_color_matrix'),
+       'and each one can be asked what arguments it takes');
+
+    const s = A.exporter.buildSpec();
+    s.width = 320;
+    s.height = 180;
+    s.fps = 25;
+    s.end = Math.min(s.end, s.start + 1);       // a test, not a coffee break
+    s.path = bro.appDir + '/../out/ui-export-graph.mp4';
+
+    const g = A.renderGraph(s, A.exporter.specSources());
+    ok(g.ok, `the edit can be written as a graph to run (${g.reason || 'ok'})`);
+    ok(g.filterInputs.length > 0 &&
+       g.filterInputs.every((i) => i.path && i.label && i.stream),
+       `every pad it reads names its file (${g.filterInputs.map((i) => i.label).join(' ')})`);
+    // The tail belongs to the writer on this path, and a graph carrying it
+    // would convert into the encoder's colour twice.
+    ok(g.filterGraph.indexOf('out_color_matrix') < 0,
+       'and it stops in the compositing space');
+
+    s.filterGraph = g.filterGraph;
+    s.filterInputs = g.filterInputs;
+    let started = '';
+    try { bro.ffmpeg.render.start(s); } catch (e) { started = String(e); }
+    ok(!started, `the renderer accepted it (${started || 'accepted'})`);
+
+    if (!started) {
+        waitFor('the graph render to finish',
+                () => bro.ffmpeg.render.poll().state !== 'running', 60000);
+        const st = bro.ffmpeg.render.poll();
+        ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+
+        const gp = bro.ffmpeg.probe(s.path);
+        ok(!!gp.video && gp.video.width === 320 && gp.video.height === 180,
+           `and wrote a ${gp.video ? gp.video.width + 'x' + gp.video.height : 'broken'} file`);
+        ok(Math.abs(gp.format.duration - (s.end - s.start)) < 0.25,
+           `as long as the range asked for (${gp.format.duration.toFixed(2)}s)`);
+    }
+}
+
 console.log(`\n${checks} checks passed`);

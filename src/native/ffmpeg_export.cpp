@@ -13,6 +13,7 @@
 #include "ffmpeg_export.h"
 
 #include "export_frame.h"
+#include "export_graph.h"
 #include "export_timeline.h"
 #include "export_writer.h"
 
@@ -22,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -77,10 +79,27 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
     st.framesTotal = total;
     setStatus(st);
 
-    TimelineSource timeline(s, std::move(clips));
+    // Which of the two answers to "what does the output look like at t" this
+    // render uses, and the only line in the job that knows there are two.
+    std::string err;
+    std::unique_ptr<FrameSource> source;
+    if (!s.filterGraph.empty()) {
+        auto g = std::make_unique<GraphSource>(s);
+        if (!g->build(&err)) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+            st.elapsedSec = secondsSince();
+            setStatus(st);
+            LOG_ERROR("export failed: %s", err.c_str());
+            return;
+        }
+        source = std::move(g);
+    } else {
+        source = std::make_unique<TimelineSource>(s, std::move(clips));
+    }
+    FrameSource& timeline = *source;
 
     Writer writer;
-    std::string err;
     if (!writer.open(s, timeline.hasAudio(), &err)) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
@@ -211,7 +230,9 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
         if (error) *error = "no output file";
         return false;
     }
-    if (clips.empty()) {
+    // A graph names its own inputs, so it is a render on its own; the clip list
+    // is what the *other* path is made of.
+    if (clips.empty() && s.filterGraph.empty()) {
         if (error) *error = "nothing on the timeline to render";
         return false;
     }

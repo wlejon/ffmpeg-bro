@@ -167,18 +167,39 @@ them to change alone:
 |---|---|
 | `ffmpeg_export.h` | the description a render is given, and the four calls that run one |
 | `ffmpeg_export.cpp` | the job: one slot, one thread, the status the UI polls |
-| `export_timeline.*` | **what the output looks like at t** — clips in, one canvas and one block of samples out |
+| `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
+| `export_graph.*` | libavfilter's answer to the same two questions |
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
 | `export_writer.*` | encoders and the muxer they feed |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
-| `ffmpeg_capabilities.*` | what this build can write, asked of libavcodec |
+| `ffmpeg_capabilities.*` | what this build can write and what it can put a picture through, asked of libav* |
 
-**`export_timeline.h` is the seam a node graph attaches at.** `runExport` asks it two
-questions per output frame — the canvas at `t`, and the samples between `t` and the next
-frame — and asks nothing else. A graph is a different answer to the same two questions,
-with its inputs named explicitly and its compositing described rather than implied by a
-track stack, so it arrives as a second implementation and the job does not change.
+**`export_timeline.h` is the seam a node graph attaches at**, and does. `runExport` asks a
+`FrameSource` two questions per output frame — the canvas at `t`, and the samples between
+`t` and the next frame — and asks nothing else, so a second implementation cost the job one
+line. `TimelineSource` is the track stack; `GraphSource` parses a `-filter_complex` and runs
+it. **Which one runs is `ExportSettings::filterGraph` being empty or not**, and the two are
+measured against each other in `tests/export_test.cpp` — the same edit rendered both ways,
+compared as PSNR, 43 dB and holding. Do not let that check be loosened: the whole value of
+a second path is that it is the same render.
+
+Four things about the graph path are load-bearing:
+
+- **The graph ends in the compositing space, not the encoder's.** What leaves the last pad
+  is a picture; converting it into the encoder's format and colour is the writer's job on
+  both paths. The command bar prints that tail because a standalone ffmpeg has no writer,
+  which is why `derive()` takes `forRender` and why `renderGraph()` and `filtergraph()`
+  differ by exactly one chain.
+- **Sources are fed as decoded**, through `SourceVideo::nextRaw`/`SourceAudio::nextRaw`, so
+  the graph does its own cropping, scaling and colour conversion. A reader is walked that
+  way or through `rgbaAt`/`mixInto`, never both: they share a decoder and a position.
+- **Rotation is inserted as `transpose` filters** between the buffersrc and the graph,
+  where ffmpeg's own autorotate puts it, because a display matrix is metadata and a filter
+  graph works on pictures.
+- **Every input decodes from the start of its file**, as `-filter_complex` without `-ss`
+  does; `trim` throws away the rest. Right, and wrong for a clip an hour in — when the
+  derivation starts saying where each input's window begins, that is where a seek goes.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -187,9 +208,12 @@ backend, which is why `<video src="anything.mkv">` just works and why every cont
 through one set of seek/timestamp/reordering semantics.
 
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
-`openOnStart`, `encoders`, `containers`, `render.*`, …) via
+`openOnStart`, `encoders`, `containers`, `filters`, `filterOptions`, `render.*`, …) via
 `EngineConfig::installHostBindings`, so it exists in every realm including workers.
-`probe()` is synchronous on purpose.
+`probe()` is synchronous on purpose. `filters` is a list of names and pad shapes built at
+startup because it is small; `filterOptions(name)` is asked one filter at a time because
+there are five hundred of them and building every option table would be most of a second
+before the window opened.
 
 `ffmpeg_export.cpp` is the encode half: decode each clip → composite into an RGBA canvas →
 swscale to the encoder's pixel format → encode → mux. It owns its own readers rather than
@@ -382,6 +406,15 @@ What the fixes were, and what the code here still does about them:
   from the edit and owns every refusal and caveat; `graph/print.js` turns nodes
   into chains. `filtergraph.js` is the two composed, with the shape callers
   want, so `command.js` does not know a graph exists.
+
+  It exports the graph twice, because there are two consumers and they want
+  different tails. `filtergraph()` is the one to *print*: it ends with the
+  conversion into the encoder's colour, because a standalone ffmpeg hands the
+  last pad to its encoder. `renderGraph()` is the one to *run* — the same
+  chains, stopping in the compositing space, plus the `filterInputs` list that
+  says which file feeds `[0:v]` — because on that path the writer converts, and
+  doing it in both places does it twice. They differ by exactly one chain, and
+  `tests/ui_filtergraph.js` asserts that.
 
   Three things about the model are load-bearing rather than incidental.
   **Arguments are positional-then-named because ffmpeg's are** — `crop`'s four

@@ -39,7 +39,9 @@ function ok(cond, what) {
 /// A chain by the pad it reads from. The video chains are emitted together and
 /// the overlays after them, so an audio chain's index moves with the number of
 /// clips — which is not what any of these cases is about.
-const chainFrom = (g, pad) => g.chains.find((c) => c.indexOf(pad) === 0) || '(no such chain)';
+const chainFrom = (g, pad) =>
+    (g.chains || g.filterGraph.split(';')).find((c) => c.indexOf(pad) === 0) ||
+    '(no such chain)';
 
 function same(actual, expected, what) {
     if (actual !== expected) {
@@ -50,8 +52,9 @@ function same(actual, expected, what) {
 }
 
 waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
-const { filtergraph } = globalThis.__ffmpegBro;
+const { filtergraph, renderGraph } = globalThis.__ffmpegBro;
 ok(typeof filtergraph === 'function', 'filtergraph() is on the test surface');
+ok(typeof renderGraph === 'function', 'and renderGraph(), which is the same graph to run');
 
 /// A clip with everything at its neutral value, so each case below states only
 /// what it is about.
@@ -281,6 +284,60 @@ console.log('\nthe caveat that cannot be fixed');
 //
 // A graph that is nearly right is worse than no graph: the only reason to show
 // one is that it can be taken somewhere else and run.
+
+// ── the graph to run, as opposed to the graph to print ─────────────────────
+//
+// `bro.ffmpeg.render.start` takes the same graph, with two differences that are
+// both consequences of the renderer not being a standalone ffmpeg: the tail
+// that converts into the encoder's colour belongs to the writer on this path,
+// and the inputs are named rather than numbered. Everything else has to be
+// identical, or the render and the command shown above it are two different
+// edits.
+
+console.log('\nthe same graph, to run rather than to print');
+{
+    const s = spec({ clips: [clip(), clip({ x: 960, z: 1, opacity: 0.5 })] });
+    const shown = filtergraph(s);
+    const run = renderGraph(s);
+    ok(run.ok, 'it can be rendered');
+
+    const shownChains = shown.chains;
+    const runChains = run.filterGraph.split(';');
+    same(runChains.length, shownChains.length, 'the same number of chains');
+    const differing = [];
+    for (let i = 0; i < shownChains.length; i++)
+        if (runChains[i] !== shownChains[i]) differing.push(i);
+    same(differing.length, 1, 'exactly one of them differs');
+    ok(differing.length === 1 && shownChains[differing[0]].endsWith('[vout]'),
+       'and it is the one that ends at [vout]');
+
+    same(chainFrom(run, '[o0][v1]'),
+         '[o0][v1]overlay=960:0:eof_action=pass[vout]',
+         'the last overlay stops in the compositing space');
+    same(chainFrom(shown, '[o0][v1]'),
+         '[o0][v1]overlay=960:0:eof_action=pass,' +
+         'scale=in_range=full:out_color_matrix=bt709:out_range=tv[vout]',
+         'where the printed one goes on into the encoder’s');
+
+    same(JSON.stringify(run.filterInputs),
+         JSON.stringify([{ label: '0:v', path: 'a.mp4', stream: 'v' },
+                         { label: '1:v', path: 'a.mp4', stream: 'v' },
+                         { label: '0:a', path: 'a.mp4', stream: 'a' },
+                         { label: '1:a', path: 'a.mp4', stream: 'a' }]),
+         'every pad the graph reads says which file and which kind of stream feeds it');
+
+    // A pixel format is the encoder's business on this path, so it must not
+    // appear in what runs — the writer would then convert into it twice.
+    const withFormat = renderGraph(spec({ pixelFormat: 'yuv422p' }));
+    ok(withFormat.filterGraph.indexOf('yuv422p') < 0,
+       'a chosen pixel format stays out of the graph that runs');
+    ok(filtergraph(spec({ pixelFormat: 'yuv422p' })).chains.join(';').indexOf('yuv422p') > 0,
+       'and stays in the one that is printed');
+
+    // A refusal is a refusal on both paths. Rendering an edit the graph cannot
+    // express would be worse than printing one.
+    ok(!renderGraph(spec({ clips: [] })).ok, 'and an edit it cannot express is still refused');
+}
 
 console.log('\nrefusals');
 {

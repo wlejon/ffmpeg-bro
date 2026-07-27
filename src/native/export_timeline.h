@@ -5,12 +5,11 @@
 // clips and knows nothing about encoders. Between them passes one canvas and
 // one block of samples per output frame.
 //
-// **That seam is where a node graph attaches.** A graph is a different answer
-// to the same two questions — the canvas at t, and the samples between t and
-// the next frame — with the inputs named explicitly and the compositing
-// described rather than implied by a track stack. When it arrives it becomes a
-// second implementation of this, and `runExport` does not change: it already
-// asks these two questions and nothing else.
+// **That seam is where a node graph attaches**, and now does: `FrameSource`
+// below is the two questions written down, `TimelineSource` is the track
+// stack's answer, and `GraphSource` in export_graph.h is libavfilter's. The job
+// asks nothing else of either, which is why adding the second one left
+// `runExport` a walk over frames with one line changed.
 //
 // Sources are opened lazily, on the frame a clip first appears. A two-hour
 // timeline of a hundred clips would otherwise open a hundred files, and their
@@ -28,29 +27,46 @@ namespace ffmpegbro {
 struct Rgba;
 class ClipSources;
 
-class TimelineSource {
+/// The two questions, and nothing else. Whatever answers them can be rendered.
+///
+/// Deliberately narrow: every widening of this is a thing the job has to know
+/// about the edit, and the job's whole claim is that it knows nothing about
+/// the edit.
+class FrameSource {
+public:
+    virtual ~FrameSource() = default;
+
+    /// Whether this render has sound. Asked before the first frame because it
+    /// decides whether the file gets an audio track at all, which has to be
+    /// settled before the header goes down.
+    virtual bool hasAudio() const = 0;
+
+    /// The output frame at `t` seconds on the timeline. Owned by the source
+    /// and valid until the next call.
+    virtual const Rgba& canvasAt(double t) = 0;
+
+    /// Add `frames` samples covering [from, from + frames/rate) into `dst`,
+    /// which the caller has zeroed.
+    virtual void mixInto(float* dst, double from, int frames, int rate, int channels) = 0;
+};
+
+class TimelineSource : public FrameSource {
 public:
     /// `clips` need not be sorted; they are put into paint order here, which is
     /// bottom track first — the same order the viewer stacks them and for the
     /// same reason.
     TimelineSource(const ExportSettings& s, std::vector<ExportClip> clips);
-    ~TimelineSource();
+    ~TimelineSource() override;
 
-    /// Whether any clip has sound this render will use. Asked before the first
-    /// frame because it decides whether the file gets an audio track at all,
-    /// which has to be settled before the header goes down. Opening the audio
-    /// readers is a header read per clip, which is cheap enough to do eagerly
-    /// and the only way to answer honestly.
-    bool hasAudio() const { return anyAudio_; }
+    /// Opening the audio readers is a header read per clip, which is cheap
+    /// enough to do eagerly and the only way to answer honestly.
+    bool hasAudio() const override { return anyAudio_; }
 
-    /// The composited output frame at `t` seconds on the timeline. Owned here
-    /// and valid until the next call.
-    const Rgba& canvasAt(double t);
+    const Rgba& canvasAt(double t) override;
 
-    /// Add `frames` samples covering [from, from + frames/rate) into `dst`,
-    /// which the caller has zeroed. Every clip under the playhead contributes
-    /// at its own level: summed, not picked between.
-    void mixInto(float* dst, double from, int frames, int rate, int channels);
+    /// Every clip under the playhead contributes at its own level: summed, not
+    /// picked between.
+    void mixInto(float* dst, double from, int frames, int rate, int channels) override;
 
 private:
     ExportSettings settings_;

@@ -80,6 +80,44 @@ double meanLuma(const std::vector<uint8_t>& rgba, int w, int h,
     return n ? sum / n : -1.0;
 }
 
+/// How alike two decoded frames are, in dB. The comparison the two render
+/// paths need: "the same picture" is not a thing that can be asserted exactly
+/// once two encoders have been through it, and a threshold on a mean squared
+/// error is what everyone else measures a codec with.
+///
+/// Alpha is skipped — it comes back constant out of a decoded video and would
+/// only inflate the number.
+double psnr(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, int w, int h) {
+    const size_t want = static_cast<size_t>(w) * h * 4;
+    if (a.size() < want || b.size() < want) return -1.0;
+    double se = 0;
+    size_t n = 0;
+    for (size_t i = 0; i < want; i += 4)
+        for (int c = 0; c < 3; ++c, ++n) {
+            const double d = static_cast<double>(a[i + c]) - b[i + c];
+            se += d * d;
+        }
+    if (!n) return -1.0;
+    const double mse = se / static_cast<double>(n);
+    return mse <= 0 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+/// The matrix a source will be decoded through, named the way the `scale`
+/// filter wants to hear it.
+///
+/// This is `swsSpaceFor()` in export_frame.cpp and `sourceColor()` in
+/// ui/graph/derive.js written a third time, which is the point: if the three
+/// ever disagree, the two render paths produce different colours and the check
+/// below is what says so.
+std::string matrixName(const std::string& tag, int height) {
+    if (tag == "bt709") return "bt709";
+    if (tag == "bt470bg") return "bt601";
+    if (tag == "smpte170m") return "smpte170m";
+    if (tag == "smpte240m") return "smpte240m";
+    if (tag == "bt2020nc" || tag == "bt2020_ncl") return "bt2020";
+    return height >= 720 ? "bt709" : "bt601";
+}
+
 double brightestIn(const std::vector<uint8_t>& rgba, int w, int h,
                    int x0, int y0, int x1, int y1) {
     double best = 0;
@@ -241,6 +279,39 @@ int main(int argc, char* argv[]) {
     }
     check(encoderOptions("no_such_encoder").empty(),
           "an encoder that does not exist has no options rather than crashing");
+
+    // The filter list is the palette the graph stage picks from, and the same
+    // argument applies: offering a filter this build does not link is a menu
+    // entry that fails at the last step.
+    {
+        const auto filters = availableFilters();
+        checkf(filters.size() > 100, "libavfilter reports its filters (%zu)", filters.size());
+        const FilterInfo* overlay = nullptr;
+        const FilterInfo* amix = nullptr;
+        const FilterInfo* color = nullptr;
+        for (const auto& f : filters) {
+            if (f.name == "overlay") overlay = &f;
+            if (f.name == "amix") amix = &f;
+            if (f.name == "color") color = &f;
+        }
+        check(overlay && overlay->inputs == "vv" && overlay->outputs == "v",
+              "overlay is reported as two pictures in and one out");
+        check(amix && amix->dynamicInputs && amix->outputs == "a",
+              "amix is reported as taking as many inputs as it is given");
+        check(color && color->inputs.empty() && !color->dynamicInputs,
+              "color is reported as a source that takes nothing");
+
+        const auto scaleOpts = filterOptions("scale");
+        bool sawWidth = false, sawMatrix = false;
+        for (const auto& o : scaleOpts) {
+            if (o.name == "width" || o.name == "w") sawWidth = true;
+            if (o.name == "in_color_matrix") sawMatrix = true;
+        }
+        checkf(sawWidth && sawMatrix, "scale's own options are readable (%zu, with the "
+               "colour ones the graph depends on)", scaleOpts.size());
+        check(filterOptions("no_such_filter").empty(),
+              "a filter that does not exist has no options rather than crashing");
+    }
 
     // ── the source ─────────────────────────────────────────────────────────
 
@@ -556,6 +627,127 @@ int main(int argc, char* argv[]) {
                "a second render starts the instant the first reports done (%s)",
                started ? "accepted" : chainErr.c_str());
         waitForExport();
+    }
+
+    // ── the same edit, rendered through libavfilter ────────────────────────
+    //
+    // Two implementations of "what does the output look like at t" — the track
+    // stack and a parsed filter graph — and the only useful assertion about a
+    // second implementation is that it agrees with the first. The graph below
+    // is what ui/graph/derive.js writes for `leftHalf`, minus the tail that
+    // converts into the encoder's colour: on this path that conversion is the
+    // writer's, and doing it in both places is doing it twice.
+    //
+    // What this catches is everything the two paths could quietly disagree
+    // about — which source frame belongs at an output instant, what a crop
+    // means, which matrix a source is decoded through, where the picture is
+    // placed. Any of those is worth a few dB, and none of them is visible in a
+    // render you only ever look at one of.
+    {
+        std::printf("\nthe same edit through libavfilter\n");
+
+        const StreamSummary* sv = nullptr;
+        for (const auto& s : src.streams) if (s.kind == "video") { sv = &s; break; }
+
+        const ExportClip c = leftHalf(first, srcDuration);
+        const std::string matrix =
+            matrixName(sv ? sv->colorSpace : "", sv ? sv->height : kH);
+        const std::string range = (sv && sv->colorRange == "pc") ? "full" : "tv";
+
+        char text[1024];
+        std::snprintf(text, sizeof(text),
+            "color=c=black:s=%dx%d:r=%g:d=%g[base];"
+            "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS+0/TB,"
+            "scale=%d:%d:in_color_matrix=%s:in_range=%s:out_range=full,format=rgba[v0];"
+            "[base][v0]overlay=0:0:eof_action=pass[vout]"
+            "%s",
+            kW, kH, kFps, kSpan,
+            c.inPoint, c.inPoint + c.length,
+            static_cast<int>(c.w), static_cast<int>(c.h), matrix.c_str(), range.c_str(),
+            srcHasAudio ? ";[0:a]atrim=start=1:end=2.6,asetpts=PTS-STARTPTS[a0]" : "");
+
+        const std::string outG = "out/export-graph.mp4";
+        ExportSettings sg = baseSettings(outG);
+        sg.filterGraph = text;
+        sg.filterInputs = {{"0:v", first, "v"}};
+        if (srcHasAudio) sg.filterInputs.push_back({"0:a", first, "a"});
+
+        // The clip list is passed as well and deliberately ignored: a graph
+        // names its own inputs, and a path that silently used the clips too
+        // would render something the graph does not describe.
+        st = render(sg, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "a filter graph renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            const ProbeResult og = probeMedia(outG);
+            check(og.ok, "and the result opens as media");
+            checkf(st.framesDone == std::llround(kSpan * kFps),
+                   "with every frame written (%lld)", (long long)st.framesDone);
+
+            VideoPipeline a, b;
+            check(a.open(outA) && b.open(outG), "both renders open for comparison");
+            // Three instants rather than one: a single frame can agree by
+            // accident, and a path that is one frame out agrees at none of
+            // them for the same reason.
+            double worst = 99.0;
+            for (double at : {0.3, 0.8, 1.3}) {
+                a.advanceTo(static_cast<TimeNs>(at * 1e9));
+                b.advanceTo(static_cast<TimeNs>(at * 1e9));
+                if (!a.hasFrame() || !b.hasFrame()) { worst = -1.0; break; }
+                const double db = psnr(a.currentRgba(), b.currentRgba(), kW, kH);
+                std::printf("        %.1fs: %.1f dB\n", at, db);
+                worst = std::min(worst, db);
+            }
+            // Comfortably over forty when the two agree, and what is left is
+            // two independent x264 passes over near-identical pictures rather
+            // than any disagreement about the edit. What a real one looks like
+            // is well under twenty: a frame out of step, a crop taken from the
+            // wrong edge, or a source decoded through the wrong matrix all land
+            // there, which is why the threshold has room under it and is still
+            // nowhere near what a mistake would score.
+            checkf(worst > 34.0,
+                   "the graph renders the same picture as the track stack (%.1f dB)", worst);
+
+            // And the same sound. A graph whose `atrim` starts a beat late, or
+            // whose `amix` normalised, is inaudible in the picture check and
+            // obvious here.
+            if (srcHasAudio && srcAudible) {
+                AudioPeaks pa, pg;
+                if (analyzeAudioPeaks(outA, 64, pa) && analyzeAudioPeaks(outG, 64, pg) &&
+                    pa.rms.size() == pg.rms.size() && !pa.rms.empty()) {
+                    double worstDiff = 0, loudest = 0;
+                    for (size_t i = 0; i < pa.rms.size(); ++i) {
+                        worstDiff = std::max(worstDiff, std::fabs(double(pa.rms[i]) - pg.rms[i]));
+                        loudest = std::max(loudest, double(pa.rms[i]));
+                    }
+                    checkf(loudest > 0.0005 && worstDiff < loudest * 0.15,
+                           "and the same sound (worst rms difference %.4f of %.4f)",
+                           worstDiff, loudest);
+                } else {
+                    check(false, "both renders' audio decodes for comparison");
+                }
+            }
+        }
+
+        // The graph is text the user can edit, so every way of getting it wrong
+        // has to arrive as a sentence rather than as a render that produces
+        // nothing.
+        ExportSettings broken = baseSettings("out/export-graph-bad.mp4");
+        broken.endTime = 0.4;
+        broken.filterGraph = "[0:v]not_a_filter=1[vout]";
+        broken.filterInputs = {{"0:v", first, "v"}};
+        st = render(broken, clipsA);
+        checkf(st.state == ExportStatus::State::Failed,
+               "a graph that will not parse is refused with a reason (%s)", st.error.c_str());
+
+        ExportSettings unfed = baseSettings("out/export-graph-unfed.mp4");
+        unfed.endTime = 0.4;
+        unfed.filterGraph = "[7:v]null[vout]";
+        unfed.filterInputs = {{"0:v", first, "v"}};
+        st = render(unfed, clipsA);
+        checkf(st.state == ExportStatus::State::Failed,
+               "and so is an input nothing feeds (%s)", st.error.c_str());
     }
 
     std::printf("\nbad asks are refused, not crashed into\n");

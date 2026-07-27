@@ -58,6 +58,18 @@ struct ExportOption {
     std::string value;
 };
 
+/// One named input pad of a filter graph: what feeds `[0:v]`.
+///
+/// The mapping is given rather than inferred from the clip array, because a
+/// graph names its own inputs and an index that happens to line up today is a
+/// correspondence nothing enforces. Whoever wrote `[2:a]` knows which file it
+/// meant; nothing downstream can work it out.
+struct ExportGraphInput {
+    std::string label;      // "0:v", exactly as the graph text writes it
+    std::string path;
+    std::string stream;     // "v" for pictures, "a" for sound
+};
+
 struct ExportSettings {
     std::string path;               // output file; the extension picks the muxer
 
@@ -125,6 +137,24 @@ struct ExportSettings {
     std::vector<ExportOption> videoOptions;
     std::vector<ExportOption> audioOptions;
     std::vector<ExportOption> formatOptions;   // handed to the muxer
+
+    // Render through libavfilter instead of the internal compositor.
+    //
+    // `-filter_complex` syntax, run by libavfilter itself — so a filter the UI
+    // put in the graph is a filter that reaches the picture, which is the whole
+    // reason this exists. Empty is the usual case and renders through the track
+    // stack, which is faster and, for an edit with nothing in the graph but the
+    // compositing, the same picture. Both paths are measured against each other
+    // in tests/export_test.cpp; do not let them drift apart silently.
+    //
+    // **The graph ends in the compositing space, not the encoder's.** What
+    // leaves the last pad is a picture, and the conversion into the encoder's
+    // format and colour is the writer's, exactly as it is for the other path.
+    // A graph that ends with its own `scale=out_color_matrix=…` is converted
+    // twice and comes out slightly worse than the command bar's, which prints
+    // that tail because a standalone ffmpeg has no writer to do it.
+    std::string filterGraph;
+    std::vector<ExportGraphInput> filterInputs;
 };
 
 /// A snapshot of the running job. Copied under the lock, so the caller can
