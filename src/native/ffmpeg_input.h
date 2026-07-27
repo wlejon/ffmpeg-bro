@@ -116,18 +116,22 @@ struct MediaInput {
 
     /// `-hwaccel_output_format cuda`: **leave the frames on the card**.
     ///
-    /// This is the field that decides whether hardware decode is a win or a
-    /// loss, and it is ffmpeg's own vocabulary for the same decision. Empty —
-    /// which is what `-hwaccel cuda` alone means — downloads every frame into
-    /// system memory as it is decoded, because everything downstream (the
-    /// compositor, a software filter, bro's renderer) wants pixels it can
-    /// touch. Set, the frames stay where they were decoded and only a graph
-    /// made of `_cuda`/`_qsv` filters, or an `hwdownload`, can read them; a
-    /// hardware encoder at the far end then never brings the picture down at
-    /// all, which is the only arrangement in which the GPU is faster here.
+    /// ffmpeg's own vocabulary for the same decision. Empty — which is what
+    /// `-hwaccel cuda` alone means — downloads every frame into system memory
+    /// as it is decoded, because everything downstream (the compositor, a
+    /// software filter, bro's renderer) wants pixels it can touch. Set, the
+    /// frames stay where they were decoded and only a graph made of
+    /// `_cuda`/`_qsv` filters, or an `hwdownload`, can read them; a hardware
+    /// encoder at the far end then never brings the picture down at all.
     ///
-    /// Measured, and the numbers are in README. The readback is the cost, and
-    /// it is bigger than the decode it saves.
+    /// **Measured, and the answer is not the one the folklore gives.** The
+    /// readback is 3–4% of a hardware decode's wall clock on this machine — it
+    /// is not the cost. The *decode* is: NVDEC pulled a frame at a time is
+    /// 2.6× slower than libavcodec threaded across 32 cores at 4K and 3.4×
+    /// slower at 1080p, so `-hwaccel` on an input is a loss whatever this field
+    /// says. What wins is the encoder, which is a decision about a stream and
+    /// not about an input. The numbers, and what follows from them, are in
+    /// README.
     std::string hwaccelOutputFormat;
 
     /// `-ss` before `-i`: where this input starts. The input's clock is

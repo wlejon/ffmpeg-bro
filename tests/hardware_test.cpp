@@ -294,18 +294,21 @@ int main(int argc, char* argv[]) {
 
     // ── the picture, decoded on the card ───────────────────────────────────
 
-    const int videoCodec = [&] {
+    int videoCodec = AV_CODEC_ID_NONE, srcW = kW, srcH = kH;
+    {
         AVFormatContext* fc = nullptr;
-        int id = AV_CODEC_ID_NONE;
         if (avformat_open_input(&fc, file.c_str(), nullptr, nullptr) >= 0) {
             if (avformat_find_stream_info(fc, nullptr) >= 0) {
                 const int i = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-                if (i >= 0) id = fc->streams[i]->codecpar->codec_id;
+                if (i >= 0) {
+                    videoCodec = fc->streams[i]->codecpar->codec_id;
+                    srcW = fc->streams[i]->codecpar->width;
+                    srcH = fc->streams[i]->codecpar->height;
+                }
             }
             avformat_close_input(&fc);
         }
-        return id;
-    }();
+    }
     const HwDevice* dev = deviceThatDecodes(static_cast<AVCodecID>(videoCodec));
 
     if (!dev) {
@@ -499,19 +502,60 @@ int main(int argc, char* argv[]) {
             measured("decode + scale + encode, never leaving the card", msGraph, 1);
         }
 
-        // The same edit through the compositor, for the number that matters:
-        // what the readback costs when it is not avoided.
+        // The same seconds, the same size, through the compositor and x264 —
+        // which is the comparison the whole chunk turns on. It has to be the
+        // *same size*: the graph above took its size from the source, so a
+        // control render left at 640x360 would be the hardware path doing more
+        // work and looking faster for it.
         ExportSettings cpu = baseSettings("out/hw_cpu.mp4");
         cpu.includeAudio = false;
+        cpu.width = srcW;
+        cpu.height = srcH;
         MediaInput plain;
         plain.path = file;
         cpu.inputs.push_back(plain);
+        ExportClip whole = wholeCanvas(0);
+        whole.w = srcW;
+        whole.h = srcH;
         const auto t1 = Clock::now();
-        st = render(cpu, {wholeCanvas(0)});
+        st = render(cpu, {whole});
         const double msCpu = msSince(t1);
         checkf(st.state == ExportStatus::State::Done, "the same seconds through x264 (%s)",
                st.error.empty() ? "no error" : st.error.c_str());
         measured("decode + composite + x264, all in system memory", msCpu, 1);
+
+        // The third arrangement, and on this machine the interesting one:
+        // decode on the CPU — where libavcodec's threaded decoder is faster
+        // than NVDEC — and *upload* to the encoder. The picture crosses the bus
+        // once, in the direction that is not the readback, and the encoder
+        // still never sees system memory.
+        ExportSettings mix = baseSettings("out/hw_upload.mp4");
+        mix.videoCodec = hwEncoder;
+        mix.preset.clear();
+        mix.crf = -1;
+        mix.includeAudio = false;
+        mix.sizeFromGraph = true;
+        MediaInput soft;
+        soft.path = file;
+        mix.inputs.push_back(soft);
+        char up[512];
+        std::snprintf(up, sizeof(up),
+                      "[0:v]trim=0:%.3f,setpts=PTS-STARTPTS,format=nv12,hwupload[vout]", kSpan);
+        mix.filterGraph = up;
+        mix.filterInputs.push_back(pad);
+        mix.filterHwDevice = dev->name;
+        const auto t2 = Clock::now();
+        st = render(mix, {});
+        const double msUpload = msSince(t2);
+        checkf(st.state == ExportStatus::State::Done,
+               "a software decode uploaded straight into %s finishes (%s)", hwEncoder.c_str(),
+               st.error.empty() ? "no error" : st.error.c_str());
+        measured("decode on the CPU, upload, encode on the card", msUpload, 1);
+
+        if (msCpu > 0 && msGraph > 0 && msUpload > 0)
+            std::printf("        %dx%d, %.1f s of output — against x264: on the card %.2fx, "
+                        "uploaded %.2fx\n",
+                        srcW, srcH, kSpan, msCpu / msGraph, msCpu / msUpload);
     }
 
     // ── the arrangement that must refuse ───────────────────────────────────

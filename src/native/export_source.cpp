@@ -177,12 +177,16 @@ bool SourceVideo::decodeOne() {
         av_frame_unref(pending_);
         int rc = avcodec_receive_frame(dec_, pending_);
         if (rc == 0) {
-            // The readback, and the whole of what makes hardware decode a
-            // trade rather than a win. A reader whose input did not ask for
+            // The readback. A reader whose input did not ask for
             // `-hwaccel_output_format` hands back pictures in system memory
-            // however they were decoded, because that is what the compositor,
-            // a software filter and bro's renderer all want — and bringing one
-            // down costs more here than decoding it did. Measured; see README.
+            // however they were decoded, because that is what the compositor, a
+            // software filter and bro's renderer all want.
+            //
+            // **It is not what makes hardware decode expensive here**, which is
+            // worth writing down because everybody assumes it is: measured, the
+            // transfer is 3–4% of the wall clock of a CUDA decode, and the
+            // decode itself is several times a threaded software one. See
+            // tests/hardware_test.cpp and README.
             if (!keepHw_ && pending_->hw_frames_ctx) {
                 std::string why;
                 if (!downloadFrame(&pending_, &swap_, &why)) return false;

@@ -394,10 +394,13 @@ public:
         // A hardware decode still has to arrive here as pixels: what bro's
         // renderer takes is three planes it can read, and there is no path in
         // playback that could hand it a device handle. So the picture comes
-        // down, unconditionally — which is why the honest thing this
-        // application can say about hardware decode on the *timeline* is that
-        // it costs a readback and buys a decode, and on this machine that is a
-        // loss. See README.
+        // down, unconditionally.
+        //
+        // The download is cheap — 3–4% of a CUDA decode, measured — and it is
+        // the *decode* that makes `-hwaccel` a loss on the timeline, because
+        // libavcodec threaded across every core is several times faster than
+        // one NVDEC stream pulled a frame at a time. The UI says so where the
+        // choice is made. See README.
         if (frame_->hw_frames_ctx) {
             std::string why;
             if (!downloadFrame(&frame_, &swap_, &why)) {
