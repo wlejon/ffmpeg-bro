@@ -628,6 +628,7 @@ export function graphSummary() {
         mine: d.graph.nodes.filter((n) => !n.derived).length,
         locks: d.graph.nodes.filter((n) => n.locked).length,
         overrides: d.overrides,
+        problems: d.problems,
     };
 }
 

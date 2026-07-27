@@ -1048,6 +1048,12 @@ function stageState(id) {
         if (!clips.length) return ['—', ''];
         const g = graphSummary();
         if (!g.ok) return ['cannot be described', g.reason];
+        // A graph that will not run is the one thing on this card worth saying
+        // ahead of everything else: the render falls back to the compositor
+        // without your filters, and the spine is where you look when you are on
+        // some other stage entirely.
+        if (g.problems && g.problems.length)
+            return ['will not run', g.problems[0].reason];
         // What is yours is counted separately from what was derived, on the
         // card as well as on the stage: a lock that is silently in force is the
         // failure this whole milestone is designed against, and the spine is

@@ -790,7 +790,8 @@ A graph you are half way through wiring is a graph that will not run, and that
 is a normal state to be in — the moment between placing a node and connecting it
 is exactly it. So the stage draws it and **says what is wrong on the node it is
 about**: the card is outlined, the reason is on it, the column beside it says the
-same thing with room, and the bar along the bottom counts them.
+same thing with room, the bar along the bottom counts them, and the Graph card
+on the spine reads `will not run` from whichever stage you are on.
 
 What is refused, each naming the node:
 
