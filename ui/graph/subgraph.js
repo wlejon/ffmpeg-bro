@@ -77,7 +77,17 @@ function pruned(g, keep) {
 /// invent a name that nothing else here would know.
 export function previewGraph(g, node, opts = {}) {
     if (!node) return { ok: false, reason: 'no node' };
-    if (node.kind === 'sink') return { ok: false, reason: 'a sink is not a picture' };
+    if (node.stream === 'a') return { ok: false, reason: 'a waveform is not a small picture' };
+    // A sink is not a picture of its own — it is the pad the muxer maps, and
+    // what it shows is whatever its producer hands it. Following the wire is
+    // worth doing rather than refusing, because the sink at the end of the
+    // picture side is the one node on this screen that means *the render*, and
+    // it is the first thing anybody clicks.
+    if (node.kind === 'sink') {
+        const from = g.producers(node)[0];
+        return from ? previewGraph(g, from, opts)
+                    : { ok: false, reason: 'nothing is mapped here' };
+    }
 
     const keep = ancestors(g, node);
     const view = pruned(g, keep);

@@ -37,8 +37,8 @@
 // "empty" — the redraw is refused rather than believed.
 
 import { el, div, span, put } from '../dom.js';
-import { basename } from '../format.js';
-import { buildSpec, specSources } from '../export/spec.js';
+import { basename, clock } from '../format.js';
+import { buildSpec, specSources, range as exportRange } from '../export/spec.js';
 import { derive } from './derive.js';
 import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
@@ -82,6 +82,10 @@ export function initGraphView(r, hooks = {}) {
         spec: (start, end) => buildSpec({ start, end }),
         sources: specSources,
         overlay: overlay.current,
+        // How far a playback runs: to the end of what would be written, not to
+        // the end of the timeline. A node is being watched in order to decide
+        // something about the render, and the render stops where the range does.
+        until: () => exportRange().end,
         // An export and the A/B comparison are both more important than this.
         busy: () => (hooks.busy ? hooks.busy() : false),
         changed: () => drawGraph(),
@@ -276,22 +280,53 @@ function cardWidth(key) {
 /// would restart the other eight, over and over, and none of them would ever
 /// get past the first second. Held by node key, moved into the new card,
 /// re-`src`ed only when the file it should be showing actually changes.
+///
+/// Two of them for the node being played, because a playback is a run of
+/// separate files and `src = next` is a reload: the picture goes black, decoding
+/// starts from nothing, and at one piece every couple of seconds that is a blink
+/// often enough to be the thing you notice instead of the filter. So the piece
+/// after the one on screen is loaded into the other element while the first is
+/// still playing, and arriving at the end is a class change on two elements that
+/// have both already decoded a frame. The second one is made when play is
+/// pressed and dropped when it stops: eighteen decoders for nine cards, all but
+/// two of them showing a still, would be paying for it everywhere to spend it in
+/// one place.
 const videos = new Map();
 
-function videoFor(key, path) {
-    let v = videos.get(key);
-    if (!v) {
-        v = document.createElement('video');
-        v.loop = true;
-        v.muted = true;
-        videos.set(key, v);
+function pairFor(key) {
+    let p = videos.get(key);
+    if (!p) { p = { a: newVideo(), b: null, front: 'a' }; videos.set(key, p); }
+    if (preview.isPlaying(key)) {
+        if (!p.b) p.b = newVideo();
+    } else if (p.b) {
+        release(p.b);
+        p.b = null;
+        p.front = 'a';
+        p.playing = '';
     }
-    if (v.__path !== path) {
-        v.__path = path;
-        v.src = path;
-        try { v.play(); } catch (e) { /* it will play when it can */ }
-    }
+    return p;
+}
+
+function newVideo() {
+    const v = document.createElement('video');
+    v.muted = true;
     return v;
+}
+
+function release(v) {
+    try { v.pause(); v.src = ''; } catch (e) { /* already gone */ }
+    v.__path = '';
+}
+
+/// The looping couple of seconds a card shows when it is not being played.
+function showStill(pair, path) {
+    const v = pair.a;
+    v.classList.remove('gn-off');
+    v.loop = true;
+    if (v.__path === path) return;
+    v.__path = path;
+    v.src = path;
+    try { v.play(); } catch (e) { /* it will play when it can */ }
 }
 
 /// The picture a node produces, or what is happening instead.
@@ -305,16 +340,51 @@ function shotView(key, width) {
     const shot = preview.shotFor(key);
     if (!shot) return null;
     const inner = Math.max(16, width - 12);
-    if (shot.state === 'ready' && shot.w > 0) {
+    // A node that is playing keeps its picture even when its *still* has been
+    // invalidated — an edit somewhere else in the graph can do that, and taking
+    // the elements out of the tree would leave the playback running somewhere
+    // nobody can see it.
+    if (preview.isPlaying(key) || (shot.state === 'ready' && shot.w > 0)) {
         const box = div('gn-shot');
-        box.style.height = `${Math.round((inner * shot.h) / shot.w)}px`;
-        box.append(videoFor(key, shot.path));
+        box.style.height = `${Math.round(inner * (shot.w > 0 ? shot.h / shot.w : 9 / 16))}px`;
+        const pair = pairFor(key);
+        box.append(pair.a);
+        if (pair.b) box.append(pair.b);
+        // Left alone while it is playing: the frame loop owns which element is
+        // in front and what is in it, and putting the still back on every
+        // redraw would jump the picture back to the beginning of the range
+        // whenever anything on this screen changed.
+        if (!preview.isPlaying(key)) showStill(pair, shot.path);
+        box.append(playButton(key));
+        if (preview.isPlaying(key)) box.append(div('gn-playbar mono', span('', 'gn-clock')));
         return box;
     }
     const box = div('gn-shot gn-shot-' + (shot.state === 'failed' ? 'fail' : 'wait'),
                     span(shot.state === 'failed' ? (shot.reason || 'no picture') : '…', 'dim'));
     box.style.height = `${Math.round(inner * 9 / 16)}px`;
     return box;
+}
+
+/// Play, on the picture. Over the video rather than under it, because a control
+/// that is part of the card's flow makes the card taller when it appears — and
+/// the whole graph is laid out from measured heights, so one button would move
+/// every node below it.
+function playButton(key) {
+    const playing = preview.isPlaying(key);
+    return el('button', {
+        cls: 'gn-play' + (playing ? ' on' : ''),
+        'data-play': key,
+        text: playing ? '■' : '▶',
+        title: playing ? 'Stop' : 'Play this node from here to the end of the range',
+        on: { click: (e) => {
+            e.stopPropagation();
+            const started = playing ? (preview.stopPlay(), true) : preview.startPlay(key);
+            drawGraph();
+            // After the redraw, which clears it: there is nothing to play when
+            // the previews are being taken from the far end of the range.
+            if (!started) note('There is nothing after this point to play.');
+        } },
+    });
 }
 
 /// The corner you drag to make a card bigger.
@@ -449,22 +519,24 @@ export function drawGraph() {
     panel.draw(d.graph);
     markSelection();
 
-    // What is worth a picture: everything on the picture side that is not the
-    // pad the muxer maps. Asked for after the layout because it is the layout
-    // that says which stream a node is on — only the two ends of the graph say
-    // so themselves — and at the width each card actually is, so a card dragged
+    // What is worth a picture: everything on the picture side, the pad the muxer
+    // maps included — that node is the render, and it is the first thing anybody
+    // clicks. Asked for after the layout because it is the layout that says
+    // which stream a node is on — only the two ends of the graph say so
+    // themselves — and at the width each card actually is, so a card dragged
     // bigger gets a sharper render rather than a stretched one.
     if (preview.isEnabled()) {
         preview.sync(placed.nodes
-            .filter((b) => b.stream === 'v' && b.node.kind !== 'sink')
+            .filter((b) => b.stream === 'v')
             .map((b) => ({ key: panel.keyOf(b.node), fit: previewFit(cardWidth(panel.keyOf(b.node))) }))
             .filter((w) => w.key));
     }
-    // A card that has gone takes its decoder with it. Left behind, every node
+    // A card that has gone takes its decoders with it. Left behind, every node
     // ever previewed would still be decoding.
-    for (const [key, v] of Array.from(videos)) {
+    for (const [key, pair] of Array.from(videos)) {
         if (preview.shotFor(key)) continue;
-        try { v.pause(); v.src = ''; } catch (e) { /* already gone */ }
+        release(pair.a);
+        if (pair.b) release(pair.b);
         videos.delete(key);
     }
 }
@@ -476,10 +548,108 @@ function previewFit(width) {
     return Math.max(128, Math.min(640, Math.round(width / 32) * 32));
 }
 
-/// Called once a frame while this stage is up: the render queue is the only
-/// asynchronous thing here.
+/// Called once a frame while this stage is up: the render queue and the
+/// playback are the only asynchronous things here.
 export function tickGraph() {
     preview.tick();
+    playFrame();
+}
+
+/// Drive the node that is playing.
+///
+/// Polled rather than driven by events, for the same reason the rest of this
+/// application polls: what has to be noticed is a `<video>` arriving at the end
+/// of its file, and an `ended` that this engine may or may not raise is a
+/// playback that may or may not continue. `currentTime` against `duration` is
+/// two properties that certainly exist.
+///
+/// No redraw happens here. A redraw re-derives the graph, rebuilds every card
+/// and measures all of them, and doing that sixty times a second to move a clock
+/// would make the stage unusable — so the readout is written into the element in
+/// place, and the structure of the card only changes when playback starts or
+/// stops.
+function playFrame() {
+    const key = preview.playingKey();
+    if (!key) return;
+    const pair = videos.get(key);
+    const st = preview.playStats();
+    if (!pair || !pair.b || !st) return;
+    if (st.failed) { preview.stopPlay(); drawGraph(); note(`Playback stopped: ${st.failed}.`); return; }
+
+    let front = pair.front === 'b' ? pair.b : pair.a;
+    let back = pair.front === 'b' ? pair.a : pair.b;
+    const piece = preview.currentPiece();
+
+    // Put the piece that is due on screen. Where the other element is already
+    // holding it — which is the point of there being two — this is a swap and
+    // not a load.
+    if (piece && piece.state === 'ready' && front.__path !== piece.path) {
+        if (back.__path === piece.path) {
+            pair.front = pair.front === 'b' ? 'a' : 'b';
+            const t = front; front = back; back = t;
+        } else {
+            front.__path = piece.path;
+            front.src = piece.path;
+        }
+        front.classList.remove('gn-off');
+        back.classList.add('gn-off');
+    }
+
+    // And run it. Separate from putting it there because the first piece is
+    // usually the still that was already on the card — nothing to load and
+    // nothing to swap, but it is looping two seconds and a playback is not, so
+    // the one thing it does need is to be told to stop doing that.
+    if (piece && piece.state === 'ready' && pair.playing !== piece.path) {
+        pair.playing = piece.path;
+        front.loop = false;
+        // From the top, which matters for exactly one piece: the first. It is
+        // the still that was already on the card, and the still has been going
+        // round for however long the stage has been open — adopting it where it
+        // happened to be would start the playback part way through its own
+        // first two seconds and then credit the whole of them to the rate.
+        try { front.currentTime = 0; } catch (e) { /* it starts where it starts */ }
+        try { front.play(); } catch (e) { /* it will play when it can */ }
+    }
+
+    // And get the one after it decoding while this one runs.
+    const after = preview.nextPiece();
+    if (after && after.state === 'ready' && back.__path !== after.path) {
+        back.__path = after.path;
+        back.loop = false;
+        back.src = after.path;
+    }
+
+    if (piece && front.__path === piece.path) {
+        const at = Number(front.currentTime) || 0;
+        const dur = Number(front.duration) || 0;
+        preview.reportPosition(at);
+        // A hair short of the end: the last frame's timestamp is one frame
+        // before the duration, so waiting for equality waits forever.
+        if (dur > 0 && at >= dur - 0.05 && preview.advancePlay() === 'ended') {
+            preview.stopPlay();
+            drawGraph();
+            return;
+        }
+    }
+
+    readout(st);
+}
+
+/// The clock and the rate, written straight into the strip over the picture.
+function readout(st) {
+    const strip = refs.nodes && refs.nodes.querySelector('.gn-playbar .gn-clock');
+    if (!strip) return;
+    const slow = st.settled && st.rate < 0.95;
+    // The rate is what is actually being sustained, waits included, because that
+    // is the number somebody deciding whether a filter is affordable wants —
+    // rather than the renderer's throughput with the stalls taken out of it,
+    // which would say a graph was fast while you watched it not be. Withheld for
+    // the first second and a half: there is nothing to average over yet, and the
+    // first piece is a render nobody has waited for.
+    strip.textContent = clock(st.at) +
+        (st.settled ? ` · ${st.rate.toFixed(2)}×` : '') +
+        (st.waiting ? ' · rendering' : slow ? ' · slower than real time' : '');
+    strip.className = 'gn-clock' + (slow || st.waiting ? ' gn-slow' : '');
 }
 
 /// Which card the panel is about. A class rather than a rebuild: the selection

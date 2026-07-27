@@ -251,7 +251,10 @@ function applyOverlay(g, points, ov, overrides) {
         const keys = [];
         for (const k of Object.keys(lock.params || {}))
             if (String(node.params[k]) !== String(lock.params[k])) keys.push(k);
-        if (lock.pos && lock.pos.join(' ') !== node.pos.join(' '))
+        // Joined on a character no argument can contain, and written as an
+        // escape rather than as itself: a literal NUL in the source makes every
+        // tool that reads this file treat it as a binary and refuse to search it.
+        if (lock.pos && lock.pos.join('\u0000') !== node.pos.join('\u0000'))
             keys.push('arguments');
         Object.assign(node.params, lock.params);
         if (lock.pos) node.pos = lock.pos.slice();

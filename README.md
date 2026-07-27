@@ -344,7 +344,29 @@ that make it affordable are worth knowing, because they are what you will notice
 - **Taken from where the playhead was** when you opened the stage, not followed
   live. `At playhead` re-takes it; `Previews` turns the whole thing off.
 
-Audio nodes have no picture, and show none rather than a black rectangle.
+`video out` gets one too — it is the pad the muxer maps, which makes it the one node
+on the screen that means *the render*. Audio nodes have no picture, and show none
+rather than a black rectangle.
+
+### Playing a node
+
+A couple of seconds on a loop answers "is the crop right". It does not answer "does
+this hold up over a shot", which is usually what a filter is being judged on. **The
+▶ in the corner of a picture** plays that node forward, from where the previews were
+taken to the end of what would be written.
+
+Every second of it is a real render, which is the whole point and also the
+constraint: an expensive graph cannot be played at speed. So the range is rendered
+in pieces, ahead of the picture, and each piece plays at its own rate. When the
+renderer keeps up, that is real time. When it does not, the picture waits for the
+next piece and the readout says what rate is actually being sustained — `0.42×`,
+waits included. That number is a fact about your filter, and it is the reason
+nothing here quietly drops frames instead: a smooth picture that had skipped nine
+frames in ten would make a slow filter look fast.
+
+Pressing play starts on the frame already in the card, because the still is the
+first piece. One node plays at a time — there is one render slot, and two would not
+be two playbacks so much as two stutters.
 
 ### Locks
 
@@ -644,9 +666,10 @@ Honest list of what does not work:
   *viewer* cannot show it: playback is the engine decoding into a `<video>` and
   there is no filter anywhere in that path. Filtered clips are marked `fx` rather
   than left looking broken.
-- **Scrubbing a node preview.** Each one is a couple of seconds from wherever
-  the playhead was, looping. There is no way to move within it except to move
-  the playhead and press `At playhead`.
+- **Scrubbing a node.** ▶ plays one forward from where the previews were taken,
+  and that is the only way to move through it: there is no scrub bar, no way
+  back, and nothing to jump with. Somewhere else to start from means moving the
+  playhead and pressing `At playhead`.
 - **Filters with more than one input or output.** The palette offers what can
   be spliced onto a wire, which means one in and one out. `amix`, `split`,
   `blend` and everything else that needs a wire made by hand needs an editor

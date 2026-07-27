@@ -1059,6 +1059,76 @@ console.log('\na node resized to the size that helps');
     pump(120);
 }
 
+// ── and the whole render, played ───────────────────────────────────────────
+//
+// The one node on the screen that means "the render" is the pad the muxer maps,
+// and playing *that* is what somebody who has just built a graph wants to do
+// with it. Everything below is real: every second of picture is a render
+// through libavfilter, which is why the checks are about the clock advancing
+// and the rate being reported rather than about smoothness, which no test can
+// see.
+
+console.log('\nplaying a node');
+{
+    const outCard = q('#gr-nodes [data-key="out:v"]');
+    ok(outCard && outCard.querySelector('.gn-shot'),
+       'the pad the muxer maps has a picture too — it is the render');
+
+    const button = q('#gr-nodes [data-play="out:v"]');
+    ok(!!button, 'and a play button on it');
+    button.click();
+    pump(200);
+    same(A.graph.preview.playingKey(), 'out:v', 'clicking it plays that node');
+
+    const box = q('#gr-nodes [data-key="out:v"] .gn-shot');
+    same(qq('video', box).length, 2,
+         'with two players: one showing and one already decoding what comes next');
+    ok(!!q('.gn-playbar', box), 'and a readout over the picture');
+
+    // The clock has to actually move, and it has to move past the end of the
+    // first piece — which is the whole mechanism: a second render, handed over
+    // without the picture stopping.
+    const began = A.graph.preview.playStats().at;
+    waitFor('the playback to cross into a second rendered piece',
+            () => A.graph.preview.playStats() &&
+                  A.graph.preview.playStats().at > began + 2.1, 60000);
+    const st = A.graph.preview.playStats();
+    ok(st.at > began + 2.1, `the clock ran on (${began.toFixed(2)} → ${st.at.toFixed(2)})`);
+    ok(st.rate > 0.05 && st.rate <= 1.6,
+       `at a rate it reports rather than assumes (${st.rate.toFixed(2)}×)`);
+    // Re-found rather than reused: a still landing on another card redraws the
+    // stage, and the box captured above is the previous generation of it —
+    // alive, because `put()` detaches rather than destroys, and no longer the
+    // one anything is writing to.
+    const bar = q('#gr-nodes [data-key="out:v"] .gn-playbar');
+    ok(/\d\.\d\d×/.test(bar.textContent), `and says so on the card: "${bar.textContent}"`);
+
+    screenshot('out/export-08-playing-a-node.png');
+
+    q('#gr-nodes [data-play="out:v"]').click();
+    pump(200);
+    same(A.graph.preview.playingKey(), null, 'clicking again stops it');
+    const after = q('#gr-nodes [data-key="out:v"] .gn-shot');
+    same(qq('video', after).length, 1, 'and the second player goes away with it');
+    ok(!q('.gn-playbar', after), 'along with the readout');
+
+    // Two nodes cannot play at once: the host has one render slot, and the
+    // second would not be a second playback so much as two stutters.
+    q('#gr-nodes [data-play="out:v"]').click();
+    pump(120);
+    const other = q('#gr-nodes [data-play$="/scale"]');
+    if (other) {
+        other.click();
+        pump(120);
+        ok(A.graph.preview.playingKey() !== 'out:v',
+           'starting another moves the playback rather than adding one');
+        same(qq('#gr-nodes .gn-playbar').length, 1, 'and there is only ever one');
+    }
+    A.graph.preview.stopPlay();
+    A.graph.draw();
+    pump(120);
+}
+
 console.log('\nturning them off');
 {
     q('#gr-previews').click();

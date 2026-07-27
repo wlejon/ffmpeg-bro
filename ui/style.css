@@ -1223,6 +1223,50 @@ button.text.primary:hover { background: #ffa063; }
     height: 100%;
     object-fit: fill;
 }
+/* The node being played holds two of them, one showing and one already decoding
+   the piece after it. Stacked rather than swapped in and out of the tree: taking
+   an element out is what makes it reload when it comes back, which is the blink
+   the second element exists to avoid. Hidden with opacity because display:none
+   would stop it decoding, which is the whole job. */
+.gn-shot video + video { position: absolute; left: 0; top: 0; }
+.gn-shot video.gn-off { opacity: 0; }
+
+/* Play, on the picture. Over it rather than under, because the graph is laid
+   out from measured card heights and a control that appears in the flow would
+   move every node below this one. */
+.gn-play {
+    position: absolute;
+    left: 3px;
+    bottom: 3px;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    line-height: 14px;
+    text-align: center;
+    font-size: 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    opacity: 0.35;
+    cursor: pointer;
+}
+.gn:hover .gn-play, .gn-play.on { opacity: 1; }
+.gn-play.on { border-color: var(--blue); }
+
+/* What time it is and what rate it is really running at. */
+.gn-playbar {
+    position: absolute;
+    left: 22px;
+    right: 3px;
+    bottom: 3px;
+    font-size: 9px;
+    text-align: right;
+    color: rgba(255, 255, 255, 0.75);
+    text-shadow: 0 1px 2px #000;
+    pointer-events: none;
+}
+.gn-playbar .gn-slow { color: var(--accent); }
 .gn-shot-wait, .gn-shot-fail {
     display: flex;
     align-items: center;

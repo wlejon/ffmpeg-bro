@@ -253,6 +253,19 @@ once to mix. Notable:
   an explicit option wins. **An unknown key is an error, not a shrug** — a render that
   succeeds while ignoring what it was told is the worst of the three outcomes.
 - **A cancelled render still writes its trailer.** An MP4 with no index opens nowhere.
+  Two things this needs, and both of them were wrong for a while, in a way that only
+  showed up as an intermittently unopenable file after a Stop:
+  - **A terminal state is published once, at the bottom, after the writer has closed the
+    file.** A cancelled render already carries its state when it leaves the frame loop, so
+    the `setStatus` that marks the *stage* "finishing" must not run for it: saying
+    "stopped" while the trailer has yet to go down is a window as long as finishing takes
+    — for an mp4 with `+faststart`, a whole second pass over the file — and the obvious
+    act on seeing "stopped" is to open what was made.
+  - **`Writer::finish()` runs every step and writes the trailer whatever failed before
+    it.** Returning at the first failure was the obvious shape and the wrong one: a render
+    stopped after a second has an audio FIFO holding less than one encoder frame, draining
+    it can fail, and the file was then closed with no moov — losing everything rendered to
+    save the last few milliseconds of sound. Whichever step failed is still reported.
 - **The run slot is freed *before* the terminal status is published.** Anything polling
   acts the instant it sees `done`, and the obvious next act is another render — which is
   what the preview does, chaining a lossless reference into the candidate. Cleared
@@ -541,7 +554,31 @@ about them:
   value it passed through. The range is snapshotted when the stage opens rather than
   following the playhead, because a playhead move would otherwise invalidate every node.
   Audio nodes get no picture: a waveform of a pad is a real thing to want and it is not a
-  smaller version of this.
+  smaller version of this. **A sink shows the pad it maps** — `video out` is the one node
+  on the screen that means *the render*, and it is the first thing anybody clicks; the
+  picture is its producer's, so `sync()` hands it that one rather than rendering it twice.
+- `graph/play.js` — a node **played** rather than looked at, which is a different question:
+  a still answers "is the crop right" and only a run of seconds answers "does this hold up".
+  The range is cut into pieces, each is rendered in front of the picture, and each plays at
+  its own rate. **The renderer is the bottleneck and the readout says so** — every second
+  on this stage is a real render through libavfilter, so an expensive graph cannot be
+  played at speed, and the two alternatives are both worse: dropping frames would make a
+  slow filter look fast, and rendering something cheaper would show a picture the render
+  will not produce. When the renderer keeps up it is real time; when it does not the
+  picture waits and the card reports the rate actually being sustained, waits included.
+  That number is a fact about your filter.
+
+  `play.js` renders nothing — it is the bookkeeping, and `preview.js`, which owns the one
+  slot, asks it what to do first. Splitting it that way is what keeps the slot in one
+  place. One node plays at a time for the same reason: nine at once is not nine ninths of
+  the speed, it is one playing and eight stuttering. Three things in `view.js` go with it —
+  **two `<video>` elements** for the playing node, since `src = next` is a reload and a
+  blink every couple of seconds is what you would end up watching instead of the filter;
+  the frame loop **polls `currentTime` against `duration`** rather than listening for
+  `ended`, which this engine may not raise; and it **never redraws** — a redraw re-derives
+  the graph and re-measures every card, so the clock is written into the element in place
+  and only starting and stopping change the card's structure. The still already on a card
+  is handed over as the first piece, so pressing play starts on that frame.
 - `graph/panel.js` — the column beside the graph: what the selected node is set
   to, or what can go on the wire whose `+` was clicked. One panel for both,
   because inserting a filter and configuring it are one gesture with a pause in

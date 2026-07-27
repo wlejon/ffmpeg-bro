@@ -629,8 +629,16 @@ console.log('\nthe graph, cut off at one node');
     ok(/^\[0:v\]scale=/.test(source.filterGraph),
        `which is the stream itself: ${source.filterGraph}`);
 
-    same(previewGraph(d.graph, d.graph.byAnchor('out:v')).ok, false,
-         'a sink is refused — it is the pad the muxer maps, not a picture');
+    // The picture sink is the one node on the screen that means *the render*,
+    // and it has no pad of its own — so it shows the pad it maps, which is
+    // exactly what its producer shows.
+    const out = previewGraph(d.graph, d.graph.byAnchor('out:v'));
+    ok(out.ok, 'the video sink can be previewed');
+    same(out.filterGraph, previewGraph(d.graph, d.graph.producers(d.graph.byAnchor('out:v'))[0])
+         .filterGraph, 'and it is the same render as the node that feeds it');
+
+    same(previewGraph(d.graph, d.graph.byAnchor('out:a')).ok, false,
+         'the audio sink is refused — a waveform is not a smaller picture');
     same(previewGraph(d.graph, null).ok, false, 'and so is nothing at all');
 
     // The card's width is what the picture is rendered at, so dragging one

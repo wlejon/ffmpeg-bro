@@ -39,9 +39,12 @@
 
 import { derive } from './derive.js';
 import { previewGraph } from './subgraph.js';
+import * as play from './play.js';
 
 /// How much of the timeline a preview shows. Long enough to see motion, short
-/// enough that a nine-node graph is populated in a few seconds.
+/// enough that a nine-node graph is populated in a few seconds — and also the
+/// length of one piece of a playback, which is what lets the still already on a
+/// card be the first piece rather than a render somebody has to wait through.
 const SECONDS = 2;
 
 /// How long the graph has to hold still before anything renders.
@@ -67,6 +70,7 @@ export function setEnabled(value) {
     on = !!value;
     if (!on) {
         queue.length = 0;
+        play.stop();
         // A render in flight is left to finish rather than cancelled: it holds
         // the slot either way, and cancelling it would only mean the next
         // export waits for the same work to unwind.
@@ -86,6 +90,10 @@ export function setRange(start, end) {
     range = { start: a, end: b };
     shots.clear();
     queue.length = 0;
+    // A playback is a walk forward from where the previews were taken. Moving
+    // where they are taken from moves its beginning, so it starts again rather
+    // than carrying on from a place that is no longer related to it.
+    play.stop();
 }
 
 export function rangeStart() { return range ? range.start : 0; }
@@ -125,6 +133,7 @@ export function sync(wanted) {
         const sig = `${g.filterGraph}|${JSON.stringify(g.filterInputs)}`;
         const had = shots.get(key);
         if (had && had.sig === sig) {
+            had.fit = fit;
             // Unchanged — but the queue was emptied above, and an entry still
             // waiting for its turn has to go back on it. Without this the first
             // preview to finish takes the rest of the queue down with it and
@@ -132,16 +141,37 @@ export function sync(wanted) {
             if (had.state === 'pending' && !(running && running.key === key)) queue.push(key);
             continue;
         }
-        shots.set(key, { sig, state: 'pending', path: '', reason: '', graph: g });
+        // Two nodes can be the same picture, and one pair always is: the pad the
+        // muxer maps and the filter that produces it are one render described
+        // twice. Rendering it twice would be the most conspicuous waste on the
+        // screen, since those two cards sit side by side.
+        const twin = ready(sig);
+        if (twin) {
+            shots.set(key, { sig, fit, state: 'ready', path: twin.path,
+                             w: twin.w, h: twin.h, reason: '', graph: g });
+            continue;
+        }
+        shots.set(key, { sig, fit, state: 'pending', path: '', reason: '', graph: g });
         queue.push(key);
         fresh = true;
     }
 
     for (const key of Array.from(shots.keys())) if (!live.has(key)) shots.delete(key);
+    // A node that is no longer in the graph cannot be playing. Nothing else
+    // notices: the view holds its `<video>` by key and would go on showing the
+    // last piece of a node that has been deleted.
+    if (play.playingKey() && !live.has(play.playingKey())) play.stop();
     // Only something genuinely new restarts the wait. Otherwise each finished
     // preview would push the next one another quiet period into the future, and
     // a nine-node graph would fill in at one node every second for no reason.
     if (fresh) settleAt = Date.now() + QUIET_MS;
+}
+
+/// A picture already in hand for this exact render, whoever asked for it.
+function ready(sig) {
+    for (const shot of shots.values())
+        if (shot.sig === sig && shot.state === 'ready' && shot.path) return shot;
+    return null;
 }
 
 /// Called once a frame. Everything asynchronous about this is here.
@@ -149,58 +179,82 @@ export function tick() {
     if (running) {
         const p = bro.ffmpeg.render.poll();
         if (p.state === 'running') return;
-        const shot = shots.get(running.key);
-        // Only if it is still the render that was asked for: a graph edit while
-        // this was encoding has already replaced the entry, and writing an old
-        // picture into a new one is the one way a preview can lie.
-        if (shot && shot.sig === running.sig) {
-            if (p.state === 'done') {
-                shot.state = 'ready';
-                shot.path = running.path;
-                // How big the picture turned out. Asked of the file rather than
-                // of the `<video>`, because the card has to be laid out at the
-                // right height *before* the element is in the tree and has
-                // anything to report — and this is the one moment the answer is
-                // both known and cheap.
-                try {
-                    const info = bro.ffmpeg.probe(running.path);
-                    shot.w = (info.video && info.video.width) || 0;
-                    shot.h = (info.video && info.video.height) || 0;
-                } catch (e) {
-                    shot.state = 'failed';
-                    shot.reason = 'nothing came out of it';
-                }
-            } else {
-                shot.state = 'failed';
-                shot.reason = p.error || p.state;
-            }
-        }
+        const was = running;
         running = null;
-        if (hooks.changed) hooks.changed();
+        if (was.seg) finishSegment(was, p);
+        else finishShot(was, p);
         return;
     }
 
-    if (!on || !queue.length || Date.now() < settleAt) return;
+    if (!on) return;
     // The slot belongs to whatever else wants it. An export is the point of the
     // application and the A/B preview is a decision being taken; this is a
     // convenience and goes last.
     if (hooks.busy && hooks.busy()) return;
     if (bro.ffmpeg.render.poll().state === 'running') return;
 
+    // A picture somebody is watching outranks a picture somebody might look at,
+    // and it is the only work here with a deadline: fall behind and the playback
+    // stalls, where a still that arrives a second late is a still that arrives.
+    if (nextSegment()) return;
+    if (!queue.length || Date.now() < settleAt) return;
+
     const key = queue.shift();
     const shot = shots.get(key);
     if (!shot || shot.state !== 'pending') return;
+    const path = launch(shot.graph, range.start, range.end);
+    if (path.error) {
+        shot.state = 'failed';
+        shot.reason = path.error;
+        if (hooks.changed) hooks.changed();
+        return;
+    }
+    running = { key, sig: shot.sig, path: path.path };
+}
 
-    const spec = hooks.spec(range.start, range.end);
-    spec.filterGraph = shot.graph.filterGraph;
-    spec.filterInputs = shot.graph.filterInputs;
+/// Start the next piece of a playback, if one is wanted. Returns whether the
+/// slot was taken.
+function nextSegment() {
+    const key = play.playingKey();
+    if (!key) return false;
+    const seg = play.want();
+    if (!seg) return false;
+    const shot = shots.get(key);
+    const g = graphFor(key, seg.from, seg.to, (shot && shot.fit) || 320);
+    if (!g) { play.failed(seg, 'the graph no longer reaches this node'); return false; }
+    const out = launch(g, seg.from, seg.to);
+    if (out.error) { play.failed(seg, out.error); return false; }
+    play.began(seg);
+    running = { key, seg, path: out.path };
+    return true;
+}
+
+/// The subgraph for one node over one window. Derived afresh rather than
+/// re-timed, because a window is not a parameter of the graph: it is what the
+/// `trim` on every clip is cut at and what each input seeks to, and the
+/// derivation is the one place that knows how to work both out.
+function graphFor(key, from, to, fit) {
+    const d = derive(hooks.spec(from, to), hooks.sources(), { overlay: hooks.overlay() });
+    if (!d.ok) return null;
+    const node = d.graph.node(key) || d.graph.byAnchor(key);
+    if (!node) return null;
+    const g = previewGraph(d.graph, node, { fit });
+    return g.ok ? g : null;
+}
+
+/// Hand a subgraph to the renderer. Returns `{ path }` or `{ error }`.
+///
+/// Fast and disposable, and deliberately not the settings being chosen on the
+/// Encode stage — an x265 option on an x264 preview is an unknown key and an
+/// unknown key is an error, which is right for a render and absurd for a
+/// thumbnail.
+function launch(g, from, to) {
+    const spec = hooks.spec(from, to);
+    spec.filterGraph = g.filterGraph;
+    spec.filterInputs = g.filterInputs;
     // The graph decides how big the picture is. Nothing out here could know:
     // half way down a graph the size is whatever libavfilter made it.
     spec.sizeFromGraph = true;
-    // Fast and disposable, and deliberately not the settings being chosen on
-    // the Encode stage — an x265 option on an x264 preview is an unknown key
-    // and an unknown key is an error, which is right for a render and absurd
-    // for a thumbnail.
     spec.videoCodec = 'libx264';
     spec.crf = 30;
     spec.preset = 'ultrafast';
@@ -210,18 +264,82 @@ export function tick() {
     spec.faststart = false;
     spec.title = '';
     spec.path = bro.ffmpeg.tempPath(`node-${++seq}.mp4`);
-
     try {
         bro.ffmpeg.render.start(spec);
     } catch (e) {
-        shot.state = 'failed';
-        shot.reason = String(e.message || e);
-        if (hooks.changed) hooks.changed();
-        return;
+        return { error: String(e.message || e) };
     }
-    running = { key, sig: shot.sig, path: spec.path };
+    return { path: spec.path };
 }
+
+function finishShot(was, p) {
+    const shot = shots.get(was.key);
+    // Only if it is still the render that was asked for: a graph edit while
+    // this was encoding has already replaced the entry, and writing an old
+    // picture into a new one is the one way a preview can lie.
+    if (shot && shot.sig === was.sig) {
+        if (p.state === 'done') {
+            shot.state = 'ready';
+            shot.path = was.path;
+            // How big the picture turned out. Asked of the file rather than of
+            // the `<video>`, because the card has to be laid out at the right
+            // height *before* the element is in the tree and has anything to
+            // report — and this is the one moment the answer is both known and
+            // cheap.
+            try {
+                const info = bro.ffmpeg.probe(was.path);
+                shot.w = (info.video && info.video.width) || 0;
+                shot.h = (info.video && info.video.height) || 0;
+            } catch (e) {
+                shot.state = 'failed';
+                shot.reason = 'nothing came out of it';
+            }
+        } else {
+            shot.state = 'failed';
+            shot.reason = p.error || p.state;
+        }
+    }
+    if (hooks.changed) hooks.changed();
+}
+
+/// A piece of a playback landed. Deliberately does *not* redraw: a redraw
+/// re-derives the graph, rebuilds nine cards and measures every one of them, and
+/// during a playback that would happen every couple of seconds to change nothing
+/// on screen. The frame loop picks the piece up.
+function finishSegment(was, p) {
+    if (!play.holds(was.seg)) return;
+    if (p.state === 'done') play.finished(was.seg, was.path);
+    else play.failed(was.seg, p.error || p.state);
+}
+
+// ── playing one node ──────────────────────────────────────────────────
+
+/// Play `key` from where the previews are taken to the end of what would be
+/// written. The still already on the card is handed over as the first piece
+/// where it covers the same seconds, which it does unless the range has been set
+/// to something other than the default — so pressing play normally starts on
+/// that frame instead of after a render.
+export function startPlay(key) {
+    if (!on || !range || !key) return false;
+    const shot = shots.get(key);
+    const until = hooks.until ? hooks.until() : range.end;
+    const seed = shot && shot.state === 'ready' && shot.path
+        ? { path: shot.path, seconds: range.end - range.start } : null;
+    return play.start(key, range.start, Math.max(until, range.end), SECONDS, seed);
+}
+
+export function stopPlay() { play.stop(); }
+
+export const playingKey = play.playingKey;
+export const isPlaying = play.isPlaying;
+export const playStats = play.stats;
+export const currentPiece = play.current;
+export const nextPiece = play.next;
+export const reportPosition = play.report;
+export const advancePlay = play.advance;
 
 /// Whether anything is outstanding, for the status line — a graph that is
 /// halfway through filling in should say so rather than looking half broken.
-export function outstanding() { return queue.length + (running ? 1 : 0); }
+export function outstanding() {
+    return queue.length + (running && !running.seg ? 1 : 0);
+}
