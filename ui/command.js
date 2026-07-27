@@ -30,7 +30,6 @@ import { project } from './project.js';
 import { div, span, put, show } from './dom.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings } from './export/state.js';
-import { videoOptions, audioOptions } from './export/options.js';
 import { buildSpec, specSources } from './export/spec.js';
 import { containerInfo } from './export/capabilities.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
