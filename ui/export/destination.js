@@ -1,0 +1,172 @@
+// Where the render goes.
+//
+// It was a path and two flags, which was right while a destination was always
+// one file. Four muxers say otherwise and each is a different shape:
+//
+//   | | |
+//   |---|---|
+//   | one file | what nearly every render is |
+//   | a set of files | `image2`, `segment`, `hls`, `dash` — pictures, segments, chunks and the playlist that names them |
+//   | a stream | a URL through one of the protocols this build links |
+//   | several at once | `-f tee`: one encode, several destinations |
+//
+// **Which of the four this is, is asked rather than declared.** There is no
+// mode control here and no list of segmenting muxers written down, because
+// both would be a second answer that could disagree with the first: the muxer
+// picker already has the facts. `AVFMT_NOFILE` is libavformat's own way of
+// saying "I do not write the file you named me with" — which is exactly what a
+// segmenter, a playlist writer and `tee` all are — and a frame pattern in the
+// path is what makes `image2` a run rather than one picture. A URL is a URL.
+//
+// The one name in this file is `tee`, and it is a name rather than a
+// capability: `-f tee` *is* the mechanism for several destinations, there is
+// one such muxer, and asking a question to discover it would be asking a
+// question whose only possible answer is its name.
+//
+// **Why the tee muxer and not two Writers.** Chunk 12 sketched the second and
+// the seams do allow it — one `FrameSource`, two `Writer`s — but it would be
+// the wrong thing: `tee` means *one encode to several places*, and two Writers
+// are two encoders on the same frames. Twice the CPU, twice the heat, and two
+// files that are supposed to be the same bitstream in different wrappers are
+// two different bitstreams. The muxer does what the name means; the seam stays
+// available for the day something wants two genuinely different encodes, which
+// is a different feature and is not this one.
+
+import { settings } from './state.js';
+
+/// The scheme of a URL, or '' for a path. A Windows drive letter is a colon in
+/// a path and not a scheme, which is why the run before the colon has to be
+/// longer than one character.
+export function schemeOf(path) {
+    const m = /^([A-Za-z][A-Za-z0-9+.-]+):\/\//.exec(String(path || ''));
+    return m ? m[1].toLowerCase() : '';
+}
+
+export const outputProtocols = () =>
+    (bro.ffmpeg.protocols && bro.ffmpeg.protocols.output) || [];
+
+/// Can this build reach that scheme? A URL naming a protocol that is absent
+/// fails at open with a message about a filename, which is the least useful
+/// place to find out.
+export const protocolLinked = (scheme) => outputProtocols().indexOf(scheme) >= 0;
+
+export const isTee = () => settings.container === 'tee';
+
+/// One of `file`, `files`, `stream`, `several`.
+///
+/// The order matters and is the order the questions come: a `tee` is several
+/// whatever its destinations are, a URL is a stream whatever the muxer thinks,
+/// and what is left is a set or a file depending on whether the muxer writes
+/// what it was named with.
+export function kindOf(muxer, path = settings.path) {
+    if (isTee()) return 'several';
+    if (schemeOf(path)) return 'stream';
+    if (bro.ffmpeg.hasFramePattern(path || '')) return 'files';
+    if (muxer && muxer.noFile) return 'files';
+    return 'file';
+}
+
+/// What the destination is, in one sentence, in libavformat's own terms.
+export function describeKind(kind, muxer) {
+    switch (kind) {
+        case 'several':
+            return 'one encode, several destinations — each with its own muxer and its own ' +
+                   'options, written as the -f tee argument below';
+        case 'stream':
+            return 'a URL: the render is pushed through a protocol as it is made, so there ' +
+                   'is no file to size and nothing to open at the end';
+        case 'files':
+            return muxer && muxer.noFile
+                ? `${muxer.name} does not write the file it is named with — it opens its own ` +
+                  'as it goes, and what you name is the one that says where they are'
+                : 'a file per frame — the numbering is in the name, and there is nowhere ' +
+                  'else it could be';
+        default:
+            return 'one file, opened now and closed when the render ends';
+    }
+}
+
+// ── several destinations ───────────────────────────────────────────────────
+//
+// The `tee` muxer takes its destinations in the filename, separated by `|`,
+// each optionally preceded by `[key=value:key=value]`. That is a small
+// language inside an argument, and it has escaping rules of its own — which is
+// the awkward part and the reason the spec is *built* here rather than typed.
+//
+// libavformat splits the slaves with `av_get_token`, which honours a backslash
+// and stops at the separator, and reads the bracket with `av_opt_get_key_value`
+// on `=` and `:`. So a `|` or a `\` anywhere has to be escaped, and inside a
+// bracket a `:` and a `]` do too. Everything here is then quoted once more by
+// the command bar for the shell, which is a second and completely separate
+// layer — a fact worth knowing, because the two are what make hand-written tee
+// arguments notoriously hard to get right.
+
+/// A destination's URL as `tee` will read it.
+export const escapeTarget = (s) => String(s || '').replace(/([\\|])/g, '\\$1');
+
+/// A value inside the `[...]`, where `:` separates one option from the next
+/// and `]` ends the list.
+export const escapeOption = (s) => String(s || '').replace(/([\\|:\]])/g, '\\$1');
+
+let nextId = 1;
+export const newDestination = (over = {}) =>
+    Object.assign({ id: nextId++, format: '', path: '', options: {} }, over);
+
+/// The whole `-f tee` argument, or '' when there is nothing to write.
+///
+/// A destination with no path is skipped rather than written as an empty
+/// slave: `[f=mpegts]|out.mkv` is a parse error, and half-typed rows are the
+/// normal state of a list somebody is filling in.
+export function teeSpec(list = settings.destinations) {
+    const parts = [];
+    for (const d of list || []) {
+        if (!d.path) continue;
+        const opts = [];
+        // `f` first, because it is the one every destination has and the one
+        // that decides what the rest of the bracket means.
+        if (d.format) opts.push(`f=${escapeOption(d.format)}`);
+        for (const k of Object.keys(d.options || {})) {
+            const v = d.options[k];
+            if (v === '' || v === undefined) continue;
+            opts.push(`${k}=${escapeOption(v)}`);
+        }
+        parts.push((opts.length ? `[${opts.join(':')}]` : '') + escapeTarget(d.path));
+    }
+    return parts.join('|');
+}
+
+/// The string `render.start` is given as `path`, which for a tee is not a path
+/// at all. One place, because there are four callers — the spec, the command
+/// bar, the warnings and the progress panel — and a fifth answer built by hand
+/// somewhere would be a render going somewhere the screen does not say.
+export function outputTarget() {
+    return isTee() ? teeSpec() : settings.path;
+}
+
+/// What a person would open to look at the result, or '' when there is nothing
+/// to open.
+///
+/// **A render to a set of files is not "done, here is your file".** For `hls`
+/// and `dash` the answer is the playlist, which is the file that was named and
+/// is the only thing that says what order the pieces go in. For a numbered run
+/// it is the first file, because a run of pictures has no index and `image2`'s
+/// pattern is not a name anything can open. For a stream there is nothing:
+/// what was sent has gone, and offering to open it would be offering to open a
+/// socket. For a tee it is whichever destination is a file — the first one, not
+/// because it is more important but because the other is the same render.
+export function openable(kind, path = settings.path) {
+    if (kind === 'stream') return '';
+    if (kind === 'several') {
+        const local = (settings.destinations || []).find((d) => d.path && !schemeOf(d.path));
+        return local ? local.path : '';
+    }
+    if (kind === 'files' && bro.ffmpeg.hasFramePattern(path)) {
+        const start = Number(settings.extraFormat.start_number);
+        try {
+            return bro.ffmpeg.frameNames(path, Number.isFinite(start) ? start : 1, 1)[0] || '';
+        } catch (e) {
+            return '';
+        }
+    }
+    return path;
+}

@@ -504,6 +504,21 @@ int Writer::ioOpen(AVFormatContext* s, AVIOContext** pb, const char* url, int fl
 
     const int rc = avio_open2(pb, url, flags, &s->interrupt_callback, &merged);
     if (rc >= 0 && self) self->noteOpened(url, *pb, merged);
+
+    // Give the caller back only what the protocol did *not* take, which is what
+    // `io_open` is defined to do and what the caller then goes on to hand to
+    // its own `avformat_write_header`. `tee` is the one that notices: its slave
+    // options go through here on the way to a muxer, and a protocol option
+    // still sitting in the bag afterwards is reported by the slave as an
+    // unknown muxer option.
+    if (options && *options) {
+        AVDictionary* keep = nullptr;
+        const AVDictionaryEntry* e = nullptr;
+        while ((e = av_dict_iterate(*options, e)))
+            if (av_dict_get(merged, e->key, nullptr, 0)) av_dict_set(&keep, e->key, e->value, 0);
+        av_dict_free(options);
+        *options = keep;
+    }
     av_dict_free(&merged);
     return rc;
 }

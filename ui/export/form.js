@@ -27,6 +27,8 @@ import { defaultPath, withExtension, withPattern, withoutPattern,
 import { cutPoints } from './options.js';
 import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
+import { kindOf, describeKind, schemeOf, protocolLinked, teeSpec,
+         newDestination } from './destination.js';
 
 let panes = {};
 let hooks = {};
@@ -104,7 +106,45 @@ export function drawForm() {
 
 // ── output ─────────────────────────────────────────────────────────────────
 
+/// Where the render goes — a file, a set of files, a URL, or several at once.
+///
+/// **The panel states what the destination is before it offers anything.** The
+/// four shapes want different things said about them: a set of files wants to
+/// know what the pieces will be called, a URL wants to know whether this build
+/// can reach its protocol at all, and a tee wants the list. None of that is a
+/// mode somebody picks — see ui/export/destination.js, where the shape is asked
+/// of the muxer and the path rather than declared.
 function outputRows() {
+    const muxer = muxerInfo(settings.container) || { name: settings.container };
+    const kind = kindOf(muxer);
+    const all = formatOptionsOf(settings.container);
+
+    const rows = [
+        row('Goes to', span(KIND_LABELS[kind], 'mono')),
+        row('', note(describeKind(kind, muxer))),
+    ];
+
+    if (kind === 'several') rows.push(...teeRows());
+    else rows.push(...oneTargetRows(kind));
+
+    rows.push(...formatRows());
+    rows.push(head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
+        'data-f': 'formatopts',
+        cls: 'section-head ex-toggle',
+        on: { click: () => { showFormatOptions = !showFormatOptions; drawForm(); } },
+    }));
+    return rows;
+}
+
+const KIND_LABELS = {
+    file: 'one file',
+    files: 'a set of files',
+    stream: 'a stream',
+    several: 'several destinations',
+};
+
+/// The ordinary case, and the two that are nearly it: a path, or a URL.
+function oneTargetRows(kind) {
     const path = el('input', {
         cls: 'wide', 'data-f': 'path', type: 'text', value: settings.path,
         on: { change: () => {
@@ -119,22 +159,103 @@ function outputRows() {
     fileLabel.classList.add('ex-dir');
     refreshFileLabel();
 
-    const all = formatOptionsOf(settings.container);
-    return [
-        row('File', path),
-        row('', btns([
+    const rows = [row(kind === 'stream' ? 'URL' : 'File', path)];
+
+    const scheme = schemeOf(settings.path);
+    if (scheme) {
+        // A URL naming a protocol that is not in this build fails at open with
+        // a message about a filename, which is the least useful place to find
+        // out. The same row the Sources stage draws for an input, for the same
+        // reason and out of the same list.
+        const linked = protocolLinked(scheme);
+        rows.push(row('Protocol', span(
+            linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
+            linked ? 'mono' : 'mono src-missing')));
+        rows.push(row('', note(
+            'Its own options are in the column beside the muxer’s. They travel in one bag, ' +
+            'which is what libavformat does with what a muxer does not recognise — and a ' +
+            'key neither takes stops the render rather than being ignored.')));
+    } else {
+        // Only where there is a file to choose. A dialog for a URL would be a
+        // dialog that cannot say what is being asked for.
+        rows.push(row('', btns([
             el('button', { cls: 'tiny', 'data-f': 'browse', text: 'Choose…',
                            on: { click: () => browse(path) } }),
             fileLabel,
-        ])),
-        ...numberingRows(path),
-        ...formatRows(),
-        head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
-            'data-f': 'formatopts',
-            cls: 'section-head ex-toggle',
-            on: { click: () => { showFormatOptions = !showFormatOptions; drawForm(); } },
-        }),
-    ];
+        ])));
+    }
+
+    rows.push(...numberingRows(path));
+    return rows;
+}
+
+// ── several destinations ───────────────────────────────────────────────────
+//
+// One encode, several places. The list is edited as a list — each row a muxer,
+// a target and its own options — and the `-f tee` argument is *built* from it
+// rather than typed, because that argument is a small language with two layers
+// of escaping over it and hand-writing one correctly is a party trick.
+//
+// It is shown as well as built, in full, under the list: the whole claim of
+// this application is that nothing reaches ffmpeg unseen, and an argument
+// assembled on your behalf is exactly the thing that has to be visible.
+
+function teeRows() {
+    const list = settings.destinations;
+    const rows = [];
+
+    list.forEach((d, i) => {
+        const target = el('input', {
+            cls: 'wide', 'data-f': `tee-path-${i}`, type: 'text', value: d.path,
+            on: { change: () => { d.path = target.value.trim(); hooks.changed(); } },
+        });
+        const muxer = el('input', {
+            cls: 'wide', 'data-f': `tee-format-${i}`, type: 'text', value: d.format,
+            placeholder: 'muxer, by name — mpegts, flv, matroska',
+            on: { change: () => { d.format = muxer.value.trim(); hooks.changed(); } },
+        });
+        const scheme = schemeOf(d.path);
+        rows.push(head(`Destination ${i + 1}`, {
+            cls: 'section-head',
+        }));
+        rows.push(row('-f', muxer));
+        rows.push(row('To', target));
+        if (scheme)
+            rows.push(row('', note(protocolLinked(scheme)
+                ? `${scheme} · linked in`
+                : `${scheme} · not in this build, so this destination will fail at open`)));
+        rows.push(row('', btns([
+            el('button', { cls: 'tiny', 'data-f': `tee-drop-${i}`, text: 'Remove',
+                           on: { click: () => {
+                               settings.destinations.splice(i, 1);
+                               hooks.changed();
+                           } } }),
+        ])));
+    });
+
+    rows.push(row('', btns([
+        el('button', { cls: 'tiny', 'data-f': 'tee-add', text: '+ Destination',
+                       on: { click: () => {
+                           // The muxer the Encode stage is set to is the
+                           // sensible first answer for the first destination
+                           // and a poor one for the second, which is usually
+                           // the whole reason there is a second.
+                           settings.destinations.push(newDestination({
+                               format: list.length ? '' : 'matroska',
+                               path: '',
+                           }));
+                           hooks.changed();
+                       } } }),
+    ])));
+
+    const spec = teeSpec();
+    rows.push(row('-f tee', span(spec || 'nothing to write yet', spec ? 'mono ex-tee' : 'dim')));
+    rows.push(row('', note(
+        'Built rather than typed: tee separates its destinations with | and reads each ' +
+        'one’s options out of [ ], so a | or a \\ in a target and a : or a ] in an option ' +
+        'value have to be escaped — and then the shell quotes the lot again, which is a ' +
+        'second and separate layer. The command bar prints what runs.')));
+    return rows;
 }
 
 // ── writing a run of files ─────────────────────────────────────────────────
@@ -438,6 +559,7 @@ function muxerRows(list) {
 }
 
 function pickMuxer(name) {
+    const previous = settings.container;
     settings.container = name;
     const c = muxerInfo(name);
     // The codecs follow the container when the ones in hand will not fit: VP9
@@ -454,7 +576,25 @@ function pickMuxer(name) {
     // The muxer's options are its own; carrying `movflags` into Matroska would
     // stop the render dead at write_header, where an unknown key is an error.
     settings.extraFormat = {};
-    if (settings.path) settings.path = withExtension(settings.path, outputExt());
+    // Only where the muxer has an extension of its own. Forty-seven have none,
+    // and rewriting `take1.mkv` to `take1.out` because `tee` cannot answer the
+    // question would be an answer nobody asked for.
+    if (settings.path && c && c.ext) settings.path = withExtension(settings.path, outputExt());
+
+    // Picking `tee` with a file already named makes that file the first
+    // destination, because it is what somebody who has just settled on a
+    // filename and then decided to also stream it means. An empty list would
+    // throw the decision away and make the obvious next act "type it again".
+    if (name === 'tee' && !settings.destinations.length) {
+        const was = muxerInfo(previous);
+        settings.destinations = [
+            newDestination({ format: previous === 'tee' ? '' : previous,
+                             path: settings.path }),
+            newDestination(),
+        ];
+        if (!was) settings.destinations[0].format = '';
+    }
+
     // image2 writes one file per frame and the numbering is in the filename,
     // so a path with no pattern in it is one picture overwritten on every
     // frame of the range. Nobody means that by picking image2, and finding out
@@ -473,7 +613,7 @@ function pickMuxer(name) {
 /// rather than being ignored.
 function formatOptionRows() {
     const all = formatOptionsOf(settings.container);
-    return optionColumn({
+    const out = optionColumn({
         name: 'fmtoptsearch',
         title: `${settings.container} options · ${all.length}`,
         note: `What ${settings.container} takes beyond its defaults, out of the muxer's own ` +
@@ -484,6 +624,37 @@ function formatOptionRows() {
         hint: 'Anything set here is passed straight to the muxer.',
         onChange: () => hooks.changed(),
     });
+
+    // And the protocol's, when the destination is a URL. **One bag, two
+    // objects**: the muxer takes what it recognises and libavformat hands the
+    // rest down to the AVIO layer, which is what the Sources stage already does
+    // at the reading end and is why these are edited into `extraFormat` rather
+    // than into a second dictionary. `srt` reports thirty-odd options here,
+    // `rtmp` about twenty, and none of them is reachable any other way.
+    //
+    // Only where *this* render's destination is a URL. A `tee` has several
+    // destinations and several protocols between them, and one column feeding
+    // one bag could not say which of them it was for — so a tee destination
+    // carries its own options in its own brackets instead.
+    const scheme = kindOf(muxerInfo(settings.container) || {}) === 'stream'
+        ? schemeOf(settings.path) : '';
+    if (scheme) {
+        let opts = [];
+        try { opts = bro.ffmpeg.protocolOptions(scheme) || []; } catch (e) { opts = []; }
+        if (opts.length)
+            out.push(...optionColumn({
+                name: 'protooptsearch',
+                title: `${scheme} options · ${opts.length}`,
+                note: 'The protocol’s own — timeouts, buffer sizes, certificates, latency. ' +
+                      'They travel in the same bag the muxer’s do, and a key neither of ' +
+                      'them has stops the render rather than being ignored.',
+                options: opts,
+                bag: settings.extraFormat,
+                hint: 'Anything set here is passed straight to the protocol.',
+                onChange: () => hooks.changed(),
+            }));
+    }
+    return out;
 }
 
 // ── video ──────────────────────────────────────────────────────────────────

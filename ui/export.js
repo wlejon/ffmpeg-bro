@@ -39,6 +39,7 @@ import { initPreview, drawPreview, drawPreviewStats, chasePreview, startPreview,
          stepPreviewBy } from './export/preview.js';
 import { initStrip, drawStrip, refitStrip, markPreviewAt } from './export/strip.js';
 import { initProgress, drawProgress } from './export/progress.js';
+import * as destination from './export/destination.js';
 
 let el_ = {};
 let hooks = {};
@@ -422,3 +423,9 @@ export function currentOptions() { return videoOptions(activeVideoCodec()); }
 /// numbers instead of promising three.
 export { metrics as qualityMetrics } from './export/quality.js';
 export function previewState() { return preview; }
+
+/// Where the render goes, as a shape rather than a path. Pure — the kind, the
+/// tee argument and its escaping are all functions of the settings — so a test
+/// can state exactly what a destination becomes without driving a form or
+/// starting a render, which is how ui_filtergraph.js is written against specs.
+export { destination };

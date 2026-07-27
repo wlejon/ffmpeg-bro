@@ -1418,6 +1418,19 @@ body.fs #cropbox { display: none; }
 #ex-settings select, #ex-advanced select, #src-options select { max-width: 100%; }
 #ex-settings input[type=range] { width: 140px; }
 .ex-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The `-f tee` argument the destination list comes to. Wrapped anywhere and
+   not elided, because it is the whole thing that is being shown: an argument
+   assembled on somebody's behalf is exactly the one that has to be legible,
+   and half of one with a "…" on the end says nothing about the escaping. */
+.ex-tee {
+    display: block;
+    word-break: break-all;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--accent);
+}
+
 .tiny-note { font-size: 11px; }
 
 .ex-toggle { cursor: pointer; user-select: none; }

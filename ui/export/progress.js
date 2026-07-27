@@ -9,6 +9,14 @@
 import { el, div, put, fromTemplate } from '../dom.js';
 import { bytes, elapsed, basename } from '../format.js';
 import { verdict, openReport } from '../report.js';
+import { kindOf, openable } from './destination.js';
+import { settings } from './state.js';
+import { muxerInfo } from './capabilities.js';
+
+/// What shape the destination of the render being watched is. Asked of the
+/// settings rather than carried in the status, because it is a fact about what
+/// was asked for and the renderer has no opinion about it.
+const destinationKind = () => kindOf(muxerInfo(settings.container) || {});
 
 let pane = null;
 let hooks = {};
@@ -60,8 +68,31 @@ function said() {
     ]);
 }
 
+/// What is arriving, said in the terms the destination makes true.
+///
+/// **The three shapes cannot share a sentence.** A bounded render into one file
+/// has frames and a total and therefore an estimate; a render into a set of
+/// files has all of that *and* a count of pieces, which is the thing actually
+/// showing up on disk and the only number that says a segmenter is segmenting;
+/// a stream has no size, no percentage and nothing to open, and what it can say
+/// honestly is how long it has been going and how fast the bytes are leaving.
+/// A bar creeping towards an end nobody chose is the failure this avoids, and
+/// it is the same rule a recording already follows — `openEnded`, and zero
+/// meaning nobody knows.
+function shapeLine(p, kind) {
+    if (kind === 'stream') {
+        const rate = p.elapsed > 0 ? (p.bytes * 8) / p.elapsed : 0;
+        return line(`${bytes(p.bytes)} sent · ${(rate / 1e6).toFixed(2)} Mb/s`, 'mono');
+    }
+    if (p.pieces > 0)
+        return line(`${p.pieces} file${p.pieces === 1 ? '' : 's'} written so far`, 'mono');
+    return null;
+}
+
 function running(p, pct) {
-    const left = p.fps > 0 && p.totalFrames
+    const kind = destinationKind();
+    const open = p.openEnded || kind === 'stream';
+    const left = !open && p.fps > 0 && p.totalFrames
         ? Math.max(0, (p.totalFrames - p.frames) / p.fps) : 0;
     // Which walk over the range this is, and what it is for. A render that is
     // going to do the whole thing again must not report "43%" and leave the
@@ -72,37 +103,63 @@ function running(p, pct) {
                'dim')
         : null;
     return [
-        bar(pct),
+        // A render with no end has no fraction to draw, and a bar at zero for
+        // ten minutes says "stuck" rather than "streaming".
+        open ? null : bar(pct),
         twoPass,
         // A render that copies packets has no output frames to count — what it
         // writes is packets and how many there are is not a thing anybody knows
         // before reading them, which is why `totalFrames` is zero. "frame 40 of
         // 0" is the sort of readout that looks like a bug in the progress bar,
         // so it says what it is counting instead.
-        line(p.totalFrames ? `${pct}% · frame ${p.frames} of ${p.totalFrames}`
-                           : `${pct}% · ${p.frames} packets copied`, 'mono'),
+        line(!p.totalFrames ? `${p.frames} packets copied`
+                            : open ? `frame ${p.frames}`
+                                   : `${pct}% · frame ${p.frames} of ${p.totalFrames}`, 'mono'),
+        shapeLine(p, kind),
         line(`${p.fps.toFixed(1)} fps · ${elapsed(p.elapsed)} so far` +
              (left > 0.5 ? ` · about ${elapsed(left)} left` : '') +
-             ` · ${bytes(p.bytes)}`, 'mono dim'),
+             (kind === 'stream' ? '' : ` · ${bytes(p.bytes)}`), 'mono dim'),
         line(p.path, 'dim'),
     ].filter(Boolean);
 }
 
 function done(p) {
+    const kind = destinationKind();
+    // **A render to a set of files is not "done, here is your file", and a
+    // render to a socket has nothing to open at all.** `openable()` is where
+    // that is decided — the playlist for hls, the first picture of a numbered
+    // run, whichever tee destination is local, nothing for a stream — because
+    // a button offering to open something that is not there is worse than no
+    // button.
+    const back = el('button', { cls: 'tiny', 'data-f': 'back', text: 'Back to settings',
+                                on: { click: hooks.back } });
+    const open = openable(kind, p.path);
+    const buttons = open
+        ? [el('button', { cls: 'tiny', 'data-f': 'import', text: 'Add it to the timeline',
+                          on: { click: () => hooks.addToTimeline(open) } }), back]
+        : [back];
+
     return [
         bar(100, 'done'),
-        line(`Wrote ${basename(p.path)}`, 'good'),
-        line(`${p.frames} ${p.totalFrames ? 'frames' : 'packets'} · ${bytes(p.bytes)} · ` +
+        line(kind === 'stream' ? `Sent to ${p.path}`
+                               : `Wrote ${p.pieces > 0 ? `${p.pieces + 1} files` : basename(p.path)}`,
+             'good'),
+        line(`${p.frames} ${p.totalFrames ? 'frames' : 'packets'} · ` +
+             `${bytes(p.bytes)}${kind === 'stream' ? ' sent' : ''} · ` +
              `${elapsed(p.elapsed)} at ${p.fps.toFixed(1)} fps`, 'mono dim'),
         line(p.path, 'dim'),
+        // What "the result" is, when it is not the thing that was named. The
+        // playlist is a file that says where the pieces are, and saying so is
+        // the difference between a render somebody can use and one they have to
+        // go and look in a folder to understand.
+        kind === 'files' && open && p.pieces > 0
+            ? line(`${p.pieces} more beside it; ${basename(open)} is the one to open`, 'dim')
+            : null,
+        kind === 'stream'
+            ? line('nothing was kept — a stream is gone once it has been sent', 'dim') : null,
         said(),
-        div('ex-line', [
-            el('button', { cls: 'tiny', 'data-f': 'import', text: 'Add it to the timeline',
-                           on: { click: () => hooks.addToTimeline(p.path) } }),
-            el('button', { cls: 'tiny', 'data-f': 'back', text: 'Back to settings',
-                           on: { click: hooks.back } }),
-        ]),
-    ];
+        div('ex-line', buttons),
+    ].filter(Boolean);
 }
 
 function stopped(p, pct) {

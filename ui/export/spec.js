@@ -13,6 +13,7 @@ import { settings, outputFps, outputExt } from './state.js';
 import { muxerInfo } from './capabilities.js';
 import { videoOptions, audioOptions, forceKeyFrames } from './options.js';
 import { streamSpecs } from './streams.js';
+import { outputTarget } from './destination.js';
 import { renderGraph } from '../filtergraph.js';
 import { current as overlayState, isEmpty, nodes as overlayNodes } from '../graph/overlay.js';
 
@@ -218,7 +219,11 @@ export function buildSpec(over = {}) {
     };
 
     const spec = {
-        path: over.path || settings.path || defaultPath(),
+        // Where it goes, which is not always a path: `-f tee` takes its
+        // destinations in the filename, and `outputTarget()` is the one place
+        // that assembles them. A preview overrides it with a temp file, as it
+        // overrides everything else about the output.
+        path: over.path || outputTarget() || defaultPath(),
         // The `-i`s, in the order they are numbered. All of them, not only the
         // ones a clip reads: the list is the document's, the indices are what
         // the clips point at, and dropping the unused ones would renumber the

@@ -1136,7 +1136,14 @@ function stageState(id) {
     const size = p && p.state === 'done' && p.bytes ? bytes(p.bytes) : '';
     const n = (s.streams || []).length;
     const list = `${n} stream${n === 1 ? '' : 's'}`;
-    return [s.container || '—', size || `${list}${s.path ? ' · ' + basename(s.path) : ''}`];
+    // Where it goes, which is not always one filename. A `tee` has no path at
+    // all — the destinations are the list — and a card that named `s.path`
+    // there would name whatever file the muxer before it happened to leave
+    // behind, which is the one thing this render is *not* writing.
+    const dest = exporter.destination.isTee()
+        ? `${(s.destinations || []).filter((d) => d.path).length} destinations`
+        : (s.path ? basename(s.path) : '');
+    return [s.container || '—', size || `${list}${dest ? ' · ' + dest : ''}`];
 }
 
 /// Kept because the export module still calls it when its job state changes:

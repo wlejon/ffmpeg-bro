@@ -907,6 +907,333 @@ console.log('\nchoosing a muxer');
     pump(40);
 }
 
+// ── where the render goes ──────────────────────────────────────────────────
+//
+// A destination stopped being a path and two flags. Four shapes, and the whole
+// claim of this section is that the *shape* is asked rather than declared: the
+// muxer and the path decide it between them, and every panel, warning, command
+// note and progress readout reads that one answer.
+
+console.log('\nwhere the render goes');
+{
+    A.shell.goTo('write');
+    pump(60);
+    const D = A.exporter.destination;
+
+    // A known starting point. Every shape below is a container and a path, and
+    // both are remembered between runs — so a section that assumed what it
+    // inherited would pass or fail on what the last run left behind.
+    S.container = 'mp4';
+    S.path = bro.appDir + '/../out/ui-export.mp4';
+    S.extraFormat = {};
+    S.destinations = [];
+    A.exporter.redraw();
+    pump(40);
+
+    // The ordinary case is still the ordinary case, and it says so.
+    same(S.container, 'mp4', 'the container is mp4 to begin with');
+    same(D.kindOf(bro.ffmpeg.muxers.find((m) => m.name === 'mp4'), S.path), 'file',
+         'a path and a muxer that writes it is one file');
+    ok((f('path') || {}).value === S.path, 'and the panel offers the path');
+
+    // A URL is a stream, whatever the muxer thinks. There is no control that
+    // says so: the scheme does.
+    const wasPath = S.path;
+    S.path = 'udp://127.0.0.1:9000';
+    A.exporter.redraw();
+    pump(40);
+    same(D.kindOf(bro.ffmpeg.muxers.find((m) => m.name === 'mp4'), S.path), 'stream',
+         'a URL is a stream, asked of the path rather than of a mode control');
+    ok(D.schemeOf(S.path) === 'udp', 'the scheme is read out of it');
+    ok(D.outputProtocols().length > 5,
+       `${D.outputProtocols().length} output protocols in this build, and udp is ` +
+       (D.protocolLinked('udp') ? 'one of them' : 'not among them'));
+    ok(D.protocolLinked('udp'), 'udp is linked in');
+    ok(!D.protocolLinked('no_such_protocol'), 'and a scheme this build lacks is reported so');
+
+    // C:\ is a colon in a path, not a scheme. Getting this wrong would call
+    // every Windows path a stream.
+    same(D.schemeOf('C:/videos/out.mp4'), '', 'a drive letter is not a protocol');
+
+    // The protocol's own options, in the same column the muxer's are in and
+    // the same bag they travel in — which is what libavformat does with what a
+    // muxer does not recognise.
+    if (!q('#ex-format-opts [data-f="protooptsearch"]')) {
+        f('formatopts').click();
+        pump(40);
+    }
+    ok(!!q('[data-f="protooptsearch"]'),
+       'a URL destination offers the protocol’s own option table beside the muxer’s');
+    const udpOpts = bro.ffmpeg.protocolOptions('udp') || [];
+    ok(udpOpts.length > 3, `udp reports ${udpOpts.length} options`);
+    q('[data-f="protooptsearch"]').value = 'pkt_size';
+    q('[data-f="protooptsearch"]').dispatchEvent(new Event('input'));
+    pump(40);
+    const pkt = q('#ex-format-opts [data-opt="pkt_size"]');
+    ok(!!pkt, 'searching it finds pkt_size, which is the protocol’s and not the muxer’s');
+    pkt.value = '1316';
+    pkt.dispatchEvent(new Event('change'));
+    pump(40);
+    same(String(S.extraFormat.pkt_size), '1316',
+         'and it goes in the same bag the muxer’s options do');
+    same(String(A.exporter.buildSpec().formatOptions.pkt_size), '1316',
+         'which is the bag the renderer is handed');
+    ok(A.command.currentCommand().indexOf('-pkt_size 1316') > 0,
+       'and the command prints it, because it reaches the destination');
+    ok(A.command.currentCommand().indexOf('udp://127.0.0.1:9000') > 0,
+       'with the URL as the output, unresolved against anything');
+
+    // A stream has no size and no percentage — the same vocabulary a recording
+    // uses, rather than a second convention.
+    const streamWarnings = A.exporter.currentWarnings();
+    ok(!streamWarnings.some((w) => w.indexOf('no udp output protocol') >= 0),
+       'a protocol this build has is not warned about');
+
+    // mp4 down a socket cannot have its index moved to the front, and it fails
+    // at the end of the render after everything has been sent.
+    ok(S.faststart, 'faststart is on');
+    ok(streamWarnings.some((w) => w.indexOf('+faststart') >= 0),
+       'and an mp4 to a stream says so, because a socket cannot be rewound');
+
+    delete S.extraFormat.pkt_size;
+    S.path = wasPath;
+    A.exporter.redraw();
+    pump(40);
+}
+
+console.log('\na set of files, and what to open at the end');
+{
+    A.shell.goTo('write');
+    pump(40);
+    const D = A.exporter.destination;
+
+    const seg = bro.ffmpeg.muxers.find((m) => m.name === 'segment');
+    const hls = bro.ffmpeg.muxers.find((m) => m.name === 'hls');
+    ok(!!seg && !!hls, 'this build has the segment and hls muxers');
+    ok(seg.noFile, 'segment declares AVFMT_NOFILE — it does not write what it is named with');
+    same(D.kindOf(seg, 'out/seg-%03d.ts'), 'files', 'so it is a set of files');
+    same(D.kindOf(hls, 'out/stream.m3u8'), 'files', 'and so is hls, whose name is a playlist');
+
+    // The other route to a set: the numbering is in the filename, which is the
+    // only place image2 can put it.
+    const img = bro.ffmpeg.muxers.find((m) => m.name === 'image2');
+    same(D.kindOf(img, 'out/frame%04d.png'), 'files', 'a frame pattern is a set of files too');
+
+    // **"Open the result" is a real question for a set.** The playlist is the
+    // file that says where the pieces are; a numbered run has no index, so the
+    // first picture is the answer; a stream has nothing at all.
+    S.container = 'hls';
+    S.path = 'out/stream.m3u8';
+    same(D.openable('files', S.path), 'out/stream.m3u8',
+         'for hls the thing to open is the playlist that was named');
+    S.container = 'image2';
+    S.path = 'out/frame%04d.png';
+    ok(/frame0*1\.png$/.test(D.openable('files', S.path)),
+       `a numbered run opens at its first file (${D.openable('files', S.path)})`);
+    same(D.openable('stream', 'udp://127.0.0.1:9000'), '',
+         'and a stream has nothing to open — what was sent has gone');
+
+    // A segment can only start on a keyframe. Two seconds of GOP against a
+    // half-second segment time succeeds and produces two-second segments,
+    // which is the shape of failure the warnings list exists for.
+    S.container = 'segment';
+    S.path = 'out/seg-%03d.ts';
+    S.extraFormat = { segment_time: '0.5' };
+    S.gopSeconds = 2;
+    A.exporter.redraw();
+    pump(40);
+    const segWarn = A.exporter.currentWarnings();
+    ok(segWarn.some((w) => w.indexOf('can only start on a keyframe') >= 0),
+       'a keyframe interval longer than the segment time is called out, with both numbers');
+
+    S.extraFormat = {};
+    S.gopSeconds = 0;
+}
+
+console.log('\nseveral destinations at once');
+{
+    A.shell.goTo('write');
+    const D = A.exporter.destination;
+
+    // Escaping first, because it is the awkward part and it is a pure
+    // function. tee splits on `|` honouring a backslash, and reads each
+    // destination's options out of `[ ]` on `=` and `:`.
+    same(D.escapeTarget('rtmp://host/app/key'), 'rtmp://host/app/key',
+         'an ordinary URL needs no escaping');
+    same(D.escapeTarget('out/a|b.mkv'), 'out/a\\|b.mkv',
+         'a | in a target is escaped, because it is what separates destinations');
+    same(D.escapeTarget('out\\a.mkv'), 'out\\\\a.mkv', 'and so is a backslash');
+    same(D.escapeOption('0:v'), '0\\:v',
+         'inside the brackets a : is escaped, because it separates one option from the next');
+    same(D.escapeOption('a]b'), 'a\\]b', 'and a ] , because it ends them');
+
+    same(D.teeSpec([{ format: 'matroska', path: 'out/a.mkv', options: {} },
+                    { format: 'mpegts', path: 'udp://127.0.0.1:9000', options: {} }]),
+         '[f=matroska]out/a.mkv|[f=mpegts]udp://127.0.0.1:9000',
+         'two destinations become one tee argument');
+    same(D.teeSpec([{ format: 'hls', path: 'out/s.m3u8', options: { hls_time: '2' } }]),
+         '[f=hls:hls_time=2]out/s.m3u8',
+         'and each carries its own muxer options in its own brackets');
+    same(D.teeSpec([{ format: 'matroska', path: '', options: {} },
+                    { format: 'flv', path: 'out/b.flv', options: {} }]),
+         '[f=flv]out/b.flv',
+         'a half-typed row is skipped rather than written as an empty slave');
+
+    // And the same through the form.
+    S.container = 'mp4';
+    S.path = bro.appDir + '/../out/ui-tee-a.mkv';
+    S.destinations = [];
+    A.exporter.redraw();
+    pump(40);
+    f('container-open').click();
+    pump(40);
+    f('fmtsearch').value = 'tee';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    ok(!!q('[data-muxer="tee"]'), 'tee is in the picker, found by name');
+    q('[data-muxer="tee"]').click();
+    pump(60);
+
+    same(S.container, 'tee', 'picking it sets -f tee');
+    ok(S.destinations.length === 2,
+       'and the file already named becomes the first destination rather than being thrown away');
+    same(S.destinations[0].path, bro.appDir + '/../out/ui-tee-a.mkv',
+         'carrying the path that was there');
+    same(S.destinations[0].format, 'mp4', 'and the muxer that was chosen for it');
+
+    // Make it two real destinations: one Matroska file, one MPEG-TS file.
+    S.destinations[0].format = 'matroska';
+    S.destinations[1].format = 'mpegts';
+    S.destinations[1].path = bro.appDir + '/../out/ui-tee-b.ts';
+    A.exporter.redraw();
+    pump(40);
+
+    const spec = A.exporter.buildSpec();
+    same(spec.format, 'tee', 'the renderer is told -f tee');
+    // Escaped as tee reads it, which on Windows means every backslash in a
+    // path is doubled — correct, and worth stating, because it is exactly the
+    // thing that looks wrong and is the reason this is built rather than typed.
+    same(spec.path,
+         `[f=matroska]${D.escapeTarget(S.destinations[0].path)}` +
+         `|[f=mpegts]${D.escapeTarget(S.destinations[1].path)}`,
+         'and the "path" it is given is the destination list, escaped as tee reads it');
+
+    const cmd = A.command.currentCommand();
+    ok(cmd.indexOf('-f tee') > 0, 'the command says -f tee');
+    ok(cmd.indexOf('[f=matroska]') > 0 && cmd.indexOf('[f=mpegts]') > 0,
+       'and prints both destinations');
+    // The list contains a `|`, which a shell would read as a pipe. A command
+    // that cannot be pasted and run is a command not worth printing.
+    ok(/"[^"]*\|[^"]*"/.test(cmd), 'quoted, so the | is tee’s and not the shell’s');
+
+    // The panel says it, in full, because an argument assembled on your behalf
+    // is exactly the one that has to be visible.
+    ok(q('#ex-dest .ex-tee') && q('#ex-dest .ex-tee').textContent.indexOf('[f=mpegts]') >= 0,
+       'and the Write stage shows the argument it built');
+
+    // Now run it. One encode, two files, and both of them the render.
+    {
+        const s2 = A.exporter.buildSpec({ width: 320, height: 180, fps: 25, end: 0.4 });
+        let started = '';
+        try { bro.ffmpeg.render.start(s2); } catch (e) { started = String(e); }
+        ok(!started, `the renderer took a tee spec (${started || 'accepted'})`);
+        if (!started) {
+            waitFor('the tee render', () => bro.ffmpeg.render.poll().state !== 'running', 60000);
+            const st = bro.ffmpeg.render.poll();
+            ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+            same(st.pieces, 2, 'and reports two destinations opened');
+            const a = bro.ffmpeg.probe(S.destinations[0].path);
+            const b = bro.ffmpeg.probe(S.destinations[1].path);
+            ok(a.video && b.video, 'both files carry the picture');
+            same(a.video.width, 320, 'and the first is the render');
+            same(b.video.width, 320, 'and so is the second');
+            ok(b.format.name.indexOf('mpegts') >= 0,
+               `in the container it was told (${b.format.name})`);
+        }
+    }
+
+    // A tee with one destination is one destination with a layer of escaping
+    // over it, and saying so is more useful than letting it work.
+    const kept = S.destinations[1];
+    S.destinations = [S.destinations[0]];
+    A.exporter.redraw();
+    pump(20);
+    ok(A.exporter.currentWarnings().some((w) => w.indexOf('one destination through tee') >= 0),
+       'one destination through tee is called out');
+    S.destinations = [];
+    A.exporter.redraw();
+    pump(20);
+    ok(A.exporter.currentWarnings().some((w) => w.indexOf('nowhere to go') >= 0),
+       'and none at all is called out rather than rendered');
+    S.destinations = [];
+
+    S.destinations = [];
+}
+
+console.log('\nprogress says something true for each shape');
+{
+    // **Three shapes, three readouts.** A bounded file render has frames, a
+    // total and therefore an estimate; a set of files has all of that and a
+    // count of pieces, which is the only number that says a segmenter is
+    // segmenting; a stream has no size, no percentage and nothing to open.
+    A.shell.goTo('write');
+    const wasW = S.width, wasH = S.height, wasOut = S.rangeOut;
+    S.width = 320; S.height = 180; S.rangeOut = 0.6;
+
+    const runIt = (container, path, extra) => {
+        S.container = container;
+        S.path = path;
+        S.extraFormat = extra || {};
+        S.destinations = [];
+        A.exporter.redraw();
+        pump(40);
+        el('ex-go').click();
+        pump(60);
+        waitFor(`the ${container} render`, () => {
+            const s = A.exporter.lastStatus();
+            return s && s.state !== 'running';
+        }, 60000);
+        pump(60);
+        return A.exporter.lastStatus();
+    };
+
+    // A set of files. The playlist is what was named and what gets opened; the
+    // segments are the pieces, counted as libavformat opened them.
+    const hls = runIt('hls', bro.appDir + '/../out/ui-hls.m3u8',
+                      { hls_time: '0.2', hls_list_size: '0' });
+    ok(hls.state === 'done', `an hls render finishes (${hls.state}${hls.error ? ': ' + hls.error : ''})`);
+    ok(hls.pieces >= 1, `and reports the segments beside the playlist (${hls.pieces})`);
+    const hlsPanel = el('ex-progress').textContent;
+    ok(hlsPanel.indexOf('files') >= 0,
+       'the panel says how many files came out rather than naming one');
+    ok(hlsPanel.indexOf('the one to open') >= 0,
+       'and which of them is the one to open, because a playlist is not "here is your file"');
+    ok(!!f('import'), 'so there is still something to put back on the timeline');
+
+    // A stream. Nothing was kept, so there is nothing to offer.
+    const udp = runIt('mpegts', 'udp://127.0.0.1:45232', { pkt_size: '1316' });
+    ok(udp.state === 'done', `a render to udp:// finishes (${udp.state}${udp.error ? ': ' + udp.error : ''})`);
+    const udpPanel = el('ex-progress').textContent;
+    ok(udpPanel.indexOf('Sent to') >= 0,
+       'the panel says it was sent rather than written');
+    ok(udpPanel.indexOf('nothing was kept') >= 0,
+       'and says so out loud, because a stream is gone once it has been sent');
+    ok(!f('import'),
+       'with no offer to put it on the timeline, which would be an offer to open a socket');
+    ok(udp.bytes > 1024, `what it reports is what went through the socket (${udp.bytes} bytes)`);
+
+    S.width = wasW; S.height = wasH; S.rangeOut = wasOut;
+
+    // Back to something the rest of this file can use.
+    S.container = 'mp4';
+    S.path = bro.appDir + '/../out/ui-export.mp4';
+    S.extraFormat = {};
+    A.exporter.redraw();
+    pump(40);
+    A.shell.goTo('encode');
+    pump(40);
+}
+
 // ── the rest of what an encoder is told ────────────────────────────────────
 //
 // None of this is an encoder option, which is exactly why each needed a control

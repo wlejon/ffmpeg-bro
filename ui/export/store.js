@@ -28,6 +28,11 @@ const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     'colorspace', 'colorRange', 'faststart', 'audio',
                     'audioCodecBitrate', 'sampleRate', 'channels',
                     'extraVideo', 'extraAudio', 'extraFormat', 'previewLength',
+                    // Where it goes, when that is more than one place. It has
+                    // to travel with `container`: a remembered `tee` and a
+                    // forgotten destination list is a workspace that opens
+                    // saying it will write to several places and naming none.
+                    'destinations',
                     'streams', 'metadata'];
 
 let fresh = true;

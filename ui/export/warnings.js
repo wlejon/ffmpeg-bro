@@ -11,6 +11,7 @@ import { encoderInfo, audioInfo, muxerInfo, codecTags } from './capabilities.js'
 import { codecOf, labelOf } from './streams.js';
 import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
          containerOf, parseCopy } from './copy.js';
+import { kindOf, schemeOf, protocolLinked } from './destination.js';
 import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
 import { renderGraph } from '../filtergraph.js';
 import { buildSpec, range, specSources } from './spec.js';
@@ -109,8 +110,68 @@ function copyWarnings(list) {
     return out;
 }
 
+/// What the destination will succeed at and be wrong about.
+///
+/// Three of these are about a shape rather than a setting, which is why they
+/// are here rather than on a control: a segment that cannot start where it was
+/// asked to, an index that cannot be moved to the front of something that
+/// cannot be rewound, and a destination list with nothing in it.
+function destinationWarnings() {
+    const out = [];
+    const muxer = muxerInfo(settings.container) || { name: settings.container };
+    const kind = kindOf(muxer);
+
+    if (kind === 'several') {
+        const usable = (settings.destinations || []).filter((d) => d.path);
+        if (!usable.length)
+            out.push('tee has no destinations, so this render has nowhere to go — add one');
+        for (const d of usable) {
+            const scheme = schemeOf(d.path);
+            if (scheme && !protocolLinked(scheme))
+                out.push(`this build has no ${scheme} output protocol, so ${d.path} will ` +
+                         'fail at open with a message about a filename');
+            if (!d.format && scheme)
+                out.push(`${d.path} has no -f, and a URL has no extension for libavformat ` +
+                         'to guess a muxer from — name one');
+        }
+        if (usable.length === 1)
+            out.push('one destination through tee is one destination with a layer of ' +
+                     'escaping over it — pick that muxer directly unless a second is coming');
+    }
+
+    const scheme = schemeOf(settings.path);
+    if (kind === 'stream' && scheme && !protocolLinked(scheme))
+        out.push(`this build has no ${scheme} output protocol — the render will fail at ` +
+                 'open, with a message about a filename rather than about the protocol');
+
+    // An index at the front needs the file rewound after the trailer, and
+    // nothing that goes down a socket can be rewound. It fails at the end of
+    // the render, after everything has been sent, which is the worst moment.
+    if (kind === 'stream' && settings.faststart && /mp4|mov/.test(settings.container))
+        out.push('+faststart rewrites the file after the trailer, and a stream cannot be ' +
+                 'rewound — take it off, or use -movflags frag_keyframe+empty_moov, which ' +
+                 'is what makes an mp4 writable to a socket at all');
+
+    // **A segment can only start on a keyframe.** The renderer asks for one
+    // every two seconds unless told otherwise, so a four-second GOP against a
+    // two-second segment time gives segments of four seconds and a playlist
+    // that quietly disagrees with what was set. It succeeds, which is what
+    // makes it belong in this list.
+    const segTime = Number(settings.extraFormat.hls_time ||
+                           settings.extraFormat.segment_time || 0);
+    if (segTime > 0) {
+        const gop = settings.gopSeconds || 2;
+        if (gop > segTime + 0.01)
+            out.push(`segments are asked for every ${segTime} s and a keyframe every ` +
+                     `${gop} s — a segment can only start on a keyframe, so they will come ` +
+                     `out ${gop} s long. Set the keyframe interval to ${segTime} s or less.`);
+    }
+    return out;
+}
+
 export function warnings() {
     const out = [];
+    out.push(...destinationWarnings());
 
     // The filters go through libavfilter, and the way they get there is
     // `spec.filterGraph`. If the derivation refused, the render still happens —

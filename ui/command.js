@@ -32,6 +32,8 @@ import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
 import { buildSpec, specSources } from './export/spec.js';
 import { parseCopy } from './export/copy.js';
+import { kindOf } from './export/destination.js';
+import { muxerInfo } from './export/capabilities.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
 import { commandParts as captureParts } from './capture.js';
 import { currentStage } from './shell.js';
@@ -44,6 +46,10 @@ import { currentStage } from './shell.js';
 // the thing on screen is the thing that gets read. It never reaches the
 // clipboard: `commandText()` is assembled separately, from the same parts.
 const GAP = '\u00a0';
+
+/// What shape the destination is, for the notes below. Asked of the muxer and
+/// the path rather than stated, exactly as the Write stage asks it.
+const destinationKind = () => kindOf(muxerInfo(settings.container) || {});
 
 let refs = {};
 let open = false;
@@ -540,6 +546,29 @@ function notes(p) {
                     'keyframe at or before it, and that is why a copy starts there. After ' +
                     'the -i they would be an output seek — the whole file read and the front ' +
                     'discarded, slower and beginning on a frame nothing can decode.']);
+    // Where it goes, when that is not a filename. Both of these change what the
+    // last argument on the line *is*, and neither is legible from the argument
+    // itself: a tee spec looks like a filename with punctuation in it, and a
+    // URL looks like a filename that happens to have a scheme.
+    const kind = destinationKind();
+    if (kind === 'several')
+        lines.push([span('Several destinations: ', 'lead'),
+                    'the last argument is not a filename — it is tee’s own list, separated ' +
+                    'by | with each destination’s muxer in [ ]. It is escaped twice on the ' +
+                    'way here: once for tee, which reads a backslash, and once for the ' +
+                    'shell, which is what the quotes are. One encode reaches all of them.']);
+    if (kind === 'stream')
+        lines.push([span('A stream: ', 'lead'),
+                    'the output is a URL, so the render is pushed as it is made. The ' +
+                    'protocol’s options are the ones the muxer did not recognise, printed ' +
+                    'in the same place — libavformat hands them down to the AVIO layer, ' +
+                    'which is the same route they take at the reading end.']);
+    if (kind === 'files')
+        lines.push([span('A set of files: ', 'lead'),
+                    'this muxer writes more than the file it is named with. What the ' +
+                    'command says is what it is told; how many files come out is decided ' +
+                    'by its own options and by where the keyframes are.']);
+
     for (const c of (p.graph.caveats || []))
         lines.push([span('Differs: ', 'lead'), c + '.']);
 

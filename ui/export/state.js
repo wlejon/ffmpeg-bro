@@ -101,6 +101,15 @@ export const settings = {
         { id: 2, kind: 'audio', source: 'mix' },
     ],
 
+    // ── where it goes, when it goes to more than one place ─────────────────
+    //
+    // `-f tee` is one encode written to several destinations, each with its own
+    // muxer and its own options. It is empty for every render that goes to one
+    // place, which is nearly all of them, and it only means anything while the
+    // container is `tee` — see ui/export/destination.js, which builds the
+    // argument and owns the escaping.
+    destinations: [],
+
     // Beside the streams, not among them: a chapter has no index, nothing is
     // mapped to it and it carries no packets. It is a table in the container,
     // which is exactly how ExportSettings holds it and how a muxer writes it.
