@@ -700,14 +700,21 @@ be enough to use this.
 | drag a node's title bar | place it — and everything else selected with it |
 | click a value on a card | change it |
 | hover a wire | its `+` |
+| drag socket → socket | make a wire |
+| drag a socket onto empty canvas | the palette, filtered to what can take that pad |
+| click a wire | select it; `Delete` cuts it |
+| `Add filter` | place one on the canvas with nothing wired to it |
 | `Fit`, or `0` | frame the whole graph |
 | the percentage | back to 1:1 |
 | `Re-layout` | give every node back to the layout |
+| `Delete` | remove a selected node of yours, or cut a selected wire |
 | `Esc` | clear the selection, then leave the stage |
 
-Nodes carry a socket for every port, and wires land on them — which matters most
-at `overlay`, whose two inputs are the canvas and the clip and are not
-interchangeable. **Where you put a node is remembered**, against the node rather
+Nodes carry a socket for **every pad the filter has**, not one per wire that
+arrived — which matters most at `overlay`, whose two inputs are the canvas and
+the clip and are not interchangeable, and which is what makes an empty pad
+something you can see and aim at rather than something invisible. An input pad
+that has nothing on it is drawn hollow. **Where you put a node is remembered**, against the node rather
 than against a position, so it survives the graph being rebuilt by the next
 timeline edit; a placed node does not move for anything except you and
 `Re-layout`. Zoomed out far enough that the values stop being readable the cards
@@ -745,7 +752,65 @@ conversion is the one chain that exists in the printed command and not in the
 graph this binary runs — the writer does it here — so a filter placed there
 would sit in the encoder's colour in the command you copied and in RGBA in the
 render you got. One insert point producing two pictures is worse than one fewer
-insert point.
+insert point. It is attached at the very end, after everything you did, which is
+what makes wiring anything behind it unreachable rather than something to be
+warned about.
+
+### Wiring it yourself
+
+Splicing is one in and one out, and most of libavfilter is not. `overlay` reads
+two pads, `amix` reads as many as you say, `split` writes several, `concat` does
+both — none of which can be dropped *onto* a wire, because there is nothing for
+the second pad to read. So they are placed and then wired:
+
+- **Drag from a socket to a socket.** Either end first; a wire from an input
+  back to an output is the same connection. **An input pad holds one wire**, so
+  dropping on an occupied pad replaces what was there — which is how a filter
+  gets *between* two derived nodes in one gesture rather than a delete and two
+  connects.
+- **Let a wire go over empty canvas** and the palette opens on what can take
+  that pad, out of libavfilter's own registry. What you pick lands where you
+  let go and arrives already wired. `Add filter` is the same palette with
+  nothing in the air.
+- **Click a wire to select it, `Delete` to cut it.** Cutting a wire the
+  derivation made is *remembered*: the skeleton is rebuilt from the timeline on
+  every edit and would put it straight back, so the absence has to be written
+  down. `Give it back` in the column hands the pad to the derivation again.
+
+A filter whose pad count is a number — `amix=inputs=3`, `concat=n=3:v=1:a=1`,
+`xstack` — grows and loses sockets as you change it, because the count is an
+ordinary option in the column beside the graph. **A wire whose pad stops
+existing does not vanish.** It is kept, reported by name — *amix has 2 inputs,
+so your wire at input 3 has nowhere to land* — and put back the moment the count
+goes up again, because a mistyped number should not be lost work.
+
+### When it will not run
+
+A graph you are half way through wiring is a graph that will not run, and that
+is a normal state to be in — the moment between placing a node and connecting it
+is exactly it. So the stage draws it and **says what is wrong on the node it is
+about**: the card is outlined, the reason is on it, the column beside it says the
+same thing with room, and the bar along the bottom counts them.
+
+What is refused, each naming the node:
+
+| | |
+|---|---|
+| an input pad with nothing on it | `overlay has nothing wired to its input 2 of 2` |
+| a pad read twice | `hflip's output is read by 2 filters — put a split in between` |
+| an output nothing reads | `nothing reads split's output 2 of 2` |
+| a picture wire in a sound pad | `a picture wire arrives at amix's input 2 of 2, which takes sound` |
+| a loop | `these feed each other in a circle: hflip → vflip` |
+| a filter this build does not have | `libavfilter in this build has no filter called "unsharpenator"` |
+| nothing mapped | `nothing is wired to video out, so the render has no picture to write` |
+| a wire on a pad that stopped existing | *see above* |
+
+**A render is refused rather than approximated.** The command bar prints the
+reason instead of a filtergraph, and the export goes through the internal
+compositor *without your filters* and says so on the Encode stage — which is the
+honest outcome, because the alternative is a file that succeeded and is not what
+you asked for. Every one of these is a shape ffmpeg itself rejects; the whole
+value of printing a command is that it can be taken elsewhere and run.
 
 ### Seeing what each node produces
 
@@ -814,11 +879,20 @@ panel** — faded, with a dot, and a tooltip naming the node to unlock. `Unlock`
 hands it back to the derivation.
 
 A filter you insert and a value you lock are pinned to a **named point**
-(`clip:7/after-scale`), never to a position, so they survive the rebuild. They
-survive moving and trimming the clip; splitting a clip copies them to both
-halves, because a cut should not change how either half looks; deleting a clip
-takes them with it. They are remembered in `localStorage` between runs — there
-is no project file yet, and this is the first thing that makes one worth having.
+(`clip:7/after-scale`), never to a position, so they survive the rebuild. A node
+you placed carries an id of its own, and a wire is written as the two pads it
+joins — each named the same way, by anchor or by id — so hand-made structure
+survives it too. They survive moving and trimming the clip; splitting a clip
+copies the filters and the locks to both halves, because a cut should not change
+how either half looks, and does *not* copy the wires, because an input pad holds
+one wire and a copy of one would be a second producer arriving at a pad that
+already has one. A clip trimmed out of the rendered range takes its nodes and
+wires with it and brings them back; deleting the clip takes them for good.
+
+They are remembered in `localStorage` between runs — there is no project file
+yet, and this is now a good deal more than the first thing that makes one worth
+having. A hand-wired graph is work in the way a slider position is not, and it
+currently lives on one machine under one key for the whole application.
 
 ### What changes when there is one
 
@@ -1365,15 +1439,17 @@ Honest list of what does not work:
   and that is the only way to move through it: there is no scrub bar, no way
   back, and nothing to jump with. Somewhere else to start from means moving the
   playhead and pressing `At playhead`.
-- **Filters with more than one input or output.** The palette offers what can
-  be spliced onto a wire, which means one in and one out. `amix`, `split`,
-  `blend` and everything else that needs a wire made by hand needs an editor
-  that can make one — the model can express it (an edge names the input port it
-  arrives at), and `split` additionally needs an edge to name the output it
-  leaves by.
-- **A project file.** What you insert and lock is remembered in
-  `localStorage`, which is per machine rather than per edit. The graph
-  overlay is the first thing that makes a document format worth having.
+- **Undo, on the graph.** Everything else in the application is a model edit;
+  the graph overlay is not on that stack, so a wire cut by mistake is put back
+  by wiring it again rather than by `Ctrl-Z`. `Give it back` covers the one case
+  where "again" is ambiguous — a pad handed to the derivation.
+- **Filters that read no pad.** `color`, `testsrc`, `sine`, `movie` — a node
+  with zero inputs can be placed and wired now, and the palette will offer one,
+  but nothing about the *edit* knows what a generated source is: it has no clip,
+  no window and no row on the Sources stage.
+- **A project file.** What you insert, lock, place and wire is remembered in
+  `localStorage`, which is per machine rather than per edit. It was the first
+  thing that made a document format worth having and is now most of the reason.
 - **Acting on what was measured.** A filter's numbers arrive as a series and
   are drawn as one, which is where it stops: `cropdetect` can tell you the
   black bars are 240 rows deep and nothing offers to crop them, `ebur128` can

@@ -150,8 +150,10 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js
 
 # the graph underneath it: the model, the printer's chain rule on graphs the
-# derivation does not produce, locks, insertion, removal, the round trip
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js
+# derivation does not produce, every refusal, pad counts, locks, insertion,
+# removal, hand-made wires surviving a rebuild, the round trip — and, given a
+# file, the wiring gesture driven on the real stage with real MouseEvents
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]
 
 # the render's back-channel, from av_log inside libav to a line on screen:
 # the drain off the frame loop, a warning that is visible and attributed, and
@@ -214,6 +216,15 @@ Six traps when writing headless tests here:
 - **Paths handed to `<video src>` must be absolute.** `bro.ffmpeg.probe()` resolves relative
   to the process cwd but `<video src>` resolves relative to the *document* (`ui/`), so a
   relative path silently probes fine and plays black. Use `bro.appDir + '/../out/x.mp4'`.
+- **A click is three events, and the middle two matter.** `new MouseEvent(...)`
+  works here and carries `clientX`/`clientY`/`button`, so a drag can be driven
+  properly — mousedown on the element, mousemove and mouseup on `document.body`,
+  which bubbles to `document` where the graph listens. But the Graph stage
+  *swallows* the click that ends a drag (a rubber band finishes with one, and
+  letting it through would clear the selection the band had just made), and
+  that flag is only reset by the next press. So a synthesised bare `click` after
+  any drag is discarded: dispatch mousedown and mouseup first. `ui_graph.js`'s
+  `click()` helper is the one place that does it.
 - **`ui/.storage.json` carries state between runs.** It is this engine's `localStorage`,
   it is not in git, and `ui_export.js` renders — which calls `remember()`. So a run that
   leaves the export settings somewhere odd hands them to the *next* run, and a suite that
@@ -1059,8 +1070,22 @@ about them:
   crop, opacity and stacking are `crop`, `colorchannelmixer` and `overlay`
   rather than special cases of anything. `graph/derive.js` builds the skeleton
   from the edit and owns every refusal and caveat; `graph/print.js` turns nodes
-  into chains. `filtergraph.js` is the two composed, with the shape callers
-  want, so `command.js` does not know a graph exists.
+  into chains; `graph/check.js` says what is wrong with a finished one.
+  `filtergraph.js` is the composition, with the shape callers want, so
+  `command.js` does not know a graph exists.
+
+  **Printing and refusing are separate, and that is not tidiness.** `print()`
+  prints whatever it is given, because half of what asks it is a *pruned* view
+  where outputs deliberately go nowhere — that is what cutting a graph off at
+  one node means, and a printer that refused would refuse every node preview.
+  `problems(g)` is asked only of a whole graph, by `derive()`, which returns
+  them alongside the graph rather than instead of it: the state is reachable and
+  normal — the moment between placing a node and wiring it is a graph with a
+  problem in it — so the stage draws it and marks the node. What must not
+  happen is a render going ahead as though the problem were not there, and that
+  is `filtergraph.js`'s job: both `filtergraph()` and `renderGraph()` refuse
+  over any problem, naming the first, because both of them produce something
+  that will be *run*.
 
   **Which of the renderer's two paths a render takes is decided in one place**:
   `buildSpec()` attaches `filterGraph`/`filterInputs` when — and only when — the
@@ -1083,15 +1108,36 @@ about them:
   a subgraph cut down to one clip's picture must not be the reason its sound is
   decoded, and a muted clip is not read for sound at all.
 
-  Three things about the model are load-bearing rather than incidental.
+  **The conversion into the encoder's colour is attached last, in front of the
+  video sink**, by `outputColour()` — after the locks, the insertions and every
+  wire a person made. It used to ride on the back of the last derived `overlay`,
+  which was right while the only thing that could be added to a graph was a
+  filter spliced onto a wire: there was no wire after it, deliberately, so
+  nothing could get between the conversion and the encoder. A hand-made wire
+  can, and the moment it can those two nodes become the one place on the screen
+  that must not be joined to — they exist in the graph this application *prints*
+  and not in the one it *runs*, so a wire ending on `output/color` would be in
+  the command you copied and absent from the render you got. Attaching them at
+  the end makes that unreachable rather than something to check for, and the two
+  forms still differ by exactly one chain. `applyLocks()` is called a second
+  time for those nodes, or they would be the only two on the screen that could
+  not be edited.
+
+  Four things about the model are load-bearing rather than incidental.
   **Arguments are positional-then-named because ffmpeg's are** — `crop`'s four
   numbers are the first entries of the same option table the named ones come
   from, and normalising them would print something other than what was written.
   **Only chain-final nodes carry a label**, because print's rule is that a run
   continues while the wire is private (one producer, one consumer, both
-  filters) and a private pad has no name to carry; that rule is what puts the
-  output colour conversion on the back of the last `overlay` instead of in a
-  chain of its own. And **a node may have more than one output, and an edge
+  filters) and a private pad has no name to carry. A hand-made wire can move
+  the end of a run — put a filter between the last `overlay` and the sink and
+  `vout` is suddenly in the middle of a chain, printed by nothing — so
+  `moveLabelsToChainEnds()` walks them forward afterwards by that same rule; it
+  is a no-op for a graph the derivation built on its own. **A node has the pads
+  its filter has, not the pads its wires gave it** — `node.ins`, filled in by
+  `declarePads()` from `padsOf()`, and `g.inPorts()` — because an unwired pad is
+  the thing you are looking for while wiring and a count of wires cannot see
+  one. And **a node may have more than one output, and an edge
   says which it leaves by** — `node.outs` and `edge.fromPort`. An **input node
   is a file, not a stream**: `[0:v]` and `[0:a]` are two pads of one `-i`, one
   demuxer and one seek, and drawing them as two nodes reading the same path
@@ -1099,31 +1145,97 @@ about them:
   when the port arrived; `padOf` takes it, `connect` records it, and
   `insertAfter`/`remove` move and heal only the wires on the pad in question —
   a filter dropped on a clip's picture that took its sound with it would put an
-  `hflip` in front of `atrim`. `split` and `asplit` are what the model can now
-  say and the derivation does not yet write. **`streamsOf(g)` lives here rather
+  `hflip` in front of `atrim`. `g.wire()` is the one a *gesture* goes through
+  and `connect` is the one the derivation builds with: an input pad holds
+  exactly one wire, so wiring replaces (`disconnectAt` first) where building
+  appends, and that is what makes putting a filter between two derived nodes one
+  gesture rather than a delete and two connects. **`streamsOf(g)` lives here rather
   than in `layout.js`**, because which stream a node is on is a fact about the
   graph and not about where it is drawn, and there are three callers — the
   layout colours a wire with it, the card colours its dot, and `subgraph.js`
-  uses it to decide whether a preview is a picture or a waveform.
+  uses it to decide whether a preview is a picture or a waveform. `keyOf(node)`
+  is also here now — anchor for a derived node, id for a user one — because a
+  hand-made wire's two ends are written as exactly that and the overlay cannot
+  import a panel; `panel.js` re-exports it, since half the application asks the
+  panel.
+
+- `graph/filters.js` — libavfilter's own answers, cached: the registry, one
+  filter's option table, and **`padsOf(filter, params, pos)`, which is the one
+  question libavfilter will not simply answer.** A dynamic filter's pad count is
+  a function of an option value and nothing in the metadata says which option —
+  each of them works it out in its own `init`, from a field it named itself, and
+  ffmpeg's CLI does not know either. So the option is *found*: among the four
+  names ffmpeg has ever used for a pad count (`inputs`, `nb_inputs`, `n`,
+  `outputs`), at most one is in a given filter's table, and its default is in
+  that table too. Three things there were wrong first and are worth not
+  repeating:
+
+  - **The dynamic flag is not the count.** `scale` carries
+    `AVFILTER_FLAG_DYNAMIC_INPUTS` — it grows a pad for `scale2ref` — while
+    declaring one `v` input and having nothing that counts anything. The
+    declared pads win unless a counting option is actually found.
+  - **The positional fallback needs the option to be the table's first entry.**
+    `amix=3` is `amix=inputs=3` only because `inputs` is amix's first option.
+    Reading `pos[0]` as a count without checking turned `scale=1920:1080` into a
+    node with sixty-four sockets on every graph the application drew.
+  - **`concat` is written out**, because its count multiplies: `n=3:v=1:a=1` is
+    six pads in and two out, grouped per segment, and no rule about a single
+    number expresses that.
+
+- `graph/check.js` — **what is wrong with a finished graph, in sentences that
+  name the node.** An empty input pad, two wires on one pad, a pad read twice
+  (ffmpeg's own message for which is "Label found twice", about its parser), a
+  pad nothing reads, a picture wire in a sound pad, a cycle, a filter this build
+  does not have, and a wire the overlay could not put back. Every one of them is
+  a shape ffmpeg itself rejects — that is the entry requirement, because the
+  whole value of printing a command is that it runs. Cycles get a proper
+  depth-first colouring rather than the bounded relaxations `depths()` and
+  `streamsOf()` use: those survive a loop by giving up, which draws something
+  and never says what, and a cycle has to be *named* because every other
+  complaint about it is a consequence.
 
 - `graph/overlay.js` — the part of the graph a person made, held apart from the
   part that is derived, because **the skeleton is thrown away and rebuilt on
-  every timeline edit**. Two pieces of data: `inserts` (ordered, each pinned to
-  a named point) and `locks` (params keyed by a node's anchor).
-  `derive(spec, sources, { overlay })` puts them back — locks first, then
-  insertions — and reports every lock that *disagreed* with what it just
-  derived as an `override`, which is what lets the outranked control say so.
-  Five rules here are load-bearing and each has a failure behind it:
+  every timeline edit**. Five pieces of data: `inserts` (ordered, each pinned to
+  a named point), `locks` (params keyed by a node's anchor), and — since the
+  graph stopped being a chain of splices — `nodes`, `wires` and `cuts`.
+  `derive(spec, sources, { overlay })` puts them back in that order, because
+  each step is described in terms of what the ones before it produced, and
+  reports every lock that *disagreed* with what it just derived as an
+  `override`, which is what lets the outranked control say so.
+
+  **Structure needs a vocabulary that survives the rebuild, and there is exactly
+  one**: a key. A free node carries an id from the same counter the inserts use;
+  a wire is `{ from, fromPort, to, port }` where both ends are keys; a cut is
+  `key#port`. Nothing refers to a node object or to a position in an array.
+
+  Three things about that shape, each with a reason:
+
+  - **A cut is a thing, not the absence of one.** The skeleton grows every
+    derived wire back on every rebuild, so "there is no wire here" cannot be
+    said by leaving something out. It is what lets you be half way through
+    wiring something in between.
+  - **Pads are worked out between the locks and the wires.** A lock can change
+    how many pads a node has — `amix`'s count is an option like any other — so
+    `declarePads()` runs after the locks, and a wire is checked against pads
+    that exist by then.
+  - **A wire whose pad stopped existing is kept and reported, not dropped.**
+    Same rule as an anchor whose point is out of range, same reason: putting the
+    count back has to bring the wire back, or a mistyped number is lost work.
+
+  Five older rules are load-bearing and each has a failure behind it:
 
   - **Anchors, not positions.** A derived node is named for what it is
     (`clip:7/scale`, `composite/overlay:7`); an insert point is a named place
     on a wire (`clip:7/after-scale`). Ids come from a counter that never
     restarts, so they identify nothing across two derivations. `buildSpec()`
     carries `clip.id` for exactly this.
-  - **There is no insert point after the output colour conversion.** That chain
-    is in the printed graph and not in the one this binary runs, so a filter
-    there would be in the encoder's colour in the command and in RGBA in the
-    render. One point, two pictures.
+  - **There is no insert point after the output colour conversion, and no
+    socket behind it either.** That chain is in the printed graph and not in
+    the one this binary runs, so a filter there would be in the encoder's
+    colour in the command and in RGBA in the render. One point, two pictures.
+    It is now structural rather than a rule to remember: the conversion is
+    attached after the overlay is applied, so there is nothing there to wire to.
   - **An insertion moves the label.** Only chain-final nodes carry one, so a
     node spliced onto the end of a run takes `v0`/`vout` with it — left behind
     it names a pad no chain produces.
@@ -1135,10 +1247,20 @@ about them:
     has nothing to report yet, and marking the control anyway would badge every
     field anyone had ever touched.
 
-  A split copies a clip's entries to both halves (`cloneClip`, called from
-  `splitAtPlayhead`) — a cut should not change how either half looks. Persisted
-  in `localStorage` under `ffmpeg-bro.graph`; there is still **no project
-  file**, and this is the first thing that makes one worth having.
+  A split copies a clip's inserts and locks to both halves (`cloneClip`, called
+  from `splitAtPlayhead`) — a cut should not change how either half looks — and
+  copies neither pins nor **wires**. Not wires for a stronger reason than the
+  pins: an input pad holds one wire, so a copy of one would be a second producer
+  arriving at a pad that already has one, which is not a graph.
+
+  Persisted in `localStorage` under `ffmpeg-bro.graph`. **The shape grew rather
+  than changing**, which is what lets a blob written before any of this load as
+  exactly what it was — three keys it has never heard of come back empty — and
+  is worth the restraint it cost, because the alternative was a migration for
+  work somebody had done and could not get back. There is still **no project
+  file**, and this was already the first thing that made one worth having; a
+  hand-wired graph is work in the way a slider position is not, and the next
+  agent to want one should say so rather than keep adding to a localStorage key.
 - `graph/view.js` + `graph/card.js` + `graph/canvas.js` + `graph/layout.js` — the Graph
   stage. Nothing here builds a graph; it asks `derive()` for one on every change and
   draws the answer, so a redraw throws away every node object and **nothing may be
@@ -1165,8 +1287,11 @@ about them:
   | the selection's wires lit, the rest dimmed | every wire was equally loud |
   | `+` on the wire under the pointer | five of them, always, read as part of the graph |
   | left-drag marquee, middle-drag pan | selecting eight nodes was eight clicks |
+  | drag socket → socket to wire | there was no way to make a connection at all, which confined the whole stage to filters that can be spliced |
+  | let go over nothing for a palette | placing a node and wiring it are one gesture with a pause in it, exactly as inserting one on a wire already is |
+  | a wire is selectable and `Delete` cuts it | the other half of being able to make one |
 
-  Four things about how it is built are load-bearing:
+  Six things about how it is built are load-bearing:
 
   - **`portY()` is exported from `layout.js` and used by both the wire and the socket
     it lands on — at both ends.** A dot anywhere else says this wire goes to that port
@@ -1202,6 +1327,20 @@ about them:
     survive the rebuild, and **outside `isEmpty()`**: where a card sits must never
     change which of the renderer's two paths runs. A split copies a clip's filters and
     *not* its pins, because two cards cannot be in one place.
+  - **A socket is hit-tested from the layout, never from the document.**
+    `canvas.socketAt()` walks `placed.nodes` and computes each pad's position
+    with the same `portY()` the wire and the dot use. Asking what element is
+    under a point would ask about a container with a `transform` on it, and the
+    socket elements are eight pixels wide — four at 0.6× zoom, which is a target
+    nobody can hit. It also makes the gesture testable without
+    `elementFromPoint`, which is how `tests/ui_graph.js` drives it.
+  - **A drag's origin and the pointer's position are two fields.** They were one
+    in the first version of `startWire`, so the first mouse move overwrote where
+    the drag began, every completed drag measured as zero pixels long, and
+    letting go over empty canvas did nothing at all — which reads as a press
+    that did nothing, because a zero-length drag is exactly that. The general
+    shape: a field that means "where this started" cannot be the same field as
+    "where this is".
 
   `layout.js` stays pure geometry — a graph, a `sizeOf()` and a `pinOf()` in, positions
   out — so the view can build its cards, measure them and only then place them, which
@@ -1286,18 +1425,29 @@ about them:
   the graph and re-measures every card, so the clock is written into the element in place
   and only starting and stopping change the card's structure. The still already on a card
   is handed over as the first piece, so pressing play starts on that frame.
-- `graph/panel.js` + `graph/filters.js` — the column beside the graph: what the
-  selected node is set to, or what can go on the wire whose `+` was clicked. One
-  panel for both, because inserting a filter and configuring it are one gesture
-  with a pause in it. Now that values are also edited on the cards, the division
-  is that a card shows what is *set* and the column shows everything the filter
-  *has* — thirty options for `scale` is a column, not a card. The filter list and
-  every option table come from `bro.ffmpeg.filters` and
-  `bro.ffmpeg.filterOptions(name)` — libavfilter's own, cached in `filters.js`
-  because there are two callers now and two caches would be two answers to what a
-  filter takes — so there is no list of supported filters written down anywhere. The palette
-  offers what can be *spliced*: one input and one output of the wire's stream,
-  which is what splicing means rather than a simplification of ffmpeg.
+- `graph/panel.js` — the column beside the graph, in four modes over one panel:
+  what the selected node is set to, what can go on the wire whose `+` was
+  clicked, what can go on the end of a wire you let go over nothing, and what a
+  selected *wire* is. One panel for all of it, because each of them is half of
+  one gesture with a pause in it — the thing you just made must not be somewhere
+  other than where you were looking. Now that values are also edited on the
+  cards, the division is that a card shows what is *set* and the column shows
+  everything the filter *has* — thirty options for `scale` is a column, not a
+  card — plus the node's pads and any reason it will not run.
+
+  **Two palettes, and the difference between them is the difference between the
+  two gestures.** `spliceable()` offers one input and one output of the wire's
+  stream, which is what splicing *means* rather than a simplification of ffmpeg.
+  `canTake()` offers anything with a pad of the right stream on the opposite
+  side, which is where `overlay`, `amix`, `concat`, `xfade` and `split` arrive —
+  they are placed and wired rather than spliced, because there is no wire a
+  two-input filter could be dropped onto. Both are filtered from libavfilter's
+  own registry through `padsOf`, so neither is a list of what is supported.
+
+  A wire's panel says which pads it joins and whether it is yours or the
+  derivation's, because that is what `Delete` means: forgetting a wire of your
+  own, or *recording the absence* of a derived one.
+
   Positional arguments are edited in place and labelled from the node's
   `posNames`, which the derivation records because ffmpeg's option tables carry
   aliases as separate entries and the n-th option is not the n-th positional
