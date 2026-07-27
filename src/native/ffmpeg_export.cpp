@@ -33,6 +33,14 @@
 #include <vector>
 
 namespace ffmpegbro {
+
+MediaInput resolveInput(const ExportSettings& s, int index, const std::string& path) {
+    if (index >= 0 && static_cast<size_t>(index) < s.inputs.size()) return s.inputs[index];
+    MediaInput in;
+    in.path = path;
+    return in;
+}
+
 namespace {
 
 struct Job {

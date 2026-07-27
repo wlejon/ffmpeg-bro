@@ -7,6 +7,8 @@
 // sitting above its built-in WebM one and uses it.
 #pragma once
 
+#include "ffmpeg_input.h"
+
 #include <string>
 #include <vector>
 
@@ -74,7 +76,13 @@ struct ProbeResult {
 
 // Read a file's structure without decoding it — the in-process replacement
 // for shelling out to ffprobe.
+//
+// The input overload is not a convenience: probing wrong is the whole reason
+// demuxer options exist, so the answer a source card shows has to be the answer
+// *those options* produce. A probe that always used libavformat's defaults
+// would disagree with the render the moment anybody set one.
 ProbeResult probeMedia(const std::string& path);
+ProbeResult probeMedia(const MediaInput& in);
 
 // Version/capability strings for the about panel.
 std::string libavVersion();

@@ -23,6 +23,7 @@
 #pragma once
 
 #include "export_frame.h"
+#include "ffmpeg_input.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -44,7 +45,15 @@ class SourceVideo {
 public:
     ~SourceVideo();
 
-    bool open(const std::string& path, std::string* err);
+    /// Open an input — a path with a forced demuxer, an option bag and a
+    /// window, all of which reach libavformat through `openInput()`.
+    ///
+    /// `ss` and `-t` are not demuxer options and cannot be: they are arithmetic
+    /// on this reader's clock. The input's zero moves to `ss` (so a clip's
+    /// in-point is measured from there, which is what makes an input seek a
+    /// different thing from a trim), and past `duration` this reader is simply
+    /// at the end of the file.
+    bool open(const MediaInput& in, std::string* err);
 
     /// The picture on screen at `t` seconds into the file, as RGBA in display
     /// orientation. Null past the end of the file.
@@ -102,6 +111,7 @@ private:
     int rotation_ = 0;
     AVRational timeBase_{1, 1000};
     double startOffset_ = 0.0;
+    double limit_ = 0.0;        // where `-t` ends this input, 0 for the file's end
     double curPts_ = 0.0, pendingPts_ = 0.0, rgbaPts_ = -1.0;
     bool haveCur_ = false, havePending_ = false, haveRgba_ = false;
     bool started_ = false, eof_ = false, drained_ = false;
@@ -115,8 +125,9 @@ public:
     ~SourceAudio();
 
     /// False when the file simply has no audio, which is not an error — a
-    /// silent clip is a clip.
-    bool open(const std::string& path, int outRate, int outChannels);
+    /// silent clip is a clip. The input's window applies exactly as it does to
+    /// the picture; see SourceVideo::open.
+    bool open(const MediaInput& in, int outRate, int outChannels);
 
     bool ok() const { return ok_; }
 
@@ -163,6 +174,7 @@ private:
     int outRate_ = 48000, outChannels_ = 2, swrRate_ = 0;
     AVRational timeBase_{1, 1000};
     double startOffset_ = 0.0;
+    double limit_ = 0.0;
     double seekTarget_ = 0.0;
     bool awaitingSeek_ = false, eof_ = false, drained_ = false, ok_ = false;
 };

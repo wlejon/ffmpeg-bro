@@ -48,7 +48,8 @@ TimelineSource::TimelineSource(const ExportSettings& s, std::vector<ExportClip> 
         auto cs = std::make_unique<ClipSources>(c);
         if (s.includeAudio && !c.muted && c.volume > 0.0) {
             cs->audio = std::make_unique<SourceAudio>();
-            if (cs->audio->open(c.path, s.audioSampleRate, s.audioChannels)) anyAudio_ = true;
+            if (cs->audio->open(resolveInput(s, c.input, c.path),
+                                s.audioSampleRate, s.audioChannels)) anyAudio_ = true;
             else cs->audio.reset();
         }
         clips_.push_back(std::move(cs));
@@ -66,7 +67,8 @@ const Rgba& TimelineSource::canvasAt(double t) {
         if (!cs->video) {
             cs->video = std::make_unique<SourceVideo>();
             std::string open;
-            if (!cs->video->open(cs->spec.path, &open)) {
+            if (!cs->video->open(resolveInput(settings_, cs->spec.input, cs->spec.path),
+                                 &open)) {
                 // One unreadable clip should not throw away the render; it
                 // exports as the hole it is, and the log says why.
                 LOG_WARN("export: %s", open.c_str());

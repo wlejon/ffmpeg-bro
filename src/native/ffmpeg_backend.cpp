@@ -22,6 +22,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -131,35 +132,43 @@ public:
         if (fmt_) avformat_close_input(&fmt_);
     }
 
-    bool open(const std::string& path) {
-        int rc = avformat_open_input(&fmt_, path.c_str(), nullptr, nullptr);
-        if (rc < 0) {
-            // Not this backend's file (or unreadable). Stay quiet: the
-            // registry contract is that a backend declining a format says so
-            // by returning nullptr, not by logging.
+    bool open(const MediaInput& in) {
+        std::string why;
+        if (!openInput(&fmt_, in, &why)) {
+            // Not this backend's file, unreadable, or opened with an option
+            // nothing took. The first is the registry's ordinary "no thanks"
+            // and says nothing; the other two are worth a line, because a
+            // `<video>` that stays black over a typo in an option is the
+            // failure this whole chunk is against — and libav's own message
+            // already went to the report channel from av_log.
+            if (!in.format.empty() || !in.options.empty())
+                LOG_WARN("ffmpeg: %s", why.c_str());
             fmt_ = nullptr;
-            return false;
-        }
-        rc = avformat_find_stream_info(fmt_, nullptr);
-        if (rc < 0) {
-            LOG_WARN("ffmpeg: '%s' opened but has no readable stream info: %s",
-                     path.c_str(), avErr(rc).c_str());
             return false;
         }
 
         pkt_ = av_packet_alloc();
         if (!pkt_) return false;
 
-        // Container-level start time, subtracted from every timestamp so the
-        // stream begins at 0 the way bro's clock expects. Taken once and
+        // Where this input's zero is: the container's own start time, which
+        // was always subtracted so the stream begins at 0 the way bro's clock
+        // expects, plus whatever `-ss` and `-itsoffset` say. Taken once and
         // applied to all tracks so a/v stay in sync relative to each other.
-        if (fmt_->start_time != AV_NOPTS_VALUE)
-            startOffsetNs_ = av_rescale_q(fmt_->start_time, AV_TIME_BASE_Q, kNsTimeBase);
+        startOffsetNs_ = static_cast<TimeNs>(
+            llround(inputEpoch(in, fmt_->start_time != AV_NOPTS_VALUE
+                                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0) * 1e9));
+        limitNs_ = static_cast<TimeNs>(llround(inputLimit(in) * 1e9));
 
-        const TimeNs formatDuration =
+        // A window makes the tracks as long as the window, because a clip's
+        // length comes from its video track's duration and an input cut down
+        // by `-t` is not as long as its file. Seeking is left to land where it
+        // lands: the pipeline asks for times on this clock and `seekTo` puts
+        // the offset back.
+        TimeNs formatDuration =
             fmt_->duration != AV_NOPTS_VALUE
                 ? av_rescale_q(fmt_->duration, AV_TIME_BASE_Q, kNsTimeBase)
                 : 0;
+        if (limitNs_ > 0) formatDuration = limitNs_;
 
         for (unsigned i = 0; i < fmt_->nb_streams; ++i) {
             AVStream* st = fmt_->streams[i];
@@ -196,6 +205,7 @@ public:
             t.durationNs = st->duration != AV_NOPTS_VALUE
                                ? toNs(st->duration, st->time_base)
                                : formatDuration;
+            if (limitNs_ > 0 && t.durationNs > limitNs_) t.durationNs = limitNs_;
 
             auto priv = std::make_shared<TrackPrivate>();
             priv->par = avcodec_parameters_alloc();
@@ -228,6 +238,9 @@ public:
             AVStream* st = fmt_->streams[pkt_->stream_index];
             int64_t ts = pkt_->pts != AV_NOPTS_VALUE ? pkt_->pts : pkt_->dts;
             TimeNs pts = ts != AV_NOPTS_VALUE ? toNs(ts, st->time_base) - startOffsetNs_ : 0;
+            // Past `-t` this input has ended, and the end of an input is the
+            // end of the stream as far as everything above here is concerned.
+            if (limitNs_ > 0 && pts >= limitNs_) return false;
             if (pts < 0) pts = 0;
 
             out.trackId = trackId;
@@ -279,6 +292,7 @@ private:
     std::vector<TrackInfo> tracks_;
     int videoStreamIndex_ = -1;
     TimeNs startOffsetNs_ = 0;
+    TimeNs limitNs_ = 0;
 };
 
 // ── VideoDecoder ───────────────────────────────────────────────────────────
@@ -652,9 +666,21 @@ void registerFfmpegBackend() {
     // timestamp and reordering semantics instead of two.
     backend.priority = 100;
 
+    // A src that names a registered input is opened as that input, options and
+    // all; anything else is a path, opened the way it always was.
+    //
+    // This is the whole of how an input's options reach *playback*. bro's
+    // `<video>` takes a string and this backend is registered generically, so
+    // there is nowhere else to put them — and a token that names the input
+    // rather than repeating its path is what lets two inputs on one file carry
+    // two different option bags, and what lets a URL be a src at all (bro
+    // resolves anything that does not start with `/` or `x:` against the
+    // document, which turns `https://…` into a path under ui/).
     backend.open = [](const std::string& path) -> std::unique_ptr<MediaSource> {
+        MediaInput in;
+        if (!resolveToken(path, &in)) in.path = path;
         auto src = std::make_unique<FFmpegSource>();
-        if (!src->open(path)) return nullptr;
+        if (!src->open(in)) return nullptr;
         return src;
     };
     backend.makeVideoDecoder = [](const TrackInfo& t) -> std::unique_ptr<VideoDecoder> {
@@ -675,26 +701,44 @@ void registerFfmpegBackend() {
 // ── Probe ──────────────────────────────────────────────────────────────────
 
 ProbeResult probeMedia(const std::string& path) {
+    MediaInput in;
+    in.path = path;
+    return probeMedia(in);
+}
+
+ProbeResult probeMedia(const MediaInput& in) {
     ProbeResult r;
-    r.path = path;
+    r.path = in.path;
 
     AVFormatContext* fmt = nullptr;
-    int rc = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
-    if (rc < 0) {
-        r.error = avErr(rc);
-        return r;
-    }
-    rc = avformat_find_stream_info(fmt, nullptr);
-    if (rc < 0) {
-        r.error = avErr(rc);
-        avformat_close_input(&fmt);
+    std::string why;
+    if (!openInput(&fmt, in, &why)) {
+        // Without the path in front of it, because the caller already knows
+        // which file it asked about and `openInput` prefixes it for the log.
+        const std::string prefix = in.path + ": ";
+        r.error = why.compare(0, prefix.size(), prefix) == 0 ? why.substr(prefix.size()) : why;
         return r;
     }
 
     r.ok = true;
     r.formatName = fmt->iformat && fmt->iformat->name ? fmt->iformat->name : "";
     r.formatLongName = fmt->iformat && fmt->iformat->long_name ? fmt->iformat->long_name : "";
-    r.durationSec = fmt->duration != AV_NOPTS_VALUE ? fmt->duration / double(AV_TIME_BASE) : 0.0;
+
+    // How long the *input* is, which is how long the file is only when nothing
+    // has been said about a window. A clip's length comes from this, so an
+    // input trimmed with `-ss`/`-t` has to report the trimmed length here or
+    // the timeline would lay out a clip running past the end of its own input.
+    const double limit = inputLimit(in);
+    const auto window = [&](double d) {
+        if (!(d > 0.0)) return 0.0;
+        d = d - in.ss + in.itsoffset;
+        if (limit > 0.0) d = std::min(d, limit);
+        return std::max(0.0, d);
+    };
+
+    const double rawDuration =
+        fmt->duration != AV_NOPTS_VALUE ? fmt->duration / double(AV_TIME_BASE) : 0.0;
+    r.durationSec = window(rawDuration);
     r.bitRate = fmt->bit_rate;
     if (fmt->pb) r.sizeBytes = avio_size(fmt->pb);
 
@@ -720,7 +764,7 @@ ProbeResult probeMedia(const std::string& path) {
         // so falling back to the container's is the best answer available
         // rather than reporting a clip of length zero.
         s.duration = st->duration != AV_NOPTS_VALUE
-                         ? st->duration * av_q2d(st->time_base)
+                         ? window(st->duration * av_q2d(st->time_base))
                          : r.durationSec;
         s.isDefault = (st->disposition & AV_DISPOSITION_DEFAULT) != 0;
 

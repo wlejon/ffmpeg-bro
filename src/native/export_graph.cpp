@@ -199,7 +199,7 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
         feed.video = std::make_unique<SourceVideo>();
         std::string open;
         const AVFrame* f = nullptr;
-        if (feed.video->open(want.path, &open)) {
+        if (feed.video->open(resolveInput(settings_, want.input, want.path), &open)) {
             // Where this pad's window begins. Without it every input decodes
             // from the start of its file — which is what `-filter_complex`
             // without `-ss` does, and what makes a clip an hour in take an
@@ -227,7 +227,8 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
     } else {
         feed.sound = std::make_unique<SourceAudio>();
         const AVFrame* f = nullptr;
-        if (feed.sound->open(want.path, settings_.audioSampleRate, settings_.audioChannels)) {
+        if (feed.sound->open(resolveInput(settings_, want.input, want.path),
+                             settings_.audioSampleRate, settings_.audioChannels)) {
             // The same seek, and safe for the same reason. `nextRaw` reads the
             // decoder directly rather than through the fifo, so none of the
             // sample-accurate trimming `fill()` does after a seek applies

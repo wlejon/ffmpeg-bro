@@ -13,11 +13,9 @@ namespace ffmpegbro {
 
 SourceVideo::~SourceVideo() { close(); }
 
-bool SourceVideo::open(const std::string& path, std::string* err) {
-    int rc = avformat_open_input(&fmt_, path.c_str(), nullptr, nullptr);
-    if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
-    rc = avformat_find_stream_info(fmt_, nullptr);
-    if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
+bool SourceVideo::open(const MediaInput& in, std::string* err) {
+    if (!openInput(&fmt_, in, err)) return false;
+    const std::string& path = in.path;
 
     stream_ = av_find_best_stream(fmt_, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (stream_ < 0) { if (err) *err = path + ": no video track"; return false; }
@@ -25,8 +23,12 @@ bool SourceVideo::open(const std::string& path, std::string* err) {
     AVStream* st = fmt_->streams[stream_];
     rotation_ = rotationOf(st);
     timeBase_ = st->time_base;
-    startOffset_ = fmt_->start_time != AV_NOPTS_VALUE
-                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0;
+    // Where this input's zero is. The container's own start time is part of it
+    // and always was; `-ss` and `-itsoffset` are the rest, which is why they
+    // are one number here rather than a special case at every point of use.
+    startOffset_ = inputEpoch(in, fmt_->start_time != AV_NOPTS_VALUE
+                                      ? fmt_->start_time / double(AV_TIME_BASE) : 0.0);
+    limit_ = inputLimit(in);
 
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!codec) { if (err) *err = path + ": no decoder for this video"; return false; }
@@ -35,7 +37,7 @@ bool SourceVideo::open(const std::string& path, std::string* err) {
     dec_->thread_count = 0;
     dec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
     dec_->pkt_timebase = timeBase_;
-    rc = avcodec_open2(dec_, codec, nullptr);
+    const int rc = avcodec_open2(dec_, codec, nullptr);
     if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
 
     // Every stream on the file except this one is skipped in the demuxer,
@@ -51,6 +53,10 @@ bool SourceVideo::open(const std::string& path, std::string* err) {
 }
 
 const Rgba* SourceVideo::rgbaAt(double t) {
+    // `-t` on an input ends it, so past the window there is no picture — the
+    // same answer the end of the file gives, which is what the compositor
+    // already knows how to draw (a hole).
+    if (limit_ > 0.0 && t >= limit_) return nullptr;
     if (!advanceTo(t)) return nullptr;
     if (haveRgba_ && rgbaPts_ == curPts_) return result_;
 
@@ -88,6 +94,10 @@ const Rgba* SourceVideo::rgbaAt(double t) {
 
 const AVFrame* SourceVideo::nextRaw() {
     if (!havePending_ && !decodeOne()) return nullptr;
+    // The graph is fed frames, not asked for moments, so the window has to end
+    // the feed: a `-t` that only the compositor honoured would mean the two
+    // render paths were rendering different inputs.
+    if (limit_ > 0.0 && pendingPts_ >= limit_) return nullptr;
     havePending_ = false;
     started_ = true;
     // Every clock this application writes down — a clip's in-point, a graph's
@@ -183,19 +193,23 @@ bool SourceVideo::decodeOne() {
 
 SourceAudio::~SourceAudio() { close(); }
 
-bool SourceAudio::open(const std::string& path, int outRate, int outChannels) {
+bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels) {
     outRate_ = outRate;
     outChannels_ = outChannels;
-    if (avformat_open_input(&fmt_, path.c_str(), nullptr, nullptr) < 0) return false;
-    if (avformat_find_stream_info(fmt_, nullptr) < 0) return false;
+    // The error is dropped rather than reported, as it always was: a file with
+    // no sound in it is not a failed render, and the picture side has already
+    // said anything worth saying about a file that cannot be opened at all.
+    std::string why;
+    if (!openInput(&fmt_, in, &why)) return false;
 
     stream_ = av_find_best_stream(fmt_, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (stream_ < 0) return false;
 
     AVStream* st = fmt_->streams[stream_];
     timeBase_ = st->time_base;
-    startOffset_ = fmt_->start_time != AV_NOPTS_VALUE
-                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0;
+    startOffset_ = inputEpoch(in, fmt_->start_time != AV_NOPTS_VALUE
+                                      ? fmt_->start_time / double(AV_TIME_BASE) : 0.0);
+    limit_ = inputLimit(in);
 
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!codec) return false;
@@ -303,7 +317,20 @@ const AVFrame* SourceAudio::nextRaw() {
 bool SourceAudio::decodeOne() {
     for (;;) {
         int rc = avcodec_receive_frame(dec_, frame_);
-        if (rc == 0) return true;
+        if (rc == 0) {
+            // Past `-t` this input has ended, which for a reader is the same
+            // thing as the end of the file. Whole frames, because a packet of
+            // sound is what a decoder hands over — the last twenty
+            // milliseconds of an input window are not worth a second resampler
+            // pass to shave.
+            if (limit_ > 0.0) {
+                const int64_t ts = frame_->best_effort_timestamp != AV_NOPTS_VALUE
+                                       ? frame_->best_effort_timestamp : frame_->pts;
+                if (ts != AV_NOPTS_VALUE &&
+                    ts * av_q2d(timeBase_) - startOffset_ >= limit_) return false;
+            }
+            return true;
+        }
         if (rc == AVERROR_EOF) return false;
         if (rc != AVERROR(EAGAIN)) return false;
         if (eof_) {

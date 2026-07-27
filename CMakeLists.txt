@@ -39,6 +39,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_bindings.cpp
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_export.cpp
+    src/native/ffmpeg_input.cpp
     src/native/ffmpeg_report.cpp
     src/native/export_compositor.cpp
     src/native/export_frame.cpp
@@ -103,6 +104,14 @@ target_link_libraries(ffmpeg-bro-captest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-captest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# An input is an `-i`: a forced demuxer, an option bag whose unknown keys are
+# errors, a window that moves the input's own clock, and the token playback
+# opens one by.
+add_executable(ffmpeg-bro-inputtest tests/input_test.cpp)
+target_link_libraries(ffmpeg-bro-inputtest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-inputtest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
 target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
@@ -135,6 +144,7 @@ set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
 add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}")
 add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
+add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
 add_test(NAME ui-player COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
@@ -147,7 +157,7 @@ add_test(NAME ui-export COMMAND ffmpeg-bro-headless
 add_test(NAME ui-report COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_report.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export capabilities ui-player ui-export ui-report PROPERTIES
+set_tests_properties(decode export capabilities inputs ui-player ui-export ui-report PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the

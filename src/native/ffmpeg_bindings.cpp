@@ -96,17 +96,99 @@ JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
     return o;
 }
 
-// bro.ffmpeg.probe(path) — a file's structure, read in-process by
-// libavformat. Synchronous: opening a local container reads a few hundred KB
-// of headers, and every caller wants the answer before it can lay anything
-// out.
-JSValue js_probe(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "probe(path) requires a path");
-    const char* path = JS_ToCString(ctx, argv[0]);
-    if (!path) return JS_EXCEPTION;
+/// `{ g: 60, bf: 2, "x264-params": "aq-mode=3" }` — the natural JS shape for a
+/// bag of ffmpeg arguments. Numbers are stringified here rather than in the UI
+/// so that a control emitting 23 and one emitting "23" mean the same thing.
+///
+/// `owner` is whatever object the bag hangs off: the spec for the render's own
+/// options and metadata, a stream for its own, an input for its demuxer's.
+/// Same shape, same rules — which is why one reader serves
+/// `-metadata:s:a:1 title=…`, `-x264-params …` and `-probesize`.
+std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst owner, const char* key) {
+    std::vector<ExportOption> out;
+    JSValue obj = JS_GetPropertyStr(ctx, owner, key);
+    if (!JS_IsObject(obj)) { JS_FreeValue(ctx, obj); return out; }
 
-    ProbeResult r = probeMedia(path);
-    JS_FreeCString(ctx, path);
+    JSPropertyEnum* props = nullptr;
+    uint32_t count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &props, &count, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t i = 0; i < count; ++i) {
+            JSValue v = JS_GetProperty(ctx, obj, props[i].atom);
+            // An option deliberately left unset is absent, not empty: null and
+            // undefined mean "do not pass this", which is what lets the UI keep
+            // a blank field in its model without it reaching the encoder.
+            if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+                const char* name = JS_AtomToCString(ctx, props[i].atom);
+                size_t len = 0;
+                const char* val = JS_ToCStringLen(ctx, &len, v);
+                if (name && val && *name) out.push_back({name, std::string(val, len)});
+                if (name) JS_FreeCString(ctx, name);
+                if (val) JS_FreeCString(ctx, val);
+            }
+            JS_FreeValue(ctx, v);
+            JS_FreeAtom(ctx, props[i].atom);
+        }
+        js_free(ctx, props);
+    }
+    JS_FreeValue(ctx, obj);
+    return out;
+}
+
+
+/// `{ path, format, options, ss, t, to, itsoffset }` — one `-i`, as JS writes
+/// one. Used by `probe`, by `inputs.define` and by `spec.inputs`, so that the
+/// thing the Sources stage probes and the thing the render opens cannot come to
+/// be described differently.
+///
+/// `to` is `-to`: the same decision as `t` stated as an end time. Converted
+/// here rather than in the UI because there is one right answer — a window that
+/// ends before it starts is empty, not negative — and three callers.
+MediaInput inputFromJs(JSContext* ctx, JSValueConst o) {
+    MediaInput in;
+    if (!JS_IsObject(o)) return in;
+    in.path = strProp(ctx, o, "path", "");
+    in.format = strProp(ctx, o, "format", "");
+    in.options = optionsFromJs(ctx, o, "options");
+    in.ss = std::max(0.0, numProp(ctx, o, "ss", 0));
+    in.duration = std::max(0.0, numProp(ctx, o, "t", 0));
+    const double to = numProp(ctx, o, "to", 0);
+    if (to > 0.0) in.duration = std::max(0.0, to - in.ss);
+    in.itsoffset = numProp(ctx, o, "itsoffset", 0);
+    return in;
+}
+
+// bro.ffmpeg.probe(path | input, [{ format, options }]) — a file's structure,
+// read in-process by libavformat. Synchronous: opening a local container reads
+// a few hundred KB of headers, and every caller wants the answer before it can
+// lay anything out.
+//
+// It takes an input and not only a path because probing wrong is the reason
+// demuxer options exist: a Sources stage that showed what libavformat's
+// defaults made of a file, while the render opened it with `-f` and a
+// `-probesize`, would be describing a different file from the one about to be
+// rendered.
+JSValue js_probe(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "probe(path) requires a path or an input");
+
+    MediaInput in;
+    if (JS_IsObject(argv[0])) {
+        in = inputFromJs(ctx, argv[0]);
+    } else {
+        const char* path = JS_ToCString(ctx, argv[0]);
+        if (!path) return JS_EXCEPTION;
+        in.path = path;
+        JS_FreeCString(ctx, path);
+        // The second argument is the rest of the `-i`, for a caller that has a
+        // path in hand rather than an input record.
+        if (argc >= 2 && JS_IsObject(argv[1])) {
+            const std::string path0 = in.path;
+            in = inputFromJs(ctx, argv[1]);
+            in.path = path0;
+        }
+    }
+    if (in.path.empty()) return JS_ThrowTypeError(ctx, "probe() needs a path or a URL");
+
+    ProbeResult r = probeMedia(in);
 
     if (!r.ok) {
         return JS_ThrowTypeError(ctx, "cannot open '%s': %s", r.path.c_str(),
@@ -157,6 +239,10 @@ JSValue js_probe(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 /// second implementation here to disagree with it.
 ExportClip clipFromJs(JSContext* ctx, JSValueConst o) {
     ExportClip c;
+    // Which `-i` this clip is cut from. A spec that says nothing carries a path
+    // instead and renders exactly as it always did, which is what keeps the
+    // fixture generator and every hand-written spec in the tests working.
+    c.input = static_cast<int>(numProp(ctx, o, "input", -1));
     c.path = strProp(ctx, o, "path", "");
     c.start = numProp(ctx, o, "start", 0);
     c.length = numProp(ctx, o, "length", 0);
@@ -179,44 +265,6 @@ ExportClip clipFromJs(JSContext* ctx, JSValueConst o) {
     }
     JS_FreeValue(ctx, crop);
     return c;
-}
-
-/// `{ g: 60, bf: 2, "x264-params": "aq-mode=3" }` — the natural JS shape for a
-/// bag of ffmpeg arguments. Numbers are stringified here rather than in the UI
-/// so that a control emitting 23 and one emitting "23" mean the same thing.
-///
-/// `owner` is whatever object the bag hangs off: the spec for the render's own
-/// options and metadata, and a stream for its own. Same shape, same rules —
-/// which is why the writer can apply `-metadata:s:a:1 title=…` and
-/// `-x264-params …` through one reader.
-std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst owner, const char* key) {
-    std::vector<ExportOption> out;
-    JSValue obj = JS_GetPropertyStr(ctx, owner, key);
-    if (!JS_IsObject(obj)) { JS_FreeValue(ctx, obj); return out; }
-
-    JSPropertyEnum* props = nullptr;
-    uint32_t count = 0;
-    if (JS_GetOwnPropertyNames(ctx, &props, &count, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
-        for (uint32_t i = 0; i < count; ++i) {
-            JSValue v = JS_GetProperty(ctx, obj, props[i].atom);
-            // An option deliberately left unset is absent, not empty: null and
-            // undefined mean "do not pass this", which is what lets the UI keep
-            // a blank field in its model without it reaching the encoder.
-            if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
-                const char* name = JS_AtomToCString(ctx, props[i].atom);
-                size_t len = 0;
-                const char* val = JS_ToCStringLen(ctx, &len, v);
-                if (name && val && *name) out.push_back({name, std::string(val, len)});
-                if (name) JS_FreeCString(ctx, name);
-                if (val) JS_FreeCString(ctx, val);
-            }
-            JS_FreeValue(ctx, v);
-            JS_FreeAtom(ctx, props[i].atom);
-        }
-        js_free(ctx, props);
-    }
-    JS_FreeValue(ctx, obj);
-    return out;
 }
 
 /// How long a JS array says it is. Three copies of these four lines were
@@ -361,6 +409,7 @@ std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spe
             if (JS_IsObject(item)) {
                 ExportGraphInput g;
                 g.label = strProp(ctx, item, "label", "");
+                g.input = static_cast<int>(numProp(ctx, item, "input", -1));
                 g.path = strProp(ctx, item, "path", "");
                 g.stream = strProp(ctx, item, "stream", "v");
                 g.from = numProp(ctx, item, "from", 0.0);
@@ -371,6 +420,45 @@ std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spe
     }
     JS_FreeValue(ctx, arr);
     return out;
+}
+
+/// `spec.inputs` — the `-i`s, in the order the graph's labels number them.
+///
+/// Read before anything else in the spec, because a clip's `input` is an index
+/// into this and an index into a list that was not given is a mistake worth
+/// naming: a render that silently fell back to opening the path with default
+/// options would be the "succeeded while ignoring what it was told" failure one
+/// level up from an unknown option.
+bool inputsFromJs(JSContext* ctx, JSValueConst spec, std::vector<MediaInput>* out,
+                  std::string* err) {
+    JSValue arr = JS_GetPropertyStr(ctx, spec, "inputs");
+    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { JS_FreeValue(ctx, arr); return true; }
+    if (!JS_IsArray(arr)) {
+        JS_FreeValue(ctx, arr);
+        *err = "spec.inputs has to be an array of inputs";
+        return false;
+    }
+    const uint32_t len = arrayLength(ctx, arr);
+    bool ok = true;
+    for (uint32_t i = 0; i < len && ok; ++i) {
+        JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+        const std::string where = "inputs[" + std::to_string(i) + "]";
+        if (!JS_IsObject(item)) {
+            *err = where + " is not an input";
+            ok = false;
+        } else {
+            MediaInput in = inputFromJs(ctx, item);
+            if (in.path.empty()) {
+                *err = where + " has no path or URL to open";
+                ok = false;
+            } else {
+                out->push_back(std::move(in));
+            }
+        }
+        JS_FreeValue(ctx, item);
+    }
+    JS_FreeValue(ctx, arr);
+    return ok;
 }
 
 JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -413,7 +501,8 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     // thrown TypeError with the offending entry named rather than a job that
     // fails a second later with the index long gone.
     std::string bad;
-    if (!streamsFromJs(ctx, spec, &s.streams, &bad) ||
+    if (!inputsFromJs(ctx, spec, &s.inputs, &bad) ||
+        !streamsFromJs(ctx, spec, &s.streams, &bad) ||
         !chaptersFromJs(ctx, spec, &s.chapters, &bad))
         return JS_ThrowTypeError(ctx, "%s", bad.c_str());
 
@@ -833,6 +922,50 @@ JSValue filtersToJs(JSContext* ctx) {
     return arr;
 }
 
+// ── bro.ffmpeg.inputs ──────────────────────────────────────────────────────
+//
+// How an input's options reach *playback*, which the render spec cannot do:
+// bro's `<video>` takes a src string and this binary's media backend is
+// registered generically, so the string has to name the input. `define` hands
+// back a token to use as a src (or as a `bro.media` path, which is the same
+// registry one level down); the backend swaps it for the URL, the forced
+// demuxer and the option bag on the way into libavformat.
+//
+// The token is also why a URL can be played at all. bro resolves a src that
+// does not start with `/` or `x:` against the document, so `https://…` would
+// become a path under `ui/`; a token starts with a slash and survives.
+
+JSValue js_inputsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "inputs.define(id, input) requires an id and an input");
+    const char* id = JS_ToCString(ctx, argv[0]);
+    if (!id) return JS_EXCEPTION;
+    const MediaInput in = inputFromJs(ctx, argv[1]);
+    if (in.path.empty()) {
+        JS_FreeCString(ctx, id);
+        return JS_ThrowTypeError(ctx, "inputs.define() needs a path or a URL");
+    }
+    const std::string token = defineInput(id, in);
+    JS_FreeCString(ctx, id);
+    return JS_NewStringLen(ctx, token.data(), token.size());
+}
+
+JSValue js_inputsForget(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string id;
+    if (!takeName(ctx, argc, argv, &id))
+        return JS_ThrowTypeError(ctx, "inputs.forget(id) requires an id");
+    forgetInput(id);
+    return JS_UNDEFINED;
+}
+
+JSValue js_inputsToken(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string id;
+    if (!takeName(ctx, argc, argv, &id))
+        return JS_ThrowTypeError(ctx, "inputs.token(id) requires an id");
+    const std::string token = inputToken(id);
+    return JS_NewStringLen(ctx, token.data(), token.size());
+}
+
 JSValue js_tempPath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "tempPath(name) requires a name");
@@ -916,6 +1049,17 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, ns, "filterOptions",
                       JS_NewCFunction(ctx, js_filterOptions, "filterOptions", 1));
     JS_SetPropertyStr(ctx, ns, "tempPath", JS_NewCFunction(ctx, js_tempPath, "tempPath", 1));
+
+    // The inputs playback knows about. Registered rather than passed, because
+    // `<video src>` is a string — see the note above these functions.
+    JSValue inputs = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, inputs, "define",
+                      JS_NewCFunction(ctx, js_inputsDefine, "define", 2));
+    JS_SetPropertyStr(ctx, inputs, "forget",
+                      JS_NewCFunction(ctx, js_inputsForget, "forget", 1));
+    JS_SetPropertyStr(ctx, inputs, "token",
+                      JS_NewCFunction(ctx, js_inputsToken, "token", 1));
+    JS_SetPropertyStr(ctx, ns, "inputs", inputs);
 
     JSValue render = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, render, "start", JS_NewCFunction(ctx, js_renderStart, "start", 1));

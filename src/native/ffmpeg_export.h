@@ -18,15 +18,33 @@
 // this build can write at all.
 #pragma once
 
+#include "ffmpeg_input.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace ffmpegbro {
 
+/// One `-key value` pair, exactly as the ffmpeg command line would take it.
+/// The same struct a demuxer's options are written with — see ffmpeg_input.h —
+/// because they are the same kind of thing applied the same way.
+using ExportOption = KeyValue;
+
 /// One clip, as the renderer needs it: when it appears, what part of its file
 /// it shows, and where its picture lands in the canvas.
 struct ExportClip {
+    /// Which of `ExportSettings::inputs` this clip is cut from, or -1.
+    ///
+    /// -1 is not "no input": it means the input this clip *is*, synthesised
+    /// from `path` alone with everything left at libavformat's defaults — which
+    /// is the render every caller wrote before inputs existed, and what the
+    /// fixture generator and the node previews still write. `resolveInput()`
+    /// is the one place that turns either shape into an input.
+    int input = -1;
+
+    /// The file, when `input` is -1. With an input it is carried for the log
+    /// and ignored: the input says what is opened.
     std::string path;
 
     // Timeline, in seconds.
@@ -50,12 +68,6 @@ struct ExportClip {
     // Paint order, low to high. Clips are composited in this order, so a
     // higher one covers a lower one — the track stack, flattened.
     int z = 0;
-};
-
-/// One `-key value` pair, exactly as the ffmpeg command line would take it.
-struct ExportOption {
-    std::string key;
-    std::string value;
 };
 
 /// One stream in the output file.
@@ -175,10 +187,28 @@ struct ExportGraphInput {
     // can never skip a frame the graph still wants. Too small only costs
     // decoding; too large is not reachable.
     double from = 0.0;
+
+    /// Which of `ExportSettings::inputs` feeds this pad, or -1 for `path`
+    /// opened plainly. Two pads of one input — `[0:v]` and `[0:a]` — carry the
+    /// same index, which is what says they are one `-i` and one demuxer.
+    ///
+    /// Last rather than beside `path`, where it belongs, so that the positional
+    /// initialisers in tests/export_test.cpp — `{"0:v", file, "v"}` — still say
+    /// what they said. A field order is not worth that churn.
+    int input = -1;
 };
 
 struct ExportSettings {
     std::string path;               // output file
+
+    /// The `-i`s. Every clip and every graph input pad names one by index.
+    ///
+    /// A list rather than a path per clip because that is what an input is: two
+    /// clips cut from one file are one `-i`, one demuxer, one seek and one set
+    /// of options, and a render that opened it twice with two different option
+    /// bags would be describing two files. Empty is ordinary — a spec whose
+    /// clips carry paths and nothing else renders exactly as it always did.
+    std::vector<MediaInput> inputs;
 
     /// The muxer, by the name `-f` takes: "mp4", "matroska", "mpegts". Empty
     /// falls back to guessing from the extension, which is what every render
@@ -321,6 +351,15 @@ struct ExportSettings {
 /// edit's — a timeline with no sound in it gets no audio stream however many
 /// the list asks for, which is the rule the writer has always followed.
 std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio);
+
+/// The input an index names, or the one a bare path amounts to.
+///
+/// One place, for the reason `outputStreams()` is one place: nothing that opens
+/// a file should have to know whether the caller wrote an input list or left a
+/// path on a clip. An index past the end of the list is a caller's mistake and
+/// resolves to the path, which fails the same way a missing file does rather
+/// than reading out of bounds.
+MediaInput resolveInput(const ExportSettings& s, int index, const std::string& path);
 
 /// A snapshot of the running job. Copied under the lock, so the caller can
 /// read it at leisure.
