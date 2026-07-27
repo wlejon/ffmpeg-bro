@@ -36,11 +36,14 @@
 
 import { el, div, span, put, select, row, head, fromTemplate, show } from '../dom.js';
 import { basename } from '../format.js';
+import { inputs } from '../inputs.js';
 import { settings, activeVideoCodec, activeAudioCodec } from './state.js';
 import { videoEncoders, audioEncoders, muxerInfo, dispositions,
          codecTags } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
 import { optionColumn } from '../opttable.js';
+import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
+         keyframesFor, keyframeAtOrBefore, inPointNote, rewrapRows } from './copy.js';
 
 let host = null;
 let hooks = {};
@@ -80,6 +83,18 @@ export function normalizeStreams() {
         s.id = newId();
         s.source = s.source || (s.kind === 'video' ? 'composite'
                               : s.kind === 'audio' ? 'mix' : '');
+        // A copy names an input by index, and the index is the document's `-i`
+        // numbering — which the document this list was stored under no longer
+        // is. A row pointing past the end of the input list would reach
+        // `render.start` and be refused there, on the far side of a form where
+        // nothing looks wrong, so it comes back as the composed source it would
+        // have been.
+        const at = parseCopy(s.source);
+        if (at && (!inputs[at.input] ||
+                   !(inputs[at.input].probe || {}).streams))
+            s.source = s.kind === 'video' ? 'composite' : 'mix';
+        s.copyFrom = Number(s.copyFrom) || 0;
+        s.copyTo = Number(s.copyTo) || 0;
         if (!s.metadata || typeof s.metadata !== 'object') s.metadata = {};
         // A stored chain outlives the shape it was stored in, and a row with no
         // name reaches `render.start` as a bitstream filter called nothing.
@@ -114,6 +129,12 @@ export function labelOf(list, i) {
 /// which is a real answer and not an absence — the row draws it, the spec
 /// sends it and the command prints it.
 export function codecOf(s) {
+    // A copied stream has no encoder at all: what is in the file is what was in
+    // the input, and the codec is a fact rather than a choice. Reported as that
+    // fact so the bitstream-filter list, the tag vocabulary and the container
+    // checks all narrow to the codec the file will actually carry.
+    const copied = copiedStream(s);
+    if (copied) return copied.codec;
     if (s.codec) return s.codec;
     return s.kind === 'video' ? activeVideoCodec()
          : s.kind === 'audio' ? activeAudioCodec() : '';
@@ -136,14 +157,22 @@ export function removeStream(id) {
 }
 
 /// The Encode stage's Include switch, and this list, saying the same thing.
+///
+/// **A copied soundtrack is outside this.** The switch is about the mix — the
+/// thing the encoder is fed — and a stream whose packets come out of a demuxer
+/// is not made of it. Turning sound off with a copied audio row on the list
+/// leaves that row alone, because taking it away would be turning off something
+/// the switch does not control.
 export function setAudioIncluded(on) {
     settings.audio = !!on;
-    if (!on) settings.streams = settings.streams.filter((s) => s.kind !== 'audio');
-    else if (!settings.streams.some((s) => s.kind === 'audio')) addStream('audio');
+    if (!on)
+        settings.streams = settings.streams.filter((s) => s.kind !== 'audio' || isCopy(s));
+    else if (!settings.streams.some((s) => s.kind === 'audio' && !isCopy(s)))
+        addStream('audio');
 }
 
 function syncAudioFlag() {
-    settings.audio = settings.streams.some((s) => s.kind === 'audio');
+    settings.audio = settings.streams.some((s) => s.kind === 'audio' && !isCopy(s));
 }
 
 // ── what goes to the renderer ──────────────────────────────────────────────
@@ -163,14 +192,23 @@ export function streamSpecs(over = {}) {
             out.push({ kind: 'attachment', path: s.path, mimeType: s.mimeType || '' });
             continue;
         }
-        if (s.kind === 'audio' && !settings.audio) continue;
-        const codec = codecOf(s);
+        // A copied soundtrack is not the mix, so the Encode stage's Include
+        // switch has nothing to say about it: its packets come out of a
+        // demuxer whether or not this edit has any sound in it.
+        if (s.kind === 'audio' && !settings.audio && !isCopy(s)) continue;
+        const copying = isCopy(s);
+        const codec = copying ? '' : codecOf(s);
         const meta = Object.assign({}, s.metadata);
         if (s.title) meta.title = s.title;
         out.push({
             kind: s.kind,
             source: s.source || (s.kind === 'video' ? 'composite' : 'mix'),
+            // Empty on a copy, and refused by the renderer if it is not: there
+            // is no encoder to name, and a codec that reached one would be a
+            // setting that silently did nothing.
             codec,
+            copyFrom: copying ? (Number(s.copyFrom) || 0) : 0,
+            copyTo: copying ? (Number(s.copyTo) || 0) : 0,
             // The packet chain, in order. An entry with no name is a row
             // somebody has opened and not filled in, and it is dropped for the
             // reason a pathless attachment is: `-bsf:v ,dump_extra` is not a
@@ -181,7 +219,9 @@ export function streamSpecs(over = {}) {
             // The Encode stage's intent, expressed against whatever encoder
             // this row ends up on: a second video stream at x265 gets x265's
             // way of saying the quality that was asked for, not x264's keys.
-            options: s.kind === 'video' ? videoOptions(codec, over) : audioOptions(codec),
+            // A copied stream has no encoder for any of it to reach.
+            options: copying ? {}
+                   : s.kind === 'video' ? videoOptions(codec, over) : audioOptions(codec),
             metadata: meta,
             language: s.language || '',
             disposition: s.disposition || '',
@@ -204,11 +244,57 @@ export function drawStreams() {
             addButton('Audio', 'audio'),
             addButton('Attachment', 'attachment'),
         ]),
+        ...rewrapRow(),
         head('Chapters'),
         ...chapterRows(),
         head('File metadata'),
         ...pairRows(settings.metadata, 'file', () => hooks.restated()),
     ]);
+}
+
+/// "Just rewrap this" and "cut this without re-encoding", which is what most
+/// people arrive wanting and which building a stream list by hand is a long way
+/// round to.
+///
+/// **It is a shortcut and not a mode.** What it does is write ordinary rows with
+/// ordinary `copy:` sources into the list above, so the whole of what it decided
+/// is visible, editable and undoable the moment it has run — the same rule the
+/// Report drawer's measurement shortcuts follow, where what you get is an
+/// ordinary node on the graph. There is no hidden flag anywhere and nothing on
+/// this stage behaves differently afterwards.
+function rewrapRow() {
+    const usable = inputs.filter((i) => i.probe &&
+                                        i.probe.streams.some((s) => s.kind === 'video' ||
+                                                                    s.kind === 'audio'));
+    if (!usable.length) return [];
+    return [
+        head('Copy it instead'),
+        div('ex-add', usable.map((input) => el('button', {
+            cls: 'tiny', text: `Rewrap ${input.name}`,
+            'data-rewrap': input.id,
+            title: 'Every stream of this input, copied — no decode, no encode, ' +
+                   'the same bytes in a different container',
+            on: { click: () => rewrap(inputs.indexOf(input)) },
+        }))),
+        div('ex-note dim',
+            'A copied stream is the packets that are already in the file: instant, ' +
+            'lossless, and untouched by anything on the Compose or Graph stages. ' +
+            'A cut can only start at a keyframe — open a row to see where they are.'),
+    ];
+}
+
+function rewrap(index) {
+    const rows = rewrapRows(index, newId, null);
+    if (!rows.length) return;
+    settings.streams = rows;
+    // **The container is deliberately left alone.** Which muxer to write is the
+    // whole of the remaining decision and it is taken on its own control a foot
+    // away; changing it here would be this shortcut making the choice somebody
+    // came to this stage to make. A container that will not hold what is being
+    // copied is refused by `warnings()` with both named.
+    openDetail = rows[0].id;
+    syncAudioFlag();
+    hooks.changed();
 }
 
 function addButton(label, kind) {
@@ -252,9 +338,13 @@ function streamRow(list, s, i) {
 }
 
 /// The middle of the sentence: where the stream comes from, and what it goes
-/// through. `source` is text rather than a menu because there is one answer
-/// per kind today — the composite, or the mix. Stream copy is the second, and
-/// this is where `copy:0:1` will become a choice.
+/// through.
+///
+/// **Two decisions, and the first one changes what the second can be.** A
+/// stream is either made — the composite, the mix — or copied, and a copied one
+/// has no encoder to pick: the codec in the file is the codec that was in the
+/// input, so it is stated rather than offered. Drawing the encoder menu anyway,
+/// disabled, would say there was a choice being withheld; there is no choice.
 function says(s) {
     if (s.kind === 'attachment') {
         const path = el('input', {
@@ -263,6 +353,25 @@ function says(s) {
             on: { change: (e) => { s.path = e.target.value.trim(); hooks.changed(); } },
         });
         return [span('carries', 'dim'), path];
+    }
+
+    const made = s.kind === 'video' ? 'the composite' : 'the mix';
+    const sources = [{ id: s.kind === 'video' ? 'composite' : 'mix', label: made }]
+        .concat(copyChoices(s.kind).map((c) => ({ id: c.id, label: `copy — ${c.label}` })));
+    const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
+                            title: 'Made from the edit, or copied straight out of an input',
+                            on: { change: (e) => { setSource(s, e.target.value); } } },
+                          sources, s.source || (s.kind === 'video' ? 'composite' : 'mix'));
+
+    const copied = copiedStream(s);
+    if (copied) {
+        const input = copiedInput(s);
+        return [
+            picker,
+            span('·', 'dim'),
+            span(`${copied.codec}, as it is`, 'ex-stream-copied'),
+            span(input ? `out of ${input.name}` : '', 'dim'),
+        ];
     }
 
     const list = s.kind === 'video' ? videoEncoders() : audioEncoders();
@@ -279,12 +388,33 @@ function says(s) {
         })));
 
     return [
-        span(s.kind === 'video' ? 'the composite,' : 'the mix,', 'dim'),
+        picker,
         span('through', 'dim'),
         select({ cls: 'ex-stream-codec', 'data-f': 'stream-codec',
                  on: { change: (e) => { s.codec = e.target.value; hooks.changed(); } } },
                choices, s.codec || ''),
     ];
+}
+
+/// Move a row between being made and being copied.
+///
+/// The encoder choice is dropped on the way in, because a copied stream has no
+/// encoder and a `codec` left on one is refused by the renderer — rightly, since
+/// it would be a setting that did nothing. The span is dropped on the way out
+/// for the same reason in reverse.
+function setSource(s, source) {
+    s.source = source;
+    if (isCopy(s)) {
+        s.codec = '';
+        s.bsf = s.bsf || [];
+        s.tag = '';
+    } else {
+        s.copyFrom = 0;
+        s.copyTo = 0;
+    }
+    openDetail = s.id;
+    syncAudioFlag();
+    hooks.changed();
 }
 
 /// Everything the row is not spending a control on, as the words a player
@@ -296,6 +426,17 @@ function tailOf(s) {
         if (s.path) bits.push(basename(s.path));
         if (s.mimeType) bits.push(s.mimeType);
         return bits.join(' · ');
+    }
+    // The span a copy takes, in the input's own seconds — which is what the
+    // renderer is given and what `-ss`/`-to` in the command say. Written before
+    // the metadata because it is the part of the sentence that changes what is
+    // in the file.
+    if (isCopy(s)) {
+        const from = Number(s.copyFrom) || 0;
+        const to = Number(s.copyTo) || 0;
+        if (from > 0 || to > 0)
+            bits.push(`${from.toFixed(2)} s → ${to > 0 ? to.toFixed(2) + ' s' : 'the end'}`);
+        else bits.push('all of it');
     }
     if (s.language) bits.push(s.language);
     if (s.title) bits.push(`“${s.title}”`);
@@ -338,6 +479,7 @@ function detailRows(s, tail) {
     });
 
     return [
+        ...copyRows(s, restate),
         row('Language', [lang, span('ISO 639-2', 'dim')]),
         row('Name', title),
         row('Flags', dispositionToggles(s, restate)),
@@ -346,6 +488,101 @@ function detailRows(s, tail) {
         ...pairRows(s.metadata, `s${s.id}`, restate),
         ...bsfRows(s, restate),
     ];
+}
+
+// ── What a copy takes, and where it can start ──────────────────────────────
+//
+// **A copy can only begin at a keyframe**, and that is the one fact about the
+// packet path a person has to hold. Everything else about a copy is a saving;
+// this is the cost, and it is a cost that is invisible until the file is open
+// in a player and starts a second and a half early.
+//
+// So the keyframes are on the screen, as the places they are. The strip is the
+// input's own clock with a mark per keyframe, the in-point is drawn against
+// them, and clicking a mark is how the cut is snapped to one. Underneath, in
+// words, what the current in-point costs — because a strip answers "where" and
+// only a sentence answers "and what does that mean".
+
+function copyRows(s, restate) {
+    if (!isCopy(s)) return [];
+
+    const list = keyframesFor(s);
+    const stream = copiedStream(s);
+    const input = copiedInput(s);
+    const total = input && input.probe ? (input.probe.format.duration || 0) : 0;
+
+    const num = (key, placeholder) => el('input', {
+        cls: 'num', 'data-f': `copy-${key}`, type: 'number', min: 0, step: 0.1,
+        value: Number(s[key]) || 0, placeholder,
+        on: { change: (e) => {
+            s[key] = Math.max(0, Number(e.target.value) || 0);
+            drawStreams();
+            restate();
+        } },
+    });
+
+    const out = [
+        head('What is copied'),
+        row('From', [num('copyFrom', '0'), span('seconds into the input', 'dim')]),
+        row('To', [num('copyTo', '0'), span('0 is the end of it', 'dim')]),
+    ];
+
+    if (stream && stream.kind === 'audio') {
+        out.push(div('ex-note dim',
+            'Every packet of a sound stream stands on its own, so a copied soundtrack ' +
+            'starts exactly where it is asked to.'));
+        return out;
+    }
+
+    if (!list || !list.times.length) {
+        out.push(div('ex-note dim',
+            'Where this stream’s keyframes are could not be read, so the copy will begin ' +
+            'at the keyframe at or before the in-point without this being able to say ' +
+            'where that is.'));
+        return out;
+    }
+
+    const want = Number(s.copyFrom) || 0;
+    const land = keyframeAtOrBefore(list, want);
+    const span0 = Math.max(total, list.times[list.times.length - 1] + 1);
+
+    out.push(row('Keyframes', keyframeStrip(s, list, span0, restate)));
+    out.push(div('ex-copy-note' + (land !== null && want - land > 0.001 ? ' warn' : ' dim'),
+                 inPointNote(s)));
+    if (land !== null && want - land > 0.001)
+        out.push(div('ex-add', el('button', {
+            cls: 'tiny', text: `Snap to ${land.toFixed(2)} s`, 'data-f': 'copy-snap',
+            title: 'Move the in-point to the keyframe the copy would start on anyway',
+            on: { click: () => { s.copyFrom = land; drawStreams(); restate(); } },
+        })));
+    out.push(div('ex-note dim',
+        `${list.times.length} keyframe${list.times.length === 1 ? '' : 's'}, from the ` +
+        `${list.how === 'index' ? 'demuxer’s own index' : 'packets, read'}` +
+        `${list.complete ? '' : ' — and the list was cut short, so there are more'}. ` +
+        'A copy is packets, so it can only begin on one of them.'));
+    return out;
+}
+
+/// The input's clock with a mark per keyframe, and the in-point against them.
+///
+/// Built rather than drawn into a canvas because there are a handful of marks
+/// and each one is a thing to click: hit-testing ticks by hand to find out which
+/// was meant is work with a DOM node's name on it, which is the same argument
+/// the Graph stage's `+` is placed by.
+function keyframeStrip(s, list, span0, restate) {
+    const want = Number(s.copyFrom) || 0;
+    const at = (t) => `${Math.max(0, Math.min(100, (t / (span0 || 1)) * 100))}%`;
+    const marks = list.times.map((t) => el('button', {
+        cls: 'ex-kf' + (Math.abs(t - want) < 0.001 ? ' on' : ''),
+        'data-kf': t.toFixed(3),
+        title: `${t.toFixed(2)} s`,
+        style: { left: at(t) },
+        on: { click: () => { s.copyFrom = t; drawStreams(); restate(); } },
+    }));
+    return div('ex-kf-strip', [
+        div('ex-kf-track', marks),
+        el('div', { cls: 'ex-kf-here', style: { left: at(want) } }),
+    ]);
 }
 
 // ── the packet chain ───────────────────────────────────────────────────────

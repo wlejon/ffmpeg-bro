@@ -8,7 +8,9 @@ import { project } from '../project.js';
 import { basename } from '../format.js';
 import { settings, activeVideoCodec, outputFps } from './state.js';
 import { encoderInfo, audioInfo, muxerInfo, codecTags } from './capabilities.js';
-import { codecOf } from './streams.js';
+import { codecOf, labelOf } from './streams.js';
+import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
+         containerOf, parseCopy } from './copy.js';
 import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
 import { renderGraph } from '../filtergraph.js';
 import { buildSpec, range, specSources } from './spec.js';
@@ -18,6 +20,93 @@ import { buildSpec, range, specSources } from './spec.js';
 /// the same path over a hundred frames is not.
 function outputFrames() {
     return Math.max(0, Math.round(range().length * outputFps()));
+}
+
+/// What a copied stream cannot do, said where the decision is taken.
+///
+/// **A copied stream is not decoded**, so nothing on the Compose stage and
+/// nothing on the Graph stage reaches it: no crop, no scale, no opacity, no
+/// filter, no second clip stacked over it. Every one of those is a setting
+/// somebody made that will not be in the file, and a render that succeeded
+/// while ignoring them is the exact failure this whole list exists for — worse
+/// here than anywhere else, because the output *looks* like a successful export
+/// and is the input again.
+///
+/// The keyframe is the other half. A copy can only begin on one, so an in-point
+/// between two of them silently moves; it is said with both numbers, because
+/// "it will start earlier" without saying how much earlier is not actionable.
+function copyWarnings(list) {
+    const out = [];
+    const copies = list.filter(isCopy);
+    if (!copies.length) return out;
+
+    const clips = project.clips.length;
+    const videoCopies = copies.filter((s) => s.kind === 'video');
+
+    // Which inputs a copy reads, so the message can name the one that is going
+    // into the file rather than saying "an input".
+    for (const s of copies) {
+        const at = parseCopy(s.source);
+        const stream = copiedStream(s);
+        const input = copiedInput(s);
+        const where = `${labelOf(list, list.indexOf(s))} copies ${input ? input.name : 'an input'}`;
+        if (!stream) {
+            out.push(`${where}, and that stream is not in it any more — pick another, or ` +
+                     'feed the row from the edit');
+            continue;
+        }
+
+        const box = at ? containerOf(at.input) : '';
+        if (box && box === settings.container && copies.length === list.length)
+            out.push(`this is a rewrap into the container the file is already in, so the ` +
+                     `output would be a copy of ${input ? input.name : 'the input'} — pick ` +
+                     'another container, or trim it with From and To');
+
+        if (s.kind !== 'video') continue;
+        const kf = keyframesFor(s);
+        const want = Number(s.copyFrom) || 0;
+        const land = keyframeAtOrBefore(kf, want);
+        if (land !== null && want - land > 0.001)
+            out.push(`${where} from ${want.toFixed(2)} s, and the nearest keyframe at or ` +
+                     `before that is ${land.toFixed(2)} s — a copy starts there, so ` +
+                     `${(want - land).toFixed(2)} s more than you asked for will be in the file`);
+    }
+
+    if (!videoCopies.length) return out;
+
+    // The edit, against a stream that is not decoded. Counted rather than
+    // listed: what matters is that the picture in the file is one input's and
+    // not the composition on screen.
+    if (clips > 1)
+        out.push(`the timeline has ${clips} clips and the picture is copied — a copy is one ` +
+                 'input’s packets, so nothing stacked, cut or laid beside it will be in the ' +
+                 'file');
+
+    if (!noUserNodes())
+        out.push('the filters on the Graph stage do not reach a copied stream — it is never ' +
+                 'decoded, so there is no picture for a filter to work on');
+
+    const first = project.clips[0];
+    if (first) {
+        const x = first.xform || {};
+        const crop = x.crop || {};
+        const cropped = (crop.l || 0) + (crop.t || 0) + (crop.r || 0) + (crop.b || 0) > 0.001;
+        if (cropped || (x.opacity !== undefined && x.opacity < 0.999))
+            out.push('the crop and opacity on this clip do not reach a copied stream — the ' +
+                     'packets go into the file as they are');
+    }
+
+    for (const s of videoCopies) {
+        const stream = copiedStream(s);
+        if (!stream || !stream.width) continue;
+        const w = stream.displayWidth || stream.width;
+        const h = stream.displayHeight || stream.height;
+        if (w !== settings.width || h !== settings.height)
+            out.push(`the output is set to ${settings.width}×${settings.height} and the ` +
+                     `copied picture is ${w}×${h} — a copy is not resized, so the file will ` +
+                     'be the second of those');
+    }
+    return out;
 }
 
 export function warnings() {
@@ -36,6 +125,8 @@ export function warnings() {
     // you are half way through wiring — and "cannot be expressed" is a useless
     // thing to read when what is actually wrong is that one input of an
     // `overlay` you placed a minute ago has nothing on it.
+    out.push(...copyWarnings(settings.streams));
+
     if (!noUserNodes() && !buildSpec().filterGraph) {
         const why = renderGraph(buildSpec(), specSources(), { overlay: overlayState() });
         out.push(`this render would go through the internal compositor without your ` +
@@ -98,34 +189,42 @@ export function warnings() {
     // `bin`, `rtp_mpegts`, half of the raw writers — and it has to be said
     // where the choice was made rather than at write_header. The picker marks
     // it too; this is what makes it impossible to walk past.
-    const wantsVideo = settings.streams.some((s) => s.kind === 'video');
-    const wantsAudio = settings.audio && settings.streams.some((s) => s.kind === 'audio');
+    // Only the streams an encoder is actually opened for. A copied stream has
+    // none, so a container that holds no encoder this build has is no obstacle
+    // to it — MPEG-TS taking a copied H.264 is the ordinary case, and reading
+    // the encoder list at it would refuse the render that works.
+    const wantsVideo = settings.streams.some((s) => s.kind === 'video' && !isCopy(s));
+    const wantsAudio = settings.audio &&
+                       settings.streams.some((s) => s.kind === 'audio' && !isCopy(s));
     if (c && wantsVideo && !c.videoCodecs.length)
         out.push(`no video encoder this build offers can go in ${c.name} — ` +
                  'take the video stream out on this stage, or pick another container');
-    else if (c && info && c.videoCodecs.indexOf(codec) < 0)
+    else if (c && info && wantsVideo && c.videoCodecs.indexOf(codec) < 0)
         out.push(`${c.label} cannot hold ${info.label} — the muxer will refuse it`);
     if (c && wantsAudio && !c.audioCodecs.length)
         out.push(`no audio encoder this build offers can go in ${c.name} — ` +
                  'this render will be silent or be refused');
-    else if (c && settings.audio && settings.audioCodec &&
+    else if (c && wantsAudio && settings.audioCodec &&
              c.audioCodecs.indexOf(settings.audioCodec) < 0)
         out.push(`${c.label} cannot hold ${(audioInfo(settings.audioCodec) || {}).label}`);
 
+    // Everything from here down is about a picture being made, which a render
+    // whose video is copied is not doing: the size, the shape and the rate in
+    // the file are the input's.
     const pix = settings.pixelFormat || (info && info.pixelFormats[0]) || 'yuv420p';
-    if (/420/.test(pix) && ((w % 2) || (h % 2)))
+    if (wantsVideo && /420/.test(pix) && ((w % 2) || (h % 2)))
         out.push(`${pix} needs even dimensions — ${w}×${h} will fail`);
 
     const canvasAspect = project.height ? project.width / project.height : 0;
     const outAspect = h ? w / h : 0;
-    if (canvasAspect && Math.abs(outAspect - canvasAspect) > 0.01)
+    if (wantsVideo && canvasAspect && Math.abs(outAspect - canvasAspect) > 0.01)
         out.push('the output is a different shape from the canvas — the picture will be stretched');
 
     const fps = outputFps();
-    if (project.fps && fps > project.fps + 0.01)
+    if (wantsVideo && project.fps && fps > project.fps + 0.01)
         out.push(`${fps} fps from a ${project.fps.toFixed(3)} fps timeline duplicates frames`);
 
-    if (info && info.hardware && settings.rate === 'quality')
+    if (wantsVideo && info && info.hardware && settings.rate === 'quality')
         out.push('a GPU encoder trades quality per bit for speed — compare it against x264 before trusting the number');
 
     if (settings.rate === 'lossless')

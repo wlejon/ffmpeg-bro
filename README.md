@@ -209,6 +209,20 @@ bro.ffmpeg.deviceSources("dshow")
 // be able to take, and nobody types a fourcc they have not seen.
 bro.ffmpeg.codecTags("mp4", "libx265")   // → ["hev1", "hvc1"]
 
+// Where a copy can start. **A copied stream can only begin at a keyframe**,
+// which is a fact about the input rather than about the render — so it is a
+// query, asked before the render rather than explained after it. Read out of
+// the demuxer's own index where there is one, which is instant and exact, and
+// by reading the window where there is not.
+bro.ffmpeg.keyframes(path | input, { stream, from, to, max })
+// → { stream, how: "index" | "scan", complete, from, to, times: [0, 2, 4, …] }
+// The times are seconds on the stream's own clock, counted from its first
+// packet — which is the clock `ExportStream.copyFrom` is written against and
+// the clock the seek is made on, so a number snapped to here is the number the
+// render lands on. `complete` is false when the walk was cut short by `max` or
+// by the scan not reaching `to`: a list of keyframes that quietly stops is a
+// list somebody would snap to the wrong end of.
+
 // The encoder libavformat itself would reach for, given a muxer and a
 // filename — `av_guess_codec`, which is what the `ffmpeg` CLI uses. It matters
 // for one muxer: **`image2`'s extension names a codec, not a container**, so
@@ -408,10 +422,28 @@ Given, it is authoritative:
 streams: [
   { kind: "video",                  // "video" | "audio" | "attachment"
     source: "composite",            // where the content comes from: "composite"
-                                    // (the canvas) or "mix" (the whole
-                                    // soundtrack). Composed, so named rather
-                                    // than numbered — no input index means
-                                    // "everything, stacked".
+                                    // (the canvas), "mix" (the whole
+                                    // soundtrack), or "copy:0:1" — an input and
+                                    // a stream in it, exactly what `-map 0:1`
+                                    // names. The first two are *composed*, so
+                                    // they are named rather than numbered: no
+                                    // input index means "everything, stacked".
+                                    //
+                                    // A copied stream reaches no encoder at
+                                    // all — its packets come out of a demuxer,
+                                    // through this stream's bitstream chain,
+                                    // into the muxer — so `codec`, `crf`,
+                                    // `preset`, `pixelFormat` and the option
+                                    // bag have nothing to configure and naming
+                                    // one is an error rather than a shrug.
+    copyFrom: 0, copyTo: 0,         // the span it takes, in the input's own
+                                    // seconds; 0 is the end of it. **A copy
+                                    // can only start at a keyframe**: the seek
+                                    // is AVSEEK_FLAG_BACKWARD, so it lands at
+                                    // or *before* `copyFrom` and never skips a
+                                    // frame the copy wanted. What that costs is
+                                    // the caller's to show — see
+                                    // `bro.ffmpeg.keyframes`.
     codec: "libx265",               // empty asks the muxer for its default
     options: { crf: 22 },           // this stream's encoder options
     metadata: { title: "Programme" },
@@ -1344,6 +1376,69 @@ away, including the last video stream, which is what a sound-only render is.
 Everything a row does not say it takes from the Encode stage, so a second audio
 track is one click and not twenty controls.
 
+**The first word of the row is where its content comes from**, and there are
+two answers. The composite and the mix are made — the edit, composited and
+summed, through an encoder. A **copy** is not made at all: it is one input's
+packets, going into the file exactly as they came out, which is `-map 0:1`
+and `-c:v copy`. Picking one changes the rest of the sentence, because a
+copied stream has no encoder to choose: the codec in the file is the codec that
+was in the input, so it is stated rather than offered.
+
+### Copying instead of encoding
+
+Four things become possible and each of them is instant and lossless, because
+nothing is decoded:
+
+| | |
+|---|---|
+| **Rewrap** | the same packets in a different container |
+| **Lossless cut** | a span of one input, byte for byte |
+| **Replace the audio** | copy the picture, take the sound from the edit or from elsewhere |
+| **Extract** | one stream on its own |
+
+`Rewrap <file>` under the list is the short way to all four: it fills the list
+with one copied row per stream of that input. **It is a shortcut and not a
+mode** — what it leaves behind is ordinary rows with ordinary sources, so
+everything it decided is on the screen and can be changed or undone a row at a
+time. Nothing on this stage behaves differently afterwards.
+
+**A copy can only start at a keyframe**, and that is the one cost worth knowing
+about the whole packet path. Open a copied row and the keyframes are drawn on
+the input's own clock with the in-point against them: click a mark to cut
+there, or type a time and read what it costs —
+
+> the nearest keyframe at or before 4.20 s is 4.00 s — a copy can only start on
+> one, so 0.20 s more than you asked for will be at the front of the file
+
+with `Snap` beside it. Where they are is asked of the demuxer's own index,
+which is instant for mp4 and Matroska; a container without one is read, and
+the panel says which of the two happened and whether the list was cut short.
+Every packet of a sound stream stands on its own, so a copied soundtrack starts
+exactly where it is asked to and says so instead of drawing a strip.
+
+**A copy conflicts with the edit, and every conflict is named rather than
+ignored.** This matters more here than anywhere else on the stage: a render
+that quietly dropped what it could not apply would succeed, and what came out
+would be the input again.
+
+| | |
+|---|---|
+| more than one clip | *the timeline has 3 clips and the picture is copied — a copy is one input's packets, so nothing stacked, cut or laid beside it will be in the file* |
+| a filter on the graph | *the filters on the Graph stage do not reach a copied stream — it is never decoded, so there is no picture for a filter to work on* |
+| a crop, or an opacity | *the packets go into the file as they are* |
+| an output of a different size | *the output is set to 1920×1080 and the copied picture is 640×360 — a copy is not resized* |
+| a container that will not hold the codec | refused by `avformat_query_codec`, with both named |
+| a codec chosen on a copied row | there is no encoder to configure, so it is refused rather than ignored |
+| the same container it came from | *this is a rewrap into the container the file is already in* |
+
+The command bar prints `-map 0:1` and `-c:v copy`, and puts `-ss` and `-to`
+**in front of the `-i`**. That position is the whole difference between a
+lossless cut and a slow one: before the `-i` it is an input seek and the
+demuxer jumps to the keyframe, which is why a copy starts there; after it, the
+same word is an output seek — the whole file read and the front discarded,
+slower and beginning on a frame nothing can decode. The bar says so under the
+command.
+
 Open a row and it says what the stream carries:
 
 - **Language** — ISO 639-2, the one metadata key every player reads.
@@ -1964,13 +2059,14 @@ Honest list of what does not work:
   attachments; a subtitle track is a kind it does not offer yet. The seam is
   there — a stream says what *kind* it is and where its content comes from —
   and what is missing is a source for one.
-- **Every stream of the list from the same place.** A video row is fed from
-  the composite and an audio row from the mix, which is why the source is
-  stated rather than chosen. Mapping a particular input stream through — the
-  thing `-map 0:a:2` says — is the packet path's, below.
-- **Stream copy.** Every render decodes and re-encodes, even where the output
-  settings match the input exactly and the packets could have been remuxed
-  untouched — which would be both instant and lossless.
+- **A copy that follows the timeline.** A copied stream is one input's packets
+  over a span, set on its own row in the input's own seconds. The clip you
+  trimmed on the timeline is not that span and nothing connects the two, so
+  cutting losslessly means reading the in-point off the keyframe strip rather
+  than off the edit. It is the obvious next thing and it is not built.
+- **A copy of a stream that is not video or audio.** The stream list holds
+  those two and attachments; a copied subtitle track is the same gap the
+  encoded one is, one kind short.
 - **Encoding straight from the GPU.** NVENC, AMF and QSV are offered with their
   own presets, tunes, profiles and rate-control modes, but frames still go
   down to system memory as RGBA and back up again. A hardware decode feeding a

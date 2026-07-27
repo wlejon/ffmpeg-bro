@@ -1185,6 +1185,138 @@ console.log('\na bitstream filter on a stream');
     pump(40);
 }
 
+// ── the packet path ────────────────────────────────────────────────────────
+//
+// A copied stream is the one row on this stage that is not encoded, and the
+// three things worth checking are exactly the three things that make it a
+// decision rather than a switch: that it can be taken on the row, that the
+// keyframe it will actually start on is on the screen before the render, and
+// that the edit it contradicts is refused by name.
+
+console.log('\na stream copied rather than encoded');
+{
+    A.shell.goTo('write');
+    pump(60);
+
+    // Where a copy can start, asked of the input. This is the fact the whole
+    // surface is built on, so it is checked as a binding first.
+    const keys = bro.ffmpeg.keyframes(A.inputs.inputs[0].path);
+    ok(keys && Array.isArray(keys.times) && keys.times.length > 0,
+       `libavformat reports the keyframes (${keys.times.length}, from the ${keys.how})`);
+    ok(keys.times[0] < 0.001,
+       `the first is the start of the file (${keys.times[0].toFixed(3)} s)`);
+    let rising = true;
+    for (let i = 1; i < keys.times.length; i++)
+        if (keys.times[i] <= keys.times[i - 1]) rising = false;
+    ok(rising, 'and they come back in order');
+
+    // The decision, on the row. The picker is the source: what the stream is
+    // made of, or which input stream it is.
+    const rows = () => qq('#ex-streams .ex-stream');
+    const picker = q('[data-f="stream-source"]', rows()[0]);
+    ok(!!picker, 'the video row offers where its content comes from');
+    let offered = [];
+    for (const o of picker.options) offered.push(o.value);
+    ok(offered[0] === 'composite', 'the composite first, because that is what a render is');
+    ok(offered.some((v) => /^copy:0:\d+$/.test(v)),
+       `and a copy of each of the input’s streams (${offered.join(' ')})`);
+
+    const wantVideo = offered.find((v) => /^copy:0:/.test(v));
+    picker.value = wantVideo;
+    picker.dispatchEvent(new Event('change'));
+    pump(80);
+
+    let spec = A.exporter.buildSpec();
+    same(spec.streams[0].source, wantVideo, 'the choice reaches the spec as copy:<input>:<stream>');
+    same(spec.streams[0].codec, '', 'with no encoder on it, because there is none to name');
+
+    // What the row says, and what the command says. `-c:v copy` and a `-map`
+    // that names an input pad rather than a filtergraph label.
+    let text = A.command.currentCommand();
+    ok(text.indexOf('-c:v copy') > 0, `the command prints -c:v copy (${text.indexOf('copy')})`);
+    ok(/-map 0:\d+/.test(text), 'and a -map naming the input stream');
+
+    // The keyframe surface. An in-point between two keyframes is where a copy
+    // costs something, and the whole point is that it says so beforehand.
+    const from = q('#ex-streams [data-f="copy-copyFrom"]');
+    ok(!!from, 'the row says what part of the input is copied');
+    const between = keys.times.length > 1 ? (keys.times[0] + keys.times[1]) / 2 : 0.37;
+    from.value = String(between);
+    from.dispatchEvent(new Event('change'));
+    pump(80);
+
+    ok(qq('#ex-streams .ex-kf').length === keys.times.length,
+       `the keyframes are drawn, one mark each (${qq('#ex-streams .ex-kf').length})`);
+    const note = q('#ex-streams .ex-copy-note');
+    ok(!!note && note.textContent.indexOf('keyframe') >= 0,
+       `and what the in-point costs is said in words (${note ? note.textContent : ''})`);
+    const snap = q('#ex-streams [data-f="copy-snap"]');
+    ok(!!snap, 'with the offer to snap to the keyframe it would start on anyway');
+
+    // And the refusal, where the decision is: a copy cannot land at 0.37 s and
+    // the warnings say so with both numbers.
+    let said = A.exporter.currentWarnings().join(' | ');
+    ok(said.indexOf('keyframe') >= 0 && said.indexOf('more than you asked for') >= 0,
+       `the warnings name what the cut costs (${said})`);
+
+    snap.click();
+    pump(80);
+    spec = A.exporter.buildSpec();
+    ok(Math.abs(spec.streams[0].copyFrom - keys.times[0]) < 0.001 ||
+       Math.abs(spec.streams[0].copyFrom - keys.times[1]) < 0.001,
+       `snapping puts the in-point on a keyframe (${spec.streams[0].copyFrom})`);
+    said = A.exporter.currentWarnings().join(' | ');
+    ok(said.indexOf('more than you asked for') < 0,
+       'and then there is nothing left to warn about');
+
+    // `-ss` goes in front of the `-i`, which is the distinction that decides
+    // whether a copy is instant or is a read of the whole file. Taken from the
+    // second keyframe, because the first is zero and prints nothing.
+    if (keys.times.length > 1) {
+        q('#ex-streams [data-kf="' + keys.times[1].toFixed(3) + '"]').click();
+        pump(80);
+        same(A.exporter.buildSpec().streams[0].copyFrom, keys.times[1],
+             'clicking a keyframe is how a cut is put on one');
+        text = A.command.currentCommand();
+        const ss = text.indexOf('-ss ');
+        const i = text.indexOf(' -i ');
+        ok(ss > 0 && ss < i, `-ss is an input seek, printed before the -i (${ss} < ${i})`);
+    }
+
+    // What a copy contradicts. The picture is not decoded, so a filter on the
+    // graph does not reach it — and saying nothing would leave a file that is
+    // the input again and looks like a successful export.
+    A.graph.overlay.insert('clip:' + A.project.clips[0].id + '/after-scale', 'hflip');
+    pump(60);
+    said = A.exporter.currentWarnings().join(' | ');
+    ok(said.indexOf('do not reach a copied stream') >= 0,
+       `a filter on the graph is refused against a copied stream (${said})`);
+    A.graph.overlay.clear();
+    pump(60);
+
+    // The shortcut. Whatever it sets has to be visible in the list afterwards —
+    // it writes ordinary rows and there is no hidden mode.
+    ok(!!q('#ex-streams [data-rewrap]'), 'the stage offers to rewrap an input outright');
+    q('#ex-streams [data-rewrap]').click();
+    pump(80);
+    spec = A.exporter.buildSpec();
+    ok(spec.streams.length >= 1 && spec.streams.every((s) => /^copy:/.test(s.source)),
+       `a rewrap makes every stream a copy (${spec.streams.map((s) => s.source).join(' ')})`);
+    ok(qq('#ex-streams .ex-stream').length === spec.streams.length,
+       'and the list says so — the shortcut leaves ordinary rows behind it');
+    text = A.command.currentCommand();
+    ok(text.indexOf('-c:v copy') > 0 && text.indexOf('-c:a copy') > 0,
+       `the command copies both (${text})`);
+
+    // Back to a render, so everything after this is the file it always was.
+    A.exporter.currentSettings().streams = A.exporter.defaultStreams();
+    A.exporter.currentSettings().audio = true;
+    A.exporter.redraw();
+    pump(60);
+    same(A.exporter.buildSpec().streams[0].source, 'composite',
+         'and it goes back to being made');
+}
+
 // ── the range ──────────────────────────────────────────────────────────────
 
 console.log('\nwriting part of the timeline');

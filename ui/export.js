@@ -32,7 +32,7 @@ import { intents, activeIntent, applyIntent, clampToEncoder } from './export/pre
 import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
 import { initForm, drawForm } from './export/form.js';
-import { initStreams, drawStreams } from './export/streams.js';
+import { initStreams, drawStreams, defaultStreams } from './export/streams.js';
 import { initPreview, drawPreview, drawPreviewStats, chasePreview, startPreview,
          previewFinished, previewRange, invalidatePreview, invalidateCandidate,
          stopPreviewPlayback, renderCandidate, startQuality, togglePreviewPlay,
@@ -404,6 +404,12 @@ export function lastStatus() { return lastPoll; }
 
 /// For tests: the settings block, and what the encoder is being told.
 export function currentSettings() { return settings; }
+
+/// The list this application writes when nobody has said otherwise — one video
+/// stream from the composite and one audio stream from the mix. On the surface
+/// so that a test which has turned the output into a rewrap can put it back
+/// without knowing what the default is made of.
+export { defaultStreams };
 
 /// Redraw everything from the settings as they now are. The app itself never
 /// needs this — every control redraws what it changed — but a test that writes

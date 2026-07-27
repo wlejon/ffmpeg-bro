@@ -1066,6 +1066,52 @@ body.fs #cropbox { display: none; }
 .ex-bsf-row { display: flex; align-items: center; gap: 5px; padding: 1px 0; }
 .ex-bsf-row .ex-bsf-name { flex: 1; min-width: 0; }
 .ex-bsf-n { min-width: 12px; text-align: right; }
+
+/* Made, or copied. The decision is a picker rather than a word because it is
+   the first thing a row says about itself and the second half of the sentence
+   changes shape with it. */
+.ex-stream-src { max-width: 210px; }
+.ex-stream-copied { color: var(--accent); }
+
+/* Where a copy can start. The marks are the keyframes, on the input's own
+   clock, and the line is the in-point drawn against them — a copy can only
+   begin on a mark, so the gap between the line and the mark to its left is
+   exactly what the cut costs. */
+.ex-kf-strip { position: relative; width: 100%; height: 18px; }
+.ex-kf-track {
+    position: absolute;
+    left: 0; right: 0; top: 7px;
+    height: 4px;
+    background: var(--line);
+    border-radius: 2px;
+}
+.ex-kf {
+    position: absolute;
+    /* This engine does not blockify an absolutely positioned inline element,
+       and a button with a width and no display comes out one pixel square. */
+    display: block;
+    top: -4px;
+    width: 3px;
+    height: 12px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 1px;
+    background: var(--dim);
+    cursor: pointer;
+}
+.ex-kf:hover { background: var(--text); }
+.ex-kf.on { background: var(--accent); }
+.ex-kf-here {
+    position: absolute;
+    display: block;
+    top: 0;
+    width: 1px;
+    height: 18px;
+    background: var(--accent);
+}
+.ex-copy-note { font-size: var(--fs-sm); line-height: 1.5; padding: 3px 0; }
+.ex-copy-note.warn { color: var(--accent); }
 .cmd-note {
     display: block;
     color: var(--dim);

@@ -31,6 +31,7 @@ import { div, span, put, show } from './dom.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
 import { buildSpec, specSources } from './export/spec.js';
+import { parseCopy } from './export/copy.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
 import { commandParts as captureParts } from './capture.js';
 import { currentStage } from './shell.js';
@@ -144,6 +145,43 @@ export function parts() {
     if (settings.scaler && settings.scaler !== 'bicubic')
         pre.push('-sws_flags', settings.scaler);
 
+    // Which `-i`s a copied stream needs, and where they land in the printed
+    // numbering.
+    //
+    // **A `-map` counts input files on the command line**, and the graph's own
+    // `[0:v]` counts the same list — so a copy has to be printed as one of these
+    // inputs and know its own index, not the index it happens to have in the
+    // document. Graph inputs first, because their labels are already written
+    // against that order; a copied input that is not among them is appended and
+    // takes the next number. A copy of a file the graph is also reading is one
+    // `-i` and not two, which is the same rule the renderer follows: one input,
+    // one demuxer, one seek.
+    const copies = (spec.streams || [])
+        .map((s) => ({ s, at: parseCopy(s.source) }))
+        .filter((c) => c.at);
+    const order = g.ok ? (g.inputRefs || []).slice() : [];
+    const printedPath = g.ok ? g.inputs.slice() : [];
+    for (const c of copies) {
+        if (order.indexOf(c.at.input) >= 0) continue;
+        const src = (spec.inputs || [])[c.at.input];
+        order.push(c.at.input);
+        printedPath.push(src ? src.path : '');
+    }
+    // What each printed input has to seek to, when a copy is what reads it.
+    // `-ss` before the `-i` is an *input* seek: the demuxer jumps to the
+    // keyframe at or before it, which is exactly what a copy can do and is why
+    // a lossless cut is instant. The same word after the `-i` is an output seek
+    // — every packet read from the start of the file and then thrown away —
+    // which is slower and, with `-c copy`, starts the file on a frame nothing
+    // can decode.
+    const copySeek = new Map();
+    for (const c of copies) {
+        const cur = copySeek.get(c.at.input) || { ss: Infinity, to: 0 };
+        cur.ss = Math.min(cur.ss, Number(c.s.copyFrom) || 0);
+        cur.to = Number(c.s.copyTo) > 0 ? Math.max(cur.to, Number(c.s.copyTo)) : cur.to;
+        copySeek.set(c.at.input, cur);
+    }
+
     // Each `-i` with what belongs *in front of* it. That order is most of what
     // makes a printed command runnable: `-f`, the demuxer's options, `-ss`,
     // `-to` and `-itsoffset` are input options, and the same words after the
@@ -151,9 +189,11 @@ export function parts() {
     // seeks the *output*, and a command that put them there would produce a
     // different file while looking almost right.
     const inputs = [];
-    if (g.ok) {
-        g.inputs.forEach((p, i) => {
-            const src = (spec.inputs || [])[(g.inputRefs || [])[i]];
+    {
+        printedPath.forEach((p, i) => {
+            const which = order[i];
+            const src = (spec.inputs || [])[which];
+            const seek = copySeek.get(which);
             if (src) {
                 // First of the input options, because it is the one that says
                 // there is more of this input than the file has in it. The
@@ -173,13 +213,24 @@ export function parts() {
                 for (const k of Object.keys(src.decoderOptions || {}))
                     if (src.decoderOptions[k] !== '' && src.decoderOptions[k] !== undefined)
                         inputs.push(`-${k}`, arg(src.decoderOptions[k]));
-                if (src.ss) inputs.push('-ss', String(src.ss));
-                if (src.to) inputs.push('-to', String(src.to));
+                // The input's own window, and then the copy's on top of it. A
+                // copy's `copyFrom` is measured on the input's clock — after
+                // its `-ss` — and a command line has only one `-ss` per input,
+                // so the two are added. Both are input options and both have to
+                // stay in front of the `-i`: after it, `-ss` would read the
+                // whole file and throw the front away, and the copy would begin
+                // on a frame with no keyframe behind it.
+                const ss = (src.ss || 0) + (seek && isFinite(seek.ss) ? seek.ss : 0);
+                const to = seek && seek.to > 0 ? (src.ss || 0) + seek.to : (src.to || 0);
+                if (ss) inputs.push('-ss', String(Number(ss.toFixed(3))));
+                if (to) inputs.push('-to', String(Number(to.toFixed(3))));
                 if (src.itsoffset) inputs.push('-itsoffset', String(src.itsoffset));
             }
             inputs.push('-i', arg(p));
         });
     }
+    /// Where a printed `-i` sits in the command's own numbering.
+    const printedIndex = (specIndex) => order.indexOf(specIndex);
 
     // What the file is made of, in the order the muxer will number it. The
     // spec's list is authoritative — it is what `render.start` is handed — so
@@ -188,6 +239,13 @@ export function parts() {
     const streams = spec.streams && spec.streams.length ? spec.streams : [];
     const nVideo = streams.filter((s) => s.kind === 'video').length;
     const nAudio = streams.filter((s) => s.kind === 'audio').length;
+
+    // Whether anything maps the graph at all. A rewrap maps input pads and
+    // nothing else, so printing a `-filter_complex` beside it would be printing
+    // a composition nothing reads — a command that is longer, slower and
+    // describes work the render is not doing.
+    const graphUsed = g.ok && streams.some(
+        (s) => !parseCopy(s.source) && (s.kind === 'video' || s.kind === 'audio'));
 
     // The output half, once per pass.
     //
@@ -202,15 +260,40 @@ export function parts() {
     // terms. Two video streams of the same pad is a legitimate thing to want —
     // one h264 for compatibility, one HEVC for size — and it is the same label
     // mapped twice.
-    if (g.ok) {
-        for (let i = 0; i < nVideo; i++) out.push('-map', arg(g.video));
-        if (g.audio) for (let i = 0; i < nAudio; i++) out.push('-map', arg(g.audio));
+    //
+    // A copied stream maps an *input pad* rather than a filtergraph label —
+    // `-map 0:1` — and the number is the printed input's, which is why the
+    // `-i`s were planned before this. Everything else maps the graph's output.
+    for (const s of streams) {
+        const at = parseCopy(s.source);
+        if (at) {
+            const n = printedIndex(at.input);
+            if (n >= 0) out.push('-map', `${n}:${at.stream}`);
+            continue;
+        }
+        if (!g.ok) continue;
+        if (s.kind === 'video') out.push('-map', arg(g.video));
+        else if (s.kind === 'audio' && g.audio) out.push('-map', arg(g.audio));
     }
     if (!nVideo) out.push('-vn');
-    if (!g.ok || !g.audio || !nAudio) out.push('-an');
+    if (!nAudio || (!copies.some((c) => c.s.kind === 'audio') && (!g.ok || !g.audio)))
+        out.push('-an');
 
     let vi = 0, ai = 0, ti = 0;
     for (const s of streams) {
+        // `-c:v copy` and nothing else. Not one of the encoder options below
+        // applies — there is no encoder — and printing a `-crf` beside a
+        // `copy` would be printing a command that means something different
+        // from the render.
+        const at = parseCopy(s.source);
+        if (at) {
+            const kind = s.kind === 'audio' ? 'a' : 'v';
+            const idx = kind === 'a' ? ai++ : vi++;
+            out.push(`-c:${sel(kind, idx, kind === 'a' ? nAudio : nVideo)}`, 'copy');
+            bsfArgs(out, s, kind, idx, kind === 'a' ? nAudio : nVideo);
+            describe(out, s, kind, idx, kind === 'a' ? nAudio : nVideo);
+            continue;
+        }
         if (s.kind === 'attachment') {
             // `-attach` is an output option, and the mimetype rides on the
             // attachment's own stream index — `t` counts attachments, not
@@ -308,7 +391,8 @@ export function parts() {
     const passes = spec.passes && spec.passes.length ? spec.passes : [null];
     const tails = passes.map(tail);
 
-    return { spec, graph: g, pre, inputs, out: tails[tails.length - 1], tails, passes };
+    return { spec, graph: g, graphUsed, pre, inputs,
+             out: tails[tails.length - 1], tails, passes };
 }
 
 /// What the bar is describing right now.
@@ -333,7 +417,7 @@ function commandText() {
     if (cap) return cap.pre.concat(cap.inputs, cap.out).join(' ');
     const p = parts();
     const head = p.pre.concat(p.inputs);
-    if (p.graph.ok) head.push('-filter_complex', arg(p.graph.chains.join(';')));
+    if (p.graphUsed) head.push('-filter_complex', arg(p.graph.chains.join(';')));
     // One line per pass, in order, because that is how a two-pass render is run
     // by hand. Pasted into a shell they run one after the other, which is what
     // this binary does with them in one job.
@@ -367,7 +451,10 @@ export function draw() {
         return;
     }
 
-    const empty = !project.clips.length;
+    // A render that copies packets has no timeline behind it — a rewrap is one
+    // input and one muxer — so an empty edit is not an empty command.
+    const empty = !project.clips.length &&
+                  !(settings.streams || []).some((s) => parseCopy(s.source));
     show(refs.copy, !empty);
     refs.bar.classList.toggle('empty', empty);
     if (empty) { put(refs.line, () => []); lastText = ''; return; }
@@ -384,7 +471,7 @@ export function draw() {
             if (p.passes[i] && p.passes[i].label)
                 bits.push(span(`# ${p.passes[i].label}\n`, 'cmd-pass'));
             bits.push(span(p.pre.concat(p.inputs).join(' ') + GAP, 'cmd-exact'));
-            if (p.graph.ok) {
+            if (p.graphUsed) {
                 bits.push(span('-filter_complex' + GAP, 'cmd-exact'));
                 // Dimmed, and on its own lines when opened, because this is the
                 // half that is a translation rather than a transcript.
@@ -419,13 +506,40 @@ function notes(p) {
                'libavfilter and these are the chains it parses — all but the last, which ' +
                'converts into the encoder’s colour and is the writer’s job here.'],
     ];
+    const streams = p.spec.streams || [];
+    const copied = streams.filter((s) => parseCopy(s.source));
+    const allCopied = copied.length && copied.length === streams.length;
+
     // No graph means the second line is about something that is not on screen,
-    // so it goes and the refusal takes its place.
-    if (!p.graph.ok) {
+    // so it goes and the refusal takes its place — unless there is nothing for
+    // a graph to describe, which is what a render made entirely of copied
+    // streams is. A rewrap has no composition to translate and saying "the
+    // graph cannot be expressed" about it would be reporting a problem that
+    // does not exist.
+    if (!p.graphUsed) {
         lines.length = 1;
-        lines.push([span('No graph: ', 'lead'),
-                    `${p.graph.reason}, so the command above is incomplete.`]);
+        if (!allCopied)
+            lines.push([span('No graph: ', 'lead'),
+                        `${p.graph.reason}, so the command above is incomplete.`]);
     }
+
+    // The one distinction people get wrong about a copy, said where the two
+    // arguments are a foot apart on the screen. It is not trivia: the same
+    // three characters on either side of the `-i` are two different operations,
+    // and only one of them can produce a lossless cut.
+    if (allCopied)
+        lines[0] = [span('Exact: ', 'lead'),
+                    'all of it — a render made only of copied streams has no composition ' +
+                    'in it to be a translation of.'];
+    if (copied.length)
+        lines.push([span('Copied: ', 'lead'),
+                    `${copied.length} stream${copied.length === 1 ? '' : 's'} go in as the ` +
+                    'packets that are already there — no decode, no filter, no encoder, and ' +
+                    'nothing from the Compose or Graph stages reaches them. The -ss and -to ' +
+                    'sit before the -i, which is an input seek: the demuxer jumps to the ' +
+                    'keyframe at or before it, and that is why a copy starts there. After ' +
+                    'the -i they would be an output seek — the whole file read and the front ' +
+                    'discarded, slower and beginning on a frame nothing can decode.']);
     for (const c of (p.graph.caveats || []))
         lines.push([span('Differs: ', 'lead'), c + '.']);
 
