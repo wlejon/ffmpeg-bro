@@ -50,11 +50,20 @@ extern "C" {
 
 namespace ffmpegbro {
 
+class CopyStreams;
+
 class Writer {
 public:
     ~Writer();
 
-    bool open(const ExportSettings& s, bool wantAudio, std::string* err);
+    /// `copies` is the render's packet path — the streams fed from a demuxer
+    /// rather than from the compositor. It is built *before* this is called
+    /// because a copied stream is described to the muxer out of its input
+    /// stream's own parameters, and there is nowhere else to get them from.
+    /// Null is a render with no copied stream in it, which is nearly all of
+    /// them.
+    bool open(const ExportSettings& s, bool wantAudio, std::string* err,
+              CopyStreams* copies = nullptr);
 
     /// Encode one composited canvas into every video stream mapped to the
     /// composite. `index` is the output frame number, which is the whole
@@ -68,6 +77,17 @@ public:
     /// time and the video loop produces however many one frame covers — and
     /// because two encoders in one file rarely agree on that number.
     bool writeAudio(const float* interleaved, int frames, std::string* err);
+
+    /// One packet of a copied stream, in that stream's *input* time base and
+    /// already shifted so that the copy's zero is the file's. It goes through
+    /// the same bitstream chain and the same muxer call an encoded packet does
+    /// — which is the whole reason the packet path cost so little: `writePacket`
+    /// was already codec-agnostic, and a copied stream differs from an encoded
+    /// one by where its `srcTimeBase` came from.
+    ///
+    /// `desc` indexes the resolved stream list — `outputStreams()`'s answer —
+    /// which is the same numbering `CopyStreams` was built against.
+    bool writeCopiedPacket(size_t desc, AVPacket* pkt, std::string* err);
 
     /// Flush both encoders and write the trailer. Called even on a cancelled
     /// render: an mp4 whose trailer never went down has no index and plays
@@ -128,8 +148,18 @@ private:
     /// stream of its kind needs to be fed.
     struct Out {
         ExportStream desc;
+        size_t descIndex = 0;           ///< where it sits in the resolved list
         AVStream* st = nullptr;
         AVCodecContext* enc = nullptr;
+
+        /// Packets from a demuxer rather than from an encoder. `enc` is null
+        /// for one of these and every loop that feeds encoders steps over it.
+        bool copied = false;
+
+        /// The time base the packets arrive in: an encoder's, or the input
+        /// stream's for a copy. One field rather than two branches at the
+        /// muxer, which is what let the packet path reuse `writePacket` whole.
+        AVRational srcTimeBase{1, 1};
 
         // video
         AVFrame* vframe = nullptr;
@@ -166,6 +196,10 @@ private:
     bool openVideoStream(Out& o, std::string* err);
     bool openAudioStream(Out& o, bool* skipped, std::string* err);
     bool openAttachment(Out& o, std::string* err);
+
+    /// A stream that is the bytes that were already there: the muxer is told
+    /// about the *input* stream's parameters, and no encoder is opened at all.
+    bool openCopyStream(Out& o, CopyStreams& copies, std::string* err);
 
     /// Metadata, language, disposition and codec tag — everything the muxer is
     /// told about a stream that is not the bitstream itself.

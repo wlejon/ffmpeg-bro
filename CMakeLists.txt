@@ -45,6 +45,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_report.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
+    src/native/export_copy.cpp
     src/native/export_frame.cpp
     src/native/export_graph.cpp
     src/native/export_source.cpp

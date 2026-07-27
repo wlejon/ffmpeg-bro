@@ -2,6 +2,7 @@
 
 #include "export_writer.h"
 
+#include "export_copy.h"
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_sequence.h"
 
@@ -395,7 +396,15 @@ std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio)
         // The decision is the edit's, not the settings', which is why it is
         // made here with `wantAudio` in hand rather than by whoever built the
         // list without one.
-        if (st.kind == "audio" && (!wantAudio || !s.includeAudio)) continue;
+        //
+        // **A copied audio stream is not the mix and is not covered by this.**
+        // Its sound comes out of a demuxer, so a timeline with nothing on it
+        // still writes one — which is exactly what "replace the audio" and
+        // "extract the soundtrack" are, and dropping it here would have made
+        // both of them silently impossible.
+        if (st.kind == "audio" && !isCopySource(st.source) &&
+            (!wantAudio || !s.includeAudio))
+            continue;
 
         if (st.source.empty())
             st.source = st.kind == "audio" ? "mix"
@@ -421,11 +430,15 @@ std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio)
 Writer::~Writer() { close(); }
 
 bool Writer::hasAudio() const {
-    for (const auto& o : outs_) if (o->desc.kind == "audio") return true;
+    // Only the streams the *mixer* feeds. A copied soundtrack has an encoder
+    // nowhere in it, and a render that started mixing for one would be decoding
+    // every clip's audio to hand it to nothing.
+    for (const auto& o : outs_) if (o->desc.kind == "audio" && !o->copied) return true;
     return false;
 }
 
-bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err) {
+bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
+                  CopyStreams* copies) {
     settings_ = s;
 
     // `-f`, when the render says which muxer it means. Named rather than left
@@ -451,12 +464,25 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err) {
     // numbering: `-map` order, `-metadata:s:a:1`, and what a player shows in
     // its track menu are all the same order, and there is no second sorting
     // pass anywhere to disagree with it.
-    for (const auto& desc : outputStreams(s, wantAudio)) {
+    const std::vector<ExportStream> resolved = outputStreams(s, wantAudio);
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        const ExportStream& desc = resolved[i];
         auto out = std::make_unique<Out>();
         out->desc = desc;
+        out->descIndex = i;
 
         bool skipped = false;
-        if (desc.kind == "video") {
+        if (isCopySource(desc.source)) {
+            // The packet path. It reaches no encoder, so nothing below this
+            // branch — the pixel format, the rate control, the colour tags —
+            // applies to it: what goes in the file is what was already in the
+            // input.
+            if (!copies) {
+                *err = "this render has a copied stream and nothing opened to copy from";
+                return false;
+            }
+            if (!openCopyStream(*out, *copies, err)) return false;
+        } else if (desc.kind == "video") {
             if (!openVideoStream(*out, err)) return false;
         } else if (desc.kind == "audio") {
             if (!openAudioStream(*out, &skipped, err)) return false;
@@ -514,7 +540,7 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err) {
 bool Writer::writeVideo(const Rgba& canvas, int64_t index, std::string* err) {
     for (auto& out : outs_) {
         Out& o = *out;
-        if (o.desc.kind != "video") continue;
+        if (o.desc.kind != "video" || o.copied) continue;
         if (av_frame_make_writable(o.vframe) < 0) return false;
 
         const uint8_t* src[4] = {canvas.data.data(), nullptr, nullptr, nullptr};
@@ -545,7 +571,7 @@ bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) 
 
     for (auto& out : outs_) {
         Out& o = *out;
-        if (o.desc.kind != "audio") continue;
+        if (o.desc.kind != "audio" || o.copied) continue;
 
         const int maxOut = static_cast<int>(av_rescale_rnd(
             swr_get_delay(o.swr, o.enc->sample_rate) + frames,
@@ -597,8 +623,19 @@ bool Writer::finish(std::string* err) {
     // of each. It matters only in that changing it for no reason would change
     // the interleaving of a file that is otherwise byte for byte what it was.
     std::string step;
+    // A copied stream has no encoder to flush, but it may still have a
+    // bitstream filter holding a packet — `dump_extra` buffers one — so the
+    // chain gets its end-of-stream here for the same reason `encode()` gives it
+    // one on the encoded path. Without this the last packet of a rewrap is
+    // simply missing, which is a file that plays and is short.
     for (auto& out : outs_) {
-        if (out->desc.kind != "audio") continue;
+        if (!out->copied || !out->bsf) continue;
+        step.clear();
+        av_bsf_send_packet(out->bsf, nullptr);
+        if (!drainBsf(*out, &step)) note(step);
+    }
+    for (auto& out : outs_) {
+        if (out->desc.kind != "audio" || out->copied) continue;
         step.clear();
         // Whatever is left is shorter than a full encoder frame; the encoder
         // pads it rather than dropping the last few milliseconds.
@@ -606,7 +643,7 @@ bool Writer::finish(std::string* err) {
         else if (!encode(*out, nullptr, &step)) note(step);
     }
     for (auto& out : outs_) {
-        if (out->desc.kind != "video") continue;
+        if (out->desc.kind != "video" || out->copied) continue;
         step.clear();
         if (!encode(*out, nullptr, &step)) note(step);
         // A pass-1 log that nothing was written to means this encoder does not
@@ -697,12 +734,11 @@ void Writer::close() {
 }
 
 bool Writer::openVideoStream(Out& o, std::string* err) {
-    // The only two things a video stream can be fed from today. A stream copy
-    // says `copy:0:1` and never reaches an encoder at all, which is the branch
-    // this refusal is holding the place of — see ExportStream::source.
+    // `composite` is the canvas; `copy:0:1` was taken by the branch above.
+    // Anything else is a caller naming a source that does not exist.
     if (o.desc.source != "composite" && !o.desc.source.empty()) {
         *err = "a video stream cannot be fed from '" + o.desc.source +
-               "' — this render composites, and stream copy is not here yet";
+               "' — it is the composite, or copy:<input>:<stream>";
         return false;
     }
 
@@ -840,6 +876,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
     o.st->time_base = o.enc->time_base;
     o.st->avg_frame_rate = fps;
+    o.srcTimeBase = o.enc->time_base;
 
     // After the encoder, because a bitstream filter is configured from what the
     // encoder settled on and may then change it — h264_mp4toannexb rewrites the
@@ -868,7 +905,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
 bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     if (o.desc.source != "mix" && !o.desc.source.empty()) {
         *err = "an audio stream cannot be fed from '" + o.desc.source +
-               "' — this render mixes, and stream copy is not here yet";
+               "' — it is the mix, or copy:<input>:<stream>";
         return false;
     }
 
@@ -905,6 +942,7 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     }
     if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
     o.st->time_base = o.enc->time_base;
+    o.srcTimeBase = o.enc->time_base;
     if (!openBitstreamFilters(o, err)) return false;
 
     // Some encoders take any number of samples; 1024 is a sane block for
@@ -944,6 +982,91 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     av_channel_layout_copy(&o.aframe->ch_layout, &o.enc->ch_layout);
     o.aframe->nb_samples = o.frameSize;
     if (av_frame_get_buffer(o.aframe, 0) < 0) { *err = "out of memory"; return false; }
+    return true;
+}
+
+// ── A stream that is not encoded ────────────────────────────────────────────
+
+bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
+    const AVStream* src = copies.streamFor(o.descIndex);
+    if (!src) { *err = "nothing was opened to copy this stream from"; return false; }
+
+    const AVMediaType want = o.desc.kind == "video" ? AVMEDIA_TYPE_VIDEO
+                           : o.desc.kind == "audio" ? AVMEDIA_TYPE_AUDIO
+                                                    : AVMEDIA_TYPE_UNKNOWN;
+    if (src->codecpar->codec_type != want) {
+        const char* got = av_get_media_type_string(src->codecpar->codec_type);
+        *err = "'" + o.desc.source + "' is " + (got ? got : "not a stream this build writes") +
+               ", and this row is a " + o.desc.kind + " stream";
+        return false;
+    }
+    // **A copied stream is not encoded, so it has no encoder to configure.**
+    // Naming one would be a setting that silently does nothing, which is the
+    // failure every option bag in this file is written against.
+    if (!o.desc.codec.empty()) {
+        *err = "a copied stream carries the bytes that were already there, so '" +
+               o.desc.codec + "' would encode nothing — take the codec off it, or feed " +
+               "the stream from the composite";
+        return false;
+    }
+
+    o.copied = true;
+    o.st = avformat_new_stream(oc_, nullptr);
+    if (!o.st) { *err = "out of memory"; return false; }
+
+    int rc = avcodec_parameters_copy(o.st->codecpar, src->codecpar);
+    if (rc < 0) { *err = "cannot describe the copied stream to the muxer"; return false; }
+    o.st->codecpar->codec_tag = 0;
+    // The fourcc travels only where the output container has a name for it.
+    // Carried blindly, an mp4's `avc1` lands in Matroska as a tag it has never
+    // heard of and `write_header` refuses the file with a message about invalid
+    // data. This is the same test ffmpeg's own stream copy makes, and an
+    // explicit `-tag:v` still wins because `describeStream` runs afterwards.
+    if (src->codecpar->codec_tag && oc_->oformat->codec_tag &&
+        av_codec_get_id(oc_->oformat->codec_tag, src->codecpar->codec_tag) ==
+            src->codecpar->codec_id)
+        o.st->codecpar->codec_tag = src->codecpar->codec_tag;
+
+    o.st->time_base = src->time_base;
+    o.st->avg_frame_rate = src->avg_frame_rate;
+    o.st->r_frame_rate = src->r_frame_rate;
+    o.st->sample_aspect_ratio = src->sample_aspect_ratio;
+    // The input's own flags travel with the stream — a commentary track stays a
+    // commentary track — and `describeStream` overwrites them when the caller
+    // said something, which is the same "explicit wins" rule as everywhere else.
+    o.st->disposition = src->disposition;
+    o.srcTimeBase = src->time_base;
+
+    // Whether the container will hold it, asked rather than assumed — and the
+    // three answers `avformat_query_codec` has are all kept: a muxer that has
+    // not been taught to answer returns AVERROR_PATCHWELCOME, and reading that
+    // shrug as a refusal is how a picker comes to insist MPEG-TS will not hold
+    // H.264. Only an actual no stops the render.
+    const int holds = avformat_query_codec(oc_->oformat, o.st->codecpar->codec_id,
+                                           FF_COMPLIANCE_NORMAL);
+    if (holds == 0) {
+        const AVCodecDescriptor* d = avcodec_descriptor_get(o.st->codecpar->codec_id);
+        *err = std::string("the ") + oc_->oformat->name + " muxer will not hold " +
+               (d && d->name ? d->name : "that codec") +
+               ", so this stream cannot be copied into it — encode it, or write " +
+               "another container";
+        return false;
+    }
+
+    // After the parameters, because a bitstream filter is configured from them
+    // and may then change them: `h264_mp4toannexb` between an mp4 and MPEG-TS
+    // is the whole reason `-bsf` and stream copy belong to each other.
+    if (!openBitstreamFilters(o, err)) return false;
+    return true;
+}
+
+bool Writer::writeCopiedPacket(size_t desc, AVPacket* pkt, std::string* err) {
+    for (auto& out : outs_) {
+        if (out->descIndex != desc) continue;
+        return writePacket(*out, pkt, err);
+    }
+    // The stream was resolved away — an audio stream on a silent render is the
+    // one case — so there is nothing to write it to and nothing wrong.
     return true;
 }
 
@@ -1028,7 +1151,8 @@ bool Writer::setUpPasses(Out& o, const AVCodec* codec, std::string* err) {
 // ── Bitstream filters ──────────────────────────────────────────────────────
 
 bool Writer::openBitstreamFilters(Out& o, std::string* err) {
-    if (o.desc.bitstreamFilters.empty() || !o.st || !o.enc) return true;
+    if (o.desc.bitstreamFilters.empty() || !o.st) return true;
+    if (!o.enc && !o.copied) return true;
 
     AVBSFList* list = av_bsf_list_alloc();
     if (!list) { *err = "out of memory"; return false; }
@@ -1074,9 +1198,13 @@ bool Writer::openBitstreamFilters(Out& o, std::string* err) {
     int rc = av_bsf_list_finalize(&list, &o.bsf);
     if (rc < 0) { *err = "cannot build the bitstream filter chain: " + avErr(rc); return false; }
 
-    rc = avcodec_parameters_from_context(o.bsf->par_in, o.enc);
+    // Where the chain's input is described from: the encoder that will produce
+    // the packets, or — for a copy, which has no encoder — the input stream's
+    // own parameters, already copied into `codecpar` above.
+    rc = o.enc ? avcodec_parameters_from_context(o.bsf->par_in, o.enc)
+               : avcodec_parameters_copy(o.bsf->par_in, o.st->codecpar);
     if (rc < 0) { *err = "cannot describe the stream to its bitstream filters"; return false; }
-    o.bsf->time_base_in = o.enc->time_base;
+    o.bsf->time_base_in = o.srcTimeBase;
     rc = av_bsf_init(o.bsf);
     if (rc < 0) {
         *err = "the bitstream filter chain will not run on this stream: " + avErr(rc);
@@ -1238,7 +1366,7 @@ bool Writer::encode(Out& o, AVFrame* frame, std::string* err) {
 
 bool Writer::writePacket(Out& o, AVPacket* pkt, std::string* err) {
     if (!o.bsf) {
-        av_packet_rescale_ts(pkt, o.enc->time_base, o.st->time_base);
+        av_packet_rescale_ts(pkt, o.srcTimeBase, o.st->time_base);
         pkt->stream_index = o.st->index;
         const int rc = av_interleaved_write_frame(oc_, pkt);
         if (rc < 0) { *err = std::string("cannot write to the file: ") + avErr(rc); return false; }

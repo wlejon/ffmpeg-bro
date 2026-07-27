@@ -13,6 +13,7 @@
 
 #include "ffmpeg_export.h"
 
+#include "export_copy.h"
 #include "export_frame.h"
 #include "export_graph.h"
 #include "export_timeline.h"
@@ -135,10 +136,31 @@ bool checkDecoderOptions(const ExportSettings& s, std::string* err) {
     return true;
 }
 
+/// Does this render have to make pictures and sound at all?
+///
+/// A file whose every stream is copied is a rewrap or a lossless cut: there is
+/// no canvas, no mix, no encoder and no frame clock, and building a
+/// `FrameSource` for it would open and decode every clip on the timeline in
+/// order to hand the result to nobody. An empty stream list is the renderer's
+/// usual two, so it composes.
+bool composesAnything(const ExportSettings& s) {
+    if (s.streams.empty()) return true;
+    for (const auto& st : s.streams)
+        if ((st.kind == "video" || st.kind == "audio") && !isCopySource(st.source)) return true;
+    return false;
+}
+
 /// One walk over the range: ask the edit what the output looks like at this
 /// instant, hand it to the writer, say how far along it is. Every step past
 /// "how far along" belongs to something else, which is what keeps this readable
 /// as the sequence it is.
+///
+/// **There are two loops here and only one of them is about frames.** A copied
+/// stream is not fed per output frame — it is packets arriving on the input's
+/// own clock — so it is pumped *beside* the frame loop, up to the time of the
+/// frame just written, which is what keeps the muxer's interleaving sane
+/// without a second sorting stage. A render with nothing composed in it has no
+/// frame loop at all and the packets drive the job.
 ///
 /// It leaves `st` carrying a terminal state only when the *job* is over —
 /// failure or cancellation. A pass that finished cleanly leaves it Running, so
@@ -169,10 +191,15 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         return;
     }
 
+    const bool composes = composesAnything(s);
+
     // Which of the two answers to "what does the output look like at t" this
     // render uses, and the only line in the job that knows there are two.
     std::unique_ptr<FrameSource> source;
-    if (!s.filterGraph.empty()) {
+    if (!composes) {
+        // Nothing to compose: every stream is packets. The frame source is not
+        // built at all, so a rewrap of a two-hour file does not open a decoder.
+    } else if (!s.filterGraph.empty()) {
         auto g = std::make_unique<GraphSource>(s);
         if (!g->build(&err)) {
             st.state = ExportStatus::State::Failed;
@@ -192,10 +219,26 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     } else {
         source = std::make_unique<TimelineSource>(s, std::move(clips));
     }
-    FrameSource& timeline = *source;
+    const bool wantAudio = source && source->hasAudio();
+
+    // The packet path, opened before the writer because a copied stream is
+    // described to the muxer out of its input stream's own parameters and there
+    // is nowhere else to get them from. `outputStreams` is asked with the same
+    // `wantAudio` on both sides, so a copy's index means the same stream here
+    // and in the writer.
+    CopyStreams copies;
+    if (!copies.build(s, outputStreams(s, wantAudio), &err)) {
+        st.state = ExportStatus::State::Failed;
+        st.error = err;
+        st.elapsedSec = secondsSince();
+        setStatus(st);
+        LOG_ERROR("export failed: %s", err.c_str());
+        reportNote(AV_LOG_ERROR, "render", err);
+        return;
+    }
 
     Writer writer;
-    if (!writer.open(s, timeline.hasAudio(), &err)) {
+    if (!writer.open(s, wantAudio, &err, &copies)) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
         st.elapsedSec = secondsSince();
@@ -210,10 +253,15 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     const int channels = s.audioChannels;
     int64_t samplesWritten = 0;
 
-    st.stage = "rendering";
+    st.stage = composes ? "rendering" : "copying";
+    // A copy is not measured in output frames: what it writes is packets, and
+    // how many there are is not a thing anybody knows before reading them. Zero
+    // is the honest answer, the same one an endless input gives — the progress
+    // below comes from the copy's own clock instead.
+    if (!composes) { st.framesTotal = 0; }
     setStatus(st);
 
-    for (int64_t n = 0; n < total; ++n) {
+    for (int64_t n = 0; composes && n < total; ++n) {
         if (job::stopping()) {
             st.state = ExportStatus::State::Cancelled;
             st.stage = "cancelled";
@@ -221,6 +269,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         }
 
         const double t = s.startTime + double(n) / s.fps;
+        FrameSource& timeline = *source;
         const Rgba& canvas = timeline.canvasAt(t);
         // `-shortest`: the range said how long to write for and the content has
         // run out first. Asked after the canvas rather than before it because
@@ -252,6 +301,17 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             }
         }
 
+        // The copied streams, caught up to the frame just written. Beside the
+        // frame loop rather than after it: `av_interleaved_write_frame` queues
+        // a stream that runs ahead of its neighbours, so writing a whole copied
+        // track first would hold an hour of packets in memory before the first
+        // encoded frame went down.
+        if (!copies.empty() && !copies.pumpTo(double(n + 1) / s.fps, writer, &err)) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+            break;
+        }
+
         st.framesDone = n + 1;
         // Across the whole job, not across this pass. The person watching
         // started one render; a bar that reached the end and went back to zero
@@ -265,6 +325,45 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             st.bytesWritten = writer.bytesSoFar();
             setStatus(st);
         }
+    }
+
+    // The other loop: a render with nothing composed in it is driven by the
+    // packets themselves. There is no output frame rate to walk, no canvas and
+    // no encoder — the job is over when every copied stream has reached the end
+    // of what it was asked for.
+    if (!composes && st.state == ExportStatus::State::Running) {
+        while (!copies.done()) {
+            if (job::stopping()) {
+                st.state = ExportStatus::State::Cancelled;
+                st.stage = "cancelled";
+                break;
+            }
+            // Half a second at a time, so a Stop is answered promptly and the
+            // status moves; the number is a polling interval and nothing else
+            // depends on it.
+            if (!copies.pumpTo(copies.position() + 0.5, writer, &err)) {
+                st.state = ExportStatus::State::Failed;
+                st.error = err;
+                break;
+            }
+            st.framesDone = copies.packets();
+            const double span = copies.span();
+            st.progress = base + share *
+                (span > 0 ? std::min(1.0, std::max(0.0, copies.position() / span)) : 0.0);
+            st.elapsedSec = secondsSince();
+            st.bytesWritten = writer.bytesSoFar();
+            setStatus(st);
+        }
+    }
+
+    // Whatever the copy still owes. The frame loop stops at the range's last
+    // frame and a copied stream's own `copyTo` is what says where it ends, so
+    // the two need not agree — and a rewrap whose tail was silently dropped
+    // because the encoded half ran out first would be a file that is short.
+    if (st.state == ExportStatus::State::Running && !copies.empty() &&
+        !copies.pumpTo(0, writer, &err)) {
+        st.state = ExportStatus::State::Failed;
+        st.error = err;
     }
 
     const bool aborted = st.state == ExportStatus::State::Failed ||
@@ -410,13 +509,20 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
         if (error) *error = "no output file";
         return false;
     }
+    // A render that copies packets has neither a timeline nor a graph behind
+    // it — a rewrap is one input and one muxer — so neither of the two checks
+    // below is about it. Its length is the span of what it copies, which is on
+    // the input's clock and not on the range's.
+    bool copiesAnything = false;
+    for (const auto& st : s.streams) if (isCopySource(st.source)) copiesAnything = true;
+
     // A graph names its own inputs, so it is a render on its own; the clip list
     // is what the *other* path is made of.
-    if (clips.empty() && s.filterGraph.empty()) {
+    if (clips.empty() && s.filterGraph.empty() && !copiesAnything) {
         if (error) *error = "nothing on the timeline to render";
         return false;
     }
-    if (s.endTime <= s.startTime) {
+    if (s.endTime <= s.startTime && !copiesAnything) {
         if (error) *error = "the range to render is empty";
         return false;
     }

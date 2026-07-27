@@ -115,11 +115,28 @@ struct ExportStream {
     /// streams, which is why they are named rather than numbered: no input
     /// index means "everything, stacked".
     ///
-    /// **This is the seam the packet path attaches at.** A copied stream will
-    /// say `copy:0:1` — an input file and a stream in it — and the writer will
-    /// branch on the prefix rather than grow a second list beside this one.
-    /// Nothing here builds that; it is left as a vocabulary with room in it.
+    /// **This is the seam the packet path attaches at**, and does. A copied
+    /// stream says `copy:0:1` — an input file and a stream in it, exactly what
+    /// `-map 0:1` names — and the writer branches on the prefix rather than
+    /// growing a second list beside this one. Such a stream reaches no encoder
+    /// at all: its packets come out of a demuxer and go into the muxer, which
+    /// is what makes a rewrap instant and a cut lossless. See export_copy.h.
     std::string source;
+
+    /// The span of the input a copied stream takes, in the input's own seconds.
+    /// Ignored by anything fed from the composite or the mix.
+    ///
+    /// **A copy can only start at a keyframe**, so `copyFrom` is where the
+    /// input is *seeked* to and not necessarily where the output begins: the
+    /// seek is `AVSEEK_FLAG_BACKWARD` and lands at or before it, because
+    /// landing after it would drop frames the copy was asked for. The
+    /// difference is a real cost and it is the caller's job to show it —
+    /// `keyframesOf()` in export_copy.h is what a UI asks so that the in-point
+    /// can be snapped to one before the render rather than explained after it.
+    ///
+    /// `copyTo` is 0 for the end of the input.
+    double copyFrom = 0.0;
+    double copyTo = 0.0;
 
     /// The encoder, as libavcodec knows it. Empty asks the muxer for its
     /// default, which is what an unset `videoCodec` has always meant.

@@ -1,5 +1,6 @@
 #include "ffmpeg_bindings.h"
 
+#include "export_copy.h"
 #include "ffmpeg_backend.h"
 #include "ffmpeg_capture.h"
 #include "ffmpeg_export.h"
@@ -377,6 +378,13 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
             } else {
                 st.source = strProp(ctx, item, "source", "");
                 st.codec = strProp(ctx, item, "codec", "");
+                // The span a copied stream takes out of its input, on the
+                // input's own clock. Meaningless on a composed stream and
+                // simply unread there, which is why they are not guarded: a
+                // `composite` carrying a `copyFrom` is a caller's leftover
+                // field and not a decision anything acts on.
+                st.copyFrom = numProp(ctx, item, "copyFrom", 0);
+                st.copyTo = numProp(ctx, item, "copyTo", 0);
                 st.options = optionsFromJs(ctx, item, "options");
                 st.metadata = optionsFromJs(ctx, item, "metadata");
                 st.language = strProp(ctx, item, "language", "");
@@ -962,6 +970,63 @@ JSValue js_protocolOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     return optionsToJs(ctx, protocolOptions(name));
 }
 
+/// bro.ffmpeg.keyframes(path | input, { stream, from, to, max }) — where a copy
+/// can start.
+///
+/// **A copied stream can only begin at a keyframe**, and where they are is a
+/// fact about the input rather than about the render. It is here as a query
+/// rather than as something a render hands back, because the whole point is to
+/// know before the render: an in-point that lands between two keyframes costs
+/// exactly the difference, and discovering that afterwards is discovering it
+/// from a file that starts in the wrong place.
+///
+/// `how` says where the answer came from — the demuxer's own index, which is
+/// instant and exact, or a scan of the window for a container that has none —
+/// and `complete` is false when the walk was cut short, because a list of
+/// keyframes that quietly stops is a list somebody would snap to the wrong end
+/// of.
+JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "keyframes(path) requires a path or an input");
+
+    MediaInput in;
+    JSValueConst opts = argc >= 2 ? argv[1] : JS_UNDEFINED;
+    if (JS_IsObject(argv[0])) {
+        in = inputFromJs(ctx, argv[0]);
+    } else {
+        const char* path = JS_ToCString(ctx, argv[0]);
+        if (!path) return JS_EXCEPTION;
+        in.path = path;
+        JS_FreeCString(ctx, path);
+    }
+    int stream = -1;
+    double from = 0, to = 0;
+    int max = 0;
+    if (JS_IsObject(opts)) {
+        stream = static_cast<int>(numProp(ctx, opts, "stream", -1));
+        from = numProp(ctx, opts, "from", 0);
+        to = numProp(ctx, opts, "to", 0);
+        max = static_cast<int>(numProp(ctx, opts, "max", 0));
+    }
+
+    KeyframeList list;
+    std::string err;
+    if (!keyframesOf(in, stream, from, to, max, &list, &err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "stream", JS_NewInt32(ctx, list.stream));
+    setStr(ctx, out, "how", list.how);
+    JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
+    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
+    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (double t : list.times) JS_SetPropertyUint32(ctx, arr, i++, JS_NewFloat64(ctx, t));
+    JS_SetPropertyStr(ctx, out, "times", arr);
+    return out;
+}
+
 /// bro.ffmpeg.deviceSources(name) — what one capture device can see now.
 ///
 /// The one query in this file that talks to hardware, which is why it is a
@@ -1383,6 +1448,11 @@ void installFfmpegBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_bsfOptions, "bsfOptions", 1));
     JS_SetPropertyStr(ctx, ns, "deviceSources",
                       JS_NewCFunction(ctx, js_deviceSources, "deviceSources", 1));
+    // Where a copy can start. A query about an input rather than a capability
+    // of the build, and the one thing that makes a lossless cut a decision
+    // somebody takes rather than one they discover.
+    JS_SetPropertyStr(ctx, ns, "keyframes",
+                      JS_NewCFunction(ctx, js_keyframes, "keyframes", 2));
     JS_SetPropertyStr(ctx, ns, "codecTags",
                       JS_NewCFunction(ctx, js_codecTags, "codecTags", 2));
     JS_SetPropertyStr(ctx, ns, "guessCodec",

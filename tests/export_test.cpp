@@ -13,6 +13,7 @@
 //
 // Usage: ffmpeg-bro-exporttest <media-file> [<second-file>]
 
+#include "export_copy.h"
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
@@ -209,6 +210,50 @@ struct Opened {
 std::string meta(const AVStream* st, const char* key) {
     const AVDictionaryEntry* e = st ? av_dict_get(st->metadata, key, nullptr, 0) : nullptr;
     return e && e->value ? e->value : "";
+}
+
+/// One packet, kept whole. A rewrap's entire claim is that the bytes did not
+/// change, and the only way to assert that is to hold both sets and compare
+/// them — a count, or a size, or a duration would all pass for a file that had
+/// been re-encoded to the same length.
+struct Pkt {
+    std::vector<uint8_t> data;
+    int64_t pts = 0, dts = 0;
+    int flags = 0;
+    AVRational timeBase{1, 1};
+};
+
+std::vector<Pkt> packetsOf(const std::string& path, int stream) {
+    std::vector<Pkt> out;
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0) return out;
+    if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); return out; }
+    AVPacket* pkt = av_packet_alloc();
+    while (pkt && av_read_frame(fc, pkt) >= 0) {
+        if (pkt->stream_index == stream) {
+            Pkt p;
+            p.data.assign(pkt->data, pkt->data + pkt->size);
+            p.pts = pkt->pts;
+            p.dts = pkt->dts;
+            p.flags = pkt->flags;
+            p.timeBase = fc->streams[stream]->time_base;
+            out.push_back(std::move(p));
+        }
+        av_packet_unref(pkt);
+    }
+    if (pkt) av_packet_free(&pkt);
+    avformat_close_input(&fc);
+    return out;
+}
+
+/// The first stream of a kind, as `-map 0:v:0` would find it.
+int streamIndexOf(const std::string& path, AVMediaType kind) {
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0) return -1;
+    if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); return -1; }
+    const int idx = av_find_best_stream(fc, kind, -1, -1, nullptr, 0);
+    avformat_close_input(&fc);
+    return idx;
 }
 
 ExportClip rightHalf(const std::string& path, double sourceDuration, double opacity) {
@@ -2054,6 +2099,250 @@ int main(int argc, char* argv[]) {
         checkf(st.state == ExportStatus::State::Failed &&
                    st.error.find("not_a_decoder_option") != std::string::npos,
                "and one it does not have stops the render by name (%s)", st.error.c_str());
+    }
+
+    // ── the packet path ────────────────────────────────────────────────────
+    //
+    // A copied stream is the one thing in this renderer that never decodes.
+    // Everything below is about that being literally true: the bytes that come
+    // out are the bytes that went in, the cut lands on a keyframe, and a copied
+    // picture sits happily beside an encoded soundtrack in one file.
+    {
+        std::printf("\nstream copy\n");
+
+        const int srcVideo = streamIndexOf(first, AVMEDIA_TYPE_VIDEO);
+        const int srcAudio = streamIndexOf(first, AVMEDIA_TYPE_AUDIO);
+        checkf(srcVideo >= 0, "the fixture has a video stream to copy (index %d)", srcVideo);
+
+        MediaInput in;
+        in.path = first;
+
+        // Where a copy can start, asked of the input. The index answers for an
+        // mp4, which is what makes this instant rather than a read of the file.
+        KeyframeList keys;
+        std::string kerr;
+        const bool gotKeys = keyframesOf(in, srcVideo, 0, 0, 0, &keys, &kerr);
+        checkf(gotKeys && !keys.times.empty(),
+               "the keyframes are reported (%zu, from the %s, %s)", keys.times.size(),
+               keys.how.c_str(), keys.complete ? "complete" : "cut short");
+        bool ascending = true;
+        for (size_t i = 1; i < keys.times.size(); ++i)
+            if (keys.times[i] <= keys.times[i - 1]) ascending = false;
+        check(ascending, "in order, on the input's own clock");
+        checkf(keys.times.empty() || keys.times[0] < 0.001,
+               "and the first is the start of the file (%.3f s)",
+               keys.times.empty() ? -1.0 : keys.times[0]);
+        {
+            KeyframeList none;
+            std::string why;
+            MediaInput missing;
+            missing.path = "no-such-file.mp4";
+            check(!keyframesOf(missing, -1, 0, 0, 0, &none, &why),
+                  "a file that is not there is refused rather than answered for");
+        }
+
+        // A rewrap: the same packets, a different container. This is the whole
+        // claim of the packet path and it is asserted rather than approximated
+        // — every byte of every packet, in order.
+        ExportSettings rw;
+        rw.path = "out/copy-rewrap.mp4";
+        rw.format = "mp4";
+        rw.inputs = {in};
+        rw.startTime = 0;
+        rw.endTime = 1.0;   // ignored: a copy's length is its own span
+        rw.faststart = false;
+        {
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            rw.streams.push_back(v);
+        }
+        st = render(rw, {});
+        checkf(st.state == ExportStatus::State::Done, "a rewrap runs with nothing decoded (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        const auto before = packetsOf(first, srcVideo);
+        const auto after = packetsOf(rw.path, 0);
+        checkf(!before.empty() && before.size() == after.size(),
+               "and writes exactly as many packets as it read (%zu against %zu)",
+               after.size(), before.size());
+        size_t identical = 0;
+        for (size_t i = 0; i < after.size() && i < before.size(); ++i)
+            if (before[i].data == after[i].data) ++identical;
+        checkf(identical == before.size(),
+               "every one of them byte for byte (%zu of %zu)", identical, before.size());
+        {
+            Opened o(rw.path);
+            checkf(o && o.fc->nb_streams == 1 &&
+                       o.fc->streams[0]->codecpar->codec_id ==
+                           avcodec_find_decoder_by_name("h264")->id,
+                   "and the result is one stream of the codec that went in");
+        }
+
+        // A lossless cut. The in-point is a keyframe, so what comes out starts
+        // exactly there — which is the whole reason the keyframes are asked for
+        // rather than a cut being taken wherever the playhead was.
+        if (keys.times.size() >= 2) {
+            const double at = keys.times[1];
+            ExportSettings cut;
+            cut.path = "out/copy-cut.mp4";
+            cut.format = "mp4";
+            cut.inputs = {in};
+            cut.startTime = 0;
+            cut.endTime = 1.0;
+            cut.faststart = true;
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            v.copyFrom = at;
+            cut.streams.push_back(v);
+            st = render(cut, {});
+            checkf(st.state == ExportStatus::State::Done,
+                   "a cut from a keyframe at %.3f s runs (%s)", at,
+                   st.error.empty() ? "no error" : st.error.c_str());
+
+            const auto cutPkts = packetsOf(cut.path, 0);
+            checkf(!cutPkts.empty() && (cutPkts[0].flags & AV_PKT_FLAG_KEY),
+                   "and the file begins on a keyframe");
+            checkf(!cutPkts.empty() && cutPkts[0].dts <= 0,
+                   "with the copy's own zero at the front of the file (dts %lld)",
+                   cutPkts.empty() ? -1LL : static_cast<long long>(cutPkts[0].dts));
+            checkf(cutPkts.size() < before.size(),
+                   "and it is shorter than the whole file (%zu packets against %zu)",
+                   cutPkts.size(), before.size());
+            // Every one of them is still a packet out of the source, at the
+            // same offset into it: a cut that re-encoded would match nothing.
+            size_t matched = 0;
+            const size_t offset = before.size() - cutPkts.size();
+            for (size_t i = 0; i < cutPkts.size(); ++i)
+                if (before[offset + i].data == cutPkts[i].data) ++matched;
+            checkf(matched == cutPkts.size(),
+                   "byte for byte with the tail of the source (%zu of %zu)", matched,
+                   cutPkts.size());
+            {
+                Opened o(cut.path);
+                checkf(o && o.fc->duration > 0 &&
+                           av_seek_frame(o.fc, -1, 0, AVSEEK_FLAG_BACKWARD) >= 0,
+                       "and what was written seeks back to its start (%.2f s long)",
+                       o ? o.fc->duration / double(AV_TIME_BASE) : 0.0);
+            }
+        }
+
+        // A copied picture beside an encoded soundtrack: two paths into one
+        // muxer, interleaved by the writer that was already there.
+        if (srcAudio >= 0) {
+            ExportSettings mixed = baseSettings("out/copy-plus-encode.mp4");
+            mixed.inputs = {in};
+            mixed.faststart = false;
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            v.copyTo = kSpan;
+            ExportStream a;
+            a.kind = "audio";
+            a.source = "mix";
+            mixed.streams = {v, a};
+            std::vector<ExportClip> one{leftHalf(first, srcDuration)};
+            one[0].input = 0;
+            st = render(mixed, one);
+            checkf(st.state == ExportStatus::State::Done,
+                   "a copied picture and an encoded soundtrack write one file (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+            {
+                Opened o(mixed.path);
+                const bool two = o && o.fc->nb_streams == 2;
+                checkf(two, "with both streams in it");
+                if (two) {
+                    check(o.fc->streams[0]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                              o.fc->streams[1]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO,
+                          "in the order the list asked for");
+                    check(o.fc->streams[1]->codecpar->codec_id == AV_CODEC_ID_AAC,
+                          "the sound encoded as aac");
+                }
+                const auto copied = packetsOf(mixed.path, 0);
+                size_t same = 0;
+                for (size_t i = 0; i < copied.size() && i < before.size(); ++i)
+                    if (before[i].data == copied[i].data) ++same;
+                checkf(!copied.empty() && same == copied.size(),
+                       "and the picture still byte for byte what it was (%zu packets)",
+                       copied.size());
+            }
+        }
+
+        // The refusals. Every one of these produces a file that is technically
+        // valid and not what was asked for if it is allowed through.
+        ExportSettings bad;
+        bad.path = "out/copy-never.mp4";
+        bad.format = "mp4";
+        bad.inputs = {in};
+        bad.startTime = 0;
+        bad.endTime = 1.0;
+
+        ExportSettings noStream = bad;
+        {
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:99";
+            noStream.streams.push_back(v);
+        }
+        st = render(noStream, {});
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("99") != std::string::npos,
+               "a stream the input does not have is refused by number (%s)", st.error.c_str());
+
+        if (srcAudio >= 0) {
+            ExportSettings wrongKind = bad;
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcAudio);
+            wrongKind.streams.push_back(v);
+            st = render(wrongKind, {});
+            checkf(st.state == ExportStatus::State::Failed &&
+                       st.error.find("audio") != std::string::npos,
+                   "a sound stream copied into a video row is refused (%s)", st.error.c_str());
+        }
+
+        ExportSettings withCodec = bad;
+        {
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            v.codec = "libx264";
+            withCodec.streams.push_back(v);
+        }
+        st = render(withCodec, {});
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("libx264") != std::string::npos,
+               "and an encoder named on a copied stream is refused rather than ignored (%s)",
+               st.error.c_str());
+
+        ExportSettings junkSource = bad;
+        {
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:nonsense";
+            junkSource.streams.push_back(v);
+        }
+        st = render(junkSource, {});
+        check(st.state == ExportStatus::State::Failed,
+              "a copy source that is not one is refused");
+
+        // A container that will not hold the codec, said where the decision is
+        // rather than at write_header. WebM holds VP8/VP9/AV1 and not H.264.
+        ExportSettings wrongBox = bad;
+        wrongBox.path = "out/copy-never.webm";
+        wrongBox.format = "webm";
+        {
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            wrongBox.streams.push_back(v);
+        }
+        st = render(wrongBox, {});
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("webm") != std::string::npos,
+               "a container that will not hold the copied codec says so (%s)",
+               st.error.c_str());
     }
 
     std::printf("\nbad asks are refused, not crashed into\n");
