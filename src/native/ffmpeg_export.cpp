@@ -16,6 +16,7 @@
 #include "export_copy.h"
 #include "export_frame.h"
 #include "export_graph.h"
+#include "export_subtitle.h"
 #include "export_timeline.h"
 #include "export_writer.h"
 
@@ -226,8 +227,14 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // is nowhere else to get them from. `outputStreams` is asked with the same
     // `wantAudio` on both sides, so a copy's index means the same stream here
     // and in the writer.
+    const std::vector<ExportStream> resolved = outputStreams(s, wantAudio);
     CopyStreams copies;
-    if (!copies.build(s, outputStreams(s, wantAudio), &err)) {
+    SubtitleStreams subs;
+    // The subtitle path, built alongside the packet path and for the same
+    // reason: the writer opens a subtitle encoder *against its decoder* — the
+    // ASS header and the frame size both come from there — so the readers have
+    // to exist before the file is described.
+    if (!copies.build(s, resolved, &err) || !subs.build(s, resolved, &err)) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
         st.elapsedSec = secondsSince();
@@ -238,7 +245,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     }
 
     Writer writer;
-    if (!writer.open(s, wantAudio, &err, &copies)) {
+    if (!writer.open(s, wantAudio, &err, &copies, &subs)) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
         st.elapsedSec = secondsSince();
@@ -311,6 +318,15 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             st.error = err;
             break;
         }
+        // The subtitles, beside them, on the same clock and for the same
+        // reason: a cue arrives on the input's own timeline rather than on the
+        // output's frame grid, and writing a whole track first would leave
+        // `av_interleaved_write_frame` holding an hour of them.
+        if (!subs.empty() && !subs.pumpTo(double(n + 1) / s.fps, writer, &err)) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+            break;
+        }
 
         st.framesDone = n + 1;
         // Across the whole job, not across this pass. The person watching
@@ -333,7 +349,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // no encoder — the job is over when every copied stream has reached the end
     // of what it was asked for.
     if (!composes && st.state == ExportStatus::State::Running) {
-        while (!copies.done()) {
+        while (!copies.done() || !subs.done()) {
             if (job::stopping()) {
                 st.state = ExportStatus::State::Cancelled;
                 st.stage = "cancelled";
@@ -342,15 +358,19 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             // Half a second at a time, so a Stop is answered promptly and the
             // status moves; the number is a polling interval and nothing else
             // depends on it.
-            if (!copies.pumpTo(copies.position() + 0.5, writer, &err)) {
+            const double at = std::max(copies.position(), subs.position());
+            if (!copies.pumpTo(at + 0.5, writer, &err) ||
+                !subs.pumpTo(at + 0.5, writer, &err)) {
                 st.state = ExportStatus::State::Failed;
                 st.error = err;
                 break;
             }
-            st.framesDone = copies.packets();
-            const double span = copies.span();
+            st.framesDone = copies.packets() + subs.cues();
+            const double span = std::max(copies.span(), subs.span());
             st.progress = base + share *
-                (span > 0 ? std::min(1.0, std::max(0.0, copies.position() / span)) : 0.0);
+                (span > 0 ? std::min(1.0, std::max(0.0, std::max(copies.position(),
+                                                                 subs.position()) / span))
+                          : 0.0);
             st.elapsedSec = secondsSince();
             st.bytesWritten = writer.bytesSoFar();
             st.piecesWritten = writer.piecesWritten();
@@ -362,8 +382,9 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // frame and a copied stream's own `copyTo` is what says where it ends, so
     // the two need not agree — and a rewrap whose tail was silently dropped
     // because the encoded half ran out first would be a file that is short.
-    if (st.state == ExportStatus::State::Running && !copies.empty() &&
-        !copies.pumpTo(0, writer, &err)) {
+    if (st.state == ExportStatus::State::Running &&
+        ((!copies.empty() && !copies.pumpTo(0, writer, &err)) ||
+         (!subs.empty() && !subs.pumpTo(0, writer, &err)))) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
     }
@@ -517,7 +538,8 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
     // below is about it. Its length is the span of what it copies, which is on
     // the input's clock and not on the range's.
     bool copiesAnything = false;
-    for (const auto& st : s.streams) if (isCopySource(st.source)) copiesAnything = true;
+    for (const auto& st : s.streams)
+        if (isCopySource(st.source) || isDecodeSource(st.source)) copiesAnything = true;
 
     // A graph names its own inputs, so it is a render on its own; the clip list
     // is what the *other* path is made of.

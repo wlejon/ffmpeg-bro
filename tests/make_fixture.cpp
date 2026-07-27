@@ -44,6 +44,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -195,6 +196,87 @@ bool writeStills(const std::filesystem::path& pattern, int count, int width, int
     return true;
 }
 
+/// Subtitles, as the two text formats everything else converts between.
+///
+/// Written as bytes rather than through a `Writer`, because that is what a
+/// subtitle file is: a few lines of text somebody typed, and the whole point of
+/// a fixture is that a render can be checked against times and words that were
+/// known before the file existed.
+///
+/// **The cues are placed so that a burn-in is measurable.** A second of picture
+/// with nothing over it, a second with a line over it, a second with nothing
+/// again — so a render through `subtitles=` and a render without it are
+/// provably identical outside the cue and provably different inside it. That
+/// pair of measurements is the only check that says a subtitle was actually
+/// drawn; "the render succeeded" says nothing at all.
+///
+/// The words differ between the two files on purpose. A conversion that wrote
+/// its input straight back out, or that read the wrong one of the two, would
+/// otherwise pass.
+bool writeSubtitles(const std::filesystem::path& dir) {
+    struct Sidecar { const char* name; std::vector<std::string> lines; };
+    const Sidecar files[] = {
+        {"cues.srt", {
+            "1",
+            "00:00:01,000 --> 00:00:02,000",
+            "first cue",
+            "",
+            "2",
+            "00:00:04,000 --> 00:00:05,500",
+            "second cue",
+            "and its second line",
+            "",
+            "3",
+            "00:00:07,000 --> 00:00:08,000",
+            "third cue",
+            "",
+        }},
+        // The same three moments in the format that carries styling, so a
+        // render asked for `ass` can be checked against something other than a
+        // conversion of the file above.
+        {"cues.ass", {
+            "[Script Info]",
+            "ScriptType: v4.00+",
+            "PlayResX: 640",
+            "PlayResY: 360",
+            "",
+            "[V4+ Styles]",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+            "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+            "MarginR, MarginV, Encoding",
+            "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+            "0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1",
+            "",
+            "[Events]",
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+            "Effect, Text",
+            "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,styled one",
+            "Dialogue: 0,0:00:04.00,0:00:05.50,Default,,0,0,0,,styled two",
+            "Dialogue: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,styled three",
+            "",
+        }},
+    };
+    for (const auto& f : files) {
+        const std::filesystem::path path = dir / f.name;
+        // Binary, so the line endings are the ones written here on every
+        // platform: a subtitle parser counts blank lines, and a text-mode
+        // write on Windows turns each of them into two bytes.
+        std::ofstream out(path, std::ios::binary);
+        if (!out) {
+            std::fprintf(stderr, "%s: cannot write\n", path.string().c_str());
+            return false;
+        }
+        size_t bytes = 0;
+        for (const auto& line : f.lines) {
+            out << line << "\n";
+            bytes += line.size() + 1;
+        }
+        std::printf("  %s  %zu lines  %zu bytes\n", f.name, f.lines.size(), bytes);
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -229,5 +311,10 @@ int main(int argc, char* argv[]) {
     if (!writeStills(frames / "plate%d.png", 12, 160, 90, 1, 2)) return 1;
     if (!writeStills(frames / "logo.png", 1, 64, 64, 1, 0)) return 1;
     if (!writeStills(dir / "still.png", 1, 320, 180, 1, 2)) return 1;
+
+    // Subtitles, whose three cues fall inside the landscape fixture's ten
+    // seconds — so the same file can be burned into it, muxed beside it and
+    // converted, all against times that are written down above.
+    if (!writeSubtitles(dir)) return 1;
     return 0;
 }

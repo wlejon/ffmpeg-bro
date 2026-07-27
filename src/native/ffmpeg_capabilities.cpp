@@ -629,6 +629,57 @@ std::vector<CodecOption> availableAudioEncoders() {
     return cached;
 }
 
+// ── subtitles ──────────────────────────────────────────────────────────────
+
+/// Every subtitle encoder this build links, in libavcodec's own order.
+///
+/// **Discovered rather than named**, which the two lists above are not: they
+/// start from a candidate list because "the useful video encoders" is a
+/// judgement nobody can ask libavcodec for. There is no such judgement here —
+/// there are nine subtitle encoders and each one is a named interchange format
+/// somebody asks for by name, so writing them down would be copying the
+/// registry into this file.
+///
+/// A *text* subtitle and a *bitmap* one are not interchangeable, and the
+/// distinction is libavcodec's own (`AV_CODEC_PROP_TEXT_SUB`) rather than
+/// anything invented here: converting `dvdsub` into `subrip` is optical
+/// character recognition, which is not something this or any ffmpeg does, and
+/// the refusal has to be able to name the reason.
+std::vector<CodecOption> availableSubtitleEncoders() {
+    static const std::vector<CodecOption> cached = [] {
+        std::vector<CodecOption> out;
+        void* opaque = nullptr;
+        while (const AVCodec* codec = av_codec_iterate(&opaque)) {
+            if (codec->type != AVMEDIA_TYPE_SUBTITLE) continue;
+            if (!av_codec_is_encoder(codec)) continue;
+            CodecOption o;
+            o.id = codec->name;
+            o.longName = codec->long_name ? codec->long_name : "";
+            o.label = o.longName.empty() ? o.id : o.longName;
+            o.codecName = avcodec_get_name(codec->id);
+            o.containers = containersFor(codec);
+            if (const AVCodecDescriptor* d = avcodec_descriptor_get(codec->id))
+                o.textSub = (d->props & AV_CODEC_PROP_TEXT_SUB) != 0;
+            out.push_back(std::move(o));
+        }
+        return out;
+    }();
+    return cached;
+}
+
+const AVCodec* defaultSubtitleEncoder(const std::string& muxerName) {
+    const AVOutputFormat* ofmt = muxerNamed(muxerName);
+    if (!ofmt) return nullptr;
+    const AVCodec* fallback = nullptr;
+    for (const auto& c : availableSubtitleEncoders()) {
+        const AVCodec* e = avcodec_find_encoder_by_name(c.id.c_str());
+        if (!e || avformat_query_codec(ofmt, e->id, FF_COMPLIANCE_NORMAL) != 1) continue;
+        if (c.textSub) return e;
+        if (!fallback) fallback = e;
+    }
+    return fallback;
+}
+
 // ── muxers ─────────────────────────────────────────────────────────────────
 
 std::vector<MuxerOption> availableMuxers() {
@@ -637,6 +688,7 @@ std::vector<MuxerOption> availableMuxers() {
         const auto& devices = outputDeviceFormats();
         const auto video = availableVideoEncoders();
         const auto audio = availableAudioEncoders();
+        const auto subtitle = availableSubtitleEncoders();
 
         std::vector<MuxerOption> out;
         void* opaque = nullptr;
@@ -711,6 +763,18 @@ std::vector<MuxerOption> availableMuxers() {
             };
             const bool answeredVideo = fill(video, &o.videoCodecs);
             const bool answeredAudio = fill(audio, &o.audioCodecs);
+            // The subtitle list is asked the same question and treated
+            // differently in one respect: only a *yes* gets in. `fill` above
+            // turns "not taught to answer" into "everything offered", on the
+            // grounds that ffmpeg would let you try — which is right for a
+            // picture codec in mpegts and wrong here, because a subtitle codec
+            // in a container that holds none is a refusal at `write_header`
+            // rather than a shrug, and almost every muxer holds none.
+            for (const auto& c : subtitle) {
+                const AVCodec* enc = avcodec_find_encoder_by_name(c.id.c_str());
+                if (enc && avformat_query_codec(ofmt, enc->id, FF_COMPLIANCE_NORMAL) == 1)
+                    o.subtitleCodecs.push_back(c.id);
+            }
             o.answersCodecs = answeredVideo && answeredAudio;
 
             // What to default to: the muxer's own choice where this build can
@@ -729,8 +793,19 @@ std::vector<MuxerOption> availableMuxers() {
             };
             const AVCodec* dv = avcodec_find_encoder(ofmt->video_codec);
             const AVCodec* da = avcodec_find_encoder(ofmt->audio_codec);
+            const AVCodec* ds = avcodec_find_encoder(ofmt->subtitle_codec);
             o.videoCodec = prefer(o.videoCodecs, dv ? dv->name : nullptr);
             o.audioCodec = prefer(o.audioCodecs, da ? da->name : nullptr);
+            // The declaration where there is one; otherwise the first codec
+            // the muxer *answers* for, preferring text over pictures — see
+            // `defaultSubtitleEncoder`, which the writer asks the same
+            // question of so the picker and the render cannot disagree.
+            if (ds && std::find(o.subtitleCodecs.begin(), o.subtitleCodecs.end(), ds->name) !=
+                          o.subtitleCodecs.end()) {
+                o.subtitleCodec = ds->name;
+            } else if (const AVCodec* pick = defaultSubtitleEncoder(o.name)) {
+                o.subtitleCodec = pick->name;
+            }
 
             out.push_back(std::move(o));
         }

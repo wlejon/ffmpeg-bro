@@ -115,6 +115,15 @@ struct CodecOption {
     bool hardware = false;  // encodes on the GPU: fast, and quality per bit is
                             // not comparable with a software encoder's
     bool intraOnly = false; // every frame a keyframe (ProRes, MJPEG)
+    /// Subtitles only: text rather than pictures — `AV_CODEC_PROP_TEXT_SUB`.
+    ///
+    /// The one distinction that decides whether a conversion is possible at
+    /// all. `subrip`, `ass` and `webvtt` are text; `dvdsub` and `hdmv_pgs` are
+    /// pictures of text, and turning one of those into the other is optical
+    /// character recognition rather than a decode and an encode. Reported so
+    /// the refusal can name the reason instead of arriving as an encoder
+    /// failure nobody can read.
+    bool textSub = false;
     bool lossless = false;  // can be told to write losslessly
     bool alwaysLossless = false;  // has no lossy mode: FFV1, HuffYUV
     bool losslessOption = false;  // asks for it with -lossless 1 rather than a
@@ -145,6 +154,36 @@ struct CodecOption {
 
 std::vector<CodecOption> availableVideoEncoders();
 std::vector<CodecOption> availableAudioEncoders();
+
+/// Every subtitle encoder this build links — **discovered, not named**.
+///
+/// The two lists above start from a list of candidates because there are three
+/// hundred video encoders and the useful ones are a dozen; there are nine
+/// subtitle encoders in a full build and every one of them is a format somebody
+/// asks for by name, so a candidate list here would be the whole registry
+/// written out twice. `av_codec_iterate` with `AVMEDIA_TYPE_SUBTITLE` is the
+/// answer, and a build that gains one gains it in the picker.
+///
+/// `containers` is asked the same way the other two are, which matters more
+/// here than anywhere else: **which subtitle codec a file can hold is almost
+/// entirely a fact about the container.** mp4 takes `mov_text` and nothing
+/// else, Matroska takes `ass`/`subrip`/`webvtt`, WebM takes `webvtt`, and a
+/// picker that offered `subrip` for an mp4 would be offering a render that
+/// fails at `write_header`.
+std::vector<CodecOption> availableSubtitleEncoders();
+
+/// The subtitle encoder to reach for when nobody named one and the muxer does
+/// not declare one either — `nullptr` when it holds none at all.
+///
+/// **A muxer's declaration and a muxer's answer are different facts**, and mp4
+/// is where that bites: its `subtitle_codec` is `AV_CODEC_ID_NONE` in this
+/// build while `avformat_query_codec` happily says it holds `mov_text`. So the
+/// fallback is the registry asked the same question — with one preference,
+/// which is that a **text** encoder wins. mp4 also accepts `dvdsub`, which is
+/// first in libavcodec's order and is pictures: a text source landing there
+/// fails at the first cue with "Bitmap subtitle required", which is true and
+/// unhelpful. Nothing here is a table of which container holds what.
+const AVCodec* defaultSubtitleEncoder(const std::string& muxerName);
 
 // ── What this build can write the result *into* ────────────────────────────
 //
@@ -178,6 +217,16 @@ struct MuxerOption {
     std::string videoCodec;
     std::string audioCodec;
 
+    /// And a subtitle encoder, chosen the same way — with one extra step that
+    /// matters. **A muxer's declaration and a muxer's answer are different
+    /// facts.** mp4 declares no subtitle codec at all in this build and yet
+    /// `avformat_query_codec` says it holds `mov_text`, so a picker that
+    /// trusted `defaultSubtitle` would report that mp4 cannot carry subtitles.
+    /// This is the declaration where there is one and the first codec the muxer
+    /// actually takes where there is not, which is the answer both the picker
+    /// and the writer act on.
+    std::string subtitleCodec;
+
     /// What the muxer itself says it writes when nobody says otherwise, as
     /// codec names. A fact about the format even where this build cannot
     /// encode it, which is why it is reported separately from the two above.
@@ -208,6 +257,15 @@ struct MuxerOption {
     // write_header, long after the choice was made.
     std::vector<std::string> videoCodecs;
     std::vector<std::string> audioCodecs;
+
+    /// And the subtitle codecs, asked the same way.
+    ///
+    /// Separate from the two above because the answer is far narrower and far
+    /// more decisive: an mp4 holds exactly one subtitle codec, Matroska holds
+    /// three, and a hundred and fifty muxers hold none at all. A stage offering
+    /// "+ Subtitle" has to be able to say which of those it is looking at
+    /// before somebody adds a row the muxer will refuse.
+    std::vector<std::string> subtitleCodecs;
 
     /// Whether the two lists above are an *answer*.
     ///

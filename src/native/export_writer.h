@@ -69,6 +69,7 @@ extern "C" {
 namespace ffmpegbro {
 
 class CopyStreams;
+class SubtitleStreams;
 
 class Writer {
 public:
@@ -80,8 +81,12 @@ public:
     /// stream's own parameters, and there is nowhere else to get them from.
     /// Null is a render with no copied stream in it, which is nearly all of
     /// them.
+    /// `subs` is the render's decoded-subtitle path, for the same reason
+    /// `copies` is here: a subtitle stream's encoder is opened *against its
+    /// decoder* — the ASS header carries the styles and the frame size carries
+    /// where a `mov_text` box goes — and there is nowhere else to get either.
     bool open(const ExportSettings& s, bool wantAudio, std::string* err,
-              CopyStreams* copies = nullptr);
+              CopyStreams* copies = nullptr, SubtitleStreams* subs = nullptr);
 
     /// Encode one composited canvas into every video stream mapped to the
     /// composite. `index` is the output frame number, which is the whole
@@ -106,6 +111,18 @@ public:
     /// `desc` indexes the resolved stream list — `outputStreams()`'s answer —
     /// which is the same numbering `CopyStreams` was built against.
     bool writeCopiedPacket(size_t desc, AVPacket* pkt, std::string* err);
+
+    /// One decoded cue, re-encoded into this stream's subtitle codec.
+    ///
+    /// **The timing is the packet's, not the subtitle's.**
+    /// `avcodec_encode_subtitle` refuses a non-zero `start_display_time`
+    /// outright and every text encoder in libavcodec ignores `pts` — what a
+    /// muxer writes as the moment a line appears is `pkt->pts` and how long it
+    /// stays is `pkt->duration`. So the two milliseconds arrive here as
+    /// milliseconds, the stream's `srcTimeBase` is 1/1000, and the rescale into
+    /// the muxer's clock is the one `writePacket` already does.
+    bool writeSubtitle(size_t desc, AVSubtitle* sub, int64_t fromMs, int64_t toMs,
+                       std::string* err);
 
     /// Flush both encoders and write the trailer. Called even on a cancelled
     /// render: an mp4 whose trailer never went down has no index and plays
@@ -233,6 +250,12 @@ private:
         AVAudioFifo* fifo = nullptr;
         int frameSize = 1024;
         int64_t audioPts = 0;
+
+        // subtitles: somewhere for the encoder to write. `avcodec_encode_subtitle`
+        // takes a caller's buffer rather than allocating a packet, which is the
+        // one place libavcodec still works that way — so the buffer is the
+        // stream's, allocated once, rather than a megabyte per cue.
+        std::vector<uint8_t> subBuf;
     };
 
     void close();
@@ -246,6 +269,11 @@ private:
     bool openVideoStream(Out& o, std::string* err);
     bool openAudioStream(Out& o, bool* skipped, std::string* err);
     bool openAttachment(Out& o, std::string* err);
+
+    /// A stream of cues rather than of frames: no pixel format, no rate
+    /// control, no fifo. What it does need that nothing else does is its
+    /// *decoder's* header, which is where an ASS file keeps its styles.
+    bool openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err);
 
     /// A stream that is the bytes that were already there: the muxer is told
     /// about the *input* stream's parameters, and no encoder is opened at all.

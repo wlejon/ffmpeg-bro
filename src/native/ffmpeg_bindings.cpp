@@ -1,6 +1,7 @@
 #include "ffmpeg_bindings.h"
 
 #include "export_copy.h"
+#include "export_subtitle.h"
 #include "ffmpeg_backend.h"
 #include "ffmpeg_capture.h"
 #include "ffmpeg_export.h"
@@ -369,11 +370,13 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
             st.kind = strProp(ctx, item, "kind", "");
             // Checked here as well as in the writer, because this is where the
             // index of the offending entry is still in hand: "streams[3] is a
-            // 'subtitle'" says where to look and "there is no such thing as a
-            // 'subtitle' output stream" does not.
-            if (st.kind != "video" && st.kind != "audio" && st.kind != "attachment") {
+            // 'data'" says where to look and "there is no such thing as a
+            // 'data' output stream" does not.
+            if (st.kind != "video" && st.kind != "audio" && st.kind != "attachment" &&
+                st.kind != "subtitle") {
                 *err = where + " is a '" + st.kind +
-                       "', and this build writes video, audio and attachment streams";
+                       "', and this build writes video, audio, subtitle and attachment "
+                       "streams";
                 ok = false;
             } else {
                 st.source = strProp(ctx, item, "source", "");
@@ -409,6 +412,17 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
                     ok = false;
                 } else if (st.kind == "attachment" && st.path.empty()) {
                     *err = where + " is an attachment with no file to attach";
+                    ok = false;
+                } else if (st.kind == "subtitle" && !isCopySource(st.source) &&
+                           !isDecodeSource(st.source)) {
+                    // There is no composed subtitle track. A subtitle stream is
+                    // one that was already in a file — carried through as
+                    // packets, or decoded and written again in the codec this
+                    // container holds — and a row that says neither is a row
+                    // that would produce an empty track rather than an error.
+                    *err = where + " is a subtitle stream fed from '" + st.source +
+                           "', and a subtitle stream comes from copy:<input>:<stream> or "
+                           "decode:<input>:<stream>";
                     ok = false;
                 } else {
                     out->push_back(std::move(st));
@@ -854,6 +868,10 @@ JSValue codecListToJs(JSContext* ctx, const std::vector<CodecOption>& list) {
         JS_SetPropertyStr(ctx, o, "tune", JS_NewBool(ctx, c.supportsTune));
         JS_SetPropertyStr(ctx, o, "hardware", JS_NewBool(ctx, c.hardware));
         JS_SetPropertyStr(ctx, o, "intraOnly", JS_NewBool(ctx, c.intraOnly));
+        // Subtitles: text rather than pictures. The one fact that decides
+        // whether a conversion is possible at all, so it travels with the
+        // codec rather than being worked out from its name.
+        JS_SetPropertyStr(ctx, o, "textSub", JS_NewBool(ctx, c.textSub));
         JS_SetPropertyStr(ctx, o, "lossless", JS_NewBool(ctx, c.lossless));
         JS_SetPropertyStr(ctx, o, "alwaysLossless", JS_NewBool(ctx, c.alwaysLossless));
         JS_SetPropertyStr(ctx, o, "losslessOption", JS_NewBool(ctx, c.losslessOption));
@@ -1112,6 +1130,7 @@ JSValue muxersToJs(JSContext* ctx) {
         setStr(ctx, o, "mimeType", m.mimeType);
         setStr(ctx, o, "videoCodec", m.videoCodec);
         setStr(ctx, o, "audioCodec", m.audioCodec);
+        setStr(ctx, o, "subtitleCodec", m.subtitleCodec);
         setStr(ctx, o, "defaultVideo", m.defaultVideo);
         setStr(ctx, o, "defaultAudio", m.defaultAudio);
         setStr(ctx, o, "defaultSubtitle", m.defaultSubtitle);
@@ -1122,6 +1141,7 @@ JSValue muxersToJs(JSContext* ctx) {
         JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, m.device));
         JS_SetPropertyStr(ctx, o, "videoCodecs", stringsToJs(ctx, m.videoCodecs));
         JS_SetPropertyStr(ctx, o, "audioCodecs", stringsToJs(ctx, m.audioCodecs));
+        JS_SetPropertyStr(ctx, o, "subtitleCodecs", stringsToJs(ctx, m.subtitleCodecs));
         JS_SetPropertyStr(ctx, o, "answersCodecs", JS_NewBool(ctx, m.answersCodecs));
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
@@ -1427,6 +1447,12 @@ void installFfmpegBindings(JSContext* ctx) {
     // last step.
     JS_SetPropertyStr(ctx, ns, "encoders", codecListToJs(ctx, availableVideoEncoders()));
     JS_SetPropertyStr(ctx, ns, "audioEncoders", codecListToJs(ctx, availableAudioEncoders()));
+    // The third list, and the first one that is not a judgement about which
+    // entries are worth offering: there are nine subtitle encoders and each is
+    // an interchange format asked for by name, so this is the registry walk
+    // rather than a candidate list checked against the build.
+    JS_SetPropertyStr(ctx, ns, "subtitleEncoders",
+                      codecListToJs(ctx, availableSubtitleEncoders()));
 
     // Every muxer this build links, by the name `-f` takes. This was four
     // extensions in a table — mp4, mkv, mov, webm — and everything else the

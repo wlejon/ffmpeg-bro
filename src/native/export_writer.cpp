@@ -3,6 +3,7 @@
 #include "export_writer.h"
 
 #include "export_copy.h"
+#include "export_subtitle.h"
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_sequence.h"
 
@@ -594,7 +595,7 @@ int64_t Writer::piecesWritten() const {
 std::vector<Writer::Piece> Writer::pieces() const { return wrote_; }
 
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
-                  CopyStreams* copies) {
+                  CopyStreams* copies, SubtitleStreams* subs) {
     settings_ = s;
 
     // `-f`, when the render says which muxer it means. Named rather than left
@@ -671,6 +672,8 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
             if (!openAudioStream(*out, &skipped, err)) return false;
         } else if (desc.kind == "attachment") {
             if (!openAttachment(*out, err)) return false;
+        } else if (desc.kind == "subtitle") {
+            if (!openSubtitleStream(*out, subs, err)) return false;
         } else {
             *err = "there is no such thing as a '" + desc.kind + "' output stream";
             return false;
@@ -1234,6 +1237,7 @@ bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
 
     const AVMediaType want = o.desc.kind == "video" ? AVMEDIA_TYPE_VIDEO
                            : o.desc.kind == "audio" ? AVMEDIA_TYPE_AUDIO
+                           : o.desc.kind == "subtitle" ? AVMEDIA_TYPE_SUBTITLE
                                                     : AVMEDIA_TYPE_UNKNOWN;
     if (src->codecpar->codec_type != want) {
         const char* got = av_get_media_type_string(src->codecpar->codec_type);
@@ -1500,6 +1504,165 @@ bool Writer::openAttachment(Out& o, std::string* err) {
     av_dict_set(&o.st->metadata, "filename", fileName(o.desc.path).c_str(), 0);
     av_dict_set(&o.st->metadata, "mimetype",
                 (o.desc.mimeType.empty() ? defaultMimeType(id) : o.desc.mimeType).c_str(), 0);
+    return true;
+}
+
+// ── subtitles ──────────────────────────────────────────────────────────────
+//
+// The third kind of encoded stream, and the one whose apparatus is smallest:
+// no scaler, no fifo, no rate control, no frame clock. A subtitle encoder takes
+// an `AVSubtitle` and a caller's buffer and hands back a length — the one place
+// in libavcodec that still works that way — and everything about *when* a line
+// is on screen travels on the packet.
+//
+// Two things it needs that no other stream does:
+//
+//   - **The decoder's `subtitle_header`.** An ASS file's styles live there and
+//     not in the cues: the fonts, the colours, the margins and the resolution
+//     every position is measured against. An `ass`→`ass` pass that opened a
+//     fresh encoder keeps every line of dialogue and silently loses how all of
+//     it looks, which is the worst shape a conversion can have.
+//   - **A frame size.** `mov_text` writes a `tx3g` box positioned inside a
+//     rectangle, and with no rectangle it lands where the encoder's defaults
+//     put it. The input stream's own size is the right answer where it has one
+//     — an mp4's text track carries it — and the render's canvas is the right
+//     answer where it does not, because that is the picture the text will be
+//     drawn over.
+
+bool Writer::openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err) {
+    if (o.desc.source.empty() || !isDecodeSource(o.desc.source)) {
+        *err = "a subtitle stream is copied from an input (copy:<input>:<stream>) or "
+               "decoded out of one (decode:<input>:<stream>) — there is no composed "
+               "subtitle track for it to be made of";
+        return false;
+    }
+
+    // The encoder, or the muxer's own default. `-c:s` unset means "whatever
+    // this container writes", which is what the ffmpeg command line means by
+    // it, and it is the answer nearly every render wants: Matroska says `ass`,
+    // WebM says `webvtt`.
+    //
+    // **Not every muxer declares one, and mp4 is the one that matters.** Its
+    // `subtitle_codec` is `AV_CODEC_ID_NONE` in this build, yet
+    // `avformat_query_codec` says it holds `mov_text` — which is to say the
+    // container's answer and the container's *declaration* are different facts,
+    // and only the first is worth acting on. So the fallback is the same
+    // question asked of the registry: the first subtitle encoder this build has
+    // that this muxer will actually take. That is the shape `MuxerOption`
+    // already uses to pick a video and an audio encoder, and it means nothing
+    // here is a list of which container holds what.
+    const AVCodec* codec = nullptr;
+    if (!o.desc.codec.empty()) {
+        codec = avcodec_find_encoder_by_name(o.desc.codec.c_str());
+        if (!codec) {
+            *err = "this build has no subtitle encoder called '" + o.desc.codec + "'";
+            return false;
+        }
+    } else {
+        codec = avcodec_find_encoder(oc_->oformat->subtitle_codec);
+        if (!codec) codec = defaultSubtitleEncoder(oc_->oformat->name);
+        if (!codec) {
+            *err = std::string("the ") + oc_->oformat->name +
+                   " muxer will not hold any subtitle codec this build can write";
+            return false;
+        }
+    }
+    if (codec->type != AVMEDIA_TYPE_SUBTITLE) {
+        *err = "'" + std::string(codec->name) + "' is not a subtitle encoder";
+        return false;
+    }
+    // Asked before anything is opened, because the alternative is being told at
+    // `write_header` — after the whole file has been described — that mp4 does
+    // not hold `subrip`. Only an actual no stops it: the third answer,
+    // AVERROR_PATCHWELCOME, means the muxer was never taught to answer.
+    if (avformat_query_codec(oc_->oformat, codec->id, FF_COMPLIANCE_NORMAL) == 0) {
+        *err = std::string("the ") + oc_->oformat->name + " muxer will not hold " +
+               codec->name + " subtitles" +
+               (oc_->oformat->subtitle_codec != AV_CODEC_ID_NONE
+                    ? std::string(" — it writes ") + avcodec_get_name(oc_->oformat->subtitle_codec)
+                    : std::string(" — it holds no subtitles at all"));
+        return false;
+    }
+
+    o.st = avformat_new_stream(oc_, nullptr);
+    if (!o.st) { *err = "out of memory"; return false; }
+    o.enc = avcodec_alloc_context3(codec);
+    if (!o.enc) { *err = "out of memory"; return false; }
+
+    // Milliseconds, which is the clock a subtitle is written on everywhere in
+    // ffmpeg: the display times inside an AVSubtitle are milliseconds and every
+    // text format's own syntax counts in hundredths or thousandths of a second.
+    o.enc->time_base = AVRational{1, 1000};
+
+    const AVCodecContext* dec = subs ? subs->decoderFor(o.descIndex) : nullptr;
+    if (dec && dec->subtitle_header && dec->subtitle_header_size > 0) {
+        o.enc->subtitle_header = static_cast<uint8_t*>(
+            av_mallocz(size_t(dec->subtitle_header_size) + 1));
+        if (!o.enc->subtitle_header) { *err = "out of memory"; return false; }
+        std::memcpy(o.enc->subtitle_header, dec->subtitle_header,
+                    size_t(dec->subtitle_header_size));
+        o.enc->subtitle_header_size = dec->subtitle_header_size;
+    }
+    o.enc->width = dec && dec->width > 0 ? dec->width : settings_.width;
+    o.enc->height = dec && dec->height > 0 ? dec->height : settings_.height;
+
+    if (wantsGlobalHeader()) o.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (!applyOptions(o.enc, o.desc.options, "subtitle", err)) return false;
+
+    int rc = avcodec_open2(o.enc, codec, nullptr);
+    if (rc < 0) {
+        *err = std::string("cannot open the ") + codec->name + " encoder: " + avErr(rc);
+        return false;
+    }
+    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
+    o.st->time_base = o.enc->time_base;
+    o.srcTimeBase = o.enc->time_base;
+    // A megabyte, which is what ffmpeg's own muxer allocates for the same call:
+    // a cue is a few hundred bytes of text and a bitmap one is bounded by the
+    // picture, and `avcodec_encode_subtitle` has no way to ask for more.
+    o.subBuf.assign(1 << 20, 0);
+    if (!openBitstreamFilters(o, err)) return false;
+    return true;
+}
+
+bool Writer::writeSubtitle(size_t desc, AVSubtitle* sub, int64_t fromMs, int64_t toMs,
+                           std::string* err) {
+    for (auto& out : outs_) {
+        Out& o = *out;
+        if (o.descIndex != desc) continue;
+        if (!o.enc || o.copied) return true;
+
+        // A copy of the struct, not of what it points at: the rects belong to
+        // the caller, which frees them, and every encoder here only reads them.
+        // `start_display_time` has to be zero — `avcodec_encode_subtitle`
+        // refuses anything else outright — so the offset it was carrying has
+        // already been folded into the two milliseconds above.
+        AVSubtitle one = *sub;
+        one.pts = 0;
+        one.start_display_time = 0;
+        one.end_display_time = static_cast<uint32_t>(std::max<int64_t>(0, toMs - fromMs));
+
+        const int size = avcodec_encode_subtitle(o.enc, o.subBuf.data(),
+                                                 static_cast<int>(o.subBuf.size()), &one);
+        if (size < 0) {
+            *err = std::string("the ") + o.enc->codec->name +
+                   " encoder would not write a subtitle cue";
+            return false;
+        }
+        // Zero is an ordinary answer and not a failure: `mov_text` writes
+        // nothing for a cue whose text came out empty, and a zero-length packet
+        // in an mp4 is a text track with a hole in it.
+        if (size == 0) return true;
+
+        av_packet_unref(pkt_);
+        if (av_new_packet(pkt_, size) < 0) { *err = "out of memory"; return false; }
+        std::memcpy(pkt_->data, o.subBuf.data(), size_t(size));
+        pkt_->stream_index = o.st->index;
+        pkt_->pts = pkt_->dts = fromMs;
+        pkt_->duration = std::max<int64_t>(0, toMs - fromMs);
+        pkt_->flags |= AV_PKT_FLAG_KEY;
+        return writePacket(o, pkt_, err);
+    }
     return true;
 }
 
