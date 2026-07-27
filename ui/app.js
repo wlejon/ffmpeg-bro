@@ -17,6 +17,7 @@ import * as exporter from './export.js';
 import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
 import { clock, timecode, basename } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
+import { filtergraph } from './filtergraph.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -834,5 +835,6 @@ globalThis.__ffmpegBro = {
     splitAtPlayhead, setLayout, select, selectMany,
     showProperties, pending,
     exporter,
+    filtergraph,
 };
 globalThis.__ffmpegBroReady = true;

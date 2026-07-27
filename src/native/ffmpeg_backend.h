@@ -38,6 +38,17 @@ struct StreamSummary {
     std::string pixFmt;
     double sampleAspect = 0.0;   // pixel aspect ratio, 0 when unknown/square
     int rotation = 0;            // degrees, from the display matrix
+    // What the file says its colour is, verbatim — empty when it says nothing,
+    // which is common and is not the same as saying BT.601. Anything that has
+    // to turn "nothing" into a matrix does it by frame height, the way every
+    // player does and the way swsSpaceFor() in ffmpeg_export.cpp does; the
+    // guess belongs at the point of use, not here, because a probe that
+    // invents a tag the file does not carry cannot be trusted about the ones
+    // it does.
+    std::string colorSpace;
+    std::string colorRange;
+    std::string colorPrimaries;
+    std::string colorTransfer;
     // Audio
     int sampleRate = 0;
     int channels = 0;

@@ -96,7 +96,12 @@ bro.ffmpeg.probe(path)    // in-process ffprobe: throws if the file can't be rea
 //                title, default,
 //                duration,
 //                // video: width, height, displayWidth, displayHeight, fps,
-//                //        pixFmt, sampleAspect, rotation
+//                //        pixFmt, sampleAspect, rotation,
+//                //        colorSpace, colorRange, colorPrimaries, colorTransfer
+//                //        — verbatim, and empty when the file says nothing.
+//                //        "Untagged" and "BT.601" are different facts; only
+//                //        the point of use is entitled to turn one into the
+//                //        other, and it does it by frame height.
 //                // audio: sampleRate, channels, channelLayout, sampleFmt
 //               }, ...],
 //     video, audio }          // shortcuts to the first of each

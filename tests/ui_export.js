@@ -86,6 +86,22 @@ clip.length = Math.min(1.6, clip.length);
 A.setPlayhead(0);
 ok(clip.length > 0.5, `clip trimmed to ${clip.length.toFixed(2)}s for a quick render`);
 
+// What the file says its colour is. Reported verbatim and left empty when the
+// file says nothing, because "untagged" and "BT.601" are different facts and
+// only the point of use is entitled to turn the first into the second. The
+// equivalent filtergraph needs these: rendering one edit both ways and
+// measuring put the difference between naming every conversion and leaving
+// them to swscale at 24.1 dB against 39.1 dB, which is a colour cast rather
+// than noise.
+{
+    const v = clip.probe.video;
+    const tags = ['colorSpace', 'colorRange', 'colorPrimaries', 'colorTransfer'];
+    ok(tags.every((k) => typeof v[k] === 'string'),
+       `probe reports the colour tags (${tags.map((k) => `${k}=${v[k] || '—'}`).join(' ')})`);
+    ok(v.colorSpace !== 'unspecified' && v.colorRange !== 'unknown',
+       'an untagged stream reads as empty rather than as a word that looks like a value');
+}
+
 // ── the spec matches the edit ──────────────────────────────────────────────
 //
 // This is the join that matters: the renderer knows nothing about fit, zoom,

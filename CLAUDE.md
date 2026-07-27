@@ -58,6 +58,10 @@ media file as an argument.
 # the Output workspace end to end: controls -> ffmpeg options, the advanced
 # option editor, both halves of the A/B preview, and loading the result back
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
+
+# the equivalent filtergraph, against specs written out by hand. Needs no
+# media: buildSpec()'s output is a plain object and the module is pure.
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js
 ```
 
 `tests/ui_player.js` is the main regression suite: it drops files on the real UI, plays,
@@ -229,6 +233,17 @@ new. What the fixes were, and what the code here still does about them:
   would compare a picture against a squashed copy of itself. Because they are placed in
   pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
   refits when the measured stage changes.
+- `filtergraph.js` — `buildSpec()`'s output written as the `-filter_complex`
+  that would produce it, for showing (and copying) what the render amounts to
+  in ffmpeg's own terms. The app composites internally rather than shelling
+  out, so this is a *translation*, and how good a one was settled by measuring:
+  render the same edit both ways and compare. Naming every colour conversion
+  is worth 24.1 dB → 39.1 dB, which is why `probe()` reports each source's
+  colour tags and why they are threaded in here. A rate change is the one
+  difference no option closes — a fixed-rate walk and a frame-sync pick
+  different frames — so it is reported as a caveat instead. **An edit it
+  cannot express faithfully returns a refusal, not an approximation**: the
+  whole value of printing a command is that it can be taken elsewhere and run.
 - `format.js`, `icons.js` — timecode/byte formatting, and SVG icons painted from
   `data-icon` attributes. `icons.js` is the one place that still writes markup as a
   string: the icons are `<svg>` path data, closer to an asset than to a UI, and

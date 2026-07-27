@@ -709,6 +709,18 @@ ProbeResult probeMedia(const std::string& path) {
                 s.pixFmt = pf;
             if (par->sample_aspect_ratio.num > 0 && par->sample_aspect_ratio.den > 0)
                 s.sampleAspect = av_q2d(par->sample_aspect_ratio);
+            // Left empty when the file is untagged. av_color_*_name answers
+            // "unspecified"/"unknown" for those, which reads like a value and
+            // is not one.
+            if (par->color_space != AVCOL_SPC_UNSPECIFIED)
+                if (const char* v = av_color_space_name(par->color_space)) s.colorSpace = v;
+            if (par->color_range != AVCOL_RANGE_UNSPECIFIED)
+                if (const char* v = av_color_range_name(par->color_range)) s.colorRange = v;
+            if (par->color_primaries != AVCOL_PRI_UNSPECIFIED)
+                if (const char* v = av_color_primaries_name(par->color_primaries))
+                    s.colorPrimaries = v;
+            if (par->color_trc != AVCOL_TRC_UNSPECIFIED)
+                if (const char* v = av_color_transfer_name(par->color_trc)) s.colorTransfer = v;
             // Rotation lives in a display matrix side-datum; a phone video is
             // 1920x1080 on disk and 1080x1920 on screen, and only this says so.
             if (const AVPacketSideData* sd = av_packet_side_data_get(

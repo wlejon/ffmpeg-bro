@@ -71,6 +71,10 @@ JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
         JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, s.height));
         JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, s.fps));
         setStr(ctx, o, "pixFmt", s.pixFmt);
+        setStr(ctx, o, "colorSpace", s.colorSpace);
+        setStr(ctx, o, "colorRange", s.colorRange);
+        setStr(ctx, o, "colorPrimaries", s.colorPrimaries);
+        setStr(ctx, o, "colorTransfer", s.colorTransfer);
         JS_SetPropertyStr(ctx, o, "sampleAspect", JS_NewFloat64(ctx, s.sampleAspect));
         JS_SetPropertyStr(ctx, o, "rotation", JS_NewInt32(ctx, s.rotation));
         // What the frame measures once rotation is applied — the size a UI
