@@ -24,8 +24,8 @@ import { project, duration } from './project.js';
 import { el, div, put, byId, show } from './dom.js';
 import { bytes, clock } from './format.js';
 
-import { settings, preview, currentJob, setJob, onJobChange, isRendering } from './export/state.js';
-import { containerInfo } from './export/capabilities.js';
+import { settings, preview, currentJob, setJob, onJobChange, isRendering,
+         activeVideoCodec, activeAudioCodec, outputFps } from './export/state.js';
 import { videoOptions } from './export/options.js';
 import { buildSpec, range, defaultPath } from './export/spec.js';
 import { intents, activeIntent, applyIntent, clampToEncoder } from './export/presets.js';
@@ -88,17 +88,38 @@ export { isRendering as isRunning };
 /// Everything that has to be true before the Encode or Write stage is looked
 /// at. Called by the shell on the way in rather than by a tab: which stage is
 /// up is the shell's business, and this module's is what is on it.
+///
+/// **Encode and Write are two stages of one arrival.** The shell calls this for
+/// each of them, and stepping between the two is not a fresh visit — so the
+/// half of this that reads the edit runs only when coming from outside. It
+/// used to run both times, and the casualty was where the preview samples
+/// from: dragged to a moment worth checking on the Encode stage, it snapped
+/// back to the playhead on the way back from setting a filename, leaving the
+/// A/B stage showing frames from somewhere the strip no longer pointed at and
+/// the next preview paying for a lossless render it already had.
 export function prepare() {
     if (!project.clips.length) return false;
-    if (hooks.pause) hooks.pause();
+    if (!open) arrive();
     open = true;
+
+    clampToEncoder();
+    showPanel('form');
+    drawAll();
+    if (hooks.workspace) hooks.workspace();
+    return true;
+}
+
+/// Coming to the encode side from the edit: what the settings should say about
+/// a timeline they may not have seen before.
+function arrive() {
+    if (hooks.pause) hooks.pause();
 
     if (!settings.path) settings.path = defaultPath();
     if (!settings.width) { settings.width = project.width; settings.height = project.height; }
-    if (!settings.videoCodec)
-        settings.videoCodec = (containerInfo(settings.container) || {}).videoCodec || '';
-    if (!settings.audioCodec)
-        settings.audioCodec = (containerInfo(settings.container) || {}).audioCodec || '';
+    // Pinned rather than left to the container's default, so the form shows
+    // the codec it is about to use rather than a blank that reads as "none".
+    if (!settings.videoCodec) settings.videoCodec = activeVideoCodec();
+    if (!settings.audioCodec) settings.audioCodec = activeAudioCodec();
 
     // Nothing has ever been saved, so start somewhere named rather than on a
     // pile of defaults that happens to match none of the presets and reads as
@@ -115,12 +136,6 @@ export function prepare() {
     if (settings.rangeOut > total) settings.rangeOut = 0;
     preview.at = Math.min(Math.max(0, hooks.playhead ? hooks.playhead() : 0),
                           Math.max(0, total - 0.1));
-
-    clampToEncoder();
-    showPanel('form');
-    drawAll();
-    if (hooks.workspace) hooks.workspace();
-    return true;
 }
 
 /// Leaving the encode side altogether. Refused while a render holds the host's
@@ -180,10 +195,10 @@ function drawIntents() {
 
 function updateSummary() {
     const r = range();
-    const fps = settings.fps || project.fps || 30;
+    const fps = outputFps();
     const frames = Math.max(1, Math.round(r.length * fps));
     const clips = project.clips.length;
-    const codec = settings.videoCodec || (containerInfo(settings.container) || {}).videoCodec;
+    const codec = activeVideoCodec();
 
     // What the file will be, in the terms the file will be described in by
     // whatever opens it next. A measurement beats an estimate, so the preview's
@@ -296,8 +311,5 @@ export function lastStatus() { return lastPoll; }
 
 /// For tests: the settings block, and what the encoder is being told.
 export function currentSettings() { return settings; }
-export function currentOptions() {
-    const codec = settings.videoCodec || (containerInfo(settings.container) || {}).videoCodec;
-    return videoOptions(codec);
-}
+export function currentOptions() { return videoOptions(activeVideoCodec()); }
 export function previewState() { return preview; }

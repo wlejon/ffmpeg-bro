@@ -39,7 +39,7 @@ export function optionsOf(codec) {
     return optionCache.get(codec);
 }
 
-export function optionNamed(codec, name) {
+function optionNamed(codec, name) {
     return optionsOf(codec).find((o) => o.name === name) || null;
 }
 

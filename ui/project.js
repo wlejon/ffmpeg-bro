@@ -119,7 +119,7 @@ export function moveClip(clip, start, track) {
 }
 
 /// Where a track's clips currently run out.
-export function trackEnd(track) {
+function trackEnd(track) {
     let d = 0;
     for (const c of project.clips)
         if (c.track === track) d = Math.max(d, c.start + c.length);
@@ -162,14 +162,6 @@ export function clipsAt(t) {
     for (const c of project.clips)
         if (t >= c.start && t < c.start + c.length) out.push(c);
     return out;      // already sorted: project.clips is kept in track order
-}
-
-/// The clip that owns the moment: the topmost one the playhead is inside. It
-/// is the picture in front, so it is the one whose decoder drives the clock and
-/// whose timecode is the truth.
-export function clipAt(t) {
-    const all = clipsAt(t);
-    return all.length ? all[all.length - 1] : null;
 }
 
 export function nextClipAfter(t) {

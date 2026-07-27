@@ -6,13 +6,12 @@
 // same bag, the bag is applied with av_opt_set the way the ffmpeg command line
 // applies its arguments, and neither can describe a render the other would not.
 
-import { project } from '../project.js';
-import { settings } from './state.js';
+import { settings, outputFps } from './state.js';
 import { audioInfo, hasOpt } from './capabilities.js';
 
 /// Turn the rate-control choice into ffmpeg options. One place, so the summary
 /// line, the preview and the export cannot describe three different renders.
-export function rateOptions(codec) {
+function rateOptions(codec) {
     const out = {};
     const q = Math.round(settings.quality);
     switch (settings.rate) {
@@ -52,7 +51,7 @@ export function videoOptions(codec, over = {}) {
     if (settings.tune && hasOpt(codec, 'tune')) out.tune = settings.tune;
     if (settings.profile && hasOpt(codec, 'profile')) out.profile = settings.profile;
 
-    const fps = over.fps || settings.fps || project.fps || 30;
+    const fps = over.fps || outputFps();
     if (settings.gopSeconds > 0) out.g = Math.max(1, Math.round(settings.gopSeconds * fps));
     if (settings.bframes >= 0) out.bf = settings.bframes;
 
@@ -69,13 +68,7 @@ export function audioOptions(codec) {
     return Object.assign(out, settings.extraAudio);
 }
 
-/// The options as ffmpeg would have been given them. Shown because it is the
-/// shortest complete statement of what is about to happen, and because anyone
-/// who knows ffmpeg can read it faster than they can read the form.
-export function commandLine(codec) {
-    const v = videoOptions(codec);
-    const parts = [];
-    for (const k of Object.keys(v)) parts.push(`-${k} ${v[k]}`);
-    if (settings.pixelFormat) parts.push(`-pix_fmt ${settings.pixelFormat}`);
-    return parts.join(' ') || 'encoder defaults';
-}
+// There was a commandLine() here that printed this bag as `-key value` pairs
+// for a line at the bottom of the export form. ui/command.js prints the whole
+// invocation under every stage now, and two functions that turn options into a
+// command line is one more than can be kept saying the same thing.

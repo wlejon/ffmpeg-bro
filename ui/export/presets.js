@@ -5,8 +5,8 @@
 // has rather than assumed: a machine without an NVIDIA card does not get
 // offered the NVIDIA one.
 
-import { settings } from './state.js';
-import { encoderInfo, audioInfo, containerInfo, audioEncoders,
+import { settings, activeVideoCodec } from './state.js';
+import { encoderInfo, audioInfo, audioEncoders,
          rateModes, qualityRange } from './capabilities.js';
 import { withExtension } from './spec.js';
 
@@ -101,7 +101,7 @@ export function applyIntent(id) {
 /// because a preset carried over from x264 is meaningless to ProRes and a
 /// silently-ignored one is how a render ends up not being what was asked for.
 export function clampToEncoder() {
-    const codec = settings.videoCodec || (containerInfo(settings.container) || {}).videoCodec;
+    const codec = activeVideoCodec();
     const info = encoderInfo(codec);
     if (!info) return;
 

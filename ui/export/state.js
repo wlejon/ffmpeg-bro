@@ -4,6 +4,16 @@
 // here — the form writes them, the spec reads them, the preview invalidates
 // itself against them — and passing them down through every call would be
 // ceremony around a single source of truth that already exists.
+//
+// The three readers at the bottom are here for the same reason. Each answers a
+// question the settings do not answer literally — which encoder is in force
+// when none has been picked, what rate the render actually runs at — and each
+// was written out by hand in six or eight places before it was written down
+// once. Six copies of a fallback chain is six chances for the summary, the
+// command, the warnings and the spec to describe different renders.
+
+import { project } from '../project.js';
+import { containerInfo } from './capabilities.js';
 
 export const PREVIEW_LENGTHS = [1, 2, 3, 5, 10];
 
@@ -95,3 +105,22 @@ export function setJob(v) {
 }
 
 export function onJobChange(fn) { watchers.push(fn); }
+
+// ── what the settings come to ──────────────────────────────────────────────
+
+/// The video encoder in force. Empty in `settings` means "whatever the
+/// container's default is", which is a real answer and not an absence — the
+/// form draws from it, the spec sends it and the command prints it.
+export function activeVideoCodec() {
+    return settings.videoCodec || (containerInfo(settings.container) || {}).videoCodec || '';
+}
+
+export function activeAudioCodec() {
+    return settings.audioCodec || (containerInfo(settings.container) || {}).audioCodec || '';
+}
+
+/// The rate the render runs at: what was asked for, or the project's, or the
+/// fallback every other part of this app also falls back to.
+export function outputFps() {
+    return settings.fps || project.fps || 30;
+}

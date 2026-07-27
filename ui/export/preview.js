@@ -13,7 +13,7 @@
 import { project, duration } from '../project.js';
 import { el, div, span, put, segmented, fromTemplate } from '../dom.js';
 import { bytes, clock, elapsed, timecode } from '../format.js';
-import { settings, preview, PREVIEW_LENGTHS, currentJob } from './state.js';
+import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps } from './state.js';
 import { buildSpec, range } from './spec.js';
 
 let panes = {};
@@ -43,12 +43,12 @@ export function initPreview(refs, h) {
 /// The lossless render only has to be redone when the picture itself changes:
 /// a different quality, preset or codec does not move it, which is the case
 /// that matters because it is the one being compared.
-export function referenceKey() {
+function referenceKey() {
     return JSON.stringify([
         project.clips.map((c) => [c.path, c.start, c.length, c.inPoint, c.track,
                                   c.xform.opacity, c.xform.scale, c.xform.x, c.xform.y,
                                   c.xform.fit, c.xform.crop, project.layout]),
-        settings.width, settings.height, settings.fps || project.fps,
+        settings.width, settings.height, outputFps(),
         preview.at, settings.previewLength, project.width, project.height,
     ]);
 }
@@ -84,7 +84,7 @@ export function startPreview() {
     else renderCandidate();
 }
 
-export function renderReference() {
+function renderReference() {
     const r = previewRange();
     preview.refPath = bro.ffmpeg.tempPath('reference.mkv');
     // Lossless H.264 rather than a raw format: it is exact, it is a tenth the
@@ -370,7 +370,7 @@ function stepPreview(dir) {
     setPreviewPlaying(false);
     for (const v of [cand, ref]) {
         if (v.stepFrame) v.stepFrame(dir);
-        else v.currentTime = Math.max(0, v.currentTime + dir / (settings.fps || project.fps || 30));
+        else v.currentTime = Math.max(0, v.currentTime + dir / outputFps());
     }
     // Whatever the candidate landed on is the frame being compared; the
     // reference is put on the same one rather than trusted to have stepped the
@@ -407,7 +407,7 @@ function updatePreviewTime() {
     if (!cand) return;
     const len = cand.duration > 0 ? cand.duration : Math.max(0.001, settings.previewLength);
     const at = Math.max(0, Math.min(len, cand.currentTime || 0));
-    const fps = settings.fps || project.fps || 30;
+    const fps = outputFps();
 
     if (node.time) node.time.textContent = timecode(previewRange().start + at, fps);
     if (node.length) node.length.textContent = `${at.toFixed(2)} / ${len.toFixed(2)} s`;
@@ -455,7 +455,7 @@ export function chasePreview() {
     // reference is chased — writing currentTime every frame fights the decoder
     // — but the tolerance has to be smaller than the thing being looked for:
     // half a second of motion across the wipe hides any amount of ringing.
-    const limit = 1 / Math.max(1, settings.fps || project.fps || 30);
+    const limit = 1 / Math.max(1, outputFps());
     if (Math.abs(ref.currentTime - cand.currentTime) > limit)
         ref.currentTime = cand.currentTime;
 }

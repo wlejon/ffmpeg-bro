@@ -54,6 +54,11 @@ function n(v, dp = 3) {
 
 const px = (v) => String(Math.round(v));
 
+/// What a clip has taken off each edge, as fractions. A clip that has never
+/// been cropped carries no crop at all, and three copies of that default were
+/// three places for "no crop" to come to mean something slightly different.
+const cropOf = (clip) => clip.crop || { l: 0, t: 0, r: 0, b: 0 };
+
 /// The matrix, primaries, transfer and range the render will be converted to
 /// and tagged with. This mirrors `ffmpeg_export.cpp`'s rule exactly, including
 /// what "auto" means — the guess every player makes, by frame height — because
@@ -130,7 +135,7 @@ function sourceColor(src) {
 /// the spec — the renderer does not need it, since it crops the placed picture.
 /// Letting ffmpeg do that arithmetic keeps the two definitions the same one.
 function videoChain(clip, w, i, src) {
-    const c = clip.crop || { l: 0, t: 0, r: 0, b: 0 };
+    const c = cropOf(clip);
     const keepW = 1 - c.l - c.r;
     const keepH = 1 - c.t - c.b;
 
@@ -209,7 +214,7 @@ export function filtergraph(spec, sources) {
         const clip = spec.clips[ci];
         const w = windowOf(clip, start, end);
         if (!w) continue;                       // outside the range; not an error
-        const c = clip.crop || { l: 0, t: 0, r: 0, b: 0 };
+        const c = cropOf(clip);
         if (c.l + c.r >= 1 || c.t + c.b >= 1)
             return refuse(`a clip is cropped away to nothing`);
         if (!(clip.w > 0 && clip.h > 0) ||
@@ -244,7 +249,7 @@ export function filtergraph(spec, sources) {
 
     let over = '[base]';
     kept.forEach(({ clip, w }, i) => {
-        const c = clip.crop || { l: 0, t: 0, r: 0, b: 0 };
+        const c = cropOf(clip);
         const x = clip.x + clip.w * c.l;
         const y = clip.y + clip.h * c.t;
         const last = i === kept.length - 1;

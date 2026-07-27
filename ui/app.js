@@ -19,6 +19,7 @@ import { clock, timecode, basename, bytes } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
 import { filtergraph } from './filtergraph.js';
 import * as shell from './shell.js';
+import { initSources, drawSources } from './sources.js';
 import * as command from './command.js';
 
 const el = (id) => document.getElementById(id);
@@ -29,7 +30,6 @@ const dropzone = el('dropzone');
 const osd      = el('osd');
 const filename = el('filename');
 const chips    = el('chips');
-const mediaInfo = el('mediainfo');
 const xformPanel = el('transform');
 const stats    = el('stats');
 
@@ -67,7 +67,9 @@ el('libav').textContent = bro.ffmpeg.version;
 
 viewer.initViewer({ stage, viewer: viewerEl });
 
-initInspector({ filename, chips, media: mediaInfo, transform: xformPanel }, {
+initSources(el('sources'));
+
+initInspector({ filename, chips, transform: xformPanel }, {
     // The panel edits the model; putting the picture and the timeline back in
     // step with it is the application's job, not the panel's.
     edited: () => { viewer.refreshAll(); updateCropUI(); changed('edit'); },
@@ -146,9 +148,11 @@ onChange((what) => {
     // both are downstream of every change to the model — not just the ones
     // made on the encode side. Here rather than in syncUI() because that runs
     // from the frame loop, and rebuilding a spec sixty times a second to
-    // discover it has not changed is work for nothing.
+    // discover it has not changed is work for nothing. The Sources stage is
+    // downstream of the same thing: which files are on the timeline.
     shell.drawSpine();
     command.draw();
+    drawSources();
 });
 
 // A file named on the command line, handed over by the host binding.
@@ -855,6 +859,7 @@ shell.initShell({
         if (id === 'encode' || id === 'write') exporter.prepare();
         else exporter.closeExport();
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
+        if (id === 'sources') drawSources();
         command.draw();
     },
     state: stageState,

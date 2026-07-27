@@ -691,6 +691,27 @@ body.fs #cropbox { display: none; }
     max-width: 900px;
 }
 
+/* One block per file, and there is more than one — the stage reads every
+   source on the timeline, so the blocks need a seam between them that the
+   stream headings inside them do not have. */
+.source { margin-bottom: 18px; }
+.source + .source { border-top: 1px solid var(--line); padding-top: 12px; }
+.source-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 2px 12px;
+}
+.source-name { font-size: 14px; font-weight: 600; }
+/* The path is what -i would be handed, and the only thing telling two files
+   with the same name apart. Broken anywhere rather than pushed off the side. */
+.source-path {
+    padding: 0 12px 4px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    word-break: break-all;
+}
+
 /* Write: where it goes, and the act of going. Two columns — the destination on
    the left, and on the right the statement of what is about to happen with the
    button that makes it happen underneath, so the last thing under the pointer
@@ -755,7 +776,11 @@ body.fs #cropbox { display: none; }
     line-height: 1.6;
     color: var(--text);
     /* Collapsed it is one line and elided; opened it wraps and scrolls. A
-       command that is eight hundred characters long is not a status bar. */
+       command that is eight hundred characters long is not a status bar.
+       The space between the spans this line is built from is a non-breaking
+       one, put there by command.js — see the note beside it. `pre` here would
+       keep an ordinary space, but it also laid each span out on a line of its
+       own, which is three lines where the design says one. */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -780,8 +805,11 @@ body.fs #cropbox { display: none; }
     white-space: normal;
 }
 .cmd-note .lead { color: var(--accent); }
-/* Nothing to describe until there is an edit. */
-body.stage-sources .cmd,
+/* Nothing to describe until there is an edit — but an edit is the only
+   condition. The Sources stage used to hide it as well, which made the claim
+   this bar exists to make ("under every stage, live") false on a quarter of
+   the application, and hid it on the one stage whose subject is the `-i`
+   arguments it opens with. */
 .cmd.empty { display: none; }
 
 /* The presets. Six buttons that between them cover most renders, so the

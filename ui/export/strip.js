@@ -14,7 +14,7 @@
 // width by something that measured after the layout moved.
 
 import { project, duration } from '../project.js';
-import { byId, put, span, show } from '../dom.js';
+import { put, span, show } from '../dom.js';
 import { clock } from '../format.js';
 import { settings } from './state.js';
 import { range } from './spec.js';
@@ -60,7 +60,7 @@ export function drawStrip() {
     paintStrip();
 }
 
-export function paintStrip() {
+function paintStrip() {
     if (!canvas) return;
     const total = Math.max(0.001, duration());
     const r = range();
@@ -189,4 +189,3 @@ function move(e) {
     hooks.tweaked();
 }
 
-export function stripCanvas() { return canvas; }

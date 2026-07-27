@@ -54,11 +54,6 @@ export function bytes(n) {
     return n.toFixed(i ? 1 : 0) + ' ' + units[i];
 }
 
-export function escapeHtml(s) {
-    return String(s).replace(/[&<>"]/g,
-        (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
 export function basename(p) {
     const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
     return i >= 0 ? p.slice(i + 1) : p;

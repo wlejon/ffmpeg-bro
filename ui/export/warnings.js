@@ -5,13 +5,13 @@
 // refuses says so itself and needs no help from this.
 
 import { project } from '../project.js';
-import { settings } from './state.js';
+import { settings, activeVideoCodec, outputFps } from './state.js';
 import { encoderInfo, audioInfo, containerInfo } from './capabilities.js';
 
 export function warnings() {
     const out = [];
     const c = containerInfo(settings.container);
-    const codec = settings.videoCodec || (c || {}).videoCodec;
+    const codec = activeVideoCodec();
     const info = encoderInfo(codec);
     const w = settings.width, h = settings.height;
 
@@ -29,7 +29,7 @@ export function warnings() {
     if (canvasAspect && Math.abs(outAspect - canvasAspect) > 0.01)
         out.push('the output is a different shape from the canvas — the picture will be stretched');
 
-    const fps = settings.fps || project.fps || 30;
+    const fps = outputFps();
     if (project.fps && fps > project.fps + 0.01)
         out.push(`${fps} fps from a ${project.fps.toFixed(3)} fps timeline duplicates frames`);
 

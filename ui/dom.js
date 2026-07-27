@@ -124,3 +124,22 @@ export function segmented(name, items, chosen, onPick) {
 export function show(node, on) {
     if (node) node.classList.toggle('hidden', !on);
 }
+
+/// A labelled row: `<div class="row"><span class="key">…</span><span
+/// class="val">…</span></div>`. `value` is anything `add()` takes, so the same
+/// row holds a string in the Sources stage and a slider in the encode form.
+///
+/// Here rather than beside either of them because it was written twice — once
+/// for the form and once for the panel that reads a file out — and two
+/// implementations of the same three elements is how two panels that should
+/// line up stop lining up.
+export function row(key, value) {
+    const node = fromTemplate('tpl-row');
+    node.querySelector('.key').textContent = key;
+    add(node.querySelector('.val'), value);
+    return node;
+}
+
+/// A heading inside a column.
+export const head = (text, opts = {}) =>
+    el('div', Object.assign({ cls: 'section-head', text }, opts));

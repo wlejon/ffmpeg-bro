@@ -4,15 +4,11 @@
 // here rather than inline in the form because the form is a hundred rows and
 // the difference between reading it and not is whether each row is one line.
 
-import { el, div, span, add, fromTemplate } from '../dom.js';
+import { el, div, span } from '../dom.js';
 
-/// `<div class="row"><span class="key">…</span><span class="val">…</span></div>`
-export function row(key, controls) {
-    const node = fromTemplate('tpl-row');
-    node.querySelector('.key').textContent = key;
-    add(node.querySelector('.val'), controls);
-    return node;
-}
+// `row` and `head` used to live here. They are in dom.js now, beside the other
+// builders: the Sources stage reads a file out in the same rows this form is
+// made of, and one of them had to be the copy.
 
 /// A cluster of controls that belong together on one line. The class matters:
 /// without it the row wraps prose, which is what the rest of a row is for.
@@ -29,7 +25,3 @@ export function num(name, opts, after) {
 
 /// A note under a control: what libavcodec called this thing, mostly.
 export const note = (text) => span(text, 'dim tiny-note');
-
-/// A heading inside a column.
-export const head = (text, opts = {}) =>
-    el('div', Object.assign({ cls: 'section-head', text }, opts));

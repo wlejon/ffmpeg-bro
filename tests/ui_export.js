@@ -390,10 +390,29 @@ console.log('\nthe command says what will happen');
     // Key for key against what the encoder is actually handed. A command that
     // is missing an option describes a different render from the one the
     // preview measured, and looks entirely plausible while doing it.
+    //
+    // A key an audio encoder also has is printed `-key:v`, because unqualified
+    // it would mean every stream: the render has one context per stream and no
+    // ambiguity to resolve, and a printed command has to resolve it out loud.
     const opts = A.exporter.currentOptions();
     for (const k of Object.keys(opts))
-        ok(text.indexOf(`-${k} ${opts[k]}`) > 0,
+        ok(text.indexOf(`-${k} ${opts[k]}`) > 0 || text.indexOf(`-${k}:v ${opts[k]}`) > 0,
            `-${k} ${opts[k]} reaches the command, as it reaches the encoder`);
+
+    // And the collision itself: a bitrate render prints -b:v beside -b:a, never
+    // a bare -b that would mean both of them.
+    S.rate = 'bitrate';
+    S.videoBitrate = 6000;
+    f('container').dispatchEvent(new Event('change'));
+    pump(60);
+    const bitrateText = A.command.currentCommand();
+    ok(bitrateText.indexOf('-b:v 6000k') > 0,
+       'the video bitrate says which stream it belongs to');
+    ok(!/ -b \d/.test(bitrateText),
+       'and never as a bare -b, which would claim the audio stream as well');
+    S.rate = 'quality';
+    f('container').dispatchEvent(new Event('change'));
+    pump(60);
 
     // Three things the renderer applies that are *not* in the option bag. They
     // are named fields on the spec, so a command built from the bag alone is

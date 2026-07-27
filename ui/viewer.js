@@ -136,7 +136,7 @@ export function gridShape(n, aspect) {
 /// The cell a clip gets in grid layout, or null when the layout is 'stack'.
 /// Cells are handed out in timeline order, so the grid reads the way the
 /// timeline does rather than jumping around as clips are added.
-export function cellFor(clip, sw, sh) {
+function cellFor(clip, sw, sh) {
     if (project.layout !== 'grid') return null;
     const order = project.clips;
     const i = order.indexOf(clip);

@@ -13,10 +13,11 @@
 // anything, because the code that wired it looked only in the left one.
 
 import { project } from '../project.js';
-import { el, div, span, put, select, segmented, show, fromTemplate } from '../dom.js';
+import { el, div, span, put, select, segmented, show, fromTemplate,
+         row, head } from '../dom.js';
 import { basename } from '../format.js';
-import { row, btns, num, note, head } from './controls.js';
-import { settings } from './state.js';
+import { btns, num, note } from './controls.js';
+import { settings, activeVideoCodec } from './state.js';
 import { videoEncoders, audioEncoders, containers, encoderInfo, audioInfo,
          containerInfo, optionsOf, rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension } from './spec.js';
@@ -39,11 +40,6 @@ export function initForm(refs, h) {
     hooks = h || {};
 }
 
-/// What the form is currently about: the video encoder in force.
-function currentCodec() {
-    return settings.videoCodec || (containerInfo(settings.container) || {}).videoCodec;
-}
-
 const RATE_LABELS = {
     quality: 'Quality', bitrate: 'Bitrate', constrained: 'Capped', lossless: 'Lossless',
 };
@@ -55,7 +51,7 @@ const RATE_HINTS = {
 };
 
 export function drawForm() {
-    const codec = currentCodec();
+    const codec = activeVideoCodec();
     const info = encoderInfo(codec) || { presets: [], tunes: [], profiles: [], pixelFormats: [] };
     const cont = containerInfo(settings.container) || { videoCodecs: [], audioCodecs: [] };
 
@@ -449,7 +445,7 @@ function number(key, min) {
 
 function refreshQualityLabel() {
     if (!qualityLabel) return;
-    const r = qualityRange(currentCodec());
+    const r = qualityRange(activeVideoCodec());
     // The scale runs backwards from every other quality control in the app and
     // its ends move with the encoder, so it says where you are on it rather
     // than showing a bare number.

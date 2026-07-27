@@ -86,7 +86,7 @@ ok(video.videoWidth > 0 && video.videoHeight > 0,
    `frame size ${video.videoWidth}x${video.videoHeight}`);
 ok(Math.abs(clip.length - p.video.duration) < 0.01,
    `clip is as long as its video track (${clip.length.toFixed(3)}s)`);
-ok(el('mediainfo').textContent.indexOf('Container') >= 0, 'inspector filled in');
+ok(el('sources').textContent.indexOf('Container') >= 0, 'the Sources stage read the file');
 ok(el('chips').textContent.length > 0, `chips: ${el('chips').textContent.replace(/\s+/g, ' ').trim()}`);
 ok(el('tc-duration').textContent !== '00:00:00:00',
    `duration timecode ${el('tc-duration').textContent}`);
@@ -350,6 +350,18 @@ if (second) {
     pump(200);
     ok(A.activeClip() === clip, 'and back again');
     screenshot('out/07-two-clips.png');
+
+    // The Sources stage reads every file on the timeline, not the selected
+    // one: its card in the spine counts them, and a stage that says three and
+    // shows one is asking to be disbelieved.
+    {
+        const base = (p) => p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+        const text = el('sources').textContent;
+        ok(text.indexOf(base(media)) >= 0 && text.indexOf(base(second)) >= 0,
+           'both sources are read out, whichever clip is selected');
+        ok((text.match(/Container/g) || []).length === 2,
+           'one block per file, and two files means two');
+    }
 
     // Moving one. Dragged past the other, the other is pushed out of the way
     // rather than the two overlapping with no answer to which is on screen.

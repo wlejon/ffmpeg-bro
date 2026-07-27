@@ -22,12 +22,11 @@
 
     <div id="stages">
     <section id="st-sources" class="stage-view hidden">
-        <!-- What is in the files. `mediainfo` is what the inspector used to
-             hold; the Sources stage is where it belongs, with room to be read
-             rather than scrolled past. -->
-        <div id="sources" class="sources">
-            <div id="mediainfo" class="dim pad">Nothing loaded.</div>
-        </div>
+        <!-- What is in the files: every file on the timeline, once each. This
+             was the inspector's Media panel, which could only ever describe
+             the selected clip; the stage has room to read them all out and a
+             card in the spine that counts them. -->
+        <div id="sources" class="sources dim pad">Nothing loaded.</div>
     </section>
 
     <section id="st-compose" class="stage-view">

@@ -11,7 +11,7 @@
 // because how many there are is a property of the edit.
 
 import { project, duration, moveClip, resolveOverlaps, changed, trackCount,
-         isSelected, select, selectMany, trimClip } from './project.js';
+         isSelected, select, trimClip } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { el, put } from './dom.js';
 
@@ -113,7 +113,7 @@ export function revealTime(t) {
 
 // ── hit testing ────────────────────────────────────────────────────────────
 
-export function clipAtX(x, track) {
+function clipAtX(x, track) {
     const t = xToTime(x);
     for (const c of project.clips)
         if ((track === undefined || c.track === track) &&
@@ -600,11 +600,4 @@ export function initTimeline(refs) {
             view.start = f * total() - view.span / 2;
             draw();
         });
-}
-
-/// Select every clip that overlaps a span of time, across all tracks — what
-/// "select all" and the range keys need.
-export function selectSpan(from, to) {
-    const lo = Math.min(from, to), hi = Math.max(from, to);
-    selectMany(project.clips.filter((c) => c.start < hi && c.start + c.length > lo));
 }

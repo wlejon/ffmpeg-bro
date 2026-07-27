@@ -27,12 +27,21 @@
 //   - the scaler, which is a flag and not an option.
 
 import { project } from './project.js';
-import { el, div, span, put, show } from './dom.js';
+import { div, span, put, show } from './dom.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings } from './export/state.js';
 import { videoOptions, audioOptions } from './export/options.js';
 import { buildSpec } from './export/spec.js';
 import { containerInfo } from './export/capabilities.js';
+
+// The space between one span and the next, non-breaking on purpose. The line
+// is three spans because it is three kinds of statement, and an ordinary space
+// at the end of an inline box is whitespace at a seam: collapsed away, it drew
+// `…/clip.mp4-filter_complex"color=…` — one argument where the command has
+// two. The copied string was always right, which is the worse way round, since
+// the thing on screen is the thing that gets read. It never reaches the
+// clipboard: `commandText()` is assembled separately, from the same parts.
+const GAP = '\u00a0';
 
 let refs = {};
 let open = false;
@@ -63,10 +72,21 @@ function sourcesFor() {
     return project.clips.map((c) => (c.probe && c.probe.video) || null);
 }
 
-/// Everything the encoder is told, as `-key value` pairs. Assembled here rather
-/// than taken from `commandLine()` in options.js because that one answers a
-/// different question — what the *options bag* holds — and this one has to
-/// answer what the encoder ends up configured with, named fields included.
+// The video options that an audio encoder also has, and so the ones that have
+// to say which stream they are for. Unqualified, `-b 8000k` in a command line
+// means every stream — and a command whose audio bitrate depends on ffmpeg
+// reading `-b` before `-b:a` is not one worth handing to anybody. The renderer
+// has no such ambiguity, since it calls av_opt_set on one context at a time,
+// which is why this belongs here and not in the option bag.
+const PER_STREAM = new Set(['b', 'maxrate', 'bufsize', 'q', 'qscale', 'profile', 'level']);
+
+const videoKey = (k) => (PER_STREAM.has(k) ? `${k}:v` : k);
+
+/// Everything the encoder is told, as `-key value` pairs. Assembled from the
+/// spec rather than from the option bag alone, because the bag is not the whole
+/// of what the encoder ends up configured with — the named fields below are
+/// settings of the renderer's own, and a command missing them describes a
+/// different file from the one about to be written.
 export function parts() {
     const spec = buildSpec();
     const codec = spec.videoCodec;
@@ -89,7 +109,7 @@ export function parts() {
 
     out.push('-c:v', codec);
     const v = videoOptions(codec);
-    for (const k of Object.keys(v)) out.push(`-${k}`, arg(v[k]));
+    for (const k of Object.keys(v)) out.push(`-${videoKey(k)}`, arg(v[k]));
     if (settings.pixelFormat) out.push('-pix_fmt', settings.pixelFormat);
     // The renderer sets a two-second GOP unless told otherwise; x264 left alone
     // uses 250 frames. A command without this writes a differently-keyframed
@@ -116,9 +136,11 @@ export function parts() {
     return { spec, graph: g, pre, inputs, out };
 }
 
-/// The whole thing as one runnable string. What Copy puts on the clipboard, and
-/// what the tests compare against.
-export function commandText() {
+/// The whole thing as one runnable string, which is what Copy puts on the
+/// clipboard. Anything outside this module wants `currentCommand()` — the
+/// string the bar is actually showing, rather than one built again from a
+/// model that may have moved since.
+function commandText() {
     const p = parts();
     const bits = p.pre.concat(p.inputs);
     if (p.graph.ok) bits.push('-filter_complex', arg(p.graph.chains.join(';')));
@@ -136,12 +158,12 @@ export function draw() {
     lastText = commandText();
 
     put(refs.line, () => {
-        const bits = [span(p.pre.concat(p.inputs).join(' ') + ' ', 'cmd-exact')];
+        const bits = [span(p.pre.concat(p.inputs).join(' ') + GAP, 'cmd-exact')];
         if (p.graph.ok) {
-            bits.push(span('-filter_complex ', 'cmd-exact'));
+            bits.push(span('-filter_complex' + GAP, 'cmd-exact'));
             // Dimmed, and on its own lines when opened, because this is the
             // half that is a translation rather than a transcript.
-            bits.push(span(arg(p.graph.chains.join(open ? ';\n  ' : ';')) + ' ', 'cmd-equiv'));
+            bits.push(span(arg(p.graph.chains.join(open ? ';\n  ' : ';')) + GAP, 'cmd-equiv'));
         }
         bits.push(span(p.out.join(' '), 'cmd-exact'));
         if (open) bits.push(notes(p));
@@ -161,9 +183,13 @@ function notes(p) {
          'the graph above is a translation. Measured against the render it describes, ' +
          'it comes out around 39 dB — the same picture, not the same bits.'],
     ];
-    if (!p.graph.ok)
-        lines.length = 1, lines.push([span('No graph: ', 'lead'), p.graph.reason +
-                                      ', so the command above is incomplete.']);
+    // No graph means the second line is about something that is not on screen,
+    // so it goes and the refusal takes its place.
+    if (!p.graph.ok) {
+        lines.length = 1;
+        lines.push([span('No graph: ', 'lead'),
+                    `${p.graph.reason}, so the command above is incomplete.`]);
+    }
     for (const c of (p.graph.caveats || []))
         lines.push([span('Differs: ', 'lead'), c + '.']);
     return div('cmd-note', lines.map((l) => div('', l)));

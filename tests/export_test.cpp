@@ -249,8 +249,22 @@ int main(int argc, char* argv[]) {
         if (s.kind == "video") srcDuration = s.duration;
         if (s.kind == "audio") srcHasAudio = true;
     }
+    // An audio *track* is not sound. Plenty of files carry a track that is
+    // digitally silent — anything rendered from stills, anything a tool wrote
+    // to keep a muxer happy — and the mixer check below reads "silence came
+    // out" as a broken mixer when it is a faithful render of nothing. So the
+    // source is measured once, here, and the check that cannot mean anything
+    // is skipped out loud rather than failed.
+    bool srcAudible = false;
+    if (srcHasAudio) {
+        AudioPeaks srcPeaks;
+        if (analyzeAudioPeaks(first, 64, srcPeaks))
+            for (float v : srcPeaks.rms)
+                if (v > 0.0005f) { srcAudible = true; break; }
+    }
     std::printf("\nsource: %s  %.2fs  %s\n", first.c_str(), srcDuration,
-                srcHasAudio ? "with audio" : "silent");
+                !srcHasAudio ? "no audio track"
+                             : srcAudible ? "with audio" : "audio track, but silent");
     if (srcDuration < kSpan + 1.0) {
         std::printf("source is too short for this test (needs %.1fs)\n", kSpan + 1.0);
         return 1;
@@ -417,7 +431,11 @@ int main(int argc, char* argv[]) {
         double loudest = 0;
         for (float v : peaks.rms) loudest = std::max(loudest, double(v));
         checkf(peaks.sampleRate == 48000, "at 48 kHz (%u)", peaks.sampleRate);
-        checkf(loudest > 0.0005, "and is not silence (peak rms %.4f)", loudest);
+        if (srcAudible)
+            checkf(loudest > 0.0005, "and is not silence (peak rms %.4f)", loudest);
+        else
+            std::printf("  SKIP  whether it is silence — the source is "
+                        "(pass a file with sound to check the mixer)\n");
     }
 
     // ── cancelling ─────────────────────────────────────────────────────────

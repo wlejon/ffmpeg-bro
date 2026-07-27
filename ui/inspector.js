@@ -1,20 +1,22 @@
 // The right-hand panel, and the chips beside the filename.
 //
-// Two halves with different jobs. The Media half always describes exactly one
-// file — the primary selection — because a codec list averaged over four clips
-// would be nonsense. The Properties half edits all of them at once, which is
-// where the care goes: a field whose selection disagrees shows blank rather
-// than one clip's value, because an inherited number that silently applies to
-// three other clips the moment you tab past it is the classic multi-select
-// trap.
+// It edits the whole selection at once, which is where the care goes: a field
+// whose selection disagrees shows blank rather than one clip's value, because
+// an inherited number that silently applies to three other clips the moment
+// you tab past it is the classic multi-select trap.
+//
+// What is *in* a file is no longer here. It was the Media half of this panel,
+// hanging off the primary selection because a panel about one clip can only
+// describe one file; it is the Sources stage now (ui/sources.js), which reads
+// every file on the timeline. The chips stay: they are about the clip in front
+// of you, which is what the rest of this panel is about.
 //
 // The panel is rebuilt from the model rather than kept in sync field by field.
 // It is a dozen controls, and a panel that can disagree with the picture is
 // worse than one that is redrawn.
 
 import { project } from './project.js';
-import { el, div, span, put } from './dom.js';
-import { clock, bytes, kbps } from './format.js';
+import { el, div, span, put, head } from './dom.js';
 
 let panel = {};
 let hooks = {};
@@ -60,15 +62,12 @@ export function showProperties() {
         panel.filename.textContent = 'no media';
         panel.filename.classList.add('dim');
         put(panel.chips, () => []);
-        put(panel.media, () => 'Nothing loaded.');
-        panel.media.classList.add('dim', 'pad');
         put(panel.transform, () => []);
         return;
     }
     panel.filename.textContent = clip.name;
     panel.filename.classList.remove('dim');
     showChips(clip.probe);
-    showInfo(clip.probe);
     showTransform(clip);
 }
 
@@ -83,51 +82,6 @@ function showChips(p) {
         p.video && p.video.fps && chip(p.video.fps.toFixed(3) + ' fps'),
         p.audio && chip(`${p.audio.codec} ${p.audio.channels}ch`),
     ]);
-}
-
-// ── what is in the file ────────────────────────────────────────────────────
-
-const head = (text) => div('section-head', text);
-
-function row(key, value) {
-    return div('row', [span(key, 'key'), span(String(value), 'val')]);
-}
-
-function showInfo(p) {
-    panel.media.classList.remove('dim', 'pad');
-    put(panel.media, () => [
-        head('Container'),
-        row('Format', p.format.longName || p.format.name),
-        row('Duration', clock(p.format.duration)),
-        row('Size', bytes(p.format.size)),
-        row('Bitrate', p.format.bitRate ? kbps(p.format.bitRate) : '—'),
-        row('Streams', String(p.streams.length)),
-        ...p.streams.map(streamRows),
-    ]);
-}
-
-function streamRows(s) {
-    const rows = [
-        head(`${s.kind} #${s.index}` + (s.language ? ` · ${s.language}` : '')),
-        row('Codec', s.codecLong || s.codec),
-        s.profile && row('Profile', s.profile),
-        s.duration && row('Duration', s.duration.toFixed(3) + ' s'),
-    ];
-    if (s.kind === 'video') {
-        rows.push(row('Size', `${s.width}×${s.height}` +
-            (s.rotation ? ` → ${s.displayWidth}×${s.displayHeight} (${s.rotation}°)` : '')));
-        rows.push(row('Frame rate', s.fps ? s.fps.toFixed(3) + ' fps' : '—'));
-        rows.push(row('Pixels', s.pixFmt || '—'));
-        if (s.sampleAspect && Math.abs(s.sampleAspect - 1) > 0.001)
-            rows.push(row('Pixel AR', s.sampleAspect.toFixed(4)));
-    } else if (s.kind === 'audio') {
-        rows.push(row('Rate', s.sampleRate + ' Hz'));
-        rows.push(row('Channels', `${s.channels} (${s.channelLayout || 'unknown'})`));
-        rows.push(row('Samples', s.sampleFmt || '—'));
-    }
-    if (s.bitRate) rows.push(row('Bitrate', kbps(s.bitRate)));
-    if (s.title) rows.push(row('Title', s.title));
-    return rows;
 }
 
 // ── the transform panel ────────────────────────────────────────────────────

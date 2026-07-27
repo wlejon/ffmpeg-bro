@@ -166,6 +166,17 @@ clip whose length came from the container would run past the end of its video.
 Matroska keeps only one duration for the whole file, and then that is what every
 stream reports.
 
+## Sources
+
+`I` (or the first card on the spine) is what is actually in the files: container,
+duration, size, bitrate, and then every stream — codec, profile, dimensions, frame
+rate, pixel format, colour tags, sample rate, channel layout. Straight out of
+`probe()`, which runs in-process, so it is there the moment a file lands rather than
+after a subprocess has been waited on.
+
+Every file on the timeline, once each, with the number of clips cut from it. Two clips
+from one file are one source, which is what ffmpeg would open.
+
 ## The timeline
 
 Video lanes under the ruler and one audio lane beneath them, the way an edit
@@ -447,6 +458,7 @@ upright, from the container's display matrix.
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ```
 
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
@@ -457,6 +469,11 @@ the control strip's geometry — that every icon button drew its icon, that the
 transport buttons are one width, that the transport is on the window's centre
 line and the zoom controls on the timeline's left edge — because a mistyped
 icon name or a stray width breaks none of the behaviour and all of the look.
+
+`ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
+the translation into a filter graph is a pure function of it, so the graph is checked
+against specs written out by hand — including the edits it must refuse rather than
+approximate.
 
 `exporttest` renders a timeline and then opens what it wrote, which is the only
 way to check the things nobody can see until the render is over: that a clip

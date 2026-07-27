@@ -7,7 +7,7 @@
 
 import { project, duration } from '../project.js';
 import * as viewer from '../viewer.js';
-import { settings } from './state.js';
+import { settings, outputFps } from './state.js';
 import { containerInfo } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
 
@@ -72,6 +72,9 @@ export function buildSpec(over = {}) {
         };
     });
 
+    // Not activeVideoCodec(): `over` is the preview's, and the reference render
+    // is this edit in a *different* container, so the fallback has to be that
+    // container's default rather than the one the settings are pointing at.
     const container = containerInfo(over.container || settings.container);
     const vcodec = over.videoCodec || settings.videoCodec ||
                    (container ? container.videoCodec : 'libx264');
@@ -83,7 +86,7 @@ export function buildSpec(over = {}) {
         path: over.path || settings.path || defaultPath(),
         width: outW,
         height: outH,
-        fps: over.fps || settings.fps || project.fps || 30,
+        fps: over.fps || outputFps(),
         start: over.start !== undefined ? over.start : r.start,
         end: over.end !== undefined ? over.end : r.end,
         videoCodec: vcodec,

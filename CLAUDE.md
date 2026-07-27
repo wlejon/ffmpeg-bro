@@ -89,8 +89,11 @@ The app exposes `globalThis.__ffmpegBro` (model, transport, and the operations) 
 `__ffmpegBroReady` purely so tests drive it through a stable surface instead of DOM ids
 that only exist while one clip is selected. Keep that in mind when renaming anything there.
 
-Note: `tests/perf_ui.js` is stale — it reaches for `document.getElementById('player')`,
-which no longer exists now that the viewer creates a `<video>` per clip.
+`tests/perf_ui.js` times seeks through the whole application — the same seeks
+`perf_test.cpp` measures inside the decoder, but arriving through a clip's `<video>` with
+the frame loop, viewer and timeline still running. It asks `__ffmpegBro.video()` for the
+element rather than an id, because the viewer creates a `<video>` per clip and there has
+been no one player element for some time.
 
 ## Architecture
 
@@ -157,9 +160,9 @@ layout mode. Everything else reads it and nothing else.
 
 **No markup in strings.** Structure that repeats lives in a `<template>` in `index.html`
 and is cloned; everything else is built with the helpers in `ui/dom.js` (`el`, `div`,
-`span`, `put`, `select`, `segmented`, `fromTemplate`). Two reasons beyond taste: a value
-interpolated into a template literal has to be escaped by hand and only ever is until
-someone forgets, and markup rebuilt as a string throws away its elements, so every
+`span`, `put`, `select`, `segmented`, `fromTemplate`, `row`, `head`). Two reasons beyond
+taste: a value interpolated into a template literal has to be escaped by hand and only
+ever is until someone forgets, and markup rebuilt as a string throws away its elements, so every
 listener has to be found and re-attached in a second pass — a pass that is free to drift
 out of step with the first. Controls here carry their own listeners, made in the same call
 that makes the control, so a control that moves between panels takes its behaviour with it.
@@ -181,7 +184,7 @@ new. What the fixes were, and what the code here still does about them:
   or not the engine minds — and dynamic elements are marked with classes (`.pv-ref`) or
   `data-f` attributes rather than ids, which is what lets several of them exist at once
   without inventing unique names. Tests select the same way:
-  `document.querySelector('#output [data-f="path"]')`.
+  `document.querySelector('#st-write [data-f="path"]')`.
 - **A `<span>` that is a flex item wrapped its own contents.** The seam between two inline
   boxes — the space in `<span>AAA</span><span> BBB</span>` — was counted by neither of them
   when their widths were summed, so the item's max-content width came out one space too
@@ -214,6 +217,11 @@ new. What the fixes were, and what the code here still does about them:
   `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
   colour tags and the conversion into them, the keyframe interval (two seconds here,
   250 frames in x264), and the scaler, which is a flag rather than an option.
+- `sources.js` — the Sources stage: every file on the timeline, once each, read out of
+  `probe()`. Distinct by path, so two clips cut from one file are one source — which is
+  what ffmpeg would open. **It is not driven by the selection**, which is why it is not
+  in `inspector.js` any more: a panel hanging off the primary selection can only ever
+  describe one file, and the stage's own card in the spine counts them all.
 - `app.js` — orchestration: transport, keyboard, drag/drop, the frame loop, the inspector.
 - `viewer.js` — the program monitor. Each clip is a `<video>` inside a crop window (a div
   with `overflow:hidden`). Fit/zoom/pan/crop/opacity/stacking are **style writes on those
@@ -224,13 +232,16 @@ new. What the fixes were, and what the code here still does about them:
 - `analysis.js` + `analyze-worker.js` — filmstrip and waveform via `bro.media` (see
   `../bro/docs/video-api.js`). Both are full-file decodes, so they run in one worker with
   one queue and the lanes fill in behind a responsive UI.
-- `inspector.js` — the right-hand panel and the chips in the title bar. Owns `subjects()`
+- `inspector.js` — the properties panel and the chips in the title bar. Owns `subjects()`
   and `common()`: what an edit applies to, and what a field shows when the selection
   disagrees. It edits the model and calls back for everything else, so it never has to
   know about the viewer, the timeline or the transport.
 - `export.js` + `export/` — the Output workspace. `export.js` is the wiring; the parts are
-  `state` (settings and the render slot), `capabilities` (what libavcodec says this build
-  can do), `options` (settings → `-key value`), `spec` (the model → what the renderer
+  `state` (settings, the render slot, and the three readers — `activeVideoCodec()`,
+  `activeAudioCodec()`, `outputFps()` — that say what the settings *come to*, because
+  a fallback chain written out at each point of use is a fallback chain that can
+  disagree with itself), `capabilities` (what libavcodec says this build can do),
+  `options` (settings → `-key value`), `spec` (the model → what the renderer
   wants), `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress`.
   `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **Two stages,
   not a modal**: what the picture is put through (Encode) and where it goes (Write) are
@@ -241,7 +252,11 @@ new. What the fixes were, and what the code here still does about them:
   Consequences: anything in the frame loop that measures a panel has to ignore a
   measurement of zero (most of the window is `display:none` at any moment), and
   `shell.goTo` is the only thing that switches — `export.js` offers `prepare()` and
-  `canLeave()` and has no opinion about what is on screen.
+  `canLeave()` and has no opinion about what is on screen. **`prepare()` runs for both
+  Encode and Write, so the half of it that reads the edit is gated on arriving from
+  outside** (`arrive()`): stepping between the two stages is one visit, and re-running
+  it moved the preview's sample point back to the playhead on the way back from setting
+  a filename.
 
   Four regions: the settings form (drawn from the selected encoder's reported capabilities,
   so it changes shape per codec), the A/B stage, the advanced option column, and the range
