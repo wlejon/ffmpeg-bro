@@ -1664,6 +1664,64 @@ if (!media) {
         same(document.querySelectorAll('#gr-nodes .gn-bad').length, 0,
              'and putting it back clears the marks');
     }
+
+    // A source is placed the same way a filter is, because a source *is* a
+    // filter — one with no inputs, which libavfilter says and nothing here
+    // writes down. What that makes reachable is the watermark.
+    console.log('\nplacing a source');
+    {
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+        document.getElementById('gr-add').dispatchEvent(
+            new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(160);
+        ok(!!document.querySelector('#gr-panel [data-f="padsearch"]'),
+           'Add node opens the palette over the canvas');
+        ok(!!document.querySelector('#gr-panel [data-filter="testsrc"]'),
+           'and it offers what libavfilter makes out of nothing');
+
+        const inputId = A.inputs.inputs[0].id;
+        const offered = document.querySelector(`#gr-panel [data-input="${inputId}"]`);
+        ok(!!offered, 'led by the files already loaded, because a file the graph reads is ' +
+                      'an -i with a demuxer and a window and not a movie= argument');
+
+        offered.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(300);
+        same(overlay.sourceInputs().join(), inputId, 'clicking one places it');
+        const rec = overlay.nodes()[0];
+        ok(!!boxOf(rec.id), 'and its card is on the screen');
+        const padText = document.querySelector(
+            `#gr-nodes [data-key="${rec.id}"] .gn-pad`);
+        ok(padText && /\[1:v\]/.test(padText.textContent),
+           `numbered after the clip's own input, which is what the chains say: ${
+               padText ? padText.textContent : 'no pad'}`);
+
+        // **The Sources stage has to stay true.** It claims to be every file
+        // this render opens, and an input with no clip cut from it is now an
+        // ordinary thing for a render to open.
+        A.drawSources();
+        pump(120);
+        const card = document.querySelector(`#src-list [data-input="${inputId}"] .src-used`);
+        ok(card && /read by the graph/.test(card.textContent),
+           `the Sources card says the graph reads it: ${card ? card.textContent : 'no card'}`);
+        const remove = document.querySelector('#src-detail [data-f="srcremove"]');
+        ok(remove && remove.disabled,
+           'and it cannot be removed out from under the node that names it');
+
+        // A `movie` filter is not an input, and that is exactly why it is
+        // accounted for separately rather than left off the list.
+        overlay.addNode('movie', { pos: ['C\\:/logo.png'] });
+        A.drawSources();
+        pump(120);
+        const adopt = document.querySelector('#src-list [data-f="srcadopt"]');
+        ok(!!adopt, 'a movie node’s file is listed as opened by the graph, with the offer ' +
+                    'to make it an input that has a demuxer and a window of its own');
+
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
 }
 
 console.log(`\nPASS ui_graph — ${checks} checks`);

@@ -493,7 +493,17 @@ export function derive(spec, sources, opts = {}) {
     const start = Number(spec.start) || 0;
     const end = Number(spec.end) || 0;
     const length = end - start;
-    if (!(length > 0)) return refuse('the range is empty');
+    // With nothing on the timeline the range has nothing to measure itself
+    // against, and the answer is the one chunks 5 and 6 already settled on for
+    // a still and an endless input: `-t` is the only thing that can say how long
+    // something with no length of its own is. Said here rather than left as
+    // "the range is empty", because that is a true sentence that tells nobody
+    // what to do about it.
+    if (!(length > 0))
+        return refuse(spec.clips.length
+            ? 'the range is empty'
+            : 'the range is empty — with nothing on the timeline, a source’s own ' +
+              'duration (d) is the only thing that says how long a render would be');
 
     const W = Math.round(spec.width);
     const H = Math.round(spec.height);

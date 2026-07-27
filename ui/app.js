@@ -981,7 +981,8 @@ shell.initShell({
         // only when neither has anything to say.
         if ((id === 'encode' || id === 'write') &&
             !project.clips.length && !exporter.range().length)
-            return 'Nothing on the timeline to encode, and nothing in the graph either';
+            return 'Nothing on the timeline, and nothing in the graph says how long a ' +
+                   'render would be — give a source a duration (d), or add a file';
         return null;
     },
     changed: (id, leaving) => {
