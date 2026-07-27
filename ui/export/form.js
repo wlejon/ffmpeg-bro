@@ -219,8 +219,12 @@ function describeMuxer(m) {
     if (m.device) bits.push('a device');
     else if (m.noFile) bits.push('writes through a protocol');
     if (m.stills) bits.push('pictures only');
-    if (!m.videoCodecs || !m.videoCodecs.length) bits.push('no video encoder here fits it');
-    if (!m.audioCodecs || !m.audioCodecs.length) bits.push('no audio encoder here fits it');
+    // A muxer that has not been taught to answer `avformat_query_codec` is a
+    // third case and worth saying out loud: nothing here is filtering its
+    // codec list, and it will refuse at write_header if it cannot take one.
+    if (!m.answersCodecs) bits.push('does not say which codecs it takes');
+    else if (!m.videoCodecs.length) bits.push('no video encoder here fits it');
+    else if (!m.audioCodecs.length) bits.push('no audio encoder here fits it');
     else if (!fits(m)) bits.push('will not hold what this render is set to');
     return bits.join(' · ');
 }
@@ -257,12 +261,22 @@ function muxerRows(list) {
     // Searching looks at everything. A facet is a way of not having to name
     // what you want; once you have named it, narrowing the answer to a group
     // you happened to be standing in would hide the entry you asked for.
-    const matching = term
+    let matching = term
         ? muxers().filter((m) =>
               m.name.toLowerCase().indexOf(term) >= 0 ||
               (m.longName || '').toLowerCase().indexOf(term) >= 0 ||
               m.extensions.some((e) => e.indexOf(term) >= 0))
         : muxers().filter((m) => inFacet(m, formatFacet));
+
+    // Under "Fits", the ones that *said* yes come before the ones that never
+    // answered. That is not a ranking of which muxers are good — it is the
+    // distinction the group is about, and without it the list opens on `avm2`
+    // and `crc`, which are in it only because they have never been taught to
+    // answer the question.
+    if (!term && formatFacet === 'fits') {
+        matching = matching.filter((m) => m.answersCodecs)
+                           .concat(matching.filter((m) => !m.answersCodecs));
+    }
     const shown = matching.slice(0, MUXER_LIMIT);
 
     const out = [div('ex-note dim', term
@@ -275,7 +289,8 @@ function muxerRows(list) {
         if (m.device) tail.push('device');
         else if (m.noFile) tail.push('no file');
         if (m.stills) tail.push('pictures');
-        if (!fits(m)) tail.push('not for these codecs');
+        if (!m.answersCodecs) tail.push('does not say');
+        else if (!fits(m)) tail.push('not for these codecs');
         out.push(el('button', {
             cls: 'ex-fmt-row' + (m.name === settings.container ? ' on' : '') +
                  (fits(m) ? '' : ' misfit'),
@@ -612,14 +627,27 @@ function bagRows(all, bag, searchText, hint) {
     return out;
 }
 
+/// The bounds, where they are worth stating.
+///
+/// libav gives every unbounded numeric option the whole of its type as a
+/// range, so a muxer's `movflags` reports ±2147483648 — which is not a range,
+/// it is the absence of one, and printing it at that length pushes the column
+/// about for no information at all. The graph panel already learnt this on
+/// libavfilter's tables; the muxers' are worse, because most of their options
+/// are flags.
+function rangeOf(o) {
+    if (!o.hasRange || o.type === 'enum' || o.type === 'flags') return '';
+    if (Math.abs(Number(o.min)) > 1e9 && Math.abs(Number(o.max)) > 1e9) return '';
+    return `[${o.min}…${o.max}]`;
+}
+
 function optionRow(o, bag) {
     const node = fromTemplate('tpl-option');
     const cur = bag[o.name] !== undefined ? String(bag[o.name]) : '';
 
     node.querySelector('.opt-name').textContent = o.name;
     node.querySelector('.opt-type').textContent = o.type;
-    node.querySelector('.opt-range').textContent =
-        o.hasRange && o.type !== 'enum' ? `[${o.min}…${o.max}]` : '';
+    node.querySelector('.opt-range').textContent = rangeOf(o);
     node.querySelector('.ex-opt-help').textContent = o.help || '';
     if (cur !== '') node.classList.add('set');
 

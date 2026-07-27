@@ -756,6 +756,7 @@ JSValue muxersToJs(JSContext* ctx) {
         JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, m.device));
         JS_SetPropertyStr(ctx, o, "videoCodecs", stringsToJs(ctx, m.videoCodecs));
         JS_SetPropertyStr(ctx, o, "audioCodecs", stringsToJs(ctx, m.audioCodecs));
+        JS_SetPropertyStr(ctx, o, "answersCodecs", JS_NewBool(ctx, m.answersCodecs));
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;

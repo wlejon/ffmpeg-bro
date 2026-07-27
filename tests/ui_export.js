@@ -752,6 +752,161 @@ console.log('\nthe Write stage is the output’s stream list');
     pump(40);
 }
 
+// ── which muxer ────────────────────────────────────────────────────────────
+//
+// The container control was a four-item menu drawn from a four-entry table in
+// C++, and everything else this build can write was unreachable. It is now a
+// picker over every muxer libavformat has, which is a hundred and eighty — so
+// what is being checked here is that a hundred and eighty is navigable without
+// a list of the good ones anywhere: facets that are queries, a search over
+// name, description and extension, and a choice that reaches the renderer as
+// `-f` rather than as a filename somebody hopes will be guessed correctly.
+
+console.log('\nchoosing a muxer');
+{
+    A.shell.goTo('write');
+    pump(60);
+
+    ok(bro.ffmpeg.muxers.length > 100,
+       `${bro.ffmpeg.muxers.length} muxers to pick from, which is why it is not a <select>`);
+    f('container-open').click();
+    pump(40);
+    ok(!!f('fmtsearch'), 'opening it gives a search box');
+    const list = (sel) => Array.prototype.slice.call(qq(sel));
+    const facets = list('[data-facet]');
+    ok(facets.length >= 5, `and the groupings, which are queries: ${
+        facets.map((b) => b.textContent).join(' ')}`);
+
+    // The default group is the one that matters: the muxers that will hold
+    // what this render is set to encode. Every row in it is one
+    // avformat_query_codec said yes to, so none of them is marked as a misfit.
+    const fitting = list('#st-write .ex-fmt-row');
+    ok(fitting.length > 3, `"Fits" offers ${fitting.length} of them for x264 + aac`);
+    ok(fitting.every((r) => r.className.indexOf('misfit') < 0),
+       'and not one of them would be refused at write_header');
+    ok(fitting.some((r) => r.getAttribute('data-muxer') === 'mp4'),
+       'mp4 among them');
+    ok(!fitting.some((r) => r.getAttribute('data-muxer') === 'webm'),
+       'and WebM not, because it will not hold either of these codecs');
+
+    // Search reaches everything, group or no group — a facet is a way of not
+    // having to name what you want, and once it has been named, filtering the
+    // answer down to the group you were standing in would hide it.
+    f('fmtsearch').value = 'mpeg-ts';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    ok(!!q('[data-muxer="mpegts"]'),
+       'searching libavformat’s own descriptions finds MPEG-TS by what it is called');
+
+    // "mkv" is the extension the four-entry table used to call this format
+    // and is not the name of anything in libavformat, so finding Matroska by
+    // it is the search reaching extensions rather than only names.
+    f('fmtsearch').value = 'mkv';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    ok(!!q('[data-muxer="matroska"]'),
+       'an extension finds the muxer that writes it, though nothing is called mkv');
+
+    f('fmtsearch').value = 'mpegts';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    q('[data-muxer="mpegts"]').click();
+    pump(60);
+
+    same(S.container, 'mpegts', 'picking one sets the muxer by name');
+    ok(/\.ts$/.test(S.path), `and the filename follows it (${S.path})`);
+    const tsSpec = A.exporter.buildSpec();
+    same(tsSpec.format, 'mpegts', 'the renderer is told which muxer, by name');
+    ok(A.command.currentCommand().indexOf('-f mpegts') > 0,
+       'and the command says -f mpegts, because that is what is being run');
+
+    // `avformat_query_codec` has three answers and mpegts gives the third:
+    // it has neither a query function nor a tag table, so it says nothing
+    // about H.264 rather than saying no. Reading the shrug as a refusal is how
+    // a picker comes to insist MPEG-TS will not hold H.264 — so nothing is
+    // filtered here and the codec in hand is left alone.
+    same(S.videoCodec, 'libx264',
+         'a muxer that does not answer for a codec does not have it taken away');
+    ok(bro.ffmpeg.muxers.find((m) => m.name === 'mpegts').answersCodecs === false,
+       'and the fact that it did not answer is reported rather than guessed at');
+
+    // A muxer that *does* answer narrows the codec list — and the ones it will
+    // not take are still listed, marked, because hiding them hides the reason
+    // the one you wanted is missing.
+    A.shell.goTo('encode');
+    pump(40);
+    const webm = bro.ffmpeg.muxers.find((m) => m.name === 'webm');
+    ok(webm.answersCodecs && webm.videoCodecs.indexOf('libx264') < 0,
+       'WebM answers, and its answer about x264 is no');
+    const vcodecs = list('[data-f="vcodec"] option');
+    ok(vcodecs.length > 10, `the codec menu lists every offered encoder (${vcodecs.length})`);
+    A.shell.goTo('write');
+    pump(40);
+
+    // ── the muxer's own options ────────────────────────────────────────────
+    //
+    // The same mechanism as the encoder's advanced column, over the muxer's
+    // AVClass instead of the encoder's, applied by the same rule: an unknown
+    // key is an error at write_header rather than a setting quietly ignored.
+
+    ok(!!f('formatopts'), 'the muxer states how many options it has');
+    f('formatopts').click();
+    pump(40);
+    ok(el('ex-format-opts').className.indexOf('hidden') < 0,
+       'and they open in a column of their own');
+
+    f('fmtoptsearch').value = 'service_id';
+    f('fmtoptsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    const svc = q('#ex-format-opts [data-opt="mpegts_service_id"]');
+    ok(!!svc, 'searching finds the muxer’s own options, not the encoder’s');
+    svc.value = '17';
+    svc.dispatchEvent(new Event('change'));
+    pump(40);
+    same(String(S.extraFormat.mpegts_service_id), '17', 'setting one reaches the settings');
+    same(String(A.exporter.buildSpec().formatOptions.mpegts_service_id), '17',
+         'and the spec the renderer is handed');
+    ok(A.command.currentCommand().indexOf('-mpegts_service_id 17') > 0,
+       'and the command prints it, because it reaches the muxer');
+
+    // Written, and opened again — the whole point of a picker over a hundred
+    // and eighty is that what it offers can actually be written.
+    {
+        const tsPath = bro.appDir + '/../out/ui-mpegts.ts';
+        const spec = A.exporter.buildSpec({ width: 320, height: 180, fps: 25, end: 0.4,
+                                            path: tsPath });
+        let started = '';
+        try { bro.ffmpeg.render.start(spec); } catch (e) { started = String(e); }
+        ok(!started, `the renderer took it (${started || 'accepted'})`);
+        if (!started) {
+            waitFor('the mpegts render', () => bro.ffmpeg.render.poll().state !== 'running',
+                    60000);
+            const st = bro.ffmpeg.render.poll();
+            ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+            const probed = bro.ffmpeg.probe(tsPath);
+            ok(probed.format.name.indexOf('mpegts') >= 0,
+               `and what came out is an MPEG-TS (${probed.format.name})`);
+        }
+    }
+
+    // A muxer's options are its own. Carrying mpegts_service_id into Matroska
+    // would stop the render dead at write_header, where an unknown key is an
+    // error rather than a shrug — so changing the muxer empties the bag.
+    f('container-open').click();
+    pump(40);
+    f('fmtsearch').value = 'mp4';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    q('[data-muxer="mp4"]').click();
+    pump(60);
+    same(S.container, 'mp4', 'back to mp4');
+    same(Object.keys(S.extraFormat).length, 0,
+         'and the previous muxer’s options did not come with it');
+    ok(/\.mp4$/.test(S.path), `the filename came back too (${S.path})`);
+    A.shell.goTo('encode');
+    pump(40);
+}
+
 // ── the range ──────────────────────────────────────────────────────────────
 
 console.log('\nwriting part of the timeline');

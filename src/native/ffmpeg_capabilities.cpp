@@ -653,24 +653,46 @@ std::vector<MuxerOption> availableMuxers() {
                 o.stills = d && (d->props & AV_CODEC_PROP_INTRA_ONLY) != 0;
             }
 
-            // Each encoder already worked out which muxers will hold it;
-            // reading it back from there keeps the two answers from
-            // disagreeing, and costs one pass over two short lists instead of
-            // a second query_codec sweep.
-            for (const auto& v : video)
-                if (std::find(v.containers.begin(), v.containers.end(), o.name) !=
-                    v.containers.end())
-                    o.videoCodecs.push_back(v.id);
-            for (const auto& a : audio)
-                if (std::find(a.containers.begin(), a.containers.end(), o.name) !=
-                    a.containers.end())
-                    o.audioCodecs.push_back(a.id);
+            // **`avformat_query_codec` has three answers, not two**, and over
+            // a hundred and eighty muxers the third one matters. Yes and no
+            // come from the muxer's `query_codec` or its tag table; a muxer
+            // with neither — mpegts is one — returns AVERROR_PATCHWELCOME for
+            // everything except the three codecs it names as its defaults,
+            // which means *not taught to answer* and not *no*. Reading that as
+            // "no" is how a picker comes to insist that MPEG-TS will not hold
+            // H.264.
+            //
+            // So a muxer that does not answer is recorded as not answering and
+            // offered everything: ffmpeg would let you try, and the muxer's own
+            // refusal at write_header is a better place to be told than a menu
+            // that was wrong. Anything drawing this can say which kind of
+            // answer it has.
+            auto fill = [&](const std::vector<CodecOption>& from,
+                            std::vector<std::string>* into) {
+                bool answered = true;
+                for (const auto& c : from) {
+                    const AVCodec* enc = avcodec_find_encoder_by_name(c.id.c_str());
+                    if (!enc) continue;
+                    const int rc = avformat_query_codec(ofmt, enc->id, FF_COMPLIANCE_NORMAL);
+                    if (rc == 1) into->push_back(c.id);
+                    else if (rc < 0) answered = false;
+                }
+                if (!answered) {
+                    into->clear();
+                    for (const auto& c : from) into->push_back(c.id);
+                }
+                return answered;
+            };
+            const bool answeredVideo = fill(video, &o.videoCodecs);
+            const bool answeredAudio = fill(audio, &o.audioCodecs);
+            o.answersCodecs = answeredVideo && answeredAudio;
 
             // What to default to: the muxer's own choice where this build can
             // encode it and the muxer will take it, and otherwise the first
-            // thing on the menu that fits. `mpegts` asks for MPEG-2 video,
-            // which this build has no encoder for, and answering "nothing"
-            // there would be a container that cannot be written.
+            // thing on the menu that fits. `webm` asks for VP9 and gets it;
+            // `bin` asks for nothing this build can encode, and answering with
+            // nothing there is right — it is a container you cannot write, and
+            // the UI says so rather than inventing a codec for it.
             auto prefer = [](const std::vector<std::string>& fits, const char* want) {
                 if (want && *want) {
                     const AVCodec* enc = avcodec_find_encoder_by_name(want);

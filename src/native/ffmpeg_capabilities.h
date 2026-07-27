@@ -196,6 +196,22 @@ struct MuxerOption {
     // write_header, long after the choice was made.
     std::vector<std::string> videoCodecs;
     std::vector<std::string> audioCodecs;
+
+    /// Whether the two lists above are an *answer*.
+    ///
+    /// `avformat_query_codec` has three outcomes and only two of them are yes
+    /// and no: a muxer with neither a `query_codec` function nor a codec tag
+    /// table returns AVERROR_PATCHWELCOME, which means "not taught to answer".
+    /// Over four well-known containers that never came up; over a hundred and
+    /// eighty it does — mpegts answers for the three codecs it names as
+    /// defaults and shrugs at everything else, so reading the shrug as "no" is
+    /// how a picker comes to insist MPEG-TS will not hold H.264.
+    ///
+    /// False means the lists above are *everything offered* rather than a
+    /// filtered set, because ffmpeg would let you try and the muxer's own
+    /// refusal at write_header is a better place to find out than a menu that
+    /// was wrong. Anything drawing this should say which kind of answer it has.
+    bool answersCodecs = true;
 };
 
 /// Every muxer this build links, libavformat's own order. Includes libavdevice's
