@@ -66,6 +66,23 @@ console.log('\npads');
          'a fixed filter is what libavfilter declares');
     same(JSON.stringify(padsOf('color')), '{"ins":[],"outs":["v"]}',
          'a source reads nothing');
+    same(JSON.stringify(padsOf('testsrc')), '{"ins":[],"outs":["v"]}',
+         'and so does every other generator libavfilter has');
+    same(JSON.stringify(padsOf('sine')), '{"ins":[],"outs":["a"]}',
+         'including the ones that make sound');
+
+    // `movie` is the second filter whose pads are a function of an option and
+    // not of a count — the option is a *string* in ffmpeg's stream-specifier
+    // syntax, so the general rule finds nothing to count and leaves the node
+    // with no output pads at all, which is a node that cannot be wired.
+    same(JSON.stringify(padsOf('movie')), '{"ins":[],"outs":["v"]}',
+         'movie is one picture unless it is told otherwise');
+    same(JSON.stringify(padsOf('amovie')), '{"ins":[],"outs":["a"]}',
+         'and amovie is one sound');
+    same(padsOf('movie', { streams: 'dv+da' }).outs.join(''), 'va',
+         'a stream list is as many pads as it names');
+    same(padsOf('movie', { s: 'a:0+v:0' }).outs.join(''), 'av',
+         'in the order it names them, by the alias as well as the name');
     same(padsOf('nosuchfilterhere'), null,
          'and a filter this build does not have gets no shape invented for it');
 
@@ -850,6 +867,126 @@ console.log('\na node on no wire, wired by hand');
     const run = globalThis.__ffmpegBro.renderGraph(spec, null, { overlay: overlay.current() });
     ok(run.ok && /overlay=16:16/.test(run.filterGraph),
        'and so does the graph the renderer is handed');
+}
+
+console.log('\na node that produces something out of nothing');
+{
+    overlay.clear();
+    // Nothing on the timeline at all. That used to be a refusal and is now a
+    // render: `ffmpeg -f lavfi -i testsrc -t 5 out.mp4` is a thing people do
+    // every day, and a timeline is one view of a media document rather than the
+    // only thing a render can be made of.
+    const bare = { width: 640, height: 360, fps: 25, start: 0, end: 2,
+                   audio: true, clips: [] };
+    same(derive(bare, null, { overlay: overlay.current() }).ok, false,
+         'an empty timeline with an empty graph is still nothing to render');
+
+    // What counts is a node that *produces*. An `hflip` nobody has wired cannot
+    // be the whole of a render, and deriving a graph around it would report
+    // five problems where "there is nothing to render" is the true sentence.
+    const flip = overlay.addNode('hflip');
+    same(derive(bare, null, { overlay: overlay.current() }).ok, false,
+         'and an hflip nobody wired is not a source however alone it is');
+    overlay.removeInsert(flip.id);
+
+    const src = overlay.addNode('testsrc', { params: { size: '640x360', rate: '25' } });
+    const d = derive(bare, null, { overlay: overlay.current() });
+    ok(d.ok, `a graph rooted in a generator derives with no clips: ${d.reason || ''}`);
+    ok(!d.graph.byAnchor('base'),
+       'and there is no derived canvas in the way — a black rectangle nothing is laid ' +
+       'over is a source nothing reads the moment you wire your own to the sink');
+    ok(d.problems.some((p) => /nothing is wired to video out/.test(p.reason)),
+       'so the sink is empty until you fill it');
+
+    overlay.wire(src.id, 0, 'out:v', 0);
+    const wired = derive(bare, null, { overlay: overlay.current() });
+    same(wired.problems.length, 0, `and then it runs: ${
+        wired.problems.map((p) => p.reason).join(' | ')}`);
+    const chain = print(wired.graph).chains.join(';');
+    ok(/^testsrc=/.test(chain), `the generator is the whole filtergraph: ${chain}`);
+    ok(/size=640x360/.test(chain), 'configured with the size the render is');
+    ok(!!print(wired.graph).video, 'and the muxer has a pad to map');
+
+    const run = globalThis.__ffmpegBro.renderGraph(bare, null, { overlay: overlay.current() });
+    ok(run.ok && /testsrc/.test(run.filterGraph),
+       `the renderer is handed it too: ${run.reason || ''}`);
+    same(run.filterInputs.length, 0, 'and it opens no files at all');
+    overlay.clear();
+}
+
+console.log('\na file the graph reads that no clip is cut from');
+{
+    overlay.clear();
+    // The watermark, which is what this whole shape is for. **It is an `-i`,
+    // not a `movie=`** — everything that decides how a file opens belongs to
+    // the input, and the row on the Sources stage is already there.
+    const spec = oneClip();
+    spec.clips[0].input = 0;
+    spec.inputs = [{ path: 'a.mp4' }, { path: 'logo.png' }];
+    spec.inputInfo = [
+        { id: 'in1', name: 'a.mp4', path: 'a.mp4', streams: ['v', 'a'] },
+        { id: 'in2', name: 'logo.png', path: 'logo.png', streams: ['v'] },
+    ];
+
+    const logo = overlay.addSource('in2');
+    const mark = overlay.addNode('overlay', { pos: ['16', '16'] });
+    overlay.wire('composite/overlay:7', 0, mark.id, 0);
+    overlay.wire(logo.id, 0, mark.id, 1);
+    overlay.wire(mark.id, 0, 'out:v', 0);
+
+    const d = derive(spec, null, { overlay: overlay.current() });
+    ok(d.ok, `a watermark derives: ${d.reason || ''}`);
+    same(d.problems.length, 0, `and nothing is wrong with it: ${
+        d.problems.map((p) => p.reason).join(' | ')}`);
+
+    const node = d.graph.node(logo.id);
+    ok(!!node && node.kind === 'input', 'the source is an input node — a file, not a filter');
+    same(node.index, 1, 'numbered after the clips’, because the graph numbers the pads it reads');
+    same(node.input, 1, 'and carrying which of the document’s inputs it is, which is what ' +
+                        'the demuxer, the option bag and the window travel on');
+    same(node.outs.length, 1, 'with a pad per stream the probe found and no more');
+
+    const p = print(d.graph);
+    same(p.inputs[1], 'logo.png', 'the printed command opens it');
+    same(p.inputRefs[1], 1, 'as the input it is, rather than as a bare path');
+    ok(/\[1:v\]/.test(p.chains.join(';')), `and a chain reads its pad: ${p.chains.join(';')}`);
+
+    const run = globalThis.__ffmpegBro.renderGraph(spec, null, { overlay: overlay.current() });
+    ok(run.ok && run.filterInputs.some((i) => i.label === '1:v' && i.input === 1),
+       'and the renderer is told which -i feeds [1:v]');
+    ok(!run.filterInputs.some((i) => i.label === '1:a'),
+       'one entry per pad that is *read* — a logo opened for its picture is not ' +
+       'decoded for sound it has not got');
+
+    // The Sources stage's whole claim is that it is every file this render
+    // opens, so it has to be able to ask.
+    same(overlay.sourceInputs().join(), 'in2',
+         'and the Sources stage can ask which inputs the graph reads on its own account');
+
+    // An input that is taken off the Sources stage takes the node with it —
+    // the opposite of the rule for a clip out of range, because a removed input
+    // is gone and its id is never handed out again.
+    overlay.retain([7], ['in1']);
+    same(overlay.nodeCount(), 1, 'removing the input removes the node that named it');
+    same(overlay.wires().length, 2, 'and the wires that ended on it');
+    overlay.clear();
+}
+
+console.log('\na source node is not written to disk');
+{
+    // There is still no project file, so the inputs themselves do not survive a
+    // restart and their ids start at one again every run. A restored `in3`
+    // would name whichever file happened to be third next time, which is worse
+    // than losing the node.
+    overlay.clear();
+    const keep = overlay.addNode('hflip');
+    overlay.addSource('in2');
+    overlay.wire('clip:7/format', 0, keep.id, 0);
+    overlay.restore();
+    same(overlay.nodeCount(), 1, 'the filter comes back');
+    same(overlay.nodes()[0].filter, 'hflip', 'as itself');
+    same(overlay.sourceInputs().length, 0, 'and the node naming an input does not');
+    overlay.clear();
 }
 
 console.log('\na wire taken off is remembered as a cut');

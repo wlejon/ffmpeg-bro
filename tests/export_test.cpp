@@ -1186,6 +1186,190 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ── a graph that produces something out of nothing ─────────────────────
+    //
+    // Every render above starts from a file on a timeline. libavfilter has
+    // thirty filters that read nothing at all — `color`, `testsrc`,
+    // `smptebars`, `sine`, `anullsrc` — and `ffmpeg -f lavfi -i testsrc -t 5
+    // out.mp4` is a thing people do every day, so a render with no clip in it
+    // is a render this application has to be able to perform. Nothing in the
+    // job needs to change for that: `startExport` already treats a graph as a
+    // render on its own account, and a buffersink asked for a frame gets one
+    // without anything having been pushed in. What is checked here is that it
+    // is true, because it is the sort of thing that stops being true silently.
+    {
+        std::printf("\na render nothing on the timeline accounts for\n");
+
+        const std::string outS = "out/export-graph-source.mp4";
+        char text[512];
+        std::snprintf(text, sizeof(text),
+            "color=c=red:s=%dx%d:r=%g,format=rgba[vout];"
+            "sine=frequency=440:sample_rate=48000[aout]",
+            kW, kH, kFps);
+
+        ExportSettings ss2 = baseSettings(outS);
+        ss2.endTime = 0.8;
+        ss2.filterGraph = text;
+        // No `filterInputs` and no clips: nothing here opens a file.
+        st = render(ss2, {});
+        checkf(st.state == ExportStatus::State::Done,
+               "a graph rooted only in generators renders with no clips at all (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            const ProbeResult os = probeMedia(outS);
+            const StreamSummary* ov = nullptr;
+            bool hasSound = false;
+            for (const auto& s2 : os.streams) {
+                if (s2.kind == "video" && !ov) ov = &s2;
+                if (s2.kind == "audio") hasSound = true;
+            }
+            check(os.ok && ov, "and the result opens as media");
+            if (ov)
+                checkf(ov->width == kW && ov->height == kH,
+                       "at the size the render asked for (%dx%d)", ov->width, ov->height);
+            check(hasSound, "with the sound the graph made as well as the picture");
+
+            // Red, which no `color=c=red` can fail to be — this is the one
+            // check in the file whose expected value is known exactly, because
+            // for once the content is not somebody's footage.
+            VideoPipeline v;
+            if (v.open(outS)) {
+                v.advanceTo(static_cast<TimeNs>(0.4 * 1e9));
+                if (v.hasFrame()) {
+                    const auto& rgba = v.currentRgba();
+                    const size_t at = (size_t(kH / 2) * kW + kW / 2) * 4;
+                    if (at + 2 < rgba.size())
+                        checkf(rgba[at] > 180 && rgba[at + 1] < 80 && rgba[at + 2] < 80,
+                               "and it is the colour it was told to be (%d,%d,%d)",
+                               rgba[at], rgba[at + 1], rgba[at + 2]);
+                    else
+                        check(false, "the generated frame has pixels in it");
+                } else {
+                    check(false, "the generated render decodes");
+                }
+            } else {
+                check(false, "the generated render opens for decoding");
+            }
+
+            AudioPeaks tone;
+            if (analyzeAudioPeaks(outS, 32, tone)) {
+                bool loud = false;
+                for (float v2 : tone.rms) if (v2 > 0.0005f) { loud = true; break; }
+                check(loud, "and the tone the graph generated is audible in it");
+            }
+        }
+    }
+
+    // ── a second picture the graph opened for itself ───────────────────────
+    //
+    // A watermark, a logo bug and an insert are all one shape: a file the graph
+    // reads that nothing on the timeline is cut from, scaled and laid over the
+    // composite. In this application that is a second `-i` rather than a
+    // `movie=` — see ui/graph/derive.js for the argument — so what arrives here
+    // is an extra `ExportGraphInput` and a chain that reads its pad.
+    //
+    // The check is the same edit rendered twice, with and without the mark: the
+    // corner it was placed in has to differ and everything else has to be the
+    // same picture. That is content-independent in the way this whole file
+    // insists on, and it is a stronger statement than "the corner is a
+    // particular colour" — it says the overlay landed exactly where it was told
+    // and nowhere else. `negate` is on the mark's chain so that the two renders
+    // differ even if the two files happen to look alike there.
+    {
+        std::printf("\na second picture the graph opened for itself\n");
+
+        const int markW = kW / 4, markH = kH / 4;
+        const int markX = 16, markY = 16;
+        char body[1024];
+        std::snprintf(body, sizeof(body),
+            "color=c=black:s=%dx%d:r=%g:d=%g[base];"
+            "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,format=rgba[main];"
+            "[base][main]overlay=0:0:eof_action=pass",
+            kW, kH, kFps, 0.8,
+            clipsA[0].inPoint, clipsA[0].inPoint + 0.8, kW, kH);
+
+        char plain[1200];
+        std::snprintf(plain, sizeof(plain), "%s[vout]", body);
+
+        char marked[1600];
+        std::snprintf(marked, sizeof(marked),
+            "%s[canvas];"
+            "[1:v]trim=start=0:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,negate,format=rgba[mark];"
+            "[canvas][mark]overlay=%d:%d:eof_action=pass[vout]",
+            body, 0.8, markW, markH, markX, markY);
+
+        const std::string outP = "out/export-graph-plain.mp4";
+        const std::string outM = "out/export-graph-mark.mp4";
+
+        ExportSettings sp = baseSettings(outP);
+        sp.endTime = 0.8;
+        sp.includeAudio = false;
+        sp.filterGraph = plain;
+        sp.filterInputs = {{"0:v", first, "v"}};
+        sp.filterInputs[0].from = clipsA[0].inPoint;
+        st = render(sp, {});
+        checkf(st.state == ExportStatus::State::Done,
+               "the composite renders on its own (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        ExportSettings sm2 = baseSettings(outM);
+        sm2.endTime = 0.8;
+        sm2.includeAudio = false;
+        sm2.filterGraph = marked;
+        // Two inputs, and the second is a file no clip is cut from — which is
+        // the whole point: `filterInputs` is one entry per pad that is read,
+        // and nothing but the graph says this file is opened at all.
+        sm2.filterInputs = {{"0:v", first, "v"}, {"1:v", second, "v"}};
+        sm2.filterInputs[0].from = clipsA[0].inPoint;
+        st = render(sm2, {});
+        checkf(st.state == ExportStatus::State::Done,
+               "and so does the same graph with a second file laid over it (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            VideoPipeline a, b;
+            if (a.open(outP) && b.open(outM)) {
+                a.advanceTo(static_cast<TimeNs>(0.4 * 1e9));
+                b.advanceTo(static_cast<TimeNs>(0.4 * 1e9));
+                if (a.hasFrame() && b.hasFrame()) {
+                    const auto& fa = a.currentRgba();
+                    const auto& fb = b.currentRgba();
+                    // Mean absolute difference per channel, inside the mark and
+                    // outside it. Two x264 passes over near-identical pictures
+                    // are not bit-identical, so "outside" is a small number
+                    // rather than zero and the check is on the gap.
+                    const auto diff = [&](int x0, int y0, int x1, int y1, bool inside) {
+                        double sum = 0;
+                        int n = 0;
+                        for (int y = 0; y < kH; ++y)
+                            for (int x = 0; x < kW; ++x) {
+                                const bool in = x >= x0 && x < x1 && y >= y0 && y < y1;
+                                if (in != inside) continue;
+                                const size_t i = (size_t(y) * kW + x) * 4;
+                                if (i + 2 >= fa.size() || i + 2 >= fb.size()) continue;
+                                for (int c = 0; c < 3; ++c, ++n)
+                                    sum += std::fabs(double(fa[i + c]) - fb[i + c]);
+                            }
+                        return n ? sum / n : -1.0;
+                    };
+                    const double in = diff(markX, markY, markX + markW, markY + markH, true);
+                    const double out = diff(markX, markY, markX + markW, markY + markH, false);
+                    checkf(in > 12.0 && in > out * 3.0,
+                           "the corner the mark was placed in is a different picture "
+                           "(%.1f vs %.1f per channel)", in, out);
+                    checkf(out < 12.0,
+                           "and the rest of the canvas is the picture it was without it "
+                           "(%.1f per channel)", out);
+                } else {
+                    check(false, "both renders decode for comparison");
+                }
+            } else {
+                check(false, "both renders open for comparison");
+            }
+        }
+    }
+
     // ── what the render said ───────────────────────────────────────────────
     //
     // A render used to be able to report four numbers and, on failure, one
