@@ -245,6 +245,14 @@ Six traps when writing headless tests here:
   to do.
 
 
+One trap on the native side is worth the same billing. **A network destination is tested
+against a real listener, in this process**: a UDP socket bound on the loopback with
+`avio_open2(..., AVIO_FLAG_READ)` *before* the render starts, drained on a thread with the
+protocol's own `timeout` option so the read gives up rather than outliving the job. That is
+not ceremony — writing to a port nobody is on **succeeds silently**, so a test that only
+checked the render's exit status would pass with the protocol plumbing entirely broken.
+`tests/export_test.cpp` requires what arrives to start with an MPEG-TS sync byte.
+
 The app exposes `globalThis.__ffmpegBro` (model, transport, and the operations) and
 `__ffmpegBroReady` purely so tests drive it through a stable surface instead of DOM ids
 that only exist while one clip is selected. Keep that in mind when renaming anything there.
@@ -288,7 +296,7 @@ them to change alone:
 | `export_copy.*` | **the packet path** — streams that are not made at all, and where a copy can start |
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
-| `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio**, plus the three stages that are neither: forced keyframes, two-pass, and the packet chain |
+| `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio**, plus the three stages that are neither: forced keyframes, two-pass, and the packet chain. Also **every destination the muxer opens**: one writer is one muxer, which is not the same thing as one file |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
 | `ffmpeg_capabilities.*` | what this build can write, read, reach, capture and put a picture through, asked of libav* |
 | `ffmpeg_report.*` | **what a render said** — libav's log, and the values filters attach to frames |
@@ -661,6 +669,60 @@ option bag merged on top, an encoder, a destination, or `discard` for `-f null -
   intermediate file and pass two read it (vidstab itself is a `--enable-` this build
   lacks), and with the encoder, by requiring a real two-pass ABR render to hit its
   bitrate target more closely than one pass at the same target.
+
+**A destination is not always one file, and `export_writer.cpp` is where that is
+known.** One `Writer` is one *muxer*; it was the same thing as one file until four muxers
+said otherwise — `segment` and `image2` write a numbered run, `hls` and `dash` write a run
+and a playlist naming it, `tee` writes the same packets to several places at once. Five
+things about how that is handled are load-bearing:
+
+- **What a render wrote is asked of libavformat, through `AVFormatContext::io_open`.**
+  That callback is what *every* output goes through: the primary file, each segment, each
+  DASH chunk, each `tee` slave, each numbered picture. It is the seam ffmpeg's own CLI
+  overrides (`oc->opaque` carries the object; libavformat never touches that field), so
+  hooking the `io_open`/`io_close2` pair gives the names, the count and the sizes without
+  a second implementation of anybody's numbering scheme. It also survives a muxer changing
+  how it numbers things, which `sizeOnDisk`'s pattern walk — still there as the fallback —
+  would not. **A file opened twice is one file**: `hls` rewrites its playlist every segment
+  and would otherwise be counted forty times.
+- **`ExportStatus::piecesWritten` counts what was opened *beside* `path`.** Zero for an
+  ordinary render, so nothing has to know segmenters exist; the segments, the chunks, the
+  pictures, the tee destinations otherwise. And `bytesWritten` is **on disk for a file and
+  sent for a URL** — the io_close hook stats a local path after the close (which is the
+  only correct answer for an mp4 that `+faststart` rewrote) and takes `avio_tell` for
+  anything else.
+- **`formatOptions` is one bag and two objects, split in `open()`.** At the reading end
+  libavformat hands a demuxer's leftovers down to AVIO, and the Sources stage says so.
+  Writing cannot work that way because the order is reversed — `avio_open2` runs *before*
+  `avformat_write_header`, and an `AVFMT_NOFILE` muxer opens its files later still, from
+  inside libavformat. So the split is made once, by asking the format context which keys
+  it has (`av_opt_find` with `AV_OPT_SEARCH_CHILDREN` reaches the generic table and the
+  muxer's private one); what it does not know is stashed and merged into every
+  `avio_open2`. **An unknown key is still an error**, in three places: unconsumed by the
+  muxer, unconsumed by the protocol (carried out of the callback, which cannot refuse, to
+  `open()` which can), and — for a muxer that opens nothing at all, which is what `-f null
+  -` is — reaching nothing.
+- **`io_open` gives the caller back only what the protocol did not take.** That is what
+  the callback is defined to do, and `tee` is the one that notices: its slave options go
+  through here on the way to a muxer, and a protocol option still in the bag afterwards is
+  reported by the slave as an unknown muxer option.
+- **Encoders take `AV_CODEC_FLAG_GLOBAL_HEADER` for `AVFMT_NOFILE` muxers as well as
+  `AVFMT_GLOBALHEADER` ones.** A muxer that does not write the file it was named with —
+  `tee`, `segment`, `hls`, `dash`, `rtp` — cannot answer for the format that eventually
+  receives the packets. The safe answer is to have the extradata: a muxer that wants the
+  parameter sets in-band gets them from its own automatic bitstream filter, and one that
+  wants them up front has nowhere else to look. **This is not a table** — the flag is the
+  question — and it was found the hard way: matroska behind a `tee` fails at
+  `write_header` with `Invalid data found when processing input` and no mention of
+  extradata anywhere in it.
+
+**`tee` is the muxer, not two `Writer`s, and the reason is what `tee` means.** Chunk 12
+sketched two writers fed from one `FrameSource` and the seams do allow it — but `tee` is
+*one encode to several places*, and two writers are two encoders on the same frames:
+twice the CPU, and two files that are supposed to be the same bitstream in different
+wrappers are two different bitstreams. The muxer does what the name means. The seam is
+still there for the day something wants two genuinely *different* encodes, which is a
+different feature (the `passes` list already expresses it sequentially) and is not built.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -1258,8 +1320,8 @@ about them:
   can disagree with itself), `capabilities` (what libavcodec and libavformat say this
   build can do — `muxers()`, `muxerInfo()`, `extOf()`, `formatOptionsOf()`),
   `options` (settings → `-key value`), `spec` (the model → what the renderer
-  wants), `streams` (what the file is made of), `presets`, `warnings`, `store`,
-  `form`, `preview`, `strip`, `progress`.
+  wants), `streams` (what the file is made of), `destination` (where it goes),
+  `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress`.
   `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **Two stages,
   not a modal**: what the picture is put through (Encode) and where it goes (Write) are
   different decisions taken at different moments, so `#st-encode` and `#st-write` are
@@ -1284,6 +1346,48 @@ about them:
   be comparing against a different encode. It bows out when `over.videoOptions` is given
   — the lossless reference names its own bag and has no bitrate for a second pass to
   spend.
+
+  **`export/destination.js` is where the render goes, and the shape is *asked*.** Four
+  of them — one file, a set of files, a stream, several at once — and `kindOf()` decides
+  by asking, in this order: the muxer is `tee`; the path has a scheme in the output
+  protocol list; the path has a frame pattern or the muxer says `AVFMT_NOFILE`; otherwise
+  a file. **No mode control and no list of segmenting muxers**, because either would be a
+  second answer that could disagree with the first — `AVFMT_NOFILE` is libavformat's own
+  way of saying *I do not write the file you named me with*, which is exactly what a
+  segmenter, a playlist writer and `tee` all are, and it is the same query the muxer
+  picker's "Streaming" facet already runs. The one *name* in the file is `tee`, and it is
+  a name rather than a capability: `-f tee` is the mechanism, there is one such muxer, and
+  a question to discover it could only ever answer with its name.
+
+  Four things here are load-bearing:
+
+  - **`outputTarget()` is the one place that says what `spec.path` is.** For a tee it is
+    the built argument and not a path at all, and there are four callers — the spec, the
+    command bar, the warnings, the progress panel. A fifth answer assembled by hand
+    somewhere would be a render going somewhere the screen does not say.
+  - **The `-f tee` argument is built, never typed, and shown in full.** Two layers of
+    escaping sit over it: `tee` splits destinations on `|` with `av_get_token` (so `|` and
+    `\` are escaped) and reads each one's options out of `[ ]` on `=` and `:` (so `:` and
+    `]` are escaped in values), and then the command bar quotes the lot for the shell.
+    On Windows that doubles every backslash in a path, which looks wrong and is right.
+    An argument assembled on somebody's behalf is exactly the one that has to be visible.
+  - **`openable()` answers "open the result" per shape**, because a set of files is not
+    "done, here is your file": the playlist for `hls`/`dash` (it is what was named and the
+    only thing that says the order), the first picture of a numbered run (a run has no
+    index and `out%04d.png` is not a name anything can open), whichever `tee` destination
+    is local, and **nothing** for a stream — so no button is drawn, since one that opened a
+    socket would be worse than its absence.
+  - **`destinations` is in `store.js`'s `REMEMBERED` list, beside `container`.** A
+    remembered `tee` with a forgotten destination list is a workspace that opens saying it
+    will write to several places and naming none. (Worth knowing while testing: the whole
+    settings block is persisted in `localStorage`, so a headless run that dies half way
+    through a section leaves its container and option bag behind for the next one. The
+    destination section of `ui_export.js` sets its own starting point for that reason.)
+
+  Progress says something different and true for each: frames and an estimate for a
+  bounded file, `pieces` — the count of files arriving — for a set, bytes *sent* and a
+  bitrate for a stream, with no bar at all when the job is `openEnded`. That is the
+  recording's vocabulary reused rather than a second convention.
 
   **`forceKeyFrames()` in `options.js` derives, it never copies.** `settings.keyframeMode`
   is what is stored; `cuts` re-reads `project.clips` on every call, so a keyframe follows

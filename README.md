@@ -291,6 +291,17 @@ bro.ffmpeg.render.start({ path,
                           // that is what identifies one: nothing in
                           // libavformat is called "mkv", forty-seven muxers
                           // have no extension at all, and several share one.
+                          //
+                          // **`path` is not always a path.** It is whatever
+                          // this muxer is named with: a file, a pattern with a
+                          // frame number in it, a URL through any output
+                          // protocol this build links, or — for `-f tee` — the
+                          // destination list, `[f=matroska]a.mkv|[f=flv]rtmp://…`.
+                          // `formatOptions` is split in two on the way in by
+                          // asking the muxer which keys are its own; what it
+                          // does not know is handed to `avio_open2`, which is
+                          // where a protocol's options are taken. A key
+                          // neither of them has is an error.
                           format: "matroska",
                           width, height, fps, start, end,
                           videoCodec, audioCodec, audio, clips: [...],
@@ -316,8 +327,17 @@ bro.ffmpeg.render.start({ path,
                           shortest: false,
                           streams: [...], chapters: [...] })
 bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openEnded,
-                            //     elapsed, fps, bytes, path, stage, error, job,
-                            //     pass, passes, passLabel }
+                            //     elapsed, fps, bytes, pieces, path, stage,
+                            //     error, job, pass, passes, passLabel }
+// `bytes` is on disk for a file and *sent* for a URL — a socket cannot be
+// stat'd, and an mp4 that +faststart rewrote is not the write position either.
+// `pieces` is how many files the muxer opened **beside** the one it was named
+// with: 0 for an ordinary render, the segments of an `hls` or `segment` one,
+// the chunks of a `dash` one, the numbered pictures of an `image2` one, the
+// destinations of a `tee`. Counted as libavformat opens them, through
+// `AVFormatContext::io_open`, so it needs to know nothing about how any muxer
+// numbers its files — and a file opened twice is one file, so a playlist
+// rewritten every segment is not counted forty times.
 bro.ffmpeg.render.cancel()
 
 // A render that is more than one render. Two things in ffmpeg need a second
@@ -1358,6 +1378,105 @@ encoder follows the filename through `av_guess_codec`, which is what `ffmpeg` it
 does; without it every picture render lands on mjpeg, which is what image2 declares as
 its default whatever the file is called.
 
+### Where it goes
+
+The other half of `Write` is the destination, and it stopped being a path.
+There are four shapes and each says which it is:
+
+| | |
+|---|---|
+| **one file** | what nearly every render is: opened now, closed when the render ends |
+| **a set of files** | `image2`, `segment`, `hls`, `dash` — pictures, segments, chunks, and the playlist that names them |
+| **a stream** | a URL through one of the thirty output protocols this build links |
+| **several at once** | `-f tee`: one encode, several destinations |
+
+**Which one it is, is asked rather than chosen.** There is no mode control here
+and no list of segmenting muxers written down anywhere, because either would be
+a second answer that could disagree with the first. `AVFMT_NOFILE` is
+libavformat's own way of saying *I do not write the file you named me with* —
+which is exactly what a segmenter, a playlist writer and `tee` all are — a frame
+pattern in the name is what makes `image2` a run rather than one picture, and a
+URL is a URL. The muxer picker's **Streaming** facet is the same query.
+
+Each shape then gets what it needs and nothing else. A URL says which protocol
+it names and **whether this build has it**, because a URL naming a protocol that
+is absent fails at open with a message about a filename. Beside the muxer's
+option column is the **protocol's own** — `srt` reports 38 here, `rtmp` about
+twenty — and they travel in one bag, which is what libavformat does with
+whatever a muxer does not recognise, exactly as the Sources stage does at the
+reading end. A key neither of them has stops the render rather than being
+ignored.
+
+### Several destinations at once
+
+`-f tee` is **one encode written to several places**. That is worth being exact
+about, because "two outputs" can mean two different things and only one of them
+is this: `tee` sends the *same packets* to several muxers, so a Matroska file
+and an MPEG-TS stream carry the same bitstream in different wrappers, at the
+cost of one encode. Two outputs at *different settings* is a different feature —
+two encodes — and is not built.
+
+The destinations are a list: a muxer, a target, and that destination's own
+options. The `-f tee` argument is **built from the list rather than typed**,
+and shown in full underneath it, because that argument is a small language with
+two layers of escaping over it:
+
+- `tee` separates destinations with `|` and reads each one's options out of
+  `[ ]` on `=` and `:`, honouring a backslash — so a `|` or a `\` in a target,
+  and a `:` or a `]` in an option value, have to be escaped. On Windows that
+  means every backslash in a path is doubled, which looks wrong and is right.
+- then the shell quotes the lot again, which is a second and completely
+  separate layer, and is what the command bar's quotes are.
+
+An argument assembled on your behalf is exactly the one that has to be visible,
+which is why the list and the string are both on the screen.
+
+**Recording and streaming the same capture** is this, and it is the case tee was
+chosen for: one encode, one real-time deadline, a file kept and the same packets
+sent somewhere else. The Capture stage takes a tee argument in its own path
+field and says how many destinations it comes to; the editor for the argument is
+on the Write stage, because a second copy of the escaping would be a second
+answer to it.
+
+### What comes back from each
+
+Progress has to say something true for each shape, and they do not share a
+sentence:
+
+| | |
+|---|---|
+| **one file** | frames of a total, a percentage, a rate and an estimate |
+| **a set of files** | all of that, and **how many files have arrived** — the only number that says a segmenter is segmenting |
+| **a stream** | elapsed, frames, bytes **sent** and the bitrate they come to — no size, no percentage, no bar |
+
+How many files is asked of libavformat rather than counted off the disk.
+`AVFormatContext::io_open` is the callback every output goes through — the
+primary file, each segment, each DASH chunk, each `tee` slave, each numbered
+picture — and it is the seam ffmpeg's own CLI overrides, so the count, the names
+and the sizes come for nothing and stay right whatever a muxer's numbering
+scheme is. A file opened twice is one file, so an HLS playlist rewritten on
+every segment is not counted forty times.
+
+A stream has no size because there is nothing to stat, and the number reported
+is what went through the socket. It is the same vocabulary a recording with no
+`-t` uses — `openEnded`, and zero meaning nobody knows — rather than a second
+convention.
+
+**And "open the result" is a real question when the result is not one file.**
+For `hls` and `dash` the answer is the playlist: it is the file that was named
+and the only thing that says what order the pieces go in. For a numbered run it
+is the first picture, because a run has no index and `out%04d.png` is not a name
+anything can open. For a `tee` it is whichever destination is local. For a
+stream there is **nothing** — what was sent has gone — so no button is offered,
+because one that opened a socket would be worse than its absence.
+
+Two things about a destination are warned about rather than discovered:
+`+faststart` on a stream, which rewrites the file after the trailer and cannot
+be done to something that cannot be rewound — it fails at the end, after
+everything has been sent — and a **keyframe interval longer than the segment
+time**, which succeeds and quietly produces segments of the wrong length,
+because a segment can only start on a keyframe.
+
 ### What is in the file
 
 `Write` is the output's **stream list**: one row per stream the muxer will
@@ -1872,6 +1991,19 @@ is visible and attributed, that the whole of libav's chatter is kept and merely
 filtered, and that what the filter measured arrives as a named series sampled
 in order rather than as more log lines.
 
+`exporttest` also covers where a render *goes*, which stopped being one file: a
+`segment` render writing four .ts files and an m3u8 that names them, every name
+in the playlist checked against the disk and the playlist opened back as one
+piece of media of the whole render's length rather than one segment's; the same
+through `hls`, where the playlist is the thing you name and the segments are the
+pieces; a `tee` whose two destinations receive the same forty packets, one of
+which decodes to the render in the rectangle the clip was given; and a **real
+network destination** — a UDP socket bound on the loopback in the test process
+*before* the render starts, because writing to a port nobody is on succeeds
+silently whatever is wrong underneath. What arrives starts with an MPEG-TS sync
+byte, and the render reports what it sent rather than a size. `capturetest`
+records through a tee, since a recording is a device into the same `Writer`.
+
 `exporttest` also covers the four things on the encode side that are claims
 about bytes: a real two-pass encode at a bitrate target, which has to write its
 statistics where `-passlogfile` said, come out a different size from one pass
@@ -1906,6 +2038,19 @@ description and by extension, that picking MPEG-TS sets `-f mpegts` rather than
 a filename somebody hopes will be guessed, that a muxer which never answered
 does not have the codec taken off it, and that the muxer's own options reach
 the spec, the command and a file that opens as an MPEG-TS.
+
+And where the render goes: that the shape of a destination is *asked* — a URL
+is a stream because of its scheme, `segment` is a set of files because it says
+`AVFMT_NOFILE`, a frame pattern is a set because the numbering is in the name,
+and `C:/` is a path and not a protocol — that a URL's own protocol options are
+offered beside the muxer's and reach the same bag, the spec and the printed
+command; that the `-f tee` argument is built with tee's escaping (a `|` in a
+target, a `:` and a `]` in an option value) and then quoted for the shell, so
+what is printed can be pasted and run; that picking `tee` makes the file already
+named the first destination rather than throwing it away; that a two-destination
+render writes both and reports two; and that the progress panel says something
+different and true for each shape — the count of files for a set, "sent" and no
+offer to open anything for a stream.
 
 It also drives everything on the encode side that is not an encoder option: that
 two-pass is a *mode* of the rate control and that choosing it makes the spec say
@@ -1997,9 +2142,21 @@ Honest list of what does not work:
   purpose, so a URL that takes four seconds to answer takes the UI with it, and
   nothing yet says "connecting" or offers to stop. A local file was never long
   enough for that to matter.
-- **Writing to one.** `AVFMT_NOFILE` muxers are in the picker and thirty output
-  protocols are reported, but a render still writes to a path. Pointing one at
-  a socket is chunk 13's.
+- **Reading a URL while it is slow, and writing to one while it fails.** A
+  render goes to a URL now, with its protocol's own options beside the muxer's,
+  and reports what it sent rather than a size. What is not built is either end
+  of *going wrong*: `probe()` is synchronous, so a URL that takes four seconds
+  to answer takes the UI with it and nothing says "connecting" or offers to
+  stop; and a destination that drops mid-render arrives as a failed render with
+  libav's own message in the report, with nothing that retries, reconnects or
+  buffers. Both are what `-reconnect`, `-rw_timeout` and the `fifo` muxer exist
+  for, and all three are reachable as ordinary options — none of them is
+  surfaced as anything better than that.
+- **Two outputs at different settings.** `-f tee` is one encode to several
+  destinations, which is what the Write stage builds. The same render written
+  *twice* — a 1080p master and a 720p proxy — is two encodes and is a different
+  feature; the `passes` list already expresses it as two walks over the range in
+  one job, and no control offers it.
 - **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
   `<video>` drives its clock from decoded pictures, so a file with exactly one
   has nothing to advance through, and the element shows the frame and reports
@@ -2031,8 +2188,11 @@ Honest list of what does not work:
 - **Two devices at once.** A camera and a microphone are one `-i` when the same
   demuxer can open both, which on Windows dshow can. Two separate devices — a
   webcam and a USB interface — are two `-i`s, and a recording opens one.
-- **Capturing to more than one file.** The record button writes one output.
-  Recording and streaming the same capture is `-f tee`, which is chunk 13's.
+- **A destination editor on the Capture stage.** Recording and streaming the
+  same capture works — it is `-f tee` and the same `Writer` — but the argument
+  is typed into the path field there rather than built from a list. The Write
+  stage has the editor, and a second copy of the escaping would be a second
+  answer to it.
 - **Variable frame rate out.** `-fps_mode` has one honest value here and the
   command says it: `cfr`. Both render paths walk the range forward at the output
   rate and stamp each frame with its number — the compositor because it samples
