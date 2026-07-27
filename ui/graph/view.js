@@ -423,9 +423,14 @@ function startWire(key, dir, port, stream, e) {
     e.stopPropagation();
     const box = placed.nodes.find((b) => panel.keyOf(b.node) === key);
     if (!box) return;
+    // `ox`/`oy` is where the drag began and `x`/`y` is where the pointer is now,
+    // and they are two fields rather than one because they are two facts. Held
+    // in one, the origin is overwritten by the first mouse move and every drag
+    // measures as zero pixels long — which reads as a press that did nothing,
+    // since a press that did nothing is exactly what a zero-length drag is.
     wiring = { key, dir, port, stream, box,
                from: canvas.socketPoint(box, dir, port),
-               x: e.clientX, y: e.clientY, over: null };
+               ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, over: null };
     paint();
 }
 
@@ -445,7 +450,7 @@ function endWire(e) {
     // A press and release on one socket is a click, not a drag. Nothing is a
     // sensible answer to it: a wire from a pad to itself is not a thing, and
     // opening the palette every time somebody prodded a dot would be worse.
-    const moved = Math.abs(e.clientX - w.x) + Math.abs(e.clientY - w.y) > 0 || w.over;
+    const moved = Math.abs(e.clientX - w.ox) + Math.abs(e.clientY - w.oy) > 2 || !!w.over;
     swallowClick = true;
     if (w.over) {
         const other = panel.keyOf(w.over.node);

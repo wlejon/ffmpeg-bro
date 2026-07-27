@@ -1316,4 +1316,217 @@ console.log('\nthe stage with nothing on the timeline');
     same(document.querySelectorAll('#gr-nodes .gn').length, 0, 'and nothing is drawn');
 }
 
+// ── the gesture ────────────────────────────────────────────────────────────
+//
+// Everything above is the model, which is where the rules live. This is the
+// part a person actually does: press on a socket, drag, let go on another one.
+// It needs an edit — sockets have to be somewhere before a wire can be dragged
+// between them — so it is skipped without a media file, which is also what
+// keeps this suite runnable by hand with nothing to hand.
+//
+// The events are real `MouseEvent`s dispatched on the elements a pointer would
+// reach: mousedown on the socket itself, and mousemove/mouseup on `<body>`,
+// which bubbles to `document` where the view listens. That is the route a real
+// drag takes, and the reason the coordinates below are computed from
+// `graphPlacement()` rather than hard-coded is that a layout this test does not
+// compute is a layout it cannot make assertions about.
+
+const media = (globalThis.scriptArgs || []).filter((a) => a !== '--')[0];
+
+if (!media) {
+    console.log('\nthe wiring gesture — skipped, no media file given');
+} else {
+    console.log('\nthe wiring gesture, on the real stage');
+    const A = globalThis.__ffmpegBro;
+    overlay.clear();
+    dropFiles(400, 300, [media]);
+    waitFor('a clip on the timeline', () => A.project.clips.length === 1);
+    ok(A.shell.goTo('graph'), 'the Graph stage opens');
+    pump(400);
+    A.graph.draw();
+    pump(200);
+
+    const vp = document.getElementById('gr-viewport');
+    const clipId = A.project.clips[0].id;
+    const keyOfBox = (b) => (b.node.derived ? b.node.anchor : b.node.id);
+    const boxOf = (key) => (A.graph.placement().nodes || []).find((b) => keyOfBox(b) === key);
+    /// Where a socket is on the screen — the same arithmetic `portY` does, which
+    /// is the one formula the wire, the dot and the hit test all share.
+    const screenOf = (box, dir, port) => {
+        const P = A.graph.placement();
+        const r = vp.getBoundingClientRect();
+        const ports = dir === 'in' ? box.inPorts : box.outPorts;
+        const y = box.y + (box.h * (port + 1)) / (Math.max(1, ports) + 1);
+        const x = dir === 'in' ? box.x : box.x + box.w;
+        return { x: x * P.zoom + P.panX + r.left, y: y * P.zoom + P.panY + r.top };
+    };
+    const mouse = (type, at, target) => (target || document.body).dispatchEvent(
+        new MouseEvent(type, { bubbles: true, button: 0,
+                               clientX: Math.round(at.x), clientY: Math.round(at.y) }));
+    /// A click is three events, and the middle two matter: the view swallows the
+    /// click that ends a drag — a rubber band finishes with one, and letting it
+    /// through would clear the selection the band had just made — so a press and
+    /// release have to happen before the click for the click to count.
+    const click = (at, target) => {
+        mouse('mousedown', at, target);
+        mouse('mouseup', at);
+        mouse('click', at, target);
+    };
+    const sockOf = (key, dir, port) =>
+        document.querySelector(`#gr-nodes [data-key="${key}"] ` +
+                               `.gn-sock[data-dir="${dir}"][data-port="${port}"]`);
+
+    ok(!!boxOf(`clip:${clipId}/format`), 'the graph is drawn and the cards are placed');
+
+    // **A socket per pad the filter has**, not per wire that arrived. The
+    // compositing overlay reads two and both are on the card whether or not
+    // anything is on them, which is what makes an empty pad a thing you can see
+    // and aim at.
+    {
+        const over = `composite/overlay:${clipId}`;
+        same(document.querySelectorAll(`#gr-nodes [data-key="${over}"] .gn-sock-in`).length, 2,
+             'overlay draws two input sockets');
+        same(boxOf(over).inPorts, 2, 'and the layout spaces the wires over the same two');
+        // The hit test works from the layout rather than from the document,
+        // because the cards live in a container with a transform on it and an
+        // eight-pixel dot at 0.6x is a target nobody can hit.
+        const at = screenOf(boxOf(over), 'in', 1);
+        const r = vp.getBoundingClientRect();
+        const hit = socketAt(A.graph.placement(), at.x - r.left, at.y - r.top,
+                             { zoom: A.graph.placement().zoom, panX: A.graph.placement().panX,
+                               panY: A.graph.placement().panY });
+        ok(hit && hit.dir === 'in' && hit.port === 1 && keyOfBox(hit) === over,
+           'and a point on one finds that pad and no other');
+    }
+
+    // Let a wire go over empty canvas and the palette opens on what can take it.
+    console.log('\nlet go over nothing and pick a filter');
+    {
+        const from = `clip:${clipId}/format`;
+        const sock = sockOf(from, 'out', 0);
+        ok(!!sock, 'a socket is a real element with its pad written on it');
+        const start = screenOf(boxOf(from), 'out', 0);
+        const r = vp.getBoundingClientRect();
+        // Somewhere with nothing on it: below everything the layout drew.
+        const empty = { x: r.left + 60, y: r.top + r.height - 30 };
+        mouse('mousedown', start, sock);
+        mouse('mousemove', empty);
+        mouse('mouseup', empty);
+        pump(120);
+
+        ok(!!document.querySelector('#gr-panel [data-f="padsearch"]'),
+           'the palette opens on the pad the wire came from');
+        const offered = document.querySelector('#gr-panel [data-filter="overlay"]');
+        ok(!!offered, 'and offers a two-input filter — which is the whole point, since ' +
+                      'there is no wire one of those could be spliced onto');
+        offered.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+
+        same(overlay.nodeCount(), 1, 'clicking it places the node');
+        const made = overlay.nodes()[0];
+        same(made.filter, 'overlay', 'as the filter you chose');
+        ok(!!overlay.pinOf(made.id), 'where you let go');
+        same(overlay.wires().length, 1, 'wired to the pad you dragged from');
+        same(overlay.wires()[0].from, from, 'by its key, which survives a rebuild');
+        // `overlay` reads a picture on both pads, so the first free one is 0 —
+        // what matters is that the port is chosen from libavfilter's pad list
+        // rather than assumed, since a sound wire would have to land elsewhere.
+        same(overlay.wires()[0].to, made.id, 'and arriving on the node that was made');
+    }
+
+    // ...and now socket to socket, which is the gesture proper.
+    console.log('\nsocket to socket');
+    {
+        const made = overlay.nodes()[0];
+        A.graph.draw();
+        pump(200);
+        const target = boxOf(`composite/overlay:${clipId}`);
+        const source = boxOf(made.id);
+        ok(!!target && !!source, 'both cards are on the screen');
+
+        const start = screenOf(source, 'out', 0);
+        const end = screenOf(target, 'in', 1);
+        mouse('mousedown', start, sockOf(made.id, 'out', 0));
+        mouse('mousemove', { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 });
+        mouse('mousemove', end);
+        mouse('mouseup', end);
+        pump(200);
+
+        const wire = overlay.wires().find((w) => w.from === made.id);
+        ok(!!wire, 'a wire is made between the two sockets');
+        same(wire.to, `composite/overlay:${clipId}`, 'ending on the node it was dropped on');
+        same(wire.port, 1, 'and on the pad — not on whichever one came first');
+
+        // An input pad holds one wire, so dropping on an occupied pad replaces
+        // what was there. That is what makes putting a filter *between* two
+        // derived nodes one gesture rather than a delete and two connects.
+        const d = derive(A.exporter.buildSpec(), null, { overlay: overlay.current() });
+        const into = d.graph.byAnchor(`composite/overlay:${clipId}`);
+        same(d.graph.inEdges(into).filter((e) => e.port === 1).length, 1,
+             'the derived wire it replaced is gone rather than doubled');
+        same(d.graph.producers(into)[1].id, made.id, 'and what arrives there is yours');
+    }
+
+    // A wire is a thing you can select and delete, which is the other half of
+    // being able to make one.
+    console.log('\nclick a wire, delete a wire');
+    {
+        const P = A.graph.placement();
+        const r = vp.getBoundingClientRect();
+        const made = overlay.nodes()[0];
+        const wire = P.wires.find((w) => w.edge.from === made.id);
+        ok(!!wire, 'the wire is drawn');
+        const mid = { x: ((wire.x1 + wire.x2) / 2) * P.zoom + P.panX + r.left,
+                      y: ((wire.y1 + wire.y2) / 2) * P.zoom + P.panY + r.top };
+        click(mid, vp);
+        pump(120);
+        ok(!!document.querySelector('#gr-panel [data-f="unwire"]'),
+           'clicking it selects it, and the column says what it is');
+
+        const before = overlay.wires().length;
+        document.body.dispatchEvent(new KeyboardEvent('keydown',
+                                                      { key: 'Delete', bubbles: true }));
+        pump(200);
+        same(overlay.wires().length, before - 1, 'and Delete cuts it');
+    }
+
+    // Cutting a derived wire is a different act from forgetting one of yours,
+    // because the skeleton grows the derived one back on every rebuild.
+    console.log('\ncutting a derived wire');
+    {
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+        const P = A.graph.placement();
+        const r = vp.getBoundingClientRect();
+        const sinkBox = boxOf('out:v');
+        const wire = P.wires.find((w) => w.edge.to === sinkBox.node.id);
+        const mid = { x: ((wire.x1 + wire.x2) / 2) * P.zoom + P.panX + r.left,
+                      y: ((wire.y1 + wire.y2) / 2) * P.zoom + P.panY + r.top };
+        click(mid, vp);
+        pump(120);
+        document.body.dispatchEvent(new KeyboardEvent('keydown',
+                                                      { key: 'Delete', bubbles: true }));
+        pump(200);
+        ok(overlay.isCut('out:v', 0), 'the absence is written down, not merely not written');
+        const d = derive(A.exporter.buildSpec(), null, { overlay: overlay.current() });
+        ok(d.problems.some((p) => /nothing is wired to video out/.test(p.reason)),
+           'the stage says what is missing');
+        // ...and it is on the card, where the person is looking, rather than
+        // only in the bar along the bottom.
+        A.graph.draw();
+        pump(200);
+        ok(!!document.querySelector('#gr-nodes .gn-bad'),
+           'the node it is about is marked');
+        ok(document.querySelectorAll('#gr-nodes .gn-sock-open').length > 0,
+           'and the pad with nothing on it is drawn as empty rather than not drawn');
+
+        overlay.clear();
+        A.graph.draw();
+        pump(120);
+        same(document.querySelectorAll('#gr-nodes .gn-bad').length, 0,
+             'and putting it back clears the marks');
+    }
+}
+
 console.log(`\nPASS ui_graph — ${checks} checks`);
