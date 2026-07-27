@@ -716,6 +716,19 @@ things about how that is handled are load-bearing:
   `write_header` with `Invalid data found when processing input` and no mention of
   extradata anywhere in it.
 
+**What chunk 14 (subtitles) inherits from this.** Nothing here narrowed the stream list:
+`ExportStream::kind` is still a string and `source` is still where the content comes from,
+so a `"subtitle"` kind slots in beside `"video"`, `"audio"` and `"attachment"` with a
+fourth `openXStream()`. Three things this chunk added are directly useful to it — a copied
+stream already reaches the muxer without an encoder, which is what extracting or rewrapping
+a subtitle track is; `piecesWritten` and the `io_open` hook already account for a muxer
+that writes a sidecar (`-f webvtt` beside an `hls` render is exactly that shape); and
+`kindOf()` on the Write stage already says when the destination is a set, which is the case
+where a subtitle track becomes a separate playlist rather than a stream in the file. The
+one thing that is *not* there is a source for a subtitle stream: burning one in is a
+filter (`subtitles=`, on the graph), and carrying one through is `copy:` — everything else
+needs a decoder and an encoder this application has never opened.
+
 **`tee` is the muxer, not two `Writer`s, and the reason is what `tee` means.** Chunk 12
 sketched two writers fed from one `FrameSource` and the seams do allow it — but `tee` is
 *one encode to several places*, and two writers are two encoders on the same frames:
