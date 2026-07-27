@@ -692,8 +692,8 @@ console.log('\na batch');
     // Property edits reach every selected clip at once.
     A.selectMany(A.project.clips.slice());
     A.showProperties();
-    // By selector, not by id: the panel is rebuilt on every change, and bro's
-    // id index hands back the element from the draw before.
+    // By selector, not by id: the panel is rebuilt on every change, and its
+    // controls are named by what they edit rather than by unique ids.
     const slider = document.querySelector('#transform [data-s="opacity"]');
     ok(!!slider, 'the properties panel has an opacity control for the whole selection');
     slider.value = '50';

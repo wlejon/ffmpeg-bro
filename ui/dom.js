@@ -59,16 +59,14 @@ export function add(node, children) {
 
 /// Replace everything under a node.
 ///
-/// `build` is a function and not a list of children, and that is not a style
-/// choice. bro's getElementById index is keyed by the id *string* and written
-/// when `.id` is assigned; removing an element deletes that entry whichever
-/// element currently holds the id. Passing an array evaluates it before the
-/// call, so the replacement registers its ids and then the clear-out of the
-/// old content unregisters them again — leaving elements that are in the tree,
-/// that querySelector finds, and that getElementById says do not exist.
-///
-/// Clearing first and building second cannot get that wrong, and a signature
-/// that only accepts a builder cannot be called the other way round.
+/// `build` is a function and not a list of children, so that the old content
+/// is gone before the new content is made. Passing an array evaluates it
+/// first, which means both generations of the panel exist at once, in the same
+/// document, for the length of the call — and anything keyed on something they
+/// share (bro's id index was, and answered with the wrong one for it) sees two
+/// claimants where the code plainly meant one to replace the other. That bug
+/// is fixed upstream; the order is still the honest one, and a signature that
+/// only accepts a builder cannot be called the other way round.
 export function put(node, build) {
     if (!node) return node;
     node.replaceChildren();

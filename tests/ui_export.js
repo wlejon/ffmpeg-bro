@@ -35,14 +35,13 @@ function waitFor(what, predicate, timeoutMs = 10000) {
 
 const el = (id) => document.getElementById(id);
 
-// Anything the UI builds at runtime is found by selector, never by id.
-//
-// bro's id index is keyed by the id string and is not updated when a
-// replacement element claims an id the index already knows, so after a redraw
-// getElementById — and querySelector('#…'), which is backed by the same index
-// — hands back the *previous* element: detached, measuring zero, wired to
-// nothing. Classes and data attributes are matched by walking the live tree,
-// so they always answer about what is actually on screen.
+// Anything the UI builds at runtime is found by selector, never by id —
+// because it does not have an id to be found by. Several of these controls
+// exist at once (both halves of the preview, a form drawn twice for two
+// codecs), and a `data-f` name says which control it is without having to
+// invent a unique id for each instance. Selecting the way the app labels
+// things is also what makes a test fail when the label changes, rather than
+// quietly matching something else.
 const q = (sel, root) => (root || document).querySelector(sel);
 const qq = (sel, root) => (root || document).querySelectorAll(sel);
 /// One of the Output workspace's form controls, by its data-f name.

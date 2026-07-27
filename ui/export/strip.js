@@ -4,10 +4,14 @@
 // moves where the preview samples from, which is nearly always the thing you
 // actually want to look at.
 //
-// The markup is in index.html and never rebuilt — a canvas cannot measure
-// itself in the turn it was created in, so a repaint that recreated its own
-// element would measure an unlaid-out canvas every time, fall back to a
-// default width forever, and be stretched across the window.
+// The markup is in index.html and never rebuilt, and the build is separate
+// from the paint. That separation was forced by an engine bug (nothing could
+// measure itself in the turn it was created in, so a repaint that recreated
+// its own canvas measured an unlaid-out one, fell back to a default width
+// forever, and came out stretched across the window). It is kept because the
+// strip repaints on a stage resize, which is not when it was built: a canvas
+// that is only ever as wide as its backing store says has to be told the new
+// width by something that measured after the layout moved.
 
 import { project, duration } from '../project.js';
 import { byId, put, span, show } from '../dom.js';

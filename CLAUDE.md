@@ -159,28 +159,38 @@ listener has to be found and re-attached in a second pass — a pass that is fre
 out of step with the first. Controls here carry their own listeners, made in the same call
 that makes the control, so a control that moves between panels takes its behaviour with it.
 
-**Three things about bro's DOM, each of which cost an afternoon:**
+**Three bugs this app found in bro, each of which cost an afternoon. All three are fixed
+upstream** — bro `87d60e5` and htmlayout `2f881f7` — so this app needs a bro at least that
+new. What the fixes were, and what the code here still does about them:
 
-- **An element built at runtime must not have an `id`.** bro's id index is keyed by the id
-  *string* and written when `.id` is assigned; removing an element deletes that entry
-  whichever element currently holds the id. So a redraw that builds its replacement before
-  clearing the old content — which is what passing an array of children does, since the
-  argument is evaluated first — leaves elements that are in the tree, that `querySelector`
-  by class finds, and that `getElementById` swears do not exist. Worse, after a second
-  redraw the index hands back the *previous* element: detached, measuring zero, wired to
-  nothing. `querySelector('#id')` is backed by the same index and is no better. Hence
-  `put(node, () => [...])` takes a builder and not a list, and hence dynamic elements are
-  marked with classes (`.pv-ref`) or `data-f` attributes rather than ids. **Tests must
-  select the same way** — `document.querySelector('#output [data-f="path"]')`, never
-  `getElementById` — for anything the UI redraws.
-- **A `<span>` that is a flex item does not lay its own inline children out.** They come
-  out drawn on top of each other. Either make it `display: flex` itself, or make the
-  children direct children of the flex row.
-- **A canvas cannot measure itself in the turn it was created in**, and neither can
-  anything else: layout has not run. Anything sized from `getBoundingClientRect` has to be
-  built in one turn and measured in a later one — which is why the range strip separates
-  `drawStrip` (build once) from `paintStrip` (measure and paint), and why the preview
-  videos are re-fitted from the frame loop rather than at creation.
+- **`getElementById` went stale on a redraw.** The index kept one element per id and erased
+  by the id *string*, so removing an element unregistered whatever element currently
+  answered to it; a redraw that built its replacement before clearing what it replaced
+  registered the new element and then had that registration thrown away. Elements were in
+  the tree, `querySelector` by class found them, and `getElementById` denied them; after a
+  second redraw it handed back the previous element, detached and wired to nothing. The
+  index is now a cache that only answers with an element still carrying the id and still in
+  the document, and asks the tree when it cannot. **Two habits here outlived the bug and are
+  worth keeping**: `put(node, () => [...])` takes a builder rather than a list, so the old
+  content is cleared before the new is built — which is the order that makes sense whether
+  or not the engine minds — and dynamic elements are marked with classes (`.pv-ref`) or
+  `data-f` attributes rather than ids, which is what lets several of them exist at once
+  without inventing unique names. Tests select the same way:
+  `document.querySelector('#output [data-f="path"]')`.
+- **A `<span>` that is a flex item wrapped its own contents.** The seam between two inline
+  boxes — the space in `<span>AAA</span><span> BBB</span>` — was counted by neither of them
+  when their widths were summed, so the item's max-content width came out one space too
+  narrow and the second box fell to a second line. It looked like a flex item not laying its
+  inline children out. Fixed in htmlayout's intrinsic sizing; the workarounds it prompted
+  (making a row's children direct children of the flex row) are harmless and can stay.
+- **Nothing could measure itself in the turn it was created in.** Layout ran on the frame
+  loop, so `getBoundingClientRect` answered about the DOM as it was before the last edit.
+  Geometry reads now flush pending layout the way CSSOM requires, so measuring an element
+  built a line ago is correct. The build/measure split that this forced — the range strip's
+  `drawStrip` (build once) and `paintStrip` (measure and paint) — is still the right shape
+  for a different reason: the strip repaints when the *stage* resizes, which is not when it
+  was built. Anything that genuinely needs a frame to have happened (a rendered video's
+  first picture, a screenshot) still has to wait for one.
 
 - `app.js` — orchestration: transport, keyboard, drag/drop, the frame loop, the inspector.
 - `viewer.js` — the program monitor. Each clip is a `<video>` inside a crop window (a div
