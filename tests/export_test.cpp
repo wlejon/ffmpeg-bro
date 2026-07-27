@@ -1776,16 +1776,35 @@ int main(int argc, char* argv[]) {
         std::remove((logPrefix + "-0.log").c_str());
         std::remove((logPrefix + "-0.log.mbtree").c_str());
 
+        // Through the *option bag*, which is what the UI sends: a friendly
+        // control produces `-key value` pairs and there is no private path from
+        // it to the encoder. That matters more here than it looks — the writer
+        // also has convenience fields for the rate, and `crf` is a private
+        // option while `b` is a generic one, so they do not overwrite each
+        // other. Set both and x264 picks CRF, and a render told to hit a
+        // bitrate comes out byte for byte identical to the quality one with the
+        // command bar printing `-b:v` throughout. The check below is the one
+        // that says it does not.
+        ExportSettings quality = baseSettings("out/export-abr-crf.mp4");
+        quality.includeAudio = false;
+        check(render(quality, clipsA).state == ExportStatus::State::Done,
+              "the same edit renders at constant quality for comparison");
+        const int64_t crfBytes = exportStatus().bytesWritten;
+
         ExportSettings one = baseSettings("out/export-abr-1pass.mp4");
-        one.videoBitrateKbps = kTargetKbps;
+        one.videoOptions = {{"b", std::to_string(kTargetKbps) + "k"}};
         one.includeAudio = false;
         st = render(one, clipsA);
         checkf(st.state == ExportStatus::State::Done, "one pass at a bitrate target renders (%s)",
                st.error.empty() ? "no error" : st.error.c_str());
         const int64_t oneBytes = st.bytesWritten;
+        checkf(oneBytes != crfBytes,
+               "a bitrate in the option bag is what the encoder spends, not the crf the "
+               "writer would otherwise have set (%lld bytes against %lld)",
+               static_cast<long long>(oneBytes), static_cast<long long>(crfBytes));
 
         ExportSettings two = baseSettings("out/export-abr-2pass.mp4");
-        two.videoBitrateKbps = kTargetKbps;
+        two.videoOptions = {{"b", std::to_string(kTargetKbps) + "k"}};
         two.includeAudio = false;
         ExportPass p1;
         p1.label = "pass 1";

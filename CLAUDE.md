@@ -742,6 +742,16 @@ once to mix. Notable:
   `Writer::sizeOnDisk` walks the names from the muxer's own `start_number` — asked
   of `oc_->priv_data` before `close()`, because only image2 knows what it was told —
   and stops at the first one that is not there.
+- **The convenience rate fields stand down when the option bag names a rate control**,
+  and this is *not* the same thing as the bag being applied last. `crf` is a private
+  option and `b` is a generic one, so they do not overwrite each other: the writer set
+  `crf` from `ExportStream::crf`, the bag then set `b`, and x264 picked CRF — so every
+  render the UI made at a bitrate target came out byte for byte identical to the
+  constant-quality one, silently, with the command bar printing `-b:v 200k` throughout.
+  `bagSetsBitrate`/`bagSetsQuality` are the guard, and `tests/export_test.cpp` requires
+  a bag bitrate to produce a different file from the crf. **Anything else added here
+  that writes to `priv_data` has the same hazard**: applied-last only wins where the two
+  writes land on the same option.
 - **Profile ids are numbered per codec.** Do not resolve `codec->profiles` against the
   generic `profile` option's constants: VP9's profile 2 and HEVC's Main 10 are both 2, and
   that "translation" confidently offered `main10` as a VP9 profile. Profiles come from the

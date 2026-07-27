@@ -196,6 +196,40 @@ bool takeOption(std::vector<ExportOption>& opts, const char* key, std::string* v
     return false;
 }
 
+/// Has the caller said, in its own words, what the encoder should spend?
+///
+/// **The convenience fields have to stand down when it has**, and this is not
+/// the same thing as the option bag being applied last. `crf` is a *private*
+/// option and `b` is a generic one, so they do not overwrite each other:
+/// setting `crf` from `ExportStream::crf` and then applying `b` from the bag
+/// leaves x264 with both, and x264 picks CRF — which is how a render told to
+/// hit 200 kbps came out byte for byte identical to the constant-quality one,
+/// silently, with the command bar printing `-b:v 200k` the whole time. That is
+/// the "succeeded while ignoring what it was told" failure the option bag
+/// exists to prevent, arriving through the option bag.
+///
+/// The names are the ones a rate control is asked for by, across the encoders
+/// this build has. Split in two because the two answers differ by one line:
+/// a bitrate is the whole instruction and needs nothing added, and a quality
+/// still needs `bit_rate` cleared — libvpx reads a bitrate as the target and a
+/// zero as "quality only", so `-crf` on top of a default bitrate is a ceiling
+/// rather than the thing that was asked for.
+bool bagNames(const std::vector<ExportOption>& opts,
+              std::initializer_list<const char*> keys) {
+    for (const auto& o : opts)
+        for (const char* k : keys)
+            if (o.key == k) return true;
+    return false;
+}
+
+bool bagSetsBitrate(const std::vector<ExportOption>& opts) {
+    return bagNames(opts, {"b", "rc"});
+}
+
+bool bagSetsQuality(const std::vector<ExportOption>& opts) {
+    return bagNames(opts, {"crf", "qp", "cq", "q", "qscale", "lossless", "global_quality"});
+}
+
 /// The whole of a file, or empty. `stats_in` wants the pass-1 log as one
 /// NUL-terminated string, which is exactly what a text read gives.
 std::string readWholeFile(const std::string& path) {
@@ -764,7 +798,11 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     const bool fullRange = impliedFull || settings_.colorRange == "pc";
     o.enc->color_range = fullRange ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 
-    if (o.desc.bitrateKbps > 0) {
+    if (bagSetsBitrate(o.desc.options)) {
+        // The caller's own words, applied below, are the whole of it.
+    } else if (bagSetsQuality(o.desc.options)) {
+        o.enc->bit_rate = 0;
+    } else if (o.desc.bitrateKbps > 0) {
         o.enc->bit_rate = int64_t(o.desc.bitrateKbps) * 1000;
     } else if (hasOption(codec, "crf")) {
         av_opt_set_int(o.enc->priv_data, "crf", o.desc.crf, 0);
