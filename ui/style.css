@@ -1169,8 +1169,9 @@ body.fs #cropbox { display: none; }
 .ex-foot button.hidden { display: none; }
 .ex-foot .ex-summary { flex: 1; min-width: 0; }
 
-#ex-settings input.wide, #ex-advanced input.wide { width: 100%; box-sizing: border-box; }
-#ex-settings select, #ex-advanced select { max-width: 100%; }
+#ex-settings input.wide, #ex-advanced input.wide,
+#src-detail input.wide, #src-options input.wide { width: 100%; box-sizing: border-box; }
+#ex-settings select, #ex-advanced select, #src-options select { max-width: 100%; }
 #ex-settings input[type=range] { width: 140px; }
 .ex-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiny-note { font-size: 11px; }
