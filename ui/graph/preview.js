@@ -38,6 +38,7 @@
 // failed render rather than a replaced file.
 
 import { derive } from './derive.js';
+import { specInputs } from '../inputs.js';
 import { previewGraph } from './subgraph.js';
 import * as play from './play.js';
 
@@ -120,6 +121,7 @@ export function sync(wanted) {
 
     const live = new Set();
     let fresh = false;
+    const inputSig = JSON.stringify(specInputs());
     queue.length = 0;
     for (const { key, fit } of wanted) {
         const node = d.graph.node(key) || d.graph.byAnchor(key);
@@ -132,7 +134,11 @@ export function sync(wanted) {
         // same picture from the same files share one, and a node whose
         // arguments were not touched keeps its picture through an edit that
         // rebuilt every node object in the graph.
-        const sig = `${g.filterGraph}|${JSON.stringify(g.filterInputs)}`;
+        // The inputs are in it as well as the pads, because a pad says which
+        // `-i` it reads and not how that `-i` is opened: forcing a demuxer or
+        // setting a `-probesize` changes the picture without changing a
+        // character of the graph.
+        const sig = `${g.filterGraph}|${JSON.stringify(g.filterInputs)}|${inputSig}`;
         const had = shots.get(key);
         if (had && had.sig === sig) {
             had.fit = fit;

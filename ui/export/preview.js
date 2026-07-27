@@ -11,6 +11,7 @@
 // movement between them rather than anything about the encoder.
 
 import { project, duration } from '../project.js';
+import { specInputs } from '../inputs.js';
 import { el, div, span, put, segmented, fromTemplate } from '../dom.js';
 import { bytes, clock, elapsed, timecode } from '../format.js';
 import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps,
@@ -46,6 +47,11 @@ export function initPreview(refs, h) {
 /// that matters because it is the one being compared.
 function referenceKey() {
     return JSON.stringify([
+        // The inputs as well as the clips: a demuxer forced or a `-probesize`
+        // set changes what a clip decodes to without changing anything about
+        // the clip, and a reference that outlived it would be a comparison
+        // against the file as it used to open.
+        specInputs(),
         project.clips.map((c) => [c.path, c.start, c.length, c.inPoint, c.track,
                                   c.xform.opacity, c.xform.scale, c.xform.x, c.xform.y,
                                   c.xform.fit, c.xform.crop, project.layout]),
