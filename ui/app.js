@@ -150,6 +150,7 @@ exporter.initExport({
     settings: el('ex-settings'),
     advanced: el('ex-advanced'),
     dest: el('ex-dest'),
+    streams: el('ex-streams'),
     write: el('ex-write'),
     intentList: el('ex-intent-list'),
     intentCustom: el('ex-intent-custom'),
@@ -868,9 +869,14 @@ function stageState(id) {
                    : `${s.videoBitrate}k`;
         return [s.videoCodec || '—', `${rate}${s.preset ? ' · ' + s.preset : ''}`];
     }
+    // Write is the stream list now, so the card counts it: "mp4 · 3 streams"
+    // is the statement of that stage, and a file that gained a commentary
+    // track has to say so from the bar rather than only from the stage.
     const p = exporter.lastStatus();
     const size = p && p.state === 'done' && p.bytes ? bytes(p.bytes) : '';
-    return [s.container || '—', size || (s.path ? basename(s.path) : 'no file chosen')];
+    const n = (s.streams || []).length;
+    const list = `${n} stream${n === 1 ? '' : 's'}`;
+    return [s.container || '—', size || `${list}${s.path ? ' · ' + basename(s.path) : ''}`];
 }
 
 /// Kept because the export module still calls it when its job state changes:

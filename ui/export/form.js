@@ -21,6 +21,7 @@ import { settings, activeVideoCodec } from './state.js';
 import { videoEncoders, audioEncoders, containers, encoderInfo, audioInfo,
          containerInfo, optionsOf, rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension } from './spec.js';
+import { setAudioIncluded } from './streams.js';
 
 let panes = {};
 let hooks = {};
@@ -263,10 +264,14 @@ function even(n) { return Math.max(16, Math.round(n / 2) * 2); }
 // ── audio ──────────────────────────────────────────────────────────────────
 
 function audioRows(cont) {
+    // Through setAudioIncluded rather than by writing the flag: the Write
+    // stage's audio rows and this switch are two halves of one decision, and
+    // two switches for one decision is how a render comes out silent while a
+    // track list insists it should not have.
     const rows = [row('Include', btns(el('button', {
         cls: 'tiny' + (settings.audio ? ' on' : ''), 'data-f': 'audio',
         text: settings.audio ? 'On' : 'Off',
-        on: { click: () => { settings.audio = !settings.audio; hooks.changed(); } },
+        on: { click: () => { setAudioIncluded(!settings.audio); hooks.changed(); } },
     })))];
     if (!settings.audio) return rows;
 

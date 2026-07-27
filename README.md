@@ -556,6 +556,52 @@ shortest complete statement of what is about to happen. An option the encoder
 does not have is an error, not a shrug: a render that succeeds while silently
 ignoring half of what it was told is the worst of the three outcomes.
 
+### What is in the file
+
+`Write` is the output's **stream list**: one row per stream the muxer will
+number, in the order it will number them. A file is not a picture and a
+soundtrack — it is a list of streams — and everything this application could
+not say before followed from that list not existing.
+
+A row reads as a statement rather than as a grid of labelled inputs:
+
+> **A2** the mix, through `aac` — *fra · “Commentary” · forced · comment*
+
+The usual two — the composite through one video encoder, the mix through one
+audio encoder — arrive without anyone asking, because that is what nearly
+every render is. `+ Video`, `+ Audio` and `+ Attachment` add one; `×` takes one
+away, including the last video stream, which is what a sound-only render is.
+Everything a row does not say it takes from the Encode stage, so a second audio
+track is one click and not twenty controls.
+
+Open a row and it says what the stream carries:
+
+- **Language** — ISO 639-2, the one metadata key every player reads.
+- **Name** — what a track menu shows.
+- **Flags** — a toggle per disposition, and the list is libavformat's own:
+  `default`, `forced`, `comment`, `hearing_impaired` and the rest, walked out
+  of `av_disposition_to_string`. Several at once, because a track can be forced
+  *and* a commentary.
+- **Tag** — the fourcc, offered as the vocabulary the chosen muxer actually
+  takes. `hvc1` and `hev1` are the same HEVC bitstream and only the first plays
+  on Apple hardware, which is a decision worth being able to take and not a
+  string anybody types from memory. A tag the container has never heard of is
+  called out here rather than at `write_header`, where it arrives as "Invalid
+  data found when processing input" with no mention of the tag.
+- **Metadata** — anything else, as key and value.
+
+**An attachment is a row and a chapter is not**, and that is the shape of the
+things rather than a layout choice. An attachment *is* a stream: it has an
+index, it is what `-attach` produces, and the muxer writes it out of the stream
+at header time — a font travelling beside a subtitle, a cover image. A chapter
+has no index, nothing is mapped to it and no player shows it in a track menu;
+it is a table beside the streams, so it is drawn beside them.
+
+The preview is not part of this. Both halves of the A/B comparison, and every
+node preview on the Graph stage, ask for the renderer's own default of one
+video stream and one audio stream: they exist to show what something does to a
+*picture*, and a second language track proves nothing about a wipe.
+
 ### The command
 
 Under every stage, live, is the invocation. Not a summary line at the bottom of
@@ -579,6 +625,16 @@ Put a filter on the graph and the second line changes, because the claim
 changes: the render goes through libavfilter and those are the chains it
 parses. All but the last, which converts into the encoder's colour and is the
 writer's job here.
+
+Everything the stream list produces is printed: a `-map` per stream,
+`-c:a:1`, `-metadata:s:a:1 language=fra`, `-disposition:a:1 +forced+comment`,
+`-tag:v hvc1`, `-attach`. The index appears only when it has to — `-c:v` for
+the file that is a picture and a soundtrack, `-c:a:0` and `-c:a:1` once there
+are two, because unqualified the second would claim both. One thing on this
+stage genuinely cannot be said as an argument: ffmpeg reads **chapters** from
+an input rather than from an option, so a command that wrote them would need an
+FFMETADATA file and a second `-i`. That is said out loud under the command
+instead of being quietly dropped.
 
 How good a translation was measured rather than asserted: render the same edit
 both ways and compare. Naming every colour conversion is the difference between
@@ -727,7 +783,11 @@ it builds is the edit that is on screen, that every control turns into the
 ffmpeg option it claims to be (and that a raw option beats the control setting
 the same key), that the advanced editor's list is libavcodec's, that both
 halves of the A/B preview render and land on identical pixels, and that the
-file that comes out can be dropped straight back on the timeline.
+file that comes out can be dropped straight back on the timeline. It also
+drives the Write stage's stream list: a second audio track added, given a
+language, a name and two flags at once, and then rendered and opened to find
+both tracks in it — and every one of those printed by the command bar, because
+anything reaching the muxer the bar does not print is a bug.
 
 ## Not yet
 
@@ -762,6 +822,14 @@ Honest list of what does not work:
   and not intelligently. Real two-pass needs the stats file from pass one fed
   into pass two, which means a job that is two jobs, and the job state machine
   is built around one.
+- **Subtitle streams.** The Write stage's list can hold video, audio and
+  attachments; a subtitle track is a kind it does not offer yet. The seam is
+  there — a stream says what *kind* it is and where its content comes from —
+  and what is missing is a source for one.
+- **Every stream of the list from the same place.** A video row is fed from
+  the composite and an audio row from the mix, which is why the source is
+  stated rather than chosen. Mapping a particular input stream through — the
+  thing `-map 0:a:2` says — is the packet path's, below.
 - **Stream copy.** Every render decodes and re-encodes, even where the output
   settings match the input exactly and the packets could have been remuxed
   untouched — which would be both instant and lossless.

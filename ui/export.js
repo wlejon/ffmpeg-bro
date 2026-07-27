@@ -27,11 +27,12 @@ import { bytes, clock } from './format.js';
 import { settings, preview, currentJob, setJob, onJobChange, isRendering,
          activeVideoCodec, activeAudioCodec, outputFps } from './export/state.js';
 import { videoOptions } from './export/options.js';
-import { buildSpec, range, defaultPath, specSources } from './export/spec.js';
+import { buildSpec, previewSpec, range, defaultPath, specSources } from './export/spec.js';
 import { intents, activeIntent, applyIntent, clampToEncoder } from './export/presets.js';
 import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
 import { initForm, drawForm } from './export/form.js';
+import { initStreams, drawStreams } from './export/streams.js';
 import { initPreview, drawPreview, chasePreview, startPreview, previewFinished,
          previewRange, invalidatePreview, invalidateCandidate, stopPreviewPlayback,
          renderCandidate, togglePreviewPlay, stepPreviewBy } from './export/preview.js';
@@ -60,6 +61,15 @@ export function initExport(refs, h) {
     initForm({ settings: el_.settings, advanced: el_.advanced, dest: el_.dest }, {
         changed: after,
         tweaked: () => { invalidateCandidate(); updateSummary(); },
+    });
+    // The stream list changes what is *in* the file and not what the picture
+    // looks like, so a language or a disposition must not throw away a
+    // candidate render that cost ten seconds. `changed` rebuilds the rows (a
+    // stream was added, removed or re-coded); `restated` only re-says what will
+    // be written, which is the summary, the spine and the command bar.
+    initStreams(el_.streams, {
+        changed: () => { drawStreams(); updateSummary(); },
+        restated: updateSummary,
     });
     initPreview({ stage: byId('ex-pv-stage-host'), controls: byId('ex-pv-controls'),
                   stats: byId('ex-pv-stats') }, {
@@ -165,6 +175,7 @@ function showPanel(which) {
 function drawAll() {
     drawIntents();
     drawForm();
+    drawStreams();
     drawPreview();
     drawStrip();
     updateSummary();
@@ -304,7 +315,8 @@ export function tick() {
 
 // ── what the app and the tests reach for ───────────────────────────────────
 
-export { buildSpec, specSources, range, togglePreviewPlay, stepPreviewBy, startPreview };
+export { buildSpec, previewSpec, specSources, range, togglePreviewPlay, stepPreviewBy,
+         startPreview };
 
 /// The last thing poll() reported, for the status line and for tests.
 export function lastStatus() { return lastPoll; }

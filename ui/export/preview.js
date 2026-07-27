@@ -14,7 +14,7 @@ import { project, duration } from '../project.js';
 import { el, div, span, put, segmented, fromTemplate } from '../dom.js';
 import { bytes, clock, elapsed, timecode } from '../format.js';
 import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps } from './state.js';
-import { buildSpec, range } from './spec.js';
+import { previewSpec, range } from './spec.js';
 
 let panes = {};
 let hooks = {};
@@ -91,7 +91,7 @@ function renderReference() {
     // size of FFV1, and it decodes fast enough to play beside the candidate.
     // yuv444p so that the reference does not itself throw away the chroma the
     // candidate is about to be judged on.
-    hooks.launch(buildSpec({
+    hooks.launch(previewSpec({
         path: preview.refPath,
         start: r.start, end: r.end,
         container: 'mkv',
@@ -106,7 +106,7 @@ function renderReference() {
 export function renderCandidate() {
     const r = previewRange();
     preview.candPath = bro.ffmpeg.tempPath(`candidate.${settings.container}`);
-    hooks.launch(buildSpec({ path: preview.candPath, start: r.start, end: r.end }), 'candidate');
+    hooks.launch(previewSpec({ path: preview.candPath, start: r.start, end: r.end }), 'candidate');
 }
 
 /// Called when the render slot reports a terminal state and the job was one of

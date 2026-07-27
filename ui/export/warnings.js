@@ -6,7 +6,8 @@
 
 import { project } from '../project.js';
 import { settings, activeVideoCodec, outputFps } from './state.js';
-import { encoderInfo, audioInfo, containerInfo } from './capabilities.js';
+import { encoderInfo, audioInfo, containerInfo, codecTags } from './capabilities.js';
+import { codecOf } from './streams.js';
 import { isEmpty as noUserNodes } from '../graph/overlay.js';
 import { buildSpec } from './spec.js';
 
@@ -23,6 +24,35 @@ export function warnings() {
     if (!noUserNodes() && !buildSpec().filterGraph)
         out.push('your filters cannot be expressed as a graph for this edit, so this ' +
                  'render would go through the internal compositor without them');
+
+    // A row still being drafted is not sent to the renderer — an `-attach`
+    // with nothing after it is not a command anybody should be shown — so the
+    // stream is silently absent from the file unless this says otherwise.
+    const draft = settings.streams.filter((s) => s.kind === 'attachment' && !s.path).length;
+    if (draft)
+        out.push(`${draft} attachment${draft === 1 ? ' has' : 's have'} no file yet, so ` +
+                 `${draft === 1 ? 'it' : 'they'} will not be written`);
+
+    // Not every container holds every kind of stream, and the failure arrives
+    // at write_header long after the row was added.
+    const atts = settings.streams.filter((s) => s.kind === 'attachment' && s.path).length;
+    if (atts && settings.container !== 'mkv' && settings.container !== 'webm')
+        out.push(`${settings.container} cannot hold an attachment — Matroska can`);
+    const audioTracks = settings.streams.filter((s) => s.kind === 'audio').length;
+    if (audioTracks > 1 && settings.container === 'webm')
+        out.push('WebM players commonly show only the first audio track');
+
+    // A fourcc belongs to a container's vocabulary and not to a codec, so a tag
+    // that was right for the mp4 it was chosen in stops the muxer dead in the
+    // Matroska it is now being written to — at write_header, with "Invalid data
+    // found when processing input" and no mention of the tag.
+    for (const s of settings.streams) {
+        if (!s.tag) continue;
+        const known = codecTags(settings.container, codecOf(s));
+        if (known.indexOf(s.tag) < 0)
+            out.push(`the ${settings.container} muxer does not know '${s.tag}' as a tag for ` +
+                     `${codecOf(s) || 'this codec'}, and will refuse the file`);
+    }
 
     const c = containerInfo(settings.container);
     const codec = activeVideoCodec();

@@ -97,7 +97,11 @@ against footage the fixtures do not resemble:
 
 # native: render a timeline and open the result — geometry, opacity, audio
 # mixing, cancellation, capability reporting, whether options reach the
-# encoder. Writes into out/.
+# encoder, and what a multi-stream file came out as. Writes into out/.
+# It opens results with libavformat directly as well as through probeMedia(),
+# because a disposition beyond "default", a fourcc and an attachment's mimetype
+# are not things playback asks about — which is why this target alone among the
+# test binaries takes ${FFMPEG_INCLUDE_DIRS}.
 ./build/Release/ffmpeg-bro-exporttest <file> [<second-file>]
 
 # native: where the time in a seek goes (demux vs decode vs YUV->RGB)
@@ -171,7 +175,7 @@ them to change alone:
 | `export_graph.*` | libavfilter's answer to the same two questions |
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
-| `export_writer.*` | encoders and the muxer they feed |
+| `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio** |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
 | `ffmpeg_capabilities.*` | what this build can write and what it can put a picture through, asked of libav* |
 
@@ -212,6 +216,46 @@ Four things about the graph path are load-bearing:
   every frame. On, the sink is asked and the writer is opened for the answer. That is what
   previewing a node in the middle of a graph needs, since nothing outside libavfilter
   knows how big the picture is half way through.
+
+**A file is a list of streams.** `ExportSettings::streams` is a
+`std::vector<ExportStream>` and the writer holds a `std::vector<Out>`;
+`outputStreams(settings, wantAudio)` in `export_writer.cpp` resolves every
+default in one place, so nothing downstream has to know whether the caller gave
+a list. Four things about it are load-bearing:
+
+- **An empty list is not "no streams" — it is the usual two.** `outputStreams()`
+  synthesises one video stream from the composite and one audio stream from the
+  mix out of the named fields, which is byte for byte the file this renderer
+  wrote before the list existed. That is what keeps `make_fixture.cpp`, the node
+  previews and every test that predates it untouched, and it is the sentinel the
+  UI's `previewSpec()` uses to say "a render about the picture".
+- **`ExportStream::source` is `-map` written down.** "composite" and "mix" are
+  *composed* sources rather than input streams, which is why they are named and
+  not numbered — no input index means "everything, stacked". The vocabulary has
+  room in it for `copy:0:1`, which is where chunk 12's packet path attaches: the
+  writer branches on the prefix rather than growing a second list beside this
+  one. `openVideoStream`/`openAudioStream` already refuse anything else *with
+  that sentence in the error*, so the branch has a named place to go.
+- **The list order is the muxer's numbering.** Streams are created in list
+  order and there is no second sorting pass anywhere, which is what makes
+  `-metadata:s:a:1` mean the stream the UI drew second.
+- **A tag is a container's vocabulary, not a codec's.** `hvc1` set in an mp4 and
+  then written to Matroska stops the muxer at `avformat_write_header` with
+  "Invalid data found when processing input" and no mention of the tag.
+  `ui/export/warnings.js` says so before the render; `codecTags()` is what it
+  asks.
+
+**`AVCodecTag` is opaque and its tables cannot be walked.** `av_codec_get_tag2`
+asks "what tag for this codec here" and `av_codec_get_id` asks "what codec for
+this tag here", and there is no third call. So `codecTags()` is the one
+capability in this repo that cannot be purely enumerated: the muxer's default
+comes from `av_codec_get_tag2`, and the alternates are *candidates* put back
+through `av_codec_get_id` against that muxer's own tables before being offered.
+Nothing false can reach a caller — `hvc1` appears for HEVC in mp4 and mov and is
+absent from Matroska without any of that being written down — but a fourcc
+nobody thought to list is a fourcc the menu will not have. `streamDispositions()`
+has no such problem: a disposition is a single bit and `av_disposition_to_string`
+names it, so asking for every bit in turn *is* the whole vocabulary.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -370,6 +414,14 @@ about them:
   `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
   colour tags and the conversion into them, the keyframe interval (two seconds here,
   250 frames in x264), and the scaler, which is a flag rather than an option.
+  **It is written from `spec.streams` and not from the settings the list was built
+  out of**, because the spec is what `render.start` is handed: a `-map` per stream,
+  `-c:a:1`, `-metadata:s:`, `-disposition:`, `-tag:` and `-attach`, with the index
+  appearing only when there is more than one of that kind (`sel()`/`keyFor()`) —
+  `-c:v` is what everybody reads, and `-metadata:s:a language=fra` with two audio
+  streams claims both of them. **Chapters are the one thing on the Write stage an
+  ffmpeg command line cannot say at all**: ffmpeg reads them from an input rather
+  than from an option, so the note says so rather than dropping them silently.
 - `sources.js` — the Sources stage: every file on the timeline, once each, read out of
   `probe()`. Distinct by path, so two clips cut from one file are one source — which is
   what ffmpeg would open. **It is not driven by the selection**, which is why it is not
@@ -410,7 +462,8 @@ about them:
   a fallback chain written out at each point of use is a fallback chain that can
   disagree with itself), `capabilities` (what libavcodec says this build can do),
   `options` (settings → `-key value`), `spec` (the model → what the renderer
-  wants), `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress`.
+  wants), `streams` (what the file is made of), `presets`, `warnings`, `store`,
+  `form`, `preview`, `strip`, `progress`.
   `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **Two stages,
   not a modal**: what the picture is put through (Encode) and where it goes (Write) are
   different decisions taken at different moments, so `#st-encode` and `#st-write` are
@@ -436,6 +489,49 @@ about them:
   would compare a picture against a squashed copy of itself. Because they are placed in
   pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
   refits when the measured stage changes.
+- `export/streams.js` — **the Write stage is the output's stream list**, one row per
+  stream the muxer will number, in that order. `#ex-streams` is the middle column of
+  `#st-write`, between the destination and the verdict. This is the surface stream
+  copy (12), destinations (13) and subtitle tracks (14) attach to, so its shape
+  matters more than its polish. Five things here are decisions rather than layout:
+
+  - **A row is a sentence, not a grid of labelled inputs** — "A2 · the mix, through
+    aac · fra · “Commentary” · forced" — because what a person checks on this stage
+    is whether that sentence is the one they meant. What a stream *has* is behind a
+    ▸, for the same reason the encoder's eighty options are a column. A row you add
+    opens on its detail, since adding a stream and saying what it is are one gesture
+    with a pause in it.
+  - **An attachment is a row and a chapter is not.** An attachment *is* a stream: an
+    index, `-attach`, extradata written at header time. A chapter has no index,
+    nothing maps to it and no player shows it in a track menu — it is a table beside
+    the streams, so it is drawn beside them, and `ExportSettings` holds it the same
+    way. Drawn among the streams it would invite "what is chapter 2's language",
+    which has no answer.
+  - **`settings.audio` and the audio rows are one fact.** The Encode stage's Include
+    switch goes through `setAudioIncluded()`, which empties or refills the rows. Two
+    switches for one decision is how a render comes out silent while a track list
+    insists it should not have.
+  - **Nothing is tabled.** The dispositions are `bro.ffmpeg.dispositions` (every bit,
+    through `av_disposition_to_string`), the fourccs are `bro.ffmpeg.codecTags(ext,
+    codec)`, the codecs are the encoder lists. A row cannot offer what the render
+    would then refuse.
+  - **`hooks.changed` rebuilds the rows; `hooks.restated` only re-says what will be
+    written.** A language or a disposition changes what is *in* the file and not what
+    the picture looks like, so it must not throw away a candidate render that cost
+    ten seconds. Which is also why the detail's fields commit on `change` and rewrite
+    the row's tail in place rather than redrawing the list under the caret — the same
+    build/measure split the range strip and the graph cards use.
+
+  **`previewSpec()` in `export/spec.js` is how a preview avoids inheriting an
+  eight-stream output.** The A/B comparison and every node preview exist to show what
+  something does to one *picture*; a second language track proves nothing about a
+  wipe, a chapter table measured against the whole timeline means nothing inside
+  three seconds of it, and an audio-only stream list would leave the comparison with
+  no picture at all. So they call `previewSpec()`, which is `buildSpec()` with
+  `streams: []` and `chapters: []` — the renderer's own sentinel for one video stream
+  and one audio stream. One place decides it, for the reason `buildSpec()` is one
+  place: there are four callers and a preview rendered from a different description
+  is a preview of something else.
 - `graph/` + `filtergraph.js` — `buildSpec()`'s output written as the
   `-filter_complex` that would produce it, for showing (and copying) what the
   render amounts to in ffmpeg's own terms. The app composites internally rather

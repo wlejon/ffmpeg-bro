@@ -530,4 +530,13 @@ std::vector<std::string> codecTags(const std::string& containerExt,
     return out;
 }
 
+std::vector<std::string> streamDispositions() {
+    std::vector<std::string> out;
+    for (int bit = 0; bit < 32; ++bit) {
+        const char* name = av_disposition_to_string(1 << bit);
+        if (name && *name) out.push_back(name);
+    }
+    return out;
+}
+
 } // namespace ffmpegbro

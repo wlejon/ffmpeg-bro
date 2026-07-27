@@ -672,6 +672,9 @@ void installFfmpegBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_encoderOptions, "encoderOptions", 1));
     JS_SetPropertyStr(ctx, ns, "codecTags",
                       JS_NewCFunction(ctx, js_codecTags, "codecTags", 2));
+    // Small enough to build once: thirty-odd names, and every stream row on
+    // the Write stage draws a toggle per entry.
+    JS_SetPropertyStr(ctx, ns, "dispositions", stringsToJs(ctx, streamDispositions()));
 
     // What this build can put a picture *through*, which is the palette the
     // graph stage picks from. A list of names and pad shapes is small; the

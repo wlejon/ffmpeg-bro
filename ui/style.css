@@ -749,10 +749,11 @@ body.fs #cropbox { display: none; }
     word-break: break-all;
 }
 
-/* Write: where it goes, and the act of going. Two columns — the destination on
-   the left, and on the right the statement of what is about to happen with the
-   button that makes it happen underneath, so the last thing under the pointer
-   before the click is the description of what the click does. */
+/* Write: what the file is made of, where it goes, and the act of going. Three
+   columns — the destination on the left, the stream list in the middle where
+   the room is, and on the right the statement of what is about to happen with
+   the button that makes it happen underneath, so the last thing under the
+   pointer before the click is the description of what the click does. */
 .ex-write {
     flex: 1;
     display: flex;
@@ -760,7 +761,62 @@ body.fs #cropbox { display: none; }
     overflow: hidden;
 }
 .ex-write.hidden { display: none; }
-.ex-dest { width: 460px; flex-shrink: 0; padding: 4px 12px 16px; }
+.ex-dest { width: 380px; flex-shrink: 0; padding: 4px 12px 16px; }
+.ex-streams {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 12px 16px;
+    border-left: 1px solid var(--line);
+}
+
+/* One stream, as the sentence it is. The head is a line you read left to
+   right — which stream, where from, through what, and then in words what a
+   player will show; the detail is folded because a file with four tracks in it
+   would otherwise be forty controls. */
+.ex-stream {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    background: #191c22;
+}
+.ex-stream-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 6px 5px 8px;
+}
+.ex-stream-n {
+    font-weight: 600;
+    color: var(--accent);
+    min-width: 20px;
+}
+.ex-stream-says { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.ex-stream-says .wide { width: 260px; }
+.ex-stream-codec { max-width: 180px; }
+.ex-stream-tail {
+    font-size: var(--fs-small);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
+}
+.ex-stream-detail {
+    border-top: 1px solid var(--line);
+    padding: 4px 8px 8px;
+}
+.ex-stream-detail.hidden { display: none; }
+/* Round-ish buttons on the head. The base button rule is a 26px single-line
+   control, so anything smaller has to say min-width: 0 or it comes out an
+   oval — the same trap the graph stage's + hit. */
+.ex-stream-head button.tiny { min-width: 0; padding: 0 6px; }
+
+.ex-flags { display: flex; flex-wrap: wrap; gap: 3px; }
+.ex-flags button { font-size: 10px; padding: 0 5px; min-width: 0; }
+.ex-add { display: flex; gap: 6px; padding: 2px 0 8px; }
+.ex-pair, .ex-chapter { display: flex; align-items: center; gap: 5px; padding: 1px 0; }
+.ex-pair .wide, .ex-chapter .wide { flex: 1; min-width: 0; }
+.ex-chapter .num { width: 64px; }
+.ex-chapter button.tiny { min-width: 0; padding: 0 6px; }
 .ex-verdict {
     flex: 1;
     min-width: 0;

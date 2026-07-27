@@ -500,6 +500,241 @@ console.log('\nwhat it warns about');
     S.height = A.project.height;
 }
 
+// ── the Write stage is the stream list ─────────────────────────────────────
+//
+// A file is not a picture and a soundtrack, it is a list of streams the muxer
+// numbers, and everything this application could not say — a second audio
+// track, a language, a forced flag, a fourcc, a font travelling inside the
+// file — followed from that list not existing. So the checks here are: that
+// the usual two arrive without anybody asking, that a row can be added and
+// taken away, that what a row says reaches the renderer, and that the command
+// bar prints every one of them. Anything reaching the muxer the bar does not
+// print is a bug, and this is where it would be caught.
+
+console.log('\nthe Write stage is the output’s stream list');
+{
+    A.shell.goTo('write');
+    pump(60);
+
+    const rows = () => qq('#ex-streams .ex-stream');
+    ok(rows().length === 2, `the usual two arrive without asking (${rows().length})`);
+    same(rows()[0].getAttribute('data-kind'), 'video', 'a video stream first');
+    same(rows()[1].getAttribute('data-kind'), 'audio', 'then the mix');
+    same(q('.ex-stream-n', rows()[0]).textContent, 'V1',
+         'numbered by kind, the way every ffmpeg stream specifier counts');
+
+    // Adding one. Two audio tracks in one file is the thing the old writer
+    // could not express at all.
+    q('#ex-streams [data-add="audio"]').click();
+    pump(60);
+    same(rows().length, 3, 'a second audio stream can be added');
+    same(q('.ex-stream-n', rows()[2]).textContent, 'A2', 'and is numbered A2');
+
+    // What that row says. The detail is a fold because a four-track file would
+    // otherwise be forty controls on one screen — and a row you just added
+    // arrives with it open, because adding a stream and saying what it is are
+    // one gesture with a pause in it.
+    const lang = q('#ex-streams [data-f="stream-lang"]');
+    ok(!!lang, 'a row you just added opens on its detail');
+    ok(qq('#ex-streams [data-f="stream-lang"]').length === 1,
+       'and one row at a time, so the list stays a list');
+    lang.value = 'fra';
+    lang.dispatchEvent(new Event('change'));
+    pump(40);
+
+    const title = q('#ex-streams [data-f="stream-title"]');
+    title.value = 'Commentary';
+    title.dispatchEvent(new Event('change'));
+    pump(40);
+
+    // The flags are libavformat's own vocabulary, walked bit by bit with
+    // av_disposition_to_string — not a list written down in this repo.
+    ok(Array.isArray(bro.ffmpeg.dispositions) && bro.ffmpeg.dispositions.length > 5,
+       `libavformat names its dispositions (${bro.ffmpeg.dispositions.length}: ` +
+       `${bro.ffmpeg.dispositions.slice(0, 4).join(' ')}…)`);
+    const forced = q('#ex-streams [data-disp="forced"]');
+    ok(!!forced, 'and each is a toggle on the row');
+    forced.click();
+    pump(60);
+    q('#ex-streams [data-disp="comment"]').click();
+    pump(60);
+
+    // The row states what a player will show, so the sentence has to be the
+    // one that will be written.
+    const tail = q('.ex-stream-tail', qq('#ex-streams .ex-stream')[2]).textContent;
+    ok(tail.indexOf('fra') >= 0 && tail.indexOf('forced') >= 0 && tail.indexOf('comment') >= 0,
+       `the row says what it carries (${tail})`);
+
+    // And it reaches the renderer.
+    let s = A.exporter.buildSpec();
+    same(s.streams.length, 3, 'the spec carries every stream');
+    const a2 = s.streams.filter((x) => x.kind === 'audio')[1];
+    same(a2.language, 'fra', 'with the language on the right one');
+    same(a2.metadata.title, 'Commentary', 'and its name');
+    ok(a2.disposition.indexOf('forced') > 0 && a2.disposition.indexOf('comment') > 0,
+       `and both flags, written the way -disposition takes them (${a2.disposition})`);
+    same(a2.source, 'mix', 'fed from the mix, which is what -map means here');
+    ok(!!a2.codec, `and an encoder, inherited from Encode (${a2.codec})`);
+
+    // The command bar. This is the claim: nothing reaches the muxer that the
+    // bar does not print.
+    let text = A.command.currentCommand();
+    ok((text.match(/-map /g) || []).length === 3,
+       `one -map per stream (${(text.match(/-map /g) || []).length})`);
+    ok(text.indexOf('-c:a:1') > 0, `each audio stream names itself (${text.indexOf('-c:a:0') > 0})`);
+    ok(text.indexOf('-metadata:s:a:1 language=fra') > 0,
+       'the language is printed against the stream it belongs to');
+    ok(/-metadata:s:a:1 "?title=Commentary/.test(text), 'and its name');
+    ok(text.indexOf('-disposition:a:1') > 0, 'and the disposition');
+    ok(text.indexOf('-c:v ') > 0 && text.indexOf('-c:v:') < 0,
+       'while the one video stream keeps the unindexed form everybody reads');
+
+    // The fourcc, offered as the muxer's vocabulary rather than as four
+    // characters nobody knows to type. hvc1 and hev1 are the same HEVC
+    // bitstream and only the first plays on Apple hardware.
+    ok(bro.ffmpeg.codecTags('mp4', 'libx264').length > 0,
+       `the mp4 muxer names its h264 tags (${bro.ffmpeg.codecTags('mp4', 'libx264').join(' ')})`);
+    q('[data-f="detail"]', qq('#ex-streams .ex-stream')[0]).click();
+    pump(60);
+    const tag = q('#ex-streams [data-f="stream-tag"]');
+    ok(!!tag && tag.options.length > 1, 'the video row offers them as a menu');
+    if (tag) {
+        tag.value = tag.options[tag.options.length - 1].value;
+        tag.dispatchEvent(new Event('change'));
+        pump(40);
+        s = A.exporter.buildSpec();
+        same(s.streams[0].tag, tag.value, 'and the choice reaches the renderer');
+        ok(A.command.currentCommand().indexOf(`-tag:v ${tag.value}`) > 0,
+           'and the command bar prints -tag:v');
+    }
+
+    // A fourcc belongs to a container's vocabulary rather than to a codec, so
+    // one that was right where it was chosen stops the muxer dead somewhere
+    // else — at write_header, with "Invalid data found when processing input"
+    // and no mention of the tag at all. Found by writing this test.
+    S.streams[0].tag = 'zzzz';
+    f('container').dispatchEvent(new Event('change'));
+    pump(60);
+    ok(el('ex-warnings').textContent.indexOf('does not know') >= 0,
+       'a tag this container has never heard of is called out, not left to write_header');
+    S.streams[0].tag = '';
+
+    // An attachment is a row because it *is* a stream — it has an index and
+    // the muxer writes it out of the stream at header time. A chapter is not,
+    // which is why it lives beside the list.
+    q('#ex-streams [data-add="attachment"]').click();
+    pump(60);
+    ok(qq('#ex-streams .ex-stream[data-kind="attachment"]').length === 1,
+       'an attachment is a row in the list');
+    ok(el('ex-warnings').textContent.indexOf('no file yet') >= 0,
+       'and one with no file yet says so rather than vanishing from the render');
+    const attPath = bro.appDir + '/../out/ui-attachment.txt';
+    const attField = q('#ex-streams [data-f="attach-path"]');
+    attField.value = attPath;
+    attField.dispatchEvent(new Event('change'));
+    pump(60);
+    ok(A.exporter.buildSpec().streams.some((x) => x.kind === 'attachment' && x.path === attPath),
+       'once it has a file it reaches the renderer');
+    ok(A.command.currentCommand().indexOf('-attach') > 0,
+       'and the command bar prints -attach');
+    ok(el('ex-warnings').textContent.indexOf('cannot hold an attachment') >= 0,
+       'mp4 cannot hold one, which is said before the muxer refuses it');
+
+    // Chapters are beside the streams, not among them: no index, nothing
+    // mapped to them, and no way to say one on an ffmpeg command line at all —
+    // which the bar has to admit rather than quietly drop.
+    q('#ex-streams [data-add="chapter"]').click();
+    pump(60);
+    ok(qq('#ex-streams .ex-chapter').length === 1, 'a chapter mark can be added');
+    const chTitle = q('#ex-streams [data-ch="0:title"]');
+    chTitle.value = 'Opening';
+    chTitle.dispatchEvent(new Event('change'));
+    pump(40);
+    same(A.exporter.buildSpec().chapters[0].title, 'Opening', 'and reaches the renderer');
+    el('cmd-toggle').click();
+    pump(60);
+    ok(q('#cmd-line .cmd-note').textContent.indexOf('FFMETADATA') >= 0,
+       'the command bar says chapters cannot be expressed as an argument');
+    el('cmd-toggle').click();
+    pump(40);
+
+    // The spine states the whole render, so it has to count them.
+    ok(q('#spine [data-stage="write"]').textContent.indexOf('streams') >= 0,
+       `the spine's card counts them (${q('#spine [data-stage="write"]').textContent
+           .replace(/\s+/g, ' ').trim()})`);
+    screenshot('out/export-07-stream-list.png');
+
+    // A preview must not inherit an eight-stream output. Both halves of the
+    // A/B comparison exist to show what the encoder costs one picture, and a
+    // second language track proves nothing about a wipe — so they ask for the
+    // renderer's own default of one video stream and one audio stream.
+    const pv = A.exporter.previewSpec({ start: 0, end: 0.4 });
+    same(pv.streams.length, 0,
+         'a preview asks for the renderer’s default list rather than the output’s');
+    same(pv.chapters.length, 0, 'and carries no chapter marks into three seconds of a render');
+
+    // Now render one, because the join between this table and the muxer is the
+    // whole point of the table.
+    {
+        const two = A.exporter.buildSpec({
+            width: 320, height: 180, fps: 25, end: 0.4,
+            path: bro.appDir + '/../out/ui-streams.mkv',
+        });
+        // Matroska, because that is the container that holds all of it.
+        two.streams = two.streams.filter((x) => x.kind !== 'attachment');
+        let started = '';
+        try { bro.ffmpeg.render.start(two); } catch (e) { started = String(e); }
+        ok(!started, `the renderer accepted the list (${started || 'accepted'})`);
+        if (!started) {
+            waitFor('the multi-stream render', () => bro.ffmpeg.render.poll().state !== 'running',
+                    60000);
+            const st = bro.ffmpeg.render.poll();
+            ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+            const p = bro.ffmpeg.probe(two.path);
+            const heard = (p.streams || []).filter((x) => x.kind === 'audio');
+            same(heard.length, 2, 'and the file has both audio tracks in it');
+            ok(heard[1].language === 'fra', `the second in the language it was given (${heard[1].language})`);
+            ok(heard[1].title === 'Commentary', `and under its own name (${heard[1].title})`);
+        }
+    }
+
+    // A row can be taken away, including the last video one: an audio-only
+    // render is a legitimate thing to want.
+    const before = qq('#ex-streams .ex-stream').length;
+    q('[data-f="drop"]', qq('#ex-streams .ex-stream')[0]).click();
+    pump(60);
+    same(qq('#ex-streams .ex-stream').length, before - 1, 'a stream can be taken out');
+    ok(!A.exporter.buildSpec().streams.some((x) => x.kind === 'video'),
+       'including the last video stream, which is what a sound-only render is');
+    ok(A.command.currentCommand().indexOf('-vn') > 0,
+       'and the command says so with -vn');
+
+    // Sound off on the Encode stage and the audio rows go with it — two
+    // switches for one decision is how a render comes out silent while a track
+    // list insists it should not have.
+    A.shell.goTo('encode');
+    pump(40);
+    f('audio').click();
+    pump(60);
+    ok(!qq('#ex-streams .ex-stream[data-kind="audio"]').length,
+       'turning sound off on Encode empties the audio rows');
+    f('audio').click();
+    pump(60);
+    ok(qq('#ex-streams .ex-stream[data-kind="audio"]').length === 1,
+       'and turning it back on puts one back');
+
+    // Put the list back to what the rest of this script stands on.
+    S.streams = [{ id: 1, kind: 'video', source: 'composite', metadata: {} },
+                 { id: 2, kind: 'audio', source: 'mix', metadata: {} }];
+    S.chapters = [];
+    S.metadata = {};
+    A.shell.goTo('write');
+    pump(60);
+    same(qq('#ex-streams .ex-stream').length, 2, 'and it is back to the usual two');
+    A.shell.goTo('encode');
+    pump(40);
+}
+
 // ── the range ──────────────────────────────────────────────────────────────
 
 console.log('\nwriting part of the timeline');

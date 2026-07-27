@@ -10,6 +10,7 @@ import * as viewer from '../viewer.js';
 import { settings, outputFps } from './state.js';
 import { containerInfo } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
+import { streamSpecs } from './streams.js';
 import { renderGraph } from '../filtergraph.js';
 import { current as overlayState, isEmpty } from '../graph/overlay.js';
 
@@ -130,6 +131,13 @@ export function buildSpec(over = {}) {
             ? over.videoOptions : videoOptions(vcodec, over),
         audioOptions: over.audioOptions !== undefined ? over.audioOptions : audioOptions(acodec),
         formatOptions: settings.extraFormat,
+        // What the file is made of. An empty list is not "no streams" — it is
+        // the renderer's own default of one video stream from the composite and
+        // one audio stream from the mix, which is what `previewSpec()` below
+        // asks for and why it can ask for it by handing over an empty array.
+        streams: over.streams !== undefined ? over.streams : streamSpecs(over),
+        chapters: over.chapters !== undefined ? over.chapters : settings.chapters,
+        metadata: settings.metadata,
         clips,
     };
 
@@ -153,4 +161,26 @@ export function buildSpec(over = {}) {
         }
     }
     return spec;
+}
+
+/// A render that is about the *picture*, not about the output file: the A/B
+/// comparison on the Encode stage, and the node previews on the Graph stage.
+///
+/// **A preview must not inherit an eight-stream output.** Both of these exist
+/// to show what something does to one picture — what the encoder costs it, what
+/// a filter makes of it — and neither is a rehearsal of the file. A second
+/// language track proves nothing about a wipe, a chapter table measured against
+/// the whole timeline means nothing inside three seconds of it, and an
+/// attachment re-read from disk for every node card on the Graph stage is work
+/// for a picture nobody is looking at. Worse, an audio-only stream list would
+/// leave the preview with no picture to compare at all.
+///
+/// So they ask for an empty list, which is the renderer's own sentinel for "one
+/// video stream from the composite and one audio stream from the mix" — the
+/// same file this application wrote before there was a list. One place decides
+/// it, for the same reason `buildSpec()` is one place: there are four callers
+/// and a preview rendered from a different description is a preview of
+/// something else.
+export function previewSpec(over = {}) {
+    return buildSpec(Object.assign({ streams: [], chapters: [] }, over));
 }

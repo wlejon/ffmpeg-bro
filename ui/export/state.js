@@ -56,6 +56,39 @@ export const settings = {
     sampleRate: 48000,
     channels: 2,
 
+    // ── what the file is made of ───────────────────────────────────────────
+    //
+    // One row per stream the muxer will number, in that order. The default is
+    // the file this application has always written — the composite through one
+    // video encoder, the mix through one audio encoder — and it arrives
+    // without anyone asking for it, because that is what nearly every render
+    // is and a Write stage that opened on an empty list would be a form.
+    //
+    // Everything a row does not say is taken from the settings above: a stream
+    // with no codec uses the one the Encode stage is set to, and its options
+    // are that stage's expressed against whatever encoder it ends up on. A
+    // list that had to repeat all of it to say nothing new is a list nobody
+    // would keep in step.
+    //
+    // `settings.audio` and the audio rows are two halves of one fact and
+    // ui/export/streams.js keeps them so: turning sound off empties the audio
+    // rows, and adding an audio row turns it back on. Two switches for one
+    // decision is how a render comes out silent with a track menu insisting it
+    // should not have.
+    streams: [
+        { id: 1, kind: 'video', source: 'composite' },
+        { id: 2, kind: 'audio', source: 'mix' },
+    ],
+
+    // Beside the streams, not among them: a chapter has no index, nothing is
+    // mapped to it and it carries no packets. It is a table in the container,
+    // which is exactly how ExportSettings holds it and how a muxer writes it.
+    chapters: [],
+
+    // The container's own metadata dictionary. `title` above stays a named
+    // field because it is the one everybody sets.
+    metadata: {},
+
     // Raw ffmpeg options, by name. Anything the controls above cannot say.
     extraVideo: {},
     extraAudio: {},

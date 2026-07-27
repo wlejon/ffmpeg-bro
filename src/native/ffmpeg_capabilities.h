@@ -166,6 +166,15 @@ std::vector<ContainerOption> availableContainers();
 std::vector<std::string> codecTags(const std::string& containerExt,
                                    const std::string& codecName);
 
+/// Every flag a stream can be given — `default`, `forced`, `comment`,
+/// `hearing_impaired`, and the rest — in libavformat's own words.
+///
+/// This one *is* enumerable: a disposition is a single bit and
+/// `av_disposition_to_string` names it, so the whole vocabulary comes out of
+/// asking for every bit in turn. Which means the row of toggles a UI draws is
+/// libavformat's list and gains whatever the next ffmpeg adds.
+std::vector<std::string> streamDispositions();
+
 /// A path under the OS temp directory, for the preview renders the export
 /// workspace throws away. Deterministic for a given name so a preview
 /// overwrites the last one rather than filling the disk with them; the

@@ -39,7 +39,7 @@
 
 import { el, div, span, put } from '../dom.js';
 import { clock } from '../format.js';
-import { buildSpec, specSources, range as exportRange } from '../export/spec.js';
+import { buildSpec, previewSpec, specSources, range as exportRange } from '../export/spec.js';
 import { derive } from './derive.js';
 import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
@@ -120,7 +120,7 @@ export function initGraphView(r, hooks = {}) {
         // spec of that range rather than reusing the one on screen: two seconds of
         // a ten-minute edit is two seconds of decoding, and the `trim` in the
         // graph is what makes it so.
-        spec: (start, end) => buildSpec({ start, end }),
+        spec: (start, end) => previewSpec({ start, end }),
         sources: specSources,
         overlay: overlay.current,
         // How far a playback runs: to the end of what would be written, not to

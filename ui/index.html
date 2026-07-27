@@ -234,14 +234,22 @@
         </div>
     </section>
 
-    <!-- Write: where it goes, and the act of going. Separated from Encode
-         because they are different decisions taken at different moments — you
-         settle what the picture is by looking at it, and then you say where to
-         put it — and because a render in progress wants the window rather than
-         a strip under a form it has stopped being about. -->
+    <!-- Write: what the file is made of, where it goes, and the act of going.
+         Separated from Encode because they are different decisions taken at
+         different moments — you settle what the picture is by looking at it,
+         and then you say what to put it in and where — and because a render in
+         progress wants the window rather than a strip under a form it has
+         stopped being about.
+
+         The middle column is the output's stream list: one row per stream the
+         muxer will number. A file is not a picture and a soundtrack, and
+         everything this application could not say — a second audio track, a
+         language, a forced flag, a fourcc, a font travelling with a subtitle —
+         followed from that list not existing. -->
     <section id="st-write" class="stage-view hidden">
         <div id="ex-write" class="ex-write">
             <div id="ex-dest" class="ex-col ex-dest"></div>
+            <div id="ex-streams" class="ex-col ex-streams"></div>
             <div id="ex-verdict" class="ex-verdict">
                 <div class="section-head">What will be written</div>
                 <div id="ex-summary" class="ex-summary mono dim"></div>
@@ -292,6 +300,25 @@
             </div>
             <div class="ex-opt-help dim"></div>
             <div class="opt-control"></div>
+        </div>
+    </template>
+
+    <!-- One stream of the output file, drawn as the sentence it is: which
+         stream it is, where its content comes from, what it goes through, and
+         then — in words rather than in controls — the language, the flags and
+         the tag a player will show. What the stream *has* is behind the ▸,
+         because everything on the surface at once is nothing on the surface. -->
+    <template id="tpl-stream">
+        <div class="ex-stream">
+            <div class="ex-stream-head">
+                <span class="ex-stream-n mono"></span>
+                <span class="ex-stream-says"></span>
+                <span class="spacer"></span>
+                <span class="ex-stream-tail dim"></span>
+                <button class="tiny" data-f="detail" title="What this stream carries">&#9656;</button>
+                <button class="tiny" data-f="drop" title="Take this stream out of the file">&times;</button>
+            </div>
+            <div class="ex-stream-detail hidden"></div>
         </div>
     </template>
 

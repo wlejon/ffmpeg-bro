@@ -74,7 +74,40 @@ function arg(v) {
 // which is why this belongs here and not in the option bag.
 const PER_STREAM = new Set(['b', 'maxrate', 'bufsize', 'q', 'qscale', 'profile', 'level']);
 
-const videoKey = (k) => (PER_STREAM.has(k) ? `${k}:v` : k);
+/// The stream specifier one output stream is addressed by: `v`, or `v:1` once
+/// there is more than one of that kind.
+///
+/// Indexed only when it has to be. `-c:v libx264` is what everybody writes and
+/// what everybody reads, and a bar that printed `-c:v:0` for the file that is a
+/// picture and a soundtrack would be paying for the four-track case on every
+/// render. With two audio streams the index is not decoration: unqualified,
+/// `-metadata:s:a language=fra` claims both of them.
+const sel = (kind, idx, count) => (count > 1 ? `${kind}:${idx}` : kind);
+
+/// A key for one stream. Some options belong to every stream unless they say
+/// otherwise — `-b 8000k` in a command line means the audio too — so those
+/// carry the specifier even when there is only one stream to carry it.
+function keyFor(name, kind, idx, count) {
+    if (count > 1) return `${name}:${sel(kind, idx, count)}`;
+    return PER_STREAM.has(name) ? `${name}:${kind}` : name;
+}
+
+/// `-metadata:s:v:0 title=…`, `-disposition:a:1 +forced`, `-tag:v hvc1`.
+///
+/// Everything a stream is told that is not its bitstream. Printed here because
+/// it reaches the muxer: the whole claim of this bar is that nothing does so
+/// silently, and a language written into a file by a form nobody can see the
+/// command for is exactly the thing this application exists to stop.
+function describe(out, s, kind, idx, count) {
+    const at = sel(kind, idx, count);
+    const meta = s.metadata || {};
+    if (s.language) out.push(`-metadata:s:${at}`, arg(`language=${s.language}`));
+    for (const k of Object.keys(meta))
+        if (meta[k] !== '' && meta[k] !== undefined)
+            out.push(`-metadata:s:${at}`, arg(`${k}=${meta[k]}`));
+    if (s.disposition) out.push(`-disposition:${at}`, arg(s.disposition));
+    if (s.tag) out.push(`-tag:${at}`, arg(s.tag));
+}
 
 /// Everything the encoder is told, as `-key value` pairs. Assembled from the
 /// spec rather than from the option bag alone, because the bag is not the whole
@@ -94,37 +127,72 @@ export function parts() {
     const inputs = [];
     if (g.ok) for (const p of g.inputs) inputs.push('-i', arg(p));
 
+    // What the file is made of, in the order the muxer will number it. The
+    // spec's list is authoritative — it is what `render.start` is handed — so
+    // the command is written from it rather than from the settings the list was
+    // built out of, and the two cannot come to describe different files.
+    const streams = spec.streams && spec.streams.length ? spec.streams : [];
+    const nVideo = streams.filter((s) => s.kind === 'video').length;
+    const nAudio = streams.filter((s) => s.kind === 'audio').length;
+
     const out = [];
+    // One `-map` per stream, which is what a stream list *is* in ffmpeg's
+    // terms. Two video streams of the same pad is a legitimate thing to want —
+    // one h264 for compatibility, one HEVC for size — and it is the same label
+    // mapped twice.
     if (g.ok) {
-        out.push('-map', arg(g.video));
-        if (g.audio) out.push('-map', arg(g.audio));
+        for (let i = 0; i < nVideo; i++) out.push('-map', arg(g.video));
+        if (g.audio) for (let i = 0; i < nAudio; i++) out.push('-map', arg(g.audio));
     }
-    if (!g.ok || !g.audio) out.push('-an');
+    if (!nVideo) out.push('-vn');
+    if (!g.ok || !g.audio || !nAudio) out.push('-an');
 
-    out.push('-c:v', codec);
-    const v = videoOptions(codec);
-    for (const k of Object.keys(v)) out.push(`-${videoKey(k)}`, arg(v[k]));
-    if (settings.pixelFormat) out.push('-pix_fmt', settings.pixelFormat);
-    // The renderer sets a two-second GOP unless told otherwise; x264 left alone
-    // uses 250 frames. A command without this writes a differently-keyframed
-    // file from the one the preview measured.
-    if (v.g === undefined)
-        out.push('-g', String(Math.max(1, Math.round((spec.fps || 30) * 2))));
-    out.push('-colorspace', colour.matrix,
-             '-color_primaries', colour.primaries,
-             '-color_trc', colour.transfer,
-             '-color_range', colour.range);
-
-    if (g.ok && g.audio) {
-        out.push('-c:a', spec.audioCodec);
-        const a = audioOptions(spec.audioCodec);
-        for (const k of Object.keys(a)) out.push(`-${k}:a`, arg(a[k]));
-        if (spec.sampleRate) out.push('-ar', String(spec.sampleRate));
-        if (spec.channels) out.push('-ac', String(spec.channels));
+    let vi = 0, ai = 0, ti = 0;
+    for (const s of streams) {
+        if (s.kind === 'attachment') {
+            // `-attach` is an output option, and the mimetype rides on the
+            // attachment's own stream index — `t` counts attachments, not
+            // streams, exactly as `v` counts video.
+            out.push('-attach', arg(s.path));
+            if (s.mimeType) out.push(`-metadata:s:t:${ti}`, arg(`mimetype=${s.mimeType}`));
+            ti++;
+            continue;
+        }
+        if (s.kind === 'video') {
+            const idx = vi++;
+            out.push(`-c:${sel('v', idx, nVideo)}`, s.codec || codec);
+            const v = s.options || {};
+            for (const k of Object.keys(v)) out.push(`-${keyFor(k, 'v', idx, nVideo)}`, arg(v[k]));
+            if (settings.pixelFormat)
+                out.push(`-pix_fmt:${sel('v', idx, nVideo)}`, settings.pixelFormat);
+            // The renderer sets a two-second GOP unless told otherwise; x264
+            // left alone uses 250 frames. A command without this writes a
+            // differently-keyframed file from the one the preview measured.
+            if (v.g === undefined)
+                out.push(`-${keyFor('g', 'v', idx, nVideo)}`,
+                         String(Math.max(1, Math.round((spec.fps || 30) * 2))));
+            out.push('-colorspace', colour.matrix,
+                     '-color_primaries', colour.primaries,
+                     '-color_trc', colour.transfer,
+                     '-color_range', colour.range);
+            describe(out, s, 'v', idx, nVideo);
+            continue;
+        }
+        if (!g.ok || !g.audio) continue;
+        const idx = ai++;
+        out.push(`-c:${sel('a', idx, nAudio)}`, s.codec || spec.audioCodec);
+        const a = s.options || {};
+        for (const k of Object.keys(a)) out.push(`-${k}:${sel('a', idx, nAudio)}`, arg(a[k]));
+        if (spec.sampleRate) out.push(`-ar:${sel('a', idx, nAudio)}`, String(spec.sampleRate));
+        if (spec.channels) out.push(`-ac:${sel('a', idx, nAudio)}`, String(spec.channels));
+        describe(out, s, 'a', idx, nAudio);
     }
+
     if (settings.faststart && (containerInfo(settings.container) || {}).ext === 'mp4')
         out.push('-movflags', '+faststart');
     if (settings.title) out.push('-metadata', arg(`title=${settings.title}`));
+    for (const k of Object.keys(spec.metadata || {}))
+        if (spec.metadata[k] !== '') out.push('-metadata', arg(`${k}=${spec.metadata[k]}`));
     out.push(arg(spec.path || 'out.' + settings.container));
 
     return { spec, graph: g, pre, inputs, out };
@@ -196,6 +264,17 @@ function notes(p) {
     }
     for (const c of (p.graph.caveats || []))
         lines.push([span('Differs: ', 'lead'), c + '.']);
+
+    // The one thing on this stage that an ffmpeg command line genuinely cannot
+    // say. There is no `-chapter` option: ffmpeg takes chapters from an input,
+    // so the equivalent is an FFMETADATA file and a second `-i`. Printing one
+    // would be printing a file that does not exist, and quietly dropping them
+    // would make the command describe a different output — so it is said.
+    if ((p.spec.chapters || []).length)
+        lines.push([span('Not expressible: ', 'lead'),
+                    `the ${p.spec.chapters.length} chapter marks. ffmpeg reads chapters from ` +
+                    'an input rather than from an option, so a command that wrote them would ' +
+                    'need an FFMETADATA file and a second -i; this render writes them directly.']);
     return div('cmd-note', lines.map((l) => div('', l)));
 }
 
