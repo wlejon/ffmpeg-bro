@@ -12,6 +12,8 @@ import { codecOf, labelOf } from './streams.js';
 import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
          containerOf, parseCopy } from './copy.js';
 import { kindOf, schemeOf, protocolLinked } from './destination.js';
+import { readsInput, readStream, subtitleCodecsOf,
+         defaultSubtitleCodec } from './subtitles.js';
 import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
 import { renderGraph } from '../filtergraph.js';
 import { buildSpec, range, specSources } from './spec.js';
@@ -116,6 +118,60 @@ function copyWarnings(list) {
 /// are here rather than on a control: a segment that cannot start where it was
 /// asked to, an index that cannot be moved to the front of something that
 /// cannot be rewound, and a destination list with nothing in it.
+/// What a subtitle row will succeed at and be wrong about.
+///
+/// **The one that matters most is not a failure at all**: a soft subtitle
+/// track is written correctly, plays correctly in a player, and is invisible in
+/// this application's viewer for the whole time you are working. There is no
+/// subtitle path in playback — bro's `<video>` decodes into an element and
+/// nothing in it draws cues — which is the same structural reason a filter
+/// cannot be previewed there. Said out loud once, on the stage where the row
+/// was added, because the alternative is somebody checking the viewer, seeing
+/// nothing, and concluding the track was not written.
+function subtitleWarnings(list) {
+    const out = [];
+    const subs = list.filter((s) => s.kind === 'subtitle');
+    if (!subs.length) return out;
+
+    const holds = subtitleCodecsOf(settings.container);
+    for (const s of subs) {
+        const where = labelOf(list, list.indexOf(s));
+        const stream = readStream(s);
+        if (!readsInput(s)) {
+            out.push(`${where} has no file to read cues from, so it will not be written — ` +
+                     'add a subtitle file on the Sources stage');
+            continue;
+        }
+        if (!stream) {
+            out.push(`${where} reads a stream that is not in its input any more — pick ` +
+                     'another');
+            continue;
+        }
+        if (isCopy(s)) {
+            // A copy is the codec that is already there, and the container has
+            // to hold that one rather than one it could encode.
+            if (holds.length && holds.indexOf(stream.codec) < 0 &&
+                !holds.some((h) => h === stream.codec))
+                out.push(`${where} copies a ${stream.codec} track and ` +
+                         `${settings.container} does not hold one — convert it instead, ` +
+                         `which is what ${defaultSubtitleCodec(settings.container) || 'the ' +
+                         'container'} is for`);
+        }
+    }
+
+    if (!holds.length)
+        out.push(`${settings.container} holds no subtitle codec this build can write, so ` +
+                 `${subs.length === 1 ? 'this subtitle stream' : 'these subtitle streams'} ` +
+                 'will stop the render — burn them into the picture instead, with a ' +
+                 'subtitles filter on the Graph stage');
+    else
+        out.push('the viewer cannot show a soft subtitle track — there is no subtitle path ' +
+                 'in playback at all, the same reason a filter cannot be previewed there. ' +
+                 'It is in the file; open the result, or burn it in and watch it on the ' +
+                 'Graph stage');
+    return out;
+}
+
 function destinationWarnings() {
     const out = [];
     const muxer = muxerInfo(settings.container) || { name: settings.container };
@@ -228,6 +284,8 @@ export function warnings() {
     const audioTracks = settings.streams.filter((s) => s.kind === 'audio').length;
     if (audioTracks > 1 && settings.container === 'webm')
         out.push('WebM players commonly show only the first audio track');
+
+    out.push(...subtitleWarnings(settings.streams));
 
     // A fourcc belongs to a container's vocabulary and not to a codec, so a tag
     // that was right for the mp4 it was chosen in stops the muxer dead in the

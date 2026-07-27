@@ -207,8 +207,15 @@ add_test(NAME ui-report COMMAND ffmpeg-bro-headless
 add_test(NAME ui-measure COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_measure.js"
          -- "${FIXTURE_A}")
+# The three things people mean by subtitles, each of which is a different
+# mechanism: a track beside the picture, a burn-in through libavfilter, and a
+# file on its own. Takes the fixture *directory* because it needs the video and
+# the cues that were written to go with it.
+add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_subtitles.js"
+         -- "${FIXTURE_DIR}")
 set_tests_properties(decode export capabilities inputs sequences ui-player ui-sources
-                     ui-export ui-sequence ui-report ui-measure PROPERTIES
+                     ui-export ui-sequence ui-report ui-measure ui-subtitles PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -238,5 +245,5 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED media TIMEOUT 300)
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences ui-player ui-sources ui-export
-                     ui-sequence ui-report ui-measure
+                     ui-sequence ui-report ui-measure ui-subtitles
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

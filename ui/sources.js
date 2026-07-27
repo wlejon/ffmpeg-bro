@@ -29,6 +29,9 @@ import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 import { optionColumn } from './opttable.js';
 import * as graph from './graph/overlay.js';
+import { streamsOf } from './export/streams.js';
+import { readsInput, filterPath } from './export/subtitles.js';
+import { goTo } from './shell.js';
 
 let refs = {};
 let hooks = {};
@@ -107,9 +110,25 @@ function graphReads() {
     return new Set(graph.sourceInputs());
 }
 
+/// Which inputs a stream row on the Write stage reads, by `-i` number.
+///
+/// The other way an input is used without a clip being cut from it. A subtitle
+/// file is the case that makes it necessary — nothing on the timeline is ever
+/// cut from one — but a copied soundtrack is the same shape and was already
+/// being reported as unused.
+function streamReads() {
+    const out = new Set();
+    for (const s of streamsOf()) {
+        const at = readsInput(s);
+        if (at) out.add(at.input);
+    }
+    return out;
+}
+
 function drawList() {
     const current = chosen();
     const reads = graphReads();
+    const subtitleWriters = streamReads();
     put(refs.list, () => {
         if (!inputs.length)
             return [
@@ -132,9 +151,17 @@ function drawList() {
             // nothing says nothing rather than saying "default", which would be
             // a row of noise on every card in the ordinary case.
             node.querySelector('.src-set').textContent = summary(input);
+            // A file of cues is never cut into a clip and is used all the same
+            // — by a stream row on the Write stage, or by a `subtitles=` node
+            // burning it into the picture. Both are counted, because "unused"
+            // beside a file the render is about to open is the one thing this
+            // stage cannot afford to get wrong, and a subtitle file would
+            // otherwise read that way permanently.
+            const written = subtitleWriters.has(inputs.indexOf(input));
             node.querySelector('.src-used').textContent =
                 input.error ? 'unreadable'
                 : [used ? `${used} clip${used === 1 ? '' : 's'}` : '',
+                   written ? 'written into the output' : '',
                    inGraph ? 'read by the graph' : ''].filter(Boolean).join(' · ') || 'unused';
             node.addEventListener('click', () => {
                 chosenId = input.id;
@@ -409,8 +436,71 @@ function assemblyRows(input) {
         case 'still':    return stillRows(input);
         case 'concat':   return concatRows(input);
         case 'device':   return deviceRows(input);
+        case 'subtitles': return subtitleRows(input);
         default:         return [];
     }
+}
+
+/// A file of cues, which is an `-i` this stage can describe and the timeline
+/// cannot use.
+///
+/// It is here because it *is* an `-i` — `ffmpeg -i clip.mp4 -i cues.srt` is how
+/// everyone writes it, the demuxer can be forced, `-ss` shifts every cue, and
+/// the command bar prints all of that in front of the same `-i` as everything
+/// else. What it cannot be is a clip: there is no picture to lay out and no
+/// sound to mix, and offering `Use on the timeline` would put a clip of nothing
+/// on it.
+///
+/// So the panel says the two things it *can* be, and both are somewhere else:
+/// a stream in the output, which is the Write stage, and a burn-in, which is a
+/// `subtitles` filter on the Graph stage like every other filter.
+function subtitleRows(input) {
+    const cues = (input.probe ? input.probe.streams : [])
+        .map((s) => `${s.index}: ${s.codec}${s.language ? ` (${s.language})` : ''}`);
+    return [
+        head('Subtitles'),
+        div('src-note dim',
+            'A file of cues. It is an ordinary -i — the demuxer, its options and -ss all ' +
+            'reach it — but there is no picture to lay out and no sound to mix, so nothing ' +
+            'is cut from it on the timeline.'),
+        row('Tracks', span(cues.join(' · ') || 'none libavformat could read', 'mono')),
+        div('src-note dim',
+            'Two things can be done with it, and each belongs where the decision is taken. ' +
+            'Add a subtitle stream on the Write stage and it travels beside the picture as ' +
+            'a track a player can turn off — carried through as it is, or converted into ' +
+            'what the container holds. Or burn it into the picture with a subtitles filter ' +
+            'on the Graph stage, which makes it part of the image and works in any ' +
+            'container.'),
+        row('As a filter', span(`subtitles=${filterPath(input.path)}`, 'mono')),
+        div('src-actions', el('button', {
+            cls: 'tiny', 'data-f': 'srcburn', text: 'Burn it into the picture',
+            title: 'Put a subtitles filter on the whole canvas, after compositing',
+            on: { click: () => burnIn(input) },
+        })),
+        div('src-note dim',
+            'That places an ordinary node on the graph, at the point where the whole canvas ' +
+            'is — nothing private, nothing this stage keeps to itself. The colon in a drive ' +
+            'letter is escaped and the path is quoted because a filtergraph separates a ' +
+            'filter’s arguments with colons and its filters with commas, which is a trap ' +
+            'whose error message names half a path and never mentions the colon.'),
+    ];
+}
+
+/// The short way to `subtitles=`, and it is short only in the sense that it
+/// knows the name of the filter and how to write the path.
+///
+/// **What it places is an ordinary node**, at `composite/after-overlay`, which
+/// is the same point the palette offers and the same one a measurement lands
+/// at. It appears on the Graph stage, it is printed by the command bar, it can
+/// be moved, configured and deleted there, and nothing about the render behaves
+/// differently because this button rather than the palette put it there — the
+/// rule chunk 10's measurement offers follow, for the same reason: a shortcut
+/// that produced something you could not then find is worse than no shortcut.
+function burnIn(input) {
+    graph.insert('composite/after-overlay', 'subtitles',
+                 { params: { filename: filterPath(input.path) } });
+    if (hooks.changed) hooks.changed();
+    goTo('graph');
 }
 
 /// A live device, which is an input this stage can describe and cannot use.

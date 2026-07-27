@@ -247,6 +247,14 @@ export function kindOf(input) {
     if (bro.ffmpeg.hasFramePattern(input.path)) return 'sequence';
     if ((input.options.pattern_type || '') === 'glob') return 'sequence';
     if (isImagePath(input.path)) return 'still';
+    // A file of cues, which is an `-i` with nothing to lay out: no picture, no
+    // sound, and libavformat reports no duration for one because a subtitle
+    // stream's length is where its last cue ends rather than anything in a
+    // header. Read off the probe rather than the extension — an `.srt` is not
+    // the only shape one comes in and this is the answer libavformat gave.
+    if (input.probe && input.probe.streams.length &&
+        input.probe.streams.every((s) => s.kind === 'subtitle'))
+        return 'subtitles';
     return 'file';
 }
 

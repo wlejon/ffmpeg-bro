@@ -32,6 +32,7 @@ import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
 import { buildSpec, specSources } from './export/spec.js';
 import { parseCopy } from './export/copy.js';
+import { parseDecode, defaultSubtitleCodec } from './export/subtitles.js';
 import { kindOf } from './export/destination.js';
 import { muxerInfo } from './export/capabilities.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
@@ -162,8 +163,13 @@ export function parts() {
     // takes the next number. A copy of a file the graph is also reading is one
     // `-i` and not two, which is the same rule the renderer follows: one input,
     // one demuxer, one seek.
+    // A converted subtitle track reads an input too — `-map 1:0 -c:s mov_text`
+    // — so it needs an `-i` and an index for exactly the same reason a copy
+    // does. One list, because "which streams read a file directly" is one
+    // question and two lists would be two answers to it.
     const copies = (spec.streams || [])
-        .map((s) => ({ s, at: parseCopy(s.source) }))
+        .map((s) => ({ s, at: parseCopy(s.source) || parseDecode(s.source),
+                       copied: !!parseCopy(s.source) }))
         .filter((c) => c.at);
     const order = g.ok ? (g.inputRefs || []).slice() : [];
     const printedPath = g.ok ? g.inputs.slice() : [];
@@ -245,6 +251,7 @@ export function parts() {
     const streams = spec.streams && spec.streams.length ? spec.streams : [];
     const nVideo = streams.filter((s) => s.kind === 'video').length;
     const nAudio = streams.filter((s) => s.kind === 'audio').length;
+    const nSub = streams.filter((s) => s.kind === 'subtitle').length;
 
     // Whether anything maps the graph at all. A rewrap maps input pads and
     // nothing else, so printing a `-filter_complex` beside it would be printing
@@ -252,6 +259,11 @@ export function parts() {
     // describes work the render is not doing.
     const graphUsed = g.ok && streams.some(
         (s) => !parseCopy(s.source) && (s.kind === 'video' || s.kind === 'audio'));
+    // `-sn` for the same reason `-vn` and `-an` are printed: a command that
+    // says nothing about subtitles lets ffmpeg's own stream selection put one
+    // in, and an mp4 built from a source that had a text track would come out
+    // with a track this render did not write.
+    const noSubs = nSub === 0;
 
     // The output half, once per pass.
     //
@@ -271,7 +283,7 @@ export function parts() {
     // `-map 0:1` — and the number is the printed input's, which is why the
     // `-i`s were planned before this. Everything else maps the graph's output.
     for (const s of streams) {
-        const at = parseCopy(s.source);
+        const at = parseCopy(s.source) || parseDecode(s.source);
         if (at) {
             const n = printedIndex(at.input);
             if (n >= 0) out.push('-map', `${n}:${at.stream}`);
@@ -281,12 +293,27 @@ export function parts() {
         if (s.kind === 'video') out.push('-map', arg(g.video));
         else if (s.kind === 'audio' && g.audio) out.push('-map', arg(g.audio));
     }
+    if (noSubs) out.push('-sn');
     if (!nVideo) out.push('-vn');
     if (!nAudio || (!copies.some((c) => c.s.kind === 'audio') && (!g.ok || !g.audio)))
         out.push('-an');
 
-    let vi = 0, ai = 0, ti = 0;
+    let vi = 0, ai = 0, ti = 0, si = 0;
     for (const s of streams) {
+        // A subtitle stream, either way it is read. `-c:s copy` carries the
+        // packets and `-c:s mov_text` decodes and writes them again, and the
+        // `-map` above is the same line for both — which is exactly the
+        // distinction ffmpeg's own command line draws and the reason this is
+        // one branch rather than two.
+        if (s.kind === 'subtitle') {
+            const idx = si++;
+            out.push(`-c:${sel('s', idx, nSub)}`,
+                     parseCopy(s.source) ? 'copy'
+                                         : (s.codec || defaultSubtitleCodec(settings.container)));
+            bsfArgs(out, s, 's', idx, nSub);
+            describe(out, s, 's', idx, nSub);
+            continue;
+        }
         // `-c:v copy` and nothing else. Not one of the encoder options below
         // applies — there is no encoder — and printing a `-crf` beside a
         // `copy` would be printing a command that means something different

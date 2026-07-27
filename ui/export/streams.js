@@ -44,6 +44,9 @@ import { videoOptions, audioOptions } from './options.js';
 import { optionColumn } from '../opttable.js';
 import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
          keyframesFor, keyframeAtOrBefore, inPointNote, rewrapRows } from './copy.js';
+import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
+         holdsSubtitles, isDecode, readsInput, readStream, readInput,
+         defaultSubtitleSource } from './subtitles.js';
 
 let host = null;
 let hooks = {};
@@ -79,10 +82,24 @@ export function normalizeStreams() {
     const list = Array.isArray(settings.streams) ? settings.streams : [];
     const clean = [];
     for (const s of list) {
-        if (!s || (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'attachment')) continue;
+        if (!s || (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'attachment' &&
+                   s.kind !== 'subtitle')) continue;
         s.id = newId();
         s.source = s.source || (s.kind === 'video' ? 'composite'
                               : s.kind === 'audio' ? 'mix' : '');
+        // A subtitle row reads an input and there is no composed source to fall
+        // back to, so a row whose input has gone takes the first subtitle
+        // stream that is still there — and is dropped when there is none. It
+        // cannot become "the mix" the way a stale copy of a soundtrack can.
+        if (s.kind === 'subtitle') {
+            const at = readsInput(s);
+            const gone = !at || !inputs[at.input] || !(inputs[at.input].probe || {}).streams;
+            if (gone) {
+                const put = defaultSubtitleSource(settings.container);
+                if (!put) continue;
+                s.source = put;
+            }
+        }
         // A copy names an input by index, and the index is the document's `-i`
         // numbering — which the document this list was stored under no longer
         // is. A row pointing past the end of the input list would reach
@@ -90,8 +107,8 @@ export function normalizeStreams() {
         // nothing looks wrong, so it comes back as the composed source it would
         // have been.
         const at = parseCopy(s.source);
-        if (at && (!inputs[at.input] ||
-                   !(inputs[at.input].probe || {}).streams))
+        if (s.kind !== 'subtitle' && at &&
+            (!inputs[at.input] || !(inputs[at.input].probe || {}).streams))
             s.source = s.kind === 'video' ? 'composite' : 'mix';
         s.copyFrom = Number(s.copyFrom) || 0;
         s.copyTo = Number(s.copyTo) || 0;
@@ -119,7 +136,7 @@ export function ordinalOf(list, i) {
     return n;
 }
 
-const KIND_LETTER = { video: 'V', audio: 'A', attachment: 'T' };
+const KIND_LETTER = { video: 'V', audio: 'A', subtitle: 'S', attachment: 'T' };
 
 export function labelOf(list, i) {
     return `${KIND_LETTER[list[i].kind] || '?'}${ordinalOf(list, i) + 1}`;
@@ -137,7 +154,8 @@ export function codecOf(s) {
     if (copied) return copied.codec;
     if (s.codec) return s.codec;
     return s.kind === 'video' ? activeVideoCodec()
-         : s.kind === 'audio' ? activeAudioCodec() : '';
+         : s.kind === 'audio' ? activeAudioCodec()
+         : s.kind === 'subtitle' ? defaultSubtitleCodec(settings.container) : '';
 }
 
 export function addStream(kind) {
@@ -145,6 +163,11 @@ export function addStream(kind) {
     if (kind === 'video') s.source = 'composite';
     if (kind === 'audio') s.source = 'mix';
     if (kind === 'attachment') s.path = '';
+    // A subtitle row has nothing composed to point at, so it arrives pointing
+    // at the first subtitle stream there is. Added at all only where there is
+    // one — see `addButton`, which says so rather than offering a row that
+    // cannot be filled in.
+    if (kind === 'subtitle') s.source = defaultSubtitleSource(settings.container);
     settings.streams.push(s);
     openDetail = s.id;
     syncAudioFlag();
@@ -196,6 +219,11 @@ export function streamSpecs(over = {}) {
         // switch has nothing to say about it: its packets come out of a
         // demuxer whether or not this edit has any sound in it.
         if (s.kind === 'audio' && !settings.audio && !isCopy(s)) continue;
+        // A subtitle row with nowhere to read from is a row somebody added
+        // before adding the file. Dropped rather than sent, exactly as a
+        // pathless attachment is: `warnings()` says so where a refusal from
+        // the renderer would only say it about a form nobody can see.
+        if (s.kind === 'subtitle' && !readsInput(s)) continue;
         const copying = isCopy(s);
         const codec = copying ? '' : codecOf(s);
         const meta = Object.assign({}, s.metadata);
@@ -207,8 +235,12 @@ export function streamSpecs(over = {}) {
             // is no encoder to name, and a codec that reached one would be a
             // setting that silently did nothing.
             codec,
-            copyFrom: copying ? (Number(s.copyFrom) || 0) : 0,
-            copyTo: copying ? (Number(s.copyTo) || 0) : 0,
+            // The span read out of the input, on the input's own clock. It
+            // means the same thing for a converted subtitle track as for a
+            // copy — where the reading starts and where the output's zero is
+            // — which is why there is one pair of fields rather than two.
+            copyFrom: copying || isDecode(s) ? (Number(s.copyFrom) || 0) : 0,
+            copyTo: copying || isDecode(s) ? (Number(s.copyTo) || 0) : 0,
             // The packet chain, in order. An entry with no name is a row
             // somebody has opened and not filled in, and it is dropped for the
             // reason a pathless attachment is: `-bsf:v ,dump_extra` is not a
@@ -220,7 +252,7 @@ export function streamSpecs(over = {}) {
             // this row ends up on: a second video stream at x265 gets x265's
             // way of saying the quality that was asked for, not x264's keys.
             // A copied stream has no encoder for any of it to reach.
-            options: copying ? {}
+            options: copying || s.kind === 'subtitle' ? {}
                    : s.kind === 'video' ? videoOptions(codec, over) : audioOptions(codec),
             metadata: meta,
             language: s.language || '',
@@ -242,6 +274,7 @@ export function drawStreams() {
         div('ex-add', [
             addButton('Video', 'video'),
             addButton('Audio', 'audio'),
+            ...subtitleAdd(),
             addButton('Attachment', 'attachment'),
         ]),
         ...rewrapRow(),
@@ -297,12 +330,36 @@ function rewrap(index) {
     hooks.changed();
 }
 
+/// `+ Subtitle`, and the two reasons it might not be offered.
+///
+/// **Both are worth saying rather than hiding.** A stage with no subtitle
+/// button on it reads as an application that cannot write subtitles, which is
+/// the wrong conclusion from either "you have not added the file yet" or "this
+/// container holds none". So the button is there when a subtitle track can
+/// actually be made and the reason is there when it cannot.
+function subtitleAdd() {
+    const holds = holdsSubtitles(settings.container);
+    const sources = subtitleChoices().length > 0;
+    if (holds && sources) return [addButton('Subtitle', 'subtitle')];
+    return [div('ex-note dim',
+                !holds
+                    ? `The ${settings.container} muxer holds no subtitle codec this build ` +
+                      'can write, so there is no subtitle stream to add. Matroska holds ass, ' +
+                      'subrip and webvtt; mp4 holds mov_text. Burning them into the picture ' +
+                      'is a subtitles filter on the Graph stage and works in any container.'
+                    : 'A subtitle stream is read out of a file — an .srt, a .vtt, an .ass, or ' +
+                      'a track already inside a video. Add one on the Sources stage and it ' +
+                      'can be carried through or converted here.')];
+}
+
 function addButton(label, kind) {
     return el('button', {
         cls: 'tiny', text: `+ ${label}`, 'data-add': kind,
         title: kind === 'attachment'
             ? 'A file that travels inside the output — a font, a cover image'
-            : `Another ${kind} stream in the output`,
+            : kind === 'subtitle'
+                ? 'A subtitle track in the output, carried through or converted'
+                : `Another ${kind} stream in the output`,
         on: { click: () => { addStream(kind); hooks.changed(); } },
     });
 }
@@ -355,6 +412,12 @@ function says(s) {
         return [span('carries', 'dim'), path];
     }
 
+    // **A subtitle row has no composed source**, so its sentence is a different
+    // sentence: not "made or copied" but "which track, carried or converted".
+    // Drawing it with the other two would put "the composite" in a menu where
+    // it means nothing.
+    if (s.kind === 'subtitle') return saysSubtitle(s);
+
     const made = s.kind === 'video' ? 'the composite' : 'the mix';
     const sources = [{ id: s.kind === 'video' ? 'composite' : 'mix', label: made }]
         .concat(copyChoices(s.kind).map((c) => ({ id: c.id, label: `copy — ${c.label}` })));
@@ -396,6 +459,47 @@ function says(s) {
     ];
 }
 
+/// A subtitle row: which track, and what it comes out as.
+///
+/// **Carrying and converting are one control**, because they are one decision
+/// with one question behind it — is the codec that is in the input a codec this
+/// container holds? Split across two controls, somebody would set the encoder
+/// on a row that is being copied, which is a setting that does nothing, and the
+/// application would have to say so afterwards.
+function saysSubtitle(s) {
+    const choices = subtitleChoices();
+    const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
+                            title: 'Carried through as it is, or decoded and written again',
+                            on: { change: (e) => { setSource(s, e.target.value); } } },
+                          choices.length ? choices
+                                         : [{ id: '', label: 'no subtitle file is open' }],
+                          s.source || '');
+
+    const stream = readStream(s);
+    if (isCopy(s)) {
+        // No encoder, so no menu: what is in the file is what was in the input.
+        return [picker, span('·', 'dim'),
+                span(`${stream ? stream.codec : 'as it is'}, unchanged`, 'ex-stream-copied')];
+    }
+
+    // What the container holds, asked of it. A row is not offered a codec the
+    // muxer will refuse, because the refusal would arrive at `write_header` —
+    // long after this menu said it was fine.
+    const legal = subtitleCodecsOf(settings.container);
+    const inherited = defaultSubtitleCodec(settings.container);
+    const list = subtitleEncoders().filter((e) => legal.indexOf(e.id) >= 0);
+    const options = [{ id: '', label: `${inherited || 'container default'}  (what ` +
+                                      `${settings.container} writes)` }]
+        .concat(list.map((e) => ({ id: e.id, label: `${e.id} — ${e.label}` })));
+    return [
+        picker,
+        span('as', 'dim'),
+        select({ cls: 'ex-stream-codec', 'data-f': 'stream-codec',
+                 on: { change: (e) => { s.codec = e.target.value; hooks.changed(); } } },
+               options, s.codec || ''),
+    ];
+}
+
 /// Move a row between being made and being copied.
 ///
 /// The encoder choice is dropped on the way in, because a copied stream has no
@@ -408,7 +512,11 @@ function setSource(s, source) {
         s.codec = '';
         s.bsf = s.bsf || [];
         s.tag = '';
-    } else {
+    } else if (s.kind !== 'subtitle') {
+        // A converted subtitle track keeps its window: `copyFrom` says where
+        // the reading starts and where the output's zero is, which is the same
+        // decision whether the cues are copied or written again. Only a
+        // *composed* stream has no window, because its zero is the range's.
         s.copyFrom = 0;
         s.copyTo = 0;
     }
@@ -431,7 +539,7 @@ function tailOf(s) {
     // renderer is given and what `-ss`/`-to` in the command say. Written before
     // the metadata because it is the part of the sentence that changes what is
     // in the file.
-    if (isCopy(s)) {
+    if (isCopy(s) || (s.kind === 'subtitle' && isDecode(s))) {
         const from = Number(s.copyFrom) || 0;
         const to = Number(s.copyTo) || 0;
         if (from > 0 || to > 0)
@@ -504,6 +612,27 @@ function detailRows(s, tail) {
 // only a sentence answers "and what does that mean".
 
 function copyRows(s, restate) {
+    // **A subtitle stream has no keyframes to snap to.** Every cue stands on
+    // its own — it is a moment with text on it, not a frame that depends on
+    // the one before — so the window is two numbers and there is nothing to
+    // draw a strip of. Saying that is better than an empty strip, which reads
+    // as a file whose keyframes could not be found.
+    if (s.kind === 'subtitle') {
+        if (!readsInput(s)) return [];
+        const input = readInput(s);
+        return [
+            head('What is read'),
+            row('From', [subNum(s, 'copyFrom', restate),
+                         span('seconds into the file', 'dim')]),
+            row('To', [subNum(s, 'copyTo', restate), span('0 is the end of it', 'dim')]),
+            div('ex-note dim',
+                'The start is also the output’s zero: a subtitle file written against a ' +
+                'whole programme, read from ten seconds in, comes out ten seconds earlier ' +
+                'than it went in. Every cue stands on its own, so unlike a copied picture ' +
+                'this can begin anywhere.' +
+                (input ? ` Read out of ${input.name}.` : '')),
+        ];
+    }
     if (!isCopy(s)) return [];
 
     const list = keyframesFor(s);
@@ -561,6 +690,20 @@ function copyRows(s, restate) {
         `${list.complete ? '' : ' — and the list was cut short, so there are more'}. ` +
         'A copy is packets, so it can only begin on one of them.'));
     return out;
+}
+
+/// One of a subtitle row's two window numbers. The same control the copy rows
+/// use, without the strip: there is nothing to snap to.
+function subNum(s, key, restate) {
+    return el('input', {
+        cls: 'num', 'data-f': `copy-${key}`, type: 'number', min: 0, step: 0.1,
+        value: Number(s[key]) || 0,
+        on: { change: (e) => {
+            s[key] = Math.max(0, Number(e.target.value) || 0);
+            restate();
+            hooks.restated();
+        } },
+    });
 }
 
 /// The input's clock with a mark per keyframe, and the in-point against them.
