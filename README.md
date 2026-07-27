@@ -151,7 +151,9 @@ bro.ffmpeg.protocolOptions("srt")     // what a destination is configured with
 // because it is the one query here that talks to hardware — enumerating
 // DirectShow asks every camera driver on the machine.
 bro.ffmpeg.deviceSources("dshow")
-// → { ok, error, sources: [{ name, description }, ...] }
+// → { ok, error, sources: [{ name, description, mediaTypes }, ...] }
+// `mediaTypes` is load-bearing: dshow returns the cameras and the sound cards
+// in one list, and without it a capture UI has to guess which is which.
 // A device with nothing to enumerate — gdigrab takes a rectangle, not a name —
 // answers `ok: false` with a reason, because an empty list reads as a machine
 // with no cameras in it.

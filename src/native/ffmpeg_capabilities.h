@@ -128,6 +128,11 @@ struct CodecOption {
     /// The muxers that will hold this codec, by name, asked of
     /// `avformat_query_codec` over every muxer this build links. Names rather
     /// than extensions because a muxer is chosen by name — see MuxerOption.
+    ///
+    /// Every muxer that did not say *no*, which includes the ones that have
+    /// never been taught to answer: `MuxerOption::answersCodecs` is where that
+    /// distinction is kept, and this list asks the question the same way so
+    /// that the two cannot disagree.
     std::vector<std::string> containers;
 };
 
@@ -288,6 +293,12 @@ std::vector<DeviceInfo> availableDevices();
 struct DeviceSource {
     std::string name;        // what to put after -i
     std::string description; // what to show
+
+    /// "video", "audio" — what this source carries. Load-bearing rather than
+    /// decoration: `avdevice_list_input_sources` on dshow returns the cameras
+    /// *and* the sound cards in one list, so without this a capture UI has to
+    /// guess which of them is which from the description.
+    std::vector<std::string> mediaTypes;
 };
 
 struct DeviceSourceList {

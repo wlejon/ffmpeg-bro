@@ -145,12 +145,17 @@ void profilesOf(const AVCodec* codec, CodecOption& out) {
 /// and the question asked of each is the one that matters: VP9 in an mp4 is
 /// legal and plays nowhere, AAC in a WebM is not legal at all, and either way
 /// the complaint arrives at write_header — long after the menu offered it.
+/// A muxer that never said no. Yes, and *did not say*, are both here — see
+/// `MuxerOption::answersCodecs` for why the third answer exists and why reading
+/// it as a refusal is the wrong way round. `availableMuxers()` asks the same
+/// question the same way, so the two lists cannot come to disagree about
+/// whether MPEG-TS will take H.264.
 std::vector<std::string> containersFor(const AVCodec* codec) {
     std::vector<std::string> out;
     void* opaque = nullptr;
     while (const AVOutputFormat* ofmt = av_muxer_iterate(&opaque)) {
         if (!ofmt->name) continue;
-        if (avformat_query_codec(ofmt, codec->id, FF_COMPLIANCE_NORMAL) == 1)
+        if (avformat_query_codec(ofmt, codec->id, FF_COMPLIANCE_NORMAL) != 0)
             out.push_back(ofmt->name);
     }
     return out;
@@ -855,6 +860,10 @@ DeviceSourceList deviceSources(const std::string& name) {
         DeviceSource s;
         s.name = d->device_name ? d->device_name : "";
         s.description = d->device_description ? d->device_description : "";
+        for (int k = 0; k < d->nb_media_types; ++k) {
+            const char* t = av_get_media_type_string(d->media_types[k]);
+            if (t) s.mediaTypes.push_back(t);
+        }
         out.sources.push_back(std::move(s));
     }
     avdevice_free_list_devices(&list);

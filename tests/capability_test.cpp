@@ -246,6 +246,28 @@ int main(int argc, char** argv) {
     check(!bogus.ok && !bogus.error.empty(),
           "asking a device that is not there for its sources is a reason, not an empty list");
 
+    // Asked for real, because this is the one query in the file that talks to
+    // hardware and the failure mode is a driver rather than a mistake here.
+    // What is asserted is coherence, never that anything is plugged in: a
+    // machine with no camera is not a broken build.
+    bool sourcesCoherent = true;
+    for (const auto& d : devs) {
+        if (d.direction != "input") continue;
+        const auto list = deviceSources(d.name);
+        if (!list.ok) {
+            // ENOSYS is the ordinary answer — gdigrab takes a rectangle, not a
+            // device name — and it has to arrive as a reason.
+            if (list.error.empty() || !list.sources.empty()) sourcesCoherent = false;
+            std::printf("       %-10s %s\n", d.name.c_str(), list.error.c_str());
+            continue;
+        }
+        for (const auto& s : list.sources) if (s.name.empty()) sourcesCoherent = false;
+        std::printf("       %-10s lists %zu source%s\n", d.name.c_str(), list.sources.size(),
+                    list.sources.size() == 1 ? "" : "s");
+    }
+    check(sourcesCoherent,
+          "and every device either lists sources that can be named, or says why not");
+
     // ── decoders ───────────────────────────────────────────────────────────
 
     std::printf("\ndecoders\n");

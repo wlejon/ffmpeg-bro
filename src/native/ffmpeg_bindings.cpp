@@ -707,6 +707,7 @@ JSValue js_deviceSources(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
         JSValue o = JS_NewObject(ctx);
         setStr(ctx, o, "name", s.name);
         setStr(ctx, o, "description", s.description);
+        JS_SetPropertyStr(ctx, o, "mediaTypes", stringsToJs(ctx, s.mediaTypes));
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     JS_SetPropertyStr(ctx, out, "sources", arr);
