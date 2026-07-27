@@ -5,6 +5,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavdevice/avdevice.h>
 #include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
@@ -335,8 +336,26 @@ std::string padsOf(const AVFilter* f, int isOutput) {
 
 std::vector<OptionInfo> encoderOptions(const std::string& codecName) {
     const AVCodec* codec = avcodec_find_encoder_by_name(codecName.c_str());
-    return codec ? optionsOf(codec->priv_class, AV_OPT_FLAG_ENCODING_PARAM)
-                 : std::vector<OptionInfo>{};
+    if (!codec) return {};
+    // The encoder's own options, then the generic AVCodecContext ones it has
+    // not shadowed — the same two halves `muxerOptions`, `demuxerOptions` and
+    // `decoderOptions` have always reported, and for the same reason: both
+    // reach the encoder, because `av_opt_set(ctx, …, AV_OPT_SEARCH_CHILDREN)`
+    // is one call that finds either.
+    //
+    // This half was missing, and what was missing with it was most of what the
+    // command line reaches for outside a codec's own vocabulary: `flags`
+    // (which is where `+ildct`, `+ilme` and `+cgop` live), `g`, `bf`, `maxrate`,
+    // `bufsize`, `threads`, `thread_type`, `field_order`. A column claiming to
+    // be every option the encoder has was short by ninety of them.
+    std::vector<OptionInfo> out = optionsOf(codec->priv_class, AV_OPT_FLAG_ENCODING_PARAM);
+    for (auto& o : optionsOf(avcodec_get_class(), AV_OPT_FLAG_ENCODING_PARAM)) {
+        if (std::find_if(out.begin(), out.end(),
+                         [&](const OptionInfo& e) { return e.name == o.name; }) != out.end())
+            continue;
+        out.push_back(std::move(o));
+    }
+    return out;
 }
 
 std::vector<FilterInfo> availableFilters() {
@@ -919,6 +938,39 @@ std::vector<OptionInfo> decoderOptions(const std::string& name) {
         out.push_back(std::move(o));
     }
     return out;
+}
+
+// ── bitstream filters ──────────────────────────────────────────────────────
+
+std::vector<BsfInfo> availableBitstreamFilters() {
+    static const std::vector<BsfInfo> cached = [] {
+        std::vector<BsfInfo> out;
+        void* opaque = nullptr;
+        while (const AVBitStreamFilter* f = av_bsf_iterate(&opaque)) {
+            if (!f->name) continue;
+            BsfInfo b;
+            b.name = f->name;
+            // A null list is "any codec", which is what `setts` and `noise`
+            // declare. Reported as an empty list because that is the same fact
+            // said once, and the caller that offers a menu has to know the
+            // difference between "these" and "all of them" either way.
+            if (f->codec_ids)
+                for (const AVCodecID* id = f->codec_ids; *id != AV_CODEC_ID_NONE; ++id)
+                    b.codecs.push_back(avcodec_get_name(*id));
+            out.push_back(std::move(b));
+        }
+        return out;
+    }();
+    return cached;
+}
+
+std::vector<OptionInfo> bsfOptions(const std::string& name) {
+    const AVBitStreamFilter* f = av_bsf_get_by_name(name.c_str());
+    // No `require` flag: a bitstream filter's options carry none of
+    // libavutil's direction bits, so asking for one would return nothing at
+    // all. The whole table belongs to the filter, which is the case the flag
+    // exists to narrow away from and does not apply here.
+    return f ? optionsOf(f->priv_class, 0) : std::vector<OptionInfo>{};
 }
 
 // ── tags and dispositions ──────────────────────────────────────────────────

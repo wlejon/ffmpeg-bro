@@ -48,6 +48,17 @@ public:
     /// Add `frames` samples covering [from, from + frames/rate) into `dst`,
     /// which the caller has zeroed.
     virtual void mixInto(float* dst, double from, int frames, int rate, int channels) = 0;
+
+    /// Is there anything left to render at `t`, or is the rest of the range
+    /// going to come out empty?
+    ///
+    /// Only asked when `-shortest` is on, and only *after* `canvasAt(t)` — the
+    /// graph does not find out that its last input has ended until it has tried
+    /// to pull a frame, so a question asked before would always be one frame
+    /// behind and would write the black frame it was meant to prevent. The
+    /// default is "there is always more", which is the honest answer for
+    /// anything that has not been taught to say otherwise.
+    virtual bool exhausted(double t) const { return false; }
 };
 
 class TimelineSource : public FrameSource {
@@ -67,6 +78,11 @@ public:
     /// Every clip under the playhead contributes at its own level: summed, not
     /// picked between.
     void mixInto(float* dst, double from, int frames, int rate, int channels) override;
+
+    /// Nothing covers `t` and nothing begins after it — the stack has run out.
+    /// A gap in the middle of a timeline is not the end of it, which is why
+    /// this asks about every clip rather than about the one under the playhead.
+    bool exhausted(double t) const override;
 
 private:
     ExportSettings settings_;

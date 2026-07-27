@@ -31,15 +31,11 @@ bool SourceVideo::open(const MediaInput& in, std::string* err) {
     limit_ = inputLimit(in);
     loop_.configure(fmt_, in);
 
-    const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-    if (!codec) { if (err) *err = path + ": no decoder for this video"; return false; }
-    dec_ = avcodec_alloc_context3(codec);
-    if (!dec_ || avcodec_parameters_to_context(dec_, st->codecpar) < 0) return false;
-    dec_->thread_count = 0;
-    dec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-    dec_->pkt_timebase = timeBase_;
-    const int rc = avcodec_open2(dec_, codec, nullptr);
-    if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
+    // The input's own decoder options go on here — `-skip_frame`,
+    // `-skip_loop_filter` and the rest — through the one place that applies
+    // them, so a render and playback open the same decoder the same way.
+    if (!openDecoder(&dec_, st->codecpar, timeBase_, in, /*threaded=*/true, err))
+        return false;
 
     // Every stream on the file except this one is skipped in the demuxer,
     // so a 1080p sibling track costs nothing to walk past.
@@ -217,12 +213,8 @@ bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels) {
     limit_ = inputLimit(in);
     loop_.configure(fmt_, in);
 
-    const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-    if (!codec) return false;
-    dec_ = avcodec_alloc_context3(codec);
-    if (!dec_ || avcodec_parameters_to_context(dec_, st->codecpar) < 0) return false;
-    dec_->pkt_timebase = timeBase_;
-    if (avcodec_open2(dec_, codec, nullptr) < 0) return false;
+    if (!openDecoder(&dec_, st->codecpar, timeBase_, in, /*threaded=*/false, &why))
+        return false;
 
     for (unsigned i = 0; i < fmt_->nb_streams; ++i)
         fmt_->streams[i]->discard =

@@ -70,6 +70,27 @@ struct ExportClip {
     int z = 0;
 };
 
+/// One bitstream filter on one stream — `-bsf:v h264_mp4toannexb`.
+///
+/// **A bitstream filter is not an encoder option and not a muxer option.** It
+/// sits between the two, working on packets that have already been encoded:
+/// `h264_mp4toannexb` rewrites length-prefixed NAL units as start codes,
+/// `hevc_metadata` edits the VUI without re-encoding a pixel, `dump_extra`
+/// puts the parameter sets in front of every keyframe so a stream can be joined
+/// mid-flight, `setts` rewrites timestamps. None of them can be reached by any
+/// of the option bags above, because none of them belongs to an encoder or to a
+/// muxer.
+///
+/// It is a **chain, in order**, per stream. `-bsf:v a,b` runs `a` and then `b`,
+/// and the order is the whole of the meaning — which is why this is a list of
+/// named things with their own arguments rather than a string to be parsed
+/// somewhere. libavcodec's own `av_bsf_list_*` joins them into one context, so
+/// what runs is what a command line would run.
+struct ExportBsf {
+    std::string name;                   ///< `av_bsf_get_by_name`; unknown is an error
+    std::vector<ExportOption> options;  ///< out of the filter's own AVClass
+};
+
 /// One stream in the output file.
 ///
 /// The renderer used to write exactly one video stream and one audio stream,
@@ -144,6 +165,42 @@ struct ExportStream {
     std::string pixelFormat;        // empty takes the render's
     int sampleRate = 0;             // audio: 0 takes the render's
     int channels = 0;
+
+    /// `-force_key_frames:v`, exactly as ffmpeg spells it: a comma-separated
+    /// list of times, or `expr:` and one of libavutil's expressions evaluated
+    /// per frame against `n`, `t`, `n_forced`, `prev_forced_n`, `prev_forced_t`.
+    ///
+    /// **The times are seconds into the output**, not into the timeline, which
+    /// is what ffmpeg means by them and what makes a printed command run
+    /// elsewhere and produce the same file. Whoever knows where the cuts are
+    /// subtracts the range's start; nothing here can, because nothing here
+    /// knows there was a range.
+    ///
+    /// Empty takes `ExportSettings::forceKeyFrames`.
+    std::string forceKeyFrames;
+
+    /// "progressive", "tt" (top field first) or "bb". Empty takes the render's.
+    ///
+    /// Two things at once, and they have to travel together: the encoder is put
+    /// into interlaced mode (`-flags +ildct+ilme`, and `field_order` written
+    /// into the stream so a player knows) *and* every frame handed to it is
+    /// marked interlaced with the field order it was told. Setting only the
+    /// first writes a file that claims to be interlaced and is not; setting
+    /// only the second is a claim nothing downstream can read.
+    std::string fieldOrder;
+
+    /// `-threads` and `-thread_type`. 0 is `auto`, which is what every encoder
+    /// in this binary has always been opened with and remains the right default
+    /// — this exists for the render that has to leave a core alone.
+    int threads = -1;               ///< <0 takes the render's
+    std::string threadType;         ///< "frame", "slice", "frame+slice"; empty is the render's
+
+    /// The packet chain this stream goes through on the way to the muxer.
+    ///
+    /// Per stream and not per render, because that is what a bitstream filter
+    /// is: `-bsf:v` and `-bsf:a` are different chains on different packets, and
+    /// two video streams in one file are routinely two different trades.
+    std::vector<ExportBsf> bitstreamFilters;
 
     // ── Attachment ─────────────────────────────────────────────────────────
     //
@@ -322,6 +379,28 @@ struct ExportSettings {
 
     bool faststart = true;          // mp4/mov: index at the front
     std::string title;              // written as the container's title tag
+
+    /// The defaults every video stream takes when its own field is empty. See
+    /// `ExportStream` for what each means; they live in both places for the
+    /// reason `crf` and `preset` do — a stream list that had to repeat every
+    /// setting to say nothing new about it is a list nobody would write.
+    std::string forceKeyFrames;
+    std::string fieldOrder;
+    int threads = 0;                ///< 0 is libavcodec's `auto`
+    std::string threadType;
+
+    /// `-shortest`: stop when there is nothing left to render.
+    ///
+    /// The render's range says how long the output is, and past the end of the
+    /// content both `FrameSource`s answer honestly — the track stack with an
+    /// empty canvas, the graph with black once its last input has ended. This
+    /// says to stop there instead of writing those frames out, which is exactly
+    /// what ffmpeg's `-shortest` means one level down: finish the file when the
+    /// thing feeding it has finished.
+    ///
+    /// Off by default, because a range is a decision somebody made and silently
+    /// writing less of it than was asked for is the wrong half of the trade.
+    bool shortest = false;
 
     /// Everything else written into the container's own metadata dictionary.
     /// `title` above stays a named field because it is the one every caller

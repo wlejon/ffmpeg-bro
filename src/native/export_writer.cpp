@@ -11,6 +11,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/mem.h>
 #include <libavutil/opt.h>
+#include <libavutil/parseutils.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -177,7 +178,154 @@ std::string fileName(const std::string& path) {
     return cut == std::string::npos ? path : path.substr(cut + 1);
 }
 
+/// Pull one key out of an option bag, leaving the rest.
+///
+/// For the two options in this file that are **not the encoder's**: `pass` and
+/// `passlogfile` are ffmpeg's own, exactly as `-map` and `-shortest` are, and
+/// handing either to `av_opt_set` would be an unknown option — which is an
+/// error here, and rightly. The ffmpeg command line treats them the same way,
+/// which is why they travel in the same bag as `-crf` and are taken out of it
+/// here rather than being named fields nobody would find.
+bool takeOption(std::vector<ExportOption>& opts, const char* key, std::string* value) {
+    for (auto it = opts.begin(); it != opts.end(); ++it) {
+        if (it->key != key) continue;
+        *value = it->value;
+        opts.erase(it);
+        return true;
+    }
+    return false;
+}
+
+/// The whole of a file, or empty. `stats_in` wants the pass-1 log as one
+/// NUL-terminated string, which is exactly what a text read gives.
+std::string readWholeFile(const std::string& path) {
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
+    if (!in) return {};
+    return std::string((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+}
+
+/// `-passlogfile x` becomes `x-0.log`, which is what ffmpeg writes and
+/// therefore what somebody who ran the printed command already has on disk.
+/// The number is the video stream's ordinal, so two video streams in one file
+/// keep two sets of statistics.
+std::string passLogName(const std::string& prefix, int videoOrdinal) {
+    const std::string base = prefix.empty() ? std::string("ffmpeg2pass") : prefix;
+    return base + "-" + std::to_string(videoOrdinal) + ".log";
+}
+
+/// "tt"/"bb"/"progressive" as libavcodec's field order, or UNKNOWN for "say
+/// nothing". Two names because ffmpeg takes both spellings.
+AVFieldOrder fieldOrderNamed(const std::string& s) {
+    if (s == "tt" || s == "tff" || s == "top") return AV_FIELD_TT;
+    if (s == "bb" || s == "bff" || s == "bottom") return AV_FIELD_BB;
+    if (s == "tb") return AV_FIELD_TB;
+    if (s == "bt") return AV_FIELD_BT;
+    if (s == "progressive") return AV_FIELD_PROGRESSIVE;
+    return AV_FIELD_UNKNOWN;
+}
+
+int threadTypeNamed(const std::string& s, bool* ok) {
+    *ok = true;
+    int out = 0;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == '+' || s[i] == ',' || s[i] == ' ')) ++i;
+        const size_t start = i;
+        while (i < s.size() && s[i] != '+' && s[i] != ',' && s[i] != ' ') ++i;
+        if (i == start) break;
+        const std::string name = s.substr(start, i - start);
+        if (name == "frame") out |= FF_THREAD_FRAME;
+        else if (name == "slice") out |= FF_THREAD_SLICE;
+        else { *ok = false; return 0; }
+    }
+    return out;
+}
+
 } // namespace
+
+// ── Forced keyframes ───────────────────────────────────────────────────────
+
+Writer::KeyFrames::~KeyFrames() { if (expr) av_expr_free(expr); }
+
+bool Writer::KeyFrames::parse(const std::string& text, std::string* err) {
+    if (text.empty()) return true;
+
+    if (text.rfind("expr:", 0) == 0) {
+        // libavutil's own evaluator, with libavutil's own variable names, so an
+        // expression copied out of ffmpeg's documentation means here what it
+        // means there. Anything else would be a second expression language
+        // spelt like the first.
+        static const char* const vars[] = {"n", "n_forced", "prev_forced_n",
+                                           "prev_forced_t", "t", nullptr};
+        const std::string body = text.substr(5);
+        const int rc = av_expr_parse(&expr, body.c_str(), vars, nullptr, nullptr,
+                                     nullptr, nullptr, 0, nullptr);
+        if (rc < 0) {
+            *err = "the forced-keyframe expression '" + body + "' will not parse";
+            return false;
+        }
+        on = true;
+        return true;
+    }
+    if (text.rfind("source", 0) == 0 || text.rfind("chapters", 0) == 0) {
+        // Both mean "wherever the *input* has one", and this render has no
+        // input packets and no chapters read from one — it composites. Said
+        // rather than silently producing an unforced file.
+        *err = "-force_key_frames " + text +
+               " asks for the input's own keyframes, and this render composites "
+               "rather than copying packets — give it times or an expr:";
+        return false;
+    }
+
+    size_t i = 0;
+    while (i <= text.size()) {
+        const size_t comma = text.find(',', i);
+        const std::string piece =
+            text.substr(i, comma == std::string::npos ? std::string::npos : comma - i);
+        if (!piece.empty()) {
+            // av_parse_time in duration mode, so "90", "1:30" and "0:01:30.5"
+            // all mean the same thing they mean on a command line.
+            int64_t us = 0;
+            if (av_parse_time(&us, piece.c_str(), 1) < 0) {
+                *err = "'" + piece + "' is not a time to force a keyframe at";
+                return false;
+            }
+            times.push_back(us / 1000000.0);
+        }
+        if (comma == std::string::npos) break;
+        i = comma + 1;
+    }
+    std::sort(times.begin(), times.end());
+    on = !times.empty();
+    return true;
+}
+
+bool Writer::KeyFrames::wants(int64_t n, double t) {
+    if (!on) return false;
+
+    bool force = false;
+    if (expr) {
+        double vars[5] = {double(n), nForced, prevForcedN, prevForcedT, t};
+        force = av_expr_eval(expr, vars, nullptr) > 0.5;
+    } else {
+        // The first frame at or past the next asked-for moment, which is what
+        // ffmpeg does: a time between two frames lands on the one after it,
+        // never on the one before, so a cut point is never inside the GOP that
+        // was supposed to start at it. Several moments falling inside one frame
+        // are one keyframe rather than one each on the frames that follow.
+        if (next < times.size() && t >= times[next] - 1e-9) {
+            force = true;
+            while (next < times.size() && t >= times[next] - 1e-9) ++next;
+        }
+    }
+    if (force) {
+        nForced += 1;
+        prevForcedN = double(n);
+        prevForcedT = t;
+    }
+    return force;
+}
 
 // ── What the file is made of ───────────────────────────────────────────────
 
@@ -225,6 +373,10 @@ std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio)
         if (st.pixelFormat.empty()) st.pixelFormat = s.pixelFormat;
         if (st.sampleRate <= 0) st.sampleRate = s.audioSampleRate;
         if (st.channels <= 0) st.channels = s.audioChannels;
+        if (st.forceKeyFrames.empty()) st.forceKeyFrames = s.forceKeyFrames;
+        if (st.fieldOrder.empty()) st.fieldOrder = s.fieldOrder;
+        if (st.threads < 0) st.threads = s.threads;
+        if (st.threadType.empty()) st.threadType = s.threadType;
         out.push_back(std::move(st));
     }
     return out;
@@ -339,6 +491,16 @@ bool Writer::writeVideo(const Rgba& canvas, int64_t index, std::string* err) {
             return false;
         }
         o.vframe->pts = index;
+        // Where the picture *is* in the output, which is what
+        // `-force_key_frames` is written against: seconds from the start of the
+        // file, not from the start of the timeline. Whoever knows the range
+        // subtracted its start before the times got here.
+        const double t = settings_.fps > 0 ? double(index) / settings_.fps : 0.0;
+        o.vframe->pict_type =
+            o.keys.wants(index, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+        o.vframe->flags = (o.vframe->flags & ~(AV_FRAME_FLAG_INTERLACED |
+                                               AV_FRAME_FLAG_TOP_FIELD_FIRST)) |
+                          o.frameFlags;
         if (!encode(o, o.vframe, err)) return false;
     }
     return true;
@@ -413,6 +575,15 @@ bool Writer::finish(std::string* err) {
         if (out->desc.kind != "video") continue;
         step.clear();
         if (!encode(*out, nullptr, &step)) note(step);
+        // A pass-1 log that nothing was written to means this encoder does not
+        // use libavcodec's statistics pair and keeps its own file somewhere of
+        // its choosing — so `-passlogfile` did not reach it and pass 2 will
+        // read an empty log. Said out loud rather than discovered as a pass 2
+        // that refuses, because the fix is the encoder's own option and only
+        // the name of the encoder points at it.
+        if (out->statsLog && !out->statsWritten && out->enc)
+            LOG_WARN("export: %s keeps its own two-pass statistics file, so "
+                     "-passlogfile did not reach it", out->enc->codec->name);
     }
 
     if (headerWritten_) {
@@ -474,7 +645,13 @@ void Writer::close() {
         if (o.vframe) av_frame_free(&o.vframe);
         if (o.aconv) av_frame_free(&o.aconv);
         if (o.aframe) av_frame_free(&o.aframe);
-        if (o.enc) avcodec_free_context(&o.enc);
+        if (o.bsf) av_bsf_free(&o.bsf);
+        if (o.bsfPkt) av_packet_free(&o.bsfPkt);
+        if (o.statsLog) { std::fclose(o.statsLog); o.statsLog = nullptr; }
+        // Detached before the context goes, because the buffer is this
+        // object's: `stats_in` is documented as caller-allocated and nothing
+        // should have to work out whether libavcodec would have freed it.
+        if (o.enc) { o.enc->stats_in = nullptr; avcodec_free_context(&o.enc); }
     }
     outs_.clear();
     if (pkt_) av_packet_free(&pkt_);
@@ -528,7 +705,35 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
         o.enc->pix_fmt = want;
     }
     o.enc->gop_size = std::max(1, static_cast<int>(std::lround(settings_.fps * 2)));
-    o.enc->thread_count = 0;
+    o.enc->thread_count = std::max(0, o.desc.threads);
+    if (!o.desc.threadType.empty()) {
+        bool ok = false;
+        const int mask = threadTypeNamed(o.desc.threadType, &ok);
+        if (!ok) {
+            *err = "there is no thread type called '" + o.desc.threadType +
+                   "' — it is frame, slice, or both";
+            return false;
+        }
+        o.enc->thread_type = mask;
+    }
+
+    // Interlaced encoding is two statements that have to agree: the encoder is
+    // put into field mode and the stream says which field is first, *and* every
+    // frame handed over is marked the same way. Only the first and the file
+    // claims to be interlaced without being coded that way; only the second and
+    // nothing downstream can read it. `frameFlags` is the second half, applied
+    // in writeVideo.
+    const AVFieldOrder order = fieldOrderNamed(o.desc.fieldOrder);
+    if (order != AV_FIELD_UNKNOWN) o.enc->field_order = order;
+    if (order == AV_FIELD_TT || order == AV_FIELD_BB || order == AV_FIELD_TB ||
+        order == AV_FIELD_BT) {
+        o.enc->flags |= AV_CODEC_FLAG_INTERLACED_DCT | AV_CODEC_FLAG_INTERLACED_ME;
+        o.frameFlags = AV_FRAME_FLAG_INTERLACED;
+        if (order == AV_FIELD_TT || order == AV_FIELD_TB)
+            o.frameFlags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+    }
+
+    if (!o.keys.parse(o.desc.forceKeyFrames, err)) return false;
 
     // Tagged to match what the compositor actually produced, so a player
     // does not have to guess and guess differently. "auto" is the guess
@@ -579,6 +784,10 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     if (oc_->oformat->flags & AVFMT_GLOBALHEADER)
         o.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
+    // `-pass` and `-passlogfile` come out of the bag before it is applied,
+    // because neither is an option of any encoder. See setUpPasses.
+    if (!setUpPasses(o, codec, err)) return false;
+
     // Last, so anything the caller asked for explicitly beats what was
     // worked out above. A UI that offers both a Quality slider and a raw
     // option editor has to have one of them win, and it should be the one
@@ -593,6 +802,12 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
     o.st->time_base = o.enc->time_base;
     o.st->avg_frame_rate = fps;
+
+    // After the encoder, because a bitstream filter is configured from what the
+    // encoder settled on and may then change it — h264_mp4toannexb rewrites the
+    // extradata, hevc_metadata rewrites the VUI — and the muxer has to be told
+    // about the far end of the chain rather than the near one.
+    if (!openBitstreamFilters(o, err)) return false;
 
     o.vframe = av_frame_alloc();
     if (!o.vframe) { *err = "out of memory"; return false; }
@@ -652,6 +867,7 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     }
     if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
     o.st->time_base = o.enc->time_base;
+    if (!openBitstreamFilters(o, err)) return false;
 
     // Some encoders take any number of samples; 1024 is a sane block for
     // the ones that do.
@@ -690,6 +906,155 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     av_channel_layout_copy(&o.aframe->ch_layout, &o.enc->ch_layout);
     o.aframe->nb_samples = o.frameSize;
     if (av_frame_get_buffer(o.aframe, 0) < 0) { *err = "out of memory"; return false; }
+    return true;
+}
+
+// ── Two passes ─────────────────────────────────────────────────────────────
+
+bool Writer::setUpPasses(Out& o, const AVCodec* codec, std::string* err) {
+    std::string passText, logPrefix;
+    const bool hasPass = takeOption(o.desc.options, "pass", &passText);
+    const bool hasLog = takeOption(o.desc.options, "passlogfile", &logPrefix);
+    if (!hasPass) {
+        if (hasLog)
+            LOG_WARN("export: -passlogfile with no -pass does nothing");
+        return true;
+    }
+
+    const int which = std::atoi(passText.c_str());
+    if (which < 1 || which > 3) {
+        *err = "-pass takes 1, 2 or 3 (both), not '" + passText + "'";
+        return false;
+    }
+    if (which & 1) o.enc->flags |= AV_CODEC_FLAG_PASS1;
+    if (which & 2) o.enc->flags |= AV_CODEC_FLAG_PASS2;
+
+    // Which video stream this is, so two of them in one file keep two logs —
+    // the same numbering ffmpeg uses, so the file a printed command leaves
+    // behind is the file this reads.
+    int ordinal = 0;
+    for (const auto& other : outs_)
+        if (other->desc.kind == "video") ++ordinal;
+    const std::string log = passLogName(logPrefix, ordinal);
+
+    // **Which mechanism carries the statistics is asked of the encoder, never
+    // listed.** x264 keeps its own log and takes the filename as a private
+    // `stats` option; everything else uses libavcodec's generic pair —
+    // `stats_out` filled per packet in pass one, `stats_in` handed over before
+    // `avcodec_open2` in pass two. Asking `hasOption` is the same query the
+    // `crf`/`preset` guards above already make, so a build that gains an
+    // encoder with its own log gains the right behaviour without an edit.
+    if (hasOption(codec, "stats")) {
+        // Not if the caller named one: somebody who typed `stats` knows what
+        // they meant, and this is the same "explicit wins" rule the option bag
+        // is applied under.
+        bool already = false;
+        for (const auto& kv : o.desc.options) if (kv.key == "stats") already = true;
+        if (!already) av_opt_set(o.enc->priv_data, "stats", log.c_str(), 0);
+        o.ownStatsFile = true;
+        // The same check as below, and it belongs on both branches: x264 opens
+        // its own log and fails with "Generic error in an external library",
+        // which says nothing about a missing statistics file and nothing at all
+        // about the pass that should have written it.
+        if ((which & 2) && !already && readWholeFile(log).empty()) {
+            *err = "pass 2 has no statistics to spend: '" + log +
+                   "' is missing or empty, so pass 1 either did not run or wrote "
+                   "somewhere else";
+            return false;
+        }
+        return true;
+    }
+
+    if (which & 2) {
+        o.statsIn = readWholeFile(log);
+        if (o.statsIn.empty()) {
+            *err = "pass 2 has no statistics to spend: '" + log +
+                   "' is missing or empty, so pass 1 either did not run or wrote "
+                   "somewhere else";
+            return false;
+        }
+        // Owned here and detached before the context is freed, so nothing has
+        // to know whether libavcodec would have freed it.
+        o.enc->stats_in = o.statsIn.data();
+    }
+    if (which & 1) {
+        o.statsLog = std::fopen(log.c_str(), "wb");
+        if (!o.statsLog) {
+            *err = "cannot write the pass-1 statistics to '" + log + "'";
+            return false;
+        }
+    }
+    return true;
+}
+
+// ── Bitstream filters ──────────────────────────────────────────────────────
+
+bool Writer::openBitstreamFilters(Out& o, std::string* err) {
+    if (o.desc.bitstreamFilters.empty() || !o.st || !o.enc) return true;
+
+    AVBSFList* list = av_bsf_list_alloc();
+    if (!list) { *err = "out of memory"; return false; }
+
+    for (const auto& want : o.desc.bitstreamFilters) {
+        const AVBitStreamFilter* f = av_bsf_get_by_name(want.name.c_str());
+        if (!f) {
+            av_bsf_list_free(&list);
+            *err = "this build has no bitstream filter called '" + want.name + "'";
+            return false;
+        }
+        AVBSFContext* ctx = nullptr;
+        int rc = av_bsf_alloc(f, &ctx);
+        if (rc < 0) { av_bsf_list_free(&list); *err = "out of memory"; return false; }
+        for (const auto& kv : want.options) {
+            if (kv.key.empty()) continue;
+            rc = av_opt_set(ctx, kv.key.c_str(), kv.value.c_str(), AV_OPT_SEARCH_CHILDREN);
+            if (rc < 0) {
+                const std::string why =
+                    rc == AVERROR_OPTION_NOT_FOUND
+                        ? "the " + want.name + " bitstream filter has no option '" +
+                              kv.key + "'"
+                        : "the " + want.name + " option '" + kv.key +
+                              "' will not take '" + kv.value + "': " + avErr(rc);
+                av_bsf_free(&ctx);
+                av_bsf_list_free(&list);
+                *err = why;
+                return false;
+            }
+        }
+        rc = av_bsf_list_append(list, ctx);
+        if (rc < 0) {
+            av_bsf_free(&ctx);
+            av_bsf_list_free(&list);
+            *err = "cannot build the bitstream filter chain: " + avErr(rc);
+            return false;
+        }
+    }
+
+    // One context for the whole chain: with a single entry this hands back that
+    // entry, and with several it hands back libavcodec's own list filter. Either
+    // way the rest of this file has one thing to feed.
+    int rc = av_bsf_list_finalize(&list, &o.bsf);
+    if (rc < 0) { *err = "cannot build the bitstream filter chain: " + avErr(rc); return false; }
+
+    rc = avcodec_parameters_from_context(o.bsf->par_in, o.enc);
+    if (rc < 0) { *err = "cannot describe the stream to its bitstream filters"; return false; }
+    o.bsf->time_base_in = o.enc->time_base;
+    rc = av_bsf_init(o.bsf);
+    if (rc < 0) {
+        *err = "the bitstream filter chain will not run on this stream: " + avErr(rc);
+        return false;
+    }
+
+    // The muxer is told about the *filtered* stream. h264_mp4toannexb changes
+    // the extradata out of all recognition and hevc_metadata can change the
+    // profile; a header written from the encoder's parameters would describe
+    // something that is not in the file.
+    rc = avcodec_parameters_copy(o.st->codecpar, o.bsf->par_out);
+    if (rc < 0) { *err = "cannot describe the filtered stream to the muxer"; return false; }
+    o.st->time_base = o.bsf->time_base_out;
+
+    o.bsfPkt = av_packet_alloc();
+    if (!o.bsfPkt) { *err = "out of memory"; return false; }
     return true;
 }
 
@@ -808,13 +1173,66 @@ bool Writer::encode(Out& o, AVFrame* frame, std::string* err) {
     for (;;) {
         av_packet_unref(pkt_);
         rc = avcodec_receive_packet(o.enc, pkt_);
-        if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) return true;
+        if (rc == AVERROR(EAGAIN)) return true;
+        // The encoder has nothing more, ever. Its bitstream filters may still
+        // be holding a packet, so the chain gets its end-of-stream here — a
+        // filter that buffers would otherwise lose its last packet, which for
+        // `dump_extra` is the difference between a file that plays and a file
+        // that plays with the last GOP missing.
+        if (rc == AVERROR_EOF) {
+            if (!o.bsf) return true;
+            av_bsf_send_packet(o.bsf, nullptr);
+            return drainBsf(o, err);
+        }
         if (rc < 0) { *err = std::string("encode failed: ") + avErr(rc); return false; }
 
-        av_packet_rescale_ts(pkt_, o.enc->time_base, o.st->time_base);
-        pkt_->stream_index = o.st->index;
-        rc = av_interleaved_write_frame(oc_, pkt_);
+        // Pass 1's statistics, appended as the encoder produces them. This is
+        // the whole of the handoff to pass 2 for every encoder that does not
+        // keep a log of its own.
+        if (o.statsLog && o.enc->stats_out) {
+            std::fputs(o.enc->stats_out, o.statsLog);
+            o.statsWritten = true;
+        }
+
+        if (!writePacket(o, pkt_, err)) return false;
+    }
+}
+
+bool Writer::writePacket(Out& o, AVPacket* pkt, std::string* err) {
+    if (!o.bsf) {
+        av_packet_rescale_ts(pkt, o.enc->time_base, o.st->time_base);
+        pkt->stream_index = o.st->index;
+        const int rc = av_interleaved_write_frame(oc_, pkt);
         if (rc < 0) { *err = std::string("cannot write to the file: ") + avErr(rc); return false; }
+        return true;
+    }
+
+    // Fed in the encoder's time base, which is what `time_base_in` was set to,
+    // and what comes out is in `time_base_out` — a `setts` that changes the
+    // rate changes that, so the rescale on the far side reads it rather than
+    // assuming.
+    const int rc = av_bsf_send_packet(o.bsf, pkt);
+    if (rc < 0) {
+        *err = std::string("the bitstream filter would not take a packet: ") + avErr(rc);
+        return false;
+    }
+    return drainBsf(o, err);
+}
+
+bool Writer::drainBsf(Out& o, std::string* err) {
+    if (!o.bsf || !o.bsfPkt) return true;
+    for (;;) {
+        av_packet_unref(o.bsfPkt);
+        const int rc = av_bsf_receive_packet(o.bsf, o.bsfPkt);
+        if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) return true;
+        if (rc < 0) {
+            *err = std::string("a bitstream filter failed: ") + avErr(rc);
+            return false;
+        }
+        av_packet_rescale_ts(o.bsfPkt, o.bsf->time_base_out, o.st->time_base);
+        o.bsfPkt->stream_index = o.st->index;
+        const int w = av_interleaved_write_frame(oc_, o.bsfPkt);
+        if (w < 0) { *err = std::string("cannot write to the file: ") + avErr(w); return false; }
     }
 }
 

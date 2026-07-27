@@ -84,6 +84,12 @@ const Rgba& TimelineSource::canvasAt(double t) {
     return comp_->canvas();
 }
 
+bool TimelineSource::exhausted(double t) const {
+    for (const auto& cs : clips_)
+        if (cs->spec.start + cs->spec.length > t + 1e-9) return false;
+    return true;
+}
+
 void TimelineSource::mixInto(float* dst, double from, int frames, int rate, int channels) {
     const double blockEnd = from + double(frames) / rate;
 

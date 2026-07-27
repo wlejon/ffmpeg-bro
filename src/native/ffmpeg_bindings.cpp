@@ -151,6 +151,12 @@ MediaInput inputFromJs(JSContext* ctx, JSValueConst o) {
     in.path = strProp(ctx, o, "path", "");
     in.format = strProp(ctx, o, "format", "");
     in.options = optionsFromJs(ctx, o, "options");
+    // The decoders reading this input, as against the demuxer opening it.
+    // Separate bags because they are separate objects with separate option
+    // tables — `-probesize` is libavformat's and `-skip_frame` is libavcodec's,
+    // and ffmpeg writes both in front of the same `-i` because both are
+    // decisions about this input.
+    in.decoderOptions = optionsFromJs(ctx, o, "decoderOptions");
     in.ss = std::max(0.0, numProp(ctx, o, "ss", 0));
     in.duration = std::max(0.0, numProp(ctx, o, "t", 0));
     const double to = numProp(ctx, o, "to", 0);
@@ -285,6 +291,47 @@ uint32_t arrayLength(JSContext* ctx, JSValueConst arr) {
     return len;
 }
 
+/// `stream.bsf` — `[{ name, options }, …]`, in the order they run.
+///
+/// A list rather than the comma-separated string `-bsf:v` takes, because it is
+/// a list: the order is the whole of the meaning, each entry has its own option
+/// table, and a string would have to be parsed back out to say either of those
+/// in a UI. The string is what gets *printed*; this is what gets built.
+bool bsfFromJs(JSContext* ctx, JSValueConst item, const std::string& where,
+               std::vector<ExportBsf>* out, std::string* err) {
+    JSValue arr = JS_GetPropertyStr(ctx, item, "bsf");
+    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { JS_FreeValue(ctx, arr); return true; }
+    if (!JS_IsArray(arr)) {
+        JS_FreeValue(ctx, arr);
+        *err = where + ".bsf has to be an array of bitstream filters";
+        return false;
+    }
+    const uint32_t len = arrayLength(ctx, arr);
+    bool ok = true;
+    for (uint32_t i = 0; i < len && ok; ++i) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, i);
+        ExportBsf b;
+        if (JS_IsString(e)) {
+            // `bsf: ["dump_extra"]` — the common case, where the filter takes
+            // nothing and naming it is the whole instruction.
+            const char* s = JS_ToCString(ctx, e);
+            if (s) { b.name = s; JS_FreeCString(ctx, s); }
+        } else if (JS_IsObject(e)) {
+            b.name = strProp(ctx, e, "name", "");
+            b.options = optionsFromJs(ctx, e, "options");
+        }
+        if (b.name.empty()) {
+            *err = where + ".bsf[" + std::to_string(i) + "] has no filter name";
+            ok = false;
+        } else {
+            out->push_back(std::move(b));
+        }
+        JS_FreeValue(ctx, e);
+    }
+    JS_FreeValue(ctx, arr);
+    return ok;
+}
+
 /// `spec.streams` — what the file is made of, one entry per stream the muxer
 /// will number.
 ///
@@ -344,9 +391,15 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
                 st.pixelFormat = strProp(ctx, item, "pixelFormat", "");
                 st.sampleRate = static_cast<int>(numProp(ctx, item, "sampleRate", 0));
                 st.channels = static_cast<int>(numProp(ctx, item, "channels", 0));
+                st.forceKeyFrames = strProp(ctx, item, "forceKeyFrames", "");
+                st.fieldOrder = strProp(ctx, item, "fieldOrder", "");
+                st.threads = static_cast<int>(numProp(ctx, item, "threads", -1));
+                st.threadType = strProp(ctx, item, "threadType", "");
                 st.path = strProp(ctx, item, "path", "");
                 st.mimeType = strProp(ctx, item, "mimeType", "");
-                if (st.kind == "attachment" && st.path.empty()) {
+                if (!bsfFromJs(ctx, item, where, &st.bitstreamFilters, err)) {
+                    ok = false;
+                } else if (st.kind == "attachment" && st.path.empty()) {
                     *err = where + " is an attachment with no file to attach";
                     ok = false;
                 } else {
@@ -536,6 +589,15 @@ bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::s
     s.colorRange = strProp(ctx, spec, "colorRange", "");
     s.faststart = boolProp(ctx, spec, "faststart", true);
     s.title = strProp(ctx, spec, "title", "");
+    // The defaults every video stream takes. Named fields rather than option
+    // bag entries because none of them is an encoder option: `-force_key_frames`
+    // sets a frame's picture type, `-shortest` ends the loop, and the field
+    // order has to reach the frames as well as the encoder.
+    s.forceKeyFrames = strProp(ctx, spec, "forceKeyFrames", "");
+    s.fieldOrder = strProp(ctx, spec, "fieldOrder", "");
+    s.threads = static_cast<int>(numProp(ctx, spec, "threads", 0));
+    s.threadType = strProp(ctx, spec, "threadType", "");
+    s.shortest = boolProp(ctx, spec, "shortest", false);
     s.videoOptions = optionsFromJs(ctx, spec, "videoOptions");
     s.audioOptions = optionsFromJs(ctx, spec, "audioOptions");
     s.formatOptions = optionsFromJs(ctx, spec, "formatOptions");
@@ -882,6 +944,13 @@ JSValue js_decoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     return optionsToJs(ctx, decoderOptions(name));
 }
 
+JSValue js_bsfOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "bsfOptions(name) requires a bitstream filter name");
+    return optionsToJs(ctx, bsfOptions(name));
+}
+
 JSValue js_protocolOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     std::string name;
     if (!takeName(ctx, argc, argv, &name))
@@ -1009,6 +1078,26 @@ JSValue decodersToJs(JSContext* ctx) {
         setStr(ctx, o, "type", d.type);
         JS_SetPropertyStr(ctx, o, "hardware", JS_NewBool(ctx, d.hardware));
         JS_SetPropertyStr(ctx, o, "experimental", JS_NewBool(ctx, d.experimental));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+/// bro.ffmpeg.bitstreamFilters — the stage between the encoder and the muxer.
+///
+/// Small enough to build once: thirty-odd names and the codecs each will run
+/// on. The option tables behind them are asked for one at a time, exactly as a
+/// filter's are, because a chain editor only ever shows one.
+JSValue bsfsToJs(JSContext* ctx) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& b : availableBitstreamFilters()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", b.name);
+        // Empty is "any codec" and is a real answer — `setts` and `noise`
+        // declare no list at all — so a caller narrowing a menu has to read it
+        // as "all of them" rather than as "none".
+        JS_SetPropertyStr(ctx, o, "codecs", stringsToJs(ctx, b.codecs));
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;
@@ -1285,6 +1374,9 @@ void installFfmpegBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_decoderOptions, "decoderOptions", 1));
     JS_SetPropertyStr(ctx, ns, "protocolOptions",
                       JS_NewCFunction(ctx, js_protocolOptions, "protocolOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "bitstreamFilters", bsfsToJs(ctx));
+    JS_SetPropertyStr(ctx, ns, "bsfOptions",
+                      JS_NewCFunction(ctx, js_bsfOptions, "bsfOptions", 1));
     JS_SetPropertyStr(ctx, ns, "deviceSources",
                       JS_NewCFunction(ctx, js_deviceSources, "deviceSources", 1));
     JS_SetPropertyStr(ctx, ns, "codecTags",

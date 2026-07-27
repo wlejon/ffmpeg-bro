@@ -75,6 +75,12 @@ public:
     const Rgba& canvasAt(double t) override;
     void mixInto(float* dst, double from, int frames, int rate, int channels) override;
 
+    /// The graph has ended. Known only once a pull has come back empty, which
+    /// is why `FrameSource::exhausted` is documented as a question to ask
+    /// *after* `canvasAt` — the frame that discovered it is the black one this
+    /// answer exists to stop being written.
+    bool exhausted(double) const override { return videoEnded_; }
+
 private:
     /// One buffersrc and the reader that fills it.
     struct Feed {

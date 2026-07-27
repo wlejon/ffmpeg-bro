@@ -114,6 +114,13 @@ struct TrackPrivate {
     AVRational timeBase{1, 1000};
     int streamIndex = 0;
 
+    /// The input this track came out of, carried so the decoder can be opened
+    /// with the input's own decoder options. A decoder belongs to an `-i` —
+    /// `-skip_frame nokey` before the `-i` is a decision about *that* file —
+    /// and the decoder here is built from a `TrackInfo` long after the source
+    /// has stopped being on the stack, so the input has to travel with it.
+    MediaInput input;
+
     ~TrackPrivate() {
         if (par) avcodec_parameters_free(&par);
     }
@@ -219,6 +226,7 @@ public:
             if (!priv->par || avcodec_parameters_copy(priv->par, par) < 0) return false;
             priv->timeBase = st->time_base;
             priv->streamIndex = static_cast<int>(i);
+            priv->input = in;
             t.backendPrivate = priv;
 
             if (isVideo && videoStreamIndex_ < 0) videoStreamIndex_ = static_cast<int>(i);
@@ -329,27 +337,15 @@ public:
         if (!priv || !priv->par) return false;
         timeBase_ = priv->timeBase;
 
-        const AVCodec* codec = avcodec_find_decoder(priv->par->codec_id);
-        if (!codec) {
-            LOG_WARN("ffmpeg: no decoder for video codec %s",
-                     avcodec_get_name(priv->par->codec_id));
-            return false;
-        }
-        ctx_ = avcodec_alloc_context3(codec);
-        if (!ctx_) return false;
-        if (avcodec_parameters_to_context(ctx_, priv->par) < 0) return false;
-
         // Frame + slice threading across all cores. For H.264/HEVC/AV1 this is
         // what makes software decode keep up with 4K, and unlike a hardware
         // decoder it costs no GPU->CPU readback — which matters while the
-        // renderer still wants frames in system memory.
-        ctx_->thread_count = 0;
-        ctx_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-        ctx_->pkt_timebase = timeBase_;
-
-        int rc = avcodec_open2(ctx_, codec, nullptr);
-        if (rc < 0) {
-            LOG_WARN("ffmpeg: cannot open %s decoder: %s", codec->name, avErr(rc).c_str());
+        // renderer still wants frames in system memory. The input's own
+        // decoder options are applied after it and therefore win.
+        std::string why;
+        if (!openDecoder(&ctx_, priv->par, timeBase_, priv->input,
+                         /*threaded=*/true, &why)) {
+            LOG_WARN("ffmpeg: %s", why.c_str());
             return false;
         }
 
@@ -490,21 +486,10 @@ public:
         if (!priv || !priv->par) return false;
         timeBase_ = priv->timeBase;
 
-        const AVCodec* codec = avcodec_find_decoder(priv->par->codec_id);
-        if (!codec) {
-            LOG_WARN("ffmpeg: no decoder for audio codec %s",
-                     avcodec_get_name(priv->par->codec_id));
-            return false;
-        }
-        ctx_ = avcodec_alloc_context3(codec);
-        if (!ctx_) return false;
-        if (avcodec_parameters_to_context(ctx_, priv->par) < 0) return false;
-        ctx_->thread_count = 0;
-        ctx_->pkt_timebase = timeBase_;
-
-        int rc = avcodec_open2(ctx_, codec, nullptr);
-        if (rc < 0) {
-            LOG_WARN("ffmpeg: cannot open %s decoder: %s", codec->name, avErr(rc).c_str());
+        std::string why;
+        if (!openDecoder(&ctx_, priv->par, timeBase_, priv->input,
+                         /*threaded=*/false, &why)) {
+            LOG_WARN("ffmpeg: %s", why.c_str());
             return false;
         }
 

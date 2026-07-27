@@ -1757,6 +1757,286 @@ int main(int argc, char* argv[]) {
                measured);
     }
 
+    // ── the rest of what an encoder is told ────────────────────────────────
+    //
+    // Four things that are not encoder options and could not be reached
+    // through the option bag: two-pass rate control, a bitstream filter,
+    // forced keyframes and the field order. Each is checked against the file
+    // that came out rather than against what the settings said, because every
+    // one of them is a claim about bytes nobody sees until the render is over.
+    {
+        std::printf("\ntwo-pass encoding\n");
+        char text[512];
+
+        // A bitrate low enough that the encoder has to make decisions about
+        // where to spend it, which is the whole difference the second pass
+        // makes. Short, because two runs of x264 is two runs of x264.
+        constexpr int kTargetKbps = 260;
+        const std::string logPrefix = "out/export-2pass";
+        std::remove((logPrefix + "-0.log").c_str());
+        std::remove((logPrefix + "-0.log.mbtree").c_str());
+
+        ExportSettings one = baseSettings("out/export-abr-1pass.mp4");
+        one.videoBitrateKbps = kTargetKbps;
+        one.includeAudio = false;
+        st = render(one, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "one pass at a bitrate target renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        const int64_t oneBytes = st.bytesWritten;
+
+        ExportSettings two = baseSettings("out/export-abr-2pass.mp4");
+        two.videoBitrateKbps = kTargetKbps;
+        two.includeAudio = false;
+        ExportPass p1;
+        p1.label = "pass 1";
+        p1.discard = true;
+        p1.videoOptions = {{"pass", "1"}, {"passlogfile", logPrefix}};
+        ExportPass p2;
+        p2.label = "pass 2";
+        p2.videoOptions = {{"pass", "2"}, {"passlogfile", logPrefix}};
+        two.passes = {p1, p2};
+        st = render(two, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "and so does the same target in two (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        const int64_t twoBytes = st.bytesWritten;
+
+        // The handoff is a file, and the file is the proof. `-passlogfile` is
+        // ffmpeg's own option rather than any encoder's, so the whole question
+        // is whether it reached the place the encoder keeps its statistics —
+        // and an empty log is what a two-pass render that silently did two
+        // first passes leaves behind.
+        std::error_code sec;
+        const auto logSize = std::filesystem::file_size(
+            std::filesystem::path(logPrefix + "-0.log"), sec);
+        checkf(!sec && logSize > 0,
+               "pass 1 wrote its statistics where -passlogfile said (%s-0.log, %lld bytes)",
+               logPrefix.c_str(), sec ? 0LL : static_cast<long long>(logSize));
+
+        // Two passes at the same target is not one pass at the same target.
+        // Identical output would mean the second pass had nothing to read.
+        checkf(twoBytes != oneBytes,
+               "the second pass spent the bitrate differently (%lld bytes against %lld)",
+               static_cast<long long>(twoBytes), static_cast<long long>(oneBytes));
+
+        const double span = two.endTime - two.startTime;
+        const double target = kTargetKbps * 1000.0 / 8.0 * span;
+        const double offOne = std::fabs(oneBytes - target) / target;
+        const double offTwo = std::fabs(twoBytes - target) / target;
+        checkf(offTwo <= offOne,
+               "and hit the target more closely (%.1f%% out against %.1f%%)",
+               offTwo * 100, offOne * 100);
+
+        // A second pass with nothing to read is a refusal with the reason,
+        // never a render that quietly falls back to one pass — the file would
+        // be plausible and would not be what was asked for.
+        ExportSettings orphan = baseSettings("out/export-never.mp4");
+        orphan.endTime = 0.4;
+        orphan.videoBitrateKbps = kTargetKbps;
+        ExportPass alone;
+        alone.videoOptions = {{"pass", "2"}, {"passlogfile", "out/no-such-pass-log"}};
+        orphan.passes = {alone};
+        st = render(orphan, clipsA);
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("pass 2") != std::string::npos,
+               "pass 2 with no statistics to read is refused (%s)", st.error.c_str());
+
+        std::printf("\nbitstream filters\n");
+
+        // `h264_metadata` rewrites the SPS without touching a pixel, which is
+        // exactly what a bitstream filter is for and is why it is the one to
+        // test with: the level in the file is a number that can only have come
+        // from the filter, since the encoder chose a different one.
+        ExportSettings plain = baseSettings("out/export-bsf-none.mp4");
+        plain.endTime = 0.4;
+        plain.includeAudio = false;
+        check(render(plain, clipsA).state == ExportStatus::State::Done,
+              "a stream renders with no bitstream filter on it");
+        int levelBefore = 0;
+        { Opened o(plain.path); if (o) levelBefore = o.fc->streams[0]->codecpar->level; }
+
+        ExportSettings filtered = baseSettings("out/export-bsf-level.mp4");
+        filtered.endTime = 0.4;
+        filtered.includeAudio = false;
+        ExportStream vs;
+        vs.kind = "video";
+        vs.source = "composite";
+        vs.codec = "libx264";
+        vs.bitstreamFilters = {{"h264_metadata", {{"level", "5.1"}}}};
+        filtered.streams = {vs};
+        st = render(filtered, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "and renders through one (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        int levelAfter = 0;
+        { Opened o(filtered.path); if (o) levelAfter = o.fc->streams[0]->codecpar->level; }
+        checkf(levelAfter == 51 && levelBefore != 51,
+               "which changed the bitstream itself — the SPS says level %d where the "
+               "encoder wrote %d", levelAfter, levelBefore);
+
+        ExportSettings badBsf = filtered;
+        badBsf.path = "out/export-never.mp4";
+        badBsf.streams[0].bitstreamFilters = {{"no_such_bsf", {}}};
+        st = render(badBsf, clipsA);
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("no_such_bsf") != std::string::npos,
+               "a bitstream filter this build lacks is refused by name (%s)", st.error.c_str());
+
+        badBsf.streams[0].bitstreamFilters = {{"h264_metadata", {{"nonsense", "1"}}}};
+        st = render(badBsf, clipsA);
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("nonsense") != std::string::npos,
+               "and an option it does not have is too (%s)", st.error.c_str());
+
+        std::printf("\nforced keyframes\n");
+
+        // Read out of the file, not asked of the encoder. Whether a packet is
+        // a keyframe is what a player will act on when it seeks, and the
+        // encoder's own opinion is one indirection away from that.
+        const auto keyTimes = [](const std::string& path) {
+            std::vector<double> out;
+            Opened o(path);
+            if (!o) return out;
+            int vs2 = -1;
+            for (unsigned i = 0; i < o.fc->nb_streams; ++i)
+                if (o.fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                    { vs2 = static_cast<int>(i); break; }
+            if (vs2 < 0) return out;
+            AVPacket* pkt = av_packet_alloc();
+            while (av_read_frame(o.fc, pkt) >= 0) {
+                if (pkt->stream_index == vs2 && (pkt->flags & AV_PKT_FLAG_KEY) &&
+                    pkt->pts != AV_NOPTS_VALUE)
+                    out.push_back(pkt->pts * av_q2d(o.fc->streams[vs2]->time_base));
+                av_packet_unref(pkt);
+            }
+            av_packet_free(&pkt);
+            std::sort(out.begin(), out.end());
+            return out;
+        };
+
+        ExportSettings kf = baseSettings("out/export-keyframes.mp4");
+        kf.includeAudio = false;
+        // A GOP longer than the render, so every keyframe past the first is
+        // one that was asked for and not one the encoder would have written
+        // anyway. Without this the check passes for the wrong reason.
+        kf.videoOptions = {{"g", "1000"}, {"sc_threshold", "0"}};
+        kf.forceKeyFrames = "0.4,0.8,1.2";
+        st = render(kf, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "a render with forced keyframes runs (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        const auto keys = keyTimes(kf.path);
+        std::string where;
+        for (double k : keys) {
+            std::snprintf(text, sizeof(text), "%s%.2f", where.empty() ? "" : " ", k);
+            where += text;
+        }
+        // One frame of tolerance: a forced keyframe lands on the first output
+        // frame at or past the moment asked for, which at 25 fps is up to 40 ms
+        // later and never earlier.
+        const double tol = 1.0 / kFps + 1e-3;
+        const auto near = [&](double want) {
+            for (double k : keys) if (k >= want - 1e-3 && k <= want + tol) return true;
+            return false;
+        };
+        checkf(near(0.4) && near(0.8) && near(1.2),
+               "and the file has a keyframe at each of them (%s)", where.c_str());
+        checkf(keys.size() <= 5,
+               "and not simply at every frame (%zu keyframes in %.1f s)", keys.size(),
+               kf.endTime - kf.startTime);
+
+        ExportSettings kfe = baseSettings("out/export-keyframes-expr.mp4");
+        kfe.includeAudio = false;
+        kfe.videoOptions = {{"g", "1000"}, {"sc_threshold", "0"}};
+        kfe.forceKeyFrames = "expr:gte(t,n_forced*0.5)";
+        st = render(kfe, clipsA);
+        check(st.state == ExportStatus::State::Done, "an expression is accepted too");
+        const auto ekeys = keyTimes(kfe.path);
+        checkf(ekeys.size() >= 3, "and puts one every half second (%zu in %.1f s)",
+               ekeys.size(), kfe.endTime - kfe.startTime);
+
+        ExportSettings kfb = baseSettings("out/export-never.mp4");
+        kfb.endTime = 0.4;
+        kfb.forceKeyFrames = "expr:this is not an expression";
+        st = render(kfb, clipsA);
+        check(st.state == ExportStatus::State::Failed,
+              "and an expression that will not parse is refused rather than ignored");
+
+        std::printf("\nfield order, threads, -shortest\n");
+
+        ExportSettings fo = baseSettings("out/export-interlaced.mp4");
+        fo.endTime = 0.4;
+        fo.includeAudio = false;
+        fo.fieldOrder = "tt";
+        fo.threads = 2;
+        fo.threadType = "frame";
+        st = render(fo, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "an interlaced render runs (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        {
+            Opened o(fo.path);
+            checkf(o && o.fc->streams[0]->codecpar->field_order == AV_FIELD_TT,
+                   "and the file says top field first (%d)",
+                   o ? int(o.fc->streams[0]->codecpar->field_order) : -1);
+        }
+        ExportSettings badThreads = baseSettings("out/export-never.mp4");
+        badThreads.endTime = 0.4;
+        badThreads.threadType = "sideways";
+        st = render(badThreads, clipsA);
+        check(st.state == ExportStatus::State::Failed,
+              "a thread type that is not one is refused");
+
+        // The range asks for a second and a half; the clip stops at half a
+        // second. Without -shortest the rest is written as black, which is the
+        // right default — the range is a decision somebody made — and with it
+        // the file ends where the content does.
+        std::vector<ExportClip> shortClip{leftHalf(first, srcDuration)};
+        shortClip[0].length = 0.5;
+        ExportSettings padded = baseSettings("out/export-padded.mp4");
+        padded.includeAudio = false;
+        const ExportStatus padSt = render(padded, shortClip);
+        ExportSettings cut = baseSettings("out/export-shortest.mp4");
+        cut.includeAudio = false;
+        cut.shortest = true;
+        const ExportStatus cutSt = render(cut, shortClip);
+        checkf(padSt.state == ExportStatus::State::Done &&
+                   cutSt.state == ExportStatus::State::Done,
+               "a range longer than the content renders both ways");
+        checkf(cutSt.framesDone < padSt.framesDone && cutSt.framesDone >= 12,
+               "-shortest stopped where the content did (%lld frames against %lld)",
+               static_cast<long long>(cutSt.framesDone),
+               static_cast<long long>(padSt.framesDone));
+
+        std::printf("\ndecoder options\n");
+
+        // A decoder belongs to an input, which is why these travel on the `-i`
+        // and not on the render. The refusal is the interesting half: an
+        // unknown key here is the same error an unknown demuxer option is, and
+        // a render that ignored it would be a render that decoded differently
+        // from what it was told to.
+        MediaInput skip;
+        skip.path = first;
+        skip.decoderOptions = {{"skip_frame", "nokey"}};
+        ExportSettings dec = baseSettings("out/export-skipframe.mp4");
+        dec.endTime = 0.4;
+        dec.includeAudio = false;
+        dec.inputs = {skip};
+        std::vector<ExportClip> viaInput{leftHalf(first, srcDuration)};
+        viaInput[0].input = 0;
+        st = render(dec, viaInput);
+        checkf(st.state == ExportStatus::State::Done,
+               "a decoder option on an input reaches the decoder (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        MediaInput wrong = skip;
+        wrong.decoderOptions = {{"not_a_decoder_option", "1"}};
+        ExportSettings decBad = baseSettings("out/export-never.mp4");
+        decBad.endTime = 0.4;
+        decBad.inputs = {wrong};
+        st = render(decBad, viaInput);
+        checkf(st.state == ExportStatus::State::Failed &&
+                   st.error.find("not_a_decoder_option") != std::string::npos,
+               "and one it does not have stops the render by name (%s)", st.error.c_str());
+    }
+
     std::printf("\nbad asks are refused, not crashed into\n");
     ExportSettings bad = baseSettings("out/export-never.mp4");
     check(!startExport(bad, {}, &err), "an empty timeline is refused");

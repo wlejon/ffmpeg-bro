@@ -26,8 +26,11 @@
 #include <string>
 #include <vector>
 
+struct AVCodecContext;
+struct AVCodecParameters;
 struct AVFormatContext;
 struct AVPacket;
+struct AVRational;
 
 namespace ffmpegbro {
 
@@ -68,6 +71,25 @@ struct MediaInput {
     /// libav where "was that option used?" has a real answer — so it is asked.
     std::vector<KeyValue> options;
 
+    /// What the *decoders* reading this input are opened with — `-skip_frame`,
+    /// `-skip_loop_filter`, `-thread_type`, `-lowres`, and every private option
+    /// of whichever decoder libavcodec picks.
+    ///
+    /// **A decoder belongs to an input, which is why these live here.** ffmpeg
+    /// writes them before the `-i` for the same reason it writes `-probesize`
+    /// there: they are decisions taken while the file is being opened, and the
+    /// decoder they configure is the one that input's packets go through. A
+    /// render that opened one file twice with two different decoder bags would
+    /// be describing two files, which is the argument the option bag above is
+    /// already built on.
+    ///
+    /// They are applied wherever a decoder is opened for this input — both
+    /// export readers and playback — so `-skip_frame nokey` is the same
+    /// decision on the timeline and in the file that comes out. An unknown key
+    /// stops the open with the key named, exactly as an unknown demuxer option
+    /// does: `avcodec_open2` hands back what nothing consumed.
+    std::vector<KeyValue> decoderOptions;
+
     /// `-ss` before `-i`: where this input starts. The input's clock is
     /// rewritten so that this instant is its zero, which is what makes it a
     /// different thing from a clip's in-point — trimming a clip picks a moment
@@ -99,18 +121,35 @@ struct MediaInput {
     bool operator==(const MediaInput& o) const {
         return path == o.path && format == o.format && ss == o.ss &&
                duration == o.duration && itsoffset == o.itsoffset &&
-               streamLoop == o.streamLoop && sameOptions(o);
+               streamLoop == o.streamLoop && same(options, o.options) &&
+               same(decoderOptions, o.decoderOptions);
     }
 
 private:
-    bool sameOptions(const MediaInput& o) const {
-        if (options.size() != o.options.size()) return false;
-        for (size_t i = 0; i < options.size(); ++i)
-            if (options[i].key != o.options[i].key ||
-                options[i].value != o.options[i].value) return false;
+    static bool same(const std::vector<KeyValue>& a, const std::vector<KeyValue>& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (a[i].key != b[i].key || a[i].value != b[i].value) return false;
         return true;
     }
 };
+
+/// Open a decoder for a stream of this input, with the input's decoder options
+/// on it.
+///
+/// One place, for the reason `openInput` is one place: three things in this
+/// binary open decoders — the two export readers and the playback source — and
+/// an option bag applied in two of them and forgotten in the third is a setting
+/// that works on the timeline and not in the file. An unknown key is refused
+/// with the key named; `avcodec_open2` hands back what nothing consumed, which
+/// is the only place libavcodec will say whether an option was used.
+///
+/// `*out` is left null on failure. `threaded` asks for the frame/slice
+/// threading every decoder here has always been opened with; a `thread_type` in
+/// the bag still wins, because the bag is applied afterwards.
+bool openDecoder(AVCodecContext** out, const AVCodecParameters* par,
+                 AVRational pktTimeBase, const MediaInput& in, bool threaded,
+                 std::string* err);
 
 /// Open one input, the way its `-f` and its option bag say to.
 ///

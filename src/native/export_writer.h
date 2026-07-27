@@ -35,12 +35,15 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
+#include <libavutil/eval.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -95,6 +98,32 @@ public:
     const std::vector<ExportStream>& streams() const { return described_; }
 
 private:
+    /// Which output frames are made keyframes, whatever the GOP says.
+    ///
+    /// `-force_key_frames` is ffmpeg's, not any encoder's: what it does is set
+    /// `pict_type = I` on the frame before it goes in, and every encoder that
+    /// honours that then starts a GOP there. Both of ffmpeg's forms are here
+    /// because they answer different questions — a list of times is "cut here,
+    /// here and here", and `expr:` is a rule. **A keyframe where an edit cuts is
+    /// what makes a file that can be cut again**, which is the whole reason the
+    /// list form matters in this application.
+    struct KeyFrames {
+        bool on = false;
+        std::vector<double> times;      ///< seconds into the output, sorted
+        size_t next = 0;
+        AVExpr* expr = nullptr;         ///< `expr:`, evaluated per frame
+
+        // ffmpeg's own variables, kept across frames because the expression
+        // people actually write — `gte(t,n_forced*2)` — is about the last one.
+        double nForced = 0;
+        double prevForcedN = -1;
+        double prevForcedT = -1;
+
+        bool parse(const std::string& text, std::string* err);
+        bool wants(int64_t n, double t);
+        ~KeyFrames();
+    };
+
     /// One output stream: its description, the muxer's stream, and whatever a
     /// stream of its kind needs to be fed.
     struct Out {
@@ -105,6 +134,22 @@ private:
         // video
         AVFrame* vframe = nullptr;
         SwsContext* toEncoder = nullptr;
+        KeyFrames keys;
+        int frameFlags = 0;             ///< interlaced/field order, per frame
+
+        /// The packet chain between this encoder and the muxer — `-bsf:v`.
+        /// `av_bsf_list_finalize` folds a whole chain into one context, so what
+        /// runs here is what a command line's comma-separated list runs.
+        AVBSFContext* bsf = nullptr;
+        AVPacket* bsfPkt = nullptr;
+
+        // Two-pass. The handoff between the passes is a file on disk, always,
+        // and which file is `-passlogfile` — which is ffmpeg's own option and
+        // not the encoder's, so it never reaches av_opt_set.
+        std::FILE* statsLog = nullptr;  ///< pass 1, when the encoder does not keep its own
+        std::string statsIn;            ///< pass 2, read back and pointed at by the context
+        bool statsWritten = false;
+        bool ownStatsFile = false;      ///< the encoder has a `stats` option and was given one
 
         // audio: its own resampler and fifo, because the encoder it feeds has
         // its own sample format, rate and frame size and nothing says two
@@ -127,10 +172,27 @@ private:
     bool describeStream(Out& o, std::string* err);
     bool addChapters(std::string* err);
 
+    /// `-bsf:v h264_mp4toannexb,dump_extra` — built, initialised, and the
+    /// stream's own parameters taken from what comes out of the far end. A
+    /// bitstream filter is allowed to change the extradata and the codec tag,
+    /// so the muxer has to be told about the *filtered* stream and not the
+    /// encoder's.
+    bool openBitstreamFilters(Out& o, std::string* err);
+
+    /// `-pass`/`-passlogfile`. Two options that are ffmpeg's rather than any
+    /// encoder's, so they are taken out of the bag before it is applied.
+    bool setUpPasses(Out& o, const AVCodec* codec, std::string* err);
+
     /// Hand one stream's encoder every whole frame its fifo can fill. At the
     /// end of the job `flushTail` takes the short one too.
     bool drainFifo(Out& o, bool flushTail, std::string* err);
     bool encode(Out& o, AVFrame* frame, std::string* err);
+
+    /// One encoded packet through the stream's bitstream chain and into the
+    /// muxer. `flush` sends the chain its end-of-stream and drains what falls
+    /// out, which is how a filter that buffers gets to write its last packet.
+    bool writePacket(Out& o, AVPacket* pkt, std::string* err);
+    bool drainBsf(Out& o, std::string* err);
 
     ExportSettings settings_;
     AVFormatContext* oc_ = nullptr;

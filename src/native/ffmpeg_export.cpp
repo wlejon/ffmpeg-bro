@@ -95,6 +95,46 @@ ExportSettings settingsForPass(const ExportSettings& base, const ExportPass& p) 
     return s;
 }
 
+/// Every decoder option this render was given, checked before a frame is
+/// written.
+///
+/// **An unknown option is an error, not a shrug** — but the compositor path
+/// deliberately renders an unopenable clip as the hole it is, so a mistyped
+/// `-skip_frame` would have come out as a black rectangle and a line in the
+/// log. That is right for a file that has gone missing and wrong for a setting
+/// somebody typed, and the difference cannot be told apart down where the clip
+/// is opened.
+///
+/// So the inputs that carry decoder options are opened here, once, and their
+/// decoders with them. It costs a header read per configured input and nothing
+/// whatever for every render that sets none, which is all of them until
+/// somebody sets one.
+bool checkDecoderOptions(const ExportSettings& s, std::string* err) {
+    for (const auto& in : s.inputs) {
+        if (in.decoderOptions.empty()) continue;
+        AVFormatContext* fmt = nullptr;
+        if (!openInput(&fmt, in, err)) return false;
+        bool ok = true;
+        for (unsigned i = 0; i < fmt->nb_streams && ok; ++i) {
+            AVStream* st = fmt->streams[i];
+            const AVMediaType kind = st->codecpar->codec_type;
+            if (kind != AVMEDIA_TYPE_VIDEO && kind != AVMEDIA_TYPE_AUDIO) continue;
+            AVCodecContext* dec = nullptr;
+            // A stream this build cannot decode at all is not this check's
+            // business — the render will say so where it tries to read it —
+            // so only an option failure stops anything here.
+            std::string why;
+            if (!openDecoder(&dec, st->codecpar, st->time_base, in, false, &why)) {
+                if (why.find("has no option") != std::string::npos) { *err = why; ok = false; }
+            }
+            if (dec) avcodec_free_context(&dec);
+        }
+        avformat_close_input(&fmt);
+        if (!ok) return false;
+    }
+    return true;
+}
+
 /// One walk over the range: ask the edit what the output looks like at this
 /// instant, hand it to the writer, say how far along it is. Every step past
 /// "how far along" belongs to something else, which is what keeps this readable
@@ -118,9 +158,19 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     st.framesTotal = total;
     setStatus(st);
 
+    std::string err;
+    if (!checkDecoderOptions(s, &err)) {
+        st.state = ExportStatus::State::Failed;
+        st.error = err;
+        st.elapsedSec = secondsSince();
+        setStatus(st);
+        LOG_ERROR("export failed: %s", err.c_str());
+        reportNote(AV_LOG_ERROR, "render", err);
+        return;
+    }
+
     // Which of the two answers to "what does the output look like at t" this
     // render uses, and the only line in the job that knows there are two.
-    std::string err;
     std::unique_ptr<FrameSource> source;
     if (!s.filterGraph.empty()) {
         auto g = std::make_unique<GraphSource>(s);
@@ -171,7 +221,14 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         }
 
         const double t = s.startTime + double(n) / s.fps;
-        if (!writer.writeVideo(timeline.canvasAt(t), n, &err)) {
+        const Rgba& canvas = timeline.canvasAt(t);
+        // `-shortest`: the range said how long to write for and the content has
+        // run out first. Asked after the canvas rather than before it because
+        // the graph does not know its last input has ended until it has tried
+        // to pull — so this is the frame that discovered it, and not writing it
+        // is the whole of what `-shortest` does.
+        if (s.shortest && timeline.exhausted(t)) break;
+        if (!writer.writeVideo(canvas, n, &err)) {
             st.state = ExportStatus::State::Failed;
             st.error = err;
             break;

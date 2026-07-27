@@ -344,6 +344,37 @@ std::vector<DecoderInfo> availableDecoders();
 /// other flag. There has been no way to reach these at all.
 std::vector<OptionInfo> decoderOptions(const std::string& name);
 
+// ── What this build can do to a bitstream ──────────────────────────────────
+//
+// A bitstream filter is the one stage of ffmpeg's pipeline that is neither an
+// encoder nor a muxer: it works on packets that are already encoded, between
+// the two. `h264_mp4toannexb` rewrites NAL framing, `hevc_metadata` edits the
+// VUI without touching a pixel, `dump_extra` repeats the parameter sets, `setts`
+// rewrites timestamps. None of them is reachable through any option table, which
+// is why they need a registry of their own.
+
+/// One bitstream filter, in the shape a chain editor needs.
+struct BsfInfo {
+    std::string name;
+
+    /// The codecs it will run on, by name — `av_bsf_get_by_name`'s own
+    /// `codec_ids` list. **Empty means "any"**, which is what a filter with no
+    /// list declares and is a real answer rather than an absence: `setts` and
+    /// `noise` work on anything.
+    ///
+    /// This is what lets a UI offer only the filters that can go on the stream
+    /// in hand, which for a list of thirty is the difference between a menu and
+    /// a lottery.
+    std::vector<std::string> codecs;
+};
+
+std::vector<BsfInfo> availableBitstreamFilters();
+
+/// One bitstream filter's options, out of its own `priv_class` — the same walk
+/// every other option table in this file comes from, so the column that draws
+/// an encoder's draws this one.
+std::vector<OptionInfo> bsfOptions(const std::string& name);
+
 /// The four-character codes this muxer will accept for this codec — the
 /// vocabulary a `-tag:v` control can offer instead of a blank box.
 ///

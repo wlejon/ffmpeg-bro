@@ -6,6 +6,7 @@
 #include "ffmpeg_capabilities.h"  // isInputDevice
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
 }
@@ -101,6 +102,66 @@ bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err) {
         if (err) *err = in.path + ": " + avErr(info);
         return false;
     }
+    return true;
+}
+
+bool openDecoder(AVCodecContext** out, const AVCodecParameters* par,
+                 AVRational pktTimeBase, const MediaInput& in, bool threaded,
+                 std::string* err) {
+    if (!out) return false;
+    *out = nullptr;
+    if (!par) return false;
+
+    const AVCodec* codec = avcodec_find_decoder(par->codec_id);
+    if (!codec) {
+        if (err) *err = in.path + ": this build has no " +
+                        avcodec_get_name(par->codec_id) + " decoder";
+        return false;
+    }
+
+    AVCodecContext* ctx = avcodec_alloc_context3(codec);
+    if (!ctx) { if (err) *err = "out of memory"; return false; }
+    if (avcodec_parameters_to_context(ctx, par) < 0) {
+        avcodec_free_context(&ctx);
+        if (err) *err = in.path + ": that stream cannot be described to its decoder";
+        return false;
+    }
+    ctx->pkt_timebase = pktTimeBase;
+    if (threaded) {
+        ctx->thread_count = 0;
+        ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    }
+
+    // Applied through the dictionary rather than av_opt_set, because a
+    // dictionary is the one call that reports back what nothing understood —
+    // the same reason `openInput` above uses one for the demuxer's options.
+    AVDictionary* opts = nullptr;
+    for (const auto& o : in.decoderOptions)
+        if (!o.key.empty()) av_dict_set(&opts, o.key.c_str(), o.value.c_str(), 0);
+
+    const int rc = avcodec_open2(ctx, codec, &opts);
+    if (rc < 0) {
+        av_dict_free(&opts);
+        avcodec_free_context(&ctx);
+        if (err) *err = in.path + ": cannot open the " + codec->name +
+                        " decoder: " + avErr(rc);
+        return false;
+    }
+    if (opts && av_dict_count(opts) > 0) {
+        std::string names;
+        const AVDictionaryEntry* e = nullptr;
+        while ((e = av_dict_iterate(opts, e)))
+            names += (names.empty() ? "" : ", ") + std::string(e->key);
+        av_dict_free(&opts);
+        avcodec_free_context(&ctx);
+        if (err)
+            *err = in.path + ": the " + codec->name + " decoder has no option '" +
+                   names + "'";
+        return false;
+    }
+    av_dict_free(&opts);
+
+    *out = ctx;
     return true;
 }
 
