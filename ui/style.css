@@ -882,22 +882,29 @@ body.fs #cropbox { display: none; }
 }
 .cap-elapsed { font-size: 15px; font-weight: 600; }
 
-/* One device, and one thing a device can see. Two and three lines, so both
-   need `height: auto` — the base button rule is a 26px single-line control. */
-.cap-device, .cap-source {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 1px;
-    width: 100%;
-    height: auto;
-    text-align: left;
-    margin-bottom: 3px;
-    padding: 4px 6px;
+/* One device, and one thing a device can see: two lines each.
+
+   A row and not a `<button>`, the way `.src-row` on the Sources stage is one.
+   The base button rule is a 26px single-line control and this engine will not
+   grow a button past it however the display and the height are written, so the
+   second line escapes the border and lands on whatever is underneath. A row
+   that is a row lays out correctly and carries its own click listener like
+   everything else here. */
+.cap-device {
+    padding: 4px 8px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    line-height: 1.35;
 }
-.cap-source { flex-direction: row; align-items: baseline; gap: 6px; }
+.cap-device:hover { background: #1b1e25; }
+.cap-device.on { background: #1e222b; border-left-color: var(--accent); }
+.cap-device-name { font-size: 13px; font-weight: 600; }
+.cap-device-what { font-size: 11px; }
 #cap-settings input.wide, #cap-options input.wide { width: 100%; box-sizing: border-box; }
 #cap-settings select.wide { width: 100%; box-sizing: border-box; }
+/* Long enough for the word it is placeholdered with: "until stopped" is the
+   whole of what an empty -t means and a field that clips it says "until stc". */
+#cap-settings input[data-f="capseconds"] { width: 110px; }
 
 /* The filenames a run of images will actually be written as. Shown because
    %04d is exactly the thing somebody gets wrong once and then never trusts

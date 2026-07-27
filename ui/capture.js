@@ -391,14 +391,19 @@ function drawDevices() {
         if (!all.length)
             return [div('dim pad', 'This build registered no capture devices.')];
         for (const d of all) {
-            out.push(el('button', {
-                cls: 'cap-device tiny' + (d.name === capture.device ? ' on' : ''),
+            // A div and not a `<button>`, for the reason `.src-row` on the
+            // Sources stage is one: the base button rule is a 26px single-line
+            // control and this engine will not grow one past it however the
+            // display and the height are written, so the second line lands on
+            // whatever is underneath. A row that is a row lays out correctly and
+            // takes its own click listener like anything else here.
+            out.push(el('div', {
+                cls: 'cap-device' + (d.name === capture.device ? ' on' : ''),
                 'data-device': d.name,
                 on: { click: () => pickDevice(d.name) },
             }, [
-                span(d.name, 'mono'),
-                span(d.longName || '', 'dim'),
-                span(d.kinds.join(' · '), 'dim mono'),
+                div('cap-device-name mono', d.name),
+                div('cap-device-what dim', `${d.longName || ''} · ${d.kinds.join(' · ')}`),
             ]));
         }
         if (capture.device) out.push(...sourceRows());
@@ -466,13 +471,13 @@ function sourceRows() {
 
     for (const s of list.sources) {
         const arg = sourceArg(s);
-        out.push(el('button', {
-            cls: 'cap-source tiny' + (arg === capture.source ? ' on' : ''),
+        out.push(el('div', {
+            cls: 'cap-device' + (arg === capture.source ? ' on' : ''),
             'data-source': s.description || s.name,
             on: { click: () => setSource(arg) },
         }, [
-            span((s.mediaTypes || []).join('/') || '?', 'dim mono'),
-            span(s.description || s.name),
+            div('cap-device-name', s.description || s.name),
+            div('cap-device-what dim mono', (s.mediaTypes || []).join(' · ') || 'unknown'),
         ]));
     }
     if (!list.sources.length)
