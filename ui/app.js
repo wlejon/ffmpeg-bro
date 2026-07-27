@@ -32,6 +32,7 @@ import { initSources, drawSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
          applyAudio, applyAudioAll, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
+import * as report from './report.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -572,6 +573,14 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         return;
     }
+    // The report is under every stage, so it is reachable from every stage —
+    // including the two that otherwise take the keyboard for themselves, which
+    // are the two a render is started and watched from.
+    if (e.key === 'r' || e.key === 'R') {
+        report.setOpen(!report.isOpen());
+        e.preventDefault();
+        return;
+    }
     if (shell.currentStage() === 'sources') {
         if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
         return;
@@ -712,6 +721,13 @@ function frame(now) {
     // The render is on a thread of its own in the host binary; this is the
     // only thing that looks at it, and only while its dialog is up.
     exporter.tick();
+    // What the render said, drained here rather than beside the progress bar:
+    // a render started from the Write stage keeps going while you walk back to
+    // the edit, and probing and playback log from wherever you are, so a
+    // channel that only listened while one panel was up would have holes in it
+    // exactly where somebody went to look at something.
+    report.tick();
+    report.chaseReport();
 
     requestAnimationFrame(frame);
 }
@@ -828,6 +844,16 @@ command.initCommand({
     flash,
 });
 
+// What came back, under every stage for the same reason the command is: the
+// application's argument is that nothing about a render should be hidden, and
+// half of that argument is about the half that has already happened.
+report.initReport({
+    bar: el('reportbar'),
+    head: el('rep-head'),
+    body: el('rep-body'),
+    toggle: el('rep-toggle'),
+});
+
 /// The two lines under a stage's name: what it is set to, in the terms that
 /// stage is about. Read from the model every time the spine is drawn, because
 /// a bar that can disagree with the render is worse than one that is rebuilt.
@@ -908,7 +934,7 @@ globalThis.__ffmpegBro = {
     splitAtPlayhead, setLayout, select, selectMany,
     showProperties, pending,
     exporter,
-    filtergraph, renderGraph, shell, command,
+    filtergraph, renderGraph, shell, command, report,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.
     graph: { makeGraph, restore, derive, print, layout, portY,

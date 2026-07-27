@@ -8,6 +8,7 @@
 
 import { el, div, put, fromTemplate } from '../dom.js';
 import { bytes, elapsed, basename } from '../format.js';
+import { verdict, openReport } from '../report.js';
 
 let pane = null;
 let hooks = {};
@@ -35,6 +36,30 @@ function bar(pct, cls) {
 
 const line = (text, cls = '') => div(`ex-line ${cls}`.trim(), text);
 
+/// What libav had to say about this render, where somebody is already looking.
+///
+/// A render can succeed and still have been told something worth knowing — a
+/// profile the encoder refused, a bitrate it clamped, a tag the muxer would not
+/// take. A green bar over a file that is not what was asked for is the failure
+/// this whole channel exists to prevent, so the count is stated here and the
+/// way to read it is one click. Absent entirely when there is nothing to say:
+/// a panel that always carries a "0 warnings" line teaches people to skip the
+/// place the real one will appear.
+function said() {
+    const v = verdict();
+    if (!v.errors && !v.warnings) return null;
+    const bits = [];
+    if (v.errors) bits.push(`${v.errors} error${v.errors === 1 ? '' : 's'}`);
+    if (v.warnings) bits.push(`${v.warnings} warning${v.warnings === 1 ? '' : 's'}`);
+    return div('ex-line', [
+        el('button', {
+            cls: 'tiny', 'data-f': 'report',
+            text: `${bits.join(' and ')} — what the render said`,
+            on: { click: openReport },
+        }),
+    ]);
+}
+
 function running(p, pct) {
     const left = p.fps > 0 && p.totalFrames
         ? Math.max(0, (p.totalFrames - p.frames) / p.fps) : 0;
@@ -55,6 +80,7 @@ function done(p) {
         line(`${p.frames} frames · ${bytes(p.bytes)} · ` +
              `${elapsed(p.elapsed)} at ${p.fps.toFixed(1)} fps`, 'mono dim'),
         line(p.path, 'dim'),
+        said(),
         div('ex-line', [
             el('button', { cls: 'tiny', 'data-f': 'import', text: 'Add it to the timeline',
                            on: { click: () => hooks.addToTimeline(p.path) } }),
@@ -73,6 +99,7 @@ function stopped(p, pct) {
         cancelled ? line(`${p.frames} of ${p.totalFrames} frames were written, and the ` +
                          `part it got to is playable`, 'mono dim') : null,
         cancelled ? line(p.path, 'dim') : null,
+        said(),
         div('ex-line', el('button', { cls: 'tiny', 'data-f': 'back', text: 'Back to settings',
                                       on: { click: hooks.back } })),
     ];

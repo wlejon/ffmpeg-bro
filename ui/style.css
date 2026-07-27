@@ -701,6 +701,7 @@ input[type=range] { width: 130px; }
 body.fs #topbar,
 body.fs #spine,
 body.fs #commandbar,
+body.fs #reportbar,
 body.fs #inspector,
 body.fs #controls { display: none; }
 body.fs #viewer { background: #000; }
@@ -904,6 +905,131 @@ body.fs #cropbox { display: none; }
    the application, and hid it on the one stage whose subject is the `-i`
    arguments it opens with. */
 .cmd.empty { display: none; }
+
+/* ── the report ───────────────────────────────────────────────────────────
+
+   The command bar's counterpart: one says what is about to run, this says what
+   came back. Collapsed it is a single line and stays out of the way, which is
+   the ordinary case — a render that went fine has nothing to add. It colours
+   itself when there is something to say, because a channel that has to be
+   opened to discover it has a warning in it is a channel nobody opens. */
+.rep {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    background: #101216;
+    border-top: 1px solid var(--line);
+}
+.rep-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    cursor: pointer;
+}
+.rep-toggle {
+    min-width: 20px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--dim);
+    font-size: var(--fs-base);
+    flex-shrink: 0;
+}
+.rep-toggle:hover { background: none; color: var(--accent); }
+.rep-head {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: var(--fs-sm);
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rep.warn .rep-head .rep-say { color: var(--accent); }
+.rep.bad  .rep-head .rep-say { color: var(--bad); }
+.rep.warn .rep-toggle { color: var(--accent); }
+.rep.bad  .rep-toggle { color: var(--bad); }
+.rep-dropped { font-size: var(--fs-xs); }
+
+.rep-body {
+    border-top: 1px solid var(--line);
+    padding: 6px 12px 8px;
+    max-height: 34vh;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.rep-filters {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 6px;
+}
+.rep-cols {
+    display: flex;
+    gap: 14px;
+    min-height: 0;
+    flex: 1;
+}
+.rep-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.rep-msgs { flex: 2; }
+.rep-series { flex: 1; }
+.rep-col-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    color: var(--text);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+}
+.rep-empty { font-size: var(--fs-sm); padding: 8px 0; line-height: 1.6; }
+/* The scrollbar sits over the content in this engine rather than beside it, so
+   a row that measures the full width has its right-hand end — which is where
+   the number is — cut off by it. The gutter is the fix, and it costs nothing
+   when there is nothing to scroll. */
+.rep-list, .rep-series-list {
+    overflow-y: auto;
+    min-height: 0;
+    max-height: 26vh;
+    padding-right: 12px;
+}
+
+/* A message is four columns and the first three are narrow on purpose: the
+   sentence is what is being read, and level, source and time are what it is
+   being read *by*. */
+.rep-msg {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 2px 0;
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    user-select: text;
+}
+.rep-msg .rep-lv { width: 52px; flex-shrink: 0; font-size: var(--fs-xs); text-transform: uppercase; }
+.rep-msg .rep-src { width: 110px; flex-shrink: 0; color: var(--blue); overflow: hidden; text-overflow: ellipsis; }
+.rep-msg .rep-when { width: 46px; flex-shrink: 0; text-align: right; font-size: var(--fs-xs); }
+.rep-msg .rep-text { flex: 1; min-width: 0; color: var(--text); word-break: break-word; }
+.rep-msg.bad  .rep-lv { color: var(--bad); }
+.rep-msg.warn .rep-lv { color: var(--accent); }
+.rep-msg.dim  .rep-lv { color: var(--dim); }
+.rep-msg.dim  .rep-text { color: var(--dim); }
+
+.rep-series-row { padding: 4px 0 6px; border-bottom: 1px solid var(--line); }
+.rep-series-head { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sm); }
+.rep-series-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.rep-series-stat, .rep-series-span { font-size: var(--fs-xs); }
+/* A width it can be measured at: the canvas is sized in JS from what it
+   actually got, which needs it to be a block that fills its column rather than
+   an inline replaced element with an intrinsic 300x150. */
+.rep-spark { display: block; width: 100%; height: 26px; margin: 3px 0 2px; }
 
 /* The presets. Six buttons that between them cover most renders, so the
    twenty controls below them are for the render that is not one of the six. */

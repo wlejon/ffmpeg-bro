@@ -265,6 +265,24 @@
     </section>
     </div>
 
+    <!-- What the render *said*, which is the counterpart of the bar below it:
+         one says what is about to run and the other says what came back. Until
+         it existed a render could report a percentage and, if it failed
+         outright, one sentence — everything libav had to say went to a console
+         nobody sees, and the filters that measure rather than paint had nowhere
+         to put an answer at all.
+
+         Two kinds of thing, drawn as two, because they are not the same kind of
+         fact: levelled, attributed messages are a list, and a filter's
+         measurements sampled frame by frame are a line. -->
+    <footer id="reportbar" class="rep">
+        <div class="rep-bar">
+            <button id="rep-toggle" class="rep-toggle" title="What the render said">&#9656;</button>
+            <div id="rep-head" class="rep-head"></div>
+        </div>
+        <div id="rep-body" class="rep-body hidden"></div>
+    </footer>
+
     <!-- What the render amounts to, in ffmpeg's own terms. Not a summary line
          at the bottom of one form: the whole point of the application is that
          the invocation is never hidden and never a surprise, so it runs under
@@ -374,6 +392,35 @@
 
     <template id="tpl-bar">
         <div class="ex-bar"><div class="ex-fill"></div></div>
+    </template>
+
+    <!-- One thing libav said: how bad, who said it, how far into the render,
+         and then the sentence. The source is a column of its own because a
+         warning nobody can attribute is worth much less than one labelled
+         libx264 — it is the difference between "something is wrong" and "the
+         encoder refused the profile". -->
+    <template id="tpl-rep-msg">
+        <div class="rep-msg">
+            <span class="rep-lv mono"></span>
+            <span class="rep-src mono"></span>
+            <span class="rep-when mono dim"></span>
+            <span class="rep-text"></span>
+        </div>
+    </template>
+
+    <!-- One thing a filter measured, over the render: its name (libavfilter's
+         own metadata key, verbatim), its range, and the line. A number that
+         changes over time has one useful shape and this is it. -->
+    <template id="tpl-rep-series">
+        <div class="rep-series-row">
+            <div class="rep-series-head">
+                <span class="rep-series-name mono"></span>
+                <span class="spacer"></span>
+                <span class="rep-series-stat mono dim"></span>
+            </div>
+            <canvas class="rep-spark"></canvas>
+            <div class="rep-series-span mono dim"></div>
+        </div>
     </template>
 
     <script type="module" src="app.js"></script>
