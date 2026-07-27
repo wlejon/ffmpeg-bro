@@ -63,14 +63,23 @@ function said() {
 function running(p, pct) {
     const left = p.fps > 0 && p.totalFrames
         ? Math.max(0, (p.totalFrames - p.frames) / p.fps) : 0;
+    // Which walk over the range this is, and what it is for. A render that is
+    // going to do the whole thing again must not report "43%" and leave the
+    // rest to be discovered — the percentage already spans the job, and this is
+    // what says why it is moving at half the rate it looks like it should.
+    const twoPass = (p.passes || 1) > 1
+        ? line(`pass ${p.pass} of ${p.passes}` + (p.passLabel ? ` — ${p.passLabel}` : ''),
+               'dim')
+        : null;
     return [
         bar(pct),
+        twoPass,
         line(`${pct}% · frame ${p.frames} of ${p.totalFrames}`, 'mono'),
         line(`${p.fps.toFixed(1)} fps · ${elapsed(p.elapsed)} so far` +
              (left > 0.5 ? ` · about ${elapsed(left)} left` : '') +
              ` · ${bytes(p.bytes)}`, 'mono dim'),
         line(p.path, 'dim'),
-    ];
+    ].filter(Boolean);
 }
 
 function done(p) {

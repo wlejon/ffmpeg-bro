@@ -656,6 +656,37 @@ function optionRows(input) {
         }));
     }
 
+    // The decoders, which are a different object from the demuxer and have a
+    // different table. They belong here rather than on the Encode stage for the
+    // reason `-probesize` does: a decoder is opened *for this input*, ffmpeg
+    // writes `-skip_frame` in front of the same `-i`, and a bag that lived
+    // beside the encoder's would be describing the wrong end of the pipeline.
+    //
+    // One column per codec this input turned out to carry, because the tables
+    // are the codecs' — h264's `is_avc` and aac's `dual_mono_mode` are not the
+    // same list — and the bag is shared, exactly as the demuxer's and the
+    // protocol's share one: libavcodec is handed one dictionary per decoder and
+    // an option no decoder took is what stops the open.
+    for (const codec of decoderNames(input)) {
+        const all = decoderOptionsFor(codec);
+        if (!all.length) continue;
+        out.push(...optionColumn({
+            name: `decoptsearch-${codec}`,
+            title: `${codec} decoder options · ${all.length}`,
+            note: 'What the decoder reading this input takes — `skip_frame`, ' +
+                  '`skip_loop_filter`, `thread_type`, `lowres`. These reach playback and ' +
+                  'the render alike, because both open this input’s decoders the same way.',
+            options: all,
+            bag: input.decoderOptions,
+            hint: 'Anything set here is passed straight to the decoder.',
+            // Through `reprobe` even though the probe itself will say the same
+            // thing: what it also does is re-register the input for playback,
+            // and the token is the only route an option has into the `<video>`
+            // elements the viewer is already holding.
+            onChange: () => { reprobe(input); reopened(input); },
+        }));
+    }
+
     const scheme = schemeOf(input.path);
     if (scheme) {
         const all = bro.ffmpeg.protocolOptions(scheme) || [];
@@ -673,6 +704,37 @@ function optionRows(input) {
             }));
     }
     return out;
+}
+
+/// Which decoders will read this input, by the names libavcodec answers to.
+///
+/// Out of the probe, so it is the codecs that are actually in the file rather
+/// than the ones a container usually holds. Distinct, because a file with two
+/// AAC tracks is one option table and not two.
+function decoderNames(input) {
+    const p = input.probe;
+    if (!p) return [];
+    const out = [];
+    for (const s of p.streams)
+        if (s.codec && (s.kind === 'video' || s.kind === 'audio') && out.indexOf(s.codec) < 0)
+            out.push(s.codec);
+    return out;
+}
+
+// Cached per decoder, for the reason the encoder's and the muxer's are: the
+// panel is rebuilt on every keystroke in a search box and h264 has forty-five
+// options.
+const decoderOptionCache = new Map();
+
+function decoderOptionsFor(name) {
+    if (!decoderOptionCache.has(name)) {
+        try {
+            decoderOptionCache.set(name, bro.ffmpeg.decoderOptions(name) || []);
+        } catch (e) {
+            decoderOptionCache.set(name, []);
+        }
+    }
+    return decoderOptionCache.get(name);
 }
 
 /// Apply a change and put back everything downstream of it.

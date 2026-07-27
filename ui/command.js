@@ -109,6 +109,26 @@ function describe(out, s, kind, idx, count) {
     if (s.tag) out.push(`-tag:${at}`, arg(s.tag));
 }
 
+/// `-bsf:v h264_mp4toannexb,dump_extra=freq=k`.
+///
+/// One argument for the whole chain, comma-separated in the order it runs, with
+/// each filter's own options after an `=` and separated by `:` — which is
+/// libavcodec's `av_bsf_list_parse_str` syntax and therefore what the renderer
+/// builds by hand out of the same list. Printed as one argument because that is
+/// what it is: `-bsf:v a -bsf:v b` on a command line is not two filters, it is
+/// the second one overriding the first.
+function bsfArgs(out, s, kind, idx, count) {
+    const chain = (s.bsf || []).filter((b) => b.name);
+    if (!chain.length) return;
+    const text = chain.map((b) => {
+        const opts = Object.keys(b.options || {})
+            .filter((k) => b.options[k] !== '' && b.options[k] !== undefined)
+            .map((k) => `${k}=${b.options[k]}`);
+        return opts.length ? `${b.name}=${opts.join(':')}` : b.name;
+    }).join(',');
+    out.push(`-bsf:${sel(kind, idx, count)}`, arg(text));
+}
+
 /// Everything the encoder is told, as `-key value` pairs. Assembled from the
 /// spec rather than from the option bag alone, because the bag is not the whole
 /// of what the encoder ends up configured with — the named fields below are
@@ -145,6 +165,14 @@ export function parts() {
                 for (const k of Object.keys(src.options || {}))
                     if (src.options[k] !== '' && src.options[k] !== undefined)
                         inputs.push(`-${k}`, arg(src.options[k]));
+                // The decoders reading this input, and so also in front of the
+                // `-i`: `-skip_frame` after it would be an output option that
+                // means nothing. A different bag from the demuxer's above
+                // because they are different objects with different tables,
+                // printed together because that is where ffmpeg wants both.
+                for (const k of Object.keys(src.decoderOptions || {}))
+                    if (src.decoderOptions[k] !== '' && src.decoderOptions[k] !== undefined)
+                        inputs.push(`-${k}`, arg(src.decoderOptions[k]));
                 if (src.ss) inputs.push('-ss', String(src.ss));
                 if (src.to) inputs.push('-to', String(src.to));
                 if (src.itsoffset) inputs.push('-itsoffset', String(src.itsoffset));
@@ -161,6 +189,14 @@ export function parts() {
     const nVideo = streams.filter((s) => s.kind === 'video').length;
     const nAudio = streams.filter((s) => s.kind === 'audio').length;
 
+    // The output half, once per pass.
+    //
+    // **A two-pass render is two invocations and this prints two.** ffmpeg has
+    // no way to say it in one, and the halves genuinely differ — the first
+    // writes statistics through `-f null -` and keeps no file, the second reads
+    // them and writes the output — so folding them into one line would print a
+    // command that produces a different result from the render.
+    const tail = (pass) => {
     const out = [];
     // One `-map` per stream, which is what a stream list *is* in ffmpeg's
     // terms. Two video streams of the same pad is a legitimate thing to want —
@@ -187,7 +223,7 @@ export function parts() {
         if (s.kind === 'video') {
             const idx = vi++;
             out.push(`-c:${sel('v', idx, nVideo)}`, s.codec || codec);
-            const v = s.options || {};
+            const v = Object.assign({}, s.options, (pass && pass.videoOptions) || {});
             for (const k of Object.keys(v)) out.push(`-${keyFor(k, 'v', idx, nVideo)}`, arg(v[k]));
             if (settings.pixelFormat)
                 out.push(`-pix_fmt:${sel('v', idx, nVideo)}`, settings.pixelFormat);
@@ -201,6 +237,24 @@ export function parts() {
                      '-color_primaries', colour.primaries,
                      '-color_trc', colour.transfer,
                      '-color_range', colour.range);
+            // Everything else the video stream is told that is not an encoder
+            // option, and so not in the bag above. Each of these is a decision
+            // the writer takes on its own account, which is exactly why a
+            // command built from the option bag alone would be incomplete.
+            if (spec.forceKeyFrames)
+                out.push(`-force_key_frames:${sel('v', idx, nVideo)}`, arg(spec.forceKeyFrames));
+            if (spec.fieldOrder) {
+                out.push(`-flags:${sel('v', idx, nVideo)}`, '+ildct+ilme');
+                out.push(`-field_order:${sel('v', idx, nVideo)}`, spec.fieldOrder);
+            }
+            if (spec.threads) out.push(`-threads:${sel('v', idx, nVideo)}`, String(spec.threads));
+            if (spec.threadType)
+                out.push(`-thread_type:${sel('v', idx, nVideo)}`, spec.threadType);
+            // Stated rather than chosen: this renderer walks the range at the
+            // output rate and stamps each frame with its number, on both paths.
+            // Printing it is what makes the command produce the same file.
+            out.push(`-fps_mode:${sel('v', idx, nVideo)}`, 'cfr');
+            bsfArgs(out, s, 'v', idx, nVideo);
             describe(out, s, 'v', idx, nVideo);
             continue;
         }
@@ -211,7 +265,19 @@ export function parts() {
         for (const k of Object.keys(a)) out.push(`-${k}:${sel('a', idx, nAudio)}`, arg(a[k]));
         if (spec.sampleRate) out.push(`-ar:${sel('a', idx, nAudio)}`, String(spec.sampleRate));
         if (spec.channels) out.push(`-ac:${sel('a', idx, nAudio)}`, String(spec.channels));
+        bsfArgs(out, s, 'a', idx, nAudio);
         describe(out, s, 'a', idx, nAudio);
+    }
+
+    // Output-wide, so after the streams and before the muxer's own options.
+    if (spec.shortest) out.push('-shortest');
+
+    // A pass that keeps nothing: everything above it runs, and the pictures go
+    // to the null muxer. Nothing after this point applies — there is no file to
+    // put an index at the front of and no metadata to write into it.
+    if (pass && pass.discard) {
+        out.push('-f', 'null', '-');
+        return out;
     }
 
     if (settings.faststart && spec.format === 'mp4')
@@ -233,8 +299,16 @@ export function parts() {
     // different invocation from the one being run.
     if (spec.format) out.push('-f', spec.format);
     out.push(arg(spec.path || `out.${outputExt()}`));
+    return out;
+    };
 
-    return { spec, graph: g, pre, inputs, out };
+    // One tail for an ordinary render, one per pass for a render that is two.
+    // The list is the spec's, so this cannot come to disagree with what the
+    // renderer was handed about how many times the range is walked.
+    const passes = spec.passes && spec.passes.length ? spec.passes : [null];
+    const tails = passes.map(tail);
+
+    return { spec, graph: g, pre, inputs, out: tails[tails.length - 1], tails, passes };
 }
 
 /// What the bar is describing right now.
@@ -258,9 +332,12 @@ function commandText() {
     const cap = describing();
     if (cap) return cap.pre.concat(cap.inputs, cap.out).join(' ');
     const p = parts();
-    const bits = p.pre.concat(p.inputs);
-    if (p.graph.ok) bits.push('-filter_complex', arg(p.graph.chains.join(';')));
-    return bits.concat(p.out).join(' ');
+    const head = p.pre.concat(p.inputs);
+    if (p.graph.ok) head.push('-filter_complex', arg(p.graph.chains.join(';')));
+    // One line per pass, in order, because that is how a two-pass render is run
+    // by hand. Pasted into a shell they run one after the other, which is what
+    // this binary does with them in one job.
+    return p.tails.map((t) => head.concat(t).join(' ')).join('\n');
 }
 
 export function draw() {
@@ -299,14 +376,22 @@ export function draw() {
     lastText = commandText();
 
     put(refs.line, () => {
-        const bits = [span(p.pre.concat(p.inputs).join(' ') + GAP, 'cmd-exact')];
-        if (p.graph.ok) {
-            bits.push(span('-filter_complex' + GAP, 'cmd-exact'));
-            // Dimmed, and on its own lines when opened, because this is the
-            // half that is a translation rather than a transcript.
-            bits.push(span(arg(p.graph.chains.join(open ? ';\n  ' : ';')) + GAP, 'cmd-equiv'));
-        }
-        bits.push(span(p.out.join(' '), 'cmd-exact'));
+        const bits = [];
+        // A pass at a time, each a whole invocation. With one pass — every
+        // render that is not two-pass — this is the single line it always was,
+        // because `tails` has one entry and nothing is labelled.
+        p.tails.forEach((t, i) => {
+            if (p.passes[i] && p.passes[i].label)
+                bits.push(span(`# ${p.passes[i].label}\n`, 'cmd-pass'));
+            bits.push(span(p.pre.concat(p.inputs).join(' ') + GAP, 'cmd-exact'));
+            if (p.graph.ok) {
+                bits.push(span('-filter_complex' + GAP, 'cmd-exact'));
+                // Dimmed, and on its own lines when opened, because this is the
+                // half that is a translation rather than a transcript.
+                bits.push(span(arg(p.graph.chains.join(open ? ';\n  ' : ';')) + GAP, 'cmd-equiv'));
+            }
+            bits.push(span(t.join(' ') + (i + 1 < p.tails.length ? '\n' : ''), 'cmd-exact'));
+        });
         if (open) bits.push(notes(p));
         return bits;
     });
@@ -343,6 +428,13 @@ function notes(p) {
     }
     for (const c of (p.graph.caveats || []))
         lines.push([span('Differs: ', 'lead'), c + '.']);
+
+    if (p.tails.length > 1)
+        lines.push([span('Two commands: ', 'lead'),
+                    'a two-pass render is two invocations and ffmpeg has no way to say it ' +
+                    'in one. The first writes the statistics through -f null - and keeps ' +
+                    'no file; the second reads them and writes the output. This binary ' +
+                    'runs both as one job, with one Stop and one progress bar.']);
 
     // The one thing on this stage that an ffmpeg command line genuinely cannot
     // say. There is no `-chapter` option: ffmpeg takes chapters from an input,

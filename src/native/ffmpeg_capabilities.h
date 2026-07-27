@@ -101,6 +101,13 @@ struct CodecOption {
     std::string id;         // what to put in ExportSettings
     std::string label;      // for a menu
     std::string longName;   // libavcodec's own description
+
+    /// The *codec* this encoder writes, which is not the same as its name:
+    /// `libx264` and `h264_nvenc` both write `h264`. Everything that talks
+    /// about codecs rather than encoders needs it — a bitstream filter's
+    /// `codec_ids` are codec names, so without this a chain editor has to guess
+    /// by stripping a `lib` prefix, which is a rule about spellings.
+    std::string codecName;
     bool supportsCrf = false;
     bool supportsPreset = false;
     bool supportsQp = false;

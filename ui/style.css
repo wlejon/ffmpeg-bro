@@ -1057,6 +1057,15 @@ body.fs #cropbox { display: none; }
 }
 .cmd-exact { color: var(--text); }
 .cmd-equiv { color: var(--dim); }
+/* Which pass a line is. Only ever present when there is more than one, so an
+   ordinary render still reads as the single invocation it is. */
+.cmd-pass { color: var(--accent); }
+
+/* The packet chain on a stream row. An ordered list, drawn as one: the order
+   is the whole of the meaning, so the number and the arrows are not decoration. */
+.ex-bsf-row { display: flex; align-items: center; gap: 5px; padding: 1px 0; }
+.ex-bsf-row .ex-bsf-name { flex: 1; min-width: 0; }
+.ex-bsf-n { min-width: 12px; text-align: right; }
 .cmd-note {
     display: block;
     color: var(--dim);

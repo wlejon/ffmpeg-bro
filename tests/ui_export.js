@@ -907,6 +907,284 @@ console.log('\nchoosing a muxer');
     pump(40);
 }
 
+// ── the rest of what an encoder is told ────────────────────────────────────
+//
+// None of this is an encoder option, which is exactly why each needed a control
+// and a named field on the spec rather than a row in the advanced column. What
+// is checked here is the same join the rest of this file checks: a control turns
+// into the thing ffmpeg would have been given, and the command bar prints it —
+// because anything reaching the renderer the bar does not print is a bug.
+
+console.log('\ntwo passes are a rate-control mode, not a switch');
+{
+    A.shell.goTo('encode');
+    pump(40);
+    S.videoCodec = 'libx264';
+    f('vcodec').dispatchEvent(new Event('change'));
+    pump(60);
+
+    const modes = qq('button[data-seg="rate"]');
+    let names = [];
+    for (const b of modes) names.push(b.getAttribute('data-v'));
+    ok(names.indexOf('twopass') >= 0,
+       `two-pass is one of the rate modes, beside the others (${names.join(', ')})`);
+
+    q('button[data-seg="rate"][data-v="twopass"]').click();
+    pump(60);
+    same(S.rate, 'twopass', 'choosing it is choosing a rate control');
+    ok(!!f('vbitrate'), 'and it asks for a bitrate, because that is what it spends');
+
+    f('vbitrate').value = '4000';
+    f('vbitrate').dispatchEvent(new Event('change'));
+    pump(60);
+    same(S.videoBitrate, 4000, 'the bitrate field is the one the mode spends');
+
+    // The spec is where a render becomes two renders, in one place, so the
+    // export and both halves of the preview cannot disagree about how many
+    // times the range is walked.
+    const spec = A.exporter.buildSpec();
+    same((spec.passes || []).length, 2, 'the spec says the range is walked twice');
+    same(spec.videoOptions.b, '4000k', 'both passes are aimed at the same bitrate');
+    same(spec.passes[0].discard, true, 'the first keeps nothing — it is `-f null -`');
+    same(spec.passes[0].videoOptions.pass, '1', 'and says which pass it is');
+    same(spec.passes[1].videoOptions.pass, '2', 'as does the second');
+    ok(spec.passes[0].videoOptions.passlogfile &&
+       spec.passes[0].videoOptions.passlogfile === spec.passes[1].videoOptions.passlogfile,
+       'both naming the same statistics file, which is the whole handoff');
+
+    // Two invocations, because ffmpeg has no way to say it in one and a single
+    // line would print a command that produces a different result.
+    const text = A.command.currentCommand();
+    const lines = text.split('\n').filter((l) => l.indexOf('ffmpeg ') === 0);
+    same(lines.length, 2, 'the command bar prints two invocations');
+    ok(lines[0].indexOf('-pass 1') > 0 && lines[0].indexOf('-f null -') > 0,
+       'the first writes statistics and keeps no file');
+    ok(lines[1].indexOf('-pass 2') > 0 && lines[1].indexOf('.mp4') > 0,
+       'the second reads them and writes the output');
+    ok(/-passlogfile \S+/.test(lines[0]) && /-passlogfile \S+/.test(lines[1]),
+       'and both name the log');
+
+    S.rate = 'quality';
+    f('vcodec').dispatchEvent(new Event('change'));
+    pump(60);
+    same((A.exporter.buildSpec().passes || []).length, 0,
+         'constant quality is one pass again — there is nothing for a second to learn');
+}
+
+console.log('\na keyframe where the edit cuts');
+{
+    f('advanced').click();
+    pump(60);
+    ok(!!q('button[data-seg="kfmode"][data-v="cuts"]'), 'the keyframe control is in Advanced');
+
+    // Nothing here writes a list of times down. What is remembered is the
+    // decision, and the answer is re-read from the timeline every time it is
+    // asked — which is what keeps it honest after the edit moves.
+    const before = A.project.clips.length;
+    ok(before >= 1, 'there is something on the timeline to cut');
+    // Put back afterwards: everything below renders the whole timeline and
+    // measures the result against it, so a cut left in would be this section
+    // deciding what the ones after it are looking at.
+    const was = A.project.clips.map((c) => ({ c, start: c.start, length: c.length,
+                                              inPoint: c.inPoint }));
+    A.select(A.project.clips[0]);
+    A.setPlayhead(A.project.clips[0].start + A.project.clips[0].length * 0.5, true);
+    pump(120);
+    A.splitAtPlayhead();
+    pump(120);
+    ok(A.project.clips.length > before, 'splitting it makes a cut inside the range');
+    const cutAt = A.project.clips[1].start;
+
+    q('button[data-seg="kfmode"][data-v="cuts"]').click();
+    pump(80);
+    same(S.keyframeMode, 'cuts', 'the mode is what is stored');
+
+    const spec = A.exporter.buildSpec();
+    const asked = spec.forceKeyFrames.split(',').map(Number);
+    ok(asked.some((t) => Math.abs(t - (cutAt - spec.start)) < 0.01),
+       `the cut is asked for, in seconds into the output (${spec.forceKeyFrames})`);
+    ok(A.command.currentCommand().indexOf('-force_key_frames') > 0,
+       'and the command bar prints it');
+
+    // The point of deriving rather than copying: move the clip and the
+    // keyframe moves with it. A version that wrote the numbers into a field
+    // would go on naming a moment nothing cuts at.
+    const second = A.project.clips[1];
+    second.start += 0.4;
+    second.inPoint += 0.4;
+    second.length -= 0.4;
+    A.resolveOverlaps(second);
+    pump(120);
+    const after = A.exporter.buildSpec();
+    const now = after.forceKeyFrames.split(',').map(Number);
+    ok(now.some((t) => Math.abs(t - (A.project.clips[1].start - after.start)) < 0.01),
+       `and it follows the clip when the clip moves (${after.forceKeyFrames})`);
+
+    // Typed times and an expression, which are the same option said two other
+    // ways — both ffmpeg's own spellings, so what is stored is what would be
+    // typed on a command line.
+    q('button[data-seg="kfmode"][data-v="times"]').click();
+    pump(60);
+    f('kftimes').value = '0.5,1.25';
+    f('kftimes').dispatchEvent(new Event('change'));
+    pump(60);
+    same(A.exporter.buildSpec().forceKeyFrames, '0.5,1.25', 'a list of times goes through as one');
+
+    q('button[data-seg="kfmode"][data-v="expr"]').click();
+    pump(60);
+    f('kfexpr').value = 'gte(t,n_forced*2)';
+    f('kfexpr').dispatchEvent(new Event('change'));
+    pump(60);
+    same(A.exporter.buildSpec().forceKeyFrames, 'expr:gte(t,n_forced*2)',
+         'and an expression carries the prefix ffmpeg wants');
+
+    q('button[data-seg="kfmode"][data-v="none"]').click();
+    pump(60);
+    same(A.exporter.buildSpec().forceKeyFrames, '', 'off asks for nothing');
+
+    A.project.clips.length = 0;
+    for (const w of was) {
+        w.c.start = w.start; w.c.length = w.length; w.c.inPoint = w.inPoint;
+        A.project.clips.push(w.c);
+    }
+    A.select(A.project.clips[0]);
+    pump(120);
+}
+
+console.log('\nhow the frames are timed and shaped');
+{
+    // Stated, not chosen. Both render paths walk the range at the output rate
+    // and stamp each frame with its number, so `cfr` is a fact about this
+    // renderer rather than a setting — and a picker offering `vfr` would be
+    // offering something neither path can produce.
+    ok(qq('button[data-seg="fpsmode"]').length === 0,
+       'there is no frame-timing picker, because there is nothing to pick');
+    ok(A.command.currentCommand().indexOf('-fps_mode cfr') > 0 ||
+       A.command.currentCommand().indexOf('-fps_mode:v cfr') > 0,
+       'and the command says so out loud instead');
+
+    q('button[data-seg="fieldorder"][data-v="tt"]').click();
+    pump(60);
+    same(S.fieldOrder, 'tt', 'field order is a choice');
+    same(A.exporter.buildSpec().fieldOrder, 'tt', 'and reaches the renderer');
+    const text = A.command.currentCommand();
+    ok(text.indexOf('+ildct+ilme') > 0 && text.indexOf('-field_order') > 0,
+       'printed as the two things it is: the encoder in field mode and the stream saying which');
+    q('button[data-seg="fieldorder"][data-v=""]').click();
+    pump(60);
+
+    f('threads').value = '3';
+    f('threads').dispatchEvent(new Event('change'));
+    f('threadtype').value = 'slice';
+    f('threadtype').dispatchEvent(new Event('change'));
+    pump(60);
+    same(A.exporter.buildSpec().threads, 3, '-threads is a number the renderer is given');
+    ok(A.command.currentCommand().indexOf('-thread_type:v slice') > 0 ||
+       A.command.currentCommand().indexOf('-thread_type slice') > 0,
+       'and the thread type is printed');
+    f('threads').value = '0';
+    f('threads').dispatchEvent(new Event('change'));
+    f('threadtype').value = '';
+    f('threadtype').dispatchEvent(new Event('change'));
+    pump(60);
+    ok(A.command.currentCommand().indexOf('-threads') < 0,
+       'auto prints nothing, because it is what every render has always done');
+
+    f('shortest').click();
+    pump(60);
+    same(A.exporter.buildSpec().shortest, true, '-shortest reaches the renderer');
+    ok(A.command.currentCommand().indexOf('-shortest') > 0, 'and is printed');
+    f('shortest').click();
+    pump(60);
+    f('advanced').click();
+    pump(40);
+}
+
+console.log('\na bitstream filter on a stream');
+{
+    A.shell.goTo('write');
+    pump(60);
+    ok(Array.isArray(bro.ffmpeg.bitstreamFilters) && bro.ffmpeg.bitstreamFilters.length > 0,
+       `libavcodec's own list of bitstream filters (${bro.ffmpeg.bitstreamFilters.length})`);
+
+    const rows = qq('#ex-streams [data-stream]');
+    const video = rows[0];
+    video.querySelector('[data-f="detail"]').click();
+    pump(60);
+    ok(!!q('[data-add="bsf"]'), 'the video row offers a packet chain');
+    q('[data-add="bsf"]').click();
+    pump(60);
+
+    const pick = f('bsf-0');
+    ok(!!pick, 'which is a list, in the order it runs');
+    // Narrowed to what will run on this stream's codec, out of each filter's
+    // own `codec_ids` — so the menu cannot offer something the render refuses.
+    let offered = [];
+    for (const o of pick.options) offered.push(o.value);
+    ok(offered.indexOf('h264_mp4toannexb') >= 0,
+       'offering the filters that run on h264');
+    ok(offered.indexOf('hevc_mp4toannexb') < 0,
+       'and not the ones that declare a codec this stream is not');
+    ok(offered.indexOf('setts') >= 0,
+       'a filter that declares no codec list runs on anything, so it is always offered');
+
+    pick.value = 'h264_metadata';
+    pick.dispatchEvent(new Event('change'));
+    pump(80);
+
+    const spec0 = A.exporter.buildSpec();
+    same(spec0.streams[0].bsf.length, 1, 'the chain reaches the spec');
+    same(spec0.streams[0].bsf[0].name, 'h264_metadata', 'naming the filter');
+    ok(A.command.currentCommand().indexOf('-bsf:v h264_metadata') > 0,
+       'and the command bar prints it as -bsf:v');
+
+    // Its own option table, out of the filter's own AVClass, in the same column
+    // the encoder's and the muxer's options use.
+    const search = f('bsfopts-' + rows[0].getAttribute('data-stream') + '-0');
+    ok(!!search, 'with the filter’s own option table beside it');
+    if (search) {
+        search.value = 'level';
+        search.dispatchEvent(new Event('input'));
+        pump(60);
+        const row = q('.ex-opt-row [data-opt="level"]');
+        ok(!!row, 'searching it finds libavcodec’s own option');
+        if (row) {
+            row.value = '5.1';
+            row.dispatchEvent(new Event('change'));
+            pump(80);
+            same(A.exporter.buildSpec().streams[0].bsf[0].options.level, '5.1',
+                 'and a value set on it reaches the spec');
+            ok(A.command.currentCommand().indexOf('h264_metadata=level=5.1') > 0,
+               'printed the way av_bsf_list_parse_str takes it');
+        }
+    }
+
+    // A chain is ordered, and the order is the meaning: two filters the other
+    // way round are a different file.
+    q('[data-add="bsf"]').click();
+    pump(60);
+    const second = f('bsf-1');
+    if (second) {
+        second.value = 'dump_extra';
+        second.dispatchEvent(new Event('change'));
+        pump(80);
+        const chain = A.exporter.buildSpec().streams[0].bsf.map((b) => b.name);
+        same(chain.join(','), 'h264_metadata,dump_extra', 'two filters run in the order shown');
+        q('[data-bsf-move="1:-1"]').click();
+        pump(80);
+        same(A.exporter.buildSpec().streams[0].bsf.map((b) => b.name).join(','),
+             'dump_extra,h264_metadata', 'and the arrows change what runs');
+        q('[data-bsf-drop="0"]').click();
+        pump(80);
+    }
+    q('[data-bsf-drop="0"]').click();
+    pump(80);
+    same((A.exporter.buildSpec().streams[0].bsf || []).length, 0,
+         'and removing them leaves the stream as it was');
+    A.shell.goTo('encode');
+    pump(40);
+}
+
 // ── the range ──────────────────────────────────────────────────────────────
 
 console.log('\nwriting part of the timeline');

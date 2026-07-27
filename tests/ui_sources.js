@@ -153,6 +153,40 @@ pump(60);
 same(input.options.probesize, '4000000', 'setting it puts it in the input’s bag');
 ok(!!input.probe, 'and the input was opened again with it, successfully');
 
+// ── the decoders, which are not the demuxer ────────────────────────────────
+//
+// A decoder belongs to an `-i`, which is why its options live here and not on
+// the Encode stage: ffmpeg writes `-skip_frame` in front of the same `-i` that
+// `-probesize` goes in front of, and for the same reason — both are decisions
+// taken while this input is being read. They are a *different bag* from the
+// demuxer's because they are a different object with a different table, and
+// there is a column per codec the file turned out to carry.
+
+console.log('\nthe decoders reading it');
+{
+    const codec = input.probe.video.codec;
+    const search = f(`decoptsearch-${codec}`);
+    ok(!!search, `the ${codec} decoder's own option table is a column too`);
+    search.value = 'skip_frame';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    pump(40);
+    const field = q('[data-opt="skip_frame"]');
+    ok(!!field, 'searching it finds libavcodec’s own -skip_frame');
+    type(field, 'nokey');
+    pump(80);
+    same(input.decoderOptions.skip_frame, 'nokey',
+         'setting it puts it in the input’s decoder bag, not the demuxer’s');
+    same(input.options.skip_frame, undefined,
+         'which is a different bag, because it is a different object');
+    ok(!!input.probe, 'and the input is still openable with it');
+
+    same(A.exporter.buildSpec().inputs[0].decoderOptions.skip_frame, 'nokey',
+         'the renderer is handed it on the input');
+    // Left set: the command bar has no `-i` to print until something is cut
+    // from this input, so where it lands in the line is checked below with the
+    // rest of what goes in front of one.
+}
+
 // ── the window ─────────────────────────────────────────────────────────────
 
 console.log('\nthe window');
@@ -204,6 +238,9 @@ ok(before.indexOf(`-f ${probedFormat}`) >= 0, '-f is before the -i');
 ok(before.indexOf('-probesize 4000000') >= 0, 'and so is the demuxer option');
 ok(before.indexOf('-ss 1') >= 0 && before.indexOf('-to 3') >= 0,
    'and so is the window — after the -i, -ss would seek the output instead');
+// A decoder option too, and for the same reason: after the `-i` the same word
+// is an output option meaning something else entirely.
+ok(before.indexOf('-skip_frame nokey') >= 0, 'and so is the decoder option');
 
 // ── the spec the renderer is handed ────────────────────────────────────────
 
@@ -214,7 +251,13 @@ ok(Array.isArray(spec.inputs) && spec.inputs.length === 1,
 same(spec.inputs[0].format, probedFormat, 'with the forced demuxer on it');
 same(spec.inputs[0].options.probesize, '4000000', 'and its options');
 same(spec.inputs[0].ss, 1, 'and its window');
+same(spec.inputs[0].decoderOptions.skip_frame, 'nokey',
+     'and the decoder options, in a bag of their own');
 same(spec.clips[0].input, 0, 'and the clip points into the list by index');
+
+delete input.decoderOptions.skip_frame;
+A.inputs.reprobe(input);
+pump(40);
 
 // ── an option nothing takes is an error ────────────────────────────────────
 

@@ -216,6 +216,7 @@ const char* optionTypeName(const AVOption* o) {
 /// Fill in everything about one encoder that a form needs to draw itself.
 void describeCodec(const AVCodec* codec, CodecOption& o) {
     o.longName = codec->long_name ? codec->long_name : "";
+    o.codecName = avcodec_get_name(codec->id);
     o.supportsCrf = hasOption(codec, "crf");
     o.supportsQp = hasOption(codec, "qp");
     o.supportsPreset = hasOption(codec, "preset");
@@ -478,6 +479,7 @@ const char* codecName(AVCodecID id) {
 /// be a second answer.
 void describeAudioCodec(const AVCodec* codec, CodecOption& o) {
     o.longName = codec->long_name ? codec->long_name : "";
+    o.codecName = avcodec_get_name(codec->id);
     o.containers = containersFor(codec);
     if (const AVCodecDescriptor* d = avcodec_descriptor_get(codec->id))
         o.lossless = (d->props & AV_CODEC_PROP_LOSSLESS) != 0;

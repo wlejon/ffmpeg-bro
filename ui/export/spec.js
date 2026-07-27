@@ -11,7 +11,7 @@ import { inputs as documentInputs, specInputs, indexOf as inputIndex,
 import * as viewer from '../viewer.js';
 import { settings, outputFps, outputExt } from './state.js';
 import { muxerInfo } from './capabilities.js';
-import { videoOptions, audioOptions } from './options.js';
+import { videoOptions, audioOptions, forceKeyFrames } from './options.js';
 import { streamSpecs } from './streams.js';
 import { renderGraph } from '../filtergraph.js';
 import { current as overlayState, isEmpty, nodes as overlayNodes } from '../graph/overlay.js';
@@ -121,6 +121,39 @@ function specInputInfo() {
     }));
 }
 
+/// A render that is two renders, when the rate control asked for one.
+///
+/// **`-pass` and `-passlogfile` are not encoder options**, so they do not go in
+/// the option bag — they are the two entries that differ between the passes,
+/// which is exactly what `ExportPass` is for. A pass's `videoOptions` are merged
+/// on top of the render's, so saying these two is the whole of what a two-pass
+/// encode is.
+///
+/// Pass one is `discard`ed: `-f null -`, running everything and keeping
+/// nothing, because what it produces is the statistics log beside the output
+/// and not the pictures. The log is a real file in the temp directory, since
+/// the handoff between passes is always a file on disk.
+///
+/// Here rather than at each `render.start` for the reason the filter graph is
+/// attached here: there are three renders on this stage and a reference or a
+/// preview that quietly ran one pass would be comparing against a different
+/// encode.
+export function passesFor(over = {}) {
+    if (settings.rate !== 'twopass') return undefined;
+    // The reference half of the A/B comparison names its own options — it is a
+    // lossless render and there is no bitrate for a second pass to spend — so a
+    // caller that has taken the option bag over has taken the passes with it.
+    if (over.videoOptions !== undefined) return undefined;
+    const log = bro.ffmpeg.tempPath('twopass');
+    return [
+        { label: 'pass 1 — finding where the bitrate is needed',
+          discard: true,
+          videoOptions: { pass: '1', passlogfile: log } },
+        { label: 'pass 2 — spending it',
+          videoOptions: { pass: '2', passlogfile: log } },
+    ];
+}
+
 /// Everything the renderer needs.
 ///
 /// Exported because the headless test builds one directly: driving the form
@@ -174,6 +207,15 @@ export function buildSpec(over = {}) {
     const acodec = over.audioCodec || settings.audioCodec ||
                    (container ? container.audioCodec : 'aac');
     const r = range();
+    // The seconds this particular render covers, which for a preview is a
+    // window inside the range. Worked out before the spec because
+    // `-force_key_frames` is written against the output's own clock: a cut
+    // point is a moment in *this* file, so a preview of the middle of the range
+    // forces its keyframes where the cuts fall inside the preview.
+    const window = {
+        start: over.start !== undefined ? over.start : r.start,
+        end: over.end !== undefined ? over.end : r.end,
+    };
 
     const spec = {
         path: over.path || settings.path || defaultPath(),
@@ -225,6 +267,18 @@ export function buildSpec(over = {}) {
         colorRange: settings.colorRange,
         faststart: settings.faststart,
         title: settings.title,
+        // None of these four is an encoder option, which is why each is a named
+        // field: `-force_key_frames` sets a frame's picture type before the
+        // encoder sees it, the field order has to reach the frames as well as
+        // the encoder, `-threads` was hardcoded, and `-shortest` ends the loop
+        // the writer is being fed from.
+        forceKeyFrames: over.forceKeyFrames !== undefined
+            ? over.forceKeyFrames : forceKeyFrames(window),
+        fieldOrder: settings.fieldOrder,
+        threads: settings.threads,
+        threadType: settings.threadType,
+        shortest: settings.shortest,
+        passes: over.passes !== undefined ? over.passes : passesFor(over),
         videoOptions: over.videoOptions !== undefined
             ? over.videoOptions : videoOptions(vcodec, over),
         audioOptions: over.audioOptions !== undefined ? over.audioOptions : audioOptions(acodec),

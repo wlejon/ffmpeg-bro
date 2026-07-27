@@ -52,6 +52,12 @@ export function asInput(i) {
         path: i.path,
         format: i.format || '',
         options: i.options || {},
+        // The decoders reading this input, as against the demuxer opening it.
+        // A separate bag because they are separate objects with separate option
+        // tables — `-probesize` is libavformat's and `-skip_frame` is
+        // libavcodec's — and ffmpeg writes both in front of the same `-i`
+        // because both are decisions about this input.
+        decoderOptions: i.decoderOptions || {},
         ss: i.ss || 0,
         to: i.to || 0,
         itsoffset: i.itsoffset || 0,
@@ -77,6 +83,7 @@ export function addInput(spec) {
         path: String(spec.path || '').trim(),
         format: spec.format || '',
         options: Object.assign({}, spec.options),
+        decoderOptions: Object.assign({}, spec.decoderOptions),
         ss: spec.ss || 0,
         to: spec.to || 0,
         itsoffset: spec.itsoffset || 0,
@@ -112,6 +119,8 @@ export function updateInput(input, patch) {
     const before = input.key;
     Object.assign(input, patch);
     if (patch && patch.options) input.options = Object.assign({}, patch.options);
+    if (patch && patch.decoderOptions)
+        input.decoderOptions = Object.assign({}, patch.decoderOptions);
     input.name = basename(input.path) || input.path;
     if (openingKey(input) === before) return false;
     reopen(input);
@@ -177,7 +186,8 @@ export function byId(id) { return inputs.find((i) => i.id === id) || null; }
 /// a decision somebody took, and a second drop must not silently inherit it.
 export function plainInputFor(path) {
     return inputs.find((i) => i.path === path && !i.format && !i.ss && !i.to &&
-                              !i.itsoffset && !Object.keys(i.options).length) || null;
+                              !i.itsoffset && !Object.keys(i.options).length &&
+                              !Object.keys(i.decoderOptions || {}).length) || null;
 }
 
 /// How long this input is, on its own clock. Zero when it could not be read.
@@ -212,6 +222,8 @@ export function summary(input) {
     if (input.streamLoop) bits.push(`-stream_loop ${input.streamLoop}`);
     if (input.format) bits.push(`-f ${input.format}`);
     for (const k of Object.keys(input.options)) bits.push(`-${k} ${input.options[k]}`);
+    for (const k of Object.keys(input.decoderOptions || {}))
+        bits.push(`-${k} ${input.decoderOptions[k]}`);
     if (input.ss) bits.push(`-ss ${input.ss}`);
     if (input.to) bits.push(`-to ${input.to}`);
     if (input.itsoffset) bits.push(`-itsoffset ${input.itsoffset}`);

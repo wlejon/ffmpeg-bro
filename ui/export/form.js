@@ -24,6 +24,7 @@ import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
          rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension, withPattern, withoutPattern,
          range } from './spec.js';
+import { cutPoints } from './options.js';
 import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
 
@@ -52,11 +53,13 @@ export function initForm(refs, h) {
 }
 
 const RATE_LABELS = {
-    quality: 'Quality', bitrate: 'Bitrate', constrained: 'Capped', lossless: 'Lossless',
+    quality: 'Quality', bitrate: 'Bitrate', twopass: 'Two-pass',
+    constrained: 'Capped', lossless: 'Lossless',
 };
 const RATE_HINTS = {
     quality: 'Constant quality: the bitrate lands wherever it needs to',
     bitrate: 'A target the encoder averages out to',
+    twopass: 'The same target, measured first and then spent where it is needed',
     constrained: 'An average with a ceiling, for streaming',
     lossless: 'Nothing thrown away',
 };
@@ -556,10 +559,27 @@ function rateRows(codec, info) {
         rows.push(row('Quality', btns([slider, qualityLabel])));
         refreshQualityLabel();
     }
-    if (settings.rate === 'bitrate' || settings.rate === 'constrained') {
+    if (settings.rate === 'bitrate' || settings.rate === 'twopass' ||
+        settings.rate === 'constrained') {
         rows.push(row('Bitrate', num('vbitrate',
             { min: 1, max: 500000, step: 500, value: settings.videoBitrate,
               on: { change: number('videoBitrate', 1) } }, 'kbps')));
+    }
+    if (settings.rate === 'twopass') {
+        // What two-pass costs and what it cannot promise, said where it is
+        // chosen. **Whether an encoder acts on `-pass` is the one thing
+        // libavcodec will not answer in advance** — there is no capability flag
+        // for it and no option to ask about, and this is the third place in
+        // this application where a capability genuinely cannot be queried. So
+        // the control does exactly what it says (it writes `-pass 1` and
+        // `-pass 2`, as the command line does) and the render says afterwards
+        // if the encoder kept its statistics somewhere else.
+        rows.push(row('', note(
+            'The range is rendered twice: once to measure where the bits are needed, ' +
+            'and once to spend them. Twice the time, and the closest an encoder can get ' +
+            'to a size you have to hit. What comes out of pass one is a statistics file ' +
+            'beside the output, and a render whose encoder ignored -pass says so in the ' +
+            'report rather than pretending.')));
     }
     if (settings.rate === 'constrained') {
         rows.push(row('Ceiling', num('maxrate',
@@ -668,9 +688,11 @@ function advancedRows(codec) {
         row('Keyframes', num('gop', { min: 0, max: 60, step: 0.5, value: settings.gopSeconds,
                                          on: { change: number('gopSeconds', 0) } },
                              'seconds (0 = encoder default)')),
+        ...keyframeRows(),
         row('B-frames', num('bf', { min: -1, max: 16, value: settings.bframes,
                                        on: { change: number('bframes', -1) } },
                             '-1 = leave alone')),
+        ...timingRows(),
         row('Scaler', select({ 'data-f': 'scaler', on: { change: set('scaler') } },
                              SCALERS, settings.scaler)),
         row('Colour', select({ 'data-f': 'cspace', on: { change: set('colorspace') } },
@@ -687,6 +709,127 @@ function advancedRows(codec) {
         row('Title', title),
         ...rawOptionRows(codec),
     ];
+}
+
+// ── where the keyframes go ─────────────────────────────────────────────────
+//
+// `-g` says how *often*; this says *where*, which is a different question and
+// the more useful one. **A keyframe where an edit cuts is what makes a file
+// that can be cut again** — every editor and every stream packager has to start
+// a segment on one, so a cut that falls in the middle of a GOP costs a re-encode
+// of everything up to it.
+//
+// The interesting mode is `Cut points`, and what makes it honest is that
+// nothing is copied: what is remembered is the decision, and `forceKeyFrames()`
+// re-reads the timeline every time it is asked. Drag a clip afterwards and the
+// list follows it; a version that wrote the numbers into a field when the button
+// was pressed would go on naming moments nothing cuts at.
+
+const KEYFRAME_MODES = [
+    { v: 'none', l: 'Off', title: 'Whatever the GOP length produces' },
+    { v: 'cuts', l: 'Cut points', title: 'One wherever the edit cuts, followed live' },
+    { v: 'times', l: 'Times', title: 'A list of seconds into the output' },
+    { v: 'expr', l: 'Expression', title: 'ffmpeg’s own, evaluated per frame' },
+];
+
+function keyframeRows() {
+    const rows = [row('Force at', segmented('kfmode', KEYFRAME_MODES, settings.keyframeMode,
+                                            (v) => { settings.keyframeMode = v; drawForm();
+                                                     hooks.changed(); }))];
+
+    if (settings.keyframeMode === 'cuts') {
+        const at = cutPoints(range());
+        rows.push(row('', note(at.length
+            ? `${at.length} cut${at.length === 1 ? '' : 's'} inside the range — ` +
+              `${at.map((t) => t.toFixed(2)).join(', ')} s into the file. Read from the ` +
+              'timeline every time, so moving a clip moves the keyframe with it.'
+            : 'No cut falls inside the range, so this asks for nothing. Split a clip or ' +
+              'widen the range and the keyframes follow.')));
+    }
+    if (settings.keyframeMode === 'times') {
+        const f = el('input', {
+            cls: 'wide', 'data-f': 'kftimes', type: 'text', value: settings.keyframeTimes,
+            placeholder: '1.5,4,00:00:08.5',
+            on: { change: () => { settings.keyframeTimes = f.value.trim(); hooks.changed(); } },
+        });
+        rows.push(row('At', f));
+        rows.push(row('', note(
+            'Seconds into the *output*, which is what ffmpeg means by them — so the same ' +
+            'command run elsewhere writes the same file. A moment between two frames lands ' +
+            'on the one after it.')));
+    }
+    if (settings.keyframeMode === 'expr') {
+        const f = el('input', {
+            cls: 'wide', 'data-f': 'kfexpr', type: 'text', value: settings.keyframeExpr,
+            placeholder: 'gte(t,n_forced*2)',
+            on: { change: () => { settings.keyframeExpr = f.value.trim(); hooks.changed(); } },
+        });
+        rows.push(row('expr:', f));
+        rows.push(row('', note(
+            'libavutil’s evaluator, per frame, over n, t, n_forced, prev_forced_n and ' +
+            'prev_forced_t. One that will not parse stops the render rather than being ' +
+            'quietly dropped.')));
+    }
+    return rows;
+}
+
+// ── how the frames are timed and shaped ────────────────────────────────────
+
+const FIELD_ORDERS = [
+    { v: '', l: 'Progressive' },
+    { v: 'tt', l: 'Top first' },
+    { v: 'bb', l: 'Bottom first' },
+];
+const THREAD_TYPES = [{ id: '', label: 'auto' }, { id: 'frame', label: 'frame' },
+                      { id: 'slice', label: 'slice' },
+                      { id: 'frame+slice', label: 'frame + slice' }];
+
+function timingRows() {
+    const rows = [];
+
+    // **`-fps_mode` is stated, not chosen.** This renderer walks the range
+    // forward at a fixed output rate and stamps every frame with its index —
+    // both paths do, the compositor because it samples the edit at t and the
+    // graph because the writer numbers what comes out of the sink. So `cfr` is
+    // not a setting, it is a fact, and a picker offering `vfr` or `passthrough`
+    // would be offering two things this render cannot produce.
+    rows.push(row('Frame timing', span('-fps_mode cfr', 'mono dim')));
+    rows.push(row('', note(
+        'Constant, by construction: the render walks the range at the output rate and ' +
+        'stamps each frame with its number. Variable frame rate is not something either ' +
+        'render path can express, so it is not offered.')));
+
+    rows.push(row('Field order', segmented('fieldorder', FIELD_ORDERS, settings.fieldOrder,
+                                           (v) => { settings.fieldOrder = v; drawForm();
+                                                    hooks.changed(); })));
+    if (settings.fieldOrder)
+        rows.push(row('', note(
+            'The encoder is put into field mode and every frame is marked to match. What ' +
+            'is composited here is progressive, so this is right for footage that was ' +
+            'interlaced and has come through untouched, and a claim about the picture ' +
+            'otherwise — and the chroma of a 4:2:0 output is subsampled across both ' +
+            'fields either way.')));
+
+    rows.push(row('Threads', btns([
+        num('threads', { min: 0, max: 64, value: settings.threads,
+                         on: { change: number('threads', 0) } }, '0 = all cores'),
+        select({ 'data-f': 'threadtype', on: { change: set('threadType') } },
+               THREAD_TYPES, settings.threadType),
+    ])));
+
+    rows.push(row('Shortest', btns(el('button', {
+        cls: 'tiny' + (settings.shortest ? ' on' : ''), 'data-f': 'shortest',
+        text: settings.shortest ? 'On' : 'Off',
+        title: 'End the file where the content ends rather than where the range does',
+        on: { click: () => { settings.shortest = !settings.shortest; drawForm();
+                             hooks.changed(); } },
+    }))));
+    if (settings.shortest)
+        rows.push(row('', note(
+            'The render stops at the first frame with nothing left to draw, instead of ' +
+            'writing the rest of the range as black.')));
+
+    return rows;
 }
 
 /// Every option the chosen encoder has, straight from its AVOption table.

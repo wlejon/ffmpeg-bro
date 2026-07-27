@@ -18,6 +18,13 @@ const SETTINGS_KEY = 'ffmpeg-bro.export';
 const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     'videoBitrate', 'maxrate', 'bufsize', 'preset', 'tune', 'profile',
                     'pixelFormat', 'fps', 'scaler', 'gopSeconds', 'bframes',
+                    // `keyframeMode` is remembered and the cut points are not,
+                    // which is the whole design: what carries into the next
+                    // edit is "put keyframes where it cuts", and where it cuts
+                    // is read from that edit. A list of times *is* remembered,
+                    // because a list somebody typed is a decision like a codec.
+                    'keyframeMode', 'keyframeTimes', 'keyframeExpr',
+                    'fieldOrder', 'threads', 'threadType', 'shortest',
                     'colorspace', 'colorRange', 'faststart', 'audio',
                     'audioCodecBitrate', 'sampleRate', 'channels',
                     'extraVideo', 'extraAudio', 'extraFormat', 'previewLength',

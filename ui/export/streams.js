@@ -40,6 +40,7 @@ import { settings, activeVideoCodec, activeAudioCodec } from './state.js';
 import { videoEncoders, audioEncoders, muxerInfo, dispositions,
          codecTags } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
+import { optionColumn } from '../opttable.js';
 
 let host = null;
 let hooks = {};
@@ -80,6 +81,12 @@ export function normalizeStreams() {
         s.source = s.source || (s.kind === 'video' ? 'composite'
                               : s.kind === 'audio' ? 'mix' : '');
         if (!s.metadata || typeof s.metadata !== 'object') s.metadata = {};
+        // A stored chain outlives the shape it was stored in, and a row with no
+        // name reaches `render.start` as a bitstream filter called nothing.
+        s.bsf = Array.isArray(s.bsf)
+            ? s.bsf.filter((b) => b && typeof b.name === 'string')
+                   .map((b) => ({ name: b.name, options: Object.assign({}, b.options) }))
+            : [];
         clean.push(s);
     }
     settings.streams = clean.length ? clean : defaultStreams();
@@ -164,6 +171,13 @@ export function streamSpecs(over = {}) {
             kind: s.kind,
             source: s.source || (s.kind === 'video' ? 'composite' : 'mix'),
             codec,
+            // The packet chain, in order. An entry with no name is a row
+            // somebody has opened and not filled in, and it is dropped for the
+            // reason a pathless attachment is: `-bsf:v ,dump_extra` is not a
+            // thing, and a render refused over a half-typed row is a refusal
+            // about the form rather than about the file.
+            bsf: (s.bsf || []).filter((b) => b.name)
+                              .map((b) => ({ name: b.name, options: b.options || {} })),
             // The Encode stage's intent, expressed against whatever encoder
             // this row ends up on: a second video stream at x265 gets x265's
             // way of saying the quality that was asked for, not x264's keys.
@@ -287,6 +301,10 @@ function tailOf(s) {
     if (s.title) bits.push(`“${s.title}”`);
     for (const d of (s.disposition || '').split(/[+, ]+/).filter(Boolean)) bits.push(d);
     if (s.tag) bits.push(s.tag);
+    // The chain, in order and as the command line spells it, because the order
+    // is the meaning and a count would hide it.
+    const chain = (s.bsf || []).filter((b) => b.name).map((b) => b.name);
+    if (chain.length) bits.push(`bsf ${chain.join(',')}`);
     return bits.join(' · ');
 }
 
@@ -326,7 +344,109 @@ function detailRows(s, tail) {
         ...tagRow(s, restate),
         head('Metadata'),
         ...pairRows(s.metadata, `s${s.id}`, restate),
+        ...bsfRows(s, restate),
     ];
+}
+
+// ── the packet chain ───────────────────────────────────────────────────────
+//
+// A bitstream filter is the one stage of ffmpeg's pipeline that is neither an
+// encoder nor a muxer: it works on packets that are already encoded, between
+// the two. Which is why it is here and not on the Encode stage, and why it is
+// per stream — `-bsf:v` and `-bsf:a` are different chains on different packets.
+//
+// **It is a list and it is drawn as one.** The order is the whole of the
+// meaning: `h264_mp4toannexb,dump_extra` and the same two the other way round
+// are different files. So it is a row per filter with the arrows to move one,
+// closer to the graph's node list than to the option bags above it — which are
+// unordered by nature and drawn as such.
+//
+// What can go on the list is asked of libavcodec and narrowed to the codec this
+// stream is actually encoded with, out of each filter's own `codec_ids`. A
+// filter that declares none runs on anything, which is a real answer and not an
+// absence, so those are always offered.
+
+function bsfsFor(codec) {
+    const all = bro.ffmpeg.bitstreamFilters || [];
+    if (!codec) return all;
+    // The encoder's name is not the codec's — `libx264` encodes `h264` — and a
+    // bsf's list is codec names. Asked of the encoder list rather than by
+    // stripping a `lib` prefix, which would be a rule about spellings.
+    const enc = (videoEncoders().concat(audioEncoders())).find((e) => e.id === codec);
+    const name = (enc && enc.codecName) || codec;
+    return all.filter((b) => !b.codecs.length || b.codecs.indexOf(name) >= 0);
+}
+
+function bsfRows(s, restate) {
+    if (s.kind === 'attachment') return [];
+    if (!s.bsf) s.bsf = [];
+
+    const changed = () => { restate(); drawStreams(); };
+    const choices = bsfsFor(codecOf(s));
+
+    const rows = [head('Bitstream filters')];
+    s.bsf.forEach((b, i) => {
+        const pick = select({ cls: 'ex-bsf-name', 'data-f': `bsf-${i}`,
+                              on: { change: (e) => { b.name = e.target.value;
+                                                     b.options = {}; changed(); } } },
+                            [{ id: '', label: 'pick one…' },
+                             ...choices.map((c) => ({ id: c.name, label: c.name }))],
+                            b.name || '');
+        const move = (delta) => el('button', {
+            cls: 'tiny', text: delta < 0 ? '↑' : '↓', 'data-bsf-move': `${i}:${delta}`,
+            title: 'The order is what runs',
+            on: { click: () => {
+                const j = i + delta;
+                if (j < 0 || j >= s.bsf.length) return;
+                const tmp = s.bsf[i]; s.bsf[i] = s.bsf[j]; s.bsf[j] = tmp;
+                changed();
+            } },
+        });
+        rows.push(div('ex-bsf-row', [
+            span(`${i + 1}`, 'ex-bsf-n dim'), pick, move(-1), move(1),
+            el('button', { cls: 'tiny', text: '×', 'data-bsf-drop': String(i),
+                           on: { click: () => { s.bsf.splice(i, 1); changed(); } } }),
+        ]));
+        if (!b.name) return;
+        const all = bsfOptionsFor(b.name);
+        if (!b.options) b.options = {};
+        if (all.length)
+            rows.push(...optionColumn({
+                name: `bsfopts-${s.id}-${i}`,
+                title: `${b.name} options · ${all.length}`,
+                options: all,
+                bag: b.options,
+                hint: 'Anything set here is passed straight to the bitstream filter.',
+                onChange: () => restate(),
+            }));
+    });
+
+    rows.push(div('ex-add', el('button', {
+        cls: 'tiny', text: '+ Bitstream filter', 'data-add': 'bsf',
+        title: 'Rewrite the packets on the way to the muxer, without re-encoding',
+        on: { click: () => { s.bsf.push({ name: '', options: {} }); changed(); } },
+    })));
+    rows.push(div('ex-note dim',
+        `${choices.length} of ${(bro.ffmpeg.bitstreamFilters || []).length} run on ` +
+        `${codecOf(s) || 'this stream'} — the rest declare a codec list this stream is ` +
+        'not in. They work on packets the encoder has already written, so nothing here ' +
+        'costs a re-encode.'));
+    return rows;
+}
+
+// Cached per filter, exactly as the encoder's and the muxer's tables are: the
+// stream list is rebuilt on every keystroke in a language field.
+const bsfOptionCache = new Map();
+
+function bsfOptionsFor(name) {
+    if (!bsfOptionCache.has(name)) {
+        try {
+            bsfOptionCache.set(name, bro.ffmpeg.bsfOptions(name) || []);
+        } catch (e) {
+            bsfOptionCache.set(name, []);
+        }
+    }
+    return bsfOptionCache.get(name);
 }
 
 /// One toggle per disposition libavformat knows. Several at once, because a

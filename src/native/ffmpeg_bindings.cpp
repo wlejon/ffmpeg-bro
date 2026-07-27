@@ -829,6 +829,10 @@ JSValue codecListToJs(JSContext* ctx, const std::vector<CodecOption>& list) {
         setStr(ctx, o, "id", c.id);
         setStr(ctx, o, "label", c.label);
         setStr(ctx, o, "longName", c.longName);
+        // The codec, as against the encoder: `libx264` writes `h264`. Anything
+        // that talks about codecs rather than encoders — a bitstream filter's
+        // list of what it runs on — needs this and cannot derive it.
+        setStr(ctx, o, "codecName", c.codecName);
         JS_SetPropertyStr(ctx, o, "crf", JS_NewBool(ctx, c.supportsCrf));
         JS_SetPropertyStr(ctx, o, "preset", JS_NewBool(ctx, c.supportsPreset));
         JS_SetPropertyStr(ctx, o, "qp", JS_NewBool(ctx, c.supportsQp));

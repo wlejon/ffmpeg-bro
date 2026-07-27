@@ -51,6 +51,22 @@ export const settings = {
 
     gopSeconds: 0,              // 0 = the encoder's default
     bframes: -1,                // -1 = leave alone
+
+    // `-force_key_frames`. The *mode* is what is remembered, never the answer:
+    // `cuts` re-reads the timeline every time it is asked, so a keyframe stays
+    // where the edit cuts after the edit has moved. See `forceKeyFrames()`.
+    keyframeMode: 'none',       // none | cuts | times | expr
+    keyframeTimes: '',          // "1.5,4,8" — seconds into the output
+    keyframeExpr: '',           // the body of `expr:`, without the prefix
+
+    // "" is progressive and is what a composited canvas is. `tt`/`bb` put the
+    // encoder into field mode *and* mark the frames, which are two halves of
+    // one statement — see ExportStream::fieldOrder.
+    fieldOrder: '',
+    threads: 0,                 // 0 = libavcodec's auto, which is the right default
+    threadType: '',             // "" | frame | slice | frame+slice
+    shortest: false,            // stop when the content does, not when the range does
+
     colorspace: 'auto',
     colorRange: 'tv',
     faststart: true,
