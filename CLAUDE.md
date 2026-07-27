@@ -244,6 +244,18 @@ The app exposes `globalThis.__ffmpegBro` (model, transport, and the operations) 
 `__ffmpegBroReady` purely so tests drive it through a stable surface instead of DOM ids
 that only exist while one clip is selected. Keep that in mind when renaming anything there.
 
+`tests/ui_measure.js` is the family above: a measurement started, run, read and acted
+on. Three of its sections are written against **hand-made channel records**, the way
+`ui_filtergraph.js` is written against hand-made specs — parsing what a filter said is
+a pure function of what it said, so a `cropdetect` that has not settled and a
+`blackdetect` that found two stretches can be *stated* rather than hoped for out of a
+fixture. The cut those spans produce is then made on the real timeline through the real
+split. Two traps it hit and that the next suite will hit too: **the overlay lives in
+`localStorage` and survives between headless runs**, so a suite asserting on what is in
+the graph has to `overlay.clear()` first; and **`project.width/height` is what a clip is
+placed in while `settings.width/height` only rescales the result**, so making
+`cropdetect` find letterbox means squaring the *project* canvas.
+
 `tests/perf_ui.js` times seeks through the whole application — the same seeks
 `perf_test.cpp` measures inside the decoder, but arriving through a clip's `<video>` with
 the frame loop, viewer and timeline still running. It asks `__ffmpegBro.video()` for the
@@ -263,7 +275,7 @@ them to change alone:
 | `ffmpeg_input.h` | **what an `-i` is**, the one function that opens one, `-stream_loop`, where a duration comes from, and the registry playback resolves a token through |
 | `ffmpeg_sequence.*` | **files that are one input** — the sequence scan and its refusals, the concat list, the frame-name pattern, and whether this build has glob |
 | `ffmpeg_export.h` | the description a render is given, and the four calls that run one |
-| `ffmpeg_export.cpp` | the job: one thread, the status the UI polls |
+| `ffmpeg_export.cpp` | the job: one thread, **N passes**, the status the UI polls |
 | `ffmpeg_job.*` | **the one slot both kinds of job run in**, and the three rules that go with it |
 | `ffmpeg_capture.*` | recording a device: the job whose end is somebody pressing stop |
 | `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
@@ -555,6 +567,37 @@ One limitation to know before extending this: `job::stopping()` is only checked
 between `av_read_frame` calls, so a device that has stalled is not stopped until its
 next frame arrives. At 10–30 fps that is under a tenth of a second. A device that has
 been unplugged is a different matter and is what `rw_timeout` is for.
+
+**A render is a list of passes, and an empty list is one pass that overrides
+nothing.** `ExportPass` is the render with overrides — a graph and its inputs, an
+option bag merged on top, an encoder, a destination, or `discard` for `-f null -`
+— and `runExport` loops over them, `runPass` being the old body. Four things:
+
+- **A pass is not a job.** One claim on `ffmpeg_job.h`'s slot, one thread, one
+  Stop, and one terminal status published after the *last* pass closed its file.
+  Giving the second pass its own claim would open a window between them where
+  `render.start` would be accepted — exactly the race the export preview's
+  chaining already lives in.
+- **`ExportStatus::pass`/`passCount`/`passLabel`** are how the status stays
+  honest about being two things to the machine and one thing to a person.
+  `progress` runs across the whole job; `framesDone`/`framesTotal` are the
+  pass's, because that is what the encoder is doing and a count that restarted
+  half way would be the confusing one.
+- **A pass that names its own encoder starts from an empty option bag.** An
+  option table belongs to an encoder, and carrying x264's `preset` onto
+  `wrapped_avframe` is an unknown option — an error here, and rightly. A pass
+  that keeps the encoder is *adding* to what it was set to, which is what
+  `-pass 1` means.
+- **The handoff between passes is a file on disk, always.** `vidstabdetect`
+  writes a `.trf` that `vidstabtransform` reads; `-pass 1` writes a statistics
+  log that `-pass 2` reads. Nothing crosses between passes in memory, which is
+  why the mechanism is this small. **Chunk 11's encoder two-pass is
+  `passes: [{label:"pass 1", videoOptions:{pass:"1", passlogfile:X}, discard:true},
+  {label:"pass 2", videoOptions:{pass:"2", passlogfile:X}}]` and needs nothing
+  new here.** `tests/export_test.cpp` proves the shape rather than vidstab —
+  a `--enable-` this build lacks — by having pass one write an intermediate file
+  and pass two read it, then requiring the output to be the second pass's answer
+  and measurably not the first's.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -907,6 +950,73 @@ about them:
     built-then-measured-then-painted (the range strip's split) and repainted only when
     the measured width changes, since eight canvases at 60 Hz is a frame loop nobody
     can explain.
+  - **The sparkline is the index; the plot is what one opens into.** Picking a series
+    (a row click, or `plotSeries(key)`) puts it on a `plot.js` canvas over the render's
+    range. Colours are handed out in the palette's fixed order and then *remembered*
+    in a `Map`, never recomputed from the picked list — recomputed, unpicking the blue
+    line makes the orange one blue, which takes away what a reader has just learnt.
+- `plot.js` — a series drawn as the line it is: canvas, by hand, the way `timeline.js`
+  and `graph/canvas.js` draw, because this is QuickJS with no npm and there is no
+  chart library. Four rules, none of them taste:
+  - **One axis, never two.** Two y-scales invent a correlation that is not in the
+    data, since their alignment is arbitrary and unseeable. Series that cannot share
+    a scale are normalised to their own 0–100% and the axis *says so*, with the real
+    numbers in the readout under the pointer. A series that never moved is not a
+    reason to normalise — it is a flat rule wherever it is put, and put at its own
+    value it says something true.
+  - **`SERIES_COLORS` is validated as a sequence**, against `#101216`: inside the
+    dark lightness band, over the chroma floor, ≥ 3:1 on the surface, worst adjacent
+    pair ΔE 8.4 under protanopia. **The order is the safety mechanism** — re-ordering
+    it means re-running that check — which is why `nextColor()` takes the next free
+    slot in order rather than hashing the key.
+  - **Marks are the only loud thing**: hairline grid one step off the surface and
+    *solid* (a dashed gridline reads as a threshold), 2px lines with round joins, an
+    8px end marker carrying a 2px ring in the surface colour so it survives a
+    crossing. Six lines is the cap; a seventh hue is either a repeat or one nobody
+    validated, and it is refused in words.
+  - **Interaction is not optional.** A crosshair reads every series under the
+    pointer, and a click seeks the playhead there — a measurement is about a moment,
+    and the moment is on the timeline.
+- `measure.js` — **the verb.** Filters whose output is information, and what can be
+  done with each. Two halves and they are not alike:
+  - **The reading half is generic and must stay so.** There is no list of measuring
+    filters: what distinguishes one is that it emits frame metadata or logs, and the
+    channel captures both from all four hundred and eighty-eight. `OFFERS` is a list
+    of *suggestions* — filtered against `bro.ffmpeg.filters`, placed at
+    `composite/after-overlay` or `audio/after-mix`, carrying the options that make
+    each answer at all (`ebur128` says nothing without `metadata=1`, and its true
+    peak needs `peak=true`) — and the palette is still the whole registry.
+  - **The verb half is written down, and has to be.** Nothing generic knows that
+    `lavfi.cropdetect.w` is a width in pixels or that ebur128's summary is the four
+    numbers `loudnorm` calls `measured_*`. Each follows **parse → refuse-or-offer →
+    apply**, `enable.js`'s shape: parsing reads and never writes, a refusal is a
+    sentence naming what was found rather than a button, and applying is *visible* —
+    a `crop` node at the anchor the measurement was taken at, `loudnorm` on the
+    sound, cuts on the timeline. The raw line every number came from travels with
+    the finding and is shown.
+  - **Anchors, not points in space.** `anchorFor(filter)` puts what is applied at the
+    same insert point as what measured it: a `cropdetect` at a clip's `after-decode`
+    measured the source at its own size, and a crop from it belongs there and nowhere
+    else. Applying it after compositing would be four numbers about one picture
+    applied to a different one.
+  - **Parsing is safe because it is a reading.** Log-only measurements
+    (`blackdetect`'s spans, `cropdetect`'s printed rectangle, `ebur128`'s summary) are
+    parsed here, in JS, over records the channel already holds, keyed by the
+    `AVClass` name libav puts on them (`Parsed_ebur128_0`). Nothing is applied because
+    something parsed; what parsing produces is an offer a person accepts.
+- `export/quality.js` — **what the settings cost, as a number.** The A/B stage already
+  renders the same seconds twice, at the settings and losslessly, which is a distorted
+  input and a reference on disk. A third render through the same slot chains after the
+  candidate and compares them with `psnr`, `ssim` and `libvmaf` where the build has
+  one — asked of libavfilter, never tabled. It writes nothing (`-f null -`,
+  `wrapped_avframe`), it leaves the pixel formats to libavfilter's own negotiation
+  (`psnr` declares one format list across both inputs, so doing it by hand would be a
+  second opinion and a wrong one the first time somebody renders 10-bit), and the
+  answers come back through the report as ordinary series — so the number under the
+  wipe and the per-frame line in the drawer are one measurement. It must not redraw
+  the preview while it runs: the two `<video>` elements *are* the decoders, and
+  rebuilding the stage would stop the playback it is measuring. `drawPreviewStats()`
+  exists for exactly that.
 - `sources.js` — the Sources stage, which is the **input editor**: three columns for
   the list, what this input is set to and what came back, and the demuxer's option
   table beside it. It was a read-only list derived from the timeline, which is an

@@ -272,8 +272,36 @@ bro.ffmpeg.render.start({ path,
                           metadata: { comment: "…" },   // the container's own
                           streams: [...], chapters: [...] })
 bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openEnded,
-                            //     elapsed, fps, bytes, path, stage, error, job }
+                            //     elapsed, fps, bytes, path, stage, error, job,
+                            //     pass, passes, passLabel }
 bro.ffmpeg.render.cancel()
+
+// A render that is more than one render. Two things in ffmpeg need a second
+// walk over the same frames, and both hand off through a file on disk:
+// `vidstabdetect` writes a .trf that `vidstabtransform` reads, and `-pass 1`
+// writes a statistics log that `-pass 2` spends the bitrate by. So a pass is
+// the render with **overrides**, not a new kind of job — and an empty list is
+// one pass that overrides nothing, which is every render written before there
+// were passes.
+bro.ffmpeg.render.start({ …,
+  passes: [{ label: 'analysing',      // what the status says while it runs
+             discard: true,           // `-f null -`: run it all, keep nothing
+             videoCodec: 'wrapped_avframe',
+             filterGraph, filterInputs,   // this pass's, if it differs
+             path, format,
+             videoOptions: { pass: '1' } },   // merged on top of the render's
+           { label: 'the render itself', videoOptions: { pass: '2' } }] })
+
+// **One job, two passes.** One claim on the run slot, one thread, one Stop,
+// and one terminal status published after the *last* pass has closed its file.
+// `progress` runs across the whole job because the person watching started one
+// render; `frames`/`totalFrames` are the pass's, because that is what the
+// encoder is doing. `pass` is 1 of 1 for an ordinary render, so nothing has to
+// know passes exist.
+//
+// A pass that names its own encoder starts from an **empty** option bag: an
+// option table belongs to an encoder, and x264's `preset` on `wrapped_avframe`
+// is an unknown option, which is an error here rather than a shrug.
 
 // Recording a device — the second kind of job in the same slot, polled through
 // the same `render.poll()`. A separate pair of calls because what it is given
@@ -1313,6 +1341,77 @@ panel, under a green bar, says how many warnings there were and takes you
 straight to them. A file that is not what was asked for, reported as a success,
 is the failure this whole channel is against.
 
+### Measuring, and doing something about it
+
+A whole family of libavfilter's filters answers a question rather than changing
+a picture. **There is no list of them anywhere in this application**, because
+what distinguishes one is not its name — it is that it emits frame metadata or
+logs, and both are captured from every filter on the graph. Put any of the four
+hundred and eighty-eight on and what it says arrives.
+
+**Starting one is a filter on the graph, and stays that.** The Report drawer
+offers `Crop`, `Black`, `Scenes`, `Freezes`, `Levels`, `Silence`, `Loudness` and
+`Sound levels` — each a shortcut to a gesture the Graph stage's palette already
+makes, which is why the node appears on the graph and in the command bar
+afterwards. What the shortcut adds is knowing *where* it goes and which of its
+options make it answer at all: `ebur128` says nothing whatever without
+`metadata=1`, and its true peak needs `peak=true`, which is not a thing anybody
+should find out by getting an empty report.
+
+`Measure now` runs it. That is a real render — the graph, the range, the same
+`buildSpec()` every other render here goes through — with the output thrown
+away: `-f null -` through an encoder that encodes nothing. It costs the decode
+and the filters and leaves no file, because rendering something nobody wanted in
+order to find out what a filter thought of it is most of a reason not to bother.
+
+**Reading it is a plot.** Click a series and it opens over the render's range:
+axes, a hairline grid, up to six lines against each other, a crosshair that
+reads every value under the pointer, and a click that takes the playhead to that
+moment. Colours are taken in a fixed order and then *remembered*, so taking one
+line off never repaints the rest. Series that do not share a scale are
+normalised, and the axis says so — there is deliberately no second y-axis, since
+the alignment of two scales is arbitrary and invents a correlation that is not
+in the data.
+
+**Acting on it is the point.** A measurement that can only be read is a number;
+one that can be applied is a tool. Each is parsed, and then either offered or
+*refused with a reason* — never quietly approximated:
+
+| | |
+|---|---|
+| `cropdetect` | **the crop it found**, put on the graph straight after the filter that measured it, carrying the four numbers exactly as `cropdetect` printed them |
+| `ebur128` | **`loudnorm`'s measured parameters** — integrated loudness, range, threshold and true peak, which is ffmpeg's own two-pass loudness normalisation and the only version of it that is not a guess |
+| `blackdetect`, `silencedetect`, `freezedetect`, `scdet` | **cut points on the timeline**, one at each end of every span |
+
+The line each number was read out of is on the card, for the reason the command
+bar prints the invocation: a number handed over without its source has to be
+taken on trust.
+
+The refusals matter more than the offers. A `cropdetect` still finding letterbox
+in the last third of what it saw is refused *naming both answers* — a crop from
+a filter that had not settled is a shot with its edges taken off and it looks
+exactly like a crop that worked. An `ebur128` that has not reached the end of
+its input has no summary, because that is the only place it prints one, and
+normalising to a number that is going to change is worse than not normalising.
+A picture that reaches every edge of the frame is offered no crop and says why,
+which is an answer rather than a missing button.
+
+### What the settings cost, as a number
+
+The A/B stage renders the same seconds twice, at the chosen settings and
+losslessly. That is a *distorted* input and a *reference* sitting on disk with
+nothing else to do — which is exactly what every objective quality metric is
+defined on. So a third render compares them, and under the wipe is
+
+> **measured** PSNR 43.62 dB · SSIM 0.9912 — *against the lossless half*
+
+Which metrics are available is asked of libavfilter rather than written down:
+`psnr` and `ssim` are in every build, `libvmaf` is a `--enable-` and this build
+does not have it. The comparison is on the very files the wipe is showing, so it
+cannot be describing a different render; the answers arrive through the same
+channel `cropdetect` uses, as series, so the frame where the encode fell apart
+is a place you can point at on a plot.
+
 ### Preview
 
 The hard part of encoding is not finding the settings, it is knowing what they
@@ -1417,6 +1516,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js         # needs no media
@@ -1518,6 +1618,22 @@ nothing; a split copies both halves' filters and a delete takes them away; and
 the run graph differs from the printed one by exactly one chain with the
 inserted filter in both.
 
+`ui_measure.js` is the half above that: a measurement started, run, read and
+acted on. It clicks `Crop` and finds `cropdetect` on the graph and in the
+command the bar prints; runs `Measure now` and finds the series on the render's
+own clock; opens a plot and checks that taking a line off does not repaint the
+one left; applies the crop and finds a `crop` node at the anchor the
+measurement was taken at, carrying the characters `cropdetect` printed. Three
+sections are written against **hand-made channel records**, the way
+`ui_filtergraph.js` is written against hand-made specs — parsing what a filter
+said is a pure function of what it said, so a `cropdetect` that has not settled,
+an `ebur128` with no summary and a `blackdetect` that found two stretches can be
+stated exactly rather than hoped for out of a fixture. The cut those spans
+produce is then made on the real timeline through the real split. Last, the A/B
+comparison is rendered and measured, and a better setting has to measure better
+— the one check that says the number is about the encoder rather than about the
+plumbing.
+
 `ui_report.js` drives a render the renderer has something to complain about —
 a graph running at half the output rate, with `cropdetect` measuring on the way
 past — and follows what it said from `av_log` inside libav to a line on screen:
@@ -1604,11 +1720,23 @@ Honest list of what does not work:
   render's range and is not the timeline: the playhead is not on it, and moving
   the playhead does not move anything on it. Judging where a span lands is done
   by playing the node, where the readout says `on` or `off`.
-- **Acting on what was measured.** A filter's numbers arrive as a series and
-  are drawn as one, which is where it stops: `cropdetect` can tell you the
-  black bars are 240 rows deep and nothing offers to crop them, `ebur128` can
-  tell you the loudness and nothing offers to normalise it. The channel and
-  the data model are there; what is missing is the verb.
+- **Two-pass filters.** The mechanism is there — a render is a list of passes,
+  each the render with overrides, run in one job through one slot — and the two
+  filters that need it are `vidstabdetect`/`vidstabtransform`, which this build
+  of ffmpeg was not configured with. So nothing in the UI offers a two-pass
+  filter render, because there is none here to offer and a control for a filter
+  the build does not have is a control that fails at parse. `loudnorm`'s two
+  passes *are* reachable, by a different route: `ebur128` measures and the
+  Report drawer offers `loudnorm` told what it found, which is one render and a
+  decision rather than two renders.
+- **A measurement that follows the edit.** What a filter found is about the
+  render it was measured during. Move a clip and the numbers stay, describing an
+  edit that no longer exists — nothing marks them stale, and the only thing that
+  says so is the timestamp on the render they came from.
+- **Measuring part of a graph.** `Measure now` runs the whole graph over the
+  whole range. Measuring one node's output means putting the filter at that
+  node's point, which works, and there is no equivalent of the Graph stage's
+  per-node preview for a *number*.
 - **Reading a URL that is far away.** A URL is an ordinary input now — typed in
   on the Sources stage, opened through whichever of the thirty-six protocols it
   names, with that protocol's own options beside the demuxer's. What has not
@@ -1657,9 +1785,10 @@ Honest list of what does not work:
   `bro.ffmpeg.decoderOptions()`. Nothing sets one: playback and the render both
   open their decoders with defaults.
 - **Two-pass encoding.** A bitrate target is one pass, so it is met on average
-  and not intelligently. Real two-pass needs the stats file from pass one fed
-  into pass two, which means a job that is two jobs, and the job state machine
-  is built around one.
+  and not intelligently. Real two-pass needs the statistics file from pass one
+  fed into pass two — `-pass 1`/`-pass 2` with a `-passlogfile` — and the job
+  state machine now runs a render as a list of passes, so what is left is the
+  two option pairs and the control that sets them.
 - **Subtitle streams.** The Write stage's list can hold video, audio and
   attachments; a subtitle track is a kind it does not offer yet. The seam is
   there — a stream says what *kind* it is and where its content comes from —
