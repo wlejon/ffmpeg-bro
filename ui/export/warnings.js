@@ -9,8 +9,9 @@ import { basename } from '../format.js';
 import { settings, activeVideoCodec, outputFps } from './state.js';
 import { encoderInfo, audioInfo, muxerInfo, codecTags } from './capabilities.js';
 import { codecOf } from './streams.js';
-import { isEmpty as noUserNodes } from '../graph/overlay.js';
-import { buildSpec, range } from './spec.js';
+import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
+import { renderGraph } from '../filtergraph.js';
+import { buildSpec, range, specSources } from './spec.js';
 
 /// How many frames this render will write. A single-frame range written into
 /// one picture is exactly what somebody means by "a still of this moment";
@@ -29,9 +30,17 @@ export function warnings() {
     // exactly the outcome the lock rules exist to prevent, and it deserves to
     // be said in the same place as everything else that will succeed and be
     // wrong.
-    if (!noUserNodes() && !buildSpec().filterGraph)
-        out.push('your filters cannot be expressed as a graph for this edit, so this ' +
-                 'render would go through the internal compositor without them');
+    //
+    // The reason is asked for rather than summarised, because there are now two
+    // very different ones — an edit the derivation cannot describe, and a graph
+    // you are half way through wiring — and "cannot be expressed" is a useless
+    // thing to read when what is actually wrong is that one input of an
+    // `overlay` you placed a minute ago has nothing on it.
+    if (!noUserNodes() && !buildSpec().filterGraph) {
+        const why = renderGraph(buildSpec(), specSources(), { overlay: overlayState() });
+        out.push(`this render would go through the internal compositor without your ` +
+                 `filters — ${why.reason || 'the graph cannot be expressed for this edit'}`);
+    }
 
     // image2 writes one file per frame and the numbering is in the filename,
     // so a path with no pattern in it is one picture written over itself for

@@ -176,27 +176,32 @@ export function restoreFocus(root) {
 /// `ctx` is `{ graph, key, width, lod }`. Returns the element; `view.js` places
 /// it, and `placeSockets()` finishes it once the height is known.
 export function buildCard(n, ctx) {
-    const { graph: g, key, width, lod } = ctx;
+    const { graph: g, key, width, lod, problem } = ctx;
     const cls = ['gn', `gn-${n.kind}`];
     if (n.locked) cls.push('gn-locked');
     if (!n.derived) cls.push('gn-user');
     if (n.pinned) cls.push('gn-pinned');
+    // Marked where the person is working, not only in the command bar. A graph
+    // that will not run is a fact about one node, and the place to say it is on
+    // that node — the bar along the bottom is where you find out *afterwards*.
+    if (problem) cls.push('gn-bad');
 
     const node = el('div', {
         cls: cls.join(' '),
         'data-node': n.id,
         'data-key': key || '',
         'data-filter': n.filter || n.kind,
-        title: n.path || undefined,
+        title: problem ? problem.reason : (n.path || undefined),
         style: { width: `${width}px` },
         // Ctrl or shift adds to the selection, which is what every editor does and
         // what makes dragging four nodes at once possible.
         on: { click: (e) => hooks.onSelect && hooks.onSelect(key, e.ctrlKey || e.shiftKey) },
     }, [
         header(n, g, key),
+        lod === 'min' || !problem ? null : problemRow(problem),
         lod === 'min' ? null : body(n),
         shotView(key, width),
-        sockets(n, g),
+        sockets(n, g, key),
         grip(key, width),
     ]);
     return node;
@@ -231,6 +236,16 @@ function header(n, g, key) {
         n.locked ? span('●', 'gn-lock') : null,
         pad ? span(pad, 'gn-pad mono') : null,
     ]);
+}
+
+/// One line saying what is wrong with this node, under its header.
+///
+/// On the card rather than only in the title, because a tooltip is something you
+/// find by accident: the state it describes is one you are in the middle of
+/// creating, and the answer to "why has my render stopped using my filters" has
+/// to be readable without hovering anything.
+function problemRow(problem) {
+    return problem ? div('gn-problem', span(problem.reason, '')) : null;
 }
 
 /// What the filter is configured with, editable.
@@ -302,18 +317,46 @@ function enumControl(o, value) {
 /// two identical dots would say the two wires were interchangeable when the
 /// whole point of drawing a file as one node is that they come from one `-i`
 /// and are not the same pad.
-function sockets(n, g) {
-    const ins = g.producers(n).length;
+///
+/// **The count is the filter's, not the wires'.** An `overlay` you have just
+/// placed has two input sockets and nothing on either, and an `amix=inputs=4`
+/// has four however many are connected — because an empty socket is the thing
+/// you are looking for when you are wiring, and a card drawn from its wires
+/// hides exactly the pad you need to find.
+///
+/// A socket is where a wire is started and where one is dropped, so each carries
+/// enough to say what it is without anything having to look it up: the node's
+/// key, the direction, the port and the stream.
+function sockets(n, g, key) {
+    const ins = g.inPorts(n);
     const outs = n.kind === 'sink' ? [] : (n.outs && n.outs.length ? n.outs : [{}]);
     const out = [];
-    for (let i = 0; i < ins; i++)
-        out.push(el('span', { cls: 'gn-sock gn-sock-in', 'data-port': String(i),
-                              'data-ports': String(ins) }));
+    const wired = new Set(g.inEdges(n).map((e) => e.port || 0));
+    for (let i = 0; i < ins; i++) {
+        const stream = (n.ins && n.ins[i] && n.ins[i].stream) || '';
+        out.push(el('span', {
+            // An empty pad is marked rather than merely unconnected. It is the
+            // one state a graph cannot run in, and it is invisible otherwise:
+            // nothing arrives, so there is nothing on the screen to notice.
+            cls: 'gn-sock gn-sock-in' + (stream ? ` gn-sock-${stream}` : '') +
+                 (wired.has(i) ? '' : ' gn-sock-open'),
+            'data-port': String(i), 'data-ports': String(ins),
+            'data-key': key || '', 'data-dir': 'in', 'data-stream': stream,
+            title: `input ${i + 1} of ${ins}${stream ? ` · ${stream === 'a' ? 'sound' : 'picture'}` : ''}` +
+                   (wired.has(i) ? '' : ' · nothing wired here'),
+            on: { mousedown: (e) => hooks.onWireStart &&
+                                    hooks.onWireStart(key, 'in', i, stream, e) },
+        }));
+    }
     outs.forEach((o, i) => {
         out.push(el('span', {
             cls: 'gn-sock gn-sock-out' + (o.stream ? ` gn-sock-${o.stream}` : ''),
             'data-port': String(i), 'data-ports': String(outs.length),
-            title: n.kind === 'input' && o.stream ? `${n.index}:${o.stream}` : undefined,
+            'data-key': key || '', 'data-dir': 'out', 'data-stream': o.stream || '',
+            title: n.kind === 'input' && o.stream ? `${n.index}:${o.stream}`
+                 : outs.length > 1 ? `output ${i + 1} of ${outs.length}` : 'output',
+            on: { mousedown: (e) => hooks.onWireStart &&
+                                    hooks.onWireStart(key, 'out', i, o.stream || '', e) },
         }));
     });
     return out;

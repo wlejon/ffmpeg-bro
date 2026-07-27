@@ -40,7 +40,9 @@
 // right is worse than no graph, because the whole reason to show one is that it
 // can be taken somewhere else and run.
 
-import { makeGraph } from './model.js';
+import { makeGraph, byKey, keyOf } from './model.js';
+import { padsOf } from './filters.js';
+import { problems } from './check.js';
 
 /// Numbers, short. ffmpeg's parser is happy with any of these, and a graph full
 /// of `0.30000000000000004` is one nobody reads.
@@ -287,13 +289,114 @@ function applyOverlay(g, points, ov, overrides) {
     }
 }
 
+/// The part of the overlay that is *structure*: nodes on no wire, wires nobody
+/// derived, and derived wires somebody took off.
+///
+/// Applied after the locks and the insertions and in that order, because each
+/// step is described in terms of what the ones before it produced. A lock can
+/// change how many pads a node has — `amix`'s count is an option like any other
+/// — so the pads are worked out between the two, and a wire can only be checked
+/// against pads that exist by then.
+///
+/// **An endpoint naming something this graph does not contain is kept, not
+/// dropped.** That is the same rule an insert point already follows and it is
+/// the same situation: a clip trimmed out of the render range takes its nodes
+/// and its wires with it, and both come back when the clip does. Nothing here
+/// writes to the overlay.
+function applyStructure(g, ov, stranded) {
+    ov = ov || {};
+
+    for (const rec of ov.nodes || [])
+        g.add({ id: rec.id, filter: rec.filter, pos: rec.pos, params: rec.params,
+                derived: false });
+
+    // Every graph gets its pads worked out, overlay or no overlay: what a node
+    // reads is a fact about the filter, and the checker asks it of the skeleton
+    // exactly as it asks it of a node somebody placed.
+    declarePads(g);
+
+    for (const c of ov.cuts || []) {
+        const at = String(c).split('#');
+        const node = byKey(g, at[0]);
+        if (node) g.disconnectAt(node, Number(at[1]) || 0);
+    }
+
+    for (const w of ov.wires || []) {
+        const from = byKey(g, w.from), to = byKey(g, w.to);
+        if (!from || !to) continue;
+        // A pad the node no longer has, because the option that decides its
+        // count was changed under the wire. **Not silently dropped**: the wire
+        // stays in the overlay, so putting the count back brings it back, and it
+        // is reported by name so that the graph is refused rather than rendered
+        // as though the connection had never been made.
+        if ((w.fromPort || 0) >= g.outPorts(from) || (w.port || 0) >= g.inPorts(to)) {
+            stranded.push({ node: to, from, port: w.port || 0, fromPort: w.fromPort || 0 });
+            continue;
+        }
+        g.disconnectAt(to, w.port || 0);
+        g.connect(from, to, w.port || 0, w.fromPort || 0);
+    }
+}
+
+/// What each filter node reads and writes, asked of libavfilter.
+///
+/// Every node gets it, derived and user alike, because the questions it answers
+/// are asked of every node: how many sockets a card draws, where a wire may
+/// land, and whether an input pad is empty. Counting the wires instead — which
+/// is what everything here did while the derivation was the only thing making
+/// graphs — cannot answer the last one at all, since a pad with no wire on it is
+/// invisible to a count of wires.
+///
+/// A filter this build does not have gets nothing, and `check.js` says so. There
+/// is no shape to invent for a name libavfilter will refuse.
+function declarePads(g) {
+    for (const n of g.nodes) {
+        if (n.kind !== 'filter') continue;
+        const pads = padsOf(n.filter, n.params, n.pos);
+        if (!pads) continue;
+        n.ins = pads.ins.map((s) => ({ stream: s }));
+        n.outs = pads.outs.map((s) => ({ stream: s }));
+    }
+}
+
+/// A pad name belongs at the end of the run that produces it.
+///
+/// Only chain-final nodes carry a label — that is `print.js`'s rule — and the
+/// derivation puts them exactly there. A wire drawn by hand can move the end of
+/// a run: put a filter between the last `overlay` and the sink and `vout` is
+/// suddenly on a node in the middle of a chain, where it is printed by nothing
+/// and the pad the muxer maps is invented instead.
+///
+/// So the labels are walked forward afterwards, by the same rule the printer
+/// reads them by. `applyOverlay` does this for an insertion at the moment it
+/// makes one; this catches every other way a run can grow, and is a no-op for
+/// the graph the derivation builds on its own.
+function moveLabelsToChainEnds(g) {
+    for (const node of g.nodes) {
+        if (!node.label || node.kind !== 'filter') continue;
+        let at = node;
+        for (;;) {
+            const cons = g.consumers(at);
+            if (cons.length !== 1) break;
+            const next = cons[0];
+            if (next.kind !== 'filter' || g.producers(next).length !== 1) break;
+            if (next.label) break;              // it already ends a chain of its own
+            at = next;
+        }
+        if (at === node) continue;
+        at.label = node.label;
+        node.label = null;
+    }
+}
+
 /// `buildSpec()`'s output → the graph that would render it.
 ///
-/// Returns `{ ok: true, graph, colour, caveats, points, overrides }`, or
-/// `{ ok: false, reason }` — and a caller given a refusal must say so rather
+/// Returns `{ ok: true, graph, colour, caveats, points, overrides, problems }`,
+/// or `{ ok: false, reason }` — and a caller given a refusal must say so rather
 /// than print a graph. `points` are the named places on the wires where a
 /// filter can go; `overrides` is every lock that disagreed with what was just
-/// derived, which is what lets the field it outranked say so.
+/// derived, which is what lets the field it outranked say so; `problems` is
+/// every reason this graph would not run, each naming the node it is about.
 ///
 /// `opts.overlay` is the user's layer — `{ inserts, locks }` from
 /// `graph/overlay.js`. Passed in rather than reached for, so this stays a pure
@@ -491,6 +594,9 @@ export function derive(spec, sources, opts = {}) {
     // been derived and can therefore be reported as outranked.
     const overrides = [];
     applyOverlay(g, points, opts.overlay, overrides);
+    const stranded = [];
+    applyStructure(g, opts.overlay, stranded);
+    moveLabelsToChainEnds(g);
 
     // What is known to differ about *this* render, rather than a fixed
     // disclaimer. A note that is always the same is one nobody reads, and the
@@ -503,7 +609,18 @@ export function derive(spec, sources, opts = {}) {
         caveats.push('the output rate differs from a source’s, and a fixed-rate ' +
                      'walk and a frame-sync do not choose the same frames');
 
-    return { ok: true, graph: g, colour, caveats, points, overrides };
+    // What is wrong with the graph, as opposed to what could not be derived.
+    //
+    // The two are deliberately different answers. A refusal means there is no
+    // graph to look at; this means there is one, it is on the screen, and it
+    // will not run — a node with an empty input, a pad read twice, a wire into
+    // the wrong kind of pad. Reported rather than refused because the state is
+    // reachable and normal: the moment between placing a node and wiring it up
+    // is a graph with a problem in it, and a stage that blanked itself for that
+    // would be unusable. What must not happen is a render going ahead as though
+    // the problem were not there, which is `filtergraph.js`'s job.
+    return { ok: true, graph: g, colour, caveats, points, overrides,
+             problems: problems(g, stranded) };
 }
 
 function refuse(reason) { return { ok: false, reason }; }

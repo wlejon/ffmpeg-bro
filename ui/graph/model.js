@@ -110,6 +110,14 @@ export function makeGraph(opts = {}) {
         // Copied rather than shared: two derivations of one timeline must not
         // be able to reach each other's arrays.
         if (spec.outs) node.outs = spec.outs.map((o) => ({ stream: o.stream }));
+        // What this node *reads*, one entry per input pad, where anything knows.
+        // Derived from the filter's own pad list rather than from the wires,
+        // which is the difference that makes a free graph drawable at all: a
+        // node with two inputs and one wire has an empty socket, and an empty
+        // socket is a thing to be seen and filled. Counting the wires instead —
+        // which is what this did while every graph came out of the derivation
+        // fully wired — draws a one-input `overlay` and hides the mistake.
+        if (spec.ins) node.ins = spec.ins.map((o) => ({ stream: o.stream }));
         // What only one kind has. Copied rather than merged wholesale so a
         // stray field on a spec cannot quietly become part of the model.
         if (spec.stream) node.stream = spec.stream;
@@ -154,6 +162,33 @@ export function makeGraph(opts = {}) {
             if (edges[i].from === a && edges[i].to === b) edges.splice(i, 1);
     };
 
+    /// Whatever arrives at one input pad, taken off it. **An input pad holds
+    /// exactly one wire** — that is true of libavfilter and of every node editor
+    /// there has ever been — so this is what "unwire that" means and it is also
+    /// what makes a hand-made wire able to replace a derived one without anybody
+    /// having to delete the old one first.
+    g.disconnectAt = (to, port = 0) => {
+        const id = idOf(to);
+        let any = false;
+        for (let i = edges.length - 1; i >= 0; i--)
+            if (edges[i].to === id && (edges[i].port || 0) === port) {
+                edges.splice(i, 1);
+                any = true;
+            }
+        return any;
+    };
+
+    /// Connect, replacing whatever was on that input pad. `connect` is the raw
+    /// operation the derivation builds with, where nothing is ever wired twice;
+    /// this is the one a person's gesture goes through, where the pad they
+    /// dropped on is usually already occupied by the wire the derivation made.
+    g.wire = (from, to, port = 0, fromPort = 0) => {
+        g.disconnectAt(to, port);
+        const edge = g.connect(from, to, port, fromPort);
+        g.changed('wire');
+        return edge;
+    };
+
     /// The wires arriving at a node, in port order. The sort is not decoration:
     /// edges are stored in the order they were made, and a graph rebuilt after
     /// an edit has no obligation to make them in the same order twice.
@@ -180,7 +215,25 @@ export function makeGraph(opts = {}) {
     /// and the printer from each needing to know about `outs`.
     g.outPorts = (n) => {
         const node = g.node(n) || (n && n.id ? n : null);
-        return node && node.outs && node.outs.length ? node.outs.length : 1;
+        if (!node) return 1;
+        if (node.kind === 'sink') return 0;
+        return node.outs && node.outs.length ? node.outs.length : 1;
+    };
+
+    /// How many input pads a node has — what the *filter* takes, not how many
+    /// wires happen to be attached. An unwired pad is the whole point: it is
+    /// drawn as an empty socket and reported as a graph that will not run, and
+    /// counting the wires would make both of those invisible.
+    ///
+    /// Falls back to the wires for a node nobody has declared pads for, which is
+    /// every hand-built graph in the tests and every derived one made before the
+    /// pads were worked out.
+    g.inPorts = (n) => {
+        const node = g.node(n) || (n && n.id ? n : null);
+        if (!node) return 0;
+        if (node.kind === 'input') return 0;
+        if (node.ins) return node.ins.length;
+        return Math.max(1, g.inEdges(node).length);
     };
 
     /// A straight run of filters, each reading the one before it, fed by `from`
@@ -305,6 +358,7 @@ export function makeGraph(opts = {}) {
             params: Object.assign({}, n.params),
             pos: n.pos.slice(),
             outs: n.outs ? n.outs.map((o) => ({ stream: o.stream })) : undefined,
+            ins: n.ins ? n.ins.map((o) => ({ stream: o.stream })) : undefined,
         })),
         edges: edges.map((e) => Object.assign({}, e)),
     });
@@ -314,6 +368,30 @@ export function makeGraph(opts = {}) {
     g.userNodes = () => nodes.filter((n) => !n.derived || n.locked);
 
     return g;
+}
+
+/// What names a node across two derivations.
+///
+/// A derived node's id lasts exactly as long as the graph it was made in, so it
+/// is named by its anchor — what it *is*, rather than which object it happens to
+/// be. A node a person made is not derived from anything, so its id is the
+/// name, and it is handed out by `overlay.js` from a counter that outlives every
+/// rebuild.
+///
+/// Here rather than in `panel.js`, where it started, because it is now the thing
+/// **a hand-made wire's two ends are written as**: an endpoint has to survive
+/// the skeleton being thrown away, and this is the only string that does. Four
+/// callers now — the panel, the view's selection, the overlay's wires and the
+/// problem list — and four spellings of it would be four answers to "is this the
+/// same node".
+export function keyOf(node) {
+    return node ? (node.derived ? node.anchor : node.id) : null;
+}
+
+/// The node one of those keys names, whichever kind it is.
+export function byKey(g, key) {
+    if (!key) return null;
+    return g.node(key) || g.byAnchor(key);
 }
 
 /// Which stream each node is on, and which each *wire* carries.
@@ -358,9 +436,13 @@ export function streamsOf(g) {
     }
 
     return {
-        // The generated canvas (`color`) has no producer and no input, so it
-        // falls back to video — which is what it is.
-        of: (n) => s.get(n.id) || n.stream || 'v',
+        // A node that says what it produces is believed over what reached it,
+        // and the two genuinely differ: `showwaves` reads sound and hands back a
+        // picture, so a card coloured by its producer would be green and wrong.
+        // The generated canvas (`color`) has no producer and no input at all, so
+        // it falls back to video — which is what it is.
+        of: (n) => (n.outs && n.outs.length && n.outs[0].stream) ||
+                   s.get(n.id) || n.stream || 'v',
         ofEdge: (e) => outOf(g.node(e.from), e.fromPort || 0) || 'v',
     };
 }

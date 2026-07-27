@@ -25,6 +25,9 @@ import { makeGraph, restore } from './graph/model.js';
 import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
 import { layout, portY } from './graph/layout.js';
+import { problems } from './graph/check.js';
+import { padsOf } from './graph/filters.js';
+import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
          outrankedControls, tickGraph, graphKey } from './graph/view.js';
 import * as graphPreview from './graph/preview.js';
@@ -143,6 +146,7 @@ initGraphView({
     previews: el('gr-previews'),
     atPlayhead: el('gr-at-playhead'),
     relayout: el('gr-relayout'),
+    add: el('gr-add'),
     zoomIn: el('gr-zoom-in'),
     zoomOut: el('gr-zoom-out'),
     zoomLabel: el('gr-zoom'),
@@ -1113,7 +1117,7 @@ globalThis.__ffmpegBro = {
     filtergraph, renderGraph, shell, command, report,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.
-    graph: { makeGraph, restore, derive, print, layout, portY,
+    graph: { makeGraph, restore, derive, print, layout, portY, problems, padsOf, socketAt,
              overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
              placement: graphPlacement,
              outranked: outrankedControls, preview: graphPreview, previewGraph },

@@ -1681,6 +1681,41 @@ select.gn-f { text-align: left; }
 }
 .gn-sock-in { left: -5px; }
 .gn-sock-out { right: -5px; }
+/* A socket is where a wire is started and where one is dropped, so it is a
+   target rather than a decoration: bigger than it looks, because eight pixels at
+   0.6x zoom is four and nobody can hit four. */
+.gn-sock { cursor: crosshair; }
+.gn-sock:hover { box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.35); }
+/* An input pad with nothing on it. Hollow rather than absent — the whole reason
+   the sockets are drawn from the filter's pad list and not from the wires is
+   that this is the state you are looking for while wiring, and a card drawn from
+   its wires cannot show it at all. */
+.gn-sock-open { background: var(--bg); border-color: var(--accent); }
+
+/* A node the graph will not run for. Marked on the card because the state is one
+   you are in the middle of making — a node placed and not yet wired is exactly
+   this — so the answer to "why has my render stopped using my filters" has to be
+   on the thing that caused it and not only in the bar along the bottom. */
+.gn-bad { border-color: var(--bad); }
+.gn-problem {
+    padding: 3px 7px;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: var(--bad);
+    border-bottom: 1px solid var(--line);
+}
+/* The same sentence in the column, where it has room. */
+.gp-problems { margin: 4px 0; }
+.gp-problem {
+    padding: 4px 6px;
+    margin-bottom: 3px;
+    font-size: var(--fs-sm);
+    line-height: 1.4;
+    color: var(--bad);
+    background: rgba(255, 107, 107, 0.08);
+    border-radius: 3px;
+}
+.gr-bad { color: var(--bad); }
 /* A socket that names its own stream wins over the card's, because an input node
    is not on one stream: a file's picture and its sound leave the same card, and
    two blue dots would say the two wires were interchangeable. Written after the

@@ -150,6 +150,14 @@ export function layout(g, sizeOf, pinOf) {
             col: depth.get(n.id),
             row: row.get(n.id),
             stream: streamOf.of(n),
+            // How many sockets are on each edge, carried on the box because
+            // everything that hit-tests one works from the layout rather than
+            // from the DOM: a wire dropped near a socket has to find it in the
+            // same coordinates the socket was drawn in, and asking the document
+            // what is under the pointer would ask about a container with a
+            // `transform` on it.
+            inPorts: g.inPorts(n),
+            outPorts: g.outPorts(n),
             pinned: !!pin,
             x: pin ? pin.x : colLeft[depth.get(n.id)],
             y: pin ? pin.y : rowTop[row.get(n.id)],
@@ -181,8 +189,13 @@ export function layout(g, sizeOf, pinOf) {
         // The same spacing on the way out, because a node can have more than
         // one: a file's picture and its sound leave one card and two wires
         // drawn from one point would say they were the same stream.
-        const oy1 = portY(a.h, e.fromPort || 0, g.outPorts(a.node));
-        const oy2 = portY(b.h, e.port, g.producers(b.node).length);
+        //
+        // The count is what the *filter* takes, not how many wires arrived. An
+        // `amix=inputs=3` with two things on it has three sockets and the third
+        // is empty, and spacing the two wires as though there were two would put
+        // them where the sockets are not.
+        const oy1 = portY(a.h, e.fromPort || 0, a.outPorts);
+        const oy2 = portY(b.h, e.port, b.inPorts);
         wires.push({
             edge: e,
             stream: streamOf.ofEdge(e),

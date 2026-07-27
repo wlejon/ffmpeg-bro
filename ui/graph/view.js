@@ -45,6 +45,7 @@ import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
 import * as canvas from './canvas.js';
 import * as cards from './card.js';
+import { padsOf as filterPads } from './filters.js';
 import * as overlay from './overlay.js';
 import * as panel from './panel.js';
 import * as preview from './preview.js';
@@ -91,6 +92,15 @@ let dragging = null;    // panning
 let moving = null;      // dragging nodes
 let resizing = null;    // dragging a card's corner
 let marquee = null;     // rubber band
+/// A wire being drawn, from the socket it was started at to the pointer.
+let wiring = null;
+/// The wire that is selected, by the pad it *arrives* at — `key#port`.
+///
+/// By its arriving end because that is the only end that identifies it: an input
+/// pad holds exactly one wire, so "the wire at `composite/overlay:7` input 1" is
+/// a name that survives a rebuild, and the wire object it currently refers to
+/// does not survive anything.
+let selectedWire = null;
 /// Set on the mouse-up that ends a drag and cleared by the click that follows
 /// it, because a drag on the background finishes with one and "clicked the
 /// background" means "select nothing".
@@ -136,6 +146,7 @@ export function initGraphView(r, hooks = {}) {
         keyOf: panel.keyOf,
         onSelect: (key, add) => select(key, add),
         onDragStart: (key, e) => startMove(key, e),
+        onWireStart: (key, dir, port, stream, e) => startWire(key, dir, port, stream, e),
         onResizeStart: (key, width, e) => { resizing = { key, from: width, x: e.clientX, at: width }; },
         onChanged: () => { drawGraph(); if (hooks.changed) hooks.changed(); },
         onPlayed: (started) => {
@@ -150,6 +161,10 @@ export function initGraphView(r, hooks = {}) {
         // The stage does not know about any of those, so it says what happened and
         // lets the application put them back in step.
         changed: () => { drawGraph(); if (hooks.changed) hooks.changed(); },
+        // A filter picked out of the palette while a wire was in the air lands
+        // where the wire was let go, and is joined to the pad it came from. The
+        // panel knows which filter; only this knows where the pointer was.
+        placed: (rec, pad) => placeFromPalette(rec, pad),
     });
 
     bindViewport();
@@ -182,10 +197,18 @@ function bindViewport() {
     // the selection is.
     refs.viewport.addEventListener('click', (e) => {
         if (inNode(e.target) || e.target === refs.mini || swallowClick) return;
+        // A click on a wire selects it, because a wire is now a thing that can
+        // be deleted and everything that can be deleted has to be selectable.
+        // Checked before "select nothing", since a wire is what you were aiming
+        // at and the background is what you hit by missing.
+        const rect = refs.viewport.getBoundingClientRect();
+        const hit = canvas.wireAt(placed, e.clientX - rect.left, e.clientY - rect.top, view());
+        if (hit) return selectWire(hit);
         clearSelection();
     });
 
     document.addEventListener('mousemove', (e) => {
+        if (wiring) return dragWire(e);
         if (resizing) return dragResize(e);
         if (moving) return dragMove(e);
         if (marquee) {
@@ -205,7 +228,8 @@ function bindViewport() {
         hover(e);
     });
 
-    document.addEventListener('mouseup', () => {
+    document.addEventListener('mouseup', (e) => {
+        if (wiring) return endWire(e);
         if (dragging) { swallowClick = dragging.moved; dragging = null; }
         if (marquee) {
             const m = marquee;
@@ -254,6 +278,15 @@ function bindViewport() {
 }
 
 function bindBar(hooks) {
+    // A filter with nowhere to be spliced. Dropped in the middle of what is on
+    // screen rather than at the origin — a node that appears somewhere you are
+    // not looking reads as nothing having happened — and pinned, because it was
+    // put there and the layout has no opinion about a node nothing is wired to.
+    if (refs.add)
+        refs.add.addEventListener('click', () => {
+            const p = port();
+            panel.openPad({ at: { x: (p.w / 2 - panX) / zoom, y: (p.h / 2 - panY) / zoom } });
+        });
     if (refs.previews)
         refs.previews.addEventListener('click', () => {
             preview.setEnabled(!preview.isEnabled());
@@ -364,13 +397,124 @@ function endMove() {
     drawGraph();
 }
 
+// ── wiring by hand ─────────────────────────────────────────────────────────
+//
+// **Drag from a socket to a socket.** That is the gesture every node editor
+// has, and until now this one had no way to make a connection at all — which is
+// what confined the whole stage to filters that can be *spliced*, one in and one
+// out. Everything with two inputs, everything with two outputs, and every filter
+// whose pad count is a number you type was unreachable for want of this.
+//
+// Three rules, and each of them is what one of those editors does:
+//
+// - **Either end first.** Dragging from an input back to an output is the same
+//   connection as the other way round, and insisting on a direction means half
+//   the gestures people make silently do nothing.
+// - **An input pad holds one wire.** Dropping on an occupied pad replaces what
+//   was there, derived or not — which is how a filter gets *between* two derived
+//   nodes without anybody deleting a wire first.
+// - **Let go over nothing and you get the palette**, filtered to what can take
+//   the pad you came from. Placing a node and wiring it are one gesture with a
+//   pause in it, exactly as inserting a filter on a wire already is.
+
+function startWire(key, dir, port, stream, e) {
+    if (!key || !placed || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const box = placed.nodes.find((b) => panel.keyOf(b.node) === key);
+    if (!box) return;
+    wiring = { key, dir, port, stream, box,
+               from: canvas.socketPoint(box, dir, port),
+               x: e.clientX, y: e.clientY, over: null };
+    paint();
+}
+
+function dragWire(e) {
+    wiring.x = e.clientX;
+    wiring.y = e.clientY;
+    const rect = refs.viewport.getBoundingClientRect();
+    const hit = canvas.socketAt(placed, e.clientX - rect.left, e.clientY - rect.top, view());
+    wiring.over = hit && hit.dir !== wiring.dir && panel.keyOf(hit.node) !== wiring.key
+                ? hit : null;
+    paint();
+}
+
+function endWire(e) {
+    const w = wiring;
+    wiring = null;
+    // A press and release on one socket is a click, not a drag. Nothing is a
+    // sensible answer to it: a wire from a pad to itself is not a thing, and
+    // opening the palette every time somebody prodded a dot would be worse.
+    const moved = Math.abs(e.clientX - w.x) + Math.abs(e.clientY - w.y) > 0 || w.over;
+    swallowClick = true;
+    if (w.over) {
+        const other = panel.keyOf(w.over.node);
+        const out = w.dir === 'out' ? { key: w.key, port: w.port }
+                                    : { key: other, port: w.over.port };
+        const into = w.dir === 'in' ? { key: w.key, port: w.port }
+                                    : { key: other, port: w.over.port };
+        overlay.wire(out.key, out.port, into.key, into.port);
+        selectedWire = `${into.key}#${into.port}`;
+        return drawGraph();
+    }
+    if (!moved || !refs.viewport) return paint();
+    const rect = refs.viewport.getBoundingClientRect();
+    const at = { x: (e.clientX - rect.left - panX) / zoom, y: (e.clientY - rect.top - panY) / zoom };
+    // Dropped on nothing: what can go here? The palette is filtered to filters
+    // with a pad of the right stream on the opposite side, which is the same
+    // honesty the insert palette has — it offers what can actually be attached
+    // rather than everything and a failure afterwards.
+    panel.openPad({ key: w.key, dir: w.dir, port: w.port, stream: w.stream, at });
+    paint();
+}
+
+/// A filter chosen out of the palette while a wire was in the air.
+///
+/// It lands where the wire was let go — pinned, because you chose the place —
+/// and is joined to the pad the drag came from by the first pad of its own that
+/// can take it. Which pad that is comes from libavfilter: `overlay` fed from a
+/// picture takes it on input 1, and guessing at the second would put the clip
+/// underneath the canvas.
+function placeFromPalette(rec, pad) {
+    if (!rec || !pad) return;
+    overlay.setPin(rec.id, Math.round(pad.at.x), Math.round(pad.at.y));
+    // Placed from the bar rather than from a wire: there is nothing to join it
+    // to, and inventing a connection for it would be inventing which of
+    // `overlay`'s two inputs somebody meant.
+    if (!pad.key) { select(rec.id, false); return drawGraph(); }
+    const pads = filterPads(rec.filter, rec.params, rec.pos);
+    const want = pad.dir === 'out' ? (pads && pads.ins) : (pads && pads.outs);
+    let port = 0;
+    if (want && want.length) {
+        const match = want.indexOf(pad.stream || 'v');
+        port = match >= 0 ? match : 0;
+    }
+    if (pad.dir === 'out') overlay.wire(pad.key, pad.port, rec.id, port);
+    else overlay.wire(rec.id, port, pad.key, pad.port);
+    select(rec.id, false);
+    drawGraph();
+}
+
 // ── selection ──────────────────────────────────────────────────────────────
+
+/// A wire, held by the pad it arrives at. See `selectedWire`.
+function selectWire(w) {
+    const to = lastGraph && lastGraph.node(w.edge.to);
+    selection.clear();
+    primary = null;
+    panel.selectWire(to ? { key: panel.keyOf(to), port: w.edge.port || 0,
+                            node: to, stream: w.stream } : null);
+    selectedWire = to ? `${panel.keyOf(to)}#${w.edge.port || 0}` : null;
+    markSelection();
+    paint();
+}
 
 function select(key, add) {
     if (!key) return clearSelection();
     if (!add) selection.clear();
     selection.add(key);
     primary = key;
+    selectedWire = null;
     panel.selectNode(key, selection.size);
     markSelection();
     paint();
@@ -379,6 +523,7 @@ function select(key, add) {
 function clearSelection() {
     selection.clear();
     primary = null;
+    selectedWire = null;
     panel.selectNode(null, 0);
     markSelection();
     paint();
@@ -432,7 +577,20 @@ export function graphPlacement() {
 /// `app.js` can fall through to leaving the stage when it did not.
 export function graphKey(e) {
     if (e.key === '0') { fitView(); return true; }
-    if (e.key === 'Escape' && selection.size) { clearSelection(); return true; }
+    if (e.key === 'Escape' && (selection.size || selectedWire)) { clearSelection(); return true; }
+    // A selected wire is what Delete is about, ahead of any node — you selected
+    // it by clicking it, and the node selection was cleared when you did.
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedWire) {
+        const at = selectedWire.split('#');
+        // A derived wire is *cut*, not forgotten: the skeleton grows it back on
+        // every rebuild, so the absence has to be written down. The two cases
+        // are one call because from here they are one gesture.
+        overlay.unwire(at[0], Number(at[1]) || 0);
+        selectedWire = null;
+        panel.selectWire(null);
+        drawGraph();
+        return true;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selection.size && lastGraph) {
         let any = false;
         for (const key of Array.from(selection)) {
@@ -523,9 +681,16 @@ export function drawGraph() {
     cards.noteFocus(refs.nodes);
     refs.nodes.style.transform = 'none';
     refs.nodes.classList.toggle('lod-min', lod === 'min');
+    // The first problem about each node, by id rather than by key: two nodes can
+    // share an anchor — several inserts at one point do — and the complaint
+    // belongs to the one it is about.
+    const trouble = new Map();
+    for (const p of d.problems) if (p.id && !trouble.has(p.id)) trouble.set(p.id, p);
+
     put(refs.nodes, () => d.graph.nodes.map((n) => {
         const key = panel.keyOf(n);
-        const node = cards.buildCard(n, { graph: d.graph, key, width: cardWidth(key), lod });
+        const node = cards.buildCard(n, { graph: d.graph, key, width: cardWidth(key), lod,
+                                          problem: trouble.get(n.id) });
         built.set(n.id, node);
         return node;
     }));
@@ -571,7 +736,7 @@ export function drawGraph() {
     }
     apply();
     status(print(d.graph), d);
-    panel.draw(d.graph);
+    panel.draw(d.graph, d.problems);
     markSelection();
     cards.restoreFocus(refs.nodes);
     syncPreviews();
@@ -830,7 +995,8 @@ function paint() {
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, w, h);
     canvas.paintGrid(ctx, w, h, view());
-    canvas.paintWires(ctx, placed, view(), litWire(), hoveredWire());
+    canvas.paintWires(ctx, placed, view(), litWire(), hoveredWire(), chosenWire());
+    if (wiring) paintWiring(ctx);
     if (marquee) paintMarquee(ctx);
     if (refs.mini) canvas.paintMini(refs.mini, placed, view(), port());
 }
@@ -859,6 +1025,32 @@ function litWire() {
         if (key && selection.has(key)) ids.add(b.node.id);
     }
     return (w) => ids.has(w.edge.from) || ids.has(w.edge.to);
+}
+
+/// The wire in the air, from the socket it left to wherever the pointer is —
+/// snapped to the socket it would land on, so the drop is confirmed before it
+/// happens rather than discovered afterwards.
+function paintWiring(ctx) {
+    const rect = refs.viewport.getBoundingClientRect();
+    const v = view();
+    const from = { x: wiring.from.x * zoom + panX, y: wiring.from.y * zoom + panY };
+    const to = wiring.over
+        ? { x: wiring.over.at.x * zoom + panX, y: wiring.over.at.y * zoom + panY }
+        : { x: wiring.x - rect.left, y: wiring.y - rect.top };
+    canvas.paintPending(ctx, from, to, wiring.stream || 'v', !!wiring.over);
+    void v;
+}
+
+/// The selected wire, found again in the layout rather than remembered — see
+/// `selectedWire`, and `hoverPoint` for the same argument at length.
+function chosenWire() {
+    if (!selectedWire || !placed || !lastGraph) return null;
+    const at = selectedWire.split('#');
+    const port = Number(at[1]) || 0;
+    return placed.wires.find((w) => {
+        const to = lastGraph.node(w.edge.to);
+        return to && panel.keyOf(to) === at[0] && (w.edge.port || 0) === port;
+    }) || null;
 }
 
 function paintMarquee(ctx) {
@@ -902,6 +1094,7 @@ function status(p, d) {
     const mine = d ? d.graph.nodes.filter((n) => !n.derived).length : 0;
     const locks = d ? d.graph.nodes.filter((n) => n.locked).length : 0;
     const pins = overlay.pinCount();
+    const bad = d && d.problems ? d.problems.length : 0;
     put(refs.status, () => [
         span(`${p.inputs.length} input${p.inputs.length === 1 ? '' : 's'}`),
         span('·', 'dim'),
@@ -924,8 +1117,14 @@ function status(p, d) {
         pins ? span(`${pins} placed`, 'dim') : null,
         // A render with a filter of your own in it goes through libavfilter
         // instead of the internal compositor. Stated here because it is the one
-        // thing on this screen that changes what the renderer does.
-        mine ? span('·', 'dim') : null,
-        mine ? span('rendered through libavfilter', 'dim') : null,
+        // thing on this screen that changes what the renderer does — and a graph
+        // that will not run does not go there at all, which is the one thing on
+        // this screen it is worse to find out afterwards.
+        mine && !bad ? span('·', 'dim') : null,
+        mine && !bad ? span('rendered through libavfilter', 'dim') : null,
+        bad ? span('·', 'dim') : null,
+        bad ? span(bad === 1 ? d.problems[0].reason
+                             : `${bad} things stop this graph running — ${d.problems[0].reason}`,
+                   'gr-bad') : null,
     ]);
 }

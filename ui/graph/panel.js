@@ -1,11 +1,17 @@
-// The column beside the graph: what a node is set to, and what can be put on a
-// wire.
+// The column beside the graph: what a node is set to, what can be put on a
+// wire, and what a wire is.
 //
-// Two modes over one panel, because they are two halves of one gesture. You
+// Four modes over one panel, because they are all halves of one gesture. You
 // click a `+` on a wire and pick a filter; the filter appears and is selected,
-// and the panel is now showing its arguments. Splitting them into two surfaces
-// would mean the thing you just made is somewhere other than where you were
-// looking.
+// and the panel is now showing its arguments. You let a wire go over empty
+// canvas and pick a filter; it lands there, wired to where you came from, and
+// the panel is showing *its* arguments. Splitting any of that into a second
+// surface would mean the thing you just made is somewhere other than where you
+// were looking.
+//
+// The fourth mode is a wire, which is not a node and still has something to
+// say: which pads it joins, and whether it is the derivation's or yours —
+// because that decides what deleting it means and how it comes back.
 //
 // **The option table is libavfilter's, not ours.** `bro.ffmpeg.filterOptions()`
 // walks the filter's own `AVClass` — names, types, ranges, defaults, enum
@@ -28,7 +34,8 @@
 // won.
 
 import { el, div, span, put, head, row, fromTemplate } from '../dom.js';
-import { optionsOf, infoOf, allFilters } from './filters.js';
+import { optionsOf, infoOf, allFilters, padsOf } from './filters.js';
+import { nameOf } from './check.js';
 import * as overlay from './overlay.js';
 
 let refs = {};
@@ -47,9 +54,12 @@ let selectedCount = 0;
 
 /// What survives a rebuild. A user node's id does; a derived node's does not,
 /// but its anchor does.
-export function keyOf(node) {
-    return node ? (node.derived ? node.anchor : node.id) : null;
-}
+///
+/// It lives in `model.js` now, because a hand-made wire's two ends are written
+/// as exactly this and the overlay cannot import a panel. Re-exported here
+/// because half the application asks the panel for it and renaming that would
+/// be churn for nothing.
+export { keyOf } from './model.js';
 
 export function initPanel(r, h) {
     refs = r;
@@ -62,13 +72,29 @@ export function selectedPoint() { return sel && sel.kind === 'point' ? sel.point
 export function selectNode(key, count) {
     sel = key ? { kind: 'node', key } : null;
     selectedCount = count === undefined ? (key ? 1 : 0) : count;
-    draw(graph);
+    draw(graph, trouble);
 }
 
 export function openPoint(point) {
     sel = point ? { kind: 'point', point } : null;
     search = '';
-    draw(graph);
+    draw(graph, trouble);
+}
+
+/// A pad with a wire in the air, or a place on the canvas with nothing but a
+/// position. Same palette either way — this is "what filter" — and what makes
+/// them different is only what the view does with the answer.
+export function openPad(pad) {
+    sel = pad ? { kind: 'pad', pad } : null;
+    search = '';
+    draw(graph, trouble);
+}
+
+/// A wire somebody clicked. `{ key, port, node, stream }`, or null.
+export function selectWire(wire) {
+    sel = wire ? { kind: 'wire', wire } : null;
+    selectedCount = 0;
+    draw(graph, trouble);
 }
 
 export function clearSelection() { sel = null; }
@@ -76,16 +102,24 @@ export function clearSelection() { sel = null; }
 /// Draw against the graph as it is now. Called after every derivation, so a
 /// selection that no longer exists — a clip trimmed out of the range, a node
 /// removed — falls back to nothing rather than to a stale card.
-export function draw(g) {
+export function draw(g, problems) {
     graph = g;
+    trouble = problems || [];
     if (!refs.panel) return;
     if (!g || !sel) return put(refs.panel, () => empty());
     if (sel.kind === 'point') return put(refs.panel, () => palette(sel.point));
+    if (sel.kind === 'pad') return put(refs.panel, () => padPalette(sel.pad));
+    if (sel.kind === 'wire') return put(refs.panel, () => wirePanel(sel.wire));
 
     const node = find(g, sel.key);
     if (!node) { sel = null; return put(refs.panel, () => empty()); }
     put(refs.panel, () => nodePanel(node));
 }
+
+/// Every problem the last derivation found, so the column can say what is wrong
+/// with the node it is about — where somebody is looking at that node, rather
+/// than only in the bar along the bottom.
+let trouble = [];
 
 function find(g, key) {
     return g.node(key) || g.byAnchor(key);
@@ -141,6 +175,8 @@ function nodePanel(node) {
         ]),
     ];
 
+    out.push(...problemRows(node));
+
     if (node.kind !== 'filter') {
         out.push(div('gp-hint dim', node.kind === 'input'
             ? `One file, as ffmpeg would open it — ${pads} — ${node.path || ''}`
@@ -150,6 +186,7 @@ function nodePanel(node) {
 
     const info = infoOf(node.filter);
     if (info && info.description) out.push(div('gp-hint dim', info.description));
+    out.push(...padRows(node));
 
     const options = optionsOf(node.filter);
     out.push(...positionalRows(node, options));
@@ -175,6 +212,49 @@ function nodePanel(node) {
             'will not change them until it is unlocked.'));
 
     return out;
+}
+
+/// What this node will not run for, in the column beside it.
+///
+/// The card carries it too, and both are worth having: the card is where you see
+/// that *this* node is the one, and the column is where the sentence has room to
+/// say what to do about it.
+function problemRows(node) {
+    const mine = trouble.filter((p) => p.id === node.id);
+    if (!mine.length) return [];
+    return [div('gp-problems', mine.map((p) => div('gp-problem', p.reason)))];
+}
+
+/// What the filter reads and writes, and what is currently on each pad.
+///
+/// Stated because it is the thing you need in front of you while wiring and the
+/// one thing a card cannot show at a glance: `overlay`'s two inputs are the
+/// canvas and the clip *in that order*, and an `amix` has as many as its
+/// `inputs` option says — which is an option in the table below, so the way to
+/// give it another pad is right here.
+function padRows(node) {
+    const ins = node.ins || [];
+    const outs = node.outs || [];
+    if (!ins.length && !outs.length) return [];
+    const wired = new Set(graph ? graph.inEdges(node).map((e) => e.port || 0) : []);
+    const kind = (s) => (s === 'a' ? 'sound' : 'picture');
+    const rows = [head('Pads')];
+    ins.forEach((p, i) => {
+        rows.push(row(`in ${i + 1}`, [
+            span(kind(p.stream), 'mono'),
+            wired.has(i) ? span('wired', 'gp-badge')
+                         : span('nothing wired here', 'gp-badge locked'),
+        ]));
+    });
+    outs.forEach((p, i) => {
+        const read = graph ? graph.outEdges(node).filter((e) => (e.fromPort || 0) === i).length : 0;
+        rows.push(row(`out ${i + 1}`, [
+            span(kind(p.stream), 'mono'),
+            span(read === 1 ? 'read once' : read ? `read ${read} times` : 'read by nothing',
+                 read === 1 ? 'gp-badge' : 'gp-badge locked'),
+        ]));
+    });
+    return rows;
 }
 
 /// The arguments written without names, edited in place.
@@ -306,10 +386,15 @@ function optionRow(node, o) {
 /// carries.
 ///
 /// That is not a simplification of ffmpeg, it is what splicing means. A filter
-/// with two inputs has nothing to read from the second, and one with two
-/// outputs has nowhere to send the second — both need wiring the graph model
-/// can express and this stage cannot yet draw. `amix` and `split` arrive with
-/// the editor that can make a wire by dragging one.
+/// with two inputs has nothing to read from the second and one with two outputs
+/// has nowhere to send the second, so neither can be dropped *onto* a wire
+/// however much you would like it to be.
+///
+/// They are not unreachable any more, which is what this comment used to say
+/// they were: they are placed on the canvas and wired, which is the other
+/// gesture — `Add filter`, or letting a wire go over empty space. What is
+/// offered here is still exactly what can be spliced, because that is still what
+/// this `+` does.
 function spliceable(stream) {
     return allFilters().filter((f) => f.inputs === stream && f.outputs === stream &&
                                       !f.dynamicInputs && !f.dynamicOutputs);
@@ -332,7 +417,138 @@ function palette(point) {
                                  : 'A filter here reads the picture as it is at this point.'),
         row('Find', field),
         list,
-        el('button', { cls: 'tiny', text: 'Cancel', on: { click: () => { sel = null; draw(graph); } } }),
+        el('button', { cls: 'tiny', text: 'Cancel', on: { click: () => { sel = null; draw(graph, trouble); } } }),
+    ];
+}
+
+// ── a pad, and a wire ──────────────────────────────────────────────────────
+
+/// What can go on the end of a wire you let go over nothing — or anywhere at
+/// all, when there is no wire.
+///
+/// **This is where everything that cannot be spliced arrives.** The insert
+/// palette above offers one-in-one-out filters because that is what splicing
+/// means; this one offers anything with a pad that can take what you are
+/// holding, which is `overlay`, `amix`, `concat`, `xfade`, `hstack`, `split` and
+/// the four hundred others. A filter with two inputs is placed and then wired,
+/// and the wire you were already drawing is the first of them.
+function canTake(stream, dir) {
+    // `dir` is the direction of the pad the wire *left*, so an out pad needs a
+    // filter with an input and an in pad needs one with an output.
+    return allFilters().filter((f) => {
+        const pads = padsOf(f.name);
+        if (!pads) return false;
+        const want = dir === 'in' ? pads.outs : pads.ins;
+        return want.some((s) => s === stream);
+    });
+}
+
+function padPalette(pad) {
+    const all = pad.key ? canTake(pad.stream || 'v', pad.dir)
+                        : allFilters().filter((f) => !!padsOf(f.name));
+    const list = div('gp-filter-list');
+    const field = el('input', {
+        cls: 'wide', 'data-f': 'padsearch', type: 'text', value: search,
+        placeholder: 'name or description',
+        on: { input: () => { search = field.value; put(list, () => padRowsFor(pad, all)); } },
+    });
+    put(list, () => padRowsFor(pad, all));
+
+    return [
+        div('gp-head', [span('Place', 'gp-name'),
+                        span(pad.key ? `from a ${pad.stream === 'a' ? 'sound' : 'picture'} pad`
+                                     : 'on the canvas', 'gp-badge')]),
+        div('gp-hint dim', pad.key
+            ? 'It lands where you let go and is wired to the pad you dragged from. ' +
+              'A filter with more inputs than that arrives with the rest empty — drag ' +
+              'a wire to each of them.'
+            : 'It lands unwired. Drag from a socket to a socket to join it up.'),
+        row('Find', field),
+        list,
+        el('button', { cls: 'tiny', text: 'Cancel',
+                       on: { click: () => { sel = null; draw(graph, trouble); } } }),
+    ];
+}
+
+function padRowsFor(pad, all) {
+    const term = search.trim().toLowerCase();
+    const matching = term
+        ? all.filter((f) => f.name.toLowerCase().indexOf(term) >= 0 ||
+                            (f.description || '').toLowerCase().indexOf(term) >= 0)
+        : all.filter((f) => MULTI.indexOf(f.name) >= 0);
+    const shown = matching.slice(0, FILTER_LIMIT);
+
+    const out = [];
+    if (!term)
+        out.push(div('gp-hint dim',
+                     `The ones this is for, to start with. Type to search all ${all.length} ` +
+                     'that can take this pad.'));
+    for (const f of shown) out.push(padRow(pad, f));
+    if (matching.length > FILTER_LIMIT)
+        out.push(div('gp-hint dim', `and ${matching.length - FILTER_LIMIT} more — narrow the search`));
+    return out;
+}
+
+/// One offer, with its shape on it. The pad counts are the thing being chosen
+/// between here — `overlay` takes two and `amix` takes as many as you say — so
+/// they are on the button rather than a click away.
+function padRow(pad, f) {
+    const pads = padsOf(f.name) || { ins: [], outs: [] };
+    const shape = `${f.dynamicInputs ? 'n' : pads.ins.length} in · ` +
+                  `${f.dynamicOutputs ? 'n' : pads.outs.length} out`;
+    return el('button', {
+        cls: 'gp-filter', 'data-filter': f.name,
+        on: { click: () => {
+            const rec = overlay.addNode(f.name);
+            sel = { kind: 'node', key: rec.id };
+            search = '';
+            if (hooks.placed) hooks.placed(rec, pad);
+            else changed();
+        } },
+    }, [span(f.name, 'gp-fname mono'), span(shape, 'gp-badge'),
+        span(f.description || '', 'dim')]);
+}
+
+/// What a selected wire is, and the two things that can be done to it.
+///
+/// A wire is not a node and does not get a node's panel, but it is a thing with
+/// a state worth stating: which pad it leaves, which it arrives at, and whether
+/// it is the derivation's or yours. That last one is what decides what Delete
+/// means — forgetting a wire of your own, or *recording the absence* of a
+/// derived one, which is a different act and comes back differently.
+function wirePanel(wire) {
+    if (!graph || !wire) return empty();
+    const node = find(graph, wire.key);
+    if (!node) { sel = null; return empty(); }
+    const e = graph.inEdges(node).find((x) => (x.port || 0) === wire.port);
+    const from = e ? graph.node(e.from) : null;
+    const ins = graph.inPorts(node);
+    const mine = overlay.wires().some((w) => w.to === wire.key && w.port === wire.port);
+
+    return [
+        div('gp-head', [span('Wire', 'gp-name'),
+                        mine ? span('yours', 'gp-badge user') : span('derived', 'gp-badge')]),
+        row('from', span(from ? `${nameOf(from)}${
+            graph.outPorts(from) > 1 ? ` · out ${(e.fromPort || 0) + 1}` : ''}` : '—', 'mono')),
+        row('to', span(`${nameOf(node)}${ins > 1 ? ` · in ${wire.port + 1}` : ''}`, 'mono')),
+        div('gp-actions', [
+            el('button', {
+                cls: 'tiny', text: 'Delete', 'data-f': 'unwire',
+                title: mine ? 'Forget this wire'
+                            : 'Take this wire off — the rebuild will not put it back',
+                on: { click: () => { overlay.unwire(wire.key, wire.port); sel = null; changed(); } },
+            }),
+            mine || overlay.isCut(wire.key, wire.port) ? el('button', {
+                cls: 'tiny', text: 'Give it back', 'data-f': 'rewire',
+                title: 'Let the derivation decide what arrives here',
+                on: { click: () => { overlay.reconnect(wire.key, wire.port); sel = null; changed(); } },
+            }) : null,
+        ]),
+        div('gp-hint dim', mine
+            ? 'You made this one. Deleting it leaves the pad empty; the derivation ' +
+              'will not fill it back in unless you give the pad back.'
+            : 'The derivation made this one, and makes it again on every timeline ' +
+              'edit — so taking it off is remembered as a cut rather than as nothing.'),
     ];
 }
 
@@ -368,6 +584,15 @@ function filterRows(point, all) {
 /// What an empty search offers. Not a curated set of "supported" filters —
 /// every one of the five hundred is one search away — but a list that opens
 /// on nothing is a list that reads as broken.
+/// The same idea for the pad palette: what a person reaching for a node with
+/// more than one pad is most likely reaching for. Everything else is one search
+/// away, and none of it is a list of what is *supported* — `padsOf` answers that
+/// from libavfilter's own registry.
+const MULTI = ['overlay', 'amix', 'concat', 'blend', 'xfade', 'acrossfade',
+               'hstack', 'vstack', 'xstack', 'split', 'asplit', 'amerge',
+               'sidechaincompress', 'alphamerge', 'maskedmerge', 'mix',
+               'premultiply', 'streamselect', 'astreamselect', 'interleave'];
+
 const COMMON = ['hflip', 'vflip', 'eq', 'curves', 'colorbalance', 'hue', 'unsharp',
                 'gblur', 'noise', 'negate', 'lut3d', 'drawtext', 'drawbox', 'fade',
                 'transpose', 'rotate', 'deshake', 'hqdn3d',

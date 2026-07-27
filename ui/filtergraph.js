@@ -74,9 +74,25 @@ export function inputsOf(graph) {
 /// colour tags come from. Without it the graph is still correct in geometry and
 /// timing but leaves the source matrices to swscale's guess, and `caveats` says
 /// so — the difference is a visible colour cast, not rounding.
+/// A graph with a problem in it is a refusal, not a command.
+///
+/// The derivation reports problems rather than refusing over them, because the
+/// Graph stage has to draw the thing you are half way through wiring. Both
+/// functions below produce something that will be *run* — one by a person who
+/// copied it, one by this binary — and neither has any business handing over a
+/// filtergraph that libavfilter would reject. The first problem is the reason,
+/// because it names a node and the rest are usually consequences of it.
+function refuseIfBroken(d) {
+    if (!d.problems || !d.problems.length) return null;
+    return { ok: false, reason: d.problems[0].reason, problems: d.problems,
+             graph: d.graph };
+}
+
 export function filtergraph(spec, sources, opts) {
     const d = derive(spec, sources, opts);
     if (!d.ok) return d;
+    const broken = refuseIfBroken(d);
+    if (broken) return broken;
     const { chains, inputs, inputRefs, video, audio } = print(d.graph);
     return { ok: true, inputs, inputRefs, chains, video, audio, colour: d.colour,
              caveats: d.caveats, graph: d.graph, overrides: d.overrides };
@@ -95,6 +111,8 @@ export function filtergraph(spec, sources, opts) {
 export function renderGraph(spec, sources, opts) {
     const d = derive(spec, sources, Object.assign({}, opts, { forRender: true }));
     if (!d.ok) return d;
+    const broken = refuseIfBroken(d);
+    if (broken) return broken;
     const { chains } = print(d.graph);
     const filterInputs = inputsOf(d.graph);
     return { ok: true, filterGraph: chains.join(';'), filterInputs,

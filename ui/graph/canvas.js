@@ -25,6 +25,8 @@
 //   this one is with two clips on the timeline — has no other answer than
 //   panning around until you recognise something.
 
+import { portY } from './layout.js';
+
 /// The palette's --blue and --good. Canvas takes colours, not custom properties,
 /// and a wire whose colour drifts from the node it leaves is worse than one
 /// written down in two places.
@@ -74,7 +76,7 @@ export function paintGrid(ctx, w, h, view) {
 /// `lit(wire)` says whether a wire belongs to what is selected. Everything else
 /// is drawn first and dimmer, so the lit ones are on top rather than merely
 /// brighter.
-export function paintWires(ctx, placed, view, lit, hovered) {
+export function paintWires(ctx, placed, view, lit, hovered, chosen) {
     if (!placed) return;
     const order = placed.wires.slice().sort((a, b) => (lit(a) ? 1 : 0) - (lit(b) ? 1 : 0));
     for (const w of order) {
@@ -92,6 +94,16 @@ export function paintWires(ctx, placed, view, lit, hovered) {
         if (hovered && hovered === w) {
             ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = Math.max(1, 1 * view.zoom);
+            ctx.stroke();
+        }
+
+        // A wire can be selected now, because a wire can be deleted now. Drawn
+        // as the selection colour rather than as a brighter version of itself:
+        // "this is what Delete is about" is a different statement from "this
+        // belongs to the node you clicked", and the two are on screen together.
+        if (chosen && chosen === w) {
+            ctx.strokeStyle = '#ff8c42';
+            ctx.lineWidth = Math.max(1.5, 3 * view.zoom);
             ctx.stroke();
         }
     }
@@ -114,6 +126,70 @@ export function wireAt(placed, px, py, view, tol = 7) {
             const y = u * u * u * c.y1 + 3 * u * u * t * c.y1 + 3 * u * t * t * c.y2 + t * t * t * c.y2;
             const d = (x - px) * (x - px) + (y - py) * (y - py);
             if (d < bestD) { bestD = d; best = w; }
+        }
+    }
+    return best;
+}
+
+/// The wire being dragged, from a socket to wherever the pointer is.
+///
+/// Drawn dashed and in the stream's own colour, because both halves of what it
+/// is saying matter while it is in the air: that this is not yet a connection,
+/// and that it is a picture or a sound — which is what decides whether the pad
+/// it is heading for can take it.
+export function paintPending(ctx, from, to, stream, valid) {
+    ctx.save();
+    ctx.setLineDash(valid ? [] : [5, 4]);
+    ctx.strokeStyle = WIRE[stream] || WIRE.v;
+    ctx.lineWidth = 2;
+    const reach = Math.max(24, Math.abs(to.x - from.x) * 0.45);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.bezierCurveTo(from.x + reach, from.y, to.x - reach, to.y, to.x, to.y);
+    ctx.stroke();
+    ctx.restore();
+    // The end you are holding, so it reads as an end rather than as a wire that
+    // trails off. Filled where it would connect and hollow where it would not.
+    ctx.beginPath();
+    ctx.arc(to.x, to.y, 4, 0, Math.PI * 2);
+    if (valid) { ctx.fillStyle = WIRE[stream] || WIRE.v; ctx.fill(); }
+    else { ctx.strokeStyle = MINI_EDGE; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+
+// ── sockets ────────────────────────────────────────────────────────────────
+//
+// Where a socket is, and which one is under the pointer. Both answered from the
+// layout rather than from the document, and that is not an implementation
+// detail: the cards live in a container with a `transform` on it, so asking
+// what element is under a point asks about a coordinate system nothing else
+// here uses — and the socket elements are eight pixels wide, which at 0.6×
+// zoom is a target nobody can hit. The layout knows where every pad is in graph
+// coordinates and `portY` is the one formula that decides it, so the wire, the
+// dot and the hit test are all the same arithmetic.
+
+/// Where one pad sits, in graph coordinates. `dir` is `'in'` or `'out'`.
+export function socketPoint(box, dir, port) {
+    const ports = dir === 'in' ? box.inPorts : box.outPorts;
+    return { x: dir === 'in' ? box.x : box.x + box.w,
+             y: box.y + portY(box.h, port, ports) };
+}
+
+/// The pad under a screen point, or null. Generous on purpose — a socket is a
+/// small dot and dropping a wire is a gesture, not a click on a button.
+export function socketAt(placed, px, py, view, tol = 14) {
+    if (!placed) return null;
+    let best = null, bestD = tol * tol;
+    for (const box of placed.nodes) {
+        for (const dir of ['in', 'out']) {
+            const ports = dir === 'in' ? box.inPorts : box.outPorts;
+            for (let port = 0; port < ports; port++) {
+                const p = socketPoint(box, dir, port);
+                const dx = sx(p.x, view) - px, dy = sy(p.y, view) - py;
+                const d = dx * dx + dy * dy;
+                if (d >= bestD) continue;
+                bestD = d;
+                best = { box, node: box.node, dir, port, at: p };
+            }
         }
     }
     return best;

@@ -24,11 +24,34 @@
 // edit not applying, because at least the second one is visible — so `derive.js`
 // reports every override it applied and the panel and the spine say so.
 //
+// **Structure, not only settings.** A splice was expressible as one string —
+// the name of the wire it went on — because a spliced filter has one input and
+// one output and there is only one thing it can be attached to. Nothing else in
+// libavfilter is like that. An `overlay` reads two pads and they are not
+// interchangeable, an `amix` reads as many as it was told to, a `split` writes
+// several; none of those can be described by naming a wire. So this file holds
+// three more things, and each of them is written in a vocabulary that survives
+// the rebuild:
+//
+// - `nodes` — a filter that is not on any wire. Placed on the canvas, wired
+//   afterwards, and identified by an id from the same counter the inserts use.
+// - `wires` — a connection somebody drew, as two **keys and two pad numbers**.
+//   A key is what `model.js`'s `keyOf` answers: a derived node's anchor, a user
+//   node's id. That is the only string that means the same thing before and
+//   after a derivation, which is why an endpoint is written as one and not as a
+//   node.
+// - `cuts` — a derived wire somebody took *off*. Recorded rather than inferred,
+//   because the skeleton grows it back on every rebuild: a graph where the
+//   composite no longer feeds the sink is a state you have to be able to be in
+//   while you wire something in between, and "there is no wire here" is not
+//   something the absence of data can say.
+//
 // **It is not a project file.** There is no project file yet; this is the first
-// thing that makes one worth having. Until then it goes in localStorage
-// alongside the export settings, which means it is remembered per machine
-// rather than per edit — and which is exactly why `retain()` exists, so nodes
-// pinned to clips that are no longer open do not accumulate forever.
+// thing that makes one worth having, and it is now a good deal more worth
+// having than it was — a hand-wired graph is work in a way that a slider
+// position is not, and it currently lives in localStorage on one machine under
+// one key for the whole application. Until then `retain()` is what keeps it
+// from accumulating forever.
 
 const KEY = 'ffmpeg-bro.graph';
 
@@ -42,7 +65,7 @@ const KEY = 'ffmpeg-bro.graph';
 /// deliberately *not* part of `isEmpty()`: how big you like looking at a node, and
 /// where you like it, have nothing to do with which of the renderer's two paths
 /// the render takes, and a card nudged sideways must not change what comes out.
-let state = { inserts: [], locks: {}, sizes: {}, pins: {} };
+let state = { inserts: [], nodes: [], wires: [], cuts: [], locks: {}, sizes: {}, pins: {} };
 
 /// Ids that are stable across a rebuild, and that cannot collide with the
 /// derivation's — it hands out `n1`, `n2`… from a counter that starts fresh
@@ -53,12 +76,22 @@ const listeners = [];
 
 export function current() { return state; }
 export function inserts() { return state.inserts; }
+export function nodes() { return state.nodes; }
+export function wires() { return state.wires; }
+export function cuts() { return state.cuts; }
 export function locks() { return state.locks; }
+/// Whether the render goes through the compositor or through libavfilter. Every
+/// piece of *structure* counts and no piece of arrangement does — a cut wire
+/// with nothing put in its place still changes the graph, and a card dragged
+/// three pixels still does not.
 export function isEmpty() {
-    return !state.inserts.length && !Object.keys(state.locks).length;
+    return !state.inserts.length && !state.nodes.length && !state.wires.length &&
+           !state.cuts.length && !Object.keys(state.locks).length;
 }
 export function lockCount() { return Object.keys(state.locks).length; }
 export function insertCount() { return state.inserts.length; }
+export function nodeCount() { return state.nodes.length; }
+export function wireCount() { return state.wires.length + state.cuts.length; }
 
 export function onChange(fn) {
     listeners.push(fn);
@@ -89,13 +122,115 @@ export function insert(anchor, filter, opts = {}) {
     return rec;
 }
 
+/// A filter that is not on any wire.
+///
+/// Everything with more than one input needs this, which is most of what
+/// libavfilter has: there is no wire an `overlay` could be spliced onto, because
+/// splicing means one in and one out. So it is placed and then wired, which is
+/// the gesture every node editor has and the one this stage was missing.
+///
+/// It arrives unwired on purpose. A node that guessed at its own connections
+/// would be wrong about `overlay`'s two inputs half the time, and being wrong
+/// about those is a picture rather than an error.
+export function addNode(filter, opts = {}) {
+    const rec = {
+        id: `u${++seq}`,
+        filter,
+        pos: (opts.pos || []).slice(),
+        params: Object.assign({}, opts.params),
+    };
+    state.nodes.push(rec);
+    changed('node');
+    return rec;
+}
+
+/// Take a node out, whichever kind it is — and every wire that touched it.
+///
+/// Both kinds through one call because from the outside there is one gesture:
+/// select a node you made, press Delete. Leaving the wires behind would leave
+/// endpoints naming a node that is not in the graph, which is a state the
+/// overlay is deliberately tolerant of — a clip out of range does exactly that —
+/// so they would never be cleaned up and would come back the moment an id was
+/// reused.
 export function removeInsert(id) {
-    const i = state.inserts.findIndex((n) => n.id === id);
-    if (i < 0) return false;
-    state.inserts.splice(i, 1);
+    let any = false;
+    for (const list of [state.inserts, state.nodes]) {
+        const i = list.findIndex((n) => n.id === id);
+        if (i >= 0) { list.splice(i, 1); any = true; }
+    }
+    if (!any) return false;
+    for (let i = state.wires.length - 1; i >= 0; i--)
+        if (state.wires[i].from === id || state.wires[i].to === id) state.wires.splice(i, 1);
+    delete state.sizes[id];
+    delete state.pins[id];
     changed('remove');
     return true;
 }
+
+// ── wires ──────────────────────────────────────────────────────────────────
+//
+// A wire is written as the two pads it joins, and a pad is a key and a number.
+// Nothing here refers to a node object or to a position in an array, because
+// both of those are remade by the next derivation — see `keyOf` in model.js.
+//
+// **An input pad holds one wire**, which is true of libavfilter and of every
+// node editor. That is what makes `wire()` able to replace the derived
+// connection without anybody deleting it first, and it is what lets a wire be
+// named by its arriving end alone.
+
+const padKey = (key, port) => `${key}#${port || 0}`;
+
+/// Join two pads. Replaces whatever was arriving at the destination — including
+/// a derived wire, which is how a filter gets *between* two derived nodes.
+export function wire(from, fromPort, to, port) {
+    if (!from || !to) return null;
+    const rec = { id: `w${++seq}`, from, fromPort: fromPort || 0, to, port: port || 0 };
+    for (let i = state.wires.length - 1; i >= 0; i--)
+        if (state.wires[i].to === rec.to && state.wires[i].port === rec.port)
+            state.wires.splice(i, 1);
+    // A pad being wired is a pad that is no longer cut. The two are the same
+    // statement about the same place and holding both would make the order they
+    // are applied in decide the answer.
+    const cut = state.cuts.indexOf(padKey(to, port));
+    if (cut >= 0) state.cuts.splice(cut, 1);
+    state.wires.push(rec);
+    changed('wire');
+    return rec;
+}
+
+/// Take the wire off a pad, whether it was yours or the derivation's.
+///
+/// A wire of your own is simply forgotten. A derived one has to be *remembered*
+/// as absent, because the skeleton grows it back on every rebuild and nothing
+/// missing from this file can say "not that one".
+export function unwire(to, port) {
+    const key = padKey(to, port);
+    const i = state.wires.findIndex((w) => w.to === to && w.port === (port || 0));
+    if (i >= 0) {
+        state.wires.splice(i, 1);
+        changed('wire');
+        return true;
+    }
+    if (state.cuts.indexOf(key) >= 0) return false;
+    state.cuts.push(key);
+    changed('wire');
+    return true;
+}
+
+/// Give a pad back to the derivation: forget both the wire and the cut on it.
+export function reconnect(to, port) {
+    const before = state.wires.length + state.cuts.length;
+    for (let i = state.wires.length - 1; i >= 0; i--)
+        if (state.wires[i].to === to && state.wires[i].port === (port || 0))
+            state.wires.splice(i, 1);
+    const cut = state.cuts.indexOf(padKey(to, port));
+    if (cut >= 0) state.cuts.splice(cut, 1);
+    if (state.wires.length + state.cuts.length === before) return false;
+    changed('wire');
+    return true;
+}
+
+export function isCut(to, port) { return state.cuts.indexOf(padKey(to, port)) >= 0; }
 
 /// Change what a node is configured with, whichever kind it is.
 ///
@@ -110,7 +245,8 @@ export function edit(node, change) {
     if (!node) return null;
     const target = node.derived
         ? (state.locks[node.anchor] || (state.locks[node.anchor] = { params: {}, pos: null }))
-        : state.inserts.find((n) => n.id === node.id);
+        : state.inserts.find((n) => n.id === node.id) ||
+          state.nodes.find((n) => n.id === node.id);
     if (!target) return null;
 
     if (change.params) {
@@ -146,7 +282,8 @@ export function unlock(anchor) {
 /// are how you like looking at it, not part of it, and throwing them away with
 /// the filters would be a second surprise on top of an intended one.
 export function clear() {
-    state = { inserts: [], locks: {}, sizes: state.sizes, pins: state.pins };
+    state = { inserts: [], nodes: [], wires: [], cuts: [], locks: {},
+              sizes: state.sizes, pins: state.pins };
     changed('clear');
 }
 
@@ -210,6 +347,14 @@ export function unpinAll() {
 /// be in one place and copying it would drop the new clip's whole chain exactly on
 /// top of the old one's. The new half is laid out, which is where an unpinned node
 /// belongs.
+///
+/// **Nor are wires**, for a stronger reason than tidiness. A wire is one
+/// connection between two named pads, and an input pad holds exactly one wire —
+/// so a copy of a wire that ends at some node of yours would be a second
+/// producer arriving at a pad that already has one, which is not a graph. The
+/// derivation builds the new half's chain complete on its own; what a cut does
+/// not carry over is the hand wiring, and that is a thing to say rather than a
+/// thing to guess at.
 export function cloneClip(fromId, toId) {
     const from = `clip:${fromId}`, to = `clip:${toId}`;
     const swap = (a) => (a.indexOf(`${from}/`) === 0 ? to + a.slice(from.length) : null);
@@ -249,6 +394,16 @@ export function retain(clipIds) {
         if (gone(state.inserts[i].anchor)) { state.inserts.splice(i, 1); any = true; }
     for (const anchor of Object.keys(state.locks))
         if (gone(anchor)) { delete state.locks[anchor]; any = true; }
+    // A wire with an end on a clip that has gone. Both ends are checked because
+    // either can be a derived node: a hand-made `overlay` fed by two clips loses
+    // its wire when either of them does, and keeping half of it would leave a
+    // pad claiming a producer that no derivation will ever make again.
+    for (let i = state.wires.length - 1; i >= 0; i--) {
+        const w = state.wires[i];
+        if (gone(w.from) || gone(w.to)) { state.wires.splice(i, 1); any = true; }
+    }
+    for (let i = state.cuts.length - 1; i >= 0; i--)
+        if (gone(String(state.cuts[i]).split('#')[0])) { state.cuts.splice(i, 1); any = true; }
     for (const key of Object.keys(state.sizes))
         if (gone(key)) { delete state.sizes[key]; any = true; }
     for (const key of Object.keys(state.pins))
@@ -258,26 +413,50 @@ export function retain(clipIds) {
 
 // ── persistence ────────────────────────────────────────────────────────────
 
+/// One filter record — an insert or a free node — validated rather than
+/// trusted. What is in localStorage was written by some earlier version of this
+/// application, and a record missing the field everything else indexes it by is
+/// a redraw that throws.
+function filterRec(n, withAnchor) {
+    if (!n || !n.id || !n.filter || (withAnchor && !n.anchor)) return null;
+    const rec = { id: String(n.id), filter: String(n.filter),
+                  pos: Array.isArray(n.pos) ? n.pos.map(String) : [],
+                  params: Object.assign({}, n.params) };
+    if (withAnchor) rec.anchor = String(n.anchor);
+    return rec;
+}
+
+/// **A blob written before there were free nodes still loads**, and loads as
+/// exactly what it was: three keys it has never heard of come back empty, and an
+/// overlay of inserts and locks behaves the way it always did. The shape grew
+/// rather than changing, which is what makes that possible and is worth the
+/// restraint it cost — the alternative was a version number and a migration for
+/// work somebody had done and could not get back.
 export function restore() {
     try {
         const saved = localStorage.getItem(KEY);
         if (!saved) return;
         const blob = JSON.parse(saved);
+        const list = (v, withAnchor) => (Array.isArray(v) ? v : [])
+            .map((n) => filterRec(n, withAnchor)).filter(Boolean);
         state = {
-            inserts: Array.isArray(blob.inserts)
-                ? blob.inserts.filter((n) => n && n.id && n.anchor && n.filter)
-                              .map((n) => ({ id: String(n.id), anchor: String(n.anchor),
-                                             filter: String(n.filter),
-                                             pos: Array.isArray(n.pos) ? n.pos.map(String) : [],
-                                             params: Object.assign({}, n.params) }))
-                : [],
+            inserts: list(blob.inserts, true),
+            nodes: list(blob.nodes, false),
+            wires: (Array.isArray(blob.wires) ? blob.wires : [])
+                .filter((w) => w && w.id && w.from && w.to)
+                .map((w) => ({ id: String(w.id), from: String(w.from),
+                               fromPort: Number(w.fromPort) || 0,
+                               to: String(w.to), port: Number(w.port) || 0 })),
+            cuts: (Array.isArray(blob.cuts) ? blob.cuts : []).map(String),
             locks: (blob.locks && typeof blob.locks === 'object') ? blob.locks : {},
             sizes: (blob.sizes && typeof blob.sizes === 'object') ? blob.sizes : {},
             pins: (blob.pins && typeof blob.pins === 'object') ? blob.pins : {},
         };
-        // Ids handed back to us must not be handed out again.
-        for (const rec of state.inserts) {
-            const m = /^u(\d+)$/.exec(rec.id);
+        // Ids handed back to us must not be handed out again. Wires are counted
+        // out of the same sequence as nodes, so that no two things in this file
+        // can ever be told apart by their id alone and then turn out not to be.
+        for (const rec of state.inserts.concat(state.nodes, state.wires)) {
+            const m = /^[uw](\d+)$/.exec(rec.id);
             if (m) seq = Math.max(seq, Number(m[1]));
         }
     } catch (e) { /* first run, or a blob from an older shape */ }
