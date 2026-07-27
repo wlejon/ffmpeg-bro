@@ -145,6 +145,7 @@ export function previewGraph(g, node, opts = {}) {
     // draw a still of its picture.
     const inputs = node.kind === 'input'
         ? [{ label: head, path: node.path, stream: node.outs[videoPort].stream,
+             input: node.input === undefined ? -1 : node.input,
              from: node.from || 0 }]
         : inputsOf(view);
 

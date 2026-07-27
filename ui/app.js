@@ -9,7 +9,9 @@
 
 import { project, makeClip, addClip, removeClip, duration, clipsAt,
          nextClipAfter, sourceTime, resolveOverlaps, onChange, changed, select,
-         selectMany, selectFollow, isSelected, splitClip, trackCount } from './project.js';
+         selectMany, selectFollow, isSelected, splitClip, trackCount,
+         applyInput, clipsOf } from './project.js';
+import * as inputsModel from './inputs.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
@@ -78,7 +80,29 @@ el('libav').textContent = bro.ffmpeg.version;
 
 viewer.initViewer({ stage, viewer: viewerEl });
 
-initSources(el('sources'));
+initSources({
+    list: el('src-list'),
+    detail: el('src-detail'),
+    options: el('src-options'),
+    add: el('src-add'),
+    addPath: el('src-path'),
+}, {
+    flash,
+    // An input that was reopened with a different demuxer, option or window is
+    // a different input under whatever is cut from it, so the clips have to be
+    // reloaded rather than left decoding the file as it was.
+    reopened: reloadInput,
+    // "Use on the timeline" is an action *from* this stage, because an input
+    // with no clip is an ordinary thing to have and the timeline is not where
+    // inputs come from any more.
+    use: (input) => {
+        const clip = openInput(input);
+        if (clip) { shell.goTo('compose'); flash(`Added ${clip.name}`); }
+        return clip;
+    },
+    clipsOf,
+    changed: () => { changed('inputs'); },
+});
 
 // What was inserted and locked last time, before anything asks for a graph.
 graphOverlay.restore();
@@ -222,14 +246,33 @@ if (bro.ffmpeg.openOnStart) open(bro.ffmpeg.openOnStart);
 
 // ── opening ────────────────────────────────────────────────────────────────
 
+/// Open a path or a URL: an input if there is not already a plain one on it,
+/// and then a clip of that input.
+///
+/// The two are separate acts and this is the one that does both, because
+/// dropping a file on the timeline means both. `openInput()` below is the other
+/// half on its own — an input that exists without a clip, which is an ordinary
+/// state and the reason the Sources stage is not derived from the timeline any
+/// more.
 function open(path, opts = {}) {
-    let probe;
-    try {
-        probe = bro.ffmpeg.probe(path);
-    } catch (e) {
-        flash(String(e.message || e));
+    const existing = inputsModel.plainInputFor(path);
+    const input = existing || inputsModel.addInput({ path });
+    const clip = openInput(input, opts);
+    // An input that was made here and turned out to be unusable goes away
+    // again; one that was already on the list stays, because somebody put it
+    // there.
+    if (!clip && !existing) inputsModel.removeInput(input);
+    return clip;
+}
+
+/// A clip of an input already on the list. Everything `open()` does past
+/// deciding which input that is.
+function openInput(input, opts = {}) {
+    if (input.error || !input.probe) {
+        flash(input.error || `cannot read ${input.name}`);
         return null;
     }
+    const probe = input.probe;
     if (!probe.video) {
         // bro's <video> drives its clock from decoded pictures, so a track
         // list with no video has nothing to advance. Say so instead of
@@ -242,7 +285,7 @@ function open(path, opts = {}) {
     // New clips land after everything already on their track, which is what
     // dropping a second file onto a player is asking for. `track` puts one on
     // a lane of its own instead — that is how a batch becomes a grid.
-    const clip = makeClip(path, probe);
+    const clip = makeClip(input);
     if (opts.track !== undefined) clip.track = opts.track;
     addClip(clip);
     viewer.attachClip(clip);
@@ -259,6 +302,26 @@ function open(path, opts = {}) {
         changed('open');
     }
     return clip;
+}
+
+/// An input has been reopened — a demuxer forced, an option set, a window
+/// moved — so everything downstream of what it contains is put back.
+///
+/// The `<video>` is rebuilt rather than re-pointed: the element *is* the
+/// decoder, and a decoder holding the file as it was opened before is exactly
+/// what has just stopped being true.
+function reloadInput(input) {
+    applyInput(input);
+    for (const clip of clipsOf(input)) {
+        viewer.detachClip(clip);
+        viewer.attachClip(clip);
+        clip.peaks = null;
+        clip.film = null;
+        analyzeClip(clip);
+    }
+    viewer.layout();
+    setPlayhead(Math.min(transport.t, duration()));
+    changed('inputs');
 }
 
 /// Open several files as one gesture. Dropping a morning's recordings is not
@@ -860,11 +923,18 @@ report.initReport({
 function stageState(id) {
     const clips = project.clips;
     if (id === 'sources') {
-        if (!clips.length) return ['nothing loaded', ''];
-        const files = new Set(clips.map((c) => c.path)).size;
-        const streams = clips.reduce(
-            (n, c) => n + ((c.probe && c.probe.streams) ? c.probe.streams.length : 0), 0);
-        return [`${files} file${files === 1 ? '' : 's'}`, `${streams} streams`];
+        // The inputs, not the files on the timeline: an input with no clip is
+        // an ordinary state and a card that only counted what was in use would
+        // be the old timeline-derived list wearing the new name.
+        const list = inputsModel.inputs;
+        if (!list.length) return ['nothing loaded', ''];
+        const streams = list.reduce(
+            (n, i) => n + ((i.probe && i.probe.streams) ? i.probe.streams.length : 0), 0);
+        const set = list.filter((i) => inputsModel.summary(i)).length;
+        const unused = list.filter((i) => !clipsOf(i).length).length;
+        const tail = [set ? `${set} configured` : '', unused ? `${unused} unused` : '',
+                      `${streams} streams`].filter(Boolean).join(' · ');
+        return [`${list.length} input${list.length === 1 ? '' : 's'}`, tail];
     }
     if (id === 'compose') {
         if (!clips.length) return ['empty', ''];
@@ -924,7 +994,11 @@ function flash(message) {
 // only exists while one particular clip is selected.
 globalThis.__ffmpegBro = {
     project, transport, resolveOverlaps,
-    open, openBatch, removeSelection,
+    open, openBatch, openInput, removeSelection,
+    // The `-i`s, which are the document now: a test that wants to know what
+    // will be opened asks this rather than walking the timeline for paths.
+    inputs: inputsModel,
+    drawSources,
     video: () => { const c = viewer.activeClip(); return c ? c.video : null; },
     activeClip: () => viewer.activeClip(),
     activeClips: () => viewer.activeClips(),

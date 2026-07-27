@@ -48,15 +48,30 @@ function defaultTransform() {
     };
 }
 
-export function makeClip(path, probe) {
+/// A clip of an input.
+///
+/// **A clip references an input rather than carrying a path.** What is opened,
+/// with which demuxer, with which options and over which window is the input's
+/// business — see ui/inputs.js — and two clips cut from one file are two clips
+/// of one `-i`, which is what ffmpeg would open. What is copied here is what a
+/// clip needs to lay itself out (`path` for a name, `src` for its `<video>`,
+/// the probe for its size and rate), and `applyInput()` puts it back whenever
+/// the input is reopened.
+export function makeClip(input) {
+    const probe = input.probe;
     // The video track's own duration, not the container's. They differ — an
     // audio track routinely runs a fraction of a second past the last picture
     // — and it is the pictures that decide how long a clip is.
     const media = (probe.video && probe.video.duration) || probe.format.duration || 0;
     return {
         id: nextId++,
-        path,
-        name: basename(path),
+        input,
+        path: input.path,
+        // What the `<video>` is pointed at: a token naming the input, not the
+        // path, because an input's options have to reach playback and a src is
+        // only a string. See src/native/ffmpeg_input.h.
+        src: input.src,
+        name: basename(input.path),
         probe,
         track: 0,
         start: 0,
@@ -79,6 +94,41 @@ export function makeClip(path, probe) {
 
 function sort() {
     project.clips.sort((a, b) => a.track - b.track || a.start - b.start || a.id - b.id);
+}
+
+/// Put an input's answer back into the clips cut from it, after it has been
+/// reopened with a different demuxer, option or window.
+///
+/// The length is the interesting one: `-ss 30` on a ten-second input leaves
+/// nothing, and a clip that kept its old length would lay out over footage that
+/// is no longer in the input. Trimmed rather than removed — the clip is still
+/// the edit somebody made, and a window they can widen again.
+export function applyInput(input) {
+    for (const c of project.clips) {
+        if (c.input !== input) continue;
+        c.path = input.path;
+        c.src = input.src;
+        c.probe = input.probe;
+        c.name = basename(input.path);
+        const media = input.probe
+            ? (input.probe.video && input.probe.video.duration) ||
+              input.probe.format.duration || 0
+            : 0;
+        c.media = media;
+        if (input.probe && input.probe.video) {
+            c.width = input.probe.video.displayWidth;
+            c.height = input.probe.video.displayHeight;
+            c.fps = input.probe.video.fps || c.fps;
+        }
+        c.inPoint = Math.max(0, Math.min(c.inPoint, Math.max(0, media)));
+        c.length = Math.max(0, Math.min(c.length, media - c.inPoint));
+    }
+    sort();
+}
+
+/// The clips cut from one input, which is what makes it removable or not.
+export function clipsOf(input) {
+    return project.clips.filter((c) => c.input === input);
 }
 
 /// How many lanes the timeline shows: every track in use, plus one empty one

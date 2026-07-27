@@ -718,37 +718,92 @@ body.fs #cropbox { display: none; }
    flank it and scroll on their own; the range and the summary run the full
    width underneath, where a timeline belongs. */
 
-/* Sources: what is in the files. A stage rather than the bottom two thirds of
-   a 290px column, which is where it used to be and where it was scrolled past
-   every time. */
-.sources {
+/* Sources: the inputs. A stage rather than the bottom two thirds of a 290px
+   column, which is where it used to be and where it was scrolled past every
+   time — and now three columns rather than one scroll, because an input is
+   something you *set* and not only something you read: the list, what this one
+   is, and the demuxer's own option table beside it. */
+.src-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+.src-bar .section-head { padding: 0; white-space: nowrap; }
+.src-bar input { flex: 1; min-width: 0; }
+
+.src-main {
     flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+.src-list {
+    width: 300px;
+    flex-shrink: 0;
     overflow-y: auto;
     min-height: 0;
-    padding: 4px 0 20px;
-    max-width: 900px;
+    padding: 6px 0 16px;
+    border-right: 1px solid var(--line);
+}
+.src-detail {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 4px 12px 20px;
 }
 
-/* One block per file, and there is more than one — the stage reads every
-   source on the timeline, so the blocks need a seam between them that the
-   stream headings inside them do not have. */
-.source { margin-bottom: 18px; }
-.source + .source { border-top: 1px solid var(--line); padding-top: 12px; }
-.source-head {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 2px 12px;
+/* One input in the list. The whole row is the target: an input is picked, not
+   opened, and a click anywhere on the statement should mean the statement. */
+.src-row {
+    padding: 6px 12px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
 }
-.source-name { font-size: 14px; font-weight: 600; }
-/* The path is what -i would be handed, and the only thing telling two files
-   with the same name apart. Broken anywhere rather than pushed off the side. */
-.source-path {
-    padding: 0 12px 4px;
-    font-family: Consolas, monospace;
+.src-row:hover { background: #1b1e25; }
+.src-row.on { background: #1e222b; border-left-color: var(--accent); }
+.src-row.bad .src-used { color: var(--bad); }
+.src-head { display: flex; align-items: baseline; gap: 8px; }
+.src-name { font-size: 13px; font-weight: 600; }
+/* The path is what -i is handed, and the only thing telling two files with the
+   same name apart. Broken anywhere rather than pushed off the side. */
+.src-where {
     font-size: 11px;
     word-break: break-all;
+    margin-top: 1px;
 }
+/* What is set on it, in ffmpeg's own words. Empty for an input nobody has said
+   anything about, which is most of them. */
+.src-set { font-size: 11px; color: var(--accent); margin-top: 2px; }
+.src-set:empty { display: none; }
+
+.src-demux { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.src-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.src-pick { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.src-picker { max-height: 260px; overflow-y: auto; }
+/* One demuxer offered by the picker: the name `-f` takes, what libavformat
+   calls it, and the extensions it usually wears. Two lines, so the button
+   cannot be the 26px single-line control the base rule makes it. */
+.src-demuxer {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    height: auto;
+    text-align: left;
+    margin-bottom: 3px;
+    padding: 4px 6px;
+}
+.src-error {
+    color: var(--bad);
+    padding: 4px 0 8px;
+    word-break: break-word;
+}
+.src-missing { color: var(--bad); }
 
 /* Write: what the file is made of, where it goes, and the act of going. Three
    columns — the destination on the left, the stream list in the middle where

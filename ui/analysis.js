@@ -56,7 +56,10 @@ export function analyzeClip(clip) {
     queued++;
     ensureWorker().postMessage({
         clip: clip.id,
-        path: clip.path,
+        // The input's token rather than its path, so a filmstrip is of the file
+        // as the input opens it — `bro.media` goes through the same backend
+        // registry `<video>` does, and resolves a token the same way.
+        path: clip.src || clip.path,
         buckets: Math.max(600, Math.min(6000, Math.round(clip.length * 12))),
         count,
         height: 96,

@@ -321,12 +321,15 @@ console.log('\nthe same graph, to run rather than to print');
 
     // A pad each, grouped by input, because an input node *is* one file: the
     // picture and the sound of clip zero are two outputs of one `-i` rather
-    // than two things that happen to name the same path.
+    // than two things that happen to name the same path. `input` is which of
+    // the document's `-i`s that is — -1 here, because a spec written by hand
+    // carries paths and no input list, which is a shape the renderer still
+    // takes and every test in this file relies on.
     same(JSON.stringify(run.filterInputs),
-         JSON.stringify([{ label: '0:v', path: 'a.mp4', stream: 'v', from: 0 },
-                         { label: '0:a', path: 'a.mp4', stream: 'a', from: 0 },
-                         { label: '1:v', path: 'a.mp4', stream: 'v', from: 0 },
-                         { label: '1:a', path: 'a.mp4', stream: 'a', from: 0 }]),
+         JSON.stringify([{ label: '0:v', path: 'a.mp4', input: -1, stream: 'v', from: 0 },
+                         { label: '0:a', path: 'a.mp4', input: -1, stream: 'a', from: 0 },
+                         { label: '1:v', path: 'a.mp4', input: -1, stream: 'v', from: 0 },
+                         { label: '1:a', path: 'a.mp4', input: -1, stream: 'a', from: 0 }]),
          'every pad the graph reads says which file and which kind of stream feeds it');
 
     // `from` is where the renderer seeks each input to. It is not in the

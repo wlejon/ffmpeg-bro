@@ -22,11 +22,26 @@
 
     <div id="stages">
     <section id="st-sources" class="stage-view hidden">
-        <!-- What is in the files: every file on the timeline, once each. This
-             was the inspector's Media panel, which could only ever describe
-             the selected clip; the stage has room to read them all out and a
-             card in the spine that counts them. -->
-        <div id="sources" class="sources dim pad">Nothing loaded.</div>
+        <!-- The inputs: the `-i`s, which is a different thing from "the files
+             on the timeline" and the reason this stage stopped being derived
+             from it. An input carries a demuxer, its options and a window, it
+             can be a URL, and it exists whether or not a clip is cut from it.
+
+             Three columns in the order the questions come: which inputs there
+             are, what this one is set to and what came back, and the demuxer's
+             own option table beside it — the same column the encoder's and the
+             muxer's options get, from the same component. -->
+        <div class="src-bar">
+            <span class="section-head">Add an input</span>
+            <input id="src-path" class="wide" type="text"
+                   placeholder="a file path, or a URL &mdash; https://, srt://, udp://, rtmp://">
+            <button id="src-add" class="tiny primary">Add</button>
+        </div>
+        <div class="src-main">
+            <div id="src-list" class="src-list"></div>
+            <div id="src-detail" class="src-detail"></div>
+            <div id="src-options" class="ex-col ex-right"></div>
+        </div>
     </section>
 
     <section id="st-compose" class="stage-view">
@@ -310,6 +325,23 @@
 
     <template id="tpl-row">
         <div class="row"><span class="key"></span><span class="val"></span></div>
+    </template>
+
+    <!-- One input, as the list states it: which `-i` it is, what it is called,
+         where it comes from, what has been set on it in ffmpeg's own words, and
+         whether anything on the timeline is cut from it. Unused is a normal
+         state and says so rather than being hidden. -->
+    <template id="tpl-input">
+        <div class="src-row">
+            <div class="src-head">
+                <span class="src-n mono dim"></span>
+                <span class="src-name"></span>
+                <span class="spacer"></span>
+                <span class="src-used dim"></span>
+            </div>
+            <div class="src-where dim mono"></div>
+            <div class="src-set mono"></div>
+        </div>
     </template>
 
     <!-- One raw ffmpeg option: what it is called, what libavcodec says it

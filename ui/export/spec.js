@@ -6,6 +6,7 @@
 // to change one function and let the export follow for free.
 
 import { project, duration } from '../project.js';
+import { specInputs, indexOf as inputIndex } from '../inputs.js';
 import * as viewer from '../viewer.js';
 import { settings, outputFps, outputExt } from './state.js';
 import { muxerInfo } from './capabilities.js';
@@ -76,6 +77,11 @@ export function buildSpec(over = {}) {
             // and find it again after the skeleton is rebuilt. The renderer
             // ignores it; `graph/derive.js` cannot work without it.
             id: c.id,
+            // Which `-i` this clip is cut from. The path travels too, for the
+            // log and for a spec written by hand, but the index is what the
+            // renderer opens: the demuxer, the options and the window are the
+            // input's and a path cannot carry them.
+            input: inputIndex(c.input),
             path: c.path,
             start: c.start,
             length: c.length,
@@ -104,6 +110,11 @@ export function buildSpec(over = {}) {
 
     const spec = {
         path: over.path || settings.path || defaultPath(),
+        // The `-i`s, in the order they are numbered. All of them, not only the
+        // ones a clip reads: the list is the document's, the indices are what
+        // the clips point at, and dropping the unused ones would renumber the
+        // rest. The renderer opens what is referenced and nothing else.
+        inputs: over.inputs !== undefined ? over.inputs : specInputs(),
         // Which muxer, by name. Sent rather than left to the extension because
         // that is what `-f` means and because a hundred and eighty muxers
         // share about forty extensions between them — the file's name cannot

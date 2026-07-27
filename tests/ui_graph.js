@@ -867,7 +867,7 @@ console.log('\nthe graph, cut off at one node');
     // well would be the most expensive thing on the screen and would look
     // identical.
     same(JSON.stringify(wave.filterInputs),
-         JSON.stringify([{ label: '0:a', path: 'a.mp4', stream: 'a', from: 0 }]),
+         JSON.stringify([{ label: '0:a', path: 'a.mp4', input: -1, stream: 'a', from: 0 }]),
          'reading one pad — the sound, not the picture beside it');
 }
 

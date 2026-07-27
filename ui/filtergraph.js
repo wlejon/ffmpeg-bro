@@ -49,6 +49,10 @@ export function inputsOf(graph) {
         outs.forEach((o, i) => {
             if (!read.has(i)) return;
             out.push({ label: `${n.index}:${o.stream}`, path: n.path,
+                       // Which `-i` this pad is of. Both pads of one input
+                       // carry it, which is what says they are one demuxer and
+                       // one seek rather than two files that happen to agree.
+                       input: n.input === undefined ? -1 : n.input,
                        stream: o.stream, from: n.from || 0 });
         });
     }
@@ -57,7 +61,8 @@ export function inputsOf(graph) {
 
 /// `buildSpec()`'s output → the inputs and the graph that would render it.
 ///
-/// Returns `{ ok: true, inputs, chains, video, audio, colour, caveats, graph }`
+/// Returns `{ ok: true, inputs, inputRefs, chains, video, audio, colour, caveats,
+/// graph }` — `inputRefs` saying which of the document's inputs each `-i` is,
 /// — `chains` being the filtergraph's semicolon-separated parts, unjoined, so
 /// the caller can lay them out one per line or all on one. `video` and `audio`
 /// are the pad names to map, and `graph` is what they were printed from. On
@@ -72,8 +77,8 @@ export function inputsOf(graph) {
 export function filtergraph(spec, sources, opts) {
     const d = derive(spec, sources, opts);
     if (!d.ok) return d;
-    const { chains, inputs, video, audio } = print(d.graph);
-    return { ok: true, inputs, chains, video, audio, colour: d.colour,
+    const { chains, inputs, inputRefs, video, audio } = print(d.graph);
+    return { ok: true, inputs, inputRefs, chains, video, audio, colour: d.colour,
              caveats: d.caveats, graph: d.graph, overrides: d.overrides };
 }
 

@@ -61,7 +61,7 @@ function startsChain(g, node) {
     return g.consumers(ps[0]).length !== 1;
 }
 
-/// A graph → `{ chains, inputs, video, audio }`.
+/// A graph → `{ chains, inputs, inputRefs, video, audio }`.
 ///
 /// `chains` is unjoined, so a caller can lay them out one per line or all on
 /// one — the command bar does both, depending on whether it is open.
@@ -108,8 +108,17 @@ export function print(g) {
     // `[2:v]` in a chain and `-i` number two are the same fact stated twice,
     // and two statements of one fact are two things that can disagree.
     const inputs = [];
-    for (const node of g.nodes)
-        if (node.kind === 'input' && node.path) inputs[node.index] = node.path;
+    // Which of the document's inputs each `-i` is, index-aligned with `inputs`.
+    // The path alone cannot say it: what goes *before* an `-i` — the forced
+    // demuxer, the option bag, the window — belongs to the input, and a command
+    // that printed the path without them would be a command that opens a
+    // different file.
+    const inputRefs = [];
+    for (const node of g.nodes) {
+        if (node.kind !== 'input' || !node.path) continue;
+        inputs[node.index] = node.path;
+        inputRefs[node.index] = node.input === undefined ? -1 : node.input;
+    }
 
     // A sink does not impose a name, it reports one. With a single audible clip
     // there is no mixer and the pad the muxer maps is that clip's own `[a0]` —
@@ -123,5 +132,5 @@ export function print(g) {
         return null;
     };
 
-    return { chains, inputs, video: pad('v'), audio: pad('a') };
+    return { chains, inputs, inputRefs, video: pad('v'), audio: pad('a') };
 }

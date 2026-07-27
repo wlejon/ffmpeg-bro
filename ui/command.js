@@ -122,8 +122,28 @@ export function parts() {
     if (settings.scaler && settings.scaler !== 'bicubic')
         pre.push('-sws_flags', settings.scaler);
 
+    // Each `-i` with what belongs *in front of* it. That order is most of what
+    // makes a printed command runnable: `-f`, the demuxer's options, `-ss`,
+    // `-to` and `-itsoffset` are input options, and the same words after the
+    // `-i` are output options meaning something else entirely — `-ss` after it
+    // seeks the *output*, and a command that put them there would produce a
+    // different file while looking almost right.
     const inputs = [];
-    if (g.ok) for (const p of g.inputs) inputs.push('-i', arg(p));
+    if (g.ok) {
+        g.inputs.forEach((p, i) => {
+            const src = (spec.inputs || [])[(g.inputRefs || [])[i]];
+            if (src) {
+                if (src.format) inputs.push('-f', arg(src.format));
+                for (const k of Object.keys(src.options || {}))
+                    if (src.options[k] !== '' && src.options[k] !== undefined)
+                        inputs.push(`-${k}`, arg(src.options[k]));
+                if (src.ss) inputs.push('-ss', String(src.ss));
+                if (src.to) inputs.push('-to', String(src.to));
+                if (src.itsoffset) inputs.push('-itsoffset', String(src.itsoffset));
+            }
+            inputs.push('-i', arg(p));
+        });
+    }
 
     // What the file is made of, in the order the muxer will number it. The
     // spec's list is authoritative — it is what `render.start` is handed — so

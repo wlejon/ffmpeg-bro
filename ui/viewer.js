@@ -52,7 +52,10 @@ export function attachClip(clip) {
     stage.appendChild(frame);
     clip.frame = frame;
     clip.video = video;
-    video.src = clip.path;
+    // The token naming the clip's input, not its path: an input's forced
+    // demuxer, options and window have to reach playback, and a `<video>` src
+    // is only a string. See src/native/ffmpeg_input.h.
+    video.src = clip.src || clip.path;
     video.volume = 1;
     setVisible(clip, false);
 }

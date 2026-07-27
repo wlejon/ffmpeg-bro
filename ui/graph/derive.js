@@ -386,7 +386,13 @@ export function derive(spec, sources, opts = {}) {
     // walks the array — so a clip's whole run goes down before the next clip's,
     // and the overlays after all of them.
     const heads = kept.map(({ clip, w, src, i, key }) => {
+        // `index` is the `-i` number this graph gives the input and `input` is
+        // which of the spec's inputs that is. Two numbers because they count
+        // different things: a graph numbers the pads it reads, in the order it
+        // reads them, and the document numbers every input it holds whether or
+        // not anything on the timeline is cut from it.
         const input = g.add({ kind: 'input', index: i, path: clip.path,
+                              input: clip.input === undefined ? -1 : clip.input,
                               anchor: `${key}/in`, from: w.srcIn,
                               outs: [{ stream: 'v' }] });
         inputs.set(key, input);

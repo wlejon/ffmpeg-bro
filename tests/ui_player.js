@@ -99,7 +99,10 @@ ok(video.videoWidth > 0 && video.videoHeight > 0,
    `frame size ${video.videoWidth}x${video.videoHeight}`);
 ok(Math.abs(clip.length - p.video.duration) < 0.01,
    `clip is as long as its video track (${clip.length.toFixed(3)}s)`);
-ok(el('sources').textContent.indexOf('Container') >= 0, 'the Sources stage read the file');
+// The Sources stage is the input editor now, and it is drawn into three
+// columns rather than one scroll. A drop makes an input; the detail column is
+// what that input turned out to contain.
+ok(el('src-detail').textContent.indexOf('Container') >= 0, 'the Sources stage read the input');
 ok(el('chips').textContent.length > 0, `chips: ${el('chips').textContent.replace(/\s+/g, ' ').trim()}`);
 ok(el('tc-duration').textContent !== '00:00:00:00',
    `duration timecode ${el('tc-duration').textContent}`);
@@ -364,16 +367,18 @@ if (second) {
     ok(A.activeClip() === clip, 'and back again');
     screenshot('out/07-two-clips.png');
 
-    // The Sources stage reads every file on the timeline, not the selected
-    // one: its card in the spine counts them, and a stage that says three and
-    // shows one is asking to be disbelieved.
+    // The Sources stage lists the inputs — the `-i`s — and not the clips.
+    // Two files dropped are two inputs, whichever clip is selected, and the
+    // list is the document's rather than the timeline's: an input with nothing
+    // cut from it stays on it.
     {
         const base = (p) => p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
-        const text = el('sources').textContent;
-        ok(text.indexOf(base(media)) >= 0 && text.indexOf(base(second)) >= 0,
-           'both sources are read out, whichever clip is selected');
-        ok((text.match(/Container/g) || []).length === 2,
-           'one block per file, and two files means two');
+        const list = el('src-list').textContent;
+        ok(list.indexOf(base(media)) >= 0 && list.indexOf(base(second)) >= 0,
+           'both inputs are listed, whichever clip is selected');
+        ok(A.inputs.inputs.length === 2, `two files dropped, two inputs (${A.inputs.inputs.length})`);
+        ok(el('src-detail').textContent.indexOf('Container') >= 0,
+           'and the one selected reads out what it contains');
     }
 
     // Moving one. Dragged past the other, the other is pushed out of the way

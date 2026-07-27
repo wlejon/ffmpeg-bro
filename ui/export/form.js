@@ -13,7 +13,7 @@
 // anything, because the code that wired it looked only in the left one.
 
 import { project } from '../project.js';
-import { el, div, span, put, select, segmented, show, fromTemplate,
+import { el, div, span, put, select, segmented, show,
          row, head } from '../dom.js';
 import { basename } from '../format.js';
 import { btns, num, note } from './controls.js';
@@ -22,13 +22,13 @@ import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
          muxerInfo, optionsOf, formatOptionsOf,
          rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension } from './spec.js';
+import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
 
 let panes = {};
 let hooks = {};
 
 let showAdvanced = false;
-let optionSearch = '';
 
 // The muxer picker's own state. Held here rather than in `settings` because
 // none of it is part of the render: which facet you were looking at and what
@@ -37,14 +37,12 @@ let formatOpen = false;
 let formatSearch = '';
 let formatFacet = 'fits';
 let showFormatOptions = false;
-let formatOptionSearch = '';
 
 // Held between draws so the parts that update on their own — the quality
 // readout as the slider moves, the filename beside "Choose…" — can be written
 // without rebuilding the form under the pointer.
 let qualityLabel = null;
 let fileLabel = null;
-let optionList = null;
 
 export function initForm(refs, h) {
     panes = refs;
@@ -332,33 +330,24 @@ function pickMuxer(name) {
 }
 
 /// Every option the chosen muxer has, out of its own AVClass and libavformat's
-/// generic one — the mirror of the encoder's advanced column, drawn by the same
-/// rows and applied by the same rule: what is set here goes to `av_opt_set`,
-/// and a key the muxer does not have stops the render rather than being
-/// ignored.
+/// generic one — the same column the encoder's options get and the same column
+/// an input's demuxer gets on the Sources stage, because libavutil describes
+/// all three with one structure. Applied by the same rule too: what is set here
+/// goes to `av_opt_set`, and a key the muxer does not have stops the render
+/// rather than being ignored.
 function formatOptionRows() {
     const all = formatOptionsOf(settings.container);
-    const list = div('ex-opt-list');
-    const search = el('input', {
-        cls: 'wide', 'data-f': 'fmtoptsearch', type: 'text', value: formatOptionSearch,
-        placeholder: 'name or description',
-        on: { input: () => {
-            formatOptionSearch = search.value;
-            put(list, () => bagRows(all, settings.extraFormat, formatOptionSearch,
-                                    'Anything set here is passed straight to the muxer.'));
-        } },
+    return optionColumn({
+        name: 'fmtoptsearch',
+        title: `${settings.container} options · ${all.length}`,
+        note: `What ${settings.container} takes beyond its defaults, out of the muxer's own ` +
+              'option table and libavformat’s generic one — both reach it the same way ' +
+              'ffmpeg’s own arguments do.',
+        options: all,
+        bag: settings.extraFormat,
+        hint: 'Anything set here is passed straight to the muxer.',
+        onChange: () => hooks.changed(),
     });
-    put(list, () => bagRows(all, settings.extraFormat, formatOptionSearch,
-                            'Anything set here is passed straight to the muxer.'));
-
-    return [
-        head(`${settings.container} options · ${all.length}`),
-        div('ex-note dim', `What ${settings.container} takes beyond its defaults, out of the ` +
-                           'muxer’s own option table and libavformat’s generic one — both ' +
-                           'reach it the same way ffmpeg’s own arguments do.'),
-        row('Find', search),
-        list,
-    ];
 }
 
 // ── video ──────────────────────────────────────────────────────────────────
@@ -571,111 +560,19 @@ function advancedRows(codec) {
 ///
 /// This is the part that earns the column: libavcodec knows exactly what x265
 /// will take, complete with types, ranges, defaults and help text, and none of
-/// it has to be duplicated here to be offered.
+/// it has to be duplicated here to be offered. Drawn by the shared component in
+/// ui/opttable.js — see there for why the muxer's, the demuxer's and this one
+/// are not three implementations.
 function rawOptionRows(codec) {
     const all = optionsOf(codec);
-    const search = el('input', {
-        cls: 'wide', 'data-f': 'optsearch', type: 'text', value: optionSearch,
-        placeholder: 'name or description',
-        on: { input: () => {
-            optionSearch = search.value;
-            // Only the list is rebuilt, so the field being typed into is never
-            // replaced and never loses the caret.
-            put(optionList, () => bagRows(all, settings.extraVideo, optionSearch,
-                                          'Anything set here is passed straight to the encoder.'));
-        } },
+    return optionColumn({
+        name: 'optsearch',
+        title: `${codec} options · ${all.length}`,
+        options: all,
+        bag: settings.extraVideo,
+        hint: 'Anything set here is passed straight to the encoder.',
+        onChange: () => hooks.changed(),
     });
-
-    optionList = div('ex-opt-list');
-    put(optionList, () => bagRows(all, settings.extraVideo, optionSearch,
-                                  'Anything set here is passed straight to the encoder.'));
-
-    return [
-        head(`${codec} options · ${all.length}`),
-        row('Find', search),
-        optionList,
-    ];
-}
-
-const OPTION_LIMIT = 40;
-
-/// One AVOption table, edited into one bag of `-key value` pairs.
-///
-/// The encoder's column and the muxer's are the same rows over the same kind of
-/// data, because libavutil describes an encoder and a muxer with the same
-/// structure. A second copy of this for the muxer would be a second set of
-/// decisions about which control a type gets, arrived at from the same table by
-/// a different route.
-function bagRows(all, bag, searchText, hint) {
-    const term = String(searchText || '').trim().toLowerCase();
-    // With nothing searched for, the list is what has been set — the rest is
-    // eighty rows of noise until someone goes looking for one of them.
-    const matching = term
-        ? all.filter((o) => o.name.toLowerCase().indexOf(term) >= 0 ||
-                            (o.help || '').toLowerCase().indexOf(term) >= 0)
-        : all.filter((o) => bag[o.name] !== undefined);
-    const shown = matching.slice(0, OPTION_LIMIT);
-
-    const out = [];
-    if (!term && !shown.length)
-        out.push(div('ex-note dim', `Type above to search all ${all.length} options. ${hint}`));
-
-    for (const o of shown) out.push(optionRow(o, bag));
-
-    if (matching.length > OPTION_LIMIT)
-        out.push(div('ex-note dim', `and ${matching.length - OPTION_LIMIT} more — narrow the search`));
-    return out;
-}
-
-/// The bounds, where they are worth stating.
-///
-/// libav gives every unbounded numeric option the whole of its type as a
-/// range, so a muxer's `movflags` reports ±2147483648 — which is not a range,
-/// it is the absence of one, and printing it at that length pushes the column
-/// about for no information at all. The graph panel already learnt this on
-/// libavfilter's tables; the muxers' are worse, because most of their options
-/// are flags.
-function rangeOf(o) {
-    if (!o.hasRange || o.type === 'enum' || o.type === 'flags') return '';
-    if (Math.abs(Number(o.min)) > 1e9 && Math.abs(Number(o.max)) > 1e9) return '';
-    return `[${o.min}…${o.max}]`;
-}
-
-function optionRow(o, bag) {
-    const node = fromTemplate('tpl-option');
-    const cur = bag[o.name] !== undefined ? String(bag[o.name]) : '';
-
-    node.querySelector('.opt-name').textContent = o.name;
-    node.querySelector('.opt-type').textContent = o.type;
-    node.querySelector('.opt-range').textContent = rangeOf(o);
-    node.querySelector('.ex-opt-help').textContent = o.help || '';
-    if (cur !== '') node.classList.add('set');
-
-    const apply = (v) => {
-        if (v === '') delete bag[o.name];
-        else bag[o.name] = v;
-        hooks.changed();
-    };
-
-    let control;
-    if (o.values && o.values.length) {
-        control = select({ cls: 'ex-opt', 'data-opt': o.name,
-                           on: { change: (e) => apply(e.target.value.trim()) } },
-                         [{ id: '', label: `default (${o.default})` },
-                          ...o.values.map((v) => v.name)], cur);
-    } else if (o.type === 'bool') {
-        control = select({ cls: 'ex-opt', 'data-opt': o.name,
-                           on: { change: (e) => apply(e.target.value.trim()) } },
-                         [{ id: '', label: `default (${o.default})` }, '0', '1'], cur);
-    } else {
-        control = el('input', {
-            cls: 'wide ex-opt', 'data-opt': o.name, type: 'text', value: cur,
-            placeholder: String(o.default),
-            on: { change: (e) => apply(e.target.value.trim()) },
-        });
-    }
-    node.querySelector('.opt-control').append(control);
-    return node;
 }
 
 // ── the small change handlers ──────────────────────────────────────────────
