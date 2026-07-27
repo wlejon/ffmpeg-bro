@@ -148,6 +148,12 @@ add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
 add_test(NAME ui-player COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
+# The Sources stage as the input editor: an input added by typing a path, a
+# demuxer forced, an option set, a window cut, and every one of those printed
+# before its own -i.
+add_test(NAME ui-sources COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_sources.js"
+         -- "${FIXTURE_A}")
 add_test(NAME ui-export COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
          -- "${FIXTURE_A}")
@@ -157,7 +163,8 @@ add_test(NAME ui-export COMMAND ffmpeg-bro-headless
 add_test(NAME ui-report COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_report.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export capabilities inputs ui-player ui-export ui-report PROPERTIES
+set_tests_properties(decode export capabilities inputs ui-player ui-sources
+                     ui-export ui-report PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -172,5 +179,5 @@ set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
-set_tests_properties(export capabilities ui-player ui-export ui-report PROPERTIES
-                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(export capabilities ui-player ui-sources ui-export ui-report
+                     PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

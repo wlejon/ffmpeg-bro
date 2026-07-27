@@ -115,6 +115,13 @@ export function makeGraph(opts = {}) {
         if (spec.stream) node.stream = spec.stream;
         if (spec.index !== undefined) node.index = spec.index;
         if (spec.path) node.path = spec.path;
+        // Which of the document's inputs an input node is. Two numbers, because
+        // they count different things: `index` is the `-i` number *this graph*
+        // gives the pad, and this is the `-i` the application holds — the one
+        // carrying the forced demuxer, the option bag and the window. A graph
+        // that knew only the path would print a command that opens a different
+        // file, since everything before an `-i` belongs to the input.
+        if (spec.input !== undefined) node.input = spec.input;
         // The earliest source time anything downstream will ask this input
         // for. Not printed — a command line says it with `trim` — but a
         // renderer given the graph can seek there instead of decoding from the
