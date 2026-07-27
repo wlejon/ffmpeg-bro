@@ -2586,6 +2586,27 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // A destination that is not there. This is the failure a file cannot
+        // have, and the only thing worth checking about it here is that it
+        // arrives as a refusal naming the URL rather than as a message about a
+        // filename — which is what `avio_open` gives you and is the least
+        // useful place to find out that a protocol is missing or a port is
+        // closed. What happens *after* a connection drops mid-render is the
+        // protocol's business and is reported, not handled: there is no
+        // reconnect here, and `-reconnect`/`-rw_timeout` are ordinary options.
+        {
+            ExportSettings gone = baseSettings("tcp://127.0.0.1:45999");
+            gone.format = "mpegts";
+            gone.faststart = false;
+            const ExportStatus g = render(gone, {leftHalf(first, srcDuration)});
+            checkf(g.state == ExportStatus::State::Failed &&
+                       g.error.find("tcp://127.0.0.1:45999") != std::string::npos,
+                   "a destination nothing is listening on is refused, naming it (%s)",
+                   g.error.c_str());
+            check(g.error.find("cannot reach") != std::string::npos,
+                  "and says it could not be reached rather than could not be opened");
+        }
+
         // An option nothing takes is an error, at this end too. The muxer did
         // not know it and neither did the protocol, and a render that wrote a
         // file while ignoring what it was told is the outcome every option bag

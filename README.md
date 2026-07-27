@@ -1470,6 +1470,17 @@ anything can open. For a `tee` it is whichever destination is local. For a
 stream there is **nothing** — what was sent has gone — so no button is offered,
 because one that opened a socket would be worse than its absence.
 
+**A destination can fail in ways a file cannot, and that is reported rather than
+handled.** A port nothing is listening on is refused before the render starts,
+naming the URL — *cannot reach 'tcp://…'* — rather than as the message about a
+filename `avio_open` would have given. A connection that drops half way through
+stops the render with the destination named and libav's own account of it
+beside, in the report drawer, which is where a render says what it was told; a
+disconnect is not a defect in this application and nothing here pretends
+otherwise. What is deliberately *not* built is retrying: `-reconnect`,
+`-rw_timeout` and the `fifo` muxer are what ffmpeg has for that and all three are
+ordinary options in the columns beside the destination.
+
 Two things about a destination are warned about rather than discovered:
 `+faststart` on a stream, which rewrites the file after the trailer and cannot
 be done to something that cannot be rewound — it fails at the end, after

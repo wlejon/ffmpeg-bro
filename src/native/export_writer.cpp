@@ -1605,12 +1605,34 @@ bool Writer::encode(Out& o, AVFrame* frame, std::string* err) {
     }
 }
 
+/// A write that failed, said in terms of where it was going.
+///
+/// **A destination that is not a file fails in ways a file does not.** A socket
+/// can be closed by the far end half way through a render, a stream key can be
+/// rejected after the connection is up, a network can go away — none of which
+/// is a defect in this application, and all of which used to arrive as "cannot
+/// write to the file" about something that was never a file. The destination is
+/// named because it is the actionable half: with a `tee` there are several of
+/// them and libav's own message, which lands beside this one on the report
+/// channel, is the only thing that says which.
+std::string Writer::writeFailure(int rc) const {
+    // A `tee` argument is a list and not a path, so it is never the first of
+    // these however local its destinations happen to be.
+    const bool several = oc_ && oc_->oformat && oc_->oformat->name &&
+                         std::strcmp(oc_->oformat->name, "tee") == 0;
+    if (!several && isLocalPath(settings_.path))
+        return "cannot write to the file: " + avErr(rc);
+    return "the destination stopped accepting the render — '" + settings_.path + "': " +
+           avErr(rc) + ". Whatever had already been written is closed properly; what "
+           "happens next is the protocol's, not this application's.";
+}
+
 bool Writer::writePacket(Out& o, AVPacket* pkt, std::string* err) {
     if (!o.bsf) {
         av_packet_rescale_ts(pkt, o.srcTimeBase, o.st->time_base);
         pkt->stream_index = o.st->index;
         const int rc = av_interleaved_write_frame(oc_, pkt);
-        if (rc < 0) { *err = std::string("cannot write to the file: ") + avErr(rc); return false; }
+        if (rc < 0) { *err = writeFailure(rc); return false; }
         return true;
     }
 
@@ -1639,7 +1661,7 @@ bool Writer::drainBsf(Out& o, std::string* err) {
         av_packet_rescale_ts(o.bsfPkt, o.bsf->time_base_out, o.st->time_base);
         o.bsfPkt->stream_index = o.st->index;
         const int w = av_interleaved_write_frame(oc_, o.bsfPkt);
-        if (w < 0) { *err = std::string("cannot write to the file: ") + avErr(w); return false; }
+        if (w < 0) { *err = writeFailure(w); return false; }
     }
 }
 

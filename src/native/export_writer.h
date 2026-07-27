@@ -278,6 +278,12 @@ private:
     bool writePacket(Out& o, AVPacket* pkt, std::string* err);
     bool drainBsf(Out& o, std::string* err);
 
+    /// A failed write, said in terms of where it was going. A destination that
+    /// is not a file fails in ways a file does not — a socket closed by the far
+    /// end, a stream key refused after the connection came up — and none of
+    /// them is a defect in this application.
+    std::string writeFailure(int rc) const;
+
     // ── every destination this muxer opens ─────────────────────────────────
     //
     // libavformat calls `io_open` for the primary output, for every segment a
