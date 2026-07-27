@@ -58,6 +58,102 @@ struct ExportOption {
     std::string value;
 };
 
+/// One stream in the output file.
+///
+/// The renderer used to write exactly one video stream and one audio stream,
+/// and everything downstream of `avformat_new_stream` assumed that shape. It
+/// is the assumption that stood between this application and subtitles,
+/// multi-track audio, attachments and `-map`, so what a render is given now is
+/// a *list* of these — and the old one-video-one-audio render is that list with
+/// two entries in it, synthesised by `outputStreams()` when nobody said
+/// otherwise.
+struct ExportStream {
+    /// "video", "audio" or "attachment". A subtitle stream is a later chunk's;
+    /// what it will need from here is a kind and a source, which is why this is
+    /// a string rather than an enum of the two things that exist today.
+    std::string kind = "video";
+
+    /// Where this stream's content comes from — ffmpeg's `-map`, made explicit.
+    ///
+    /// Today the answer was implicit: the composite fed the video stream and
+    /// the mix fed the audio one. Written down, it is "composite" (the canvas
+    /// the compositor or the graph's last video pad produces) and "mix" (the
+    /// whole soundtrack, summed). Both are *composed* sources rather than input
+    /// streams, which is why they are named rather than numbered: no input
+    /// index means "everything, stacked".
+    ///
+    /// **This is the seam the packet path attaches at.** A copied stream will
+    /// say `copy:0:1` — an input file and a stream in it — and the writer will
+    /// branch on the prefix rather than grow a second list beside this one.
+    /// Nothing here builds that; it is left as a vocabulary with room in it.
+    std::string source;
+
+    /// The encoder, as libavcodec knows it. Empty asks the muxer for its
+    /// default, which is what an unset `videoCodec` has always meant.
+    std::string codec;
+
+    /// `-key value` pairs for this stream's encoder, applied exactly as
+    /// `ExportSettings::videoOptions` is. Per stream because two audio streams
+    /// in one file are routinely two different trades.
+    std::vector<ExportOption> options;
+
+    /// `-metadata:s:a:1 key=value`. Written into the stream's own dictionary,
+    /// which is where a player looks for a track name.
+    std::vector<ExportOption> metadata;
+
+    /// The one metadata key every player reads, named separately because it is
+    /// the one anybody sets. ISO 639-2, "eng"/"fra"/"jpn".
+    std::string language;
+
+    /// `-disposition:a:1 default`, or `+default+forced`, or `0` for none.
+    /// Parsed with `av_disposition_from_string`, never against a table here:
+    /// libavformat already owns that vocabulary and a copy of it would go
+    /// stale the first time one was added.
+    std::string disposition;
+
+    /// `-tag:v hvc1`. Four characters, written into the stream's `codec_tag`.
+    ///
+    /// This one matters out of proportion to its size: `hvc1` and `hev1` are
+    /// the same HEVC bitstream and only the first plays on Apple hardware. It
+    /// is not an encoder option, so before there was a stream list there was
+    /// nothing in this application that could reach it.
+    std::string tag;
+
+    // ── Per-stream encoder settings ────────────────────────────────────────
+    //
+    // Each of these has a sentinel meaning "take the render's". A stream list
+    // that has to repeat every setting to say nothing new about them is a
+    // stream list nobody would write by hand, and `outputStreams()` fills them
+    // in once so that nothing past it has to know there was a default.
+
+    int crf = -1;                   // video: <0 takes ExportSettings::crf
+    int bitrateKbps = 0;            // 0 takes the render's, per kind
+    std::string preset;             // empty takes the render's
+    std::string pixelFormat;        // empty takes the render's
+    int sampleRate = 0;             // audio: 0 takes the render's
+    int channels = 0;
+
+    // ── Attachment ─────────────────────────────────────────────────────────
+    //
+    // An attachment *is* a stream — it has an index, it is what `-attach`
+    // produces, and the muxer writes its whole content out of the stream's
+    // extradata at header time. It carries no packets, which is the only way it
+    // differs from the two above.
+
+    std::string path;               // the file to embed
+    std::string mimeType;           // "font/ttf"; guessed from the name if empty
+};
+
+/// One chapter mark in the output, in output-timeline seconds.
+///
+/// Container-level rather than per-stream, because that is what a chapter is:
+/// a table beside the streams, not a track among them.
+struct ExportChapter {
+    double start = 0.0;
+    double end = 0.0;
+    std::string title;
+};
+
 /// One named input pad of a filter graph: what feeds `[0:v]`.
 ///
 /// The mapping is given rather than inferred from the clip array, because a
@@ -132,6 +228,30 @@ struct ExportSettings {
     bool faststart = true;          // mp4/mov: index at the front
     std::string title;              // written as the container's title tag
 
+    /// Everything else written into the container's own metadata dictionary.
+    /// `title` above stays a named field because it is the one every caller
+    /// sets; these are `-metadata key=value` for the rest.
+    std::vector<ExportOption> metadata;
+
+    /// What the file is made of, stream by stream.
+    ///
+    /// **Empty is not "no streams" — it is "the usual two".** `outputStreams()`
+    /// synthesises one video stream from the composite and one audio stream
+    /// from the mix out of the named fields above, which is exactly the file
+    /// this renderer wrote before there was a list at all. Every caller that
+    /// only ever wanted a picture and a soundtrack — the fixture generator, the
+    /// node previews on the Graph stage, every test that predates this — keeps
+    /// working untouched, and the named fields keep meaning what they meant.
+    ///
+    /// A list that *is* given is authoritative: it says how many streams there
+    /// are, in what order the muxer numbers them, and what each is for. The
+    /// named fields then serve as the defaults an entry does not override.
+    std::vector<ExportStream> streams;
+
+    /// Chapter marks. Written into the container before the header goes down,
+    /// so a muxer that cannot hold them (mp4 can, WebM can) simply drops them.
+    std::vector<ExportChapter> chapters;
+
     // Everything else libav will take.
     //
     // Applied with av_opt_set(ctx, key, value, AV_OPT_SEARCH_CHILDREN) on the
@@ -182,6 +302,15 @@ struct ExportSettings {
     // would write a file of the wrong size rather than refusing to.
     bool sizeFromGraph = false;
 };
+
+/// The streams this render will actually write, with every default filled in.
+///
+/// One place, so that nothing downstream has to know whether the caller gave a
+/// list or left it to the named fields, and so that "what will be in the file"
+/// is a question with an answer before the file is opened. `wantAudio` is the
+/// edit's — a timeline with no sound in it gets no audio stream however many
+/// the list asks for, which is the rule the writer has always followed.
+std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio);
 
 /// A snapshot of the running job. Copied under the lock, so the caller can
 /// read it at leisure.
