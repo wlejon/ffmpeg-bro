@@ -47,6 +47,7 @@ import { print } from './print.js';
 import { streamsOf } from './model.js';
 import { isSource } from './filters.js';
 import { inputsOf } from '../filtergraph.js';
+import { deviceOfFilter } from '../hardware.js';
 
 /// `--good`, as libavfilter spells a colour. The waveform is the same green the
 /// timeline draws its audio lane in, because it is the same thing.
@@ -160,12 +161,47 @@ export function previewGraph(g, node, opts = {}) {
                  pad: '[pv]', audio: true };
     }
 
+    // **A card is a picture on the screen, so it comes off the card first.**
+    // The tail below is `scale`, which reads pixels, and a preview cut off
+    // after an `hwupload` would be handing it a device handle — libavfilter's
+    // refusal for which is four hundred format names and no filter. Nothing is
+    // lost by downloading: the preview is drawn in a `<video>` at three hundred
+    // pixels wide and was never going to stay on the card.
+    if (onDevice(view, node)) chains.push(`[${head}]hwdownload,format=nv12[hwdl]`);
+    const shown = onDevice(view, node) ? 'hwdl' : head;
+
     // `trunc(iw/2)*2` keeps the width even and `h=-2` keeps the height even
     // and the aspect right, which between them are what stop an odd size
     // reaching an encoder that has no half pixels.
-    chains.push(`[${head}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
+    chains.push(`[${shown}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
     return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs,
              pad: '[pv]', audio: false };
+}
+
+/// Is the picture leaving `node` still on a device?
+///
+/// The same walk `check.js` does, asked of the pruned view and only about the
+/// node being previewed — a preview does not need to know where every picture
+/// in the graph is, only where this one ends up. `hwupload` puts it up,
+/// `hwdownload` brings it down, a filter belonging to a device keeps it up, and
+/// anything that reads pixels would not have got this far without the checker
+/// saying so.
+function onDevice(view, node) {
+    const seen = new Set();
+    const at = (n) => {
+        if (!n || seen.has(n.id)) return false;
+        seen.add(n.id);
+        const f = n.filter || '';
+        if (f === 'hwupload' || /^hwupload_/.test(f)) return true;
+        if (f === 'hwdownload') return false;
+        if (n.kind === 'filter' && deviceOfFilter(f)) return true;
+        for (const e of view.inEdges(n)) {
+            const from = view.node(e.from);
+            if (from && at(from)) return true;
+        }
+        return false;
+    };
+    return at(node);
 }
 
 /// The two chains that turn a sound pad into something a card can show and

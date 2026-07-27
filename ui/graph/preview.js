@@ -41,6 +41,7 @@ import { derive } from './derive.js';
 import { specInputs } from '../inputs.js';
 import { previewGraph } from './subgraph.js';
 import * as play from './play.js';
+import { deviceForRender } from '../hardware.js';
 
 /// How much of the timeline a preview shows. Long enough to see motion, short
 /// enough that a nine-node graph is populated in a few seconds — and also the
@@ -261,6 +262,11 @@ function launch(g, from, to) {
     const spec = hooks.spec(from, to);
     spec.filterGraph = g.filterGraph;
     spec.filterInputs = g.filterInputs;
+    // Re-derived, because the spec's was worked out from the *export's* graph
+    // and the chains above are a subgraph of it. A preview of a node past an
+    // `hwupload`, run without a device, refuses at the parse with libavfilter's
+    // own wording and the card goes blank.
+    spec.filterHwDevice = deviceForRender(g.filterGraph, spec.inputs);
     // The graph decides how big the picture is. Nothing out here could know:
     // half way down a graph the size is whatever libavfilter made it.
     spec.sizeFromGraph = true;
