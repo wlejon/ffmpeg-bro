@@ -122,6 +122,11 @@ against footage the fixtures do not resemble:
 # the graph underneath it: the model, the printer's chain rule on graphs the
 # derivation does not produce, locks, insertion, removal, the round trip
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js
+
+# the render's back-channel, from av_log inside libav to a line on screen:
+# the drain off the frame loop, a warning that is visible and attributed, and
+# a measuring filter's values as a named series over time
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ```
 
 `tests/ui_player.js` is the main regression suite: it drops files on the real UI, plays,
@@ -178,6 +183,7 @@ them to change alone:
 | `export_writer.*` | encoders and the muxer they feed — **N streams, not one video and one audio** |
 | `export_frame.*` | an RGBA picture, and the small libav helpers |
 | `ffmpeg_capabilities.*` | what this build can write and what it can put a picture through, asked of libav* |
+| `ffmpeg_report.*` | **what a render said** — libav's log, and the values filters attach to frames |
 
 **`export_timeline.h` is the seam a node graph attaches at**, and does. `runExport` asks a
 `FrameSource` two questions per output frame — the canvas at `t`, and the samples between
@@ -256,6 +262,54 @@ absent from Matroska without any of that being written down — but a fourcc
 nobody thought to list is a fourcc the menu will not have. `streamDispositions()`
 has no such problem: a disposition is a single bit and `av_disposition_to_string`
 names it, so asking for every bit in turn *is* the whole vocabulary.
+
+**`ffmpeg_report.*` is the render's back-channel, and chunk 10's foundation.**
+`ExportStatus` answers "how far along"; this answers "what happened". Two
+bounded rings behind one mutex, drained through `render.poll(cursor)`:
+
+- **The log.** `av_log_set_callback` — installed once at startup, never
+  removed. There is exactly **one** callback in the process and it does both
+  jobs, printing through bro's logger and recording here, because two callbacks
+  is one callback, whichever was installed last (this replaced the backend's).
+  Two thresholds, deliberately different: `av_log_set_level` governs what is
+  *printed* (warnings and up, so a windowed build's log stays readable) and the
+  ring keeps everything down to `AV_LOG_INFO`, because the detail nobody wants
+  while things work is the detail wanted afterwards. **A custom callback is
+  handed every level libav emits regardless of `av_log_get_level()`** — the
+  check lives in the *default* callback you just replaced — so a trace-level
+  filter will drown you unless you test the level before formatting anything.
+  Attribution is the `AVClass` on the `ptr` argument (`item_name` gives
+  `libx264`, `Parsed_cropdetect_0`, `mp4`); a warning nobody can attribute is
+  worth much less than one that names the encoder. **libav writes some lines in
+  pieces** — `av_log_format_line2` sets `print_prefix` on the way out to say the
+  line ended — so the channel joins on the newline rather than committing a
+  record per call.
+- **Frame metadata.** Harvested in `GraphSource::pull`, the one place both
+  sinks are read from, so *adding a measuring filter to a graph is all anybody
+  has to do*. Key verbatim (`lavfi.cropdetect.w`), value, and the frame's own
+  timestamp from the sink's time base. Costs one null check per frame when the
+  graph is not measuring.
+
+Four properties are load-bearing:
+
+- **Every record carries the render it was said during**, 0 for none.
+  `startExport` numbers the render; the `RunningFlag` guard in `runExport` is
+  declared *first* so it runs *last*, after the writer's teardown — what libav
+  says while a muxer closes a file belongs to the render that opened it.
+- **The drain is a cursor, not a flush.** Records are numbered and never
+  renumbered, so two consumers cannot take each other's messages and a dropped
+  poll loses nothing. It is also why **a render's last words are readable after
+  the job is gone**: the rings belong to the process, and draining does not
+  touch the job at all — nothing races the teardown.
+- **Both rings are bounded and report what they dropped** (512 messages, 8192
+  samples). They are sized for the gap between two polls, not for a whole
+  series — keeping the series is the consumer's job, and a native buffer big
+  enough for an hour of `ebur128` is a leak with a justification attached.
+- **The renderer is a speaker too.** `reportNote(level, source, text)` puts the
+  render's own words in the same channel at the same levels — the graph running
+  at a different rate, a trailer that would not go down after a Stop, the file
+  that was written. `poll()` without an argument builds no arrays, so the three
+  callers that only want a progress bar pay nothing.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -422,6 +476,34 @@ about them:
   streams claims both of them. **Chapters are the one thing on the Write stage an
   ffmpeg command line cannot say at all**: ffmpeg reads them from an input rather
   than from an option, so the note says so rather than dropping them silently.
+- `report.js` — **what the render said**, under every stage beside the command bar and
+  for the same reason: one states what is about to run, the other what came back.
+  Two kinds of thing drawn as two, because they are not the same kind of fact —
+  levelled, attributed messages are a list, and a filter's measurements are a line.
+  Four decisions to keep:
+  - **The series model is the thing later work stands on.** A series is
+    `{ key, stream, numeric, points: [{ t, v, raw, job }], min, max, count }`, keyed by
+    libavfilter's own metadata name *verbatim*. That name already says both which
+    filter and which quantity, and normalising it would mean a table of filters this
+    application refuses to have. Chunk 10 grows plots and actions on `seriesList()` /
+    `seriesFor(key)`; do not reshape them without a reason.
+  - **Drained from the frame loop, always** — not from `exporter.tick()`. A render
+    started on the Write stage keeps going while you walk back to the edit, and
+    `probe()` and playback log from wherever you are, so a channel that listened only
+    while one panel was up would have holes exactly where somebody went to look.
+    `poll(cursor)` is one lock and two usually-empty arrays; `draw()` only runs when
+    something arrived.
+  - **Quiet by default, loud when it matters.** The filter is warnings-and-above, so
+    a good render shows an empty list; `Everything` still has all of it, because the
+    render where the info line is the answer is the one you go looking for it on.
+    The bar colours itself, and `export/progress.js` states the count under a finished
+    render's bar — a green bar over a file that is not what was asked for is the
+    failure the channel exists against.
+  - **Nothing is cleared when a render ends.** `Clear` is a button because throwing
+    away what you were about to read is a decision, not a side effect. Sparklines are
+    built-then-measured-then-painted (the range strip's split) and repainted only when
+    the measured width changes, since eight canvases at 60 Hz is a frame loop nobody
+    can explain.
 - `sources.js` — the Sources stage: every file on the timeline, once each, read out of
   `probe()`. Distinct by path, so two clips cut from one file are one source — which is
   what ffmpeg would open. **It is not driven by the selection**, which is why it is not

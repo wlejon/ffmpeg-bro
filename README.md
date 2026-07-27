@@ -149,9 +149,45 @@ bro.ffmpeg.render.start({ path, width, height, fps, start, end,
                           metadata: { comment: "…" },   // the container's own
                           streams: [...], chapters: [...] })
 bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames,
-                            //     elapsed, fps, bytes, path, stage, error }
+                            //     elapsed, fps, bytes, path, stage, error, job }
 bro.ffmpeg.render.cancel()
+
+// What the render *said*. Given a cursor, poll also drains libav's log and
+// every value a filter measured, and hands back the cursor to carry forward.
+// Ask for nothing and you pay for nothing: a caller that only wants a
+// progress bar gets the fields above and no arrays.
+bro.ffmpeg.render.poll({ log: 0, meta: 0, max: 500 })
+// → { …, log:  [{ seq, job, at, level, severity, source, text }],
+//        meta: [{ seq, job, at, stream, key, value }],
+//        cursor: { log, meta, logDropped, metaDropped } }
 ```
+
+`job` numbers renders, and every record says which one it was said during —
+0 for the ones said while nothing was rendering, which is where a failed
+`probe()` and a decoder complaining during playback land. The capture is
+installed at startup and never removed: a muxer finishing a file *after* the
+job has published its terminal status is exactly the sort of thing worth
+reading, and it happens in the window an uninstall would have to race. Reading
+after the render is over is an ordinary read, because the rings belong to the
+process rather than to the job.
+
+`level` is libav's own — `error`, `warning`, `info` — and `source` is the
+`AVClass` behind the message: `libx264`, `Parsed_cropdetect_0`, `mp4`. The
+console keeps warnings and up so a log stays readable; the channel keeps
+everything down to info, because the detail nobody wants while things are
+working is the detail wanted afterwards.
+
+`meta` is **frame metadata**, which is how a whole family of filters answers a
+question: `cropdetect`, `blackdetect`, `silencedetect`, `ebur128`,
+`signalstats`, `astats`, `psnr`, `ssim`, `libvmaf`, `freezedetect`, `scdet`.
+The key is libavfilter's own, verbatim, and `at` is the timestamp of the frame
+it came off — so a series is a named quantity sampled over the render rather
+than more log lines.
+
+Both are bounded rings that say how much they dropped, because a long render
+with a measuring filter on it emits several values a frame. They are sized for
+the gap between two polls, not for the whole series: keeping the series is the
+consumer's job.
 
 **`streams` is what the file is made of**, one entry per stream the muxer will
 number, in that order. Leaving it out is not "no streams" — it means the file
@@ -649,6 +685,42 @@ An edit the graph cannot express faithfully produces **no graph and a reason**
 rather than an approximation. A command that is nearly right is worse than no
 command, because the only reason to print one is that it can be run.
 
+### What the render said
+
+Under the command bar, and under every stage with it, is its counterpart: one
+says what is about to run and the other says what came back. Collapsed it is a
+line — *"The last render: 1 warning · 9 series · 207 samples"* — and `R` opens
+it from anywhere.
+
+Because until it existed, a render could tell you four things: how far along it
+was, how fast, how big, and — only if it failed outright — one sentence. libav
+had plenty more to say. An encoder that clamped a bitrate, a muxer that refused
+a fourcc, a filter unhappy with its arguments: all of it went to a console
+nobody sees, and a render that came out wrong left nothing to look at.
+
+Two kinds of thing, because they are not the same kind of fact:
+
+- **Messages**, levelled and attributed. `libx264` announcing the profile it
+  settled on is a different statement from `mp4` refusing a tag, and the source
+  is a column rather than a prefix so you can see at a glance which part of the
+  pipeline is talking. Filtered to warnings and errors by default: a render
+  that went fine says so in one line and takes up one line. `Everything` is the
+  whole of what libav said, kept rather than discarded, for the render where
+  the info line turns out to be the answer.
+- **Measured**, which is what a filter found. `cropdetect`, `blackdetect`,
+  `silencedetect`, `ebur128`, `signalstats`, `astats`, `psnr`, `ssim` and the
+  rest of that family produce information rather than pictures, and libavfilter
+  hands it over by hanging it on the frames. So a value is not a log line, it
+  is a *series*: a named quantity sampled at the timestamps of the frames it
+  came off, drawn as the line it is. Put one of those filters on the graph and
+  what it measures appears here, frame by frame, while the render runs.
+
+Nothing is cleared when a render ends. The messages matter most once it is
+over, which is why they outlive the job — and why the Write stage's progress
+panel, under a green bar, says how many warnings there were and takes you
+straight to them. A file that is not what was asked for, reported as a success,
+is the failure this whole channel is against.
+
 ### Preview
 
 The hard part of encoding is not finding the settings, it is knowing what they
@@ -719,6 +791,7 @@ upright, from the container's display matrix.
 | `G` | grid / stacked layout |
 | `E` | the Encode stage (`Esc` goes back to the edit) |
 | `I` | the Sources stage — what is actually in the files |
+| `R` | what the render said — messages and what filters measured |
 | `N` | the Graph stage — the edit as a filtergraph (`0` fits it) |
 | `[` `]` | one step back / forward along the pipeline |
 | `Space` `←` `→` | on the Encode stage: play / pause and step the comparison |
@@ -744,6 +817,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js         # needs no media
 ```
@@ -771,6 +845,14 @@ reports which control it took; a lock that happens to agree has outranked
 nothing; a split copies both halves' filters and a delete takes them away; and
 the run graph differs from the printed one by exactly one chain with the
 inserted filter in both.
+
+`ui_report.js` drives a render the renderer has something to complain about —
+a graph running at half the output rate, with `cropdetect` measuring on the way
+past — and follows what it said from `av_log` inside libav to a line on screen:
+that the drain runs off the frame loop without anyone asking, that the warning
+is visible and attributed, that the whole of libav's chatter is kept and merely
+filtered, and that what the filter measured arrives as a named series sampled
+in order rather than as more log lines.
 
 `exporttest` renders a timeline and then opens what it wrote, which is the only
 way to check the things nobody can see until the render is over: that a clip
@@ -818,6 +900,11 @@ Honest list of what does not work:
 - **A project file.** What you insert and lock is remembered in
   `localStorage`, which is per machine rather than per edit. The graph
   overlay is the first thing that makes a document format worth having.
+- **Acting on what was measured.** A filter's numbers arrive as a series and
+  are drawn as one, which is where it stops: `cropdetect` can tell you the
+  black bars are 240 rows deep and nothing offers to crop them, `ebur128` can
+  tell you the loudness and nothing offers to normalise it. The channel and
+  the data model are there; what is missing is the verb.
 - **Two-pass encoding.** A bitrate target is one pass, so it is met on average
   and not intelligently. Real two-pass needs the stats file from pass one fed
   into pass two, which means a job that is two jobs, and the job state machine
