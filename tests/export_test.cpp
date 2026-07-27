@@ -1593,6 +1593,168 @@ int main(int argc, char* argv[]) {
                 m.text.find("fps") != std::string::npos && m.job != 0)
                 warned = true;
         check(warned, "a graph running at a different rate from the render says so");
+
+        // ── the clock a measurement is sampled against ─────────────────────
+        //
+        // A series is a named quantity sampled *over the render*, and the
+        // timestamps are the whole of what makes it one. Every derived chain
+        // begins `setpts=PTS-STARTPTS+offset/TB`, where the offset is where the
+        // window sits on the render's clock (`spec.origin` in graph/derive.js)
+        // — so a preview of two seconds out of the middle of a render carries
+        // the render's seconds, not the window's. That is what lets a plot of
+        // `cropdetect` drawn from a preview line up with the timeline, and a
+        // series measured against the wrong zero is worse than none: it points
+        // at the wrong frame with complete confidence.
+        const uint64_t shiftFrom = drainReport(0, 0, kAll).metaCursor;
+        constexpr double kOrigin = 4.0;
+        std::snprintf(text, sizeof(text),
+            "[0:v]setpts=PTS-STARTPTS+%g/TB,cropdetect=limit=24:round=2:reset=1,"
+            "scale=%d:%d[vout]", kOrigin, kW, kH);
+        ExportSettings so = baseSettings("out/export-measure-shifted.mp4");
+        so.endTime = 0.6;
+        so.filterGraph = text;
+        so.filterInputs = {{"0:v", first, "v"}};
+        st = render(so, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "a graph shifted onto the render's clock renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        const ReportDrain ds = drainReport(0, shiftFrom, kAll);
+        double shiftedFirst = -1, shiftedLast = -1;
+        int shiftedSamples = 0;
+        for (const auto& m : ds.meta) {
+            if (m.key.rfind("lavfi.cropdetect.", 0) != 0) continue;
+            if (shiftedFirst < 0) shiftedFirst = m.at;
+            shiftedLast = m.at;
+            ++shiftedSamples;
+        }
+        checkf(shiftedSamples > 0 && shiftedFirst >= kOrigin - 0.05 &&
+               shiftedLast <= kOrigin + so.endTime + 0.1,
+               "and what it measured is stamped on the render's clock, not the window's "
+               "(%.2f to %.2f s, expected around %.1f)", shiftedFirst, shiftedLast, kOrigin);
+    }
+
+    // ── a render that is two renders ───────────────────────────────────────
+    //
+    // Two things in ffmpeg genuinely need a second walk over the same frames,
+    // and both hand off through a file on disk: a two-pass filter
+    // (`vidstabdetect` writes a `.trf`, `vidstabtransform` reads it) and a
+    // two-pass encoder (`-pass 1` writes a statistics log, `-pass 2` spends the
+    // bitrate knowing where it is needed). What the machinery has to provide is
+    // therefore small — run the range twice with overrides — and what it must
+    // not do is invent a second job slot, because a two-pass render is one
+    // thing to whoever pressed the button.
+    //
+    // The shape is checked rather than vidstab itself, which is a `--enable-`
+    // this build does not have: pass one writes an intermediate file, pass two
+    // reads it, and what comes out has to be the second pass's answer.
+    {
+        std::printf("\ntwo passes, one job\n");
+        char text[512];
+        constexpr int kAll = 1 << 20;
+
+        const std::string mid = "out/export-pass1.mkv";
+        const std::string outP = "out/export-two-pass.mp4";
+        ExportSettings sp = baseSettings(outP);
+        sp.endTime = 0.6;
+        std::snprintf(text, sizeof(text), "[0:v]scale=%d:%d[vout]", kW, kH);
+        sp.filterGraph = text;
+        sp.filterInputs = {{"0:v", first, "v"}};
+
+        ExportPass detect;
+        detect.label = "writing what the second pass reads";
+        detect.path = mid;
+        detect.format = "matroska";
+        std::snprintf(text, sizeof(text), "[0:v]scale=%d:%d,hflip[vout]", kW, kH);
+        detect.filterGraph = text;
+        detect.filterInputs = {{"0:v", first, "v"}};
+
+        ExportPass apply;
+        apply.label = "the render itself";
+        // Nothing overridden but the pad the graph reads: the second pass is
+        // the render's own settings, fed from what the first pass left behind.
+        apply.filterInputs = {{"0:v", mid, "v"}};
+
+        sp.passes = {detect, apply};
+        st = render(sp, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "both passes ran as one job (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        checkf(st.passCount == 2 && st.pass == 2,
+               "and the status says which pass it ended on (%d of %d)", st.pass, st.passCount);
+        checkf(st.path == outP,
+               "with the file it left being the last pass's, not the first's (%s)",
+               st.path.c_str());
+
+        // The picture. Pass one flipped it and pass two only copied, so the
+        // output has to match a single-pass flip and *not* the unflipped
+        // render — which is the whole assertion: a mechanism that quietly ran
+        // only the first pass, or only the last, fails one of these two.
+        ExportSettings sf = baseSettings("out/export-one-pass-flipped.mp4");
+        sf.endTime = 0.6;
+        std::snprintf(text, sizeof(text), "[0:v]scale=%d:%d,hflip[vout]", kW, kH);
+        sf.filterGraph = text;
+        sf.filterInputs = {{"0:v", first, "v"}};
+        check(render(sf, clipsA).state == ExportStatus::State::Done,
+              "the same edit renders in one pass for comparison");
+
+        ExportSettings su = baseSettings("out/export-one-pass-plain.mp4");
+        su.endTime = 0.6;
+        std::snprintf(text, sizeof(text), "[0:v]scale=%d:%d[vout]", kW, kH);
+        su.filterGraph = text;
+        su.filterInputs = {{"0:v", first, "v"}};
+        check(render(su, clipsA).state == ExportStatus::State::Done,
+              "and so does the version the first pass did not touch");
+
+        {
+            VideoPipeline two, flipped, plain;
+            if (two.open(outP) && flipped.open(sf.path) && plain.open(su.path)) {
+                const TimeNs at = static_cast<TimeNs>(0.3 * 1e9);
+                two.advanceTo(at); flipped.advanceTo(at); plain.advanceTo(at);
+                if (two.hasFrame() && flipped.hasFrame() && plain.hasFrame()) {
+                    const double same = psnr(two.currentRgba(), flipped.currentRgba(), kW, kH);
+                    const double other = psnr(two.currentRgba(), plain.currentRgba(), kW, kH);
+                    checkf(same > 30.0,
+                           "what came out is the second pass reading the first's file (%.1f dB)",
+                           same);
+                    checkf(other < same - 6.0,
+                           "and is not the render the passes were never asked for (%.1f dB)",
+                           other);
+                } else {
+                    check(false, "all three renders decode for comparison");
+                }
+            } else {
+                check(false, "all three renders open for comparison");
+            }
+        }
+
+        // An analysis pass keeps nothing. `-f null -` is what ffmpeg writes for
+        // this and it is `AVFMT_NOFILE`, so there is no file to delete
+        // afterwards — while everything a filter measured on the way past is
+        // still in the channel, which is the entire point of running it.
+        const uint64_t nullFrom = drainReport(0, 0, kAll).metaCursor;
+        const std::string nothing = "out/export-discarded.mp4";
+        std::remove(nothing.c_str());
+        ExportSettings sd = baseSettings(outP);
+        sd.endTime = 0.4;
+        std::snprintf(text, sizeof(text),
+            "[0:v]cropdetect=limit=24:round=2:reset=1,scale=%d:%d[vout]", kW, kH);
+        sd.filterGraph = text;
+        sd.filterInputs = {{"0:v", first, "v"}};
+        ExportPass analyse;
+        analyse.label = "analysing";
+        analyse.path = nothing;
+        analyse.discard = true;
+        analyse.videoCodec = "wrapped_avframe";
+        sd.passes = {analyse, ExportPass{}};
+        st = render(sd, clipsA);
+        checkf(st.state == ExportStatus::State::Done, "an analysis pass runs and writes nothing (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        std::FILE* left = std::fopen(nothing.c_str(), "rb");
+        if (left) std::fclose(left);
+        check(!left, "the discarded pass left no file behind");
+        int measured = 0;
+        for (const auto& m : drainReport(0, nullFrom, kAll).meta)
+            if (m.key.rfind("lavfi.cropdetect.", 0) == 0) ++measured;
+        checkf(measured > 0, "and what it measured is in the channel anyway (%d samples)",
+               measured);
     }
 
     std::printf("\nbad asks are refused, not crashed into\n");

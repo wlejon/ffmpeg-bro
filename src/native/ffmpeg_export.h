@@ -198,6 +198,61 @@ struct ExportGraphInput {
     int input = -1;
 };
 
+/// One run over the frames, as a set of overrides on the render it belongs to.
+///
+/// **A pass is not a job.** There is one run slot in this binary (ffmpeg_job.h)
+/// and a two-pass render is one thing to the person who started it: one Stop
+/// button, one terminal status, one file at the end. What it is to the machine
+/// is two walks over the same range, and the only honest way to say so is for
+/// the status to name the pass it is in — which is why `ExportStatus` carries
+/// `pass`, `passCount` and `passLabel` rather than this inventing a second slot
+/// and a second progress bar.
+///
+/// Every field is "the render's unless this says otherwise". A pass that
+/// overrides nothing renders exactly what the settings describe, which is what
+/// makes an empty `passes` list and a one-entry list the same render.
+struct ExportPass {
+    /// What to say while this pass runs — "analysing", "pass 1". It goes into
+    /// `ExportStatus::passLabel`, beside the stage, because "43%" of a render
+    /// that is going to do the whole thing again is a lie by omission.
+    std::string label;
+
+    std::string filterGraph;                    ///< empty: the render's
+    std::vector<ExportGraphInput> filterInputs; ///< empty: the render's
+    std::string path;                           ///< empty: the render's
+    std::string format;                         ///< empty: the render's
+
+    /// The encoder for this pass. Empty is the render's.
+    ///
+    /// A detection pass does not care what the pictures are encoded as and the
+    /// cheapest answer is `wrapped_avframe` through the `null` muxer, which
+    /// encodes nothing at all. A two-pass *encoder* is the opposite case and
+    /// must stay on the real encoder, because the statistics file is that
+    /// encoder's. Both are said here rather than inferred from `discard`.
+    std::string videoCodec;
+
+    /// `-key value` for this pass, **merged on top of the render's** — so a
+    /// pass adds `pass=1` and keeps everything else the render is set to, which
+    /// is what a two-pass encode means.
+    ///
+    /// **A pass that names its own encoder starts from an empty bag instead.**
+    /// An option table belongs to an encoder: carrying x264's `preset` onto
+    /// `wrapped_avframe` would be an unknown option, and an unknown option is
+    /// an error here rather than a shrug. So changing the encoder is also
+    /// saying that what was set on the old one does not apply.
+    std::vector<ExportOption> videoOptions;
+    std::vector<ExportOption> audioOptions;
+
+    /// Write through the `null` muxer: run everything, keep nothing.
+    ///
+    /// This is `-f null -` and it is what an analysis pass wants — the point of
+    /// it is the file a filter wrote beside the output, or the statistics log
+    /// the encoder kept, not the pictures. `path` and `format` are ignored when
+    /// it is set, and the null muxer is `AVFMT_NOFILE`, so nothing is opened
+    /// and nothing is left behind.
+    bool discard = false;
+};
+
 struct ExportSettings {
     std::string path;               // output file
 
@@ -327,6 +382,31 @@ struct ExportSettings {
     std::string filterGraph;
     std::vector<ExportGraphInput> filterInputs;
 
+    /// A render that is more than one render.
+    ///
+    /// **Empty is one pass, which is every render this application wrote before
+    /// there were passes** — the loop runs `passes.size()` times and an empty
+    /// list is treated as one entry that overrides nothing, so nothing that
+    /// predates this changes shape or behaviour.
+    ///
+    /// Two things in ffmpeg genuinely need a second run over the same frames
+    /// and neither is a feature of this application:
+    ///
+    ///   - **A two-pass filter.** `vidstabdetect` writes a `.trf` of camera
+    ///     motion and `vidstabtransform` reads it; the handoff is a file on
+    ///     disk, so the only thing the machinery has to provide is *running the
+    ///     graph twice with the file named both times*.
+    ///   - **A two-pass encoder.** `-pass 1` writes a statistics log and
+    ///     `-pass 2` spends the bitrate knowing where it is needed. The handoff
+    ///     is again a file (`-passlogfile`), and what differs between the runs
+    ///     is two entries in the option bag.
+    ///
+    /// So a pass is a *render with overrides*, not a new kind of job: one slot,
+    /// one thread, one terminal status, published once when the last pass has
+    /// closed its file. Everything the two cases above need is here and nothing
+    /// else is, which is what stops this from becoming a second spec format.
+    std::vector<ExportPass> passes;
+
     // Take the frame size from the graph rather than from `width`/`height`.
     //
     // Off, a graph whose last pad is a different size from the render is an
@@ -392,6 +472,18 @@ struct ExportStatus {
     std::string path;
     std::string error;              // set when state == Failed
     std::string stage;              // what it is doing, for the progress line
+
+    /// Which pass this is, of how many, and what that pass is called.
+    ///
+    /// One for an ordinary render, which is what makes "pass 1 of 1" the thing
+    /// nobody has to draw. `progress` spans the whole job — `((pass - 1) +
+    /// this pass's fraction) / passCount` — because the person watching started
+    /// one render; `framesDone` and `framesTotal` are this pass's, because they
+    /// are what the encoder is actually doing and a count that restarted
+    /// halfway would be the confusing one.
+    int pass = 1;
+    int passCount = 1;
+    std::string passLabel;
 };
 
 /// Start rendering on a background thread. Returns false — with a reason in

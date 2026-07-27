@@ -430,6 +430,42 @@ std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spe
     return out;
 }
 
+/// `spec.passes` — a render that is more than one render.
+///
+/// Every field is "the render's unless this says otherwise", so an entry of
+/// `{}` is a pass that renders exactly the spec around it. The two things that
+/// need this are a two-pass *filter* (`vidstabdetect` writes a file,
+/// `vidstabtransform` reads it) and a two-pass *encoder* (`-pass 1` writes a
+/// statistics log, `-pass 2` spends the bitrate knowing where it is needed) —
+/// both of which hand off through a file on disk, which is why nothing here
+/// carries anything between the passes.
+std::vector<ExportPass> passesFromJs(JSContext* ctx, JSValueConst spec) {
+    std::vector<ExportPass> out;
+    JSValue arr = JS_GetPropertyStr(ctx, spec, "passes");
+    if (JS_IsArray(arr)) {
+        const uint32_t len = arrayLength(ctx, arr);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+            if (JS_IsObject(item)) {
+                ExportPass p;
+                p.label = strProp(ctx, item, "label", "");
+                p.filterGraph = strProp(ctx, item, "filterGraph", "");
+                p.filterInputs = graphInputsFromJs(ctx, item);
+                p.path = strProp(ctx, item, "path", "");
+                p.format = strProp(ctx, item, "format", "");
+                p.videoCodec = strProp(ctx, item, "videoCodec", "");
+                p.videoOptions = optionsFromJs(ctx, item, "videoOptions");
+                p.audioOptions = optionsFromJs(ctx, item, "audioOptions");
+                p.discard = boolProp(ctx, item, "discard", false);
+                out.push_back(std::move(p));
+            }
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, arr);
+    return out;
+}
+
 /// `spec.inputs` — the `-i`s, in the order the graph's labels number them.
 ///
 /// Read before anything else in the spec, because a clip's `input` is an index
@@ -506,6 +542,7 @@ bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::s
     s.filterGraph = strProp(ctx, spec, "filterGraph", "");
     s.filterInputs = graphInputsFromJs(ctx, spec);
     s.sizeFromGraph = boolProp(ctx, spec, "sizeFromGraph", false);
+    s.passes = passesFromJs(ctx, spec);
     s.metadata = optionsFromJs(ctx, spec, "metadata");
 
     // Read before anything is started, so a list that cannot be honoured is a
@@ -636,6 +673,13 @@ JSValue js_renderPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, st.bytesWritten));
     setStr(ctx, o, "path", st.path);
     setStr(ctx, o, "stage", st.stage);
+    // Which pass of how many, and what it is called. One of one for an
+    // ordinary render, so nothing has to know there is such a thing as a pass
+    // — but a job that is going to walk the range again must not report "43%"
+    // and leave the rest to be discovered.
+    JS_SetPropertyStr(ctx, o, "pass", JS_NewInt32(ctx, st.pass));
+    JS_SetPropertyStr(ctx, o, "passes", JS_NewInt32(ctx, st.passCount));
+    setStr(ctx, o, "passLabel", st.passLabel);
     setStr(ctx, o, "error", st.error);
     // Which render this is, so that what the channel below says can be pinned
     // to it. Zero while nothing is running — a probe and a decoder warning are

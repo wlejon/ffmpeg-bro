@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,21 +45,74 @@ namespace {
 
 void setStatus(const ExportStatus& s) { job::publish(s); }
 
-/// The whole render, as a walk: ask the edit what the output looks like at
-/// this instant, hand it to the writer, say how far along it is. Every step
-/// past "how far along" belongs to something else, which is what keeps this
-/// readable as the sequence it is.
-void runExport(ExportSettings s, std::vector<ExportClip> clips) {
-    job::Held slot;
-    const auto began = std::chrono::steady_clock::now();
-    const auto secondsSince = [&began] {
-        return std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
-    };
+/// One entry of `ExportSettings::passes` applied to the settings it belongs to.
+///
+/// Every field of a pass is "the render's unless this says otherwise", so this
+/// is the whole of what a pass *is* — there is no second spec format and
+/// nothing downstream of here can tell it is running inside a multi-pass job.
+ExportSettings settingsForPass(const ExportSettings& base, const ExportPass& p) {
+    ExportSettings s = base;
+    if (!p.filterGraph.empty()) {
+        s.filterGraph = p.filterGraph;
+        // The inputs travel with the graph they feed. A pass that changes the
+        // graph and inherited the old pad list would be naming `[1:v]` at a
+        // file the new chains never mention.
+        s.filterInputs = p.filterInputs;
+    } else if (!p.filterInputs.empty()) {
+        s.filterInputs = p.filterInputs;
+    }
+    if (!p.path.empty()) s.path = p.path;
+    if (!p.format.empty()) s.format = p.format;
 
-    ExportStatus st;
-    st.state = ExportStatus::State::Running;
+    // A pass that names its own encoder starts from an empty option bag: an
+    // option table belongs to an encoder, and carrying x264's `preset` onto
+    // `wrapped_avframe` is an unknown option — which is an error here, and
+    // rightly. A pass that keeps the encoder is adding to what it was set to.
+    if (!p.videoCodec.empty() && p.videoCodec != s.videoCodec) {
+        s.videoCodec = p.videoCodec;
+        s.videoOptions.clear();
+        // The named fields are guarded by `hasOption` in the writer, so they
+        // are simply ignored by an encoder that has no such control; only the
+        // explicit bag can fail, and that is the one being emptied.
+    }
+    for (const auto& o : p.videoOptions) s.videoOptions.push_back(o);
+    for (const auto& o : p.audioOptions) s.audioOptions.push_back(o);
+
+    // `-f null -`: run everything, keep nothing. The null muxer is
+    // AVFMT_NOFILE, so no file is opened and none is left behind — which is
+    // what an analysis pass wants, since what it produces is the file a filter
+    // wrote beside the output or the log the encoder kept.
+    if (p.discard) {
+        s.format = "null";
+        s.faststart = false;
+        // The `streams` list, if there is one, names encoders and dispositions
+        // for a file that is not being written. Cleared so the pass writes the
+        // renderer's ordinary one video stream and one audio stream, which is
+        // the smallest thing that can carry the frames past the filters.
+        s.streams.clear();
+        s.chapters.clear();
+    }
+    return s;
+}
+
+/// One walk over the range: ask the edit what the output looks like at this
+/// instant, hand it to the writer, say how far along it is. Every step past
+/// "how far along" belongs to something else, which is what keeps this readable
+/// as the sequence it is.
+///
+/// It leaves `st` carrying a terminal state only when the *job* is over —
+/// failure or cancellation. A pass that finished cleanly leaves it Running, so
+/// the next one carries on and the terminal status is published once, at the
+/// bottom of `runExport`, after the last file has been closed.
+void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
+             const std::function<double()>& secondsSince) {
+    const double base = double(st.pass - 1) / double(std::max(1, st.passCount));
+    const double share = 1.0 / double(std::max(1, st.passCount));
+
     st.path = s.path;
     st.stage = "opening";
+    st.framesDone = 0;
+    st.progress = base;
     const double span = std::max(0.0, s.endTime - s.startTime);
     const int64_t total = std::max<int64_t>(1, std::llround(span * s.fps));
     st.framesTotal = total;
@@ -142,7 +196,10 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         }
 
         st.framesDone = n + 1;
-        st.progress = double(n + 1) / double(total);
+        // Across the whole job, not across this pass. The person watching
+        // started one render; a bar that reached the end and went back to zero
+        // would be reporting the machine's business rather than theirs.
+        st.progress = base + share * (double(n + 1) / double(total));
         st.elapsedSec = secondsSince();
         st.encodeFps = st.elapsedSec > 0 ? st.framesDone / st.elapsedSec : 0;
         // Polled by the UI at frame rate; a lock per output frame is nothing
@@ -187,6 +244,48 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         }
     }
     st.bytesWritten = writer.bytesSoFar();
+    if (!aborted) st.progress = base + share;
+    st.elapsedSec = secondsSince();
+}
+
+/// The job: every pass in turn, and one terminal status at the bottom.
+///
+/// **The passes share the slot rather than taking one each.** A two-pass render
+/// is one thing to whoever started it — one Stop, one status, one file — and
+/// giving the second pass its own claim would mean a window between them where
+/// `render.start` would be accepted, which is exactly the race the export
+/// preview's chaining already lives in.
+void runExport(ExportSettings s, std::vector<ExportClip> clips) {
+    job::Held slot;
+    const auto began = std::chrono::steady_clock::now();
+    const std::function<double()> secondsSince = [&began] {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+    };
+
+    // An empty list is one pass that overrides nothing, which is every render
+    // written before passes existed — so there is one loop here rather than a
+    // fast path and a slow one that could come to disagree.
+    std::vector<ExportPass> passes = s.passes;
+    if (passes.empty()) passes.push_back(ExportPass{});
+
+    ExportStatus st;
+    st.state = ExportStatus::State::Running;
+    st.path = s.path;
+    st.passCount = static_cast<int>(passes.size());
+
+    std::string lastPath = s.path;
+    for (size_t i = 0; i < passes.size(); ++i) {
+        st.pass = static_cast<int>(i) + 1;
+        st.passLabel = passes[i].label;
+        const ExportSettings ps = settingsForPass(s, passes[i]);
+        lastPath = ps.path;
+        runPass(ps, clips, st, secondsSince);
+        if (st.state != ExportStatus::State::Running) break;
+    }
+    // What the file is called is the last pass's, not the first's: an analysis
+    // pass that wrote nothing must not leave the status pointing at a path
+    // nothing was written to.
+    st.path = lastPath;
 
     if (st.state == ExportStatus::State::Running) {
         st.state = ExportStatus::State::Done;
@@ -213,12 +312,13 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
     // ordering a surface reading the status does.
     char said[512];
     if (st.state == ExportStatus::State::Done) {
-        LOG_INFO("export: wrote %s (%lld frames, %.1f s, %.1f MB)", s.path.c_str(),
+        LOG_INFO("export: wrote %s (%lld frames, %.1f s, %.1f MB)", st.path.c_str(),
                  static_cast<long long>(st.framesDone), st.elapsedSec,
                  st.bytesWritten / 1048576.0);
-        std::snprintf(said, sizeof(said), "wrote %s — %lld frames in %.1f s, %.1f MB",
-                      s.path.c_str(), static_cast<long long>(st.framesDone), st.elapsedSec,
-                      st.bytesWritten / 1048576.0);
+        std::snprintf(said, sizeof(said), "wrote %s — %lld frames in %.1f s, %.1f MB%s",
+                      st.path.c_str(), static_cast<long long>(st.framesDone), st.elapsedSec,
+                      st.bytesWritten / 1048576.0,
+                      st.passCount > 1 ? " (the last of its passes)" : "");
         reportNote(AV_LOG_INFO, "render", said);
     } else if (st.state == ExportStatus::State::Failed) {
         LOG_ERROR("export failed: %s", st.error.c_str());
@@ -227,7 +327,7 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         std::snprintf(said, sizeof(said),
                       "stopped after %lld of %lld frames; %s was closed properly and plays",
                       static_cast<long long>(st.framesDone),
-                      static_cast<long long>(st.framesTotal), s.path.c_str());
+                      static_cast<long long>(st.framesTotal), st.path.c_str());
         reportNote(AV_LOG_WARNING, "render", said);
     }
 }
