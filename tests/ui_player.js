@@ -30,6 +30,14 @@ function waitFor(what, predicate, timeoutMs = 5000) {
 }
 
 const el = (id) => document.getElementById(id);
+
+/// A key press, the way the app hears one. Dispatched on <body> rather than on
+/// `document` — which is where app.js listens — because this engine implements
+/// Document.addEventListener but not Document.dispatchEvent. It bubbles, so it
+/// arrives; a real key press takes the same route.
+const key = (k, opts) =>
+    document.body.dispatchEvent(
+        new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, opts)));
 let checks = 0;
 function ok(cond, what) {
     checks++;
@@ -636,6 +644,88 @@ ok(A.transport.rate === 2 && A.video().playbackRate === 2,
 rate.value = '1';
 rate.dispatchEvent(new Event('change'));
 pump(20);
+
+// ── the graph stage ────────────────────────────────────────────────────────
+//
+// What the timeline comes to, in ffmpeg's own terms. Checked here rather than
+// in tests/ui_graph.js because that one runs without media and can only reach
+// the refusal: everything below needs a real edit behind it, and a layout is
+// only true once it has been measured on a stage that is actually on screen.
+
+console.log('\nthe graph stage');
+{
+    ok(A.shell.stages().indexOf('graph') === 2,
+       'Graph sits between Compose and Encode, where it is in ffmpeg');
+
+    // Through the keyboard, because a stage you can only reach by clicking a
+    // card is one the keyboard is lying about.
+    //
+    // Dispatched on <body> and left to bubble, not on `document`: this engine
+    // gives Document `addEventListener` but not `dispatchEvent`, so the node
+    // the app listens on is not one a test can aim at directly. Bubbling from
+    // body reaches it and is what a real key press does anyway.
+    key('n');
+    pump(200);
+    ok(A.shell.currentStage() === 'graph', 'n goes there');
+
+    const g = A.graph.derive(A.exporter.buildSpec(), A.exporter.specSources());
+    ok(g.ok, 'the edit on the timeline can be described as a graph');
+    const cards = document.querySelectorAll('#gr-nodes .gn');
+    ok(cards.length === g.graph.nodes.length,
+       `one card per node — ${cards.length} of them`);
+
+    // Every card measured. A stage that is display:none measures zero, and a
+    // layout built from zeroes is a heap of nodes in the top-left corner that
+    // nobody ever sees be wrong.
+    let flat = 0, laid = 0;
+    for (const c of cards) {
+        const r = c.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) flat++;
+        if (c.style.left !== '' && c.style.top !== '') laid++;
+    }
+    ok(flat === 0, 'every card has a size');
+    ok(laid === cards.length, 'and a place');
+
+    // The nodes are spread out, not stacked: two cards at the same point is
+    // what a layout that never ran looks like.
+    const spots = new Set();
+    for (const c of cards) spots.add(`${c.style.left},${c.style.top}`);
+    ok(spots.size === cards.length, 'and no two of them share it');
+
+    // The picture and the command are the same statement. If the stage can
+    // draw a node the printer does not put in a chain, one of them is wrong.
+    const printed = A.graph.print(g.graph);
+    const status = el('gr-status').textContent;
+    ok(status.indexOf(`${printed.chains.length} chain`) >= 0,
+       `the bar counts what the command bar prints: "${status}"`);
+    ok(A.command.currentCommand().indexOf(printed.chains[0]) > 0,
+       'and the first chain is in the command underneath, verbatim');
+
+    // Inputs are named after the files, which is the one thing on this screen
+    // that ties a node back to something outside it.
+    const names = Array.from(document.querySelectorAll('#gr-nodes .gn-input .gn-name'))
+                       .map((n) => n.textContent);
+    ok(names.length >= 1 && names.some((n) => media.indexOf(n) >= 0),
+       `an input card is named after its file: ${names.join(', ')}`);
+
+    // The wires are drawn in screen coordinates against a canvas the size of
+    // the viewport, so the two have to agree or half the graph has no wires.
+    const canvas = el('gr-wires');
+    const vp = el('gr-viewport');
+    ok(Math.abs(canvas.width - vp.clientWidth) <= 1 &&
+       Math.abs(canvas.height - vp.clientHeight) <= 1,
+       `the wire canvas covers the viewport (${canvas.width}x${canvas.height})`);
+
+    flush();
+    screenshot('out/11-graph.png');
+
+    // Back, and the picture is still there — the stages hide each other rather
+    // than unmounting, because the viewer's <video> elements are the decoders.
+    key('Escape');
+    pump(200);
+    ok(A.shell.currentStage() === 'compose', 'Escape comes back to the edit');
+    ok(!!A.video(), 'and the decoders were never torn down');
+}
 
 // ── fullscreen strips the chrome ───────────────────────────────────────────
 

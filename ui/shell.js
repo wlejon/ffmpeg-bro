@@ -30,6 +30,11 @@ import { el, div, span, put, show } from './dom.js';
 const STAGES = [
     { id: 'sources', name: 'Sources' },
     { id: 'compose', name: 'Compose' },
+    // Between the edit and the encoder, which is where it is in ffmpeg: the
+    // filter graph is what the decoded streams are put through on the way to
+    // being encoded, and putting it anywhere else in this bar would be a
+    // picture of a pipeline that does not exist.
+    { id: 'graph',   name: 'Graph' },
     { id: 'encode',  name: 'Encode' },
     { id: 'write',   name: 'Write' },
 ];

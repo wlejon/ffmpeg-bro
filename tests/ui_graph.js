@@ -321,4 +321,31 @@ console.log('\nwhat derive() builds');
     same(derive({ clips: [] }).ok, false, 'and an edit it cannot express has no graph at all');
 }
 
+// ── the stage, with nothing to draw ────────────────────────────────────────
+//
+// The half of the Graph stage this test can reach. Everything else about it
+// needs a real edit and a stage that has been on screen to be measured on,
+// which is tests/ui_player.js — but the refusal is exactly the case that has
+// no media by definition, and a stage that answers an empty timeline with an
+// empty screen is one you cannot tell from a broken one.
+
+console.log('\nthe stage with nothing on the timeline');
+{
+    const { shell } = globalThis.__ffmpegBro;
+    same(shell.stages().indexOf('graph'), 2,
+         'Graph sits between Compose and Encode, where it is in ffmpeg');
+    ok(shell.goTo('graph'), 'and it opens with nothing loaded — there is still something to say');
+    pump(200);
+
+    const note = document.getElementById('gr-note');
+    ok(note && !note.classList.contains('hidden'),
+       `the refusal is on screen: "${note ? note.textContent : '(no note)'}"`);
+    // In the same words the derivation refused with. An edit that cannot be
+    // described is one fact, not two — a stage that invents its own phrasing
+    // for it is a second place for the reason to go stale.
+    const reason = derive(globalThis.__ffmpegBro.exporter.buildSpec(), []).reason;
+    ok(note.textContent.indexOf(reason) >= 0, `and it says why: "${reason}"`);
+    same(document.querySelectorAll('#gr-nodes .gn').length, 0, 'and nothing is drawn');
+}
+
 console.log(`\nPASS ui_graph — ${checks} checks`);

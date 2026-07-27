@@ -131,8 +131,13 @@ Test scripts use bro's headless globals (`dropFiles`, `wallSleep`, `advanceTime`
 on the **real** clock: `advanceTime()` moves bro's virtual time and the decoder ignores it,
 so every wait must be `wallSleep()` + `flush()` (that is what `pump()` in the test does).
 
-Two traps when writing headless tests here:
+Three traps when writing headless tests here:
 
+- **`document.dispatchEvent` does not exist.** bro gives `Document` `addEventListener` but
+  not `dispatchEvent`, so the node `app.js` binds its keyboard to cannot be aimed at
+  directly. Dispatch on `document.body` with `bubbles: true` instead — bubbling itself is
+  correct all the way up through body to document to window, and that is the route a real
+  key press takes. `ui_player.js`'s `key()` helper is the one place that does it.
 - **Never trigger a native file dialog.** `showSaveFileDialog` / `showOpenFileDialog` block
   the JS thread until dismissed, and headless is not a safe harbour — there is no window to
   dismiss them at. `ui_export.js` types into `#ex-path` rather than pressing "Choose…".
@@ -283,8 +288,8 @@ What the fixes were, and what the code here still does about them:
   general shape is worth remembering: **a shutdown that frees a service before the objects
   that call into it fails silently and blames whatever ran last.**
 
-- `shell.js` — the pipeline, as the thing you navigate. Four stages — Sources,
-  Compose, Encode, Write — and the spine is both the diagram and the navigation:
+- `shell.js` — the pipeline, as the thing you navigate. Five stages — Sources,
+  Compose, Graph, Encode, Write — and the spine is both the diagram and the navigation:
   each card states what its stage is set to, so the bar reads as one statement of
   the whole render and clicking the part that is wrong is how you go and change it.
   **This replaced the Edit/Output tabs**, which were a modal in disguise. The reason
@@ -397,6 +402,26 @@ What the fixes were, and what the code here still does about them:
   findable. Editing a param locks its node — a value you typed that the next
   timeline edit silently reverted is worse than the edit not applying, because
   at least that is visible.
+- `graph/view.js` + `graph/layout.js` — the Graph stage: the same graph, drawn.
+  Read-only so far, and derived from the edit rather than edited itself.
+  `layout.js` is pure geometry — a graph and a `heightOf()` in, positions out —
+  so the view can build its cards, measure them and only then place them, which
+  is the build/measure split the range strip already uses and is necessary for
+  the same reason: a node is as tall as the arguments its filter was given.
+  Columns are longest-path depth; within a column a node wants the average row
+  of what feeds it, which is what keeps a clip's whole chain on one line.
+
+  Cards are absolutely positioned divs over a `<canvas>` that draws only the
+  wires — the pairing `timeline.js` already uses. Drawing the nodes into the
+  canvas too would mean re-implementing text wrapping to save nothing. **Pan and
+  zoom are a `transform` on the card container, and the wires are drawn in
+  screen coordinates against an untransformed canvas**: a curve stroked into a
+  scaled canvas is a blurred curve, and the reason to zoom in on a graph is to
+  read it. Two consequences worth keeping in mind — the card's width is written
+  before it is measured (left to itself it is shrink-to-fit inside a container
+  that is deliberately zero wide, so every height would be of a different card),
+  and the container's transform is cleared for the measurement so heights come
+  back in graph coordinates whatever the zoom is.
 - `format.js`, `icons.js` — timecode/byte formatting, and SVG icons painted from
   `data-icon` attributes. `icons.js` is the one place that still writes markup as a
   string: the icons are `<svg>` path data, closer to an asset than to a UI, and

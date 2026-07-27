@@ -21,6 +21,8 @@ import { filtergraph } from './filtergraph.js';
 import { makeGraph, restore } from './graph/model.js';
 import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
+import { initGraphView, drawGraph, chaseGraph, graphSummary, fitView }
+    from './graph/view.js';
 import * as shell from './shell.js';
 import { initSources, drawSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
@@ -72,6 +74,15 @@ el('libav').textContent = bro.ffmpeg.version;
 viewer.initViewer({ stage, viewer: viewerEl });
 
 initSources(el('sources'));
+
+initGraphView({
+    viewport: el('gr-viewport'),
+    canvas: el('gr-wires'),
+    nodes: el('gr-nodes'),
+    note: el('gr-note'),
+    status: el('gr-status'),
+    fit: el('gr-fit'),
+});
 
 initInspector({ filename, chips, transform: xformPanel }, {
     // The panel edits the model; putting the picture and the timeline back in
@@ -157,6 +168,11 @@ onChange((what) => {
     shell.drawSpine();
     command.draw();
     drawSources();
+    // And so is the graph, which is the same statement as the command bar's
+    // drawn as the shape it is. Only while it is up: everything the layout
+    // measures is zero behind a `display:none`, and it is rebuilt on the way
+    // in anyway.
+    if (shell.currentStage() === 'graph') drawGraph();
 });
 
 // A file named on the command line, handed over by the host binding.
@@ -512,6 +528,14 @@ document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
         return;
     }
+    // The graph owns the keyboard while it is up, for the reason the encode
+    // side does: Space must not start playback on a timeline nobody can see.
+    // `0` frames the view, which is what it does on the timeline too.
+    if (shell.currentStage() === 'graph') {
+        if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
+        else if (e.key === '0') { fitView(); e.preventDefault(); }
+        return;
+    }
 
     // The encode side owns the keyboard while it is the stage you are on:
     // Space must not start playback on a timeline nobody can see, and Delete
@@ -544,6 +568,8 @@ document.addEventListener('keydown', (e) => {
         case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
         case 'e':          shell.goTo('encode'); break;
         case 'i':          shell.goTo('sources'); break;
+        // `n` for node graph: `g` is the grid layout and `f` is fullscreen.
+        case 'n':          shell.goTo('graph'); break;
         case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
                            else return;
                            break;
@@ -625,6 +651,11 @@ function frame(now) {
         timeline.draw();
     }
     if (transport.playing) syncUI();
+    // The wires are drawn in screen coordinates against a canvas the size of
+    // the viewport, so a stage that changed size has to redraw them. Same rule
+    // as everything above: a measurement of zero is a hidden stage, not a
+    // small one.
+    chaseGraph();
     // The render is on a thread of its own in the host binary; this is the
     // only thing that looks at it, and only while its dialog is up.
     exporter.tick();
@@ -700,6 +731,7 @@ shell.initShell({
     views: {
         sources: el('st-sources'),
         compose: el('st-compose'),
+        graph: el('st-graph'),
         encode: el('st-encode'),
         write: el('st-write'),
     },
@@ -720,6 +752,9 @@ shell.initShell({
         else exporter.closeExport();
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
         if (id === 'sources') drawSources();
+        // Every height the layout needs measures zero while the stage is
+        // hidden, so the graph is built on the way in and not before.
+        if (id === 'graph') drawGraph();
         command.draw();
     },
     state: stageState,
@@ -752,6 +787,13 @@ function stageState(id) {
         return [`${project.width}×${project.height} · ${(project.fps || 30).toFixed(0)}p`,
                 `${v} V · ${clips.length} clip${clips.length === 1 ? '' : 's'} · ` +
                 clock(duration())];
+    }
+    if (id === 'graph') {
+        if (!clips.length) return ['—', ''];
+        const g = graphSummary();
+        if (!g.ok) return ['cannot be described', g.reason];
+        return [`${g.nodes} filter${g.nodes === 1 ? '' : 's'}`,
+                `${g.inputs} in · ${g.chains} chain${g.chains === 1 ? '' : 's'}`];
     }
     if (!clips.length) return ['—', ''];
     const s = exporter.currentSettings();

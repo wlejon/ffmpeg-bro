@@ -27,7 +27,7 @@ import { bytes, clock } from './format.js';
 import { settings, preview, currentJob, setJob, onJobChange, isRendering,
          activeVideoCodec, activeAudioCodec, outputFps } from './export/state.js';
 import { videoOptions } from './export/options.js';
-import { buildSpec, range, defaultPath } from './export/spec.js';
+import { buildSpec, range, defaultPath, specSources } from './export/spec.js';
 import { intents, activeIntent, applyIntent, clampToEncoder } from './export/presets.js';
 import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
@@ -304,7 +304,7 @@ export function tick() {
 
 // ── what the app and the tests reach for ───────────────────────────────────
 
-export { buildSpec, range, togglePreviewPlay, stepPreviewBy, startPreview };
+export { buildSpec, specSources, range, togglePreviewPlay, stepPreviewBy, startPreview };
 
 /// The last thing poll() reported, for the status line and for tests.
 export function lastStatus() { return lastPoll; }

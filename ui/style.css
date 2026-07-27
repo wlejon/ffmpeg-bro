@@ -1078,3 +1078,105 @@ button.text.primary:hover { background: #ffa063; }
 .ex-line { font-size: 12px; line-height: 1.7; word-break: break-all; }
 .ex-line.good { color: var(--good); }
 .ex-failed { color: var(--bad); font-size: 12px; line-height: 1.7; }
+
+/* ── the graph stage ──────────────────────────────────────────────────────
+
+   Cards over a canvas. The canvas is only ever the wires: a node is a small
+   panel with text in it, and drawing text into a canvas means re-implementing
+   wrapping and selection to save nothing. The nodes live in a container that
+   is panned and zoomed with a transform; the wires are drawn in screen
+   coordinates against the untransformed canvas, because a curve stroked into a
+   scaled canvas is a blurred curve and the reason to zoom in is to read. */
+
+.gr-viewport {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+    background: #0f1114;
+    cursor: grab;
+}
+.gr-wires {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+}
+/* The origin the layout's coordinates are relative to. Zero-sized on purpose:
+   it is a frame of reference, not a box, and giving it a size would give the
+   pan something to be clipped against. */
+.gr-nodes {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    transform-origin: 0 0;
+}
+
+.gn {
+    position: absolute;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--blue);
+    border-radius: 4px;
+    padding: 4px 6px 5px;
+    cursor: default;
+}
+/* Audio is a different colour rather than a different shape, because it is the
+   same kind of thing happening to a different stream. */
+.gn-a { border-left-color: var(--good); }
+/* The two ends of the graph are not filters and should not read as filters. */
+.gn-input, .gn-sink { background: var(--panel-hi); }
+.gn-sink { border-left-style: double; }
+/* A value set by hand outranks the derivation, and the graph has to say so —
+   losing the lock silently is the one outcome worth designing against. */
+.gn-locked { border-color: var(--accent); }
+.gn-user { border-style: dashed; border-left-style: solid; }
+
+.gn-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.gn-name {
+    font-size: 12px;
+    font-weight: 600;
+    word-break: break-all;
+}
+.gn-pad { font-size: 10px; color: var(--dim); margin-left: auto; }
+
+.gn-args { margin-top: 3px; }
+.gn-arg {
+    display: flex;
+    gap: 5px;
+    font-size: 10px;
+    line-height: 1.45;
+}
+.gn-k { color: var(--dim); }
+/* The value is the part being read, so it takes what is left and wraps rather
+   than being pushed off the side of a fixed-width card. */
+.gn-v { flex: 1; word-break: break-all; }
+
+/* The refusal, in the middle of an empty stage. Same words the command bar
+   prints, because an edit that cannot be described is one fact and not two. */
+.gr-note {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    text-align: center;
+    font-size: 13px;
+}
+
+.gr-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 10px;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    flex-shrink: 0;
+}
+.gr-status { display: flex; gap: 6px; font-size: 11px; }

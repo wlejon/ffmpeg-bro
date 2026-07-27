@@ -37,6 +37,19 @@ export function range() {
     return { start: a, end: b, length: b - a };
 }
 
+/// What `probe()` said about each clip's video stream, in the same order as
+/// `buildSpec().clips` — which is where the filtergraph's source colour tags
+/// come from, and the single biggest thing standing between the graph and the
+/// render it describes.
+///
+/// Here rather than beside either caller because there are two now, the command
+/// bar and the graph stage, and they must be looking at the same sources: a
+/// screen that draws one matrix while the command prints another is worse than
+/// either of them being wrong on its own.
+export function specSources() {
+    return project.clips.map((c) => (c.probe && c.probe.video) || null);
+}
+
 /// Everything the renderer needs.
 ///
 /// Exported because the headless test builds one directly: driving the form

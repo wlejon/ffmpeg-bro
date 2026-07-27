@@ -31,7 +31,7 @@ import { div, span, put, show } from './dom.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings } from './export/state.js';
 import { videoOptions, audioOptions } from './export/options.js';
-import { buildSpec } from './export/spec.js';
+import { buildSpec, specSources } from './export/spec.js';
 import { containerInfo } from './export/capabilities.js';
 
 // The space between one span and the next, non-breaking on purpose. The line
@@ -65,13 +65,6 @@ function arg(v) {
     return /[\s"'\\$`&|;<>(){}[\]*?!#~]/.test(s) ? `"${s.replace(/(["\\$`])/g, '\\$1')}"` : s;
 }
 
-/// The spec, plus what probe() said about each clip's video stream — which is
-/// where the source colour tags come from, and the single biggest thing
-/// standing between the graph and the render it describes.
-function sourcesFor() {
-    return project.clips.map((c) => (c.probe && c.probe.video) || null);
-}
-
 // The video options that an audio encoder also has, and so the ones that have
 // to say which stream they are for. Unqualified, `-b 8000k` in a command line
 // means every stream — and a command whose audio bitrate depends on ffmpeg
@@ -90,7 +83,7 @@ const videoKey = (k) => (PER_STREAM.has(k) ? `${k}:v` : k);
 export function parts() {
     const spec = buildSpec();
     const codec = spec.videoCodec;
-    const g = filtergraph(spec, sourcesFor());
+    const g = filtergraph(spec, specSources());
     const colour = outputColor(spec);
 
     const pre = ['ffmpeg'];
