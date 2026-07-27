@@ -945,6 +945,55 @@ Pressing play starts on the frame already in the card, because the still is the
 first piece. One node plays at a time — there is one render slot, and two would not
 be two playbacks so much as two stutters.
 
+### When it is on
+
+A filter does not have to run for the whole render. ffmpeg's timeline support is
+one option — `enable`, an expression evaluated per frame — and the **When** strip
+in the column beside the graph is where it is set: the render's range as a ruler,
+the spans the expression describes drawn on it, and ends you drag. `Another span`
+adds one; each span is `between`, `from` or `until`, with its moments in fields
+beside it. The card carries the answer in one line.
+
+**`enable` turns a filter on and off. It does not interpolate a value.** That is
+a real limit and it is worth being plain about, because "keyframes" is the word
+people reach for and this is not that: a blur that comes on at ten seconds comes
+on at full strength. What ffmpeg *does* have for animating a value is expressions
+in a filter's own options — `crop`'s `x` and `y`, `overlay`'s, `drawtext`'s, some
+of them with an `eval` option choosing between once and per-frame — which are
+evaluated every frame and genuinely do move. Those are reachable here as ordinary
+option text and are not surfaced as anything better than that.
+
+The strip is a **reading of the expression, not a copy of it**. It is parsed on
+every draw and nothing is written until you drag or type, which is the same
+arrangement the Quality slider and the advanced option editor have: one
+mechanism, nothing to drift. The expression itself is in a field under the strip
+and on the card, quoted — `enable='between(t,1,2)'` — because a filtergraph
+separates filters with commas.
+
+So an expression the strip cannot draw is **left exactly as you typed it**. It
+can draw `between(t,a,b)`, `gt(t,a)`, `gte(t,a)`, `lt(t,b)` and `lte(t,b)` added
+together, and that is all; `mod(t,4)`, anything written against `n` or `pos`,
+arithmetic inside a span, or any of the rest of ffmpeg's expression evaluator
+makes the strip stand down and say which part of it it gave up on. It does not
+approximate and it does not rewrite.
+
+**A filter with no timeline support is offered no control at all**, because
+there is nothing for one to do: libavfilter checks the flag and refuses the
+graph outright — *Timeline ('enable' option) not supported with filter 'scale'*
+— rather than ignoring it. Which filters have it is read off the registry, so
+there is no list here either. One set the other way, typed raw or moved onto a
+filter that cannot take it, is reported against that node before the render
+rather than after.
+
+`t` is seconds into the render, measured from the start of the range — the same
+clock the whole graph runs on, because every derived chain begins
+`setpts=PTS-STARTPTS+offset/TB`. A filter spliced in *before* that, at a clip's
+`after decode` point, sees the source file's own timestamps instead, and the
+strip says so and rules itself in the source's seconds.
+
+Playing the node (▶, above) is how you judge it: the readout over the picture
+says `on` or `off` as the playhead crosses the boundary.
+
 ### Locks
 
 Every value on a derived node can be typed into, and **typing into one locks
@@ -1541,6 +1590,20 @@ Honest list of what does not work:
   because the inputs themselves do not survive a restart and their ids start
   again from one, so a restored reference would name whichever file happened to
   be third next time.
+- **Animating a value.** `enable` turns a filter on and off for a span and that
+  is the whole of what it does — there is no interpolation anywhere in ffmpeg's
+  timeline support, so a value cannot be ramped by it. What ffmpeg has instead is
+  **expressions in a filter's own options**, evaluated per frame: `crop`'s `x`
+  and `y`, `overlay`'s, `scale`'s, `drawtext`'s, several of them with an `eval`
+  option choosing between evaluating once and evaluating every frame. Those work
+  here — an option is a string and the string goes through verbatim — but nothing
+  surfaces them: no control writes one, no strip draws one, and the `eval` option
+  is an entry in the table like any other. That is the shape of a real
+  keyframe editor and it is not built.
+- **A span you can see while you scrub.** The When strip is drawn against the
+  render's range and is not the timeline: the playhead is not on it, and moving
+  the playhead does not move anything on it. Judging where a span lands is done
+  by playing the node, where the readout says `on` or `off`.
 - **Acting on what was measured.** A filter's numbers arrive as a series and
   are drawn as one, which is where it stops: `cropdetect` can tell you the
   black bars are 240 rows deep and nothing offers to crop them, `ebur128` can

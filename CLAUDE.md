@@ -1087,6 +1087,22 @@ about them:
   `filtergraph.js` is the composition, with the shape callers want, so
   `command.js` does not know a graph exists.
 
+  **`spec.origin` is where the zero of the graph's clock is, and it is not
+  `spec.start`.** Every derived chain begins `setpts=PTS-STARTPTS+offset/TB`, so
+  `t` inside the graph reads as time into the render — which is the clock a
+  filter's `enable=` names. A node preview, a piece of a node playback and the
+  A/B comparison are each a render of a two-second window out of the middle of
+  the range, and derived against their own start they put t=0 at the start of
+  the window: a filter told to come on ten seconds in came on ten seconds into
+  every one of them. So `buildSpec()` carries `origin` (the range's start) beside
+  `start` (this window's), and `derive()` shifts the whole graph by the
+  difference — the canvas too, because `overlay` frame-syncs against it and a
+  canvas left at zero while every clip moved composites against the wrong frames
+  of it. Audio takes the shift on its `asetpts` and **not** on its `adelay`:
+  `adelay` prepends real silence, so a window five minutes in would arrive with
+  five minutes of it. `origin` defaults to `start`, which makes an export — and
+  every spec written by hand in a test — unchanged.
+
   **Printing and refusing are separate, and that is not tidiness.** `print()`
   prints whatever it is given, because half of what asks it is a *pruned* view
   where outputs deliberately go nowhere — that is what cutting a graph off at
@@ -1518,6 +1534,44 @@ about them:
   the graph and re-measures every card, so the clock is written into the element in place
   and only starting and stopping change the card's structure. The still already on a card
   is handed over as the first piece, so pressing play starts on that frame.
+- `graph/enable.js` + `graph/when.js` — **a filter that is on for part of the render.**
+  `enable=` is libavfilter's timeline support and the nearest thing ffmpeg has to a
+  keyframe; `enable.js` is the pure half (parse, print, `isOnAt`, `supportsTimeline`)
+  and `when.js` is the strip in the panel and the one line on the card.
+
+  **The control writes an `enable` expression and nothing else**, which is this
+  codebase's one answer to "a friendly control and the raw text must not drift" —
+  the same shape as the Quality slider and the advanced editor both producing
+  `{crf: 20}`. The strip is a *reading*: it parses the stored value on every draw
+  and writes only on a drag or a keystroke, so there is no second state. Four
+  things follow and each is load-bearing:
+
+  - **An expression it cannot draw is refused, not rewritten.** It reads
+    `between(t,a,b)`, `gt`, `gte`, `lt`, `lte`, joined by `+`, with plain numbers
+    and the variable `t`. Anything else — `mod(t,4)`, `n`, `pos`, arithmetic
+    inside a term — comes back `{ ok: false, reason }`, the strip stands down and
+    says which part it gave up on, and the text is untouched. `gte` prints as
+    `gte` and not as `gt` for the same reason: printing one as the other is a
+    rewrite of somebody's expression.
+  - **The quotes are part of the stored value.** `print.js` writes an argument
+    verbatim, deliberately, and a filtergraph separates filters with commas — so
+    `enable=between(t,1,2)` is three filters and a syntax error. What is stored is
+    `'between(t,1,2)'`, and `parseEnable` accepts it with or without so that a
+    value typed by hand still draws.
+  - **A filter with no `AVFILTER_FLAG_SUPPORT_TIMELINE` is offered no control.**
+    libavfilter's `set_enable_expr` checks the flag and returns
+    AVERROR_PATCHWELCOME, so the graph never builds — it is refused, not ignored,
+    which `tests/export_test.cpp` asserts because the whole UI rule rests on
+    which of the two it is. `f.timeline` on the registry entry is the answer;
+    `check.js` reports one arriving the other way, against the node.
+  - **The ruler is worked out from the graph, not assumed.** `clockOf()` walks
+    ancestors: past a `setpts`/`asetpts`, `t` is time into the render; a node
+    spliced in before one — at a clip's `after decode` point — is on the source
+    file's own clock, and the window is read off the `trim` below it.
+
+  Playing a node is where it is judged, so `view.js`'s readout appends `on`/`off`
+  from `data-enable` on the card — read off the element rather than re-derived,
+  because that runs on the frame loop.
 - `graph/panel.js` — the column beside the graph, in four modes over one panel:
   what the selected node is set to, what can go on the wire whose `+` was
   clicked, what can go on the end of a wire you let go over nothing, and what a
