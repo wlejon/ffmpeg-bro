@@ -7,9 +7,23 @@
 import { project } from '../project.js';
 import { settings, activeVideoCodec, outputFps } from './state.js';
 import { encoderInfo, audioInfo, containerInfo } from './capabilities.js';
+import { isEmpty as noUserNodes } from '../graph/overlay.js';
+import { buildSpec } from './spec.js';
 
 export function warnings() {
     const out = [];
+
+    // The filters go through libavfilter, and the way they get there is
+    // `spec.filterGraph`. If the derivation refused, the render still happens —
+    // through the internal compositor, which cannot run a filter — so the file
+    // would come out silently missing what was put on the graph. That is
+    // exactly the outcome the lock rules exist to prevent, and it deserves to
+    // be said in the same place as everything else that will succeed and be
+    // wrong.
+    if (!noUserNodes() && !buildSpec().filterGraph)
+        out.push('your filters cannot be expressed as a graph for this edit, so this ' +
+                 'render would go through the internal compositor without them');
+
     const c = containerInfo(settings.container);
     const codec = activeVideoCodec();
     const info = encoderInfo(codec);

@@ -321,6 +321,267 @@ console.log('\nwhat derive() builds');
     same(derive({ clips: [] }).ok, false, 'and an edit it cannot express has no graph at all');
 }
 
+// ── anchors, insert points and the user's layer ────────────────────────────
+//
+// The whole of step 4 rests on one thing being true: the skeleton is thrown
+// away and rebuilt every time the timeline moves, and what a person did to it
+// has to survive that. Everything below is a way for it not to.
+
+const overlay = globalThis.__ffmpegBro.graph.overlay;
+
+/// One clip, with an id — which is what makes `clip:7/scale` mean the same
+/// thing before and after an edit. A spec written without one falls back to a
+/// position, which is fine for a printer test and is exactly what an anchor
+/// cannot be built on.
+function oneClip(over) {
+    return {
+        width: 1920, height: 1080, fps: 30, start: 0, end: 4, audio: true,
+        clips: [Object.assign({
+            id: 7, path: 'a.mp4', start: 0, length: 4, inPoint: 0,
+            x: 0, y: 0, w: 1920, h: 1080,
+            crop: { l: 0, t: 0, r: 0, b: 0 },
+            opacity: 1, volume: 1, muted: false, z: 0,
+        }, over)],
+    };
+}
+
+const chainFor = (d, pad) => print(d.graph).chains.find((c) => c.endsWith(`[${pad}]`));
+
+console.log('\nevery derived node is named for what it is');
+{
+    const d = derive(oneClip());
+    const anchors = d.graph.nodes.map((n) => n.anchor);
+    ok(anchors.every(Boolean), 'no derived node is left without an anchor');
+    ok(anchors.indexOf('clip:7/scale') >= 0, 'and the name is the clip and the job');
+    ok(anchors.indexOf('composite/overlay:7') >= 0, 'including the one that places it');
+    same(d.graph.byAnchor('clip:7/scale').pos.join(':'), '1920:1080',
+         'a node can be found by that name');
+    // The id comes from the clip, not from where it sits in the array — two
+    // clips cut from one file are two anchors and reordering them is not an
+    // edit to either.
+    same(derive(oneClip({ id: 91 })).graph.byAnchor('clip:91/scale').pos.join(':'), '1920:1080',
+         'the id is the clip’s own');
+}
+
+console.log('\nthe wires say where something can go');
+{
+    const ids = derive(oneClip()).points.map((p) => p.id).sort().join(' ');
+    same(ids, 'audio/after-mix clip:7/after-decode clip:7/after-scale clip:7/audio ' +
+              'composite/after-overlay',
+         'five points: two per clip picture, the clip’s sound, the composite and the mix');
+
+    // Deliberately absent. The conversion into the encoder's colour is the one
+    // chain that exists in the printed graph and not in the one this
+    // application runs, so a point after it would mean one insertion and two
+    // different pictures.
+    ok(derive(oneClip()).points.every((p) => p.id !== 'pre-encode'),
+       'and none after the output colour conversion, which only the printout has');
+}
+
+console.log('\na filter put on a wire lands on that wire');
+{
+    const before = derive(oneClip(), null, {
+        overlay: { inserts: [{ id: 'u1', anchor: 'clip:7/after-decode', filter: 'hflip',
+                               pos: [], params: {} }], locks: {} },
+    });
+    ok(/^\[0:v\]hflip,trim=/.test(chainFor(before, 'v0')),
+       `before the trim, where the decoder hands it over: ${chainFor(before, 'v0')}`);
+
+    const after = derive(oneClip(), null, {
+        overlay: { inserts: [{ id: 'u1', anchor: 'clip:7/after-scale', filter: 'hflip',
+                               pos: [], params: {} }], locks: {} },
+    });
+    ok(/format=rgba,hflip\[v0\]$/.test(chainFor(after, 'v0')),
+       `and after the scale when that is what was asked for: ${chainFor(after, 'v0')}`);
+    // The label belongs to the end of the chain, not to the node that used to
+    // be there. Left behind, `[v0]` would be a pad no chain produces and the
+    // overlay reading it would be reading nothing.
+    same(after.graph.byAnchor('clip:7/format').label, null,
+         'the pad name moves to the new end of the chain');
+    same(after.graph.node('u1').label, 'v0', 'which is the node that was inserted');
+
+    const sound = derive(oneClip(), null, {
+        overlay: { inserts: [{ id: 'u1', anchor: 'audio/after-mix', filter: 'loudnorm',
+                               pos: [], params: {} }], locks: {} },
+    });
+    ok(/loudnorm\[a0\]$/.test(chainFor(sound, 'a0')),
+       `sound is the same mechanism on a different stream: ${chainFor(sound, 'a0')}`);
+    same(print(sound.graph).audio, '[a0]', 'and the muxer still maps the end of it');
+}
+
+console.log('\ntwo filters at one point run in the order they were added');
+{
+    const d = derive(oneClip(), null, {
+        overlay: { inserts: [
+            { id: 'u1', anchor: 'clip:7/after-decode', filter: 'hflip', pos: [], params: {} },
+            { id: 'u2', anchor: 'clip:7/after-decode', filter: 'vflip', pos: [], params: {} },
+        ], locks: {} },
+    });
+    ok(/^\[0:v\]hflip,vflip,trim=/.test(chainFor(d, 'v0')),
+       `and not the other way round: ${chainFor(d, 'v0')}`);
+}
+
+console.log('\nan anchor whose clip is out of range is kept, not dropped');
+{
+    // A clip trimmed out of the rendered range takes its insert points with it.
+    // Throwing the node away would mean shortening the range deleted work.
+    const spec = oneClip();
+    spec.start = 10;
+    spec.end = 14;
+    const ov = { inserts: [{ id: 'u1', anchor: 'clip:7/after-decode', filter: 'hflip',
+                             pos: [], params: {} }], locks: {} };
+    same(derive(spec, null, { overlay: ov }).ok, false,
+         'nothing falls inside the range, so there is no graph');
+    same(ov.inserts.length, 1, 'and the node is still there for when the clip comes back');
+    ok(derive(oneClip(), null, { overlay: ov }).graph.node('u1'),
+       'which it does, unchanged');
+}
+
+console.log('\na lock outranks the edit, and says that it did');
+{
+    const ov = { inserts: [], locks: { 'clip:7/scale': { params: {}, pos: ['320', '180'] } } };
+    const d = derive(oneClip(), null, { overlay: ov });
+    same(d.graph.byAnchor('clip:7/scale').pos.join(':'), '320:180', 'the typed value is used');
+    ok(d.graph.byAnchor('clip:7/scale').locked, 'and the node says it is locked');
+    ok(d.graph.byAnchor('clip:7/scale').derived,
+       'while still being a derived node — locked, not adopted');
+
+    same(d.overrides.length, 1, 'one override is reported');
+    same(d.overrides[0].clip, '7', 'against the clip it belongs to');
+    same(d.overrides[0].control, 'size', 'and the control it took over');
+
+    // The point of the whole thing: the timeline moved and the value did not.
+    const moved = derive(oneClip({ w: 640, h: 360 }), null, { overlay: ov });
+    same(moved.graph.byAnchor('clip:7/scale').pos.join(':'), '320:180',
+         'a timeline edit does not silently revert it');
+    same(moved.overrides[0].keys.join(','), 'arguments', 'and what it outranked is named');
+
+    // A lock that happens to agree has outranked nothing yet. Marking the
+    // control anyway would put a badge on every field anyone had ever touched.
+    const agrees = derive(oneClip({ w: 320, h: 180 }), null, { overlay: ov });
+    ok(agrees.graph.byAnchor('clip:7/scale').locked, 'a lock that agrees is still a lock');
+    same(agrees.overrides[0].keys.length, 0, 'but it has overridden nothing');
+}
+
+console.log('\nlocking a named param');
+{
+    const ov = { inserts: [], locks: { 'clip:7/opacity': { params: { aa: '0.25' }, pos: null } } };
+    const d = derive(oneClip({ opacity: 0.8 }), null, { overlay: ov });
+    ok(/colorchannelmixer=aa=0.25/.test(chainFor(d, 'v0')),
+       `the value reaches the graph: ${chainFor(d, 'v0')}`);
+    same(d.overrides[0].keys.join(','), 'aa', 'and the key is named');
+    same(d.overrides[0].control, 'opacity', 'against the slider it outranks');
+}
+
+// ── the overlay as a thing the application holds ───────────────────────────
+
+console.log('\nthe overlay itself');
+{
+    overlay.clear();
+    ok(overlay.isEmpty(), 'it starts empty');
+
+    const rec = overlay.insert('clip:3/after-scale', 'eq');
+    same(overlay.insertCount(), 1, 'a filter can be put at a point');
+    ok(/^u\d+$/.test(rec.id), `with an id of its own (${rec.id})`);
+
+    // Editing a user node writes to the node; editing a derived one records a
+    // lock. One call, because from the panel's side it is one gesture.
+    overlay.edit({ id: rec.id, derived: false }, { params: { contrast: '1.4' } });
+    same(overlay.inserts()[0].params.contrast, '1.4', 'its params are its own');
+
+    overlay.edit({ anchor: 'clip:3/crop', derived: true }, { params: { x: '10' } });
+    same(overlay.lockCount(), 1, 'editing a derived node records a lock instead');
+    ok(overlay.isLocked('clip:3/crop'), 'against its anchor');
+
+    // A blank means "stop overriding this", which is what emptying a box asks
+    // for. A lock with nothing left in it is not a lock.
+    overlay.edit({ anchor: 'clip:3/crop', derived: true }, { params: { x: '' } });
+    same(overlay.lockCount(), 0, 'and emptying the field takes the lock away with it');
+}
+
+console.log('\na split keeps both halves looking the same');
+{
+    overlay.clear();
+    overlay.insert('clip:3/after-scale', 'hflip');
+    overlay.edit({ anchor: 'clip:3/scale', derived: true }, { pos: ['640', '360'] });
+    overlay.cloneClip(3, 4);
+
+    same(overlay.insertCount(), 2, 'the new half gets its own copy of the filter');
+    same(overlay.inserts()[1].anchor, 'clip:4/after-scale', 'pinned to its own clip');
+    ok(overlay.inserts()[0].id !== overlay.inserts()[1].id, 'and its own id');
+    ok(overlay.isLocked('clip:4/scale'), 'the lock is copied too');
+    // Copied, not shared: editing one half after the cut must not change the
+    // other, which is a thing a shared reference would do quietly.
+    overlay.edit({ anchor: 'clip:4/scale', derived: true }, { pos: ['1', '1'] });
+    same(overlay.locks()['clip:3/scale'].pos.join(':'), '640:360',
+         'and they are copies rather than two names for one thing');
+}
+
+console.log('\nnodes pinned to a clip that is gone');
+{
+    overlay.clear();
+    overlay.insert('clip:3/after-scale', 'hflip');
+    overlay.insert('clip:9/after-scale', 'vflip');
+    overlay.edit({ anchor: 'composite/overlay:9', derived: true }, { pos: ['5', '5'] });
+
+    overlay.retain([3]);
+    same(overlay.insertCount(), 1, 'go when the clip does');
+    same(overlay.inserts()[0].anchor, 'clip:3/after-scale', 'and the rest stay');
+    same(overlay.lockCount(), 0, 'a lock on a gone clip goes too');
+
+    // Anything not pinned to a clip belongs to the render rather than to any
+    // one of its parts, and outlives all of them.
+    overlay.insert('composite/after-overlay', 'vignette');
+    overlay.retain([]);
+    same(overlay.insertCount(), 1, 'and what belongs to the whole render survives an empty timeline');
+}
+
+console.log('\nremembered');
+{
+    overlay.clear();
+    overlay.insert('clip:3/after-scale', 'eq');
+    overlay.edit({ anchor: 'clip:3/scale', derived: true }, { pos: ['800', '600'] });
+
+    // `remember()` runs on every change; restore() reads the same key back.
+    overlay.clear();
+    same(overlay.insertCount(), 0, 'cleared');
+    overlay.restore();
+    same(overlay.insertCount(), 0, 'and a cleared overlay stays cleared through a restore');
+
+    overlay.insert('clip:3/after-scale', 'eq');
+    overlay.edit({ anchor: 'clip:3/scale', derived: true }, { pos: ['800', '600'] });
+    overlay.restore();
+    same(overlay.insertCount(), 1, 'what was there comes back');
+    same(overlay.locks()['clip:3/scale'].pos.join(':'), '800:600', 'lock and all');
+    overlay.clear();
+}
+
+// ── the two graphs, with a filter in them ──────────────────────────────────
+
+console.log('\nthe run graph carries the user’s filters too');
+{
+    const { renderGraph, filtergraph } = globalThis.__ffmpegBro;
+    const spec = oneClip();
+    spec.pixelFormat = 'yuv420p';
+    const ov = { inserts: [{ id: 'u1', anchor: 'composite/after-overlay', filter: 'hflip',
+                             pos: [], params: {} }], locks: {} };
+
+    const shown = filtergraph(spec, null, { overlay: ov });
+    const run = renderGraph(spec, null, { overlay: ov });
+    ok(shown.ok && run.ok, 'both forms derive');
+
+    const runChains = run.filterGraph.split(';');
+    same(runChains.length, shown.chains.length, 'the same number of chains either way');
+    const differing = shown.chains.filter((c, i) => c !== runChains[i]);
+    same(differing.length, 1, 'differing by exactly one — the conversion the writer does here');
+    const runVideo = runChains.find((c) => c.endsWith('[vout]'));
+    ok(/hflip\[vout\]$/.test(runVideo),
+       `and the filter is in the one that runs: ${runVideo}`);
+    const shownVideo = shown.chains.find((c) => c.endsWith('[vout]'));
+    ok(/hflip,scale=.*out_color_matrix/.test(shownVideo),
+       `while the printed one carries on into the encoder’s colour: ${shownVideo}`);
+}
+
 // ── the stage, with nothing to draw ────────────────────────────────────────
 //
 // The half of the Graph stage this test can reach. Everything else about it

@@ -81,6 +81,11 @@ const A = globalThis.__ffmpegBro;
 ok(!!A && !!A.project, 'the app exposes its model');
 ok(el('dropzone').className.indexOf('hidden') < 0, 'dropzone visible before a file');
 
+// Filters and locks are remembered in localStorage, which outlives a process —
+// so a suite that inserted one and then died would leave the next run of this
+// one rendering through libavfilter for reasons nothing on screen explains.
+A.graph.overlay.clear();
+
 // ── dropping a file loads it ───────────────────────────────────────────────
 
 dropFiles(400, 300, [media]);

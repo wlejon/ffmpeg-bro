@@ -10,6 +10,8 @@ import * as viewer from '../viewer.js';
 import { settings, outputFps } from './state.js';
 import { containerInfo } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
+import { renderGraph } from '../filtergraph.js';
+import { current as overlayState, isEmpty } from '../graph/overlay.js';
 
 /// Swap a path's extension, keeping the directory and the name. Written
 /// against both separators because a path here came from a native file dialog
@@ -69,6 +71,10 @@ export function buildSpec(over = {}) {
     const clips = project.clips.map((c, i) => {
         const p = viewer.placement(c, canvasW, canvasH);
         return {
+            // Carried so the graph can name a node for the clip it came from
+            // and find it again after the skeleton is rebuilt. The renderer
+            // ignores it; `graph/derive.js` cannot work without it.
+            id: c.id,
             path: c.path,
             start: c.start,
             length: c.length,
@@ -95,7 +101,7 @@ export function buildSpec(over = {}) {
                    (container ? container.audioCodec : 'aac');
     const r = range();
 
-    return {
+    const spec = {
         path: over.path || settings.path || defaultPath(),
         width: outW,
         height: outH,
@@ -126,4 +132,25 @@ export function buildSpec(over = {}) {
         formatOptions: settings.extraFormat,
         clips,
     };
+
+    // Which of the renderer's two paths this render takes, decided in one
+    // place: a graph with nothing of the user's in it is the internal
+    // compositor, and a graph with a filter in it is libavfilter. The two are
+    // measured against each other in tests/export_test.cpp and agree to 43 dB,
+    // so this is a choice about what is *expressible* rather than about which
+    // is better — the compositor cannot run an `hflip`, and the graph path
+    // decodes every input from the start of its file.
+    //
+    // Attached here rather than at each `render.start`, because there are three
+    // of them — the export, and both halves of the A/B preview — and a
+    // reference rendered without the filters would be comparing the picture
+    // against a different picture.
+    if (!isEmpty()) {
+        const g = renderGraph(spec, specSources(), { overlay: overlayState() });
+        if (g.ok) {
+            spec.filterGraph = g.filterGraph;
+            spec.filterInputs = g.filterInputs;
+        }
+    }
+    return spec;
 }

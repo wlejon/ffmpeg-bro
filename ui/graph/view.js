@@ -1,11 +1,19 @@
 // The graph, on screen.
 //
-// The spine made the *stages* visible; this makes the graph itself visible. It
-// is derived from the edit and read-only for now, which is not a placeholder:
-// seeing what the timeline amounts to — every trim, every scale, every overlay,
-// named the way ffmpeg names them — is most of what this stage is for, and it
-// is the picture the command bar has only ever been able to state as one long
-// line.
+// The spine made the *stages* visible; this makes the graph itself visible, and
+// now editable. Seeing what the timeline amounts to — every trim, every scale,
+// every overlay, named the way ffmpeg names them — is most of what this stage
+// is for, and it is the picture the command bar has only ever been able to
+// state as one long line.
+//
+// The skeleton is still derived: nothing here builds a graph, it asks
+// `derive()` for one on every change and draws the answer. What a person does
+// on this screen goes into `overlay.js` and is put back by the derivation, so
+// the picture is always of the edit as it is now rather than of the edit as it
+// was when a node was made. The two consequences worth holding on to are that a
+// redraw throws away every node object (so nothing may be remembered by
+// reference — see `panel.keyOf`) and that a filter you insert survives moving,
+// trimming and splitting the clip it is pinned to.
 //
 // Absolutely positioned divs over a `<canvas>` that draws the wires, which is
 // the pairing `ui/timeline.js` already uses. The alternative is drawing nodes
@@ -34,6 +42,8 @@ import { buildSpec, specSources } from '../export/spec.js';
 import { derive } from './derive.js';
 import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
+import * as overlay from './overlay.js';
+import * as panel from './panel.js';
 
 // The palette's --blue and --good. Canvas takes colours, not custom
 // properties, and a wire whose colour drifts from the node it leaves is worse
@@ -58,22 +68,43 @@ function inNode(node) {
     return false;
 }
 
-export function initGraphView(r) {
+export function initGraphView(r, hooks = {}) {
     refs = r;
 
-    // Dragging the background pans. On a node it does nothing yet, which is
-    // the honest read-only behaviour: a node that moves under the mouse but
-    // does not stay moved is worse than one that does not move.
+    panel.initPanel({ panel: refs.panel }, {
+        // An edit to the overlay changes the graph, the command, the spine and
+        // the properties panel's idea of which of its controls have been
+        // outranked. The stage does not know about any of those, so it says
+        // what happened and lets the application put them back in step.
+        changed: () => { drawGraph(); if (hooks.changed) hooks.changed(); },
+    });
+
+    // Dragging the background pans; dragging a node does nothing, because a
+    // node's position here is computed and a node that moved under the mouse
+    // but snapped back on the next timeline edit would be worse than one that
+    // does not move. Clicking the background clears the selection — the panel
+    // is about a node and there has to be a way to be about none.
     let dragging = null;
+    let panned = false;
     refs.viewport.addEventListener('mousedown', (e) => {
         if (inNode(e.target)) return;
         dragging = { x: e.clientX, y: e.clientY, panX, panY };
+        panned = false;
         e.preventDefault();
+    });
+    refs.viewport.addEventListener('click', (e) => {
+        // A pan ends with a click on the background, and deselecting on the way
+        // out of one would make the panel impossible to keep open while moving
+        // around the graph.
+        if (inNode(e.target) || panned) return;
+        panel.selectNode(null);
+        markSelection();
     });
     document.addEventListener('mousemove', (e) => {
         if (!dragging) return;
         panX = dragging.panX + (e.clientX - dragging.x);
         panY = dragging.panY + (e.clientY - dragging.y);
+        if (Math.abs(e.clientX - dragging.x) + Math.abs(e.clientY - dragging.y) > 3) panned = true;
         apply();
     });
     document.addEventListener('mouseup', () => { dragging = null; });
@@ -102,7 +133,7 @@ export function initGraphView(r) {
 /// wants the shape without the picture. Cheap: `derive()` is a pure walk over
 /// a handful of clips, which is also what the command bar does twice a draw.
 export function graphSummary() {
-    const d = derive(buildSpec(), specSources());
+    const d = derive(buildSpec(), specSources(), { overlay: overlay.current() });
     if (!d.ok) return { ok: false, reason: d.reason };
     const p = print(d.graph);
     return {
@@ -111,7 +142,26 @@ export function graphSummary() {
         chains: p.chains.length,
         inputs: p.inputs.length,
         caveats: d.caveats.length,
+        mine: d.graph.nodes.filter((n) => !n.derived).length,
+        locks: d.graph.nodes.filter((n) => n.locked).length,
+        overrides: d.overrides,
     };
+}
+
+/// Which controls elsewhere in the application are outranked by a lock, by clip
+/// id. The properties panel asks, because a field that has quietly stopped
+/// applying has to say so where it is, not only on a stage nobody may be
+/// looking at.
+export function outrankedControls() {
+    const d = derive(buildSpec(), specSources(), { overlay: overlay.current() });
+    const by = {};
+    if (!d.ok) return by;
+    for (const o of d.overrides) {
+        if (!o.clip || !o.control || !o.keys.length) continue;
+        const list = by[o.clip] || (by[o.clip] = []);
+        if (list.indexOf(o.control) < 0) list.push(o.control);
+    }
+    return by;
 }
 
 /// One node as a card. Everything the node carries is on it — a graph screen
@@ -151,13 +201,34 @@ function card(n, g) {
     return el('div', {
         cls: cls.join(' '),
         'data-node': n.id,
+        'data-key': panel.keyOf(n) || '',
         'data-filter': n.filter || n.kind,
         title: n.path || undefined,
         style: { width: `${NODE_W}px` },
+        on: { click: () => { panel.selectNode(panel.keyOf(n)); markSelection(); } },
     }, [
-        div('gn-head', [span(name, 'gn-name'), pad && span(pad, 'gn-pad mono')]),
+        div('gn-head', [
+            span(name, 'gn-name'),
+            n.locked ? span('●', 'gn-lock') : null,
+            pad && span(pad, 'gn-pad mono'),
+        ]),
         args.length ? div('gn-args mono', args) : null,
     ]);
+}
+
+/// The `+` that sits on a wire. In the transformed container with the cards
+/// rather than on the canvas with the wires, because it is a thing to be
+/// clicked and the canvas is one element — hit-testing a bezier by hand to find
+/// out which wire was meant is work with a DOM node's name on it.
+function insertButton(point, x, y) {
+    return el('button', {
+        cls: 'gp-plus' + (panel.selectedPoint() === point.id ? ' on' : ''),
+        'data-point': point.id,
+        title: `Insert a filter ${point.title}`,
+        text: '+',
+        style: { left: `${Math.round(x)}px`, top: `${Math.round(y)}px` },
+        on: { click: (e) => { e.stopPropagation(); panel.openPoint(point); markSelection(); } },
+    });
 }
 
 /// Rebuild from the edit. Refused while the stage is not on screen, because
@@ -168,13 +239,14 @@ export function drawGraph() {
     const width = refs.viewport.clientWidth;
     if (!width) return;
 
-    const d = derive(buildSpec(), specSources());
+    const d = derive(buildSpec(), specSources(), { overlay: overlay.current() });
     if (!d.ok) {
         placed = null;
         put(refs.nodes, () => []);
         paint();
         note(d.reason ? `No graph: ${d.reason}.` : 'No graph.');
         status(null);
+        panel.draw(null);
         return;
     }
     note('');
@@ -195,24 +267,62 @@ export function drawGraph() {
         measured.set(n.id, cards.get(n.id).getBoundingClientRect().height);
 
     placed = layout(d.graph, (n) => measured.get(n.id));
+    const boxes = new Map();
     for (const box of placed.nodes) {
         const node = cards.get(box.node.id);
         node.classList.add(`gn-${box.stream}`);
         node.style.left = `${box.x}px`;
         node.style.top = `${box.y}px`;
+        boxes.set(box.node.id, box);
+    }
+
+    // The insert points, on the wire each one names. Appended after the cards
+    // so they are measured against nothing — a zero-sized container has no
+    // layout for a late child to disturb — and drawn at the middle of the wire
+    // leaving the point's current end, which is the last thing inserted there
+    // rather than the derived node the point was declared against.
+    for (const p of d.points) {
+        const wire = placed.wires.find((w) => w.edge.from === p.at);
+        const from = boxes.get(p.at);
+        if (!from) continue;
+        const x = wire ? (wire.x1 + wire.x2) / 2 : from.x + from.w + 18;
+        const y = wire ? (wire.y1 + wire.y2) / 2 : from.y + from.h / 2;
+        refs.nodes.append(insertButton(p, x - 9, y - 9));
     }
 
     if (shape !== shapeOf(d.graph)) { shape = shapeOf(d.graph); fit(); }
     apply();
-    status(print(d.graph));
+    status(print(d.graph), d);
+    panel.draw(d.graph);
+    markSelection();
+}
+
+/// Which card the panel is about. A class rather than a rebuild: the selection
+/// changes on every click and the cards are expensive enough to measure that
+/// making them again to draw a border would be visible.
+function markSelection() {
+    if (!refs.nodes) return;
+    const key = panel.selectedKey();
+    for (const node of refs.nodes.querySelectorAll('.gn'))
+        node.classList.toggle('on', !!key && node.getAttribute('data-key') === key);
+    const point = panel.selectedPoint();
+    for (const b of refs.nodes.querySelectorAll('.gp-plus'))
+        b.classList.toggle('on', !!point && b.getAttribute('data-point') === point);
 }
 
 /// What makes one graph a different *picture* from another: how many nodes,
 /// what they are and how they are wired. Not their arguments — turning the
 /// quality up should not throw away where you had panned to.
+///
+/// Wires are written by the *position* of the nodes they join and not by their
+/// ids, because ids are handed out from a counter that never restarts: two
+/// derivations of the same unchanged edit produce the same graph with entirely
+/// different ids, so an id-keyed comparison says "different" every single time
+/// and the view refits on every redraw. Which it did.
 function shapeOf(g) {
+    const at = new Map(g.nodes.map((n, i) => [n.id, i]));
     return g.nodes.map((n) => `${n.kind}:${n.filter}`).join(',') + '|' +
-           g.edges.map((e) => `${e.from}>${e.to}:${e.port}`).join(',');
+           g.edges.map((e) => `${at.get(e.from)}>${at.get(e.to)}:${e.port}`).join(',');
 }
 
 /// Frame the whole graph and repaint. The two halves are separate because
@@ -294,10 +404,12 @@ function note(text) {
 }
 
 /// What is on screen, said in the same numbers the command bar uses.
-function status(p) {
+function status(p, d) {
     if (!refs.status) return;
     if (!p || !placed) return put(refs.status, () => []);
     const nodes = placed.nodes.filter((b) => b.node.kind === 'filter').length;
+    const mine = d ? d.graph.nodes.filter((n) => !n.derived).length : 0;
+    const locks = d ? d.graph.nodes.filter((n) => n.locked).length : 0;
     put(refs.status, () => [
         span(`${p.inputs.length} input${p.inputs.length === 1 ? '' : 's'}`),
         span('·', 'dim'),
@@ -305,8 +417,16 @@ function status(p) {
         span('·', 'dim'),
         span(`${p.chains.length} chain${p.chains.length === 1 ? '' : 's'}`),
         span('·', 'dim'),
-        // Said out loud rather than left to be discovered: this is what the
-        // edit comes to, not a place the edit is made.
-        span('derived from the edit', 'dim'),
+        // What is derived and what is not, counted separately, because that is
+        // the difference the whole stage turns on: the first is rebuilt from
+        // the timeline and the second survives it.
+        mine || locks
+            ? span(`${mine} of yours${locks ? `, ${locks} locked` : ''}`, 'gr-mine')
+            : span('derived from the edit', 'dim'),
+        // A render with a filter of your own in it goes through libavfilter
+        // instead of the internal compositor. Stated here because it is the one
+        // thing on this screen that changes what the renderer does.
+        mine ? span('·', 'dim') : null,
+        mine ? span('rendered through libavfilter', 'dim') : null,
     ]);
 }

@@ -39,12 +39,12 @@ export { outputColor };
 /// colour tags come from. Without it the graph is still correct in geometry and
 /// timing but leaves the source matrices to swscale's guess, and `caveats` says
 /// so — the difference is a visible colour cast, not rounding.
-export function filtergraph(spec, sources) {
-    const d = derive(spec, sources);
+export function filtergraph(spec, sources, opts) {
+    const d = derive(spec, sources, opts);
     if (!d.ok) return d;
     const { chains, inputs, video, audio } = print(d.graph);
-    return { ok: true, inputs, chains, video, audio,
-             colour: d.colour, caveats: d.caveats, graph: d.graph };
+    return { ok: true, inputs, chains, video, audio, colour: d.colour,
+             caveats: d.caveats, graph: d.graph, overrides: d.overrides };
 }
 
 /// The same graph, in the two fields `bro.ffmpeg.render.start` wants to render
@@ -57,8 +57,8 @@ export function filtergraph(spec, sources) {
 /// numbered, because `[0:v]` and `-i` number zero are one fact on a command
 /// line and two separate statements here. Taking both from the graph's own
 /// input nodes is what keeps them from disagreeing.
-export function renderGraph(spec, sources) {
-    const d = derive(spec, sources, { forRender: true });
+export function renderGraph(spec, sources, opts) {
+    const d = derive(spec, sources, Object.assign({}, opts, { forRender: true }));
     if (!d.ok) return d;
     const { chains } = print(d.graph);
     const filterInputs = d.graph.nodes

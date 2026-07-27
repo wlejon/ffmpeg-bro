@@ -131,17 +131,20 @@ function sourceColor(src) {
 /// because the crop is a fraction of the source and the source's size is not in
 /// the spec — the renderer does not need it, since it crops the placed picture.
 /// Letting ffmpeg do that arithmetic keeps the two definitions the same one.
-function videoSteps(clip, w, src) {
+function videoSteps(clip, w, src, key) {
     const c = cropOf(clip);
     const keepW = 1 - c.l - c.r;
     const keepH = 1 - c.t - c.b;
 
     const steps = [
-        { filter: 'trim', params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
-        { filter: 'setpts', pos: [`PTS-STARTPTS+${n(w.offset, 6)}/TB`] },
+        { filter: 'trim', anchor: `${key}/trim`,
+          params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
+        { filter: 'setpts', anchor: `${key}/setpts`, posNames: ['expr'],
+          pos: [`PTS-STARTPTS+${n(w.offset, 6)}/TB`] },
     ];
     if (keepW < 1 || keepH < 1)
-        steps.push({ filter: 'crop',
+        steps.push({ filter: 'crop', anchor: `${key}/crop`,
+                     posNames: ['w', 'h', 'x', 'y'],
                      pos: [`iw*${n(keepW, 6)}`, `ih*${n(keepH, 6)}`,
                            `iw*${n(c.l, 6)}`, `ih*${n(c.t, 6)}`] });
 
@@ -157,34 +160,141 @@ function videoSteps(clip, w, src) {
     // one edit against the renderer: 39.1 dB with all three, 29.0 dB with the
     // matrix alone, 26.8 dB with none, 24.1 dB with the ranges alone.
     const from = sourceColor(src);
-    const scale = { filter: 'scale', pos: [px(clip.w * keepW), px(clip.h * keepH)], params: {} };
+    const scale = { filter: 'scale', anchor: `${key}/scale`, posNames: ['w', 'h'],
+                    pos: [px(clip.w * keepW), px(clip.h * keepH)], params: {} };
     if (from)
         Object.assign(scale.params, { in_color_matrix: from.matrix,
                                       in_range: from.range, out_range: 'full' });
     steps.push(scale);
-    steps.push({ filter: 'format', pos: ['rgba'] });
+    steps.push({ filter: 'format', anchor: `${key}/format`,
+                 posNames: ['pix_fmts'], pos: ['rgba'] });
     if (clip.opacity < 1)
-        steps.push({ filter: 'colorchannelmixer', params: { aa: n(clip.opacity) } });
+        steps.push({ filter: 'colorchannelmixer', anchor: `${key}/opacity`,
+                     params: { aa: n(clip.opacity) } });
     return steps;
 }
 
 /// The audio run for one clip. `adelay` rather than `asetpts` for the offset:
 /// it pads with silence, which is what a clip that starts late sounds like.
-function audioSteps(clip, w) {
+function audioSteps(clip, w, key) {
     const steps = [
-        { filter: 'atrim', params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
-        { filter: 'asetpts', pos: ['PTS-STARTPTS'] },
+        { filter: 'atrim', anchor: `${key}/atrim`,
+          params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
+        { filter: 'asetpts', anchor: `${key}/asetpts`, posNames: ['expr'],
+          pos: ['PTS-STARTPTS'] },
     ];
-    if (clip.volume !== 1) steps.push({ filter: 'volume', pos: [n(clip.volume)] });
+    if (clip.volume !== 1)
+        steps.push({ filter: 'volume', anchor: `${key}/volume`,
+                     posNames: ['volume'], pos: [n(clip.volume)] });
     if (w.offset > 0.0005)
-        steps.push({ filter: 'adelay', pos: [px(w.offset * 1000)], params: { all: '1' } });
+        steps.push({ filter: 'adelay', anchor: `${key}/adelay`, posNames: ['delays'],
+                     pos: [px(w.offset * 1000)], params: { all: '1' } });
     return steps;
+}
+
+// ── anchors ────────────────────────────────────────────────────────────────
+//
+// Every node the derivation makes is named for *what it is*, and the wires
+// between them carry named points where something can be put. Both exist for
+// the same reason: this whole graph is rebuilt whenever the timeline moves, so
+// an id is only good for as long as one derivation lasts, and a position in an
+// array means something different afterwards. A name outlives both.
+//
+// A clip's own id is what makes `clip:7/scale` stable, which is why `buildSpec`
+// carries it. A spec written by hand without one falls back to its position,
+// which is fine for a test and would not be fine for an edit.
+
+const clipKey = (clip, i) =>
+    `clip:${clip.id !== undefined && clip.id !== null ? clip.id : `#${i}`}`;
+
+/// Which control on the properties panel a node's value came from — so that a
+/// lock can be reported *there*, against the field it outranks, rather than
+/// only on a stage the person editing may not be looking at.
+///
+/// Not every node has one: `trim`'s numbers come from the range and the clip's
+/// position together, and there is no single box on screen holding them.
+const CONTROL = {
+    crop: 'crop', scale: 'size', opacity: 'opacity', volume: 'volume',
+};
+
+export function controlOf(anchor) {
+    if (/^composite\/overlay:/.test(anchor || '')) return 'position';
+    const m = /\/([a-z]+)$/.exec(anchor || '');
+    return (m && CONTROL[m[1]]) || null;
+}
+
+/// Which clip a node belongs to, as a string — clip ids are numbers and anchors
+/// are text, and comparing the two directly is a bug that only shows up once
+/// there are ten clips and one of them is `clip:1` next to `clip:10`.
+export function clipOf(anchor) {
+    const m = /^clip:([^/]+)\//.exec(anchor || '') ||
+              /^composite\/overlay:(.+)$/.exec(anchor || '');
+    return m ? m[1] : null;
+}
+
+/// The user's layer, put back onto a skeleton that has never seen it.
+///
+/// Locks first, then insertions, because an insertion's position is described
+/// relative to derived nodes and a lock does not move any of them.
+///
+/// An override is only reported when the lock actually disagrees with what the
+/// derivation just produced. A lock that happens to say what the timeline says
+/// is still a lock — it will keep saying it after the next drag — but it has
+/// outranked nothing yet, and a panel that marked the control anyway would cry
+/// wolf on every field anyone had ever touched.
+function applyOverlay(g, points, ov, overrides) {
+    if (!ov) return;
+
+    for (const node of g.nodes) {
+        const lock = node.anchor && ov.locks ? ov.locks[node.anchor] : null;
+        if (!lock) continue;
+        const keys = [];
+        for (const k of Object.keys(lock.params || {}))
+            if (String(node.params[k]) !== String(lock.params[k])) keys.push(k);
+        if (lock.pos && lock.pos.join(' ') !== node.pos.join(' '))
+            keys.push('arguments');
+        Object.assign(node.params, lock.params);
+        if (lock.pos) node.pos = lock.pos.slice();
+        node.locked = true;
+        overrides.push({ anchor: node.anchor, filter: node.filter,
+                         clip: clipOf(node.anchor), control: controlOf(node.anchor), keys });
+    }
+
+    for (const rec of ov.inserts || []) {
+        const point = points.find((p) => p.id === rec.anchor);
+        // Not an error and not something to throw away: a clip trimmed out of
+        // the render range takes its insert points with it, and the node comes
+        // back when the clip does.
+        if (!point) continue;
+        const after = g.node(point.at);
+        if (!after) continue;
+        const node = g.insertAfter(after, {
+            id: rec.id, anchor: rec.anchor, filter: rec.filter,
+            pos: rec.pos, params: rec.params, derived: false,
+        });
+        // The label goes with the end of the chain, not with the node that used
+        // to be there. Left behind it would be a name no chain produces, and
+        // the pad the muxer maps would be invented instead of `vout`.
+        if (after.label) { node.label = after.label; after.label = null; }
+        // Two nodes at one point run in the order they were added, so the next
+        // one goes after this one rather than in front of it.
+        point.at = node.id;
+    }
 }
 
 /// `buildSpec()`'s output → the graph that would render it.
 ///
-/// Returns `{ ok: true, graph, colour, caveats }`, or `{ ok: false, reason }`
-/// — and a caller given a refusal must say so rather than print a graph.
+/// Returns `{ ok: true, graph, colour, caveats, points, overrides }`, or
+/// `{ ok: false, reason }` — and a caller given a refusal must say so rather
+/// than print a graph. `points` are the named places on the wires where a
+/// filter can go; `overrides` is every lock that disagreed with what was just
+/// derived, which is what lets the field it outranked say so.
+///
+/// `opts.overlay` is the user's layer — `{ inserts, locks }` from
+/// `graph/overlay.js`. Passed in rather than reached for, so this stays a pure
+/// function of its arguments: the tests hand it literals and get the same
+/// answer the application gets, which is the only reason they are worth
+/// anything.
 ///
 /// `sources` is optional and runs parallel to `spec.clips`: what
 /// `bro.ffmpeg.probe()` said about each clip's video stream, which is where the
@@ -228,7 +338,7 @@ export function derive(spec, sources, opts = {}) {
         if (!(clip.w > 0 && clip.h > 0) ||
             ![clip.x, clip.y, clip.w, clip.h].every(Number.isFinite))
             return refuse('a clip has no rectangle to be drawn in');
-        kept.push({ clip, w, i: kept.length,
+        kept.push({ clip, w, i: kept.length, key: clipKey(clip, ci),
                     src: Array.isArray(sources) ? sources[ci] : null });
     }
     if (!kept.length) return refuse('nothing on the timeline falls inside the range');
@@ -241,16 +351,33 @@ export function derive(spec, sources, opts = {}) {
     // rate asked for rather than at whatever the topmost source happens to run
     // at — the same thing the renderer does by holding a fixed output clock.
     const base = g.run([], [{
-        filter: 'color',
+        filter: 'color', anchor: 'base',
         params: { c: 'black', s: `${W}x${H}`, r: n(fps, 6), d: n(length, 6) },
     }], 'base');
+
+    // The named places on the wires where something can be put. `at` is where
+    // the *next* insertion goes, which starts as the point's own node and moves
+    // along as nodes are spliced in.
+    const points = [];
+    const point = (id, after, stream, title) => {
+        if (after) points.push({ id, after: after.id, at: after.id, stream, title });
+    };
 
     // Nodes are pushed in the order their chains are printed in, and print.js
     // walks the array — so a clip's whole run goes down before the next clip's,
     // and the overlays after all of them.
-    const heads = kept.map(({ clip, w, src, i }) => {
-        const input = g.add({ kind: 'input', stream: 'v', index: i, path: clip.path });
-        return g.run(input, videoSteps(clip, w, src), `v${i}`);
+    const heads = kept.map(({ clip, w, src, i, key }) => {
+        const input = g.add({ kind: 'input', stream: 'v', index: i, path: clip.path,
+                              anchor: `${key}/in:v` });
+        const tail = g.run(input, videoSteps(clip, w, src, key), `v${i}`);
+        // Two points per clip, and they are two different pictures: before the
+        // scale a filter sees the source at its own size, in its own pixel
+        // format and colour; after it, the clip as it will be composited —
+        // RGBA, at the size it occupies on the canvas. `hflip` does not care;
+        // anything that works in pixels does.
+        point(`${key}/after-decode`, input, 'v', 'after decode');
+        point(`${key}/after-scale`, g.byAnchor(`${key}/format`), 'v', 'after scale');
+        return tail;
     });
 
     // The last overlay carries the conversion out of the compositing space and
@@ -261,14 +388,17 @@ export function derive(spec, sources, opts = {}) {
     const toEncoder = [];
     if (!opts.forRender) {
         toEncoder.push({
-            filter: 'scale',
+            filter: 'scale', anchor: 'output/color',
             params: { in_range: 'full', out_color_matrix: colour.sws, out_range: colour.range },
         });
-        if (spec.pixelFormat) toEncoder.push({ filter: 'format', pos: [spec.pixelFormat] });
+        if (spec.pixelFormat)
+            toEncoder.push({ filter: 'format', anchor: 'output/format',
+                             posNames: ['pix_fmts'], pos: [spec.pixelFormat] });
     }
 
     let over = base;
-    kept.forEach(({ clip }, i) => {
+    let lastOverlay = null;
+    kept.forEach(({ clip, key }, i) => {
         const c = cropOf(clip);
         const x = clip.x + clip.w * c.l;
         const y = clip.y + clip.h * c.t;
@@ -277,18 +407,32 @@ export function derive(spec, sources, opts = {}) {
         // ends the canvas has to carry on rather than the whole graph stopping,
         // which is the default and would truncate the output at the first clip
         // to run out.
-        const steps = [{ filter: 'overlay', pos: [px(x), px(y)],
+        const steps = [{ filter: 'overlay', anchor: `composite/overlay:${key.slice(5)}`,
+                         posNames: ['x', 'y'], pos: [px(x), px(y)],
                          params: { eof_action: 'pass' } }];
         if (last) steps.push(...toEncoder);
         over = g.run([over, heads[i]], steps, last ? 'vout' : `o${i}`);
+        lastOverlay = g.byAnchor(`composite/overlay:${key.slice(5)}`);
     });
-    g.connect(over, g.add({ kind: 'sink', stream: 'v' }), 0);
+    // The composite, before it is converted into the encoder's colour.
+    //
+    // There is deliberately no point *after* that conversion. It is the one
+    // chain that exists in the printed graph and not in the one this
+    // application runs — the writer converts on that path — so a filter placed
+    // there would sit in the encoder's colour in the command you copied and in
+    // RGBA in the render you got. Two pictures from one insert point is worse
+    // than one fewer insert point.
+    point('composite/after-overlay', lastOverlay, 'v', 'after compositing');
+    g.connect(over, g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' }), 0);
 
     if (spec.audio !== false) {
         const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0);
-        const tails = heard.map(({ clip, w, i }) => {
-            const input = g.add({ kind: 'input', stream: 'a', index: i, path: clip.path });
-            return g.run(input, audioSteps(clip, w), `a${i}`);
+        const tails = heard.map(({ clip, w, i, key }) => {
+            const input = g.add({ kind: 'input', stream: 'a', index: i, path: clip.path,
+                                  anchor: `${key}/in:a` });
+            const tail = g.run(input, audioSteps(clip, w, key), `a${i}`);
+            point(`${key}/audio`, input, 'a', 'clip audio');
+            return tail;
         });
         let out = null;
         if (tails.length === 1) {
@@ -298,12 +442,22 @@ export function derive(spec, sources, opts = {}) {
             // divides by the number of inputs, which would make every clip
             // quieter for the company of the others — a render that sounds
             // different from the edit it was made from.
-            out = g.run(tails, [{ filter: 'amix',
+            out = g.run(tails, [{ filter: 'amix', anchor: 'audio/mix',
                                   params: { inputs: String(tails.length), normalize: '0' } }],
                         'aout');
         }
-        if (out) g.connect(out, g.add({ kind: 'sink', stream: 'a' }), 0);
+        // With one audible clip there is no mixer, and this point sits on that
+        // clip's own tail — which is the same wire the muxer maps and the right
+        // place for something that applies to the whole soundtrack.
+        point('audio/after-mix', out, 'a', 'after mixing');
+        if (out) g.connect(out, g.add({ kind: 'sink', stream: 'a', anchor: 'out:a' }), 0);
     }
+
+    // The user's layer goes on last, over a skeleton that is complete — so an
+    // insert point is a wire that exists and a lock is a value that has already
+    // been derived and can therefore be reported as outranked.
+    const overrides = [];
+    applyOverlay(g, points, opts.overlay, overrides);
 
     // What is known to differ about *this* render, rather than a fixed
     // disclaimer. A note that is always the same is one nobody reads, and the
@@ -316,7 +470,7 @@ export function derive(spec, sources, opts = {}) {
         caveats.push('the output rate differs from a source’s, and a fixed-rate ' +
                      'walk and a frame-sync do not choose the same frames');
 
-    return { ok: true, graph: g, colour, caveats };
+    return { ok: true, graph: g, colour, caveats, points, overrides };
 }
 
 function refuse(reason) { return { ok: false, reason }; }

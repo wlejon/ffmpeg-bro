@@ -274,14 +274,95 @@ several decoders each free-running on their own audio clock come apart within a
 minute. Four 1080p60 streams stay inside ~35 ms of each other; the ceiling is
 decode throughput, not the transport.
 
+## The graph
+
+`N` opens the Graph stage, which is the edit drawn as the filtergraph that
+performs it. Every trim, every scale, every overlay, named the way ffmpeg names
+them, wired the way ffmpeg wires them — and the same chains the command bar
+prints along the bottom, laid out so they can be read.
+
+It is **derived from the timeline and rebuilt whenever the timeline moves**.
+Nothing on this screen invents a graph; it asks for one on every change and
+draws the answer, which is what makes it a picture of the edit as it is now
+rather than a copy of the edit as it was. Drag the background to pan, scroll to
+zoom, `0` to fit, `Esc` back to the edit.
+
+### Putting a filter in it
+
+Every wire that can take one carries a `+`. Click it and pick a filter out of
+**libavfilter's own list** — five hundred of them in this build, searchable by
+name and by what libavfilter says each one does; there is no list of supported
+filters written down anywhere in this application. The filter appears on the
+wire, selected, with its whole option table beside it, read out of the filter's
+own `AVClass` exactly as the encoder's advanced column is read out of an
+encoder's.
+
+There are five places a filter can go, and they are five different pictures:
+
+| Point | What is on the wire there |
+|---|---|
+| after decode | the source at its own size, format and colour |
+| after scale | the clip as it will be composited — RGBA, at the size it occupies |
+| after compositing | the whole canvas, before the encoder's colour |
+| clip audio | one clip's sound, before it is trimmed and placed |
+| after mixing | the whole soundtrack |
+
+Two filters at one point run in the order you added them.
+
+There is deliberately **no point after the output colour conversion**. That
+conversion is the one chain that exists in the printed command and not in the
+graph this binary runs — the writer does it here — so a filter placed there
+would sit in the encoder's colour in the command you copied and in RGBA in the
+render you got. One insert point producing two pictures is worse than one fewer
+insert point.
+
+### Locks
+
+Every value on a derived node can be typed into, and **typing into one locks
+that node**. The skeleton around it still regenerates: move the clip, trim it,
+crop it, and everything except the thing you set follows. A value you typed
+that the next drag silently reverted is worse than the edit not applying,
+because at least the second one is visible.
+
+So every place that could disagree says which one won. The node is badged, the
+Graph card on the spine counts the locks, the panel beside the graph says what
+the lock outranks, and **the control it took over is marked in the properties
+panel** — faded, with a dot, and a tooltip naming the node to unlock. `Unlock`
+hands it back to the derivation.
+
+A filter you insert and a value you lock are pinned to a **named point**
+(`clip:7/after-scale`), never to a position, so they survive the rebuild. They
+survive moving and trimming the clip; splitting a clip copies them to both
+halves, because a cut should not change how either half looks; deleting a clip
+takes them with it. They are remembered in `localStorage` between runs — there
+is no project file yet, and this is the first thing that makes one worth having.
+
+### What changes when there is one
+
+A render with a filter of your own in it goes through **libavfilter** instead of
+the internal compositor, and nothing has to be switched on for that: the spec
+the application builds carries the graph, and `ffmpeg_export.cpp` picks its
+`FrameSource` on whether that field is empty. The two paths are measured against
+each other on every `ctest` run — the same edit rendered both ways, compared as
+PSNR, 43 dB and holding — so this is a choice about what is *expressible*, not
+about which is better.
+
+Two consequences worth knowing. The command bar stops calling its filtergraph a
+translation, because on this path it is not one: those are the chains
+libavfilter parses, all but the last. And **the viewer cannot show you a
+filter** — playback is the engine decoding the file straight into a `<video>`,
+with no filter path anywhere in it. Clips carrying filters are marked `fx` in
+the picture rather than left looking as though the filter did nothing; the
+export preview is where you see what it does.
+
 ## Output
 
-`Encode` and `Write` are two of the four stages on the spine — the row under
-the title bar that *is* the pipeline: **Sources → Compose → Encode → Write**.
-Each card says what its stage is currently set to, so the bar reads as one
-statement of the whole render, and clicking the part that is wrong is how you
-go and change it. `E` goes to Encode, `[` and `]` step along the chain, `Esc`
-comes back to the edit.
+`Encode` and `Write` are two of the five stages on the spine — the row under
+the title bar that *is* the pipeline: **Sources → Compose → Graph → Encode →
+Write**. Each card says what its stage is currently set to, so the bar reads as
+one statement of the whole render, and clicking the part that is wrong is how
+you go and change it. `E` goes to Encode, `[` and `]` step along the chain,
+`Esc` comes back to the edit.
 
 Choosing an encoder setting means looking at what it does to the picture, and
 the comparison that shows you is the whole point of the Encode stage, so it
@@ -359,9 +440,14 @@ equally true:
 - **Exact** — everything but the filtergraph. Those keys are literally what
   `av_opt_set` is called with, which is the same path the `ffmpeg` command line
   uses for its own arguments. Not a description of the render; the render.
-- **Equivalent** — the composition. This binary composites internally rather
-  than building a filter graph, so the graph shown is a translation, and it is
-  dimmed to say so.
+- **Equivalent** — the composition. With nothing of your own on the graph this
+  binary composites internally rather than building a filter graph, so the
+  graph shown is a translation, and it is dimmed to say so.
+
+Put a filter on the graph and the second line changes, because the claim
+changes: the render goes through libavfilter and those are the chains it
+parses. All but the last, which converts into the encoder's colour and is the
+writer's job here.
 
 How good a translation was measured rather than asserted: render the same edit
 both ways and compare. Naming every colour conversion is the difference between
@@ -446,6 +532,7 @@ upright, from the container's display matrix.
 | `G` | grid / stacked layout |
 | `E` | the Encode stage (`Esc` goes back to the edit) |
 | `I` | the Sources stage — what is actually in the files |
+| `N` | the Graph stage — the edit as a filtergraph (`0` fits it) |
 | `[` `]` | one step back / forward along the pipeline |
 | `Space` `←` `→` | on the Encode stage: play / pause and step the comparison |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
@@ -471,6 +558,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js         # needs no media
 ```
 
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
@@ -486,6 +574,16 @@ icon name or a stray width breaks none of the behaviour and all of the look.
 the translation into a filter graph is a pure function of it, so the graph is checked
 against specs written out by hand — including the edits it must refuse rather than
 approximate.
+
+`ui_graph.js` needs none either, and watches the graph from inside rather than
+through the string it prints: the model, the printer's chain rule on shapes the
+derivation does not produce, and the whole of what makes an edited graph
+survive a rebuilt one. A filter lands on the wire it names and takes the pad
+name with it; two at one point run in order; a lock outranks the timeline and
+reports which control it took; a lock that happens to agree has outranked
+nothing; a split copies both halves' filters and a delete takes them away; and
+the run graph differs from the printed one by exactly one chain with the
+inserted filter in both.
 
 `exporttest` renders a timeline and then opens what it wrote, which is the only
 way to check the things nobody can see until the render is over: that a clip
@@ -511,9 +609,19 @@ Honest list of what does not work:
   writes the picture upright. `<video>` does not: bro's decode path carries no
   rotation, so a phone clip shot upright plays on its side and exports
   correctly. The export is the one that is right, which is the wrong way round.
-- **Effects.** libavfilter is linked and unused. Everything the renderer does —
-  scale, crop, place, blend, mix — it does itself, which covers the edit as it
-  stands and none of what a filter graph is for.
+- **Filters on playback.** A filter you put on the graph runs when you render
+  and in the export preview. The viewer cannot show it: playback is the engine
+  decoding into a `<video>` and there is no filter anywhere in that path.
+  Filtered clips are marked `fx` rather than left looking broken.
+- **Filters with more than one input or output.** The palette offers what can
+  be spliced onto a wire, which means one in and one out. `amix`, `split`,
+  `blend` and everything else that needs a wire made by hand needs an editor
+  that can make one — the model can express it (an edge names the input port it
+  arrives at), and `split` additionally needs an edge to name the output it
+  leaves by.
+- **A project file.** What you insert and lock is remembered in
+  `localStorage`, which is per machine rather than per edit. The graph
+  overlay is the first thing that makes a document format worth having.
 - **Two-pass encoding.** A bitrate target is one pass, so it is met on average
   and not intelligently. Real two-pass needs the stats file from pass one fed
   into pass two, which means a job that is two jobs, and the job state machine

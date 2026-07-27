@@ -21,8 +21,9 @@ import { filtergraph, renderGraph } from './filtergraph.js';
 import { makeGraph, restore } from './graph/model.js';
 import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
-import { initGraphView, drawGraph, chaseGraph, graphSummary, fitView }
-    from './graph/view.js';
+import { initGraphView, drawGraph, chaseGraph, graphSummary, fitView,
+         outrankedControls } from './graph/view.js';
+import * as graphOverlay from './graph/overlay.js';
 import * as shell from './shell.js';
 import { initSources, drawSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
@@ -75,13 +76,29 @@ viewer.initViewer({ stage, viewer: viewerEl });
 
 initSources(el('sources'));
 
+// What was inserted and locked last time, before anything asks for a graph.
+graphOverlay.restore();
+
 initGraphView({
     viewport: el('gr-viewport'),
     canvas: el('gr-wires'),
     nodes: el('gr-nodes'),
     note: el('gr-note'),
     status: el('gr-status'),
+    panel: el('gr-panel'),
     fit: el('gr-fit'),
+}, {
+    // A filter inserted or a value locked changes what will be rendered, so it
+    // changes the three things that state that: the spine's cards, the command
+    // underneath them, and the properties panel, whose controls may just have
+    // stopped applying. The picture too — not because it can show a filter, but
+    // because it has to say that it cannot.
+    changed: () => {
+        shell.drawSpine();
+        command.draw();
+        showProperties();
+        viewer.refreshAll();
+    },
 });
 
 initInspector({ filename, chips, transform: xformPanel }, {
@@ -95,6 +112,10 @@ initInspector({ filename, chips, transform: xformPanel }, {
     redraw: () => { viewer.refreshAll(); updateCropUI(); timeline.draw(); },
     cropHandlesOn: () => cropMode,
     toggleCropHandles: () => setCropMode(!cropMode),
+    // Which of the panel's controls a lock on the graph has taken over. Asked
+    // rather than pushed, because it is a function of the edit and the overlay
+    // together and both move.
+    outranked: outrankedControls,
 });
 timeline.initTimeline({
     timeline: el('timeline'),
@@ -150,6 +171,11 @@ exporter.initExport({
 let resumeAfterScrub = false;
 
 onChange((what) => {
+    // Nodes pinned to a clip that is no longer open. Here rather than in each
+    // place a clip can go away — delete, a batch drop that clears the timeline,
+    // a project reset — because there are several and the one that is missed is
+    // the one that grows the stored overlay forever.
+    graphOverlay.retain(project.clips.map((c) => c.id));
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
         // The selection ring lives on the picture, so a change of selection is
@@ -280,7 +306,14 @@ function splitAtPlayhead() {
     const halves = [];
     for (const c of targets) {
         const right = splitClip(c, t, (n) => { n.peaks = c.peaks; n.film = c.film; viewer.attachClip(n); });
-        if (right) halves.push(right);
+        if (!right) continue;
+        // A cut should not change how either half looks, and the graph's nodes
+        // are pinned to clip ids — so the new half gets its own copy of
+        // whatever was pinned to the whole. Without this, splitting a clip you
+        // had put a filter on silently drops the filter off everything after
+        // the cut.
+        graphOverlay.cloneClip(c.id, right.id);
+        halves.push(right);
     }
     // The right-hand halves become the selection: after a cut you are almost
     // always about to do something to what comes after it.
@@ -792,8 +825,15 @@ function stageState(id) {
         if (!clips.length) return ['—', ''];
         const g = graphSummary();
         if (!g.ok) return ['cannot be described', g.reason];
+        // What is yours is counted separately from what was derived, on the
+        // card as well as on the stage: a lock that is silently in force is the
+        // failure this whole milestone is designed against, and the spine is
+        // where you look when you are not on the Graph stage.
+        const mine = g.mine ? `${g.mine} yours` : '';
+        const locks = g.locks ? `${g.locks} locked` : '';
+        const extra = [mine, locks].filter(Boolean).join(' · ');
         return [`${g.nodes} filter${g.nodes === 1 ? '' : 's'}`,
-                `${g.inputs} in · ${g.chains} chain${g.chains === 1 ? '' : 's'}`];
+                extra || `${g.inputs} in · ${g.chains} chain${g.chains === 1 ? '' : 's'}`];
     }
     if (!clips.length) return ['—', ''];
     const s = exporter.currentSettings();
@@ -840,6 +880,8 @@ globalThis.__ffmpegBro = {
     filtergraph, renderGraph, shell, command,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.
-    graph: { makeGraph, restore, derive, print },
+    graph: { makeGraph, restore, derive, print,
+             overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
+             outranked: outrankedControls },
 };
 globalThis.__ffmpegBroReady = true;

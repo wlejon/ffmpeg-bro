@@ -52,6 +52,20 @@ export function makeGraph(opts = {}) {
         return null;
     };
 
+    /// A node by the name of what it *is*, rather than by the id it happens to
+    /// have been given. The skeleton is thrown away and rebuilt whenever the
+    /// timeline moves, so an id is only good for as long as one derivation
+    /// lasts; an anchor outlives them all, which is what a lock and a selection
+    /// both need.
+    ///
+    /// Answers with the first, because several user nodes can share one insert
+    /// point and each of those is found by its own id.
+    g.byAnchor = (anchor) => {
+        if (!anchor) return null;
+        for (const nd of nodes) if (nd.anchor === anchor) return nd;
+        return null;
+    };
+
     /// Structural, and quiet: building a graph is not an edit to one. Only the
     /// mutations below announce themselves, so deriving a skeleton does not
     /// send every listener a hundred notifications about a graph that is not
@@ -71,6 +85,14 @@ export function makeGraph(opts = {}) {
             locked: !!spec.locked,
             derived: spec.derived !== undefined ? !!spec.derived : derivedByDefault,
         };
+        // What the positional arguments are called, where whoever wrote them
+        // knew. Not derivable: ffmpeg's own option tables carry aliases as
+        // separate entries — `scale` lists `w` and `width` and `h` and
+        // `height` — so the n-th option is not reliably the n-th positional
+        // argument, and a panel that labelled them by counting would name
+        // `crop`'s `x` "h". The derivation knows what it wrote; nothing else
+        // has to guess.
+        if (spec.posNames) node.posNames = spec.posNames.slice();
         // What only one kind has. Copied rather than merged wholesale so a
         // stray field on a spec cannot quietly become part of the model.
         if (spec.stream) node.stream = spec.stream;

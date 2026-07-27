@@ -166,10 +166,16 @@
          wires, because a node is a small panel and panels are what the DOM is
          for. -->
     <section id="st-graph" class="stage-view hidden">
-        <div id="gr-viewport" class="gr-viewport">
-            <canvas id="gr-wires" class="gr-wires"></canvas>
-            <div id="gr-nodes" class="gr-nodes"></div>
-            <div id="gr-note" class="gr-note dim hidden"></div>
+        <div class="gr-main">
+            <div id="gr-viewport" class="gr-viewport">
+                <canvas id="gr-wires" class="gr-wires"></canvas>
+                <div id="gr-nodes" class="gr-nodes"></div>
+                <div id="gr-note" class="gr-note dim hidden"></div>
+            </div>
+            <!-- What the selected node is set to, or what can go on the wire
+                 whose + was clicked. One column for both, because inserting a
+                 filter and configuring it are one gesture with a pause in it. -->
+            <div id="gr-panel" class="gr-panel"></div>
         </div>
         <div class="gr-bar">
             <div id="gr-status" class="gr-status dim"></div>

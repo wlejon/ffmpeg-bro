@@ -86,12 +86,28 @@ function showChips(p) {
 
 // ── the transform panel ────────────────────────────────────────────────────
 
+/// Which of this panel's controls have been outranked by a lock on the graph.
+///
+/// A value typed into a node beats what the timeline says — that is what a lock
+/// is for — and the failure worth designing against is that happening quietly.
+/// So the field that has stopped applying says so *here*, where someone is
+/// about to drag it, and not only on a stage they may not have open.
+function outranked() {
+    const by = hooks.outranked ? hooks.outranked() : {};
+    const out = new Set();
+    for (const c of subjects())
+        for (const name of by[String(c.id)] || []) out.add(name);
+    return out;
+}
+
 export function showTransform(clip) {
     if (!clip) return put(panel.transform, () => []);
     const list = subjects();
     const many = list.length > 1;
     const gridOn = project.layout === 'grid';
     const again = () => showTransform(clip);
+    const locked = outranked();
+    const mark = (name) => (locked.has(name) ? name : null);
 
     put(panel.transform, () => [
         head('Canvas'),
@@ -119,7 +135,7 @@ export function showTransform(clip) {
         ])),
         controlRow('Opacity', percentSlider('opacity',
             common((k) => k.xform.opacity),
-            (f) => { for (const k of subjects()) k.xform.opacity = f; })),
+            (f) => { for (const k of subjects()) k.xform.opacity = f; }), mark('opacity')),
         controlRow('Audio', div('btns', [
             toggleButton('Mute', common((k) => k.muted) === true, () => {
                 const on = !(common((k) => k.muted) === true);
@@ -131,7 +147,7 @@ export function showTransform(clip) {
                 for (const k of subjects()) { k.volume = f; if (f > 0) k.muted = false; }
                 hooks.audioChanged();
             }),
-        ])),
+        ]), mark('volume')),
 
         head(gridOn ? 'Transform (grid: cell-relative)' : 'Transform'),
         controlRow('Fit', div('seg', ['contain', 'cover', 'stretch', 'actual'].map((id, i) =>
@@ -143,7 +159,7 @@ export function showTransform(clip) {
             })))),
         controlRow('Scale', percentSlider('zoom', common((k) => k.xform.zoom),
             (f) => { for (const k of subjects()) k.xform.zoom = Math.max(0.05, f); },
-            5, 400)),
+            5, 400), mark('size')),
         controlRow('Position', div('btns', [
             span(many ? '—' : `${pc(clip.xform.panX)}%, ${pc(clip.xform.panY)}%`, 'mono dim'),
             el('button', { cls: 'tiny', text: 'Reset', 'data-reset': 'pan',
@@ -151,11 +167,11 @@ export function showTransform(clip) {
                                edit((k) => { k.xform.panX = k.xform.panY = 0; k.xform.zoom = 1; });
                                again();
                            } } }),
-        ])),
+        ]), mark('position')),
 
         head('Crop'),
-        controlRow('Left / Top', div('btns', [cropField('l'), cropField('t')])),
-        controlRow('Right / Bot', div('btns', [cropField('r'), cropField('b')])),
+        controlRow('Left / Top', div('btns', [cropField('l'), cropField('t')]), mark('crop')),
+        controlRow('Right / Bot', div('btns', [cropField('r'), cropField('b')]), mark('crop')),
         controlRow('', div('btns', [
             toggleButton('Handles (C)', hooks.cropHandlesOn(), () => hooks.toggleCropHandles(),
                          'data-crop'),
@@ -170,8 +186,18 @@ export function showTransform(clip) {
 
 const pc = (v) => (v * 100).toFixed(1);
 
-function controlRow(key, control) {
-    return div('row', [span(key, 'key'), control]);
+/// `outrankedBy` names the graph control that has taken this row's job, or is
+/// null. The row still works — the value goes into the model and the viewer
+/// still shows it — it just no longer reaches the render, and saying which node
+/// took it is the difference between an explanation and a mystery.
+function controlRow(key, control, outrankedBy) {
+    const node = div('row' + (outrankedBy ? ' outranked' : ''), [span(key, 'key'), control]);
+    if (outrankedBy) {
+        node.setAttribute('data-outranked', outrankedBy);
+        node.title = `Locked in the graph — this no longer reaches the render. ` +
+                     `Unlock the ${outrankedBy} node on the Graph stage to hand it back.`;
+    }
+    return node;
 }
 
 /// A cluster whose buttons share the row evenly. `.val` as well, because it is

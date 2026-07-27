@@ -325,7 +325,11 @@ What the fixes were, and what the code here still does about them:
   application's argument is that ffmpeg should stop being a thing you guess at, and
   that argument is made by never hiding what is about to run. Drawn as two kinds of
   statement because it is two — the options are exact (those keys go to `av_opt_set`),
-  the filtergraph is equivalent. **Three things reach the encoder that are not in
+  the filtergraph is equivalent. **The second claim is conditional and must stay that
+  way**: with a filter of the user's on the graph the render goes through libavfilter
+  and those chains are what it parses, so calling them a translation would be
+  underselling them by exactly the amount that matters. **Three things reach the
+  encoder that are not in
   `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
   colour tags and the conversion into them, the keyframe interval (two seconds here,
   250 frames in x264), and the scaler, which is a flag rather than an option.
@@ -344,7 +348,11 @@ What the fixes were, and what the code here still does about them:
 - `viewer.js` — the program monitor. Each clip is a `<video>` inside a crop window (a div
   with `overflow:hidden`). Fit/zoom/pan/crop/opacity/stacking are **style writes on those
   two elements** — nothing costs anything per frame, and decoded frames still go straight
-  to the renderer. Keep it that way: no canvas readback, no per-frame compositing.
+  to the renderer. Keep it that way: no canvas readback, no per-frame compositing. The
+  one thing it cannot show is a filter — there is no filter path in playback at all — so
+  a clip carrying one is badged `fx`. An unmarked picture would read as the filter not
+  working, which is the failure mode; the badge is the honest answer until playback
+  grows a path of its own.
 - `timeline.js` — ruler, dynamic V-lanes, one A1 waveform lane. Everything is drawn from
   the *visible window*, not the whole file, which is what makes zoom meaningful.
 - `analysis.js` + `analyze-worker.js` — filmstrip and waveform via `bro.media` (see
@@ -353,7 +361,12 @@ What the fixes were, and what the code here still does about them:
 - `inspector.js` — the properties panel and the chips in the title bar. Owns `subjects()`
   and `common()`: what an edit applies to, and what a field shows when the selection
   disagrees. It edits the model and calls back for everything else, so it never has to
-  know about the viewer, the timeline or the transport.
+  know about the viewer, the timeline or the transport. It asks one more thing of the
+  application now — `hooks.outranked()` — because a control whose job has been taken
+  over by a locked node has to say so *where somebody is about to drag it*, not only on
+  a stage they may not have open. Marked rather than disabled: the value still goes into
+  the model and the viewer still follows it, so a control you could not touch would be a
+  lie in the other direction.
 - `export.js` + `export/` — the Output workspace. `export.js` is the wiring; the parts are
   `state` (settings, the render slot, and the three readers — `activeVideoCodec()`,
   `activeAudioCodec()`, `outputFps()` — that say what the settings *come to*, because
@@ -407,6 +420,15 @@ What the fixes were, and what the code here still does about them:
   into chains. `filtergraph.js` is the two composed, with the shape callers
   want, so `command.js` does not know a graph exists.
 
+  **Which of the renderer's two paths a render takes is decided in one place**:
+  `buildSpec()` attaches `filterGraph`/`filterInputs` when — and only when — the
+  overlay has something in it. There it rather than at each `render.start`,
+  because there are three of those (the export and both halves of the A/B
+  preview) and a reference rendered without the filters would be comparing the
+  picture against a different picture. If the derivation refuses while the
+  overlay is non-empty the render still happens, through the compositor,
+  without the filters — so `export/warnings.js` says so.
+
   It exports the graph twice, because there are two consumers and they want
   different tails. `filtergraph()` is the one to *print*: it ends with the
   conversion into the encoder's colour, because a standalone ffmpeg hands the
@@ -429,20 +451,65 @@ What the fixes were, and what the code here still does about them:
   to name which output it leaves by, the chain rule does not change, only
   `connect` and `padOf`.
 
-  `derived`, `locked` and `anchor` are on every node for the milestone that
-  follows: the skeleton is rebuilt whenever the timeline moves, so a node you
-  touched has to be findable afterwards, and a position in an array is not
-  findable. Editing a param locks its node — a value you typed that the next
-  timeline edit silently reverted is worse than the edit not applying, because
-  at least that is visible.
-- `graph/view.js` + `graph/layout.js` — the Graph stage: the same graph, drawn.
-  Read-only so far, and derived from the edit rather than edited itself.
-  `layout.js` is pure geometry — a graph and a `heightOf()` in, positions out —
-  so the view can build its cards, measure them and only then place them, which
-  is the build/measure split the range strip already uses and is necessary for
-  the same reason: a node is as tall as the arguments its filter was given.
-  Columns are longest-path depth; within a column a node wants the average row
-  of what feeds it, which is what keeps a clip's whole chain on one line.
+- `graph/overlay.js` — the part of the graph a person made, held apart from the
+  part that is derived, because **the skeleton is thrown away and rebuilt on
+  every timeline edit**. Two pieces of data: `inserts` (ordered, each pinned to
+  a named point) and `locks` (params keyed by a node's anchor).
+  `derive(spec, sources, { overlay })` puts them back — locks first, then
+  insertions — and reports every lock that *disagreed* with what it just
+  derived as an `override`, which is what lets the outranked control say so.
+  Five rules here are load-bearing and each has a failure behind it:
+
+  - **Anchors, not positions.** A derived node is named for what it is
+    (`clip:7/scale`, `composite/overlay:7`); an insert point is a named place
+    on a wire (`clip:7/after-scale`). Ids come from a counter that never
+    restarts, so they identify nothing across two derivations. `buildSpec()`
+    carries `clip.id` for exactly this.
+  - **There is no insert point after the output colour conversion.** That chain
+    is in the printed graph and not in the one this binary runs, so a filter
+    there would be in the encoder's colour in the command and in RGBA in the
+    render. One point, two pictures.
+  - **An insertion moves the label.** Only chain-final nodes carry one, so a
+    node spliced onto the end of a run takes `v0`/`vout` with it — left behind
+    it names a pad no chain produces.
+  - **An anchor whose point is not in this graph is kept, not dropped.** A clip
+    trimmed out of the range takes its points with it and brings them back.
+    `retain()` is the only thing that deletes, and it is driven by which clips
+    are open.
+  - **A lock that agrees has overridden nothing.** It is still a lock; it just
+    has nothing to report yet, and marking the control anyway would badge every
+    field anyone had ever touched.
+
+  A split copies a clip's entries to both halves (`cloneClip`, called from
+  `splitAtPlayhead`) — a cut should not change how either half looks. Persisted
+  in `localStorage` under `ffmpeg-bro.graph`; there is still **no project
+  file**, and this is the first thing that makes one worth having.
+- `graph/view.js` + `graph/layout.js` — the Graph stage: the same graph, drawn,
+  and now edited. Nothing here builds a graph; it asks `derive()` for one on
+  every change and draws the answer, so a redraw throws away every node object
+  and **nothing may be remembered by reference** — the selection is held by
+  `panel.keyOf()`, which is the anchor for a derived node and the id for a user
+  one. `layout.js` is pure geometry — a graph and a `heightOf()` in, positions
+  out — so the view can build its cards, measure them and only then place them,
+  which is the build/measure split the range strip already uses and is
+  necessary for the same reason: a node is as tall as the arguments its filter
+  was given. Columns are longest-path depth; within a column a node wants the
+  average row of what feeds it, which is what keeps a clip's whole chain on one
+  line. The `+` on a wire is a DOM element in the transformed card container
+  rather than something drawn into the canvas, because hit-testing a bezier by
+  hand to find out which wire was meant is work with a DOM node's name on it.
+- `graph/panel.js` — the column beside the graph: what the selected node is set
+  to, or what can go on the wire whose `+` was clicked. One panel for both,
+  because inserting a filter and configuring it are one gesture with a pause in
+  it. The filter list and every option table come from `bro.ffmpeg.filters` and
+  `bro.ffmpeg.filterOptions(name)` — libavfilter's own, cached per filter — so
+  there is no list of supported filters written down anywhere. The palette
+  offers what can be *spliced*: one input and one output of the wire's stream,
+  which is what splicing means rather than a simplification of ffmpeg.
+  Positional arguments are edited in place and labelled from the node's
+  `posNames`, which the derivation records because ffmpeg's option tables carry
+  aliases as separate entries and the n-th option is not the n-th positional
+  argument.
 
   Cards are absolutely positioned divs over a `<canvas>` that draws only the
   wires — the pairing `timeline.js` already uses. Drawing the nodes into the

@@ -33,6 +33,7 @@ import { settings } from './export/state.js';
 import { videoOptions, audioOptions } from './export/options.js';
 import { buildSpec, specSources } from './export/spec.js';
 import { containerInfo } from './export/capabilities.js';
+import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
 
 // The space between one span and the next, non-breaking on purpose. The line
 // is three spans because it is three kinds of statement, and an ordinary space
@@ -83,7 +84,7 @@ const videoKey = (k) => (PER_STREAM.has(k) ? `${k}:v` : k);
 export function parts() {
     const spec = buildSpec();
     const codec = spec.videoCodec;
-    const g = filtergraph(spec, specSources());
+    const g = filtergraph(spec, specSources(), { overlay: overlayState() });
     const colour = outputColor(spec);
 
     const pre = ['ffmpeg'];
@@ -171,10 +172,20 @@ function notes(p) {
     const lines = [
         [span('Exact: ', 'lead'),
          'everything but the filtergraph — those keys are what av_opt_set is called with.'],
-        [span('Equivalent: ', 'lead'),
-         'this binary composites internally rather than running a filter graph, so ' +
-         'the graph above is a translation. Measured against the render it describes, ' +
-         'it comes out around 39 dB — the same picture, not the same bits.'],
+        // Which of the two the graph is depends on which path this render takes,
+        // and the whole point of printing a command is that the claim about it
+        // is true. With a filter of your own in the graph the render *is* the
+        // graph, and saying "translation" would be underselling it by exactly
+        // the amount that matters.
+        noUserNodes()
+            ? [span('Equivalent: ', 'lead'),
+               'this binary composites internally rather than running a filter graph, so ' +
+               'the graph above is a translation. Measured against the render it describes, ' +
+               'it comes out around 39 dB — the same picture, not the same bits.']
+            : [span('Run, not translated: ', 'lead'),
+               'there are filters of your own in this graph, so the render goes through ' +
+               'libavfilter and these are the chains it parses — all but the last, which ' +
+               'converts into the encoder’s colour and is the writer’s job here.'],
     ];
     // No graph means the second line is about something that is not on screen,
     // so it goes and the refusal takes its place.

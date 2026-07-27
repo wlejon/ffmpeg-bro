@@ -11,6 +11,15 @@
 // and an opacity on the window, both free.
 
 import { project, isSelected } from './project.js';
+import { inserts } from './graph/overlay.js';
+
+/// Does this clip have filters of its own on the graph? Read here rather than
+/// pushed in, because the overlay is small and this runs once per clip per
+/// layout rather than once per frame.
+function hasFilters(id) {
+    const key = `clip:${id}/`;
+    return inserts().some((n) => n.anchor.indexOf(key) === 0);
+}
 
 let stage = null;       // the output canvas, sized to the project aspect
 let viewerEl = null;    // the box it is centred in
@@ -204,6 +213,12 @@ function place(clip, sw, sh) {
     // a ring on the cell there is nothing tying the two together.
     clip.frame.classList.toggle('sel', project.clips.length > 1 && isSelected(clip));
     clip.frame.classList.toggle('primary', project.selected === clip);
+    // A clip with filters of its own on the graph does not look filtered here
+    // and cannot: playback is the engine decoding the file into a <video>, with
+    // no filter path anywhere in it. The render shows them and so does the
+    // export preview. A badge is the honest answer — leaving the picture
+    // unmarked would read as the filter not working.
+    clip.frame.classList.toggle('filtered', hasFilters(clip.id));
 
     // ...and the picture inside it stays whole, pushed up and left so the
     // cropped edges fall outside.

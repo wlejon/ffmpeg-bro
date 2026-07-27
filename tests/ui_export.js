@@ -838,4 +838,134 @@ console.log('\nthe same edit, through libavfilter');
     }
 }
 
+// ── a filter put on the graph by hand ──────────────────────────────────────
+//
+// The other half of that: not a graph handed to `render.start` by a test, but
+// one a person made by clicking a + on a wire and picking a filter out of
+// libavfilter's own list. What has to be true afterwards is that the filter is
+// in the spec the application builds without being asked, that the picture it
+// produces is different from the one without it, and that the command bar stops
+// calling itself a translation — because on this path it is not one.
+
+console.log('\na filter inserted on the graph');
+{
+    A.graph.overlay.clear();
+    q('#spine [data-stage="graph"]').click();
+    pump(300);
+
+    const clipId = A.project.clips[0].id;
+    const plus = qq('#gr-nodes .gp-plus');
+    ok(plus.length >= 3, `every wire that can take a filter offers one (${plus.length} points)`);
+    const at = q(`#gr-nodes [data-point="clip:${clipId}/after-scale"]`);
+    ok(!!at, 'including the one after the clip is sized, in the compositing space');
+
+    at.click();
+    pump(60);
+    ok(!!f('filtersearch'), 'clicking it opens the palette');
+    ok(qq('#gr-panel .gp-filter').length > 5,
+       'which offers somewhere to start rather than an empty box');
+
+    // Searched by name, out of the whole list this build has — the palette is
+    // libavfilter's table, not one written down here.
+    f('filtersearch').value = 'hflip';
+    f('filtersearch').dispatchEvent(new Event('input'));
+    pump(40);
+    const choice = q('#gr-panel [data-filter="hflip"]');
+    ok(!!choice, 'and finds one by name');
+    choice.click();
+    pump(120);
+
+    ok(qq('#gr-nodes .gn-user').length === 1, 'the node appears on the graph as yours');
+    // Inserting and configuring are one gesture with a pause in it, so what the
+    // palette leaves behind is the new node, selected.
+    ok(!!q('#gr-panel [data-f="remove"]'), 'and the panel is now about it');
+    ok(q('#gr-panel .gp-name').textContent === 'hflip', 'by name');
+
+    // The point of all of it: nobody had to ask for the graph path. A render
+    // with a filter of your own in it goes through libavfilter, and the spec
+    // the application builds says so.
+    const s = A.exporter.buildSpec();
+    ok(typeof s.filterGraph === 'string' && s.filterGraph.indexOf('hflip') > 0,
+       'the spec the application builds carries the graph, unasked');
+    ok(s.filterInputs && s.filterInputs.length > 0, 'and the files its pads read');
+    ok(A.command.currentCommand().indexOf('hflip') > 0,
+       'the command bar prints the filter it is about to run');
+
+    // The clip is marked in the viewer, because playback decodes through
+    // <video> and has no filter path — an unmarked picture would read as the
+    // filter not working.
+    ok(qq('#viewer .clipframe.filtered').length >= 1,
+       'and the picture says it is not showing what will be rendered');
+
+    screenshot('out/export-05-graph-with-a-filter.png');
+
+    // And it renders. Small and short: what is being proved is that the graph
+    // this UI wrote is one libavfilter takes, not that x264 works.
+    const r = A.exporter.buildSpec({
+        width: 320, height: 180, fps: 25,
+        end: Math.min(A.exporter.buildSpec().end, A.exporter.buildSpec().start + 1),
+        path: bro.appDir + '/../out/ui-export-inserted.mp4',
+    });
+    ok(r.filterGraph.indexOf('hflip') > 0, 'a preview-sized spec carries it too');
+    let started = '';
+    try { bro.ffmpeg.render.start(r); } catch (e) { started = String(e); }
+    ok(!started, `the renderer accepted it (${started || 'accepted'})`);
+    if (!started) {
+        waitFor('the inserted-filter render to finish',
+                () => bro.ffmpeg.render.poll().state !== 'running', 60000);
+        const st = bro.ffmpeg.render.poll();
+        ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+        const p = bro.ffmpeg.probe(r.path);
+        ok(!!p.video && p.video.width === 320, 'and wrote a file with the filter in it');
+    }
+}
+
+// ── a lock, and everything that has to say so ──────────────────────────────
+
+console.log('\na value typed into the graph outranks the edit');
+{
+    const clipId = A.project.clips[0].id;
+    const node = q(`#gr-nodes [data-key="clip:${clipId}/scale"]`);
+    ok(!!node, 'the scale node can be picked out by what it is');
+    node.click();
+    pump(60);
+    const w = q('#gr-panel [data-pos="0"]');
+    ok(!!w, 'its arguments are editable, named the way the derivation wrote them');
+
+    w.value = '96';
+    w.dispatchEvent(new Event('change'));
+    pump(120);
+
+    ok(A.graph.overlay.isLocked(`clip:${clipId}/scale`), 'typing in one locks the node');
+    ok(A.command.currentCommand().indexOf('scale=96:') > 0,
+       'the value reaches the command');
+    ok(A.graph.summary().locks === 1, 'and the stage counts it');
+    screenshot('out/export-06-a-locked-node.png');
+
+    // The edit still applies to everything else, and the control it took over
+    // says so where somebody is about to drag it.
+    ok(!!A.graph.outranked()[String(clipId)],
+       'the application can say which of the panel’s controls it outranks');
+    A.select(A.project.clips[0]);
+    A.showProperties();
+    pump(40);
+    ok(!!q('#transform .row.outranked'),
+       'and the properties panel marks the one that has stopped applying');
+
+    // Handed back, everything goes with it — including the command, which is
+    // the thing that would be quietly wrong if unlocking were only a change to
+    // the model.
+    const unlock = q('#gr-panel [data-f="unlock"]');
+    ok(!!unlock, 'the panel offers it back');
+    unlock.click();
+    pump(120);
+    ok(!A.graph.overlay.isLocked(`clip:${clipId}/scale`), 'unlocking gives it back');
+    ok(A.command.currentCommand().indexOf('scale=96:') < 0,
+       'and the derivation is in charge of it again');
+
+    A.graph.overlay.clear();
+    q('#spine [data-stage="compose"]').click();
+    pump(120);
+}
+
 console.log(`\n${checks} checks passed`);
