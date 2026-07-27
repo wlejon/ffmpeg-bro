@@ -43,10 +43,21 @@ bool SourceVideo::open(const MediaInput& in, std::string* err) {
         fmt_->streams[i]->discard =
             (static_cast<int>(i) == stream_) ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
 
+    // Whether this reader's pictures come off the device or stay on it. The
+    // input decides — see `hwFramesStayUp` — and everything downstream reads it
+    // off the frame rather than off a flag, so a reader that downloads is
+    // indistinguishable from a software one.
+    keepHw_ = hwFramesStayUp(in);
+
     pkt_ = av_packet_alloc();
     cur_ = av_frame_alloc();
     pending_ = av_frame_alloc();
-    return pkt_ && cur_ && pending_;
+    swap_ = av_frame_alloc();
+    return pkt_ && cur_ && pending_ && swap_;
+}
+
+AVBufferRef* SourceVideo::hwFrames() const {
+    return dec_ ? dec_->hw_frames_ctx : nullptr;
 }
 
 const Rgba* SourceVideo::rgbaAt(double t) {
@@ -110,6 +121,7 @@ void SourceVideo::close() {
     if (toRgba_) sws_freeContext(toRgba_);
     if (cur_) av_frame_free(&cur_);
     if (pending_) av_frame_free(&pending_);
+    if (swap_) av_frame_free(&swap_);
     if (pkt_) av_packet_free(&pkt_);
     if (dec_) avcodec_free_context(&dec_);
     if (fmt_) avformat_close_input(&fmt_);
@@ -165,6 +177,16 @@ bool SourceVideo::decodeOne() {
         av_frame_unref(pending_);
         int rc = avcodec_receive_frame(dec_, pending_);
         if (rc == 0) {
+            // The readback, and the whole of what makes hardware decode a
+            // trade rather than a win. A reader whose input did not ask for
+            // `-hwaccel_output_format` hands back pictures in system memory
+            // however they were decoded, because that is what the compositor,
+            // a software filter and bro's renderer all want — and bringing one
+            // down costs more here than decoding it did. Measured; see README.
+            if (!keepHw_ && pending_->hw_frames_ctx) {
+                std::string why;
+                if (!downloadFrame(&pending_, &swap_, &why)) return false;
+            }
             pendingPts_ = ptsOf(pending_);
             havePending_ = true;
             return true;

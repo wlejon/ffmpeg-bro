@@ -6,7 +6,12 @@
 #include "ffmpeg_capture.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
+#include "ffmpeg_hardware.h"
 #include "ffmpeg_report.h"
+
+extern "C" {
+#include <libavutil/pixdesc.h>
+}
 #include "ffmpeg_sequence.h"
 
 #include <algorithm>
@@ -159,6 +164,13 @@ MediaInput inputFromJs(JSContext* ctx, JSValueConst o) {
     // and ffmpeg writes both in front of the same `-i` because both are
     // decisions about this input.
     in.decoderOptions = optionsFromJs(ctx, o, "decoderOptions");
+    // The device this input's pictures are decoded on, and whether they come
+    // back down. `-hwaccel`, `-hwaccel_device` and `-hwaccel_output_format`,
+    // all three of which ffmpeg writes in front of the `-i` because all three
+    // configure the decoder that this input's packets go through.
+    in.hwaccel = strProp(ctx, o, "hwaccel", "");
+    in.hwaccelDevice = strProp(ctx, o, "hwaccelDevice", "");
+    in.hwaccelOutputFormat = strProp(ctx, o, "hwaccelOutputFormat", "");
     in.ss = std::max(0.0, numProp(ctx, o, "ss", 0));
     in.duration = std::max(0.0, numProp(ctx, o, "t", 0));
     const double to = numProp(ctx, o, "to", 0);
@@ -626,6 +638,11 @@ bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::s
     s.filterGraph = strProp(ctx, spec, "filterGraph", "");
     s.filterInputs = graphInputsFromJs(ctx, spec);
     s.sizeFromGraph = boolProp(ctx, spec, "sizeFromGraph", false);
+    // `-filter_hw_device`: which device `hwupload` and the `_cuda`/`_qsv`
+    // filters get. A decision about the graph rather than about any input,
+    // which is why it is here and not on one.
+    s.filterHwDevice = strProp(ctx, spec, "filterHwDevice", "");
+    s.filterHwDeviceIndex = strProp(ctx, spec, "filterHwDeviceIndex", "");
     s.passes = passesFromJs(ctx, spec);
     s.metadata = optionsFromJs(ctx, spec, "metadata");
 
@@ -979,6 +996,39 @@ JSValue js_decoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     if (!takeName(ctx, argc, argv, &name))
         return JS_ThrowTypeError(ctx, "decoderOptions(name) requires a decoder name");
     return optionsToJs(ctx, decoderOptions(name));
+}
+
+/// bro.ffmpeg.hardware() — what this *machine* has, as against what this build
+/// could use.
+///
+/// A function rather than a property beside `hwaccels`, and that difference is
+/// the whole of what this chunk added at this level. `hwaccels` is
+/// `av_hwdevice_iterate_types` — a registry walk, free, and an answer about the
+/// build: on a machine with no graphics card at all it still says cuda, qsv,
+/// vulkan and d3d11va, because every one of them is compiled in. This is the
+/// measurement: each type has a device *created* of it and reports whether that
+/// worked. Creating a CUDA context is tens of milliseconds and creating one of
+/// every type is the better part of a second, so it is asked for rather than
+/// built at startup — the same reason `filterOptions(name)` is a call.
+///
+/// Cached in the native half, so a UI that asks on every redraw pays once.
+JSValue js_hardware(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t n = 0;
+    for (const auto& d : hwDevices()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", d.name);
+        JS_SetPropertyStr(ctx, o, "present", JS_NewBool(ctx, d.present));
+        if (!d.error.empty()) setStr(ctx, o, "error", d.error);
+        const char* fmt = d.pixelFormat != AV_PIX_FMT_NONE
+                              ? av_get_pix_fmt_name(d.pixelFormat) : nullptr;
+        setStr(ctx, o, "pixelFormat", fmt ? fmt : "");
+        JS_SetPropertyStr(ctx, o, "decoders", stringsToJs(ctx, d.decoders));
+        JS_SetPropertyStr(ctx, o, "encoders", stringsToJs(ctx, d.encoders));
+        JS_SetPropertyStr(ctx, o, "filters", stringsToJs(ctx, d.filters));
+        JS_SetPropertyUint32(ctx, arr, n++, o);
+    }
+    return arr;
 }
 
 JSValue js_bsfOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1439,6 +1489,11 @@ void installFfmpegBindings(JSContext* ctx) {
     for (const auto& name : availableHwAccels())
         JS_SetPropertyUint32(ctx, hw, i++, JS_NewStringLen(ctx, name.data(), name.size()));
     JS_SetPropertyStr(ctx, ns, "hwaccels", hw);
+    // The list above is what this *build* has. This is what this *machine* has,
+    // and it is a call rather than a property because finding out means
+    // creating a device of every type and seeing which ones work — see
+    // js_hardware.
+    JS_SetPropertyStr(ctx, ns, "hardware", JS_NewCFunction(ctx, js_hardware, "hardware", 0));
 
     JS_SetPropertyStr(ctx, ns, "probe", JS_NewCFunction(ctx, js_probe, "probe", 1));
 

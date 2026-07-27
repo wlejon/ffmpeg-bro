@@ -4,11 +4,14 @@
 
 #include "export_frame.h"       // avErr
 #include "ffmpeg_capabilities.h"  // isInputDevice
+#include "ffmpeg_hardware.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
+#include <libavutil/frame.h>
+#include <libavutil/pixdesc.h>
 }
 
 #include <algorithm>
@@ -38,6 +41,83 @@ std::mutex& lock() {
 std::map<std::string, MediaInput>& table() {
     static std::map<std::string, MediaInput> t;
     return t;
+}
+
+/// libavcodec asking which of the formats it could produce we want.
+///
+/// The wanted format travels in `AVCodecContext::opaque`, which libavcodec
+/// itself never touches and which ffmpeg's own CLI uses for exactly this.
+///
+/// **Returning `AV_PIX_FMT_NONE` rather than the first software format is the
+/// refusal.** libavcodec's documented behaviour on a `get_format` that offers
+/// nothing is to fail the decode, and that is the right outcome: the caller
+/// asked for a hardware decode, and a decoder that quietly produced software
+/// frames instead would be a render that ignored what it was told. The common
+/// version of this — a codec the card has no decoder for — is caught at
+/// `openDecoder` below, before a packet is read, which is where it can be said
+/// in a sentence.
+AVPixelFormat wantedHwFormat(AVCodecContext* ctx, const AVPixelFormat* offered) {
+    const auto want = static_cast<AVPixelFormat>(
+        static_cast<int>(reinterpret_cast<intptr_t>(ctx->opaque)));
+    for (const AVPixelFormat* p = offered; p && *p != AV_PIX_FMT_NONE; ++p)
+        if (*p == want) return *p;
+    return AV_PIX_FMT_NONE;
+}
+
+/// The device this input asks for, on this decoder, or a sentence saying why
+/// not. Leaves the context untouched when the input asks for nothing.
+bool attachDevice(AVCodecContext* ctx, const AVCodec* codec, const MediaInput& in,
+                  std::string* err) {
+    if (in.hwaccel.empty()) return true;
+
+    const AVHWDeviceType type = hwTypeNamed(in.hwaccel);
+    if (type == AV_HWDEVICE_TYPE_NONE) {
+        if (err) *err = in.path + ": this build has no hardware acceleration called '" +
+                        in.hwaccel + "'";
+        return false;
+    }
+
+    // "The card is there" and "the card can decode *this*" are different
+    // questions and only the second one matters. Asked before a device is made,
+    // because the answer is a property of the build and the codec and does not
+    // need a driver to be consulted.
+    AVPixelFormat hwFmt = AV_PIX_FMT_NONE;
+    if (!decoderTakesDevice(codec, type, &hwFmt)) {
+        if (err)
+            *err = in.path + ": " + in.hwaccel + " cannot decode " + codec->name +
+                   " in this build — the decoder reports no " + in.hwaccel +
+                   " configuration, so the picture would have to come off the CPU anyway";
+        return false;
+    }
+
+    std::string why;
+    AVBufferRef* device = hwDeviceRef(in.hwaccel, in.hwaccelDevice, &why);
+    if (!device) {
+        if (err) *err = in.path + ": " + why;
+        return false;
+    }
+
+    // A caller that named an output format has to have named *this* one: the
+    // frames a decoder makes on a device are in the device's format and nothing
+    // converts them on the way out. Checked here so that a typo is a sentence
+    // rather than a graph that will not configure four functions later.
+    if (!in.hwaccelOutputFormat.empty()) {
+        const AVPixelFormat asked = av_get_pix_fmt(in.hwaccelOutputFormat.c_str());
+        if (asked != hwFmt) {
+            av_buffer_unref(&device);
+            const char* got = av_get_pix_fmt_name(hwFmt);
+            if (err)
+                *err = in.path + ": " + codec->name + " on " + in.hwaccel +
+                       " produces " + (got ? got : "?") + " frames, not '" +
+                       in.hwaccelOutputFormat + "'";
+            return false;
+        }
+    }
+
+    ctx->hw_device_ctx = device;        // the context takes the reference
+    ctx->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(hwFmt));
+    ctx->get_format = wantedHwFormat;
+    return true;
 }
 
 } // namespace
@@ -132,6 +212,17 @@ bool openDecoder(AVCodecContext** out, const AVCodecParameters* par,
         ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
     }
 
+    // `-hwaccel` is a decision about the picture and about nothing else. An
+    // input carrying one still opens its sound with libavcodec's own decoder,
+    // which is what ffmpeg does and the only thing that could be meant: there
+    // is no hardware AAC decoder and asking for one would refuse every file
+    // with a soundtrack.
+    if (par->codec_type == AVMEDIA_TYPE_VIDEO &&
+        !attachDevice(ctx, codec, in, err)) {
+        avcodec_free_context(&ctx);
+        return false;
+    }
+
     // Applied through the dictionary rather than av_opt_set, because a
     // dictionary is the one call that reports back what nothing understood —
     // the same reason `openInput` above uses one for the demuxer's options.
@@ -162,6 +253,36 @@ bool openDecoder(AVCodecContext** out, const AVCodecParameters* par,
     av_dict_free(&opts);
 
     *out = ctx;
+    return true;
+}
+
+bool hwFramesStayUp(const MediaInput& in) {
+    return !in.hwaccel.empty() && !in.hwaccelOutputFormat.empty();
+}
+
+bool downloadFrame(AVFrame** frame, AVFrame** scratch, std::string* err) {
+    if (!frame || !*frame || !scratch || !*scratch) return false;
+    if (!(*frame)->hw_frames_ctx) return true;      // already in system memory
+
+    av_frame_unref(*scratch);
+    // Left at NONE so libavutil picks the first format the device can transfer
+    // into — nv12 for CUDA and for QSV, and whatever a build with 10-bit
+    // surfaces reports first. Naming one here would be a table of what each
+    // device produces, and it would be wrong for the first 10-bit file.
+    (*scratch)->format = AV_PIX_FMT_NONE;
+    const int rc = av_hwframe_transfer_data(*scratch, *frame, 0);
+    if (rc < 0) {
+        if (err) *err = "cannot bring a frame down off the device: " + avErr(rc);
+        return false;
+    }
+    // Pixels are all `transfer_data` moves. Without this the picture arrives
+    // with no pts, no colour tags and none of the metadata a measuring filter
+    // hung on it — which reads as a decoder that has stopped reporting
+    // timestamps rather than as a missing line here.
+    av_frame_copy_props(*scratch, *frame);
+    // The caller goes on holding the picture in `frame` and the spare in
+    // `scratch`, which is what makes the next download free of an allocation.
+    std::swap(*frame, *scratch);
     return true;
 }
 

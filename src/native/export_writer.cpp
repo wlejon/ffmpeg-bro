@@ -5,6 +5,7 @@
 #include "export_copy.h"
 #include "export_subtitle.h"
 #include "ffmpeg_capabilities.h"
+#include "ffmpeg_hardware.h"
 #include "ffmpeg_sequence.h"
 
 #include "util/log.h"
@@ -595,8 +596,9 @@ int64_t Writer::piecesWritten() const {
 std::vector<Writer::Piece> Writer::pieces() const { return wrote_; }
 
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
-                  CopyStreams* copies, SubtitleStreams* subs) {
+                  CopyStreams* copies, SubtitleStreams* subs, AVBufferRef* hwFrames) {
     settings_ = s;
+    hwFrames_ = hwFrames;
 
     // `-f`, when the render says which muxer it means. Named rather than left
     // to the extension because that is the only choice that works: a muxer's
@@ -686,6 +688,29 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     }
 
     if (outs_.empty()) { *err = "this render would write no streams at all"; return false; }
+
+    // All of them or none. A picture that stays on the card can be handed to
+    // every encoder that was opened against the pool it lives in and to no
+    // other; a file wanting both would need a download per frame, done quietly
+    // on behalf of a render that asked for the opposite. Said here, naming the
+    // stream, rather than discovered at the first frame.
+    {
+        int nativeStreams = 0, softwareStreams = 0;
+        std::string oddOne;
+        for (const auto& out : outs_) {
+            if (out->desc.kind != "video" || out->copied) continue;
+            if (out->native) ++nativeStreams;
+            else { ++softwareStreams; if (oddOne.empty()) oddOne = out->desc.codec; }
+        }
+        if (nativeStreams && softwareStreams) {
+            *err = "this render keeps its pictures on the card, and '" +
+                   (oddOne.empty() ? std::string("one of its video streams") : oddOne) +
+                   "' would have to have them brought back down — give every video "
+                   "stream a hardware encoder, or take the hardware filters off the graph";
+            return false;
+        }
+        native_ = nativeStreams > 0;
+    }
 
     if (!(oc_->oformat->flags & AVFMT_NOFILE)) {
         // Through the hook rather than around it, so that the one file an
@@ -780,6 +805,24 @@ bool Writer::writeVideo(const Rgba& canvas, int64_t index, std::string* err) {
                                                AV_FRAME_FLAG_TOP_FIELD_FIRST)) |
                           o.frameFlags;
         if (!encode(o, o.vframe, err)) return false;
+    }
+    return true;
+}
+
+bool Writer::writeVideoFrame(AVFrame* frame, int64_t index, std::string* err) {
+    if (!frame) { *err = "no picture to write"; return false; }
+    for (auto& out : outs_) {
+        Out& o = *out;
+        if (o.desc.kind != "video" || o.copied) continue;
+        // The frame belongs to the graph and is handed to every stream in turn;
+        // what is written on it is only what is not pixels, which is the same
+        // three things `writeVideo` writes and none of them a copy.
+        frame->pts = index;
+        const double t = settings_.fps > 0 ? double(index) / settings_.fps : 0.0;
+        frame->pict_type = o.keys.wants(index, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+        frame->flags = (frame->flags & ~(AV_FRAME_FLAG_INTERLACED |
+                                         AV_FRAME_FLAG_TOP_FIELD_FIRST)) | o.frameFlags;
+        if (!encode(o, frame, err)) return false;
     }
     return true;
 }
@@ -1008,7 +1051,38 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     o.enc->time_base = av_inv_q(fps);
     o.enc->framerate = fps;
     o.enc->pix_fmt = pickPixelFormat(codec);
-    if (!o.desc.pixelFormat.empty()) {
+
+    // **The picture that never comes down.** The composite is arriving in a
+    // device pool and this encoder lives on the same kind of device, so it is
+    // opened against the pool itself: `pix_fmt` becomes the device's handle
+    // format, `sw_pix_fmt` says what the surfaces really hold, and
+    // `avcodec_open2` builds its own surfaces out of the frames context rather
+    // than allocating any. Nothing after this — no `vframe`, no scaler, no
+    // colour conversion — applies to such a stream.
+    //
+    // The two halves have to *agree*: a CUDA pool and an AMF encoder are both
+    // hardware and are not the same hardware, and handing one the other's
+    // frames fails inside the encoder with a message about surfaces. Where they
+    // do not agree this quietly stays on the ordinary path and the graph brings
+    // the picture down, which is slower and correct.
+    if (hwFrames_ && isHardwareEncoder(codec)) {
+        auto* pool = reinterpret_cast<AVHWFramesContext*>(hwFrames_->data);
+        auto* dev = reinterpret_cast<AVHWDeviceContext*>(pool->device_ref->data);
+        if (encoderDeviceType(codec) == dev->type) {
+            o.enc->pix_fmt = pool->format;
+            o.enc->sw_pix_fmt = pool->sw_format;
+            o.enc->hw_frames_ctx = av_buffer_ref(hwFrames_);
+            if (!o.enc->hw_frames_ctx) { *err = "out of memory"; return false; }
+            // The graph decided how big the picture is and it is already on the
+            // card; the render's own size was checked against the sink in
+            // `GraphSource::build`, so these are the same numbers said twice.
+            o.enc->width = pool->width;
+            o.enc->height = pool->height;
+            o.native = true;
+        }
+    }
+
+    if (!o.native && !o.desc.pixelFormat.empty()) {
         const AVPixelFormat want = av_get_pix_fmt(o.desc.pixelFormat.c_str());
         if (want == AV_PIX_FMT_NONE) {
             *err = "there is no pixel format called '" + o.desc.pixelFormat + "'";
@@ -1128,6 +1202,11 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     // extradata, hevc_metadata rewrites the VUI — and the muxer has to be told
     // about the far end of the chain rather than the near one.
     if (!openBitstreamFilters(o, err)) return false;
+
+    // A stream fed straight off the card needs neither: the picture it encodes
+    // is the one the graph made, and allocating a frame to copy it into is the
+    // readback this path exists to avoid.
+    if (o.native) return true;
 
     o.vframe = av_frame_alloc();
     if (!o.vframe) { *err = "out of memory"; return false; }

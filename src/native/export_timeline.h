@@ -22,6 +22,9 @@
 #include <string>
 #include <vector>
 
+struct AVBufferRef;
+struct AVFrame;
+
 namespace ffmpegbro {
 
 struct Rgba;
@@ -59,6 +62,36 @@ public:
     /// default is "there is always more", which is the honest answer for
     /// anything that has not been taught to say otherwise.
     virtual bool exhausted(double t) const { return false; }
+
+    // ── the picture that never came down ───────────────────────────────────
+    //
+    // Two calls, and they are the whole of what "encoding straight from the
+    // GPU" needs from this seam. A source that decodes on a device, filters on
+    // it and hands the last pad to a hardware encoder has a picture that is
+    // never pixels anybody can touch — so `canvasAt`, whose answer is an RGBA
+    // buffer in system memory, is the wrong question to ask it. Asking anyway
+    // is what every render did before this and is what the readback *is*.
+    //
+    // Deliberately optional rather than a second interface. The default answers
+    // are "no frames context" and "nothing", which is the truth for the track
+    // stack and for every graph that ends in software, so nothing that predates
+    // this changes shape and the job keeps one loop.
+
+    /// The pool the pictures leaving this source belong to, or null when they
+    /// are ordinary memory. Asked once, before the writer opens, because an
+    /// encoder that is going to take frames from a pool has to be opened
+    /// against that pool — `avcodec_open2` builds its surfaces from it.
+    virtual AVBufferRef* hwFrames() const { return nullptr; }
+
+    /// The output frame at `t`, exactly as it left the source: on the device
+    /// when that is where it was made. Null once there are no more, which on
+    /// this path ends the render — there is no black frame to write, because
+    /// black would have to be uploaded and the point of the path is that
+    /// nothing is.
+    ///
+    /// Only called when `hwFrames()` said yes *and* the writer agreed to take
+    /// them; `canvasAt` remains the question for every other render.
+    virtual const AVFrame* nativeAt(double t) { return nullptr; }
 };
 
 class TimelineSource : public FrameSource {

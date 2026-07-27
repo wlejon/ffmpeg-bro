@@ -4,6 +4,7 @@
 #include "export_graph.h"
 
 #include "export_source.h"
+#include "ffmpeg_hardware.h"
 #include "ffmpeg_report.h"
 
 #include "util/log.h"
@@ -49,16 +50,60 @@ double frameTime(const AVFilterContext* sink, const AVFrame* f) {
 
 GraphSource::GraphSource(const ExportSettings& s) : settings_(s) {}
 
+/// `avfilter_graph_parse2`, in the three steps it is made of, so that a device
+/// can be handed to the filters that need one *between* being created and being
+/// initialised.
+///
+/// **`hwupload` refuses to initialise without a device**, and there is nowhere
+/// to put one: the filter takes no argument that could name it and reads
+/// `AVFilterContext::hw_device_ctx`, which does not exist until the filter does.
+/// `avfilter_graph_parse2` creates and initialises in one call, so a device
+/// assigned after it has already come too late — "A hardware device reference is
+/// required to upload frames to", from inside a parse, with nothing in the
+/// message about which filter meant it.
+///
+/// The segment API is the seam ffmpeg's own CLI uses for exactly this, and this
+/// is `graph_parse()` in `ffmpeg_filter.c` written out. With no device named it
+/// is `avfilter_graph_parse2` in three lines instead of one, which is why there
+/// is no fast path here to disagree with.
+int GraphSource::parseGraph(AVFilterInOut** inputs, AVFilterInOut** outputs) {
+    AVFilterGraphSegment* seg = nullptr;
+    int rc = avfilter_graph_segment_parse(graph_, settings_.filterGraph.c_str(), 0, &seg);
+    if (rc < 0) return rc;
+
+    rc = avfilter_graph_segment_create_filters(seg, 0);
+    if (rc >= 0 && hwDevice_) {
+        // Every filter that declared it wants one gets the device the render
+        // named. A filter that was given its own in its arguments keeps it:
+        // `-filter_hw_device` is the default, not an override.
+        for (unsigned i = 0; i < graph_->nb_filters && rc >= 0; ++i) {
+            AVFilterContext* f = graph_->filters[i];
+            if (!f->filter || !(f->filter->flags & AVFILTER_FLAG_HWDEVICE)) continue;
+            if (f->hw_device_ctx) continue;
+            f->hw_device_ctx = av_buffer_ref(hwDevice_);
+            if (!f->hw_device_ctx) rc = AVERROR(ENOMEM);
+        }
+    }
+    if (rc >= 0) rc = avfilter_graph_segment_apply(seg, 0, inputs, outputs);
+    avfilter_graph_segment_free(&seg);
+    return rc;
+}
+
 GraphSource::~GraphSource() {
     for (auto& f : feeds_)
         if (f->first) av_frame_free(&f->first);
     if (vframe_) av_frame_free(&vframe_);
     if (aframe_) av_frame_free(&aframe_);
+    if (down_) av_frame_free(&down_);
     if (swr_) swr_free(&swr_);
     if (toRgba_) sws_freeContext(toRgba_);
     // The graph owns every filter in it, including the sources and sinks
     // linked in above, so this is the whole teardown.
     if (graph_) avfilter_graph_free(&graph_);
+    // After the graph, because each filter it held has its own reference to
+    // this and dropping ours first would say nothing but is the wrong order to
+    // read.
+    if (hwDevice_) av_buffer_unref(&hwDevice_);
 }
 
 // ── Building ───────────────────────────────────────────────────────────────
@@ -71,12 +116,30 @@ bool GraphSource::build(std::string* err) {
 
     vframe_ = av_frame_alloc();
     aframe_ = av_frame_alloc();
+    down_ = av_frame_alloc();
     graph_ = avfilter_graph_alloc();
-    if (!graph_ || !vframe_ || !aframe_) return fail("out of memory building the graph");
+    if (!graph_ || !vframe_ || !aframe_ || !down_)
+        return fail("out of memory building the graph");
+
+    // `-filter_hw_device`: the device every filter in this graph that needs one
+    // gets. It is what makes `hwupload` work at all — the filter takes no
+    // argument that could name a device and reads `AVFilterContext::
+    // hw_device_ctx` instead.
+    //
+    // **There is no such thing as a graph-wide device.** libavfilter has no
+    // field for one; ffmpeg's own CLI walks the filters after the parse and
+    // hands the device to each that declares `AVFILTER_FLAG_HWDEVICE`, and that
+    // is what `attachDevice` below does. The reference is made here so that a
+    // named device that does not exist refuses before anything is parsed.
+    if (!settings_.filterHwDevice.empty()) {
+        std::string why;
+        hwDevice_ = hwDeviceRef(settings_.filterHwDevice, settings_.filterHwDeviceIndex, &why);
+        if (!hwDevice_) return fail(why);
+    }
 
     AVFilterInOut* inputs = nullptr;
     AVFilterInOut* outputs = nullptr;
-    int rc = avfilter_graph_parse2(graph_, settings_.filterGraph.c_str(), &inputs, &outputs);
+    int rc = parseGraph(&inputs, &outputs);
     if (rc < 0) {
         avfilter_inout_free(&inputs);
         avfilter_inout_free(&outputs);
@@ -160,11 +223,32 @@ bool GraphSource::attachInput(AVFilterInOut* in, std::string* err) {
     AVFilterContext* tail = feed->src;
     if (!audio && feed->video) {
         const int quarters = ((feed->video->rotation() % 360) + 360) % 360 / 90;
+        // A phone clip that decoded on the card has to be turned round on the
+        // card: `transpose` reads pixels and a `cuda` frame has none. The
+        // hardware member of the family is tried first and only for a feed that
+        // is actually on a device, so an ordinary render still gets the filter
+        // ffmpeg's own autorotate would insert.
+        const AVFilter* transpose = nullptr;
+        if (feed->video->onDevice()) {
+            const std::string named = "transpose_" +
+                (settings_.filterHwDevice == "d3d11va" ? std::string("d3d11")
+                                                       : settings_.filterHwDevice);
+            transpose = avfilter_get_by_name(named.c_str());
+            if (!transpose && quarters) {
+                if (err)
+                    *err = "[" + label + "] decodes on the card and needs turning the right "
+                           "way up, and this build has no hardware transpose for " +
+                           settings_.filterHwDevice +
+                           " — decode it in software, or clear the rotation";
+                return false;
+            }
+        }
+        if (!transpose) transpose = avfilter_get_by_name("transpose");
         for (int i = 0; i < quarters; ++i) {
             AVFilterContext* t = nullptr;
             const std::string name = "rot_" + label + "_" + std::to_string(i);
-            int rc = avfilter_graph_create_filter(&t, avfilter_get_by_name("transpose"),
-                                                  name.c_str(), "clock", nullptr, graph_);
+            int rc = avfilter_graph_create_filter(&t, transpose, name.c_str(), "clock",
+                                                  nullptr, graph_);
             if (rc < 0 || (rc = avfilter_link(tail, 0, t, 0)) < 0) {
                 if (err) *err = "cannot turn [" + label + "] the right way up: " + avErr(rc);
                 return false;
@@ -224,6 +308,14 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
         par->color_space = f->colorspace;
         par->color_range = f->color_range;
         par->time_base = feed.video->timeBase();
+        // A pad fed pictures that are still on the card has to say which pool
+        // they came out of *before* the graph is configured. Without it
+        // libavfilter negotiates formats for a `cuda` frame it has never seen
+        // and fails at the first link with a message about pixel formats and no
+        // mention of hardware — which is the least helpful place to find out
+        // that an input decoded somewhere the graph cannot read.
+        if (AVBufferRef* pool = feed.video->hwFrames())
+            par->hw_frames_ctx = av_buffer_ref(pool);
     } else {
         feed.sound = std::make_unique<SourceAudio>();
         const AVFrame* f = nullptr;
@@ -258,6 +350,10 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
 
     int rc = av_buffersrc_parameters_set(feed.src, par);
     av_channel_layout_uninit(&par->ch_layout);
+    // `av_buffersrc_parameters_set` takes its own reference to the pool, so the
+    // one made above is ours to drop. Left in place it keeps a CUDA surface
+    // pool alive for the life of the process.
+    if (par->hw_frames_ctx) av_buffer_unref(&par->hw_frames_ctx);
     av_free(par);
     if (rc >= 0) rc = avfilter_init_dict(feed.src, nullptr);
     if (rc < 0) {
@@ -377,6 +473,22 @@ const Rgba& GraphSource::canvasAt(double) {
         return black();
     }
 
+    // The graph kept its pictures on the card and the *compositor's* question is
+    // being asked of it — which is what happens when a `_cuda` chain is
+    // previewed on a node, or when the encoder at the far end is a software one.
+    // Legal, and the readback is exactly the cost this whole path exists to
+    // avoid; a render that wanted to avoid it takes `nativeAt` instead.
+    if (vframe_->hw_frames_ctx) {
+        std::string why;
+        AVFrame* f = vframe_;
+        if (!downloadFrame(&f, &down_, &why)) {
+            videoEnded_ = true;
+            reportNote(AV_LOG_ERROR, "graph", why);
+            return black();
+        }
+        vframe_ = f;
+    }
+
     if (vframe_->format == AV_PIX_FMT_RGBA) {
         const uint8_t* src = vframe_->data[0];
         uint8_t* dst = canvas_.data.data();
@@ -405,6 +517,25 @@ const Rgba& GraphSource::canvasAt(double) {
                   stride) <= 0)
         return black();
     return canvas_;
+}
+
+AVBufferRef* GraphSource::hwFrames() const {
+    return vsink_ ? av_buffersink_get_hw_frames_ctx(vsink_) : nullptr;
+}
+
+const AVFrame* GraphSource::nativeAt(double) {
+    if (videoEnded_) return nullptr;
+    av_frame_unref(vframe_);
+    if (pull(vsink_, vframe_) < 0) {
+        // No black frame at the end of this path, deliberately. Black in the
+        // encoder's format would have to be made in system memory and uploaded,
+        // which is the readback this path exists to avoid — done once a frame
+        // for however much of the range is left over. A render that keeps its
+        // pictures on the card ends when its graph does, and README says so.
+        videoEnded_ = true;
+        return nullptr;
+    }
+    return vframe_;
 }
 
 // ── Sound ──────────────────────────────────────────────────────────────────

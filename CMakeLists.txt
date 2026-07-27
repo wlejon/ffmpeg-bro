@@ -40,6 +40,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_capture.cpp
     src/native/ffmpeg_export.cpp
+    src/native/ffmpeg_hardware.cpp
     src/native/ffmpeg_input.cpp
     src/native/ffmpeg_job.cpp
     src/native/ffmpeg_report.cpp
@@ -137,6 +138,14 @@ target_link_libraries(ffmpeg-bro-capturetest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-capturetest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# The GPU: what this machine has, whether a hardware decode is the same
+# picture, and what each path costs. Most of it is a measurement rather than an
+# assertion, and every assertion has to pass on a machine with no card at all.
+add_executable(ffmpeg-bro-hwtest tests/hardware_test.cpp)
+target_link_libraries(ffmpeg-bro-hwtest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-hwtest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
 target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
@@ -171,6 +180,7 @@ add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}"
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
+add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
 # Needs no fixture: the device it records from is `lavfi`, which produces its
 # own pictures. It writes into out/, so it wants the source directory.
 add_test(NAME capture COMMAND ffmpeg-bro-capturetest "out")
@@ -214,7 +224,7 @@ add_test(NAME ui-measure COMMAND ffmpeg-bro-headless
 add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_subtitles.js"
          -- "${FIXTURE_DIR}")
-set_tests_properties(decode export capabilities inputs sequences ui-player ui-sources
+set_tests_properties(decode export capabilities inputs sequences hardware ui-player ui-sources
                      ui-export ui-sequence ui-report ui-measure ui-subtitles PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
@@ -244,6 +254,6 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED media TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
-set_tests_properties(export capabilities sequences ui-player ui-sources ui-export
+set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-export
                      ui-sequence ui-report ui-measure ui-subtitles
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

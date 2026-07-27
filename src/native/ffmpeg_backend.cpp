@@ -328,6 +328,7 @@ public:
     ~FFmpegVideoDecoder() override {
         if (sws_) sws_freeContext(sws_);
         if (frame_) av_frame_free(&frame_);
+        if (swap_) av_frame_free(&swap_);
         if (avpkt_) av_packet_free(&avpkt_);
         if (ctx_) avcodec_free_context(&ctx_);
     }
@@ -339,9 +340,13 @@ public:
 
         // Frame + slice threading across all cores. For H.264/HEVC/AV1 this is
         // what makes software decode keep up with 4K, and unlike a hardware
-        // decoder it costs no GPU->CPU readback — which matters while the
-        // renderer still wants frames in system memory. The input's own
-        // decoder options are applied after it and therefore win.
+        // decoder it costs no GPU->CPU readback — which matters here more than
+        // anywhere, because bro's renderer wants planes in system memory and
+        // playback has no way to keep a picture on the card. An input that
+        // asks for `-hwaccel` still gets it (the decision belongs to the input
+        // and the same decision has to reach the timeline and the render), and
+        // every frame is brought back down in `nextFrame`. The input's own
+        // decoder options are applied after this and therefore win.
         std::string why;
         if (!openDecoder(&ctx_, priv->par, timeBase_, priv->input,
                          /*threaded=*/true, &why)) {
@@ -350,8 +355,9 @@ public:
         }
 
         frame_ = av_frame_alloc();
+        swap_ = av_frame_alloc();
         avpkt_ = av_packet_alloc();
-        return frame_ && avpkt_;
+        return frame_ && swap_ && avpkt_;
     }
 
     bool decode(const MediaPacket& pkt) override {
@@ -384,6 +390,21 @@ public:
         av_frame_unref(frame_);
         int rc = avcodec_receive_frame(ctx_, frame_);
         if (rc < 0) return false;   // EAGAIN/EOF: nothing more this round
+
+        // A hardware decode still has to arrive here as pixels: what bro's
+        // renderer takes is three planes it can read, and there is no path in
+        // playback that could hand it a device handle. So the picture comes
+        // down, unconditionally — which is why the honest thing this
+        // application can say about hardware decode on the *timeline* is that
+        // it costs a readback and buys a decode, and on this machine that is a
+        // loss. See README.
+        if (frame_->hw_frames_ctx) {
+            std::string why;
+            if (!downloadFrame(&frame_, &swap_, &why)) {
+                LOG_WARN("ffmpeg: %s", why.c_str());
+                return false;
+            }
+        }
 
         const int w = frame_->width;
         const int h = frame_->height;
@@ -464,6 +485,10 @@ private:
 
     AVCodecContext* ctx_ = nullptr;
     AVFrame* frame_ = nullptr;
+    /// The spare a hardware frame is brought down into; swapped with `frame_`
+    /// rather than copied, so a hardware decode allocates once and not once a
+    /// picture.
+    AVFrame* swap_ = nullptr;
     AVPacket* avpkt_ = nullptr;
     SwsContext* sws_ = nullptr;
     AVRational timeBase_{1, 1000};

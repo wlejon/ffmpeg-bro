@@ -80,6 +80,20 @@ public:
     AVRational timeBase() const { return timeBase_; }
     int rotation() const { return rotation_; }
 
+    /// The pool this reader's frames come out of, or null for an ordinary
+    /// software decode.
+    ///
+    /// Only non-null when the input asked for `-hwaccel_output_format`, and
+    /// only interesting to the graph path: a buffersrc fed hardware frames has
+    /// to be told which pool they belong to before the graph is configured, or
+    /// libavfilter negotiates formats for a picture it has never seen. The
+    /// compositor never asks, because `rgbaAt` has already brought the picture
+    /// down by the time anybody could.
+    AVBufferRef* hwFrames() const;
+
+    /// True while frames leave this reader on the device.
+    bool onDevice() const { return keepHw_; }
+
     /// Move the demuxer to `t`, or to the keyframe before it.
     ///
     /// Public because the graph path needs it and `rgbaAt` does not: walking
@@ -103,6 +117,11 @@ private:
     InputLoop loop_;
     AVFrame* cur_ = nullptr;
     AVFrame* pending_ = nullptr;
+    /// The spare a hardware frame is brought down into. `downloadFrame` swaps
+    /// it with `pending_` rather than copying, so one allocation serves the
+    /// whole file.
+    AVFrame* swap_ = nullptr;
+    bool keepHw_ = false;
     SwsContext* toRgba_ = nullptr;
     AVPixelFormat swsFmt_ = AV_PIX_FMT_NONE;
     Rgba raw_, rotated_;

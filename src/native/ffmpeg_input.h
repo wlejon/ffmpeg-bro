@@ -29,6 +29,7 @@
 struct AVCodecContext;
 struct AVCodecParameters;
 struct AVFormatContext;
+struct AVFrame;
 struct AVPacket;
 struct AVRational;
 
@@ -90,6 +91,45 @@ struct MediaInput {
     /// does: `avcodec_open2` hands back what nothing consumed.
     std::vector<KeyValue> decoderOptions;
 
+    /// `-hwaccel cuda`: decode this input on a device rather than on the CPU.
+    ///
+    /// **A decoder belongs to an input, and so does the device it runs on.**
+    /// ffmpeg writes `-hwaccel` in front of the `-i` for the same reason it
+    /// writes `-skip_frame` there — it is a decision taken while the file is
+    /// being opened, and it configures the decoder that input's packets go
+    /// through. Two clips cut from one file cannot be decoded one way and the
+    /// other.
+    ///
+    /// **Unavailable is a refusal, not a fallback.** A type that is compiled in
+    /// and absent, or a codec the card has no decoder for, stops the open with
+    /// the reason named. Silently decoding in software would be a render that
+    /// succeeded while ignoring what it was told, and on a machine where
+    /// software decode is the *faster* path it would never be noticed. See
+    /// ffmpeg_hardware.h.
+    std::string hwaccel;
+
+    /// `-hwaccel_device 0`: which one. An index for CUDA, an adapter number for
+    /// D3D11, a node path for VAAPI. Empty is the default device, which is what
+    /// a machine with one card wants and what a machine with two gets by
+    /// accident.
+    std::string hwaccelDevice;
+
+    /// `-hwaccel_output_format cuda`: **leave the frames on the card**.
+    ///
+    /// This is the field that decides whether hardware decode is a win or a
+    /// loss, and it is ffmpeg's own vocabulary for the same decision. Empty —
+    /// which is what `-hwaccel cuda` alone means — downloads every frame into
+    /// system memory as it is decoded, because everything downstream (the
+    /// compositor, a software filter, bro's renderer) wants pixels it can
+    /// touch. Set, the frames stay where they were decoded and only a graph
+    /// made of `_cuda`/`_qsv` filters, or an `hwdownload`, can read them; a
+    /// hardware encoder at the far end then never brings the picture down at
+    /// all, which is the only arrangement in which the GPU is faster here.
+    ///
+    /// Measured, and the numbers are in README. The readback is the cost, and
+    /// it is bigger than the decode it saves.
+    std::string hwaccelOutputFormat;
+
     /// `-ss` before `-i`: where this input starts. The input's clock is
     /// rewritten so that this instant is its zero, which is what makes it a
     /// different thing from a clip's in-point — trimming a clip picks a moment
@@ -121,8 +161,10 @@ struct MediaInput {
     bool operator==(const MediaInput& o) const {
         return path == o.path && format == o.format && ss == o.ss &&
                duration == o.duration && itsoffset == o.itsoffset &&
-               streamLoop == o.streamLoop && same(options, o.options) &&
-               same(decoderOptions, o.decoderOptions);
+               streamLoop == o.streamLoop && hwaccel == o.hwaccel &&
+               hwaccelDevice == o.hwaccelDevice &&
+               hwaccelOutputFormat == o.hwaccelOutputFormat &&
+               same(options, o.options) && same(decoderOptions, o.decoderOptions);
     }
 
 private:
@@ -150,6 +192,27 @@ private:
 bool openDecoder(AVCodecContext** out, const AVCodecParameters* par,
                  AVRational pktTimeBase, const MediaInput& in, bool threaded,
                  std::string* err);
+
+/// Do this input's frames stay on the device once decoded?
+///
+/// One rule in one place, because four things ask and each of them would get
+/// it slightly differently: the two export readers (which download unless the
+/// graph is going to take hardware frames), the playback source (which always
+/// downloads, since bro's renderer wants planes), and the printed command.
+/// `-hwaccel` alone is ffmpeg's "decode on the card and bring it back";
+/// `-hwaccel_output_format` is what leaves it there.
+bool hwFramesStayUp(const MediaInput& in);
+
+/// Bring a hardware frame down into system memory, keeping its timestamps.
+///
+/// `av_hwframe_transfer_data` copies pixels and nothing else — not the pts, not
+/// the colour tags, not the frame's own metadata — so a download that forgot
+/// `av_frame_copy_props` produces pictures with no clock, which reads as a
+/// decoder that has stopped reporting timestamps rather than as a missing line
+/// here. `*frame` is replaced by the software copy on success and left alone on
+/// failure. `scratch` is the caller's spare frame, reused so a download does
+/// not allocate per picture.
+bool downloadFrame(AVFrame** frame, AVFrame** scratch, std::string* err);
 
 /// Open one input, the way its `-f` and its option bag say to.
 ///

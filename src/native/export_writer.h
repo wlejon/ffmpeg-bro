@@ -85,14 +85,38 @@ public:
     /// `copies` is here: a subtitle stream's encoder is opened *against its
     /// decoder* — the ASS header carries the styles and the frame size carries
     /// where a `mov_text` box goes — and there is nowhere else to get either.
+    /// `hwFrames` is the pool the composited picture is going to arrive in, or
+    /// null for the ordinary render whose canvas is RGBA in system memory. Given
+    /// here rather than discovered later because an encoder that takes frames
+    /// from a pool is *opened* against that pool — `avcodec_open2` builds its
+    /// surfaces from it — and by the time the first frame arrives the header
+    /// has gone down.
     bool open(const ExportSettings& s, bool wantAudio, std::string* err,
-              CopyStreams* copies = nullptr, SubtitleStreams* subs = nullptr);
+              CopyStreams* copies = nullptr, SubtitleStreams* subs = nullptr,
+              AVBufferRef* hwFrames = nullptr);
 
     /// Encode one composited canvas into every video stream mapped to the
     /// composite. `index` is the output frame number, which is the whole
     /// timestamp: a fixed frame rate is what makes the result a file every
     /// editor will accept.
     bool writeVideo(const Rgba& canvas, int64_t index, std::string* err);
+
+    /// True when this render's pictures never come down: every video stream fed
+    /// from the composite was opened against the frames context `open()` was
+    /// given, and the job should be calling `writeVideoFrame` instead.
+    ///
+    /// It is all of them or none. A file with one hardware video stream and one
+    /// software one would need the picture in both places at once, which is a
+    /// download per frame done quietly on behalf of a render that asked for the
+    /// opposite — so `open()` refuses it and says which stream is the odd one.
+    bool takesNativeFrames() const { return native_; }
+
+    /// Encode one picture exactly as it left the graph — on the card, in the
+    /// pool the encoder was opened against. No scaler, no colour conversion and
+    /// no copy: the frame goes from `av_buffersink_get_frame` to
+    /// `avcodec_send_frame` and the only things written on it are the ones that
+    /// are not pixels (the timestamp, the forced keyframe, the field order).
+    bool writeVideoFrame(AVFrame* frame, int64_t index, std::string* err);
 
     /// Take mixed interleaved float samples, for every audio stream mapped to
     /// the mix. They are buffered per stream and handed to each encoder in
@@ -224,6 +248,10 @@ private:
         // video
         AVFrame* vframe = nullptr;
         SwsContext* toEncoder = nullptr;
+        /// This stream's encoder was opened against a hardware frames context,
+        /// so `vframe` and `toEncoder` are both null and the picture arrives
+        /// through `writeVideoFrame`.
+        bool native = false;
         KeyFrames keys;
         int frameFlags = 0;             ///< interlaced/field order, per frame
 
@@ -352,6 +380,11 @@ private:
 
     std::vector<Piece> wrote_;              ///< in the order they were opened
     std::map<AVIOContext*, std::string> live_;   ///< open right now, by handle
+
+    /// The pool the composite arrives in, borrowed from the frame source for
+    /// the life of `open()`. Not owned: the source outlives the writer.
+    AVBufferRef* hwFrames_ = nullptr;
+    bool native_ = false;
 };
 
 } // namespace ffmpegbro

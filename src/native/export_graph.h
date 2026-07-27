@@ -73,6 +73,15 @@ public:
 
     bool hasAudio() const override { return asink_ != nullptr; }
     const Rgba& canvasAt(double t) override;
+
+    /// The pool the last video pad produces into, or null for a graph that
+    /// ends in system memory. Asked of libavfilter (`av_buffersink_get_
+    /// hw_frames_ctx`) rather than worked out from the chains: a graph that
+    /// ends `hwupload_cuda` and one that ends `scale_cuda` are the same answer
+    /// and nothing outside libavfilter knows which filters kept the picture up.
+    AVBufferRef* hwFrames() const override;
+
+    const AVFrame* nativeAt(double t) override;
     void mixInto(float* dst, double from, int frames, int rate, int channels) override;
 
     /// The graph has ended. Known only once a pull has come back empty, which
@@ -96,6 +105,10 @@ private:
         bool closed = false;        // its end-of-stream has been handed over
     };
 
+    /// The parse, in the three steps it is made of, so a device can be handed
+    /// to `hwupload` between its filter being created and being initialised.
+    /// See the note above the definition.
+    int parseGraph(AVFilterInOut** inputs, AVFilterInOut** outputs);
     bool attachInput(AVFilterInOut* in, std::string* err);
     bool attachOutput(AVFilterInOut* out, std::string* err);
     /// Open the file behind `feed` and configure its buffersrc from the first
@@ -125,6 +138,14 @@ private:
 
     Rgba canvas_;
     SwsContext* toRgba_ = nullptr;
+    /// Where a hardware frame is brought down when the compositor's question is
+    /// the one being asked of a graph that kept its pictures on the card. The
+    /// arrangement is legal and slow, and the alternative — refusing — would
+    /// mean a `_cuda` filter could not be previewed on a card in a node.
+    AVFrame* down_ = nullptr;
+    /// `-filter_hw_device`, held for the life of the graph because every filter
+    /// that declared `AVFILTER_FLAG_HWDEVICE` was handed a reference to it.
+    AVBufferRef* hwDevice_ = nullptr;
     bool videoEnded_ = false;
 
     // Sound leaves the graph in whatever format it settled on and in frames of

@@ -245,7 +245,14 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     }
 
     Writer writer;
-    if (!writer.open(s, wantAudio, &err, &copies, &subs)) {
+    // The pool the composite is going to arrive in, or null for every render
+    // whose canvas is RGBA in system memory. Asked before the writer opens
+    // because an encoder that takes frames off a device is opened against the
+    // device's pool; asked of the source rather than worked out from the
+    // settings because only libavfilter knows whether the last pad kept its
+    // pictures on the card.
+    AVBufferRef* const hwFrames = source ? source->hwFrames() : nullptr;
+    if (!writer.open(s, wantAudio, &err, &copies, &subs, hwFrames)) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
         st.elapsedSec = secondsSince();
@@ -277,17 +284,34 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
 
         const double t = s.startTime + double(n) / s.fps;
         FrameSource& timeline = *source;
-        const Rgba& canvas = timeline.canvasAt(t);
-        // `-shortest`: the range said how long to write for and the content has
-        // run out first. Asked after the canvas rather than before it because
-        // the graph does not know its last input has ended until it has tried
-        // to pull — so this is the frame that discovered it, and not writing it
-        // is the whole of what `-shortest` does.
-        if (s.shortest && timeline.exhausted(t)) break;
-        if (!writer.writeVideo(canvas, n, &err)) {
-            st.state = ExportStatus::State::Failed;
-            st.error = err;
-            break;
+        if (writer.takesNativeFrames()) {
+            // The picture never comes down. There is no canvas to ask for and
+            // nothing to convert: the frame the graph made on the card goes
+            // straight to an encoder that was opened against the pool it lives
+            // in. `-shortest` is not consulted, because such a render has no
+            // black frame to write — black would have to be made in system
+            // memory and uploaded once a frame, which is exactly the cost this
+            // path exists to avoid — so it ends when its graph does.
+            AVFrame* f = const_cast<AVFrame*>(timeline.nativeAt(t));
+            if (!f) break;
+            if (!writer.writeVideoFrame(f, n, &err)) {
+                st.state = ExportStatus::State::Failed;
+                st.error = err;
+                break;
+            }
+        } else {
+            const Rgba& canvas = timeline.canvasAt(t);
+            // `-shortest`: the range said how long to write for and the content
+            // has run out first. Asked after the canvas rather than before it
+            // because the graph does not know its last input has ended until it
+            // has tried to pull — so this is the frame that discovered it, and
+            // not writing it is the whole of what `-shortest` does.
+            if (s.shortest && timeline.exhausted(t)) break;
+            if (!writer.writeVideo(canvas, n, &err)) {
+                st.state = ExportStatus::State::Failed;
+                st.error = err;
+                break;
+            }
         }
 
         // The samples this frame covers, counted from the start of the render

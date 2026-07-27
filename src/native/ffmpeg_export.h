@@ -478,6 +478,24 @@ struct ExportSettings {
     std::string filterGraph;
     std::vector<ExportGraphInput> filterInputs;
 
+    /// `-filter_hw_device cuda`: the device the *filters* run on.
+    ///
+    /// Separate from `MediaInput::hwaccel`, and not derivable from it, because
+    /// they are different decisions about different objects. An input says
+    /// where its packets are decoded; this says which device `hwupload`,
+    /// `scale_cuda` and `overlay_cuda` get when they ask the graph for one —
+    /// and a graph can perfectly well upload software-decoded pictures, which
+    /// is the arrangement where the GPU wins without a hardware decoder being
+    /// involved at all. `hwupload` has no argument that could name a device;
+    /// libavfilter's answer is the graph's, so this is the only place it can be
+    /// said.
+    std::string filterHwDevice;
+
+    /// Which one — `-filter_hw_device cuda:1`. The same string
+    /// `av_hwdevice_ctx_create` takes and the same one `MediaInput::
+    /// hwaccelDevice` is.
+    std::string filterHwDeviceIndex;
+
     /// A render that is more than one render.
     ///
     /// **Empty is one pass, which is every render this application wrote before
