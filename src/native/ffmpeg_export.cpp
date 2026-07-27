@@ -168,16 +168,33 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
 
     const bool aborted = st.state == ExportStatus::State::Failed ||
                          st.state == ExportStatus::State::Cancelled;
-    st.stage = aborted ? st.stage : "finishing";
-    setStatus(st);
+    // Published only while the job is still *running*.
+    //
+    // A cancelled or failed render already carries its terminal state by the
+    // time it gets here, and saying so before the trailer has been written
+    // tells everything watching that the job is over while the file is not —
+    // for however long finishing takes, which for an mp4 with `+faststart` is
+    // a whole second pass over it. The obvious next act on seeing "stopped" is
+    // to open what was made, and it opens a file with no moov in it: the
+    // failure reads as a cancelled render having skipped the index, which is
+    // the one thing this code goes out of its way to do. Anything terminal is
+    // announced once, at the bottom, after the writer has closed the file.
+    if (!aborted) { st.stage = "finishing"; setStatus(st); }
 
     // Finish the file even when cancelled: a half-written mp4 with no index is
     // not playable, and "I stopped it" should still leave the part that was
     // rendered watchable.
     std::string finishErr;
-    if (!writer.finish(&finishErr) && !aborted) {
-        st.state = ExportStatus::State::Failed;
-        st.error = finishErr;
+    if (!writer.finish(&finishErr)) {
+        // A stopped render is not a failed one, so this does not change the
+        // status it reports — but it is not nothing either, and swallowing it
+        // entirely is how a file that came out unopenable came to look like a
+        // clean cancellation.
+        if (aborted) LOG_WARN("export: %s (while finishing a stopped render)", finishErr.c_str());
+        else {
+            st.state = ExportStatus::State::Failed;
+            st.error = finishErr;
+        }
     }
     st.bytesWritten = writer.bytesSoFar();
 

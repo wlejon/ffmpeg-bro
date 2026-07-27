@@ -207,17 +207,32 @@ bool Writer::finish(std::string* err) {
     if (finished_) return true;
     finished_ = true;
 
+    // **Every step runs, and the trailer goes down whatever happened before
+    // it.** Returning at the first failure was the obvious shape and it is the
+    // wrong one: a render stopped after a second or two has an audio FIFO
+    // holding less than one encoder frame, draining it can fail, and the file
+    // was then closed with no moov at all — so "I stopped it" left an mp4 that
+    // opens nowhere, losing the whole of what had been rendered to save the
+    // last few milliseconds of sound. Whichever step failed is still reported;
+    // it just no longer takes the index with it.
+    std::string failure;
+    auto note = [&failure](const std::string& e) {
+        if (failure.empty()) failure = e.empty() ? "the file could not be finished" : e;
+    };
+
+    std::string step;
     if (aenc_) {
         // Whatever is left is shorter than a full encoder frame; the
         // encoder pads it rather than dropping the last few milliseconds.
-        if (!drainFifo(true, err)) return false;
-        if (!encode(aenc_, astream_, nullptr, err)) return false;
+        if (!drainFifo(true, &step)) note(step);
+        else if (!encode(aenc_, astream_, nullptr, &step)) note(step);
     }
-    if (venc_ && !encode(venc_, vstream_, nullptr, err)) return false;
+    step.clear();
+    if (venc_ && !encode(venc_, vstream_, nullptr, &step)) note(step);
 
     if (headerWritten_) {
         int rc = av_write_trailer(oc_);
-        if (rc < 0) { *err = std::string("cannot finish the file: ") + avErr(rc); return false; }
+        if (rc < 0) note(std::string("cannot finish the file: ") + avErr(rc));
     }
     const std::string path = settings_.path;
     close();
@@ -230,6 +245,8 @@ bool Writer::finish(std::string* err) {
     std::error_code ec;
     const auto size = std::filesystem::file_size(std::filesystem::path(path), ec);
     bytes_ = ec ? 0 : static_cast<int64_t>(size);
+
+    if (!failure.empty()) { *err = failure; return false; }
     return true;
 }
 
