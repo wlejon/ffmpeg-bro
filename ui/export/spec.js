@@ -199,6 +199,14 @@ export function buildSpec(over = {}) {
         fps: over.fps || outputFps(),
         start: over.start !== undefined ? over.start : r.start,
         end: over.end !== undefined ? over.end : r.end,
+        // Where the zero of the render's clock is, which is the range's start
+        // and *not* this window's. They differ for every preview: a node card
+        // and the A/B comparison each render two seconds out of the middle of
+        // the range, and a filter carrying `enable='between(t,10,20)'` means
+        // ten seconds into the render, not ten seconds into whatever window
+        // happens to be being drawn. Ignored by the renderer, which is given a
+        // graph with the offset already in it; see `origin` in graph/derive.js.
+        origin: over.origin !== undefined ? over.origin : r.start,
         videoCodec: vcodec,
         audioCodec: acodec,
         // The named fields the renderer has always taken. The option bag is

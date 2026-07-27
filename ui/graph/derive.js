@@ -133,7 +133,13 @@ function sourceColor(src) {
 /// because the crop is a fraction of the source and the source's size is not in
 /// the spec — the renderer does not need it, since it crops the placed picture.
 /// Letting ffmpeg do that arithmetic keeps the two definitions the same one.
-function videoSteps(clip, w, src, key) {
+///
+/// `off` is where this render's window sits on the render's own clock — see
+/// `origin` in `derive()`. It is zero for an export and for anything else that
+/// renders the whole range, and non-zero for the short windows the preview and
+/// the A/B comparison render, which have to carry the same clock or a filter
+/// whose `enable=` names a moment would come on at a different one.
+function videoSteps(clip, w, src, key, off) {
     const c = cropOf(clip);
     const keepW = 1 - c.l - c.r;
     const keepH = 1 - c.t - c.b;
@@ -142,7 +148,7 @@ function videoSteps(clip, w, src, key) {
         { filter: 'trim', anchor: `${key}/trim`,
           params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
         { filter: 'setpts', anchor: `${key}/setpts`, posNames: ['expr'],
-          pos: [`PTS-STARTPTS+${n(w.offset, 6)}/TB`] },
+          pos: [`PTS-STARTPTS+${n(w.offset + off, 6)}/TB`] },
     ];
     if (keepW < 1 || keepH < 1)
         steps.push({ filter: 'crop', anchor: `${key}/crop`,
@@ -178,12 +184,18 @@ function videoSteps(clip, w, src, key) {
 
 /// The audio run for one clip. `adelay` rather than `asetpts` for the offset:
 /// it pads with silence, which is what a clip that starts late sounds like.
-function audioSteps(clip, w, key) {
+///
+/// `off` — where this window sits on the render's clock — goes on the
+/// `asetpts` and not on the `adelay`, and the difference is not cosmetic.
+/// `adelay` prepends real silence; carrying a window five minutes into a render
+/// there would prepend five minutes of it. `asetpts` moves the timestamps and
+/// adds no samples, which is exactly what a clock offset is.
+function audioSteps(clip, w, key, off) {
     const steps = [
         { filter: 'atrim', anchor: `${key}/atrim`,
           params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
         { filter: 'asetpts', anchor: `${key}/asetpts`, posNames: ['expr'],
-          pos: ['PTS-STARTPTS'] },
+          pos: [off ? `PTS-STARTPTS+${n(off, 6)}/TB` : 'PTS-STARTPTS'] },
     ];
     if (clip.volume !== 1)
         steps.push({ filter: 'volume', anchor: `${key}/volume`,
@@ -493,6 +505,23 @@ export function derive(spec, sources, opts = {}) {
     const start = Number(spec.start) || 0;
     const end = Number(spec.end) || 0;
     const length = end - start;
+    // **Where the zero of the graph's clock is**, which is not the same
+    // question as where this render's window begins.
+    //
+    // Every chain in a derived graph starts `setpts=PTS-STARTPTS+offset/TB`, so
+    // `t` inside the graph reads as time into the render — and a filter carrying
+    // `enable='between(t,10,20)'` means those seconds of *the render*. A node
+    // preview and the A/B comparison are renders of a two-second window out of
+    // the middle of that range, and derived against their own start they would
+    // put t=0 at the start of the window: the same filter would come on ten
+    // seconds into every preview, wherever the preview was taken from. So the
+    // window's position on the render's clock travels with the spec, and the
+    // whole graph is shifted by it.
+    //
+    // Defaults to the window's own start, which is what an export has and what a
+    // spec written by hand in a test has, and makes this a no-op for both.
+    const origin = Number.isFinite(Number(spec.origin)) ? Number(spec.origin) : start;
+    const off = start - origin;
     // With nothing on the timeline the range has nothing to measure itself
     // against, and the answer is the one chunks 5 and 6 already settled on for
     // a still and an endless input: `-t` is the only thing that can say how long
@@ -560,10 +589,17 @@ export function derive(spec, sources, opts = {}) {
     // the canvas would be a source nothing read, which is a graph libavfilter
     // refuses. Left out, the sink is simply unwired, and "nothing is wired to
     // video out" is exactly the state a graph you have not finished is in.
-    const base = kept.length ? g.run([], [{
-        filter: 'color', anchor: 'base',
-        params: { c: 'black', s: `${W}x${H}`, r: n(fps, 6), d: n(length, 6) },
-    }], 'base') : null;
+    //
+    // The canvas is what `overlay` frame-syncs against, so it carries the clock
+    // offset too — `color` always starts at zero and a canvas left there while
+    // every clip was shifted would composite the clips against the wrong frames
+    // of it, which is a black picture rather than a subtle one.
+    const base = kept.length ? g.run([], [
+        { filter: 'color', anchor: 'base',
+          params: { c: 'black', s: `${W}x${H}`, r: n(fps, 6), d: n(length, 6) } },
+        ...(off ? [{ filter: 'setpts', anchor: 'base/setpts', posNames: ['expr'],
+                     pos: [`PTS-STARTPTS+${n(off, 6)}/TB`] }] : []),
+    ], 'base') : null;
 
     // The named places on the wires where something can be put. `at`/`atPort`
     // are where the *next* insertion goes, which starts as the point's own node
@@ -601,7 +637,7 @@ export function derive(spec, sources, opts = {}) {
                               anchor: `${key}/in`, from: w.srcIn,
                               outs: [{ stream: 'v' }] });
         inputs.set(key, input);
-        const tail = g.run(input, videoSteps(clip, w, src, key), `v${i}`);
+        const tail = g.run(input, videoSteps(clip, w, src, key, off), `v${i}`);
         // Two points per clip, and they are two different pictures: before the
         // scale a filter sees the source at its own size, in its own pixel
         // format and colour; after it, the clip as it will be composited —
@@ -707,7 +743,7 @@ export function derive(spec, sources, opts = {}) {
             const input = inputs.get(key);
             const out = input.outs.length;
             input.outs.push({ stream: 'a' });
-            const tail = g.run({ node: input, out }, audioSteps(clip, w, key), `a${i}`);
+            const tail = g.run({ node: input, out }, audioSteps(clip, w, key, off), `a${i}`);
             point(`${key}/audio`, input, out, 'a', 'clip audio');
             return tail;
         });
