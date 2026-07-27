@@ -249,6 +249,11 @@
     <section id="st-write" class="stage-view hidden">
         <div id="ex-write" class="ex-write">
             <div id="ex-dest" class="ex-col ex-dest"></div>
+            <!-- The muxer's own option table, in a column for the same reason
+                 the encoder's is: `hls` has thirty options and reading them
+                 through a fold under the picker is not reading them. Hidden
+                 rather than unmounted, like every other pane here. -->
+            <div id="ex-format-opts" class="ex-col ex-right hidden"></div>
             <div id="ex-streams" class="ex-col ex-streams"></div>
             <div id="ex-verdict" class="ex-verdict">
                 <div class="section-head">What will be written</div>

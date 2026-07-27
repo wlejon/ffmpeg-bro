@@ -6,7 +6,7 @@
 
 import { project } from '../project.js';
 import { settings, activeVideoCodec, outputFps } from './state.js';
-import { encoderInfo, audioInfo, containerInfo, codecTags } from './capabilities.js';
+import { encoderInfo, audioInfo, muxerInfo, codecTags } from './capabilities.js';
 import { codecOf } from './streams.js';
 import { isEmpty as noUserNodes } from '../graph/overlay.js';
 import { buildSpec } from './spec.js';
@@ -35,8 +35,16 @@ export function warnings() {
 
     // Not every container holds every kind of stream, and the failure arrives
     // at write_header long after the row was added.
+    //
+    // **This is the one capability libavformat will not answer.** There is no
+    // flag on an AVOutputFormat for attachments and no `avformat_query_codec`
+    // that covers them — ffmpeg's own CLI adds the stream and lets the muxer
+    // complain — so the two that hold one are named here rather than asked
+    // for, exactly as `codecTags` names its candidate fourccs. Everything else
+    // on this stage comes from a query; this does not, and saying so is
+    // cheaper than pretending otherwise.
     const atts = settings.streams.filter((s) => s.kind === 'attachment' && s.path).length;
-    if (atts && settings.container !== 'mkv' && settings.container !== 'webm')
+    if (atts && settings.container !== 'matroska' && settings.container !== 'webm')
         out.push(`${settings.container} cannot hold an attachment — Matroska can`);
     const audioTracks = settings.streams.filter((s) => s.kind === 'audio').length;
     if (audioTracks > 1 && settings.container === 'webm')
@@ -54,14 +62,27 @@ export function warnings() {
                      `${codecOf(s) || 'this codec'}, and will refuse the file`);
     }
 
-    const c = containerInfo(settings.container);
+    const c = muxerInfo(settings.container);
     const codec = activeVideoCodec();
     const info = encoderInfo(codec);
     const w = settings.width, h = settings.height;
 
-    if (c && info && c.videoCodecs.indexOf(codec) < 0)
+    // A muxer that will hold none of the encoders on offer is a real answer —
+    // `bin`, `rtp_mpegts`, half of the raw writers — and it has to be said
+    // where the choice was made rather than at write_header. The picker marks
+    // it too; this is what makes it impossible to walk past.
+    const wantsVideo = settings.streams.some((s) => s.kind === 'video');
+    const wantsAudio = settings.audio && settings.streams.some((s) => s.kind === 'audio');
+    if (c && wantsVideo && !c.videoCodecs.length)
+        out.push(`no video encoder this build offers can go in ${c.name} — ` +
+                 'take the video stream out on this stage, or pick another container');
+    else if (c && info && c.videoCodecs.indexOf(codec) < 0)
         out.push(`${c.label} cannot hold ${info.label} — the muxer will refuse it`);
-    if (c && settings.audio && settings.audioCodec && c.audioCodecs.indexOf(settings.audioCodec) < 0)
+    if (c && wantsAudio && !c.audioCodecs.length)
+        out.push(`no audio encoder this build offers can go in ${c.name} — ` +
+                 'this render will be silent or be refused');
+    else if (c && settings.audio && settings.audioCodec &&
+             c.audioCodecs.indexOf(settings.audioCodec) < 0)
         out.push(`${c.label} cannot hold ${(audioInfo(settings.audioCodec) || {}).label}`);
 
     const pix = settings.pixelFormat || (info && info.pixelFormats[0]) || 'yuv420p';

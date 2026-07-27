@@ -6,7 +6,7 @@
 // ever read and written together.
 
 import { settings } from './state.js';
-import { containers, containerInfo, encoderInfo, audioInfo } from './capabilities.js';
+import { muxers, hasMuxer, muxerForExtension, encoderInfo, audioInfo } from './capabilities.js';
 import { normalizeStreams } from './streams.js';
 
 const SETTINGS_KEY = 'ffmpeg-bro.export';
@@ -40,9 +40,16 @@ export function restore() {
             fresh = false;
         }
     } catch (e) { /* first run, or a stored blob from an older shape */ }
-    // The remembered container and codec may not exist in this build.
-    if (!containerInfo(settings.container))
-        settings.container = (containers()[0] || {}).ext || 'mp4';
+    // The remembered container and codec may not exist in this build — and
+    // `container` used to hold an *extension*, so a blob written before muxers
+    // were asked for by name says "mkv", which libavformat has never heard of.
+    // Guessing the muxer from the extension is what libavformat itself does
+    // with a filename, so one answer covers both the migration and a build
+    // that has genuinely lost a muxer.
+    if (!hasMuxer(settings.container)) {
+        settings.container = muxerForExtension(settings.container) ||
+                             (hasMuxer('mp4') ? 'mp4' : (muxers()[0] || {}).name || '');
+    }
     if (settings.videoCodec && !encoderInfo(settings.videoCodec)) settings.videoCodec = '';
     if (settings.audioCodec && !audioInfo(settings.audioCodec)) settings.audioCodec = '';
     // A stored blob outlives the shape it was stored in, and a stream row with

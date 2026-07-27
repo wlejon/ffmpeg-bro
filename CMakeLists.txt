@@ -93,6 +93,16 @@ target_link_libraries(ffmpeg-bro-exporttest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-exporttest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# What this build can write, read, reach and capture: the registry walks
+# behind the muxer picker, the option tables behind the columns, and a render
+# into a muxer chosen by name rather than by filename.
+add_executable(ffmpeg-bro-captest tests/capability_test.cpp)
+target_link_libraries(ffmpeg-bro-captest PRIVATE ffmpeg-bro-core bro_video)
+# libav's headers as well: what a muxer wrote is checked by opening the result
+# and asking libavformat what it thinks the file is.
+target_include_directories(ffmpeg-bro-captest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # Where the time in a seek goes: demuxer seek vs decode vs YUV->RGB.
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
 target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
@@ -124,6 +134,7 @@ set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
 
 add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}")
 add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
+add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME ui-player COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
@@ -136,7 +147,7 @@ add_test(NAME ui-export COMMAND ffmpeg-bro-headless
 add_test(NAME ui-report COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_report.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export ui-player ui-export ui-report PROPERTIES
+set_tests_properties(decode export capabilities ui-player ui-export ui-report PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -151,5 +162,5 @@ set_tests_properties(ui-filtergraph ui-graph PROPERTIES TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
-set_tests_properties(export ui-player ui-export ui-report PROPERTIES
+set_tests_properties(export capabilities ui-player ui-export ui-report PROPERTIES
                      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

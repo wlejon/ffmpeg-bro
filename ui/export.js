@@ -58,7 +58,8 @@ export function initExport(refs, h) {
     // the frame that becomes true, not the next time something redraws.
     onJobChange(() => { if (hooks.workspace) hooks.workspace(); });
 
-    initForm({ settings: el_.settings, advanced: el_.advanced, dest: el_.dest }, {
+    initForm({ settings: el_.settings, advanced: el_.advanced, dest: el_.dest,
+               format: byId('ex-format-opts') }, {
         changed: after,
         tweaked: () => { invalidateCandidate(); updateSummary(); },
     });

@@ -1,5 +1,6 @@
 #include "ffmpeg_backend.h"
 
+#include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
 
 #include "util/log.h"
@@ -636,6 +637,13 @@ void registerFfmpegBackend() {
     // can leave the callback un-installed — it is idempotent.
     av_log_set_level(AV_LOG_WARNING);
     installLogCapture();
+
+    // libavdevice's formats do not exist until this has run — not merely
+    // unlisted: `av_find_input_format("gdigrab")` would not find one either, so
+    // a screen grab was unreachable from every direction. Done here rather than
+    // where something enumerates, because this runs before the engine is
+    // constructed and a device is a source like any other.
+    registerDevices();
 
     MediaBackend backend;
     backend.name = "ffmpeg";

@@ -17,9 +17,10 @@ import { el, div, span, put, select, segmented, show, fromTemplate,
          row, head } from '../dom.js';
 import { basename } from '../format.js';
 import { btns, num, note } from './controls.js';
-import { settings, activeVideoCodec } from './state.js';
-import { videoEncoders, audioEncoders, containers, encoderInfo, audioInfo,
-         containerInfo, optionsOf, rateModes, qualityRange } from './capabilities.js';
+import { settings, activeVideoCodec, activeAudioCodec, outputExt } from './state.js';
+import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
+         muxerInfo, extOf, optionsOf, formatOptionsOf,
+         rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension } from './spec.js';
 import { setAudioIncluded } from './streams.js';
 
@@ -28,6 +29,15 @@ let hooks = {};
 
 let showAdvanced = false;
 let optionSearch = '';
+
+// The muxer picker's own state. Held here rather than in `settings` because
+// none of it is part of the render: which facet you were looking at and what
+// you had typed are where you are, not what will be written.
+let formatOpen = false;
+let formatSearch = '';
+let formatFacet = 'fits';
+let showFormatOptions = false;
+let formatOptionSearch = '';
 
 // Held between draws so the parts that update on their own — the quality
 // readout as the slider moves, the filename beside "Choose…" — can be written
@@ -54,12 +64,20 @@ const RATE_HINTS = {
 export function drawForm() {
     const codec = activeVideoCodec();
     const info = encoderInfo(codec) || { presets: [], tunes: [], profiles: [], pixelFormats: [] };
-    const cont = containerInfo(settings.container) || { videoCodecs: [], audioCodecs: [] };
+    const cont = muxerInfo(settings.container) || { videoCodecs: [], audioCodecs: [] };
 
     // Where it goes belongs to the Write stage, not to this one. Encode is
     // about what the picture is put through, and a filename at the top of that
     // column was the first thing asked for and the last thing decided.
     put(panes.dest, () => [head('Destination'), ...outputRows()]);
+
+    // The muxer's own option table, in a column of its own, for the same reason
+    // the encoder's is: `hls` has thirty options and `matroska` twenty, and a
+    // fold under the format picker is not somewhere anybody reads thirty rows.
+    if (panes.format) {
+        show(panes.format, showFormatOptions);
+        put(panes.format, () => (showFormatOptions ? formatOptionRows() : []));
+    }
 
     put(panes.settings, () => [
         head('Video'),
@@ -93,6 +111,7 @@ function outputRows() {
     fileLabel.classList.add('ex-dir');
     refreshFileLabel();
 
+    const all = formatOptionsOf(settings.container);
     return [
         row('File', path),
         row('', btns([
@@ -100,10 +119,12 @@ function outputRows() {
                            on: { click: () => browse(path) } }),
             fileLabel,
         ])),
-        row('Format', select({
-            'data-f': 'container',
-            on: { change: (e) => pickContainer(e.target.value) },
-        }, containers().map((c) => ({ id: c.ext, label: c.label })), settings.container)),
+        ...formatRows(),
+        head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
+            'data-f': 'formatopts',
+            cls: 'section-head ex-toggle',
+            on: { click: () => { showFormatOptions = !showFormatOptions; drawForm(); } },
+        }),
     ];
 }
 
@@ -112,7 +133,7 @@ function browse(pathInput) {
     // are dismissed, so anything automatic — a headless run included — would
     // hang with no window to dismiss it at.
     if (typeof showSaveFileDialog !== 'function') return;
-    const ext = settings.container;
+    const ext = outputExt();
     const chosen = showSaveFileDialog(`${ext.toUpperCase()}|${ext}`, settings.path || defaultPath());
     if (!chosen) return;
     settings.path = chosen;
@@ -121,22 +142,208 @@ function browse(pathInput) {
     hooks.tweaked();
 }
 
-function pickContainer(ext) {
-    settings.container = ext;
-    const c = containerInfo(ext);
+function refreshFileLabel() {
+    if (fileLabel) fileLabel.textContent = settings.path ? basename(settings.path) : 'no file chosen';
+}
+
+// ── the muxer ──────────────────────────────────────────────────────────────
+//
+// A hundred and eighty of them, which is a genuine design problem and not one
+// to be solved by writing down the good ones — that is precisely the table this
+// replaced. So the picker is the filter palette's shape, because it is the same
+// problem one stage later: a statement of what is chosen, a search over name
+// and long name, and groups that come out of *asking each muxer something*.
+//
+// The four facets below are four queries. "Fits" is `avformat_query_codec`
+// against the codecs the Encode stage is set to, which is the only grouping
+// that matters most of the time — it is the difference between the muxers that
+// will take this render and the ones that will refuse it at write_header.
+// "Pictures" is an intra-only video codec and no audio codec. "Streaming" is
+// AVFMT_NOFILE. "Devices" is libavdevice's own list. None of them is a
+// judgement about which muxers are worth having.
+
+const FACETS = [
+    { id: 'fits',   label: 'Fits',      hint: 'Will hold the codecs this render is set to' },
+    { id: 'files',  label: 'Files',     hint: 'Writes a file, and has an extension for it' },
+    { id: 'stills', label: 'Pictures',  hint: 'Writes pictures and no sound' },
+    { id: 'stream', label: 'Streaming', hint: 'Writes through a protocol rather than a file' },
+    { id: 'device', label: 'Devices',   hint: 'A screen, a window, a sound card' },
+    { id: 'all',    label: 'All',       hint: 'Every muxer this build links' },
+];
+
+/// Will this muxer hold what the render is currently set to encode? Both
+/// halves, because a container that takes the picture and refuses the sound is
+/// still a container this render cannot use.
+function fits(m) {
+    const v = activeVideoCodec();
+    const a = activeAudioCodec();
+    const wantsVideo = settings.streams.some((s) => s.kind === 'video');
+    const wantsAudio = settings.audio && settings.streams.some((s) => s.kind === 'audio');
+    if (wantsVideo && (!v || m.videoCodecs.indexOf(v) < 0)) return false;
+    if (wantsAudio && (!a || m.audioCodecs.indexOf(a) < 0)) return false;
+    return true;
+}
+
+function inFacet(m, facet) {
+    switch (facet) {
+        case 'fits':   return fits(m) && !m.device;
+        case 'files':  return !!m.extensions.length && !m.noFile && !m.device;
+        case 'stills': return m.stills;
+        case 'stream': return m.noFile && !m.device;
+        case 'device': return m.device;
+        default:       return true;
+    }
+}
+
+function formatRows() {
+    const m = muxerInfo(settings.container) || { name: settings.container, label: '', extensions: [] };
+    const stated = div('ex-fmt-current', [
+        span(m.name, 'mono'),
+        span(m.longName || '', 'dim'),
+        el('button', {
+            cls: 'tiny', 'data-f': 'container-open', text: formatOpen ? 'Close' : 'Change',
+            on: { click: () => { formatOpen = !formatOpen; formatSearch = ''; drawForm(); } },
+        }),
+    ]);
+
+    const rows = [row('Format', stated), row('', note(describeMuxer(m)))];
+    if (formatOpen) rows.push(formatPicker());
+    return rows;
+}
+
+/// What the muxer is, in the terms that decide whether it is the right one:
+/// what the file will be called, and whether it will take this render.
+function describeMuxer(m) {
+    const bits = [];
+    bits.push(m.ext ? `.${m.ext}` : 'no file extension of its own');
+    if (m.device) bits.push('a device');
+    else if (m.noFile) bits.push('writes through a protocol');
+    if (m.stills) bits.push('pictures only');
+    if (!m.videoCodecs || !m.videoCodecs.length) bits.push('no video encoder here fits it');
+    if (!m.audioCodecs || !m.audioCodecs.length) bits.push('no audio encoder here fits it');
+    else if (!fits(m)) bits.push('will not hold what this render is set to');
+    return bits.join(' · ');
+}
+
+const MUXER_LIMIT = 40;
+
+function formatPicker() {
+    const list = div('ex-fmt-list');
+    const field = el('input', {
+        cls: 'wide', 'data-f': 'fmtsearch', type: 'text', value: formatSearch,
+        placeholder: 'name, description or extension',
+        on: { input: () => {
+            formatSearch = field.value;
+            // Only the list is rebuilt, so the field being typed into keeps
+            // its caret — the same reason the option searches do it.
+            put(list, () => muxerRows(list));
+        } },
+    });
+    put(list, () => muxerRows(list));
+
+    return div('ex-fmt-picker', [
+        div('ex-fmt-facets', FACETS.map((f) => el('button', {
+            cls: 'tiny' + (f.id === formatFacet ? ' on' : ''),
+            text: f.label, title: f.hint, 'data-facet': f.id,
+            on: { click: () => { formatFacet = f.id; drawForm(); } },
+        }))),
+        row('Find', field),
+        list,
+    ]);
+}
+
+function muxerRows(list) {
+    const term = formatSearch.trim().toLowerCase();
+    // Searching looks at everything. A facet is a way of not having to name
+    // what you want; once you have named it, narrowing the answer to a group
+    // you happened to be standing in would hide the entry you asked for.
+    const matching = term
+        ? muxers().filter((m) =>
+              m.name.toLowerCase().indexOf(term) >= 0 ||
+              (m.longName || '').toLowerCase().indexOf(term) >= 0 ||
+              m.extensions.some((e) => e.indexOf(term) >= 0))
+        : muxers().filter((m) => inFacet(m, formatFacet));
+    const shown = matching.slice(0, MUXER_LIMIT);
+
+    const out = [div('ex-note dim', term
+        ? `${matching.length} of ${muxers().length} match “${formatSearch.trim()}”`
+        : `${matching.length} of ${muxers().length} muxers — search to reach the rest`)];
+
+    for (const m of shown) {
+        const tail = [];
+        if (m.ext) tail.push(`.${m.extensions.join(' .')}`);
+        if (m.device) tail.push('device');
+        else if (m.noFile) tail.push('no file');
+        if (m.stills) tail.push('pictures');
+        if (!fits(m)) tail.push('not for these codecs');
+        out.push(el('button', {
+            cls: 'ex-fmt-row' + (m.name === settings.container ? ' on' : '') +
+                 (fits(m) ? '' : ' misfit'),
+            'data-muxer': m.name,
+            title: m.longName || m.name,
+            on: { click: () => pickMuxer(m.name) },
+        }, [
+            span(m.name, 'ex-fmt-name mono'),
+            span(m.longName || '', 'dim'),
+            span(tail.join(' · '), 'ex-fmt-tail dim'),
+        ]));
+    }
+    if (matching.length > MUXER_LIMIT)
+        out.push(div('ex-note dim',
+                     `and ${matching.length - MUXER_LIMIT} more — narrow the search`));
+    return out;
+}
+
+function pickMuxer(name) {
+    settings.container = name;
+    const c = muxerInfo(name);
     // The codecs follow the container when the ones in hand will not fit: VP9
     // in an mp4 is legal but nothing plays it, and AAC in a WebM is not legal
-    // at all.
+    // at all. `c.videoCodec` is the muxer's own default resolved against what
+    // this build can encode, so this cannot land on an encoder that is not
+    // there — and where the muxer will hold nothing on offer it is left empty
+    // and `warnings()` says so, rather than a codec being chosen that the
+    // muxer would then refuse.
     if (c) {
         if (c.videoCodecs.indexOf(settings.videoCodec) < 0) settings.videoCodec = c.videoCodec;
         if (c.audioCodecs.indexOf(settings.audioCodec) < 0) settings.audioCodec = c.audioCodec;
     }
-    if (settings.path) settings.path = withExtension(settings.path, ext);
+    // The muxer's options are its own; carrying `movflags` into Matroska would
+    // stop the render dead at write_header, where an unknown key is an error.
+    settings.extraFormat = {};
+    if (settings.path) settings.path = withExtension(settings.path, outputExt());
+    formatOpen = false;
     hooks.changed();
 }
 
-function refreshFileLabel() {
-    if (fileLabel) fileLabel.textContent = settings.path ? basename(settings.path) : 'no file chosen';
+/// Every option the chosen muxer has, out of its own AVClass and libavformat's
+/// generic one — the mirror of the encoder's advanced column, drawn by the same
+/// rows and applied by the same rule: what is set here goes to `av_opt_set`,
+/// and a key the muxer does not have stops the render rather than being
+/// ignored.
+function formatOptionRows() {
+    const all = formatOptionsOf(settings.container);
+    const list = div('ex-opt-list');
+    const search = el('input', {
+        cls: 'wide', 'data-f': 'fmtoptsearch', type: 'text', value: formatOptionSearch,
+        placeholder: 'name or description',
+        on: { input: () => {
+            formatOptionSearch = search.value;
+            put(list, () => bagRows(all, settings.extraFormat, formatOptionSearch,
+                                    'Anything set here is passed straight to the muxer.'));
+        } },
+    });
+    put(list, () => bagRows(all, settings.extraFormat, formatOptionSearch,
+                            'Anything set here is passed straight to the muxer.'));
+
+    return [
+        head(`${settings.container} options · ${all.length}`),
+        div('ex-note dim', `What ${settings.container} takes beyond its defaults, out of the ` +
+                           'muxer’s own option table and libavformat’s generic one — both ' +
+                           'reach it the same way ffmpeg’s own arguments do.'),
+        row('Find', search),
+        list,
+    ];
 }
 
 // ── video ──────────────────────────────────────────────────────────────────
@@ -359,12 +566,14 @@ function rawOptionRows(codec) {
             optionSearch = search.value;
             // Only the list is rebuilt, so the field being typed into is never
             // replaced and never loses the caret.
-            put(optionList, () => optionRows(codec, all));
+            put(optionList, () => bagRows(all, settings.extraVideo, optionSearch,
+                                          'Anything set here is passed straight to the encoder.'));
         } },
     });
 
     optionList = div('ex-opt-list');
-    put(optionList, () => optionRows(codec, all));
+    put(optionList, () => bagRows(all, settings.extraVideo, optionSearch,
+                                  'Anything set here is passed straight to the encoder.'));
 
     return [
         head(`${codec} options · ${all.length}`),
@@ -375,32 +584,37 @@ function rawOptionRows(codec) {
 
 const OPTION_LIMIT = 40;
 
-function optionRows(codec, all) {
-    const set = settings.extraVideo;
-    const term = optionSearch.trim().toLowerCase();
+/// One AVOption table, edited into one bag of `-key value` pairs.
+///
+/// The encoder's column and the muxer's are the same rows over the same kind of
+/// data, because libavutil describes an encoder and a muxer with the same
+/// structure. A second copy of this for the muxer would be a second set of
+/// decisions about which control a type gets, arrived at from the same table by
+/// a different route.
+function bagRows(all, bag, searchText, hint) {
+    const term = String(searchText || '').trim().toLowerCase();
     // With nothing searched for, the list is what has been set — the rest is
     // eighty rows of noise until someone goes looking for one of them.
     const matching = term
         ? all.filter((o) => o.name.toLowerCase().indexOf(term) >= 0 ||
                             (o.help || '').toLowerCase().indexOf(term) >= 0)
-        : all.filter((o) => set[o.name] !== undefined);
+        : all.filter((o) => bag[o.name] !== undefined);
     const shown = matching.slice(0, OPTION_LIMIT);
 
     const out = [];
     if (!term && !shown.length)
-        out.push(div('ex-note dim', `Type above to search all ${all.length} options. ` +
-                                    `Anything set here is passed straight to the encoder.`));
+        out.push(div('ex-note dim', `Type above to search all ${all.length} options. ${hint}`));
 
-    for (const o of shown) out.push(optionRow(o, set));
+    for (const o of shown) out.push(optionRow(o, bag));
 
     if (matching.length > OPTION_LIMIT)
         out.push(div('ex-note dim', `and ${matching.length - OPTION_LIMIT} more — narrow the search`));
     return out;
 }
 
-function optionRow(o, set) {
+function optionRow(o, bag) {
     const node = fromTemplate('tpl-option');
-    const cur = set[o.name] !== undefined ? String(set[o.name]) : '';
+    const cur = bag[o.name] !== undefined ? String(bag[o.name]) : '';
 
     node.querySelector('.opt-name').textContent = o.name;
     node.querySelector('.opt-type').textContent = o.type;
@@ -410,8 +624,8 @@ function optionRow(o, set) {
     if (cur !== '') node.classList.add('set');
 
     const apply = (v) => {
-        if (v === '') delete settings.extraVideo[o.name];
-        else settings.extraVideo[o.name] = v;
+        if (v === '') delete bag[o.name];
+        else bag[o.name] = v;
         hooks.changed();
     };
 

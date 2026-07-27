@@ -7,8 +7,8 @@
 
 import { project, duration } from '../project.js';
 import * as viewer from '../viewer.js';
-import { settings, outputFps } from './state.js';
-import { containerInfo } from './capabilities.js';
+import { settings, outputFps, outputExt } from './state.js';
+import { muxerInfo, extOf } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
 import { streamSpecs } from './streams.js';
 import { renderGraph } from '../filtergraph.js';
@@ -28,7 +28,7 @@ export function withExtension(path, ext) {
 export function defaultPath() {
     const first = project.clips[0];
     if (!first) return '';
-    return `${first.path.replace(/\.[^./\\]*$/, '')}-export.${settings.container}`;
+    return `${first.path.replace(/\.[^./\\]*$/, '')}-export.${outputExt()}`;
 }
 
 /// The part of the timeline that will be written.
@@ -95,7 +95,7 @@ export function buildSpec(over = {}) {
     // Not activeVideoCodec(): `over` is the preview's, and the reference render
     // is this edit in a *different* container, so the fallback has to be that
     // container's default rather than the one the settings are pointing at.
-    const container = containerInfo(over.container || settings.container);
+    const container = muxerInfo(over.container || settings.container);
     const vcodec = over.videoCodec || settings.videoCodec ||
                    (container ? container.videoCodec : 'libx264');
     const acodec = over.audioCodec || settings.audioCodec ||
@@ -104,6 +104,11 @@ export function buildSpec(over = {}) {
 
     const spec = {
         path: over.path || settings.path || defaultPath(),
+        // Which muxer, by name. Sent rather than left to the extension because
+        // that is what `-f` means and because a hundred and eighty muxers
+        // share about forty extensions between them — the file's name cannot
+        // carry the choice.
+        format: over.container || settings.container,
         width: outW,
         height: outH,
         fps: over.fps || outputFps(),

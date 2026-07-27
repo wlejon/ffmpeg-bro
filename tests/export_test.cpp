@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
     std::printf("\ncapabilities\n");
     const auto vencs = availableVideoEncoders();
     const auto aencs = availableAudioEncoders();
-    const auto containers = availableContainers();
+    const auto containers = availableMuxers();
     std::string encoderList;
     for (const auto& e : vencs) encoderList += (encoderList.empty() ? "" : " ") + e.id;
     checkf(!vencs.empty(), "video encoders available: %s", encoderList.c_str());

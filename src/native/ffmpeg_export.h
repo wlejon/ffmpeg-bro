@@ -178,7 +178,17 @@ struct ExportGraphInput {
 };
 
 struct ExportSettings {
-    std::string path;               // output file; the extension picks the muxer
+    std::string path;               // output file
+
+    /// The muxer, by the name `-f` takes: "mp4", "matroska", "mpegts". Empty
+    /// falls back to guessing from the extension, which is what every render
+    /// before there was a muxer picker did.
+    ///
+    /// Named rather than derived because a muxer's identity *is* its name: a
+    /// hundred and eighty of them share about forty extensions, plenty have
+    /// none at all, and "mkv" is not the name of anything — the muxer behind it
+    /// is called `matroska`.
+    std::string format;
 
     int width = 1920;
     int height = 1080;

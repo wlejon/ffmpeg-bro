@@ -81,9 +81,9 @@ ok(Array.isArray(bro.ffmpeg.encoders) && bro.ffmpeg.encoders.length > 0,
    `${bro.ffmpeg.encoders.length} video encoders: ` +
    bro.ffmpeg.encoders.map((e) => e.id).join(' '));
 ok(bro.ffmpeg.encoders.some((e) => e.id === 'libx264'), 'x264 is among them');
-ok(Array.isArray(bro.ffmpeg.containers) && bro.ffmpeg.containers.length > 0,
-   `${bro.ffmpeg.containers.length} containers: ` +
-   bro.ffmpeg.containers.map((c) => c.ext).join(' '));
+ok(Array.isArray(bro.ffmpeg.muxers) && bro.ffmpeg.muxers.length > 20,
+   `${bro.ffmpeg.muxers.length} muxers, e.g. ` +
+   bro.ffmpeg.muxers.slice(0, 10).map((m) => m.name).join(' '));
 ok(typeof bro.ffmpeg.render.start === 'function' &&
    typeof bro.ffmpeg.render.poll === 'function' &&
    typeof bro.ffmpeg.render.cancel === 'function', 'render.start/poll/cancel exist');
@@ -199,7 +199,7 @@ A.shell.goTo('write');
 pump(80);
 ok(!!f('path') && f('path').value.length > 0,
    `Write proposes an output path (${f('path').value})`);
-ok(!!f('container'), 'and the container menu');
+ok(!!f('container-open'), 'and the muxer picker');
 ok(el('ex-summary').textContent.indexOf('frames') >= 0,
    `it states what will be written: ` +
    el('ex-summary').textContent.replace(/\s+/g, ' ').trim());
@@ -398,7 +398,9 @@ console.log('\nthe command says what will happen');
     S.quality = 22;
     S.preset = 'slow';
     S.extraVideo = {};
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(60);
 
     const text = A.command.currentCommand();
@@ -421,7 +423,9 @@ console.log('\nthe command says what will happen');
     // a bare -b that would mean both of them.
     S.rate = 'bitrate';
     S.videoBitrate = 6000;
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(60);
     const bitrateText = A.command.currentCommand();
     ok(bitrateText.indexOf('-b:v 6000k') > 0,
@@ -429,7 +433,9 @@ console.log('\nthe command says what will happen');
     ok(!/ -b \d/.test(bitrateText),
        'and never as a bare -b, which would claim the audio stream as well');
     S.rate = 'quality';
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(60);
 
     // Three things the renderer applies that are *not* in the option bag. They
@@ -471,7 +477,9 @@ console.log('\nthe command says what will happen');
     // is established is that this section must not decide it.
     S.quality = 20;
     S.preset = 'medium';
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(40);
 }
 
@@ -486,7 +494,9 @@ console.log('\nwhat it warns about');
     S.height = 361;
     S.pixelFormat = 'yuv420p';
     A.exporter.buildSpec();
-    f('container').dispatchEvent(new Event('change'));   // forces a redraw
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));   // forces a redraw
     pump(60);
     // Warnings belong to the stage that caused them now, not to a blob under a
     // form — they are on Write, beside the statement of what is about to
@@ -613,7 +623,9 @@ console.log('\nthe Write stage is the output’s stream list');
     // else — at write_header, with "Invalid data found when processing input"
     // and no mention of the tag at all. Found by writing this test.
     S.streams[0].tag = 'zzzz';
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(60);
     ok(el('ex-warnings').textContent.indexOf('does not know') >= 0,
        'a tag this container has never heard of is called out, not left to write_header');
@@ -679,6 +691,11 @@ console.log('\nthe Write stage is the output’s stream list');
         const two = A.exporter.buildSpec({
             width: 320, height: 180, fps: 25, end: 0.4,
             path: bro.appDir + '/../out/ui-streams.mkv',
+            // Named, not implied by the extension. A render is told which
+            // muxer by name now — `-f matroska` — so a path ending in .mkv
+            // with the settings still on mp4 writes an mp4 called .mkv,
+            // exactly as `ffmpeg -f mp4 out.mkv` does.
+            container: 'matroska',
         });
         // Matroska, because that is the container that holds all of it.
         two.streams = two.streams.filter((x) => x.kind !== 'attachment');
@@ -953,7 +970,9 @@ console.log('\nthe A/B preview');
     const key = pv.refKey;
     P.quality = 20;
     A.exporter.currentOptions();
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(60);
     ok(A.exporter.previewState().refReady && !A.exporter.previewState().candReady,
        'changing the quality invalidates the candidate but keeps the reference');
@@ -961,7 +980,9 @@ console.log('\nthe A/B preview');
 
     // Changing the output size does change them.
     P.width = 640; P.height = 360;
-    f('container').dispatchEvent(new Event('change'));
+    // Any control's change redraws the bar; the codec select is the one that
+    // is always there whatever the stage is set to.
+    f('vcodec').dispatchEvent(new Event('change'));
     pump(60);
     ok(!A.exporter.previewState().refReady,
        'changing the output size invalidates the reference too');

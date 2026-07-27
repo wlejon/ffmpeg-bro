@@ -380,6 +380,7 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
 
     ExportSettings s;
     s.path = strProp(ctx, spec, "path", "");
+    s.format = strProp(ctx, spec, "format", "");
     s.width = static_cast<int>(numProp(ctx, spec, "width", 1920));
     s.height = static_cast<int>(numProp(ctx, spec, "height", 1080));
     s.fps = numProp(ctx, spec, "fps", 30);
@@ -648,6 +649,70 @@ JSValue js_filterOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     return optionsToJs(ctx, filterOptions(name));
 }
 
+/// bro.ffmpeg.muxerOptions(name) / demuxerOptions(name) / decoderOptions(name)
+/// / protocolOptions(name) — the same walk `encoderOptions` does, over the
+/// other four kinds of thing in libav that carry an AVClass.
+///
+/// All on demand. There are a hundred and eighty muxers, three hundred and
+/// fifty demuxers and as many decoders, and their option tables are the
+/// expensive part of describing any of them — which is precisely why
+/// `filterOptions` is asked one filter at a time.
+JSValue js_muxerOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "muxerOptions(name) requires a muxer name");
+    return optionsToJs(ctx, muxerOptions(name));
+}
+
+JSValue js_demuxerOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "demuxerOptions(name) requires a demuxer name");
+    return optionsToJs(ctx, demuxerOptions(name));
+}
+
+JSValue js_decoderOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "decoderOptions(name) requires a decoder name");
+    return optionsToJs(ctx, decoderOptions(name));
+}
+
+JSValue js_protocolOptions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "protocolOptions(name) requires a protocol name");
+    return optionsToJs(ctx, protocolOptions(name));
+}
+
+/// bro.ffmpeg.deviceSources(name) — what one capture device can see now.
+///
+/// The one query in this file that talks to hardware, which is why it is a
+/// function rather than a list built at startup: enumerating DirectShow asks
+/// every camera driver on the machine. A device with nothing to enumerate
+/// answers with `ok: false` and a reason, because an empty list reads as a
+/// machine with no cameras in it.
+JSValue js_deviceSources(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string name;
+    if (!takeName(ctx, argc, argv, &name))
+        return JS_ThrowTypeError(ctx, "deviceSources(name) requires a device name");
+    const DeviceSourceList list = deviceSources(name);
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "ok", JS_NewBool(ctx, list.ok));
+    setStr(ctx, out, "error", list.error);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& s : list.sources) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", s.name);
+        setStr(ctx, o, "description", s.description);
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    JS_SetPropertyStr(ctx, out, "sources", arr);
+    return out;
+}
+
 /// bro.ffmpeg.codecTags(container, codec) — the fourccs this muxer will take
 /// for this codec, first being what it writes by itself. The `-tag:v hvc1`
 /// control is drawn from this rather than being a four-character text box: a
@@ -662,6 +727,91 @@ JSValue js_codecTags(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
     if (ext) JS_FreeCString(ctx, ext);
     if (codec) JS_FreeCString(ctx, codec);
     return JS_IsNull(out) ? JS_NewArray(ctx) : out;
+}
+
+/// The four registries, in the shape a picker wants. One function each rather
+/// than one generic one: they answer different questions, and the fields are
+/// what makes each list navigable — a muxer's are what a picker groups by, a
+/// device's are which half of libavdevice it came from.
+JSValue muxersToJs(JSContext* ctx) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& m : availableMuxers()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", m.name);
+        setStr(ctx, o, "label", m.label);
+        setStr(ctx, o, "longName", m.longName);
+        setStr(ctx, o, "ext", m.ext);
+        JS_SetPropertyStr(ctx, o, "extensions", stringsToJs(ctx, m.extensions));
+        setStr(ctx, o, "mimeType", m.mimeType);
+        setStr(ctx, o, "videoCodec", m.videoCodec);
+        setStr(ctx, o, "audioCodec", m.audioCodec);
+        setStr(ctx, o, "defaultVideo", m.defaultVideo);
+        setStr(ctx, o, "defaultAudio", m.defaultAudio);
+        setStr(ctx, o, "defaultSubtitle", m.defaultSubtitle);
+        JS_SetPropertyStr(ctx, o, "noFile", JS_NewBool(ctx, m.noFile));
+        JS_SetPropertyStr(ctx, o, "globalHeader", JS_NewBool(ctx, m.globalHeader));
+        JS_SetPropertyStr(ctx, o, "noTimestamps", JS_NewBool(ctx, m.noTimestamps));
+        JS_SetPropertyStr(ctx, o, "stills", JS_NewBool(ctx, m.stills));
+        JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, m.device));
+        JS_SetPropertyStr(ctx, o, "videoCodecs", stringsToJs(ctx, m.videoCodecs));
+        JS_SetPropertyStr(ctx, o, "audioCodecs", stringsToJs(ctx, m.audioCodecs));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+JSValue demuxersToJs(JSContext* ctx) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& d : availableDemuxers()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", d.name);
+        setStr(ctx, o, "longName", d.longName);
+        JS_SetPropertyStr(ctx, o, "extensions", stringsToJs(ctx, d.extensions));
+        setStr(ctx, o, "mimeType", d.mimeType);
+        JS_SetPropertyStr(ctx, o, "noFile", JS_NewBool(ctx, d.noFile));
+        JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, d.device));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+JSValue decodersToJs(JSContext* ctx) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& d : availableDecoders()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", d.name);
+        setStr(ctx, o, "longName", d.longName);
+        setStr(ctx, o, "type", d.type);
+        JS_SetPropertyStr(ctx, o, "hardware", JS_NewBool(ctx, d.hardware));
+        JS_SetPropertyStr(ctx, o, "experimental", JS_NewBool(ctx, d.experimental));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+JSValue protocolsToJs(JSContext* ctx) {
+    const ProtocolList p = availableProtocols();
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "input", stringsToJs(ctx, p.input));
+    JS_SetPropertyStr(ctx, o, "output", stringsToJs(ctx, p.output));
+    return o;
+}
+
+JSValue devicesToJs(JSContext* ctx) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& d : availableDevices()) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", d.name);
+        setStr(ctx, o, "longName", d.longName);
+        setStr(ctx, o, "kind", d.kind);
+        setStr(ctx, o, "direction", d.direction);
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
 }
 
 JSValue filtersToJs(JSContext* ctx) {
@@ -727,22 +877,30 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, ns, "encoders", codecListToJs(ctx, availableVideoEncoders()));
     JS_SetPropertyStr(ctx, ns, "audioEncoders", codecListToJs(ctx, availableAudioEncoders()));
 
-    JSValue containers = JS_NewArray(ctx);
-    uint32_t ci = 0;
-    for (const auto& c : availableContainers()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "ext", c.ext);
-        setStr(ctx, o, "label", c.label);
-        setStr(ctx, o, "longName", c.longName);
-        setStr(ctx, o, "videoCodec", c.videoCodec);
-        setStr(ctx, o, "audioCodec", c.audioCodec);
-        JS_SetPropertyStr(ctx, o, "videoCodecs", stringsToJs(ctx, c.videoCodecs));
-        JS_SetPropertyStr(ctx, o, "audioCodecs", stringsToJs(ctx, c.audioCodecs));
-        JS_SetPropertyUint32(ctx, containers, ci++, o);
-    }
-    JS_SetPropertyStr(ctx, ns, "containers", containers);
+    // Every muxer this build links, by the name `-f` takes. This was four
+    // extensions in a table — mp4, mkv, mov, webm — and everything else the
+    // build could write was compiled in and unreachable because of it. Built at
+    // startup because the entries are small: a hundred and eighty names, long
+    // names, extensions and flags. Their *option tables* are the expensive part
+    // and are asked for one muxer at a time, exactly as a filter's are.
+    JS_SetPropertyStr(ctx, ns, "muxers", muxersToJs(ctx));
+    JS_SetPropertyStr(ctx, ns, "demuxers", demuxersToJs(ctx));
+    JS_SetPropertyStr(ctx, ns, "decoders", decodersToJs(ctx));
+    JS_SetPropertyStr(ctx, ns, "protocols", protocolsToJs(ctx));
+    JS_SetPropertyStr(ctx, ns, "devices", devicesToJs(ctx));
+
     JS_SetPropertyStr(ctx, ns, "encoderOptions",
                       JS_NewCFunction(ctx, js_encoderOptions, "encoderOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "muxerOptions",
+                      JS_NewCFunction(ctx, js_muxerOptions, "muxerOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "demuxerOptions",
+                      JS_NewCFunction(ctx, js_demuxerOptions, "demuxerOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "decoderOptions",
+                      JS_NewCFunction(ctx, js_decoderOptions, "decoderOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "protocolOptions",
+                      JS_NewCFunction(ctx, js_protocolOptions, "protocolOptions", 1));
+    JS_SetPropertyStr(ctx, ns, "deviceSources",
+                      JS_NewCFunction(ctx, js_deviceSources, "deviceSources", 1));
     JS_SetPropertyStr(ctx, ns, "codecTags",
                       JS_NewCFunction(ctx, js_codecTags, "codecTags", 2));
     // Small enough to build once: thirty-odd names, and every stream row on

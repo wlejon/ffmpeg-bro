@@ -241,9 +241,19 @@ bool Writer::hasAudio() const {
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err) {
     settings_ = s;
 
-    int rc = avformat_alloc_output_context2(&oc_, nullptr, nullptr, s.path.c_str());
+    // `-f`, when the render says which muxer it means. Named rather than left
+    // to the extension because that is the only choice that works: a muxer's
+    // identity is its name, plenty of them have no extension at all (rtp, tee,
+    // every device), and several share one. Empty falls back to guessing from
+    // the filename, which is what every render before there was a muxer picker
+    // did and what a spec written by hand still expects.
+    int rc = avformat_alloc_output_context2(&oc_, nullptr,
+                                            s.format.empty() ? nullptr : s.format.c_str(),
+                                            s.path.c_str());
     if (rc < 0 || !oc_) {
-        *err = "cannot write '" + s.path + "': " + avErr(rc);
+        *err = s.format.empty()
+                   ? "cannot work out what to write '" + s.path + "' as: " + avErr(rc)
+                   : "this build has no '" + s.format + "' muxer: " + avErr(rc);
         return false;
     }
 

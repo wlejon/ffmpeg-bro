@@ -1124,6 +1124,63 @@ body.fs #cropbox { display: none; }
 .ex-toggle:hover { color: var(--accent); }
 .ex-note { font-size: 11px; line-height: 1.6; padding: 4px 2px; }
 
+/* The muxer picker. A hundred and eighty entries, so it is the filter
+   palette's shape rather than a <select>: what is chosen stated on one line,
+   facets that come out of asking each muxer something, a search over name,
+   description and extension, and rows that read as sentences. */
+.ex-fmt-current { display: flex; align-items: center; gap: 6px; }
+.ex-fmt-current .mono { font-weight: 600; }
+.ex-fmt-current .dim {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+}
+.ex-fmt-picker {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 7px 7px;
+    margin: 4px 0 6px;
+    background: #191c22;
+}
+.ex-fmt-facets { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 5px; }
+.ex-fmt-list { max-height: 340px; overflow-y: auto; }
+
+/* `height: auto` and `min-width: 0` are not optional here — see the note on
+   the base button rule; without them a two-line row is clipped to 26px. */
+.ex-fmt-row {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: 0;
+    text-align: left;
+    padding: 3px 6px 4px;
+    margin-bottom: 1px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: none;
+    color: var(--text);
+    font-size: var(--fs-sm);
+    line-height: 1.35;
+    cursor: pointer;
+}
+.ex-fmt-row:hover { background: var(--panel-hi); border-color: var(--line); }
+.ex-fmt-row.on { border-color: var(--accent); background: var(--panel-hi); }
+/* A muxer that will not hold what this render is set to is still offered —
+   hiding it would hide the reason the one you wanted is missing — but it says
+   so before you click rather than at write_header. */
+.ex-fmt-row.misfit .ex-fmt-name { color: var(--dim); }
+.ex-fmt-row .ex-fmt-name {
+    display: block;
+    font-size: var(--fs-base);
+    font-weight: 600;
+    color: var(--text);
+}
+.ex-fmt-row .dim { display: block; font-size: 10.5px; }
+.ex-fmt-row .ex-fmt-tail { font-size: 10px; }
+
 /* One raw ffmpeg option: what it is called, what libavcodec says it does, and
    somewhere to put a value. */
 .ex-opt-row {

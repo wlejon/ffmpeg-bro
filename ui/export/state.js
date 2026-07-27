@@ -13,7 +13,7 @@
 // command, the warnings and the spec to describe different renders.
 
 import { project } from '../project.js';
-import { containerInfo } from './capabilities.js';
+import { muxerInfo, extOf } from './capabilities.js';
 
 export const PREVIEW_LENGTHS = [1, 2, 3, 5, 10];
 
@@ -21,6 +21,11 @@ export const PREVIEW_LENGTHS = [1, 2, 3, 5, 10];
 // second one is nearly always the first one again with a different range.
 export const settings = {
     path: '',
+    // The muxer, by the name `-f` takes: "mp4", "matroska", "mpegts". Not an
+    // extension — nothing in libavformat is called "mkv", forty-seven muxers
+    // have no extension at all and several share one, so a name is the only
+    // thing that identifies one. `outputExt()` below is what a file gets
+    // called, which is a different question.
     container: 'mp4',
     videoCodec: '',
     audioCodec: '',
@@ -145,15 +150,24 @@ export function onJobChange(fn) { watchers.push(fn); }
 /// container's default is", which is a real answer and not an absence — the
 /// form draws from it, the spec sends it and the command prints it.
 export function activeVideoCodec() {
-    return settings.videoCodec || (containerInfo(settings.container) || {}).videoCodec || '';
+    return settings.videoCodec || (muxerInfo(settings.container) || {}).videoCodec || '';
 }
 
 export function activeAudioCodec() {
-    return settings.audioCodec || (containerInfo(settings.container) || {}).audioCodec || '';
+    return settings.audioCodec || (muxerInfo(settings.container) || {}).audioCodec || '';
 }
 
 /// The rate the render runs at: what was asked for, or the project's, or the
 /// fallback every other part of this app also falls back to.
 export function outputFps() {
     return settings.fps || project.fps || 30;
+}
+
+/// What a file written by the chosen muxer should be called. A reader for the
+/// same reason as the three above: the muxer's first extension is the answer in
+/// five places — the filename, the file dialog's filter, the preview's temp
+/// name, the default path, the command bar — and a muxer with no extension of
+/// its own has to fall back to something rather than producing `out.`.
+export function outputExt() {
+    return extOf(settings.container) || 'out';
 }

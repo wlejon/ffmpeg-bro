@@ -37,7 +37,7 @@
 import { el, div, span, put, select, row, head, fromTemplate, show } from '../dom.js';
 import { basename } from '../format.js';
 import { settings, activeVideoCodec, activeAudioCodec } from './state.js';
-import { videoEncoders, audioEncoders, containerInfo, dispositions,
+import { videoEncoders, audioEncoders, muxerInfo, dispositions,
          codecTags } from './capabilities.js';
 import { videoOptions, audioOptions } from './options.js';
 
@@ -252,7 +252,7 @@ function says(s) {
     }
 
     const list = s.kind === 'video' ? videoEncoders() : audioEncoders();
-    const cont = containerInfo(settings.container) || { videoCodecs: [], audioCodecs: [] };
+    const cont = muxerInfo(settings.container) || { videoCodecs: [], audioCodecs: [] };
     const legal = s.kind === 'video' ? cont.videoCodecs : cont.audioCodecs;
     const inherited = s.kind === 'video' ? activeVideoCodec() : activeAudioCodec();
 

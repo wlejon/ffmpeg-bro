@@ -13,7 +13,8 @@
 import { project, duration } from '../project.js';
 import { el, div, span, put, segmented, fromTemplate } from '../dom.js';
 import { bytes, clock, elapsed, timecode } from '../format.js';
-import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps } from './state.js';
+import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps,
+         outputExt } from './state.js';
 import { previewSpec, range } from './spec.js';
 
 let panes = {};
@@ -94,7 +95,7 @@ function renderReference() {
     hooks.launch(previewSpec({
         path: preview.refPath,
         start: r.start, end: r.end,
-        container: 'mkv',
+        container: 'matroska',
         videoCodec: 'libx264',
         audio: false,
         pixelFormat: 'yuv444p',
@@ -105,7 +106,7 @@ function renderReference() {
 
 export function renderCandidate() {
     const r = previewRange();
-    preview.candPath = bro.ffmpeg.tempPath(`candidate.${settings.container}`);
+    preview.candPath = bro.ffmpeg.tempPath(`candidate.${outputExt()}`);
     hooks.launch(previewSpec({ path: preview.candPath, start: r.start, end: r.end }), 'candidate');
 }
 

@@ -5,7 +5,7 @@
 // has rather than assumed: a machine without an NVIDIA card does not get
 // offered the NVIDIA one.
 
-import { settings, activeVideoCodec } from './state.js';
+import { settings, activeVideoCodec, outputExt } from './state.js';
 import { encoderInfo, audioInfo, audioEncoders,
          rateModes, qualityRange } from './capabilities.js';
 import { withExtension } from './spec.js';
@@ -65,7 +65,7 @@ export function intents() {
     if (h264) out.push({
         id: 'lossless', label: 'Lossless',
         hint: 'Nothing thrown away, and very large',
-        apply: { container: 'mkv', videoCodec: h264, rate: 'lossless',
+        apply: { container: 'matroska', videoCodec: h264, rate: 'lossless',
                  preset: 'veryfast', pixelFormat: 'yuv444p',
                  audioCodec: firstAudio('flac', 'pcm_s16le'), faststart: false },
     });
@@ -91,7 +91,7 @@ export function applyIntent(id) {
     const it = intents().find((x) => x.id === id);
     if (!it) return false;
     Object.assign(settings, it.apply);
-    if (settings.path) settings.path = withExtension(settings.path, settings.container);
+    if (settings.path) settings.path = withExtension(settings.path, outputExt());
     clampToEncoder();
     return true;
 }

@@ -29,9 +29,8 @@
 import { project } from './project.js';
 import { div, span, put, show } from './dom.js';
 import { filtergraph, outputColor } from './filtergraph.js';
-import { settings } from './export/state.js';
+import { settings, outputExt } from './export/state.js';
 import { buildSpec, specSources } from './export/spec.js';
-import { containerInfo } from './export/capabilities.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
 
 // The space between one span and the next, non-breaking on purpose. The line
@@ -187,12 +186,25 @@ export function parts() {
         describe(out, s, 'a', idx, nAudio);
     }
 
-    if (settings.faststart && (containerInfo(settings.container) || {}).ext === 'mp4')
+    if (settings.faststart && spec.format === 'mp4')
         out.push('-movflags', '+faststart');
     if (settings.title) out.push('-metadata', arg(`title=${settings.title}`));
     for (const k of Object.keys(spec.metadata || {}))
         if (spec.metadata[k] !== '') out.push('-metadata', arg(`${k}=${spec.metadata[k]}`));
-    out.push(arg(spec.path || 'out.' + settings.container));
+    // Whatever the muxer was told beyond its defaults. These reach it through
+    // the same `av_opt_set`-with-children route the encoder options take, so
+    // they are as exact as the rest of this line — and a `-hls_time` the file
+    // was written with but the command did not mention is the sort of omission
+    // this bar exists to make impossible.
+    for (const k of Object.keys(spec.formatOptions || {}))
+        if (spec.formatOptions[k] !== '' && spec.formatOptions[k] !== undefined)
+            out.push(`-${k}`, arg(spec.formatOptions[k]));
+    // `-f` last before the path, where ffmpeg wants it, and always — not only
+    // when the extension disagrees. The render is told which muxer by name, so
+    // a command that left it to be guessed from the filename would be a
+    // different invocation from the one being run.
+    if (spec.format) out.push('-f', spec.format);
+    out.push(arg(spec.path || `out.${outputExt()}`));
 
     return { spec, graph: g, pre, inputs, out };
 }
