@@ -45,6 +45,7 @@
 import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename } from './format.js';
 import { optionColumn } from './opttable.js';
+import { schemeOf, protocolLinked } from './export/destination.js';
 
 let refs = {};
 let hooks = {};
@@ -586,6 +587,14 @@ function drawSettings() {
         rows.push(head('The file'));
         rows.push(row('Path', path));
         rows.push(row('Container', muxerPicker()));
+        // Where a recording goes is the same question the Write stage asks, and
+        // the same answer: a recording is a device into a `Writer`, and a
+        // `Writer` is a muxer, so `-f tee` and a URL work here for the reason
+        // they work there. What is *not* here is the destination editor — one
+        // encode to a file and a stream at once is exactly the case tee exists
+        // for and is two lines to type, and a second copy of that editor would
+        // be a second answer to how the argument is escaped.
+        rows.push(...destinationRows());
         rows.push(row('Video', codecPicker(false)));
         rows.push(row('Audio', codecPicker(true)));
         // Only where the encoder has the word. An encoder with no `crf` — a
@@ -619,6 +628,47 @@ function redraw() {
 /// The numbers are shown as well as set, because `offset_x` is what the command
 /// bar prints and a rectangle nobody can read off is a rectangle nobody can
 /// reproduce.
+/// What the recording's destination turns out to be, when it is not one file.
+///
+/// **Stated, not offered.** A recording is a device into a `Writer` and a
+/// `Writer` is a muxer, so a URL and a `-f tee` argument reach one here exactly
+/// as they do from the Write stage. What this adds is the two things somebody
+/// cannot see by looking at the field: whether the protocol a URL names is in
+/// this build — it fails at open with a message about a filename otherwise —
+/// and, for a tee, how many destinations the argument comes to, since a
+/// mistyped separator reads as one destination with a strange name.
+function destinationRows() {
+    const rows = [];
+    const scheme = schemeOf(capture.path);
+    if (scheme) {
+        const linked = protocolLinked(scheme);
+        rows.push(row('Protocol', span(
+            linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
+            linked ? 'mono' : 'mono src-missing')));
+        rows.push(row('', span(
+            'A recording pushed through a protocol has no size and no percentage, for the ' +
+            'same reason it has none without a -t: there is no file to measure. What it ' +
+            'reports is what it has sent.', 'dim')));
+    }
+    if (capture.format === 'tee') {
+        // Counted by hand rather than with a split, because the separator can
+        // be escaped and a lookbehind is not something to rely on here.
+        const text = String(capture.path || '');
+        let n = text ? 1 : 0;
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] === '\\') { i++; continue; }
+            if (text[i] === '|') n++;
+        }
+        rows.push(row('', span(
+            `${n} destination${n === 1 ? '' : 's'} — recording and streaming the same ` +
+            'capture is one encode through tee, written [f=matroska]take1.mkv|' +
+            '[f=flv]rtmp://…  The Write stage has an editor for the argument; here it is ' +
+            'typed, because a second copy of the escaping would be a second answer to it.',
+            'dim')));
+    }
+    return rows;
+}
+
 function regionRows() {
     if (!takesRegion(capture.device)) return [];
     const o = capture.options;

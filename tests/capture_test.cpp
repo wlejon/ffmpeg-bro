@@ -395,6 +395,53 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── recording to more than one place ───────────────────────────────────
+    //
+    // A recording is a device into a `Writer`, and a `Writer` is a muxer — so a
+    // recording that goes to several destinations is `-f tee` and nothing else
+    // new. This is the check that says so, because "recording *and* streaming
+    // the same capture" is the case the whole tee decision was taken for: one
+    // encode, one real-time deadline, and a file kept while the same packets go
+    // somewhere else.
+    std::printf("\nRecording to several destinations\n");
+    if (!avcodec_find_encoder_by_name("libx264")) {
+        std::printf("  SKIP  no libx264 in this build\n");
+    } else {
+        const std::string keep = dir + "/capture-tee.mkv";
+        const std::string also = dir + "/capture-tee.ts";
+        std::filesystem::remove(keep);
+        std::filesystem::remove(also);
+
+        CaptureSettings c;
+        c.source = lavfi("testsrc=size=320x240:rate=25", 1.0);
+        c.output.path = "[f=matroska]" + keep + "|[f=mpegts]" + also;
+        c.output.format = "tee";
+        c.output.videoCodec = "libx264";
+        c.output.preset = "ultrafast";
+        c.output.crf = 30;
+        c.output.includeAudio = false;
+        c.output.faststart = false;
+
+        std::string err;
+        if (!startCapture(c, &err)) {
+            checkf(false, "a recording through tee starts: %s", err.c_str());
+        } else {
+            const ExportStatus st = waitForJob(30.0);
+            checkf(st.state == ExportStatus::State::Done,
+                   "a recording through tee finishes%s%s",
+                   st.error.empty() ? "" : ": ", st.error.c_str());
+            checkf(st.piecesWritten == 2, "and reports both destinations (%lld)",
+                   static_cast<long long>(st.piecesWritten));
+            const Opened a = openResult(keep);
+            const Opened b = openResult(also);
+            check(a.ok && b.ok, "both of them open");
+            checkf(a.width == 320 && b.width == 320,
+                   "at the device's own size (%dx%d and %dx%d)", a.width, a.height,
+                   b.width, b.height);
+            check(a.indexed, "and the one that is a file has an index — the trailer went down");
+        }
+    }
+
     // ── what this machine actually has ─────────────────────────────────────
     //
     // Whatever the answer is, it is asserted, and there are three of them
