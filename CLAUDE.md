@@ -157,7 +157,38 @@ against footage the fixtures do not resemble:
 # the drain off the frame loop, a warning that is visible and attributed, and
 # a measuring filter's values as a named series over time
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
+
+# native: a device as an endless input, and recording one — bounded, stopped,
+# with sound. Needs no media: it records from `lavfi`.
+./build/Release/ffmpeg-bro-capturetest out
+
+# the Capture stage: choosing a device, its options in front of its -i, a
+# recording with no percentage, and a region dragged on the live screen
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js
 ```
+
+**Testing capture is awkward and must not be fudged.** CI has no camera, so both
+suites drive `lavfi` — libavfilter's *input device* (`-f lavfi -i testsrc=…`), which
+is a device in every respect that matters (registered by `avdevice_register_all()`,
+forced with `-f`, no duration, never ends) and opens anywhere. **It is not the same
+mechanism as a source filter on the graph**, which chunk 8 adds: `testsrc` as a
+*filter* is a node with no input pad inside a filtergraph, and the lavfi *device*
+wraps a whole graph up as a demuxer so libavformat can read it as an `-i`. They are
+spelt almost identically and they are two different places in the pipeline; say so
+wherever a reader will hit it.
+
+The machine's real devices are asked about too, and **whatever the answer is, it is
+asserted**: gdigrab is either in this build or it is not, and if it is then opening
+it either produces frames or says why it did not. There is no branch that asserts
+nothing — a test that quietly passed for want of a camera would be worse than no
+test. On Windows with a desktop session gdigrab opens even under the headless
+binary, so what runs is the real screen grabber, region drag included.
+
+Two things lavfi will not do that a real device does. It produces frames as fast as
+it can rather than in real time — there is no `-re` here — so a "five second"
+recording is over in a fraction of one, and a UI test that wants to look at a
+*running* recording has to ask for enough seconds that there is still one to look at.
+And it cannot be previewed, for the `wrapped_avframe` reason above.
 
 `tests/ui_player.js` is the main regression suite: it drops files on the real UI, plays,
 scrubs, steps, zooms, moves/trims/splits clips, crops, drops a batch as a grid, and asserts
@@ -221,7 +252,9 @@ them to change alone:
 | `ffmpeg_input.h` | **what an `-i` is**, the one function that opens one, `-stream_loop`, where a duration comes from, and the registry playback resolves a token through |
 | `ffmpeg_sequence.*` | **files that are one input** — the sequence scan and its refusals, the concat list, the frame-name pattern, and whether this build has glob |
 | `ffmpeg_export.h` | the description a render is given, and the four calls that run one |
-| `ffmpeg_export.cpp` | the job: one slot, one thread, the status the UI polls |
+| `ffmpeg_export.cpp` | the job: one thread, the status the UI polls |
+| `ffmpeg_job.*` | **the one slot both kinds of job run in**, and the three rules that go with it |
+| `ffmpeg_capture.*` | recording a device: the job whose end is somebody pressing stop |
 | `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
 | `export_graph.*` | libavfilter's answer to the same two questions |
 | `export_source.*` | one clip's pictures, one clip's sound |
@@ -448,6 +481,69 @@ the one that decided it:
   as absolute only if it starts with `/`, `\` or `x:`, so `https://example.com/a.mp4`
   is resolved against the document and becomes a path under `ui/`. The leading slash
   in the token is not decoration — it is why this works without touching bro.
+
+### Recording, and the shape chunk 13 needs
+
+**A device needed nothing new in `MediaInput`.** It is `-f dshow` naming a
+libavdevice demuxer, `-i video=…` naming what it can see, and that demuxer's own
+options in the bag `-probesize` already travels in. The whole model change is one
+line in `inputIsEndless`: a device never ends, so `-t` is the only thing that can say
+how long it is, and with no `-t` the answer is zero — *nobody knows*, which is the
+same rule `inputDuration` already applied to `-loop 1`.
+
+**The job machine is where a device is genuinely a new shape.** `runExport` walks
+forward from `start` to `end` at a fixed rate asking a `FrameSource` what the output
+looks like at `t`, and every part of that is wrong for a device: it cannot be asked
+what it looks like at `t` (there is no seeking a camera), it has no `end`, and the
+clock is the device's rather than the render's. So recording is a **second job**, not
+a flag on the first, and what the two share is what does not care — `Writer`, and the
+one slot.
+
+Five decisions here, each of which chunk 13 (streaming *out*, which is the same
+open-ended shape with the ends swapped) should reuse rather than re-take:
+
+- **The slot lives in `ffmpeg_job.h`, owned by neither job.** It carries the three
+  rules that both of them get wrong in the same way if left to remember: the slot is
+  freed *before* the terminal status is published, a terminal state is published once
+  at the bottom after the file is closed, and `job::Held` frees the slot however the
+  job leaves. `startExport`/`exportStatus`/`cancelExport`/`waitForExport` are now
+  forwarders. **`Slot`'s destructor joins**, because a function-local static holding a
+  joinable `std::thread` calls `std::terminate` at exit — which reads as "the last
+  thing it printed crashed" and is nothing of the kind.
+- **Stop is the *normal* end of a recording**, so a stopped recording reports `Done`.
+  A render is `Cancelled` because something was abandoned; a recording's length was
+  the open question and stopping answered it. Reporting `Cancelled` would make every
+  successful recording look like a mistake and make the one case worth
+  distinguishing — a recording that *failed* — indistinguishable from the ordinary
+  one. A streamed output will want the same reading.
+- **Progress is elapsed and size, and there is no percentage.** `framesTotal` stays
+  0 and `ExportStatus::openEnded` says so, which `render.poll()` reports. Zero
+  meaning "nobody knows" is deliberately the same convention `inputDuration` uses, so
+  there is one rule in this binary rather than two. Given a `-t` there *is* a total
+  and then the fraction means something — which is why the UI reads `openEnded`
+  rather than assuming.
+- **A cancelled render's trailer discipline matters more here, not less.** A render
+  that lost its index has lost a file that can be made again; a recording that lost
+  its index has lost the only copy of something that happened once. `Writer::finish()`
+  runs every step whatever failed before it, and it is called on every path.
+- **One slot means no preview and no export while recording, and that is right.**
+  Not a limitation left in: a capture is the only job in this application with a
+  real-time deadline and it cannot be re-run, so it gets the machine. An encode
+  competing for the same cores is how a capture comes to drop frames. The UI refuses
+  the other stages with the reason rather than offering a door that will not open.
+
+The read loop itself is worth two notes. Frames are **placed** rather than counted —
+the device's own timestamp becomes an output frame index — so the file is constant
+frame rate whatever the device did, and a stall **holds the last picture** rather
+than leaving a gap, because a jump in the muxer's timestamps reads as a corrupt file
+in several players. And **the recording's zero is the first picture**: sound that
+arrived before it is dropped to the sample, because letting it in would put the whole
+soundtrack ahead of the picture by however long the camera took to wake up.
+
+One limitation to know before extending this: `job::stopping()` is only checked
+between `av_read_frame` calls, so a device that has stalled is not stopped until its
+next frame arrives. At 10–30 fps that is under a tenth of a second. A device that has
+been unplugged is a different matter and is what `rw_timeout` is for.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -695,8 +791,52 @@ about them:
   standard detaches turns *holding a reference* — an ordinary thing to do — into a silent
   no-op somewhere else entirely.
 
-- `shell.js` — the pipeline, as the thing you navigate. Five stages — Sources,
-  Compose, Graph, Encode, Write — and the spine is both the diagram and the navigation:
+- `capture.js` — the Capture stage: a device, what it can see, and the recording
+  it becomes. **A device is an input and this is deliberately not the Sources
+  stage**, and the reason is not layout: an input on that stage is something the
+  render about to happen will *read*, and a device cannot be — it never ends, so
+  nothing can be cut from it. What you do with a device is not configure it and
+  move on, it is watch it and then press record, which is a moment rather than a
+  setting. It is **first on the spine** because it is the one card that is not a
+  question about the file coming out: it is where an input comes from when there
+  is not one yet, and the arrow into Sources is real (what a recording writes is
+  opened as an input) just crossed at a different time.
+
+  Four things here are load-bearing:
+
+  - **A device's settings are its demuxer's options**, through the same
+    `ui/opttable.js` column the encoder's, the muxer's and the file demuxer's use.
+    There is no list of device settings written down and there could not be: this
+    build has five devices and another platform's has different ones.
+  - **The preview is an ordinary `<video>`** playing the device through
+    `inputs.define()`, so it is the same backend and the same decoder a clip
+    plays through. There is no preview-only path, for the reason the node
+    previews have none. The **one** device that cannot be shown is `lavfi`, and
+    the reason is about the seam rather than the device: lavfi's packets are not
+    bytes — `wrapped_avframe` is a pointer to a decoded AVFrame — and bro's
+    `MediaPacket` is a byte buffer because bro is codec-agnostic. The pointer
+    does not survive the crossing and the decoder answers EPERM. Detected by
+    asking `probe()` for the codec, never by name.
+  - **Whether a device takes a region is asked of its option table** — `offset_x`,
+    `offset_y` and `video_size` together — not decided by name, so another
+    platform's screen grabber answers the same way with nothing edited here. The
+    region is *dragged on the live picture*, which is the only way it could be
+    picked in this engine and turns out to be the right way anyway. That is why
+    `fitPreview()` places the picture at its own aspect rather than stretching it:
+    a squashed picture is a squashed rectangle.
+  - **The device goes to the recording, not to the preview.** `stopPreview()` runs
+    before `record.start` and the preview comes back afterwards, because a
+    DirectShow device is exclusive and the second open fails — which would read as
+    every recording being broken. Leaving the stage releases it too.
+
+  The one thing on this stage that is *not* asked of libav is the starting point
+  for a device that will not list its sources (`desktop` for gdigrab). There is no
+  call that returns it — it is in ffmpeg's man page and nowhere in the library —
+  so it is a placeholder and one button, never a restriction, and it is labelled
+  as a hint where it is offered.
+- `shell.js` — the pipeline, as the thing you navigate. Six stages — Capture,
+  Sources, Compose, Graph, Encode, Write — and the spine is both the diagram and the
+  navigation:
   each card states what its stage is set to, so the bar reads as one statement of
   the whole render and clicking the part that is wrong is how you go and change it.
   **This replaced the Edit/Output tabs**, which were a modal in disguise. The reason
@@ -711,7 +851,11 @@ about them:
   the filtergraph is equivalent. **The second claim is conditional and must stay that
   way**: with a filter of the user's on the graph the render goes through libavfilter
   and those chains are what it parses, so calling them a translation would be
-  underselling them by exactly the amount that matters. **Three things reach the
+  underselling them by exactly the amount that matters. On the Capture stage it
+  prints the *capture* instead — a device into a file is its own pipeline, and
+  printing the timeline's render under it would be describing a command nobody is
+  about to run — and all of that one is exact, because a capture composites nothing
+  and so has no filtergraph to be a translation of. **Three things reach the
   encoder that are not in
   `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
   colour tags and the conversion into them, the keyframe interval (two seconds here,
@@ -1038,11 +1182,19 @@ about them:
     detail, framed at a zoom that implies the other, rebuilt, framed differently — by
     making it unreachable rather than by detecting it. Going below is a thing only the
     wheel can do, where no fit is running to argue with.
-  - **Editing on a card commits on `change`, never on `input`, and restores focus
-    afterwards.** An edit locks the node, a lock redraws the graph, and a redraw throws
-    away every card: on `input` the field vanishes between keystrokes, and without the
-    restore a `<select>` loses focus mid-gesture. Controls also stop `mousedown`
-    propagating, or using one drags the node it is on.
+  - **Editing on a card commits on `change`, never on `input`, and the field being
+    used survives a redraw — where it is *and what is half-typed into it*.** An edit
+    locks the node, a lock redraws the graph, and a redraw throws away every card: on
+    `input` the field vanishes between keystrokes, and without the restore a
+    `<select>` loses focus mid-gesture. The half that bites is the value, and it took
+    a flaky test to find: an edit is not the only thing that redraws this stage — a
+    node preview arriving a second later rebuilds every card too, and it rebuilds
+    them *from the model*, so what had been typed and not yet committed was silently
+    eaten. `cards.noteFocus()` reads the ambient focus and its value off the document
+    before the rebuild, because the document is the only thing that knows them; it
+    stands down when an edit has already recorded an intent, since putting the old
+    text back over the value that edit just committed would be undoing it. Controls
+    also stop `mousedown` propagating, or using one drags the node it is on.
   - **A pin is visual.** `layout()` puts a pinned node where it was dropped and changes
     nothing else — the flow does not part to make room. That is what Nuke does; a layout
     that reflowed around pins would mean dragging one node rearranged the eight you were

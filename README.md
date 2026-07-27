@@ -271,9 +271,37 @@ bro.ffmpeg.render.start({ path,
                           formatOptions: {},
                           metadata: { comment: "…" },   // the container's own
                           streams: [...], chapters: [...] })
-bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames,
+bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openEnded,
                             //     elapsed, fps, bytes, path, stage, error, job }
 bro.ffmpeg.render.cancel()
+
+// Recording a device — the second kind of job in the same slot, polled through
+// the same `render.poll()`. A separate pair of calls because what it is given
+// is different (one device, no timeline) and because **stop is the normal end
+// of a recording**, which is a different act from cancelling a render even
+// though it is the same signal.
+bro.ffmpeg.record.start({ source: { path: 'desktop', format: 'gdigrab',
+                                    options: { framerate: 30 }, t: 0 },
+                          // the output half is exactly a render's: path,
+                          // format, videoCodec, audioCodec, crf, preset,
+                          // videoOptions, streams, … Width, height and fps
+                          // default to *the device's own* rather than to
+                          // 1920×1080 at 30: a capture is not composited into
+                          // a canvas, so a size of this application's choosing
+                          // would be a scale nobody asked for.
+                          path: 'out/take1.mkv', format: 'matroska' })
+bro.ffmpeg.record.stop()
+
+// `source.t` is `-t`: how long to record for, and **zero means until stopped**.
+// With no `-t` the job reports `openEnded: true`, `totalFrames: 0` and
+// `progress: 0` — zero meaning nobody knows, the same rule `probe()` follows
+// for an input with no length. Anything drawing a progress bar has to read
+// `openEnded`: a fraction of an unknown total is zero, and a bar sitting at
+// zero for ten minutes says "stuck" rather than "recording".
+//
+// A recording that is stopped reports `done`, not `cancelled`. Nothing was
+// abandoned — the length was the open question and stopping answered it — and
+// the trailer goes down either way, so what is on disk opens.
 
 // What the render *said*. Given a cursor, poll also drains libav's log and
 // every value a filter measured, and hands back the cursor to carry forward.
@@ -375,9 +403,71 @@ clip whose length came from the container would run past the end of its video.
 Matroska keeps only one duration for the whole file, and then that is what every
 stream reports.
 
+## Capture
+
+`D` (or the first card on the spine) is where an input comes from when there is not
+one yet: a screen, a camera, a microphone, recorded to a file.
+
+It is **first on the spine and it is the one card that is not about the render**.
+Every other stage is a question about the file coming out; this is the question
+about the file going in. `ffmpeg -f gdigrab -i desktop out.mkv` is a whole pipeline
+whose output is a file, and then you open that file — so the arrow from Capture to
+Sources is real, just crossed at a different moment. `Add to the timeline` is that
+arrow being followed.
+
+**A device is an input.** `-f dshow` names a libavdevice demuxer, `-i video=…` names
+what it can see, and everything else about it is that demuxer's own options — in the
+same bag `-probesize` travels in, printed in front of the same `-i`. Nothing about a
+device is a feature of this application, which is why the whole stage is three
+questions:
+
+- **Which device.** libavdevice's own list: on Windows `dshow`, `gdigrab`, `vfwcap`
+  and `lavfi`. On another platform it is a different list and nothing here changes.
+- **What it can see.** `avdevice_list_input_sources`, picked rather than typed —
+  a DirectShow name is an exact string with punctuation in it and nobody types one
+  correctly. A camera and a microphone chosen together are **one `-i`**
+  (`video=Cam:audio=Mic`), because that is what dshow means by it: one demuxer, one
+  file, two streams. A device with nothing to enumerate says so — gdigrab takes a
+  rectangle rather than a name — rather than showing an empty list, which reads as a
+  machine with no cameras in it.
+- **What it is set to.** The demuxer's whole option table, in the column the
+  encoder's and the muxer's options already use: `video_size`, `framerate`,
+  `draw_mouse`, `offset_x`, `audio_buffer_size`, `rtbufsize`. An unknown key stops
+  the open rather than being ignored.
+
+**A live preview, before you commit to a recording.** The picture is an ordinary
+`<video>` playing the device through the same backend, the same decoder and the same
+renderer everything else in this application plays through. There is no preview-only
+path, for the reason the node previews have none: a preview that agreed with the
+recording most of the time would be worse than none, because it would be trusted.
+
+**A region is dragged, not typed.** Drag a box on the picture and it becomes
+`-offset_x`, `-offset_y` and `-video_size` — the demuxer's own options, in the
+screen's own pixels, printed in the command a foot below. Which devices can be asked
+for a region is a question about their option table rather than a list of names here:
+a device takes a rectangle when it has all three of those options, which a screen
+grabber does and a camera does not. The picture is fitted rather than stretched,
+because a squashed picture would be a squashed rectangle.
+
+**Recording says what it can say and no more.** Elapsed, frames written, bytes on
+disk — and, out loud, that there is no percentage: a fraction needs a total and a
+device has no end until you press stop. Give it a `-t` and it does have one, and then
+the percentage means something. `Stop` is the *normal* end of a recording rather than
+the exceptional one, so a stopped recording reports as **done**: nothing was
+abandoned, the length was the open question and stopping answered it. The trailer
+goes down either way, which matters more here than anywhere else — a render that lost
+its index has lost a file that can be made again, and a recording that lost its index
+has lost the only copy of something that happened once.
+
+**One job at a time, and while recording that job is the recording.** There is one
+render slot in this binary and a capture takes it: no export, no preview, no node
+render while the light is on. That is a decision and not a limitation left in —
+a recording is the only job here with a real-time deadline and it cannot be re-run,
+so it gets the machine. Every other stage is refused with the reason while it runs.
+
 ## Sources
 
-`I` (or the first card on the spine) is the **inputs** — the `-i`s. Not "the files on
+`I` (or the second card on the spine) is the **inputs** — the `-i`s. Not "the files on
 the timeline": an input is a thing in its own right, it carries a demuxer and that
 demuxer's options and a window, it can be a URL, and it exists whether or not
 anything is cut from it. Adding one and using one are two acts, and `Use on the
@@ -750,9 +840,9 @@ export preview is where you see what it does.
 
 ## Output
 
-`Encode` and `Write` are two of the five stages on the spine — the row under
-the title bar that *is* the pipeline: **Sources → Compose → Graph → Encode →
-Write**. Each card says what its stage is currently set to, so the bar reads as
+`Encode` and `Write` are two of the six stages on the spine — the row under
+the title bar that *is* the pipeline: **Capture → Sources → Compose → Graph →
+Encode → Write**. Each card says what its stage is currently set to, so the bar reads as
 one statement of the whole render, and clicking the part that is wrong is how
 you go and change it. `E` goes to Encode, `[` and `]` step along the chain,
 `Esc` comes back to the edit.
@@ -1088,6 +1178,7 @@ upright, from the container's display matrix.
 | `S` | split the selection at the playhead |
 | `G` | grid / stacked layout |
 | `E` | the Encode stage (`Esc` goes back to the edit) |
+| `D` | the Capture stage — a device, watched and recorded |
 | `I` | the Sources stage — what is actually in the files |
 | `R` | what the render said — messages and what filters measured |
 | `N` | the Graph stage — the edit as a filtergraph (`0` fits it) |
@@ -1116,14 +1207,33 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-inputtest <file>          # an -i: forced demuxer, options, window, token
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
+./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, and recording one
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js         # needs no media
 ```
+
+`capturetest` and `ui_capture.js` have a problem the others do not: **CI has no
+camera.** The vehicle is `lavfi` — libavfilter's *input device*, `-f lavfi -i
+testsrc=size=320x240:rate=25` — which is a device in exactly the way gdigrab is
+(registered by `avdevice_register_all()`, opened by a forced `-f`, reporting no
+duration, never ending) and is openable on any machine. It is **not** the same
+mechanism as a source filter inside a filtergraph, which is a thing the Graph stage
+will grow: `testsrc` as a *filter* is a node with no input pad, and the lavfi
+*device* wraps a whole graph up as a demuxer so libavformat can read it as an `-i`.
+Two different places in the pipeline spelt almost identically.
+
+The machine's real devices are asked about as well, and whatever the answer is it is
+*asserted* rather than skipped: gdigrab is either in this build or it is not, and if
+it is then opening it either produces frames or says why it did not. A test that
+quietly passed because it found no camera would be worse than no test. On Windows
+with a desktop session, gdigrab opens — including headless — so what runs here is the
+real screen grabber.
 
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
 last picture in the file, zooms the timeline, moves and deletes a clip, scales
@@ -1177,6 +1287,17 @@ because the same words after it are output options meaning something else. It
 also adds a URL, to check that it survives as written rather than being resolved
 against the document, that the protocol is named, and that its own option table
 is offered.
+
+`ui_capture.js` follows a device the length of the stage: chosen out of
+libavdevice's list, its option set from its own table and printed in front of its
+`-i`, `-t` printed in front of it too (after the `-i` it would limit the output
+instead), a recording started with no end that says so and offers no percentage,
+every other stage refused while it runs, and then stopped — which is `done` and not
+`cancelled` — leaving a file that probes and lands on the timeline. Then the same
+with a `-t`, which does have a percentage and ends by itself. It also lays a device
+on the timeline and requires the refusal, drags a region on the live screen and
+checks the numbers it becomes are in the screen's pixels rather than the panel's, and
+asserts that leaving the stage gives the device back.
 
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
@@ -1281,12 +1402,26 @@ Honest list of what does not work:
 - **A sound sequence.** An image sequence is pictures. Giving a run of frames a
   separate soundtrack means two inputs and a `-map` per stream, which the Write
   stage can say and nothing yet joins up.
-- **Capturing.** `gdigrab`, `dshow`, `vfwcap` and `lavfi` are registered and
-  listed, and `bro.ffmpeg.deviceSources()` will say what each can see. A device
-  is an input with its name forced as the demuxer and its settings as the
-  option bag, so the model is now the right shape for one — but nothing opens
-  one, and a live input is not a file with a duration, which is what everything
-  above the model still assumes.
+- **Previewing the `lavfi` device.** Every other device plays in the Capture
+  stage's picture through the ordinary `<video>` path. lavfi cannot, and the
+  reason is about the seam rather than about the device: its packets are not
+  bytes — the demuxer emits `wrapped_avframe`, a pointer to an already-decoded
+  frame — and bro's `MediaPacket` is a byte buffer, because bro is
+  codec-agnostic and knows nothing about libav's types. The pointer does not
+  survive the crossing. It is detected by asking `probe()` what the codec is,
+  said out loud, and it records normally.
+- **A live device on the timeline.** A device never ends, so nothing can be cut
+  from it: there is no length for a clip to have and no seeking back to a
+  moment that has gone. Forcing `-f dshow` on the Sources stage describes one
+  correctly and refuses to lay it out, and the Capture stage is where one is
+  watched and recorded. Live *through* the edit — a camera composited with a
+  title and streamed out — is a different thing again and needs the render loop
+  to run on the wall clock.
+- **Two devices at once.** A camera and a microphone are one `-i` when the same
+  demuxer can open both, which on Windows dshow can. Two separate devices — a
+  webcam and a USB interface — are two `-i`s, and a recording opens one.
+- **Capturing to more than one file.** The record button writes one output.
+  Recording and streaming the same capture is `-f tee`, which is chunk 13's.
 - **Decoder options.** `-skip_frame`, `-skip_loop_filter`, `-thread_type` and
   every private option of every decoder are reported by
   `bro.ffmpeg.decoderOptions()`. Nothing sets one: playback and the render both

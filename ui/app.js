@@ -721,7 +721,7 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         return;
     }
-    if (shell.currentStage() === 'sources') {
+    if (shell.currentStage() === 'sources' || shell.currentStage() === 'capture') {
         if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
         return;
     }
@@ -767,6 +767,8 @@ document.addEventListener('keydown', (e) => {
         case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
         case 'e':          shell.goTo('encode'); break;
         case 'i':          shell.goTo('sources'); break;
+        // `d` for device: `c` is the crop handles and `r` is the report.
+        case 'd':          shell.goTo('capture'); break;
         // `n` for node graph: `g` is the grid layout and `f` is fullscreen.
         case 'n':          shell.goTo('graph'); break;
         case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
