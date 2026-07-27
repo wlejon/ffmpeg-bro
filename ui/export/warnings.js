@@ -17,6 +17,7 @@ import { readsInput, readStream, subtitleCodecsOf,
 import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
 import { renderGraph } from '../filtergraph.js';
 import { buildSpec, range, specSources } from './spec.js';
+import { deviceOfEncoder } from '../hardware.js';
 
 /// How many frames this render will write. A single-frame range written into
 /// one picture is exactly what somebody means by "a still of this moment";
@@ -244,6 +245,55 @@ function destinationWarnings() {
     return out;
 }
 
+/// Where the picture is, against where the encoder can take it from.
+///
+/// Two renders that succeed and are not what was wanted, and one that does not
+/// succeed at all but fails a long way from the decision that caused it.
+///
+///   - **The picture ends on a card and the encoder is a software one.** The
+///     writer refuses this outright — it would be a download per frame done
+///     quietly on behalf of a render that asked for the opposite — and the
+///     refusal arrives at `Writer::open`, which is after the Render button.
+///     Said here instead, where the encoder is being chosen.
+///   - **The encoder runs on a card and the picture never gets there.** It
+///     works: the writer uploads. It is also the thing somebody thinks they
+///     have avoided by picking a hardware encoder, so it is worth stating that
+///     a copy is still happening and where to put the `hwupload` that removes
+///     it.
+///   - **A hardware decode on an input.** Measured slower here than the CPU,
+///     said on Sources where it is chosen and again here, because a render is
+///     where somebody notices it took longer than they expected.
+function hardwareWarnings() {
+    const out = [];
+    const spec = buildSpec();
+    const codec = activeVideoCodec();
+    const device = deviceOfEncoder(codec);
+    // The last chain is the one that feeds the sink, and whether it leaves the
+    // picture on a card is whether the last crossing in it was an upload. Read
+    // off the text rather than off the graph because this is the text the
+    // renderer is handed, and there is nothing between the two to disagree.
+    const chains = String(spec.filterGraph || '').split(';');
+    const last = chains[chains.length - 1] || '';
+    const up = last.lastIndexOf('hwupload');
+    const down = last.lastIndexOf('hwdownload');
+    const endsUp = up >= 0 && up > down;
+
+    if (endsUp && !device)
+        out.push(`this render leaves its picture on the card and ${codec} cannot take it ` +
+                 'from there — pick a hardware encoder, or put an hwdownload after the ' +
+                 'last hwupload');
+    else if (device && !endsUp && spec.filterGraph)
+        out.push(`${codec} runs on the ${device} and the picture is being made in system ` +
+                 'memory, so every frame is copied up to it — an hwupload on the last wire ' +
+                 'removes that copy');
+
+    const decoding = (spec.inputs || []).filter((i) => i.hwaccel).length;
+    if (decoding)
+        out.push(`${decoding} input${decoding === 1 ? '' : 's'} decode on a card, which is ` +
+                 'measured slower here than the CPU — see the note on Sources');
+    return out;
+}
+
 export function warnings() {
     const out = [];
     out.push(...destinationWarnings());
@@ -268,6 +318,8 @@ export function warnings() {
         out.push(`this render would go through the internal compositor without your ` +
                  `filters — ${why.reason || 'the graph cannot be expressed for this edit'}`);
     }
+
+    out.push(...hardwareWarnings());
 
     // image2 writes one file per frame and the numbering is in the filename,
     // so a path with no pattern in it is one picture written over itself for
