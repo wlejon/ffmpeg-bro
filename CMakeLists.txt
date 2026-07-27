@@ -30,11 +30,20 @@ add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")
 find_package(FFMPEG REQUIRED)
 
 # The backend + its JS surface, as a library so the app and its tests share
-# one build of it.
+# one build of it. The encode half is several files rather than one: each stage of the render —
+# what the sources are, how a frame is composited, what the file is written
+# with — changes for different reasons, and two-pass, stream copy and the
+# hardware paths each need one of them to change without touching the others.
 add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
     src/native/ffmpeg_bindings.cpp
+    src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_export.cpp
+    src/native/export_compositor.cpp
+    src/native/export_frame.cpp
+    src/native/export_source.cpp
+    src/native/export_timeline.cpp
+    src/native/export_writer.cpp
 )
 target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
@@ -82,3 +91,49 @@ target_include_directories(ffmpeg-bro-exporttest PRIVATE "${BRO_DIR}/src")
 add_executable(ffmpeg-bro-perftest tests/perf_test.cpp)
 target_link_libraries(ffmpeg-bro-perftest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-perftest PRIVATE "${BRO_DIR}/src")
+
+# Media to test against, generated rather than checked in — deterministic
+# content, a known tone, and two files that differ in size, aspect, rate and
+# length. See tests/make_fixture.cpp for why that matters.
+add_executable(ffmpeg-bro-mkfixture tests/make_fixture.cpp)
+target_link_libraries(ffmpeg-bro-mkfixture PRIVATE ffmpeg-bro-core)
+# It writes through the renderer's own Writer, so it needs libav's headers the
+# way ffmpeg-bro-core does.
+target_include_directories(ffmpeg-bro-mkfixture
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
+# ── ctest ─────────────────────────────────────────────────────────────────
+#
+# `ctest --test-dir build -C Release` runs everything. The fixtures are a
+# CTest fixture in the literal sense: one setup test writes them and every
+# other test declares that it needs them, so they are made once, before, and
+# only when something is going to use them.
+enable_testing()
+set(FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
+set(FIXTURE_A "${FIXTURE_DIR}/landscape.mp4")
+set(FIXTURE_B "${FIXTURE_DIR}/portrait.mp4")
+
+add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
+set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
+
+add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}")
+add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
+add_test(NAME ui-player COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
+         -- "${FIXTURE_A}" "${FIXTURE_B}")
+add_test(NAME ui-export COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
+         -- "${FIXTURE_A}")
+set_tests_properties(decode export ui-player ui-export PROPERTIES
+                     FIXTURES_REQUIRED media TIMEOUT 900)
+
+# Needs no media at all: buildSpec()'s output is a plain object and the
+# translation into a filter graph is a pure function of it.
+add_test(NAME ui-filtergraph COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_filtergraph.js")
+set_tests_properties(ui-filtergraph PROPERTIES TIMEOUT 300)
+
+# The headless binary writes screenshots and renders relative to its working
+# directory, and the tests read them back the same way.
+set_tests_properties(export ui-player ui-export PROPERTIES
+                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

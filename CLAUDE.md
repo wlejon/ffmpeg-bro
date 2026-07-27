@@ -37,8 +37,40 @@ Targets: `ffmpeg-bro` (windowed), `ffmpeg-bro-headless` (scripted), `ffmpeg-bro-
 
 ## Tests
 
-There is no ctest wiring and no test fixture media in the repo — every test takes a real
-media file as an argument.
+```bash
+# everything, with generated fixture media: the only command you need
+cmake --build build --config Release && ctest --test-dir build -C Release
+```
+
+`ctest` writes two fixture files into `build/fixtures/` (a CTest `FIXTURES_SETUP` test, so
+they are made once and only when something will use them) and runs every suite against
+them. They are generated rather than checked in, and generated with **known content** —
+a moving bar over a gradient, a 440/660 Hz tone at -6 dBFS, two different sizes, aspects,
+rates and lengths. What that buys is in tests/make_fixture.cpp: a source whose audio track
+is digitally silent turns the export test's mixer check into a failure that reads as a
+broken mixer, and a source that is mostly black makes a picture check pass for the wrong
+reason. The generator writes through the renderer's own `Writer`, which is why it is
+eighty lines.
+
+**`ctest` is currently red, and correctly so.** Wiring it up found two crashes on its
+first run, both of which predate it and both of which were invisible because every suite
+was run through a shell pipe — which reports the exit status of the pipe, not of the
+program, so a process that printed all its passes and then died on the way out looked
+green. Neither is a test-harness problem:
+
+- **A seek into some audio streams corrupts the heap** (`export`, `ui-export`). It is in
+  `SourceAudio`, the export's own audio reader — the one path `<video>` playback does not
+  share, which is why playback is fine. Reproduces on the portrait fixture at several
+  in-points and not at others, and not at all on the landscape one, so it depends on where
+  in a particular file the seek lands. `noaudio`, `muted` and `inPoint 0` renders all pass.
+- **The headless binary crashes at shutdown** once it has loaded media (`ui-player`), after
+  every check has passed. `ui-filtergraph`, which loads none, exits cleanly. This one
+  happens with real media too and has been happening for some time.
+
+Do not "fix" either by making a test tolerate a bad exit code.
+
+Each suite also runs standalone against any real file, which is how to check behaviour
+against footage the fixtures do not resemble:
 
 ```bash
 # native: demux, decode, reorder, seek, audio, backend precedence
@@ -98,6 +130,27 @@ been no one player element for some time.
 ## Architecture
 
 ### Native side
+
+The encode half is **one file per stage of the render**, because each changes for a
+different reason and the three things README's "Not yet" list wants next each need one of
+them to change alone:
+
+| File | What |
+|---|---|
+| `ffmpeg_export.h` | the description a render is given, and the four calls that run one |
+| `ffmpeg_export.cpp` | the job: one slot, one thread, the status the UI polls |
+| `export_timeline.*` | **what the output looks like at t** — clips in, one canvas and one block of samples out |
+| `export_source.*` | one clip's pictures, one clip's sound |
+| `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
+| `export_writer.*` | encoders and the muxer they feed |
+| `export_frame.*` | an RGBA picture, and the small libav helpers |
+| `ffmpeg_capabilities.*` | what this build can write, asked of libavcodec |
+
+**`export_timeline.h` is the seam a node graph attaches at.** `runExport` asks it two
+questions per output frame — the canvas at `t`, and the samples between `t` and the next
+frame — and asks nothing else. A graph is a different answer to the same two questions,
+with its inputs named explicitly and its compositing described rather than implied by a
+track stack, so it arrives as a second implementation and the job does not change.
 
 `registerFfmpegBackend()` must run **before** the `Engine` is constructed (see `main.cpp`
 and `headless_main.cpp`), so the first `<video>` in the first document already finds it. It
@@ -222,7 +275,13 @@ new. What the fixes were, and what the code here still does about them:
   what ffmpeg would open. **It is not driven by the selection**, which is why it is not
   in `inspector.js` any more: a panel hanging off the primary selection can only ever
   describe one file, and the stage's own card in the spine counts them all.
-- `app.js` — orchestration: transport, keyboard, drag/drop, the frame loop, the inspector.
+- `transport.js` — the playhead, and what has to be true of every decoder while it moves.
+  **The one part of the application that is not an edit**: play, pause, step, shuttle and
+  loop are how you look at the timeline, not what it says, which is why a render exports a
+  clip at its own rate whatever the viewer was last playing at. Owns the master-clock
+  choice, the drift tolerance and `adoptDecoderTime()` — see the invariants below.
+- `app.js` — orchestration: the control strip, keyboard, drag/drop, the frame loop, the
+  inspector. The frame loop's whole dealing with the transport is `tick(dt)`.
 - `viewer.js` — the program monitor. Each clip is a `<video>` inside a crop window (a div
   with `overflow:hidden`). Fit/zoom/pan/crop/opacity/stacking are **style writes on those
   two elements** — nothing costs anything per frame, and decoded frames still go straight

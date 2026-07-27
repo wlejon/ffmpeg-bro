@@ -15,6 +15,7 @@
 
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
+#include "ffmpeg_capabilities.h"
 
 #include "video/media_analysis.h"
 #include "video/video_pipeline.h"

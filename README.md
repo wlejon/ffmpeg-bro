@@ -454,6 +454,18 @@ upright, from the container's display matrix.
 ## Testing
 
 ```
+cmake --build build --config Release && ctest --test-dir build -C Release
+```
+
+`ctest` generates its own media — two files with known content, a moving bar over a
+gradient and a tone at a known level, differing in size, aspect, frame rate and length —
+and runs every suite against them. Nothing is checked in and nothing depends on what a
+file you happened to have lying around contains.
+
+Each suite also runs standalone against any real file, which is how to check behaviour
+against footage the fixtures do not resemble:
+
+```
 ./build/Release/ffmpeg-bro-decodetest <file>          # backend: demux, decode, seek, audio
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
@@ -491,6 +503,18 @@ file that comes out can be dropped straight back on the timeline.
 ## Not yet
 
 Honest list of what does not work:
+
+- **Two crashes, both found the day `ctest` was wired up.** Every suite used to be run
+  through a shell pipe, which swallows the exit code, so a process that printed all its
+  passes and then died on the way out looked green. Both are real and both predate the
+  test wiring:
+  - **A seek into some audio streams crashes the renderer.** Rendering a clip whose
+    in-point is not zero corrupts the heap for some files and not others — the same file
+    at one in-point renders and at another does not. It is in the export's own audio
+    reader, which is the one path `<video>` playback does not share, so playback is
+    unaffected.
+  - **The headless binary crashes at shutdown** once it has loaded media, after every
+    check has passed. `ui_filtergraph`, which loads none, exits cleanly.
 
 - **Audio-only files.** bro's `<video>` drives its clock from decoded pictures,
   so a file with no video track has nothing to advance. The UI says so rather

@@ -1,0 +1,343 @@
+// One clip's pictures, and one clip's sound. See export_source.h.
+
+#include "export_source.h"
+
+extern "C" {
+#include <libavutil/opt.h>
+}
+
+#include <algorithm>
+#include <cmath>
+
+namespace ffmpegbro {
+
+SourceVideo::~SourceVideo() { close(); }
+
+bool SourceVideo::open(const std::string& path, std::string* err) {
+    int rc = avformat_open_input(&fmt_, path.c_str(), nullptr, nullptr);
+    if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
+    rc = avformat_find_stream_info(fmt_, nullptr);
+    if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
+
+    stream_ = av_find_best_stream(fmt_, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (stream_ < 0) { if (err) *err = path + ": no video track"; return false; }
+
+    AVStream* st = fmt_->streams[stream_];
+    rotation_ = rotationOf(st);
+    timeBase_ = st->time_base;
+    startOffset_ = fmt_->start_time != AV_NOPTS_VALUE
+                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0;
+
+    const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+    if (!codec) { if (err) *err = path + ": no decoder for this video"; return false; }
+    dec_ = avcodec_alloc_context3(codec);
+    if (!dec_ || avcodec_parameters_to_context(dec_, st->codecpar) < 0) return false;
+    dec_->thread_count = 0;
+    dec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    dec_->pkt_timebase = timeBase_;
+    rc = avcodec_open2(dec_, codec, nullptr);
+    if (rc < 0) { if (err) *err = path + ": " + avErr(rc); return false; }
+
+    // Every stream on the file except this one is skipped in the demuxer,
+    // so a 1080p sibling track costs nothing to walk past.
+    for (unsigned i = 0; i < fmt_->nb_streams; ++i)
+        fmt_->streams[i]->discard =
+            (static_cast<int>(i) == stream_) ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
+
+    pkt_ = av_packet_alloc();
+    cur_ = av_frame_alloc();
+    pending_ = av_frame_alloc();
+    return pkt_ && cur_ && pending_;
+}
+
+const Rgba* SourceVideo::rgbaAt(double t) {
+    if (!advanceTo(t)) return nullptr;
+    if (haveRgba_ && rgbaPts_ == curPts_) return result_;
+
+    const int w = cur_->width, h = cur_->height;
+    if (w <= 0 || h <= 0) return nullptr;
+
+    const auto fmt = static_cast<AVPixelFormat>(cur_->format);
+    toRgba_ = sws_getCachedContext(toRgba_, w, h, fmt, w, h, AV_PIX_FMT_RGBA,
+                                   SWS_BICUBIC, nullptr, nullptr, nullptr);
+    if (!toRgba_) return nullptr;
+    if (fmt != swsFmt_) {
+        // Only worth redoing when the format changes; the details stick to
+        // the context otherwise.
+        setColorspace(toRgba_, swsSpaceFor(cur_->colorspace, h),
+                      cur_->color_range == AVCOL_RANGE_JPEG ? 1 : 0,
+                      SWS_CS_ITU709, 1);
+        swsFmt_ = fmt;
+    }
+
+    raw_.resize(w, h);
+    uint8_t* dst[4] = {raw_.data.data(), nullptr, nullptr, nullptr};
+    int dstStride[4] = {raw_.stride, 0, 0, 0};
+    if (sws_scale(toRgba_, cur_->data, cur_->linesize, 0, h, dst, dstStride) <= 0)
+        return nullptr;
+
+    // Upright media is handed back where it was converted; only a rotated
+    // clip pays for the second buffer.
+    if (rotation_) { rotateRgba(raw_, rotation_, rotated_); result_ = &rotated_; }
+    else result_ = &raw_;
+
+    haveRgba_ = true;
+    rgbaPts_ = curPts_;
+    return result_;
+}
+
+void SourceVideo::close() {
+    if (toRgba_) sws_freeContext(toRgba_);
+    if (cur_) av_frame_free(&cur_);
+    if (pending_) av_frame_free(&pending_);
+    if (pkt_) av_packet_free(&pkt_);
+    if (dec_) avcodec_free_context(&dec_);
+    if (fmt_) avformat_close_input(&fmt_);
+}
+
+double SourceVideo::ptsOf(const AVFrame* f) const {
+    int64_t ts = f->best_effort_timestamp != AV_NOPTS_VALUE ? f->best_effort_timestamp
+                                                            : f->pts;
+    if (ts == AV_NOPTS_VALUE) return 0.0;
+    return ts * av_q2d(timeBase_) - startOffset_;
+}
+
+void SourceVideo::seekTo(double t) {
+    const int64_t target = static_cast<int64_t>(
+        std::llround(std::max(0.0, t + startOffset_) / av_q2d(timeBase_)));
+    av_seek_frame(fmt_, stream_, target, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(dec_);
+    haveCur_ = havePending_ = haveRgba_ = false;
+    drained_ = eof_ = false;
+    started_ = true;
+}
+
+bool SourceVideo::advanceTo(double t) {
+    // A backward jump, or the very first call, needs the demuxer moved.
+    // A long forward jump is cheaper as a seek than as a decode of
+    // everything in between — a clip whose in-point is minutes into a file
+    // would otherwise decode those minutes.
+    if (!started_ || t < curPts_ - 0.001 || (haveCur_ && t > curPts_ + 5.0))
+        seekTo(t);
+
+    for (;;) {
+        if (havePending_) {
+            if (pendingPts_ <= t + 1e-6 || !haveCur_) {
+                std::swap(cur_, pending_);
+                curPts_ = pendingPts_;
+                haveCur_ = true;
+                havePending_ = false;
+                continue;
+            }
+            break;      // the next picture belongs to a later moment
+        }
+        if (!decodeOne()) break;
+    }
+    return haveCur_;
+}
+
+bool SourceVideo::decodeOne() {
+    for (;;) {
+        av_frame_unref(pending_);
+        int rc = avcodec_receive_frame(dec_, pending_);
+        if (rc == 0) {
+            pendingPts_ = ptsOf(pending_);
+            havePending_ = true;
+            return true;
+        }
+        if (rc == AVERROR_EOF) return false;
+        if (rc != AVERROR(EAGAIN)) return false;
+        if (eof_) {
+            if (drained_) return false;
+            // The reorder buffer still holds pictures; a null packet is
+            // how libavcodec is asked for them.
+            avcodec_send_packet(dec_, nullptr);
+            drained_ = true;
+            continue;
+        }
+
+        av_packet_unref(pkt_);
+        rc = av_read_frame(fmt_, pkt_);
+        if (rc < 0) { eof_ = true; continue; }
+        if (pkt_->stream_index != stream_) continue;
+        if (avcodec_send_packet(dec_, pkt_) < 0) {
+            // A damaged packet is not the end of the clip; the next
+            // keyframe picks the picture back up.
+            continue;
+        }
+    }
+}
+
+SourceAudio::~SourceAudio() { close(); }
+
+bool SourceAudio::open(const std::string& path, int outRate, int outChannels) {
+    outRate_ = outRate;
+    outChannels_ = outChannels;
+    if (avformat_open_input(&fmt_, path.c_str(), nullptr, nullptr) < 0) return false;
+    if (avformat_find_stream_info(fmt_, nullptr) < 0) return false;
+
+    stream_ = av_find_best_stream(fmt_, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (stream_ < 0) return false;
+
+    AVStream* st = fmt_->streams[stream_];
+    timeBase_ = st->time_base;
+    startOffset_ = fmt_->start_time != AV_NOPTS_VALUE
+                       ? fmt_->start_time / double(AV_TIME_BASE) : 0.0;
+
+    const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+    if (!codec) return false;
+    dec_ = avcodec_alloc_context3(codec);
+    if (!dec_ || avcodec_parameters_to_context(dec_, st->codecpar) < 0) return false;
+    dec_->pkt_timebase = timeBase_;
+    if (avcodec_open2(dec_, codec, nullptr) < 0) return false;
+
+    for (unsigned i = 0; i < fmt_->nb_streams; ++i)
+        fmt_->streams[i]->discard =
+            (static_cast<int>(i) == stream_) ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
+
+    av_channel_layout_default(&outLayout_, outChannels_);
+    pkt_ = av_packet_alloc();
+    frame_ = av_frame_alloc();
+    ok_ = pkt_ && frame_;
+    return ok_;
+}
+
+void SourceAudio::seekTo(double srcSeconds) {
+    const int64_t target = static_cast<int64_t>(
+        std::llround(std::max(0.0, srcSeconds + startOffset_) / av_q2d(timeBase_)));
+    av_seek_frame(fmt_, stream_, target, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(dec_);
+    // The resampler holds a tail from before the seek; emitting it after
+    // would splice a few milliseconds of the old position onto the new one.
+    if (swr_) { swr_free(&swr_); swrRate_ = 0; swrFmt_ = AV_SAMPLE_FMT_NONE; }
+    fifo_.clear();
+    head_ = 0;
+    eof_ = drained_ = false;
+    // How much of the first decoded frame to throw away is only knowable
+    // once we see where the seek actually landed.
+    seekTarget_ = srcSeconds;
+    awaitingSeek_ = true;
+}
+
+void SourceAudio::mixInto(float* dst, int frames, float gain) {
+    int done = 0;
+    while (done < frames) {
+        if (available() == 0 && !fill()) break;
+        const int n = std::min(frames - done, available());
+        if (n <= 0) break;
+        const float* src = fifo_.data() + head_;
+        const int count = n * outChannels_;
+        for (int i = 0; i < count; ++i) dst[done * outChannels_ + i] += src[i] * gain;
+        head_ += static_cast<size_t>(count);
+        done += n;
+        compact();
+    }
+}
+
+void SourceAudio::skip(int frames) {
+    int done = 0;
+    while (done < frames) {
+        if (available() == 0 && !fill()) break;
+        const int n = std::min(frames - done, available());
+        if (n <= 0) break;
+        head_ += static_cast<size_t>(n) * outChannels_;
+        done += n;
+        compact();
+    }
+}
+
+void SourceAudio::close() {
+    if (swr_) swr_free(&swr_);
+    if (frame_) av_frame_free(&frame_);
+    if (pkt_) av_packet_free(&pkt_);
+    if (dec_) avcodec_free_context(&dec_);
+    if (fmt_) avformat_close_input(&fmt_);
+    av_channel_layout_uninit(&outLayout_);
+}
+
+int SourceAudio::available() const {
+    return static_cast<int>((fifo_.size() - head_) / outChannels_);
+}
+
+void SourceAudio::compact() {
+    // Drop the consumed front once it is worth the memmove.
+    if (head_ >= 65536) {
+        fifo_.erase(fifo_.begin(), fifo_.begin() + static_cast<long>(head_));
+        head_ = 0;
+    }
+}
+
+bool SourceAudio::fill() {
+    for (;;) {
+        int rc = avcodec_receive_frame(dec_, frame_);
+        if (rc == 0) {
+            append();
+            av_frame_unref(frame_);
+            if (available() > 0) return true;
+            continue;       // the whole frame was skipped past
+        }
+        if (rc == AVERROR_EOF) return false;
+        if (rc != AVERROR(EAGAIN)) return false;
+        if (eof_) {
+            if (drained_) return false;
+            avcodec_send_packet(dec_, nullptr);
+            drained_ = true;
+            continue;
+        }
+
+        av_packet_unref(pkt_);
+        rc = av_read_frame(fmt_, pkt_);
+        if (rc < 0) { eof_ = true; continue; }
+        if (pkt_->stream_index != stream_) continue;
+        if (avcodec_send_packet(dec_, pkt_) < 0) continue;
+    }
+}
+
+void SourceAudio::append() {
+    const auto inFmt = static_cast<AVSampleFormat>(frame_->format);
+    if (!swr_ || inFmt != swrFmt_ || frame_->sample_rate != swrRate_) {
+        if (swr_) swr_free(&swr_);
+        int rc = swr_alloc_set_opts2(&swr_, &outLayout_, AV_SAMPLE_FMT_FLT, outRate_,
+                                     &frame_->ch_layout, inFmt, frame_->sample_rate,
+                                     0, nullptr);
+        if (rc < 0 || !swr_ || swr_init(swr_) < 0) return;
+        swrFmt_ = inFmt;
+        swrRate_ = frame_->sample_rate;
+    }
+
+    int skip = 0;
+    if (awaitingSeek_) {
+        awaitingSeek_ = false;
+        int64_t ts = frame_->best_effort_timestamp != AV_NOPTS_VALUE
+                         ? frame_->best_effort_timestamp : frame_->pts;
+        const double at = ts != AV_NOPTS_VALUE
+                              ? ts * av_q2d(timeBase_) - startOffset_ : 0.0;
+        // A seek lands on a packet boundary at or before the target; the
+        // difference is what makes an in-point sample-accurate instead of
+        // up to a packet early.
+        skip = clampi(static_cast<int>(std::llround((seekTarget_ - at) * outRate_)),
+                      0, 1 << 24);
+    }
+
+    const int64_t delay = swr_get_delay(swr_, outRate_);
+    const int maxOut = static_cast<int>(av_rescale_rnd(
+        delay + frame_->nb_samples, outRate_, frame_->sample_rate, AV_ROUND_UP));
+    if (maxOut <= 0) return;
+
+    const size_t base = fifo_.size();
+    fifo_.resize(base + static_cast<size_t>(maxOut) * outChannels_);
+    auto* dst = reinterpret_cast<uint8_t*>(fifo_.data() + base);
+    const int written = swr_convert(swr_, &dst, maxOut,
+                                    const_cast<const uint8_t**>(frame_->extended_data),
+                                    frame_->nb_samples);
+    if (written < 0) { fifo_.resize(base); return; }
+    fifo_.resize(base + static_cast<size_t>(written) * outChannels_);
+
+    if (skip > 0) {
+        const size_t drop = std::min(static_cast<size_t>(skip) * outChannels_,
+                                     fifo_.size() - head_);
+        head_ += drop;
+    }
+}
+
+} // namespace ffmpegbro

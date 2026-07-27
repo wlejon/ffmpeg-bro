@@ -2,6 +2,7 @@
 
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
+#include "ffmpeg_capabilities.h"
 
 #include <string>
 #include <vector>

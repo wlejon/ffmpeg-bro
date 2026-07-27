@@ -20,6 +20,8 @@ import { paintIcons, setIcon } from './icons.js';
 import { filtergraph } from './filtergraph.js';
 import * as shell from './shell.js';
 import { initSources, drawSources } from './sources.js';
+import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
+         applyAudio, applyAudioAll, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
 
 const el = (id) => document.getElementById(id);
@@ -58,7 +60,6 @@ const cropbox = el('cropbox');
 
 // ── state ──────────────────────────────────────────────────────────────────
 
-const transport = { t: 0, playing: false, rate: 1, volume: 1, muted: false, loop: false };
 let fullscreen = false;
 let cropMode = false;
 let osdTimer = 0;
@@ -282,6 +283,10 @@ function setLayout(mode) {
 }
 
 // ── transport ──────────────────────────────────────────────────────────────
+//
+// The playhead itself is ui/transport.js — what moves, what is chased and what
+// is adopted from a decoder. What is here is the strip of controls that drives
+// it, and the readouts it drives back.
 
 function setControlsEnabled(on) {
     for (const b of [btnStart, btnPrev, btnPlay, btnNext, btnEnd, btnLoop, btnMute])
@@ -290,91 +295,12 @@ function setControlsEnabled(on) {
 }
 setControlsEnabled(false);
 
-/// Move the playhead. `seek` is false while playback is driving it — the
-/// active clip's own clock is the master then, and writing currentTime back
-/// would fight it.
-function setPlayhead(t, seek = true) {
-    const d = duration();
-    transport.t = Math.max(0, Math.min(d, t));
-    const here = clipsAt(transport.t);
-    const changedSet = viewer.setActiveSet(here);
-    // A clip that has just come into view has its decoder parked wherever it
-    // was left, so it always needs the seek even when the caller said not to.
-    for (const clip of here) {
-        applyAudio(clip);
-        const want = sourceTime(clip, transport.t);
-        if ((seek || changedSet) && Math.abs(clip.video.currentTime - want) > 0.0005)
-            clip.video.currentTime = want;
-        if (transport.playing && clip.video.paused) clip.video.play();
-    }
-    if (here.length) selectFollow(here[here.length - 1]);
-    syncUI();
-}
-
-function applyAudio(clip) {
-    if (!clip || !clip.video) return;
-    // Two volumes multiply: the clip's own level, which is part of the edit,
-    // and the transport's, which is just how loud you are listening.
-    clip.video.muted = transport.muted || clip.muted;
-    clip.video.volume = transport.volume * clip.volume;
-    clip.video.playbackRate = transport.rate;
-    // Looping is a property of the timeline, not of any one clip: a clip that
-    // looped itself would never hand over to the next one.
-    clip.video.loop = false;
-}
-
-function applyAudioAll() { for (const c of viewer.activeClips()) applyAudio(c); }
-
-function play() {
-    if (!project.clips.length) return;
-    if (transport.t >= duration() - 1e-4) setPlayhead(0);
-    transport.playing = true;
-    for (const c of viewer.activeClips()) { applyAudio(c); c.video.play(); }
-    syncUI();
-}
-
-function pause() {
-    transport.playing = false;
-    for (const c of viewer.activeClips()) c.video.pause();
-    syncUI();
-}
-
-function togglePlay() { transport.playing ? pause() : play(); }
-
-// Frame stepping pauses first: nudging while running would race the clock and
-// land somewhere nobody asked for.
-//
-// video.stepFrame() moves by decoded pictures. Doing it the usual way —
-// currentTime += 1/fps — does not work: the frame rate is an average, and the
-// seconds round trip misses the frame boundary, so a back step lands on the
-// frame it started from and nothing happens.
-function step(frames) {
-    if (transport.playing) pause();
-    let clip = viewer.activeClip();
-    if (!clip) {
-        // In a gap: step into the neighbouring clip rather than doing nothing.
-        clip = frames > 0 ? nextClipAfter(transport.t) : lastClipBefore(transport.t);
-        if (!clip) return;
-        setPlayhead(frames > 0 ? clip.start : clip.start + clip.length - 1e-4);
-        return;
-    }
-    if (clip.video.stepFrame(frames)) {
-        transport.t = clip.start + clip.video.currentTime - clip.inPoint;
-        syncUI();
-        if (timeline.revealTime(transport.t)) timeline.draw();
-        return;
-    }
-    // Off the end of this clip — carry on into the next one, so stepping
-    // walks the whole timeline and not just one file.
-    const next = frames > 0 ? nextClipAfter(transport.t) : lastClipBefore(clip.start);
-    if (next) setPlayhead(frames > 0 ? next.start : next.start + next.length - 1e-4);
-}
-
-function lastClipBefore(t) {
-    let best = null;
-    for (const c of project.clips) if (c.start + c.length <= t + 1e-6) best = c;
-    return best;
-}
+initTransport({
+    changed: () => syncUI(),
+    // Keeping the playhead in view is the timeline's business, and it only
+    // redraws when the window it is showing actually moved.
+    reveal: (t) => { if (timeline.revealTime(t)) timeline.draw(); },
+});
 
 btnPlay.addEventListener('click', togglePlay);
 btnStart.addEventListener('click', () => setPlayhead(0));
@@ -669,8 +595,7 @@ function frame(now) {
     const dt = lastTick ? Math.min(0.25, (now - lastTick) / 1000) : 0;
     lastTick = now;
 
-    if (transport.playing) advance(dt);
-    else adoptDecoderTime();
+    tickTransport(dt);
 
     // A panel that changed size (window resize, fullscreen) has to be redrawn
     // from the analysis rather than stretched — a stretched waveform lies
@@ -704,74 +629,6 @@ function frame(now) {
     requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-
-/// A seek asks for a time; what comes back is the frame whose interval
-/// contains it, which is generally a little earlier. The readout has to say
-/// where the picture actually is — otherwise the timecode is a request rather
-/// than a fact, and a frame step from a scrubbed position appears to move by
-/// some odd fraction of a frame because the step really started somewhere else.
-function adoptDecoderTime() {
-    const clip = viewer.activeClip();
-    if (!clip || !clip.video || !(clip.video.duration > 0)) return;
-    const t = clip.start + clip.video.currentTime - clip.inPoint;
-    if (Math.abs(t - transport.t) < 1e-6) return;
-    transport.t = t;
-    syncUI();
-}
-
-/// Where the playhead goes next. The topmost clip's own clock is the master
-/// while it is playing — it is the thing that knows which picture is in front.
-/// A gap between clips has no clock of its own, so it runs on the wall.
-///
-/// Everything else under the playhead is chased back into line rather than
-/// driven: several decoders each free-running from their own audio clock drift
-/// apart within a minute, and correcting on every frame would mean a seek per
-/// clip per frame. A seek only when a clip is more than a couple of frames out
-/// keeps a grid of a dozen videos together for the cost of the odd correction.
-const DRIFT_LIMIT = 0.12;
-
-function advance(dt) {
-    const d = duration();
-    const clip = viewer.activeClip();
-
-    if (clip) {
-        const local = clip.video.currentTime - clip.inPoint;
-        if (clip.video.ended || local >= clip.length - 1e-4) {
-            handOver(clip.start + clip.length);
-            return;
-        }
-        transport.t = clip.start + local;
-        resync(clip);
-    } else {
-        transport.t += dt * transport.rate;
-        if (clipsAt(transport.t).length) { setPlayhead(transport.t); return; }
-    }
-
-    if (transport.t >= d - 1e-6) { handOver(d); return; }
-    if (timeline.revealTime(transport.t)) timeline.draw();
-}
-
-function resync(master) {
-    const all = viewer.activeClips();
-    if (all.length < 2) return;
-    for (const c of all) {
-        if (c === master || !c.video) continue;
-        const want = sourceTime(c, transport.t);
-        if (Math.abs(c.video.currentTime - want) > DRIFT_LIMIT) c.video.currentTime = want;
-        if (c.video.paused && !c.video.ended) c.video.play();
-    }
-}
-
-function handOver(t) {
-    const d = duration();
-    if (t >= d - 1e-6) {
-        if (transport.loop) { setPlayhead(0); return; }
-        pause();
-        setPlayhead(Math.max(0, d - 1e-4));
-        return;
-    }
-    setPlayhead(t);
-}
 
 // ── readouts ───────────────────────────────────────────────────────────────
 
