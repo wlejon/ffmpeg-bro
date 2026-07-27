@@ -98,7 +98,17 @@ int readFrames(const MediaInput& in, int cap, std::string* err) {
     int n = 0;
     while (n < cap) {
         const int rc = av_read_frame(fmt, pkt);
-        if (rc < 0) break;
+        // Why it stopped short is the whole answer for a screen grabber: a
+        // device can open and then be refused every frame, which is a fact
+        // about the session rather than about the device. Reported through
+        // `err` with `n` still >= 0, so the caller can tell that apart from an
+        // open that never happened.
+        if (rc < 0) {
+            char msg[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(rc, msg, sizeof msg);
+            *err = msg;
+            break;
+        }
         if (pkt->stream_index == stream) n++;
         av_packet_unref(pkt);
     }
@@ -387,9 +397,19 @@ int main(int argc, char** argv) {
 
     // ── what this machine actually has ─────────────────────────────────────
     //
-    // Whatever the answer is, it is asserted. gdigrab either opens — and then
-    // it must hand over frames — or it does not, and then it must say why.
-    // Neither branch passes for want of a device.
+    // Whatever the answer is, it is asserted, and there are three of them
+    // rather than two. gdigrab opens and hands over frames; or it does not
+    // open, and says why; or it opens and Windows refuses every grab, which is
+    // what a locked workstation or a disconnected session looks like from here
+    // — `Failed to capture image (error 5)` is ERROR_ACCESS_DENIED, and no
+    // amount of correctness in this binary earns a picture of a desktop it is
+    // not allowed to see.
+    //
+    // The third branch is stated loudly and does not fail, because the machine
+    // being locked is not a defect in ffmpeg-bro. It is not a silent skip
+    // either: it must still have opened, and it must still say what stopped it.
+    // What is refused in every branch is a short read — one frame out of three
+    // means the reader is wrong, and that is this test's job to catch.
     std::printf("\nThis machine\n");
 #ifdef _WIN32
     {
@@ -400,10 +420,13 @@ int main(int argc, char** argv) {
         screen.options.push_back({"video_size", "320x240"});
         std::string err;
         const int n = readFrames(screen, 3, &err);
-        if (n >= 0) {
-            checkf(n == 3, "gdigrab opened and grabbed the screen (%d frames)", n);
-        } else {
+        if (n < 0) {
             checkf(!err.empty(), "gdigrab did not open here, and said why: %s", err.c_str());
+        } else if (n == 0) {
+            checkf(!err.empty(),
+                   "gdigrab opened, and this session would not be grabbed: %s", err.c_str());
+        } else {
+            checkf(n == 3, "gdigrab opened and grabbed the screen (%d frames)", n);
         }
 
         const DeviceSourceList cams = deviceSources("dshow");
