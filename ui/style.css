@@ -1932,3 +1932,92 @@ select.gn-f { text-align: left; }
     flex-shrink: 0;
 }
 .gr-status { display: flex; gap: 6px; font-size: 11px; }
+
+/* ── when a filter is on ────────────────────────────────────────────────────
+   The strip in the column, and the one line of it on a card. A span is a shape
+   with a ruler under it, which is why the draggable one is in the panel and the
+   card only states the answer. */
+.when-strip { margin: 4px 0 10px; }
+.when-track {
+    position: relative;
+    height: 22px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: default;
+}
+.when-strip.when-always .when-track { background: rgba(126, 214, 160, 0.10); }
+.when-span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(126, 214, 160, 0.30);
+    border-left: 1px solid var(--good, #7ed6a0);
+    border-right: 1px solid var(--good, #7ed6a0);
+}
+/* Three targets over one span: the body moves it, each edge moves one end. The
+   grips are wider than they look, because a two-pixel line is not something a
+   hand can find. */
+.when-grab { position: absolute; display: block; left: 0; right: 0; top: 0; bottom: 0;
+             cursor: move; }
+.when-edge {
+    position: absolute;
+    display: block;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    cursor: ew-resize;
+    background: rgba(126, 214, 160, 0.55);
+}
+.when-edge-a { left: -4px; }
+.when-edge-b { right: -4px; }
+.when-edge:hover { background: var(--good, #7ed6a0); }
+.when-ruler { position: relative; height: 13px; }
+.when-tick {
+    position: absolute;
+    top: 1px;
+    font-family: Consolas, monospace;
+    font-size: 9.5px;
+    color: var(--dim);
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+.when-tick:first-child { transform: none; }
+.when-tick:last-child { transform: translateX(-100%); }
+.when-hint { font-size: 10.5px; margin-top: 2px; }
+select.when-op { height: 22px; font-size: 11px; }
+.when-num {
+    flex: 1 1 0;
+    min-width: 0;
+    width: 100%;
+    height: 22px;
+    padding: 0 4px;
+    font-size: 11px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+}
+
+/* On the card: a flat bar and the answer in words. No handles — the card is
+   what the node is set to and the column is where it is set. */
+.gn-when { display: flex; align-items: center; gap: 6px; margin: 2px 0 3px; }
+.gn-when .when-track { flex: 1 1 0; min-width: 0; height: 6px; border-radius: 2px; }
+.when-span.when-flat { border-left: 0; border-right: 0;
+                       background: var(--good, #7ed6a0); }
+.gn-when-text {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--good, #7ed6a0);
+    white-space: nowrap;
+}
+.gn-when-raw .gn-when-text { color: var(--dim); }
+/* The shape of the span, then its one or two moments, then the way to be rid of
+   it. The select is given a basis rather than a share: left to flex it collapsed
+   to nothing beside two number fields and the word "between" was three pixels
+   of "b". */
+.when-edit { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+.when-i { flex: 0 0 auto; width: 10px; font-size: 10.5px; color: var(--dim); }
+.when-edit select.when-op { flex: 0 0 78px; width: 78px; min-width: 0; }
+.when-edit button.tiny { flex: 0 0 auto; min-width: 0; padding: 0 6px; }

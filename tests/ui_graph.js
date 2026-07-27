@@ -1453,6 +1453,82 @@ console.log('\nthe stage with nothing on the timeline');
     same(document.querySelectorAll('#gr-nodes .gn').length, 0, 'and nothing is drawn');
 }
 
+// ── enable=: a filter that is on for part of the render ────────────────────
+//
+// ffmpeg's timeline support, and the nearest thing it has to a keyframe. The
+// whole design rests on one claim — that the strip and the text are one
+// mechanism — so the check that matters is the round trip: what the control
+// writes is what the parser reads back, and what the parser cannot read is
+// left exactly as it was found rather than approximated.
+
+console.log('\nenable=, as spans and as text');
+{
+    const { supportsTimeline, parseEnable, printEnable } = globalThis.__ffmpegBro.graph;
+
+    // Which filters can take one is a registry fact — AVFILTER_FLAG_SUPPORT_-
+    // TIMELINE arrives as `f.timeline` — and not a list anybody writes down.
+    ok(supportsTimeline('hflip'), 'libavfilter says hflip honours a timeline');
+    ok(supportsTimeline('eq'), 'and so does eq');
+    ok(!supportsTimeline('scale'), 'and says scale does not');
+    ok(!supportsTimeline('trim'), 'nor trim');
+
+    const round = (text, what) => {
+        const p = parseEnable(text);
+        ok(p.ok, `${what} parses`);
+        same(printEnable(p.spans), `'${text}'`, `${what} round-trips unchanged`);
+    };
+    round('between(t,1,2)', 'a span');
+    round('between(t,1,2)+between(t,5,6)', 'several spans');
+    round('gt(t,3)', 'from a moment');
+    round('lt(t,4.5)', 'until a moment');
+    // `gte` is kept as `gte` rather than printed as `gt`: they are different
+    // expressions and rewriting one as the other is a rewrite of somebody's
+    // text, which is what this whole surface exists not to do.
+    round('gte(t,2)+lte(t,9)', 'the closed forms, as themselves');
+    round('gt(t,1)+between(t,4,5)', 'a mixture');
+
+    // The quotes are part of the value, because a filtergraph separates filters
+    // with commas — so both spellings have to read the same way in.
+    same(printEnable(parseEnable("'between(t,1,2)'").spans), "'between(t,1,2)'",
+         'a quoted value reads as the span it is');
+    same(parseEnable('').spans.length, 0, 'nothing at all is “always on”');
+    same(printEnable([]), '', 'and always on writes nothing, not an empty expression');
+
+    // What it cannot draw. Each is a legitimate `enable` and each has to come
+    // back as a refusal with a reason rather than as an approximation.
+    for (const [text, why] of [
+        ['mod(t,2)', 'an expression'],
+        ['between(n,10,20)', 'a frame count'],
+        ['gt(pos,1000)', 'a byte position'],
+        ['between(t,1+1,4)', 'arithmetic inside a span'],
+        ['between(t,1,2)*gt(t,0)', 'terms multiplied rather than added'],
+        ['if(gt(t,1),1,0)', 'a conditional'],
+    ]) {
+        const p = parseEnable(text);
+        ok(!p.ok && !!p.reason, `${why} is refused, with a reason: ${p.reason}`);
+    }
+
+    // A span that is not a span. `between(t,2,2)` is a filter that is never on
+    // and a strip cannot draw it either way round.
+    ok(!parseEnable('between(t,2,2)').ok, 'a span of no length is not a span');
+
+    // Whether it is on at an instant, which is what the playback readout says
+    // while a node runs. The comparisons are ffmpeg's own — `between` is
+    // inclusive at both ends, `gt` is strict, `gte` is not — because a boundary
+    // decided one way here and another way in libavfilter is wrong on exactly
+    // the frame somebody is looking at.
+    const on = (text, t) => globalThis.__ffmpegBro.graph
+        .isOnAt(parseEnable(text).spans, t);
+    ok(on('', 5), 'a filter with no enable is on always');
+    ok(!on('between(t,1,2)', 0.9), 'and one with a span is off before it');
+    ok(on('between(t,1,2)', 1), 'on at the near edge, which between() includes');
+    ok(on('between(t,1,2)', 2), 'on at the far edge too');
+    ok(!on('between(t,1,2)', 2.1), 'and off after it');
+    ok(!on('gt(t,3)', 3), 'gt is strict at its boundary');
+    ok(on('gte(t,3)', 3), 'and gte is not');
+    ok(on('between(t,1,2)+gt(t,8)', 9), 'and several spans are an or, as the + says');
+}
+
 // ── the gesture ────────────────────────────────────────────────────────────
 //
 // Everything above is the model, which is where the rules live. This is the
@@ -1718,6 +1794,217 @@ if (!media) {
         ok(!!adopt, 'a movie node’s file is listed as opened by the graph, with the offer ' +
                     'to make it an input that has a demuxer and a window of its own');
 
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
+
+    // ── the When strip ─────────────────────────────────────────────────────
+    //
+    // The claim being checked is that the strip and the `enable` text are one
+    // mechanism. So every assertion below reads the *stored parameter* after a
+    // gesture on the strip, and the last of them types an expression the strip
+    // cannot draw and checks that nothing rewrote it.
+    console.log('\nwhen a filter is on');
+    {
+        const { parseEnable } = A.graph;
+        const spec = A.exporter.buildSpec();
+        const length = spec.end - spec.start;
+        overlay.clear();
+        const rec = overlay.insert(`clip:${clipId}/after-scale`, 'hflip');
+        A.graph.draw();
+        pump(200);
+
+        const card = document.querySelector(`#gr-nodes [data-key="${rec.id}"]`);
+        ok(!!card, 'the filter is on the stage');
+        card.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(160);
+
+        const add = document.querySelector('#gr-panel [data-f="addspan"]');
+        ok(!!add, 'the column offers to turn it on for a span');
+        add.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+
+        const enableOf = () => overlay.inserts()[0].params.enable || '';
+        ok(/^'between\(t,[\d.]+,[\d.]+\)'$/.test(enableOf()),
+           `one click writes one span, quoted: ${enableOf()}`);
+        same(document.querySelectorAll('#gr-panel .when-span').length, 1,
+             'and the strip draws exactly what the expression says');
+        // The card states it too, because a filter that runs for part of the
+        // render is a different filter from one that runs throughout.
+        ok(!!document.querySelector(`#gr-nodes [data-key="${rec.id}"] .gn-when`),
+           'the card says when it is on');
+
+        document.querySelector('#gr-panel [data-f="addspan"]')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+        const two = parseEnable(enableOf());
+        same(two.spans.length, 2, `a second span is added rather than replacing the first: ${
+            enableOf()}`);
+        ok(enableOf().indexOf('+') > 0, 'written the way ffmpeg writes an or — with a +');
+        same(document.querySelectorAll('#gr-panel .when-span').length, 2,
+             'and both are on the strip');
+
+        // Dragging an end is the same mechanism: it prints an expression and
+        // puts it where the text field would have put it. Committed on release
+        // and not on every move, because a write locks the node and rebuilds
+        // the strip under the hand holding it.
+        {
+            const track = document.querySelector('#gr-panel .when-strip .when-track');
+            const grip = track.querySelector('[data-drag="0:from"]');
+            ok(!!grip, 'the near end of the first span has a grip');
+            const box = track.getBoundingClientRect();
+            const y = box.top + box.height / 2;
+            const at = (f) => ({ x: box.left + box.width * f, y });
+            mouse('mousedown', at(0.05), grip);
+            mouse('mousemove', at(0.2));
+            mouse('mouseup', at(0.2));
+            pump(200);
+            const moved = parseEnable(enableOf());
+            ok(moved.ok, `it still parses after a drag: ${enableOf()}`);
+            ok(Math.abs(moved.spans[0].from - length * 0.2) < length * 0.06,
+               `and the end went where it was dragged (${moved.spans[0].from.toFixed(2)}s of ` +
+               `${length.toFixed(2)}s)`);
+        }
+
+        // **An expression the control cannot draw is not rewritten.** This is
+        // the honest failure the whole surface turns on: the strip stands down,
+        // says which part it gave up on, and the text stays as it was typed.
+        {
+            const field = document.querySelector('#gr-panel [data-f="enable"]');
+            ok(!!field, 'the expression itself is editable, under the strip');
+            field.value = "'lt(mod(t,4),2)'";
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            pump(200);
+            same(enableOf(), "'lt(mod(t,4),2)'",
+                 'an expression the strip cannot draw is stored exactly as typed');
+            same(document.querySelectorAll('#gr-panel .when-span').length, 0,
+                 'the strip draws nothing rather than drawing something wrong');
+            ok(!!document.querySelector('#gr-panel .gp-problem'),
+               'and says so, where somebody is about to reach for the control');
+            // The card cannot draw it either, and says the same thing.
+            const bar = document.querySelector(`#gr-nodes [data-key="${rec.id}"] .gn-when-raw`);
+            ok(!!bar, 'the card marks it as an expression rather than a span');
+            // Nothing was lost: the same text is still what the node renders
+            // with, so a graph that has been round-tripped through the strip is
+            // the graph that was typed.
+            const d = derive(A.exporter.buildSpec(), null, { overlay: overlay.current() });
+            const node = d.graph.node(rec.id);
+            same(node.params.enable, "'lt(mod(t,4),2)'", 'and the graph carries it verbatim');
+        }
+
+        // Back to something drawable, and off again.
+        {
+            const field = document.querySelector('#gr-panel [data-f="enable"]');
+            field.value = "'between(t,0.5,1.5)'";
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            pump(200);
+            same(document.querySelectorAll('#gr-panel .when-span').length, 1,
+                 'typing a span by hand draws it — the field and the strip are one thing');
+            document.querySelector('#gr-panel [data-f="always"]')
+                .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+            pump(200);
+            same(overlay.inserts()[0].params.enable, undefined,
+                 'and “always on” takes the option off rather than storing an empty one');
+        }
+    }
+
+    // ── judging one ────────────────────────────────────────────────────────
+    //
+    // A still cannot answer "does it come on where I meant it to" — only a run
+    // of seconds can, which is what the play button on a card is for. What that
+    // needs from this chunk is two things: the clock a played piece renders on
+    // has to be the render's, not the piece's, and the readout has to say which
+    // side of the boundary the frame on screen is on.
+    console.log('\nplaying a node whose filter comes and goes');
+    {
+        overlay.clear();
+        const rec = overlay.insert(`clip:${clipId}/after-scale`, 'hflip');
+        A.graph.draw();
+        pump(200);
+
+        // A piece of a playback is a render of two seconds out of the middle of
+        // the range, and it is derived with `origin` so that `t` still means
+        // time into the render. Checked on the graph rather than through a
+        // rendered file: the offset is the whole mechanism and it is visible in
+        // the setpts of every chain.
+        const spec = A.exporter.previewSpec({ start: 4, end: 6 });
+        same(spec.origin, 0, 'a preview spec carries where the render’s clock starts');
+        const d = derive(spec, null, { overlay: overlay.current() });
+        const shifted = d.graph.byAnchor(`clip:${clipId}/setpts`);
+        ok(/\+4\/TB/.test(shifted.pos[0]),
+           `a window four seconds in is put four seconds along: ${shifted.pos[0]}`);
+        ok(/\+4\/TB/.test(d.graph.byAnchor('base/setpts').pos[0]),
+           'and the canvas it is composited against goes with it');
+        // Without one — which is what a spec written by hand has — nothing
+        // moves, so an export is exactly what it was.
+        const plain = derive(A.exporter.previewSpec({ start: 4, end: 6, origin: 4 }), null,
+                             { overlay: overlay.current() });
+        same(plain.graph.byAnchor('base/setpts'), null,
+             'a window that is its own origin is shifted by nothing at all');
+
+        const enableOf = () => overlay.inserts()[0].params.enable || '';
+        const play = (key) => document.querySelector(`#gr-nodes [data-play="${key}"]`);
+        const clockText = () => {
+            const c = document.querySelector('#gr-nodes .gn-playbar .gn-clock');
+            return c ? c.textContent : '';
+        };
+
+        // Carried on the card, because the readout is written on the frame loop
+        // and re-deriving a graph to answer it would derive sixty times a second.
+        for (const [text, want] of [["'lt(t,1000)'", ' · on'], ["'gt(t,1000)'", ' · off']]) {
+            overlay.edit({ id: rec.id, derived: false }, { params: { enable: text } });
+            A.graph.draw();
+            pump(200);
+            same(document.querySelector(`#gr-nodes [data-key="${rec.id}"]`)
+                     .getAttribute('data-enable'), text,
+                 `the card carries ${text}, which is what the readout reads`);
+            // The play button only exists once the node has a picture: it is
+            // drawn over the still, and a card with nothing in it has nothing
+            // to press play on.
+            waitFor('the node’s own picture', () => !!play(rec.id), 20000);
+            play(rec.id).dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+            waitFor('the playback readout', () => /·/.test(clockText()), 15000);
+            ok(clockText().indexOf(want) >= 0,
+               `and while it plays the card says${want}: “${clockText()}”`);
+            const stop = play(rec.id);
+            if (stop) stop.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+            pump(200);
+        }
+        same(enableOf(), "'gt(t,1000)'", 'and nothing about playing it changed what it says');
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
+
+    // A filter libavfilter says has no timeline support is not offered one.
+    // Refused rather than ignored: `set_enable_expr` checks the flag and hands
+    // back AVERROR_PATCHWELCOME, so a graph carrying one never builds.
+    console.log('\na filter that cannot take a timeline');
+    {
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+        const key = `clip:${clipId}/scale`;
+        const card = document.querySelector(`#gr-nodes [data-key="${key}"]`);
+        ok(!!card, 'the derived scale is on the stage');
+        card.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(160);
+        same(document.querySelectorAll('#gr-panel .when-strip').length, 0,
+             'no strip is offered for it');
+        same(document.querySelectorAll('#gr-panel [data-f="enable"]').length, 0,
+             'and no field either — a control that cannot work is worse than none');
+        const column = document.getElementById('gr-panel').textContent;
+        ok(/no timeline support/.test(column),
+           'the column says why, rather than leaving a gap where a control was');
+
+        // Set one anyway — through a lock, which is the raw path — and the
+        // graph refuses before the render does.
+        const d0 = derive(A.exporter.buildSpec(), null, { overlay: overlay.current() });
+        overlay.edit(d0.graph.byAnchor(key), { params: { enable: "'between(t,0,1)'" } });
+        const d = derive(A.exporter.buildSpec(), null, { overlay: overlay.current() });
+        ok(d.problems.some((p) => p.key === key && /no timeline support/.test(p.reason)),
+           'and setting it by hand is reported against that node, not left to the render');
         overlay.clear();
         A.graph.draw();
         pump(160);

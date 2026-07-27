@@ -38,6 +38,7 @@ import { basename } from '../format.js';
 import { portY } from './layout.js';
 import { WAVE_ASPECT } from './subgraph.js';
 import { optionOf } from './filters.js';
+import { whenBar } from './when.js';
 import * as overlay from './overlay.js';
 import * as preview from './preview.js';
 
@@ -191,6 +192,11 @@ export function buildCard(n, ctx) {
         'data-node': n.id,
         'data-key': key || '',
         'data-filter': n.filter || n.kind,
+        // When this node is on, carried on the element rather than looked up:
+        // the playback readout is written into the card sixty times a second
+        // and must not re-derive a graph to find out whether the frame it is
+        // showing is one the filter ran on.
+        'data-enable': (n.params && n.params.enable) || '',
         title: problem ? problem.reason : (n.path || undefined),
         style: { width: `${width}px` },
         // Ctrl or shift adds to the selection, which is what every editor does and
@@ -199,7 +205,7 @@ export function buildCard(n, ctx) {
     }, [
         header(n, g, key),
         lod === 'min' || !problem ? null : problemRow(problem),
-        lod === 'min' ? null : body(n),
+        lod === 'min' ? null : body(n, g),
         shotView(key, width),
         sockets(n, g, key),
         grip(key, width),
@@ -255,9 +261,14 @@ function problemRow(problem) {
 /// derivation's `posNames` rather than from the option table's ordering: ffmpeg
 /// carries aliases as separate entries, so the n-th option is not the n-th
 /// positional argument.
-function body(n) {
+function body(n, g) {
     if (n.kind !== 'filter') return null;
+    // When it is on, before what it is set to. A filter that only runs for part
+    // of the render is a different filter from one that runs throughout, and
+    // reading four crop numbers without knowing that is reading half of it.
     const rows = [];
+    const when = whenBar(n, g);
+    if (when) rows.push(when);
     const names = n.posNames || [];
     n.pos.forEach((v, i) => {
         const label = names[i] || `#${i + 1}`;

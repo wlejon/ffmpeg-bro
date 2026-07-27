@@ -22,6 +22,7 @@
 
 import { streamsOf, keyOf } from './model.js';
 import { padsOf } from './filters.js';
+import { supportsTimeline } from './enable.js';
 
 /// What to call a node in a sentence. A filter is its own name; the two ends
 /// are named the way their cards are, because that is what the person is
@@ -59,6 +60,19 @@ export function problems(g, stranded = []) {
             say(n, `libavfilter in this build has no filter called “${n.filter}”`);
             continue;
         }
+
+        // **`enable` on a filter that has no timeline support is refused by
+        // libavfilter, not ignored.** `set_enable_expr` checks
+        // AVFILTER_FLAG_SUPPORT_TIMELINE and returns AVERROR_PATCHWELCOME, so a
+        // graph carrying one fails as it is built and the render produces
+        // nothing. The panel does not offer a strip for such a filter; this is
+        // for the value arriving the other way — typed into the raw field, or
+        // moved onto a filter it does not suit — where the alternative is a
+        // render that stops with libavfilter's own wording and no node named.
+        if (n.kind === 'filter' && n.params.enable !== undefined &&
+            String(n.params.enable) !== '' && !supportsTimeline(n.filter))
+            say(n, `${nameOf(n)} has no timeline support in this build, so enable= on it ` +
+                   'is refused when the graph is built — libavfilter will not run it');
 
         const ins = g.inPorts(n);
         const arriving = g.inEdges(n);

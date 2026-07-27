@@ -26,6 +26,7 @@ import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
 import { layout, portY } from './graph/layout.js';
 import { problems } from './graph/check.js';
+import { supportsTimeline, parseEnable, printEnable, isOnAt } from './graph/enable.js';
 import { padsOf } from './graph/filters.js';
 import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
@@ -1141,6 +1142,11 @@ globalThis.__ffmpegBro = {
     graph: { makeGraph, restore, derive, print, layout, portY, problems, padsOf, socketAt,
              overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
              placement: graphPlacement,
-             outranked: outrankedControls, preview: graphPreview, previewGraph },
+             outranked: outrankedControls, preview: graphPreview, previewGraph,
+             // `enable=` as a set of spans and as the text it is. Pure, and on
+             // the surface for the same reason the model is: the control and
+             // the expression are one mechanism, and the only way to check that
+             // is to round-trip one through the other without a screen.
+             supportsTimeline, parseEnable, printEnable, isOnAt },
 };
 globalThis.__ffmpegBroReady = true;

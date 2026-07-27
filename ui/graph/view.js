@@ -40,6 +40,7 @@
 import { el, div, span, put } from '../dom.js';
 import { clock } from '../format.js';
 import { buildSpec, previewSpec, specSources, range as exportRange } from '../export/spec.js';
+import { parseEnable, isOnAt } from './enable.js';
 import { derive } from './derive.js';
 import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
@@ -933,10 +934,34 @@ function readout(st) {
     // say a graph was fast while you watched it not be. Withheld for the first
     // second and a half: there is nothing to average over yet, and the first piece
     // is a render nobody has waited for.
-    strip.textContent = clock(st.at) +
+    strip.textContent = clock(st.at) + whenNow(strip, st) +
         (st.settled ? ` · ${st.rate.toFixed(2)}×` : '') +
         (st.waiting ? ' · rendering' : slow ? ' · slower than real time' : '');
     strip.className = 'gn-clock' + (slow || st.waiting ? ' gn-slow' : '');
+}
+
+/// Whether the filter being watched is on right now.
+///
+/// **The one thing a playback answers that a still cannot.** A time-varying
+/// filter is judged by watching it come on, and a picture that changes with no
+/// word for what changed leaves you counting seconds against a field in another
+/// column. The clock is the render's own — `enable`'s `t` is measured from the
+/// start of the range, and `st.at` is a timeline second — so the two are put on
+/// the same footing here rather than anywhere the difference could be forgotten.
+///
+/// Read off the card's `data-enable` rather than out of a graph: this runs on
+/// the frame loop, and re-deriving to answer it would derive sixty times a
+/// second. Silent for a filter with no `enable` and for an expression the
+/// parser will not read, because a readout that guessed at `mod(t,4)` would be
+/// worse than one that said nothing.
+function whenNow(strip, st) {
+    let card = strip.parentNode;
+    while (card && card.getAttribute && !card.getAttribute('data-key')) card = card.parentNode;
+    const value = card && card.getAttribute ? card.getAttribute('data-enable') : '';
+    if (!value) return '';
+    const parsed = parseEnable(value);
+    if (!parsed.ok || !parsed.spans.length) return '';
+    return isOnAt(parsed.spans, st.at - exportRange().start) ? ' · on' : ' · off';
 }
 
 // ── view transform ─────────────────────────────────────────────────────────

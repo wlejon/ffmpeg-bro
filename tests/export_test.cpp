@@ -1113,6 +1113,24 @@ int main(int argc, char* argv[]) {
             } else {
                 check(false, "both renders open for comparison");
             }
+
+            // And a filter without AVFILTER_FLAG_SUPPORT_TIMELINE is *refused*,
+            // not quietly ignored: `set_enable_expr` checks the flag and hands
+            // back AVERROR_PATCHWELCOME, so the graph never builds. Worth an
+            // assertion because the whole UI rule — do not offer a strip where
+            // there is no timeline support — rests on which of the two it is.
+            char refused[400];
+            std::snprintf(refused, sizeof(refused),
+                          "[0:v]scale=%d:%d:enable='between(t,0,1)'[vout]", kW, kH);
+            ExportSettings sn = baseSettings("out/export-graph-enable-refused.mp4");
+            sn.endTime = 0.4;
+            sn.filterGraph = refused;
+            sn.filterInputs = {{"0:v", first, "v"}};
+            sn.includeAudio = false;
+            const ExportStatus nst = render(sn, clipsA);
+            checkf(nst.state == ExportStatus::State::Failed,
+                   "and enable= on a filter with no timeline support is refused (%s)",
+                   nst.error.empty() ? "no error" : nst.error.c_str());
         }
 
         // The graph is text the user can edit, so every way of getting it wrong

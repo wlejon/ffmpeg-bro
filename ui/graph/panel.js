@@ -37,6 +37,7 @@ import { el, div, span, put, head, row, fromTemplate } from '../dom.js';
 import { optionsOf, infoOf, allFilters, padsOf, isSource, sourceFilters } from './filters.js';
 import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import { nameOf } from './check.js';
+import { whenRows } from './when.js';
 import * as overlay from './overlay.js';
 
 let refs = {};
@@ -221,6 +222,17 @@ function nodePanel(node) {
 
     const options = optionsOf(node.filter);
     out.push(...positionalRows(node, options));
+    // **`enable` is written by a control and edited as text, and they are the
+    // same mechanism** — the strip parses the expression and prints one back,
+    // exactly as the Quality slider and the advanced editor both produce
+    // `{crf: 20}`. It is above the option table rather than in it because
+    // `enable` is not in a filter's own AVOption table at all: it belongs to
+    // every filter, out of `AVFilterContext`'s class, and whether *this* filter
+    // honours it is a flag the registry carries.
+    out.push(...whenRows(node, graph, (value) => {
+        overlay.edit(node, { params: { enable: value } });
+        changed();
+    }));
     out.push(...namedRows(node, options));
 
     const actions = [];
