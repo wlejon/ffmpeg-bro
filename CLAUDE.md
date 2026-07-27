@@ -155,6 +155,11 @@ against footage the fixtures do not resemble:
 # file, the wiring gesture driven on the real stage with real MouseEvents
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]
 
+# filters whose output is information: a measurement started, run, plotted and
+# applied — and refused where it could not be trusted. Plus the A/B comparison
+# measured with psnr/ssim rather than judged by eye.
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
+
 # the render's back-channel, from av_log inside libav to a line on screen:
 # the drain off the frame loop, a warning that is visible and attributed, and
 # a measuring filter's values as a named series over time
