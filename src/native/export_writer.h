@@ -14,9 +14,26 @@
 //     here unchanged, and a render that succeeds while ignoring half of what
 //     it was told is the worst of the three outcomes.
 //
-// One writer is one output file. Two outputs from one render — the thing a
-// graph with two encoder nodes describes — is two of these, which is why the
-// job owns it rather than the other way round.
+// **One writer is one muxer, which is not the same thing as one file.** It was
+// for a long time, and everything about reporting what a render produced
+// assumed it: a path, stat'd at the end. Four muxers break that assumption and
+// they are the whole of chunk 13 — `segment` and `image2` write a numbered run,
+// `hls` and `dash` write a run and a playlist that names it, and `tee` writes
+// the same packets to several destinations at once. None of them is a second
+// kind of writer; each is a muxer opening files this class never asked for.
+//
+// So the question "what did this render write" is asked of libavformat rather
+// than guessed from the filename. `AVFormatContext::io_open` is the callback
+// libavformat routes *every* output through — the primary file, every segment,
+// every DASH chunk, every `tee` slave, every numbered picture — and it is the
+// same seam ffmpeg's own CLI overrides. Hooking it gives the count, the names
+// and the sizes for nothing, and it is the only version of this that does not
+// go stale the first time a muxer numbers its files differently.
+//
+// A destination that is a **URL** rides the same seam: `avio_open2` takes the
+// protocol's options, and libavformat hands a muxer's leftovers down to the
+// AVIO layer exactly as it does at the reading end — which is why the two
+// travel in one `formatOptions` bag here and are split apart in `open()`.
 //
 // **One file is N streams.** It used to be exactly one video stream and one
 // audio stream, with two members for each and `avformat_new_stream` called
@@ -44,6 +61,7 @@ extern "C" {
 }
 
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -98,12 +116,37 @@ public:
     /// The size on disk, stat'd once the file is closed rather than taken from
     /// the write position: +faststart rewrites an mp4 after the trailer, and
     /// the position left behind reported three kilobytes for a file of three
-    /// quarters of a megabyte.
+    /// quarters of a megabyte. A destination that is not a file at all reports
+    /// what was *sent*, which is the only honest number a socket has.
     int64_t bytesSoFar() const;
+
+    /// How many files the muxer opened **beside** the one it was named with.
+    ///
+    /// Zero for an ordinary render, which is what makes this something nothing
+    /// has to know about: one muxer, one file, and the file is the path. It is
+    /// the segments of an `hls` or a `segment` render, the chunks of a `dash`
+    /// one, the pictures of an `image2` one, and the destinations of a `tee` —
+    /// counted distinct, because a playlist rewritten on every segment is one
+    /// file and not forty.
+    int64_t piecesWritten() const;
+
+    /// Everything that was opened, in the order it was opened, with what each
+    /// came to. For a caller that wants to say which files exist rather than
+    /// how many.
+    struct Piece {
+        std::string url;
+        int64_t bytes = 0;
+        bool file = false;      ///< a local path, so `bytes` is on disk
+    };
+    std::vector<Piece> pieces() const;
 
     /// What was written, on disk. A path with a frame-number pattern in it is
     /// a run of files rather than one, so it is measured as one — see the note
     /// in `finish()`.
+    ///
+    /// Only the fallback now: what the muxer actually opened is recorded as it
+    /// opens it, and this is what answers when a muxer wrote its files through
+    /// some route that never reached `io_open`.
     static int64_t sizeOnDisk(const std::string& path, int64_t startNumber);
 
     /// The rate the mixer should produce, which is the render's rather than any
@@ -228,6 +271,24 @@ private:
     bool writePacket(Out& o, AVPacket* pkt, std::string* err);
     bool drainBsf(Out& o, std::string* err);
 
+    // ── every destination this muxer opens ─────────────────────────────────
+    //
+    // libavformat calls `io_open` for the primary output, for every segment a
+    // segmenter starts, for every chunk DASH writes, for every slave `tee`
+    // feeds and for every picture `image2` numbers — and `io_close2` when each
+    // is done with. Overriding the pair is how a class that only ever knew
+    // about one file comes to know what a render made, without a second
+    // implementation of anybody's numbering scheme.
+    //
+    // They are static because libavformat takes function pointers; the Writer
+    // arrives through `AVFormatContext::opaque`, which libavformat itself never
+    // touches and which ffmpeg's own CLI uses for exactly this.
+    static int ioOpen(AVFormatContext* s, AVIOContext** pb, const char* url,
+                      int flags, AVDictionary** options);
+    static int ioClose(AVFormatContext* s, AVIOContext* pb);
+    void noteOpened(const std::string& url, AVIOContext* pb, AVDictionary* leftover);
+    void noteClosed(const std::string& url, int64_t sent);
+
     ExportSettings settings_;
     AVFormatContext* oc_ = nullptr;
     AVPacket* pkt_ = nullptr;
@@ -236,6 +297,20 @@ private:
     int64_t bytes_ = 0;
     bool headerWritten_ = false;
     bool finished_ = false;
+
+    /// The half of `formatOptions` that is not the muxer's. Handed to every
+    /// `avio_open2` this render does, because that is where a protocol's
+    /// options are taken and there is no other moment to take them.
+    AVDictionary* protocolOpts_ = nullptr;
+
+    /// The first protocol option nothing consumed. An unknown key is an error
+    /// here as it is everywhere else, but it cannot be *reported* from inside a
+    /// libavformat callback — so it is carried out to `open()`, which is the
+    /// call that can refuse.
+    std::string protocolErr_;
+
+    std::vector<Piece> wrote_;              ///< in the order they were opened
+    std::map<AVIOContext*, std::string> live_;   ///< open right now, by handle
 };
 
 } // namespace ffmpegbro

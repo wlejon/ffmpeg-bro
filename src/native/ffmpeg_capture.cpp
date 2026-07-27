@@ -361,6 +361,7 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
         st.elapsedSec = secondsSince();
         st.encodeFps = st.elapsedSec > 0 ? st.framesDone / st.elapsedSec : 0;
         st.bytesWritten = writer.bytesSoFar();
+        st.piecesWritten = writer.piecesWritten();
         // **No progress fraction.** There is no total to divide by, and a bar
         // creeping towards an end nobody chose is worse than no bar: what a
         // recording can say honestly is how long it has been going and how big
@@ -391,6 +392,7 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
         }
     }
     st.bytesWritten = writer.bytesSoFar();
+    st.piecesWritten = writer.piecesWritten();
 
     // **Stopping a recording is how a recording ends.** It is not a
     // cancellation: nothing was abandoned and nothing was lost, and the length

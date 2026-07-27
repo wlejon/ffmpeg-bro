@@ -17,6 +17,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -177,6 +178,32 @@ std::string defaultMimeType(AVCodecID id) {
 std::string fileName(const std::string& path) {
     const size_t cut = path.find_last_of("/\\");
     return cut == std::string::npos ? path : path.substr(cut + 1);
+}
+
+/// Is this destination a path on this machine, or somewhere else entirely?
+///
+/// The distinction decides what "how big is it" means. A file can be stat'd
+/// after it is closed, which is the only correct answer for an mp4 that
+/// +faststart rewrote; a socket cannot be stat'd at all and the honest number
+/// is what was pushed through it. Anything with a scheme libavformat would
+/// recognise as a protocol is the second kind — except `file:`, which is the
+/// long way of writing the first, and a Windows drive letter, which is a colon
+/// in a path and not a scheme.
+bool isLocalPath(const std::string& url) {
+    const size_t colon = url.find(':');
+    if (colon == std::string::npos) return true;
+    if (colon <= 1) return true;                       // C:\ — a drive, not a scheme
+    const std::string scheme = url.substr(0, colon);
+    for (char c : scheme)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.')
+            return true;                               // not a scheme at all
+    return scheme == "file";
+}
+
+/// The path behind a `file:` URL, which is what `std::filesystem` wants.
+std::string localPathOf(const std::string& url) {
+    if (url.rfind("file:", 0) == 0) return url.substr(5);
+    return url;
 }
 
 /// Pull one key out of an option bag, leaving the rest.
@@ -437,6 +464,97 @@ bool Writer::hasAudio() const {
     return false;
 }
 
+// ── every destination the muxer opens ──────────────────────────────────────
+
+int Writer::ioOpen(AVFormatContext* s, AVIOContext** pb, const char* url, int flags,
+                   AVDictionary** options) {
+    auto* self = static_cast<Writer*>(s->opaque);
+
+    // The muxer's own options for this file, plus the protocol's. They are
+    // merged into a copy rather than into the caller's dictionary because
+    // libavformat reads what is left of *its* dictionary afterwards, and a
+    // protocol option it never asked about would look to it like one it failed
+    // to consume.
+    AVDictionary* merged = nullptr;
+    if (options && *options) av_dict_copy(&merged, *options, 0);
+    if (self && self->protocolOpts_) av_dict_copy(&merged, self->protocolOpts_, 0);
+
+    const int rc = avio_open2(pb, url, flags, &s->interrupt_callback, &merged);
+    if (rc >= 0 && self) self->noteOpened(url, *pb, merged);
+    av_dict_free(&merged);
+    return rc;
+}
+
+int Writer::ioClose(AVFormatContext* s, AVIOContext* pb) {
+    auto* self = static_cast<Writer*>(s->opaque);
+    std::string url;
+    int64_t sent = 0;
+    if (self && pb) {
+        const auto it = self->live_.find(pb);
+        if (it != self->live_.end()) {
+            url = it->second;
+            sent = avio_tell(pb);
+            self->live_.erase(it);
+        }
+    }
+    const int rc = avio_close(pb);
+    // After the close, not before: a file's real size is a question for the
+    // filesystem once the last buffer has gone down, and for an mp4 that
+    // +faststart rewrote it is not the write position at all.
+    if (self && !url.empty()) self->noteClosed(url, sent);
+    return rc;
+}
+
+void Writer::noteOpened(const std::string& url, AVIOContext* pb, AVDictionary* leftover) {
+    live_[pb] = url;
+
+    // A file opened twice is one file. `hls` rewrites its playlist every
+    // segment and `segment` with `-segment_wrap` comes back round to the first
+    // name, and counting either as new would report a render that wrote forty
+    // files when it wrote four.
+    for (auto& p : wrote_) if (p.url == url) return;
+    Piece p;
+    p.url = url;
+    p.file = isLocalPath(url);
+    wrote_.push_back(p);
+
+    // Whatever the protocol did not take. An unknown key is an error here for
+    // the reason it is an error at every other option bag in this binary — a
+    // render that succeeded while ignoring what it was told is the worst of the
+    // three outcomes — but a callback cannot refuse, so the first one is
+    // carried out to `open()`.
+    if (!protocolErr_.empty() || !protocolOpts_) return;
+    const AVDictionaryEntry* e = nullptr;
+    while ((e = av_dict_iterate(protocolOpts_, e))) {
+        if (av_dict_get(leftover, e->key, nullptr, 0))
+            protocolErr_ = std::string("nothing reading '") + url + "' has an option '" +
+                           e->key + "'";
+    }
+}
+
+void Writer::noteClosed(const std::string& url, int64_t sent) {
+    for (auto& p : wrote_) {
+        if (p.url != url) continue;
+        if (p.file) {
+            std::error_code ec;
+            const auto size = std::filesystem::file_size(
+                std::filesystem::path(localPathOf(url)), ec);
+            p.bytes = ec ? sent : static_cast<int64_t>(size);
+        } else {
+            p.bytes = sent;
+        }
+        return;
+    }
+}
+
+int64_t Writer::piecesWritten() const {
+    int64_t n = 0;
+    for (const auto& p : wrote_) if (p.url != settings_.path) ++n;
+    return n;
+}
+
+std::vector<Writer::Piece> Writer::pieces() const { return wrote_; }
+
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
                   CopyStreams* copies) {
     settings_ = s;
@@ -457,8 +575,35 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
         return false;
     }
 
+    // Everything libavformat opens goes through this pair, from now until the
+    // context is freed. Installed here rather than at the first write because
+    // an AVFMT_NOFILE muxer opens its first file inside `avformat_write_header`
+    // — `hls` writes a segment and a playlist before the header call returns —
+    // and a hook installed afterwards would have missed them.
+    oc_->opaque = this;
+    oc_->io_open = &Writer::ioOpen;
+    oc_->io_close2 = &Writer::ioClose;
+
     pkt_ = av_packet_alloc();
     if (!pkt_) { *err = "out of memory"; return false; }
+
+    // **One bag, split in two, because there are two objects behind it.**
+    //
+    // The Sources stage puts a demuxer's options and a protocol's in one bag
+    // because that is what libavformat does at the reading end: whatever the
+    // demuxer does not recognise goes down to the AVIO layer. Writing cannot
+    // work that way, because the order is reversed — `avio_open2` happens
+    // *before* `avformat_write_header`, and an AVFMT_NOFILE muxer opens its
+    // files later still, from inside libavformat. So the split is made here,
+    // once, by asking the format context which keys it has: `av_opt_find` with
+    // AV_OPT_SEARCH_CHILDREN reaches libavformat's generic table and the
+    // muxer's own private one, and what it does not know is the protocol's.
+    for (const auto& o : s.formatOptions) {
+        if (o.key.empty()) continue;
+        const bool muxers = av_opt_find(oc_, o.key.c_str(), nullptr, 0,
+                                        AV_OPT_SEARCH_CHILDREN) != nullptr;
+        if (!muxers) av_dict_set(&protocolOpts_, o.key.c_str(), o.value.c_str(), 0);
+    }
 
     // Streams are created in list order, so the list *is* the muxer's
     // numbering: `-map` order, `-metadata:s:a:1`, and what a player shows in
@@ -502,8 +647,16 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     if (outs_.empty()) { *err = "this render would write no streams at all"; return false; }
 
     if (!(oc_->oformat->flags & AVFMT_NOFILE)) {
-        rc = avio_open(&oc_->pb, s.path.c_str(), AVIO_FLAG_WRITE);
-        if (rc < 0) { *err = "cannot open '" + s.path + "': " + avErr(rc); return false; }
+        // Through the hook rather than around it, so that the one file an
+        // ordinary render writes is accounted for exactly as the forty a
+        // segmenter writes are — and so that a destination that is a URL gets
+        // the protocol's options, which `avio_open` has nowhere to put.
+        rc = oc_->io_open(oc_, &oc_->pb, s.path.c_str(), AVIO_FLAG_WRITE, nullptr);
+        if (rc < 0) {
+            *err = (isLocalPath(s.path) ? "cannot open '" : "cannot reach '") + s.path +
+                   "': " + avErr(rc);
+            return false;
+        }
     }
     if (!s.title.empty())
         av_dict_set(&oc_->metadata, "title", s.title.c_str(), 0);
@@ -532,6 +685,12 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     }
     av_dict_free(&opts);
     if (rc < 0) { *err = std::string("cannot write header: ") + avErr(rc); return false; }
+
+    // The other half of the bag, checked now that something has actually been
+    // opened. A segmenter opens its first file during `write_header`, so by
+    // here every destination this render is going to have has been tried at
+    // least once and a key nothing took is a key nothing will ever take.
+    if (!protocolErr_.empty()) { *err = protocolErr_; return false; }
 
     headerWritten_ = true;
     return true;
@@ -669,14 +828,24 @@ bool Writer::finish(std::string* err) {
         av_opt_get_int(oc_->priv_data, "start_number", 0, &startNumber);
     close();
 
-    // How big it came out is asked of the files, not of avio_tell.
-    // +faststart rewrites the whole file after the trailer goes down, so
-    // the position left behind bears no relation to the result — an mp4
-    // that is three quarters of a megabyte on disk reported itself as
-    // three kilobytes. A render into `out%04d.png` has the opposite problem:
-    // there is no file called that, so it reported nothing at all. What is on
-    // disk is a run of files, and a run is what is measured.
-    bytes_ = sizeOnDisk(path, startNumber);
+    // How big it came out is asked of what was opened, not of avio_tell and not
+    // of the path.
+    //
+    // +faststart rewrites the whole file after the trailer goes down, so the
+    // position left behind bears no relation to the result — an mp4 that is
+    // three quarters of a megabyte on disk reported itself as three kilobytes.
+    // A render into `out%04d.png`, into `hls`, into `segment` or through `tee`
+    // has the opposite problem: there is no file called what the muxer was
+    // named, so stat'ing the path reported nothing at all. Every destination
+    // was measured as it was closed, which covers all four and needs to know
+    // nothing about anybody's numbering.
+    bytes_ = 0;
+    for (const auto& p : wrote_) bytes_ += p.bytes;
+
+    // The fallback, for a muxer that wrote its files by some route that never
+    // reached `io_open`. It is a walk of a numbered run, which is what the
+    // measurement used to be for every render.
+    if (wrote_.empty()) bytes_ = sizeOnDisk(path, startNumber);
 
     if (!failure.empty()) { *err = failure; return false; }
     return true;
@@ -704,7 +873,15 @@ int64_t Writer::sizeOnDisk(const std::string& path, int64_t startNumber) {
 
 int64_t Writer::bytesSoFar() const {
     if (bytes_) return bytes_;
-    return oc_ && oc_->pb ? avio_tell(oc_->pb) : 0;
+    // What has been closed, plus how far into what is still open. A segmenter
+    // half way through its fifth segment has four measured files and a write
+    // position, and adding them is the only reading of "how big is it so far"
+    // that does not jump backwards every time a segment rolls over.
+    int64_t total = 0;
+    for (const auto& p : wrote_) total += p.bytes;
+    for (const auto& [pb, url] : live_) total += avio_tell(pb);
+    if (!total && oc_ && oc_->pb) return avio_tell(oc_->pb);
+    return total;
 }
 
 void Writer::close() {
@@ -727,10 +904,20 @@ void Writer::close() {
     outs_.clear();
     if (pkt_) av_packet_free(&pkt_);
     if (oc_) {
-        if (oc_->pb && !(oc_->oformat->flags & AVFMT_NOFILE)) avio_closep(&oc_->pb);
+        // Closed through the hook, not around it, so the primary output is
+        // measured the same way every segment and every `tee` slave is — and
+        // so that an mp4 rewritten by +faststart is stat'd after the rewrite
+        // rather than remembered from the write position before it.
+        if (oc_->pb && !(oc_->oformat->flags & AVFMT_NOFILE)) {
+            AVIOContext* pb = oc_->pb;
+            oc_->pb = nullptr;
+            ioClose(oc_, pb);
+        }
         avformat_free_context(oc_);
         oc_ = nullptr;
     }
+    live_.clear();
+    if (protocolOpts_) av_dict_free(&protocolOpts_);
 }
 
 bool Writer::openVideoStream(Out& o, std::string* err) {

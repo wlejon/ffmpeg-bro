@@ -323,6 +323,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         // next to encoding one.
         if ((n & 3) == 0 || n + 1 == total) {
             st.bytesWritten = writer.bytesSoFar();
+            st.piecesWritten = writer.piecesWritten();
             setStatus(st);
         }
     }
@@ -352,6 +353,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
                 (span > 0 ? std::min(1.0, std::max(0.0, copies.position() / span)) : 0.0);
             st.elapsedSec = secondsSince();
             st.bytesWritten = writer.bytesSoFar();
+            st.piecesWritten = writer.piecesWritten();
             setStatus(st);
         }
     }
@@ -400,6 +402,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         }
     }
     st.bytesWritten = writer.bytesSoFar();
+    st.piecesWritten = writer.piecesWritten();
     if (!aborted) st.progress = base + share;
     st.elapsedSec = secondsSince();
 }

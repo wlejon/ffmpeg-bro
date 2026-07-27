@@ -741,6 +741,13 @@ JSValue js_renderPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, st.elapsedSec));
     JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, st.encodeFps));
     JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, st.bytesWritten));
+    // How many files the muxer opened beside the one it was named with. Zero
+    // for an ordinary render, so nothing has to know segmenters exist; the
+    // segments of an hls or a segment render, the chunks of a dash one, the
+    // pictures of an image2 one and the destinations of a tee otherwise. It is
+    // what a progress readout for a segmented render counts, because "43% of
+    // the frames" says nothing about how many files have arrived.
+    JS_SetPropertyStr(ctx, o, "pieces", JS_NewInt64(ctx, st.piecesWritten));
     setStr(ctx, o, "path", st.path);
     setStr(ctx, o, "stage", st.stage);
     // Which pass of how many, and what it is called. One of one for an

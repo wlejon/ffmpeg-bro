@@ -564,7 +564,24 @@ struct ExportStatus {
 
     double elapsedSec = 0.0;
     double encodeFps = 0.0;         // output frames per second of wall clock
+
+    /// How big it has got. **On disk for a file and sent for a stream**, which
+    /// are different facts and the only two available: a socket cannot be
+    /// stat'd, and an mp4 that +faststart rewrote is not the write position.
+    /// Whoever chose the destination knows which of the two this is.
     int64_t bytesWritten = 0;
+
+    /// How many files the muxer opened **beside** the one it was named with.
+    ///
+    /// Zero for the render this application has always done — one muxer, one
+    /// file, and the file is `path`. It is the segments of an `hls` or a
+    /// `segment` render, the chunks of a `dash` one, the numbered pictures of
+    /// an `image2` one and the destinations of a `tee`, counted as libavformat
+    /// opens them rather than guessed from the filename. A progress readout for
+    /// a segmented render has nothing else to count: the frames are the frames,
+    /// but what is arriving on disk is files.
+    int64_t piecesWritten = 0;
+
     std::string path;
     std::string error;              // set when state == Failed
     std::string stage;              // what it is doing, for the progress line
