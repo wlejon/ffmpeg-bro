@@ -389,8 +389,15 @@ function findingCard(f) {
 function currentFindings() {
     const job = subject();
     const size = hooks.picture ? hooks.picture() : { width: 0, height: 0 };
+    // **The same filter the list and the messages are under.** A finding read
+    // out of a previous render's series, shown under "This render", is the
+    // stale-measurement failure in its purest form: a crop offered from numbers
+    // measured against an edit that has since changed. So the series handed to
+    // the parser are the subject's, not every series the process has seen.
+    const series = new Map();
+    for (const s of seriesForSubject()) series.set(s.key, s);
     return measure.findings({
-        series: state.series,
+        series,
         messages: state.messages.filter((m) => !mine || !job || m.job === job),
         job: mine ? job : 0,
         width: size.width, height: size.height,
