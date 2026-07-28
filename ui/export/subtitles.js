@@ -152,12 +152,23 @@ export function subtitleCodecOf(row, container) {
 /// that looks like half a path. Quoted as well as escaped, because a filename
 /// is free to contain a comma and a comma ends the filter.
 ///
-/// The same rule the Sources stage records for `movie=`, and it is written once
-/// here so the command bar and the graph cannot disagree about it.
+/// The same rule the Sources stage records for `movie=`. It is written once
+/// here and used at the moment a node is *made* — the Sources panel's `As a
+/// filter` line and `burnIn()` — so what the graph draws and what the command
+/// bar prints are the one stored string, escaped once, rather than two
+/// escapings that could differ.
+///
+/// The separators are taken out first, which is what makes the backslash arm
+/// below unnecessary: libavfilter reads a path with forward slashes on Windows
+/// and a backslash inside a filter argument is an escape character, so turning
+/// them round is not a convenience — it removes the only thing in a Windows
+/// path that would otherwise have to be escaped twice over. `ui/sources.js`
+/// reads the result back with `unescapePath`, which is why the two have to
+/// agree about the quotes as well as about the colons.
 export function filterPath(path) {
     let out = '';
     for (const ch of String(path || '').replace(/\\/g, '/')) {
-        if (ch === ':' || ch === '\'' || ch === '\\') out += '\\';
+        if (ch === ':' || ch === '\'') out += '\\';
         out += ch;
     }
     return `'${out}'`;

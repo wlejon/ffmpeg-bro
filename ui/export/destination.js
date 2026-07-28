@@ -110,6 +110,16 @@ export function describeKind(kind, muxer) {
 // arguments notoriously hard to get right.
 
 /// A destination's URL as `tee` will read it.
+///
+/// **`[` and `]` are deliberately not escaped here, and escaping them would not
+/// work.** `tee_write_header` splits the list with `av_get_token` *first* and
+/// only then looks at what came back: `parse_slave_opts` tests whether the
+/// **first character** of the already-unescaped slave is a `[`. Since
+/// `av_get_token` removes a backslash and keeps what follows it, `\[` arrives
+/// as `[` and is read as the option bracket exactly as an unescaped one would
+/// be. So a destination whose path begins with `[` cannot be written through
+/// `tee` at all, and the honest thing is to say so rather than to apply an
+/// escape that does nothing and looks like a guard.
 export const escapeTarget = (s) => String(s || '').replace(/([\\|])/g, '\\$1');
 
 /// A value inside the `[...]`, where `:` separates one option from the next

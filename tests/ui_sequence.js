@@ -313,6 +313,30 @@ console.log('\nthe Write stage says what will be on disk');
     const cmd = A.command.currentCommand();
     ok(cmd.indexOf('-update 1') >= 0, 'which the command bar prints');
 
+    // **The grammar for taking the number back out is libavformat's, not
+    // printf's**, and the two disagree in both directions. `%-3d` carries a
+    // printf flag `av_get_frame_filename2` does not accept, so a name with one
+    // in it is *not* a pattern — this application draws it as "One picture"
+    // and used to strip it anyway. And `%%` is an escaped per cent, which is
+    // exactly what `escapePercent` in ffmpeg_sequence.cpp writes, so a regex
+    // hunting for `%d` found the second half of it and turned
+    // `100%%d bonus.png` into `100% bonus.png`.
+    //
+    // Both are asked of libav rather than reasoned about: a name it does not
+    // read as a run of files is handed back exactly as it came.
+    for (const odd of [`${outDir}/uiseq%-3d.png`, `${outDir}/100%%d bonus.png`]) {
+        ok(!bro.ffmpeg.hasFramePattern(odd),
+           `libavformat reads no frame number in ${odd.replace(/^.*[/\\]/, '')}`);
+        S.path = odd;
+        A.exporter.redraw();
+        pump(120);
+        const again = Array.from(document.querySelectorAll('#ex-dest [data-seg="ex-imgmode"]'))
+                           .find((b) => b.getAttribute('data-v') === 'one');
+        again.click();
+        pump(120);
+        eq(S.path, odd, 'and asking for One picture leaves the name alone');
+    }
+
     // Left as it was found: ui/.storage.json carries these between runs.
     S.container = wasContainer;
     S.videoCodec = wasCodec;

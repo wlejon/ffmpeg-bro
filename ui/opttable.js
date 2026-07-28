@@ -32,10 +32,16 @@ const OPTION_LIMIT = 40;
 /// The bounds, where they are worth stating.
 ///
 /// libav gives every unbounded numeric option the whole of its type as a range,
-/// so a muxer's `movflags` reports ±2147483648 — which is not a range, it is
-/// the absence of one, and printing it at that length pushes the column about
-/// for no information at all.
-function rangeOf(o) {
+/// so a muxer's `movflags` reports ±2147483648 and `trim`'s `start` reports
+/// ±9223372036854775807 — which is not a range, it is the absence of one, and
+/// printing it at that length pushes the column about for no information at
+/// all.
+///
+/// Exported because the Graph stage's option column asks the same question of
+/// the same shape of data, and had its own copy with a threshold three orders
+/// of magnitude higher and no `flags` arm: every int32 option in libavfilter
+/// printed its whole type as a range there and was correctly suppressed here.
+export function rangeOf(o) {
     if (!o.hasRange || o.type === 'enum' || o.type === 'flags') return '';
     if (Math.abs(Number(o.min)) > 1e9 && Math.abs(Number(o.max)) > 1e9) return '';
     return `[${o.min}…${o.max}]`;

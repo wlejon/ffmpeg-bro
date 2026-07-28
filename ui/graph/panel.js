@@ -39,6 +39,10 @@ import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import { nameOf } from './check.js';
 import { whenRows } from './when.js';
 import * as overlay from './overlay.js';
+// The same question about the same shape of data. There were two copies with
+// two thresholds and only one of them suppressed a `flags` range, so every
+// int32 AVOption printed ±2147483648 here and nowhere else.
+import { rangeOf } from '../opttable.js';
 
 let refs = {};
 let hooks = {};
@@ -318,10 +322,12 @@ function nodePanel(node) {
     if (node.filter === 'movie' || node.filter === 'amovie')
         out.push(div('gp-hint dim',
             'A movie opens the file itself, outside the input list — so nothing on the ' +
-            'Sources stage reaches it: no forced demuxer, no -probesize, no window, and a ' +
-            'path with a drive letter in it needs its colon escaped (C\\:/logo.png). The ' +
-            'same picture as an input node, with all of that and a row of its own, is one ' +
-            'drag from a socket away.'));
+            'Sources stage reaches it: no forced demuxer, no -probesize, no window. Write ' +
+            'the path the way libavfilter reads one, quoted with its colon escaped ' +
+            '(\'C\\:/logo.png\'): a colon separates a filter’s arguments and a comma ends ' +
+            'the filter, so a bare path with a drive letter fails and a bare path with a ' +
+            'comma in it fails differently. The same picture as an input node, with all of ' +
+            'that and a row of its own, is one drag from a socket away.'));
     out.push(...padRows(node));
 
     const options = optionsOf(node.filter);
@@ -479,19 +485,6 @@ function optionRows(node, options) {
     if (matching.length > OPTION_LIMIT)
         out.push(div('gp-hint dim', `and ${matching.length - OPTION_LIMIT} more — narrow the search`));
     return out;
-}
-
-/// The bounds, where they are worth stating.
-///
-/// libavfilter gives every unbounded numeric option the whole of its type as a
-/// range, so `trim`'s `start` reports ±9223372036854775807 — twenty digits of
-/// nothing, twice, wrapping onto three lines and pushing the column about. That
-/// is not a range, it is the absence of one, and saying so at that length is
-/// worse than not saying it.
-function rangeOf(o) {
-    if (!o.hasRange || o.type === 'enum') return '';
-    if (Math.abs(Number(o.min)) > 1e15 && Math.abs(Number(o.max)) > 1e15) return '';
-    return `[${o.min}…${o.max}]`;
 }
 
 function optionRow(node, o) {

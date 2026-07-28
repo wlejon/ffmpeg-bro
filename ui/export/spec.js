@@ -39,8 +39,34 @@ export function withPattern(path, digits = 4) {
     return `${cut[1]}%0${digits}d${cut[2] || ''}`;
 }
 
+/// The same path with the frame number taken out of it.
+///
+/// **The grammar is `av_get_frame_filename2`'s and not printf's**, which is a
+/// narrower thing than it looks: libavformat reads `%`, then a run of digits,
+/// then one character — so `%d` and `%04d` are the number, `%%` is a literal
+/// per cent, and the printf flags are not accepted at all. A regex written
+/// against printf therefore stripped `%-3d` from `out%-3d.png`, which libav
+/// reads as no pattern at all and this application correctly draws as "One
+/// picture"; and it matched the second `%` of `100%%d bonus.png`, which is what
+/// `escapePercent` in `ffmpeg_sequence.cpp` writes when a path has a per cent
+/// in it, turning the name into `100% bonus.png`.
+///
+/// So the question is asked before it is answered: `hasFramePattern` is
+/// `av_filename_number_test`, the same call image2 makes, and a name it does
+/// not read as a run of files is handed back untouched.
 export function withoutPattern(path) {
-    return String(path || '').replace(/%[-+ #0]*\d*d/, '');
+    const s = String(path || '');
+    if (!s || !bro.ffmpeg.hasFramePattern(s)) return s;
+    let out = '';
+    for (let i = 0; i < s.length;) {
+        if (s[i] !== '%') { out += s[i++]; continue; }
+        let j = i + 1;
+        while (j < s.length && s[j] >= '0' && s[j] <= '9') j++;
+        if (s[j] === 'd') { out += s.slice(j + 1); return out; }
+        if (s[j] === '%') { out += '%%'; i = j + 1; continue; }
+        out += s[i++];
+    }
+    return out;
 }
 
 /// Beside the first clip, named after it. Somewhere is better than nowhere:

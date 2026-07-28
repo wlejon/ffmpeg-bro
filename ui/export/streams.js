@@ -37,7 +37,7 @@
 import { el, div, span, put, select, row, head, fromTemplate, show } from '../dom.js';
 import { basename } from '../format.js';
 import { project } from '../project.js';
-import { inputs, hasSound } from '../inputs.js';
+import { inputs, hasSound, lengthOf as inputLength } from '../inputs.js';
 import { settings, activeVideoCodec, activeAudioCodec } from './state.js';
 import { videoEncoders, audioEncoders, muxerInfo, dispositions,
          codecTags } from './capabilities.js';
@@ -687,7 +687,11 @@ function copyRows(s, restate) {
     const list = keyframesFor(s);
     const stream = copiedStream(s);
     const input = copiedInput(s);
-    const total = input && input.probe ? (input.probe.format.duration || 0) : 0;
+    // `lengthOf`, not a copy of it minus a term: an input's length is its video
+    // stream's own duration where there is one and the container's otherwise,
+    // and a container that reports none where the stream does gave the keyframe
+    // strip a span of zero to draw the in-point against.
+    const total = input ? inputLength(input) : 0;
 
     const num = (key, placeholder) => el('input', {
         cls: 'num', 'data-f': `copy-${key}`, type: 'number', min: 0, step: 0.1,

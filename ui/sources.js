@@ -177,11 +177,19 @@ function drawList() {
 
 /// A `movie` filter's filename, with the filtergraph escaping taken off.
 ///
-/// `movie=C\:/logo.png` and `movie=C\://logo.png` are how a Windows path has to
-/// be written inside a filter argument, because a colon separates arguments.
-/// What is wanted here is the path.
+/// `'C\:/logo.png'` is how a Windows path has to be written inside a filter
+/// argument: a colon separates a filter's arguments, and the quotes are there
+/// because a comma ends the filter and a filename is free to contain one. What
+/// is wanted here is the path.
+///
+/// **Both layers, or the round trip does not close.** `filterPath()` in
+/// `export/subtitles.js` writes the quotes and this took only the backslashes
+/// off, so `Add as an input` handed `addInput` a path with a leading apostrophe
+/// on it and the open failed on a filename nobody had typed.
 function unescapePath(text) {
-    return String(text || '').replace(/\\(.)/g, '$1');
+    let s = String(text || '').trim();
+    if (s.length > 1 && s[0] === '\'' && s[s.length - 1] === '\'') s = s.slice(1, -1);
+    return s.replace(/\\(.)/g, '$1');
 }
 
 /// Files the graph opens for itself, which are the one way this stage can stop

@@ -2165,6 +2165,60 @@ if (!media) {
         pump(160);
     }
 
+    // ── a range that is the absence of one ─────────────────────────────────
+    //
+    // libav gives every unbounded numeric option the whole of its type as a
+    // range, so an int32 option reports ±2147483648. That is not a range and
+    // printing it at that length pushes the column about for no information.
+    // The option columns suppress it and this one had its own copy of the rule
+    // with a threshold three orders of magnitude higher, so the same option
+    // read one way on the Encode stage and another on the Graph stage.
+    console.log('\na range that is the absence of one');
+    {
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+        // A filter with an int32 option in it, found rather than named: what
+        // matters is that some option in this build reports ±2147483648, which
+        // is the shape the two thresholds disagreed about.
+        const wide = (bro.ffmpeg.filters || []).find((flt) => {
+            if (flt.inputs !== 'v' || flt.outputs !== 'v') return false;
+            let opts = [];
+            try { opts = bro.ffmpeg.filterOptions(flt.name) || []; } catch (e) { return false; }
+            return opts.some((o) => o.hasRange && o.type !== 'enum' && o.type !== 'flags' &&
+                                    Math.abs(Number(o.min)) > 1e9 &&
+                                    Math.abs(Number(o.min)) < 1e15 &&
+                                    Math.abs(Number(o.max)) > 1e9 &&
+                                    Math.abs(Number(o.max)) < 1e15);
+        });
+        ok(!!wide, `${wide ? wide.name : 'no filter'} reports an option whose range is its ` +
+                   'whole type');
+        const rec = overlay.insert(`clip:${clipId}/after-scale`, wide.name);
+        A.graph.draw();
+        pump(200);
+        const card = document.querySelector(`#gr-nodes [data-key="${rec.id}"]`);
+        ok(!!card, 'it is on the stage');
+        card.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(160);
+        const search = document.querySelector('#gr-panel [data-f="optsearch"]');
+        ok(!!search, 'the column searches the filter’s whole option table');
+
+        // Everything it has, so that what is asserted is a property of the
+        // column rather than of one option somebody picked.
+        search.value = 'a';
+        search.dispatchEvent(new Event('input'));
+        pump(120);
+        const ranges = Array.from(document.querySelectorAll('#gr-panel .opt-range'))
+                            .map((n) => n.textContent).filter(Boolean);
+        const huge = ranges.filter((t) => /\d{10,}/.test(t));
+        same(huge.length, 0,
+             `no option here prints its whole type as a range (${ranges.length} shown` +
+             `${huge.length ? ': ' + huge.join(' ') : ''})`);
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
+
     // ── a `+` opened on a wire that then goes away ─────────────────────────
     //
     // `derive()` rebuilds its list of insert points from scratch every time,

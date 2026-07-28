@@ -314,4 +314,41 @@ const burnedBack = bro.ffmpeg.probe(bro.appDir + '/../out/ui-burn.mp4');
 ok(!burnedBack.streams.some((s) => s.kind === 'subtitle'),
    'with no subtitle stream in it — the cues are the picture now');
 
+// ── and back out again ─────────────────────────────────────────────────────
+//
+// **The escaping has to round-trip**, because the Sources stage reads a
+// `movie=`'s filename back to say which file the graph is opening and to offer
+// to make it an `-i`. What is written is quoted *and* backslash-escaped — a
+// colon separates a filter's arguments and a comma ends the filter — and what
+// read it back took only the backslashes off, so the offer handed `addInput` a
+// path with an apostrophe on the front of it and the open failed on a filename
+// nobody had typed.
+
+console.log('\nthe escaping comes back off');
+{
+    // Written out by hand rather than asked of the code, so that this states
+    // the encoding instead of agreeing with whatever it happens to be: forward
+    // slashes, the colon escaped, the lot quoted.
+    const escaped = `'${cues.replace(/\\/g, '/').replace(/([:'])/g, '\\$1')}'`;
+    ok(/^'.*\\:.*'$/.test(escaped) || cues.indexOf(':') < 0,
+       `a filter argument for it is ${escaped}`);
+
+    A.graph.overlay.clear();
+    // A free node, because `movie` reads no pad and so cannot be spliced onto
+    // a wire — which is exactly how somebody reaches for one.
+    A.graph.overlay.addNode('movie', { params: { filename: escaped } });
+    A.shell.goTo('sources');
+    pump(150);
+
+    const rows = Array.from(qq('#src-list .src-demux'))
+                      .map((n) => n.textContent).filter((t) => /movie/.test(t));
+    ok(rows.length === 1, 'the file a movie node names is listed under Opened by the graph');
+    ok(rows[0].indexOf(cues) >= 0,
+       `as the path, with the quotes and the escapes off (${rows[0].trim()})`);
+    ok(rows[0].indexOf("'") < 0 && rows[0].indexOf('\\:') < 0,
+       'and neither layer left behind');
+    A.graph.overlay.clear();
+    pump(80);
+}
+
 console.log(`\n${checks} checks passed`);
