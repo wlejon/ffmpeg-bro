@@ -34,6 +34,7 @@ import { settings, outputExt } from './export/state.js';
 import { freshSpec, specSources } from './export/spec.js';
 import { parseCopy } from './export/copy.js';
 import { parseDecode, defaultSubtitleCodec } from './export/subtitles.js';
+import { parsePad } from './export/pads.js';
 import { kindOf } from './export/destination.js';
 import { muxerInfo } from './export/capabilities.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
@@ -308,12 +309,24 @@ export function parts() {
             continue;
         }
         if (!g.ok) continue;
-        if (s.kind === 'video') out.push('-map', arg(g.video));
+        // A pad of the graph, named by whoever placed the output it leaves by.
+        // It reads no input directly, so nothing about the plan above changes:
+        // the label is produced by a chain in the `-filter_complex` that is
+        // already being printed.
+        const pad = parsePad(s.source);
+        if (pad) { out.push('-map', arg(`[${pad}]`)); continue; }
+        if (s.kind === 'video' && g.video) out.push('-map', arg(g.video));
         else if (s.kind === 'audio' && g.audio) out.push('-map', arg(g.audio));
     }
     if (noSubs) out.push('-sn');
     if (!nVideo) out.push('-vn');
-    if (!nAudio || (!copies.some((c) => c.s.kind === 'audio') && (!g.ok || !g.audio)))
+    // A soundtrack can now arrive three ways, and `-an` has to answer for all
+    // three: the mix, a copied track, and a pad of the graph. Left out, a render
+    // whose only sound is a `sine` on a named output printed `-map "[bed]"` and
+    // `-an` in the same command.
+    const padAudio = streams.some((s) => s.kind === 'audio' && parsePad(s.source));
+    if (!nAudio || (!copies.some((c) => c.s.kind === 'audio') && !padAudio &&
+                    (!g.ok || !g.audio)))
         out.push('-an');
 
     let vi = 0, ai = 0, ti = 0, si = 0;
@@ -392,7 +405,9 @@ export function parts() {
             describe(out, s, 'v', idx, nVideo);
             continue;
         }
-        if (!g.ok || !g.audio) continue;
+        // The mix, or a pad of the graph. Either way there is an encoder and it
+        // has to be named; what there has to be is a graph for it to read.
+        if (!g.ok || (!g.audio && !parsePad(s.source))) continue;
         const idx = ai++;
         out.push(`-c:${sel('a', idx, nAudio)}`, s.codec || spec.audioCodec);
         const a = s.options || {};

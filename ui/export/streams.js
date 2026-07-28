@@ -27,7 +27,9 @@
 //   - **`settings.audio` and the audio rows are one fact.** Turning sound off
 //     on the Encode stage empties the audio rows; adding an audio row here
 //     turns it back on. Two switches for one decision is how a render comes
-//     out silent while a track list insists it should not have.
+//     out silent while a track list insists it should not have. What the switch
+//     is about is *the mix*, so a row whose sound comes from somewhere else —
+//     a copied track, a pad of the graph — is outside it in both directions.
 //   - **Nothing is written down that libav will answer for.** The dispositions
 //     are `av_disposition_to_string` over every bit; the fourccs are what the
 //     muxer's own tables confirm for the codec in hand; the codecs are the
@@ -48,6 +50,7 @@ import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
          defaultSubtitleSource } from './subtitles.js';
+import { isPad, padChoices } from './pads.js';
 import { wires as overlayWires } from '../graph/overlay.js';
 
 let host = null;
@@ -191,16 +194,26 @@ export function removeStream(id) {
 /// is not made of it. Turning sound off with a copied audio row on the list
 /// leaves that row alone, because taking it away would be turning off something
 /// the switch does not control.
+///
+/// **And so is one fed from a graph pad**, for the same reason spelt one stage
+/// over: its samples are made inside libavfilter, out of whatever that chain
+/// reads — a `sine`, a second file, an `amix` this render is not the mix of.
+/// Native draws the identical line in `outputStreams()`, and this is a
+/// *correctness* claim rather than thrift: emptied by the switch, a graph that
+/// produces a soundtrack and maps it to a stream of its own would come out
+/// silent and say nothing.
+const madeOfTheMix = (s) => s.kind === 'audio' && !isCopy(s) && !isPad(s);
+
 export function setAudioIncluded(on) {
     settings.audio = !!on;
     if (!on)
-        settings.streams = settings.streams.filter((s) => s.kind !== 'audio' || isCopy(s));
-    else if (!settings.streams.some((s) => s.kind === 'audio' && !isCopy(s)))
+        settings.streams = settings.streams.filter((s) => !madeOfTheMix(s));
+    else if (!settings.streams.some(madeOfTheMix))
         addStream('audio');
 }
 
 function syncAudioFlag() {
-    settings.audio = settings.streams.some((s) => s.kind === 'audio' && !isCopy(s));
+    settings.audio = settings.streams.some(madeOfTheMix);
 }
 
 /// Is there anything on this timeline for the mix to be made of?
@@ -255,8 +268,12 @@ export function streamSpecs(over = {}) {
         // finds out by opening — so this is the same file with or without the
         // term; what changes is that the command bar stops printing `-map
         // [a0]` for a pad no `-i` produces, which is a command that fails.
-        if (s.kind === 'audio' && !isCopy(s) && (!settings.audio || !hasAudibleSound()))
-            continue;
+        //
+        // Nor is one fed from a graph pad, and that exemption is the same kind
+        // of claim as the copy's — correctness, not thrift. Its samples are
+        // libavfilter's, so the timeline having nothing audible on it says
+        // nothing about whether the stream has anything to write.
+        if (madeOfTheMix(s) && (!settings.audio || !hasAudibleSound())) continue;
         // A subtitle row with nowhere to read from is a row somebody added
         // before adding the file. Dropped rather than sent, exactly as a
         // pathless attachment is: `warnings()` says so where a refusal from
@@ -456,11 +473,19 @@ function says(s) {
     // it means nothing.
     if (s.kind === 'subtitle') return saysSubtitle(s);
 
+    // Three answers, not two: made from the edit, made by the graph and taken
+    // off a pad somebody named, or copied straight out of an input. The middle
+    // one is what makes a second picture out of one render — two crops of a
+    // wide screen grab, a proxy beside a master — and it is offered only where
+    // an output has been placed, because a menu entry for a graph nobody has
+    // touched would be a choice that cannot be made.
     const made = s.kind === 'video' ? 'the composite' : 'the mix';
     const sources = [{ id: s.kind === 'video' ? 'composite' : 'mix', label: made }]
+        .concat(padChoices(s.kind).map((c) => ({ id: c.id, label: c.label })))
         .concat(copyChoices(s.kind).map((c) => ({ id: c.id, label: `copy — ${c.label}` })));
     const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
-                            title: 'Made from the edit, or copied straight out of an input',
+                            title: 'Made from the edit, taken off a pad of the graph, ' +
+                                   'or copied straight out of an input',
                             on: { change: (e) => { setSource(s, e.target.value); } } },
                           sources, s.source || (s.kind === 'video' ? 'composite' : 'mix'));
 
@@ -500,7 +525,11 @@ function says(s) {
     // row that went on stating "the mix, through aac" would be describing a
     // track the file will not have. Said on the row rather than in the warnings
     // list, because that is where the decision it is about was taken.
-    if (s.kind === 'audio' && !hasAudibleSound())
+    //
+    // A pad-fed row is outside it, exactly as a copied one is: what feeds it is
+    // a chain in libavfilter, and a timeline with nothing audible on it says
+    // nothing about whether that chain produces samples.
+    if (madeOfTheMix(s) && !hasAudibleSound())
         out.push(span('— nothing on the timeline has a soundtrack, so this stream will ' +
                       'not be written', 'ex-stream-none'));
     return out;
@@ -547,12 +576,17 @@ function saysSubtitle(s) {
     ];
 }
 
-/// Move a row between being made and being copied.
+/// Move a row between the three things it can be fed from.
 ///
-/// The encoder choice is dropped on the way in, because a copied stream has no
-/// encoder and a `codec` left on one is refused by the renderer — rightly, since
-/// it would be a setting that did nothing. The span is dropped on the way out
-/// for the same reason in reverse.
+/// The encoder choice is dropped on the way into a copy, because a copied stream
+/// has no encoder and a `codec` left on one is refused by the renderer — rightly,
+/// since it would be a setting that did nothing. The span is dropped on the way
+/// out for the same reason in reverse.
+///
+/// **A pad-fed row keeps its encoder**, and that is the whole difference between
+/// it and a copy: it is an encoded stream whose pictures happen to come from the
+/// middle of a graph rather than from the composite. What it drops is the span,
+/// which belongs to a row that reads an input and means nothing here.
 function setSource(s, source) {
     s.source = source;
     if (isCopy(s)) {

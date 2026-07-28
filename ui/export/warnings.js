@@ -14,6 +14,7 @@ import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
 import { kindOf, schemeOf, protocolLinked } from './destination.js';
 import { readsInput, readStream, subtitleCodecsOf,
          defaultSubtitleCodec } from './subtitles.js';
+import { parsePad, isPad } from './pads.js';
 import { isEmpty as noUserNodes } from '../graph/overlay.js';
 import { whereIs } from '../graph/check.js';
 import { range, freshSpec, currentSpec, currentGraph } from './spec.js';
@@ -192,6 +193,75 @@ function subtitleWarnings(list) {
     return out;
 }
 
+/// What a stream fed from a graph pad will be refused for, said here first.
+///
+/// **The renderer refuses every one of these before it opens a file** — a label
+/// naming no pad, a picture pad in a sound stream, `pad:` with no graph at all —
+/// and it says so in almost these words, listing the labels there are. The
+/// wording is deliberately close, because two answers to the same question that
+/// differ in substance are two answers: this one arrives where the decision is
+/// taken, which is the standing rule, and the native one is what actually stops
+/// the render if this is ever wrong.
+///
+/// The last of them is not a refusal at all. An output nothing reads is a pad
+/// libavfilter drains and the render is perfectly good; it is worth a word
+/// because the reason somebody placed one is to map it, and a stream row that
+/// was never added looks exactly like one that was.
+function padWarnings(list) {
+    const out = [];
+    const rows = list.filter(isPad);
+    const g = currentGraph();
+    const graph = g && g.ok ? g.graph : null;
+    const named = graph
+        ? graph.nodes.filter((n) => n.kind === 'sink' && n.name !== undefined && n.name)
+        : [];
+
+    if (rows.length && !currentSpec().filterGraph) {
+        // Either there is no graph of your own at all, or the derivation
+        // refused one — and which of the two it is is the whole of what there
+        // is to do about it, so it is said rather than summarised.
+        const why = noUserNodes()
+            ? 'there is nothing on the Graph stage, so the picture comes straight from the ' +
+              'timeline and there are no pads to name'
+            : `the graph was refused: ${(g && g.reason) || 'it cannot be expressed for this edit'}`;
+        out.push(`${rows.length === 1 ? 'a stream is' : `${rows.length} streams are`} fed from ` +
+                 `a pad of the filter graph and this render has no graph in it — ${why}. ` +
+                 'The renderer refuses pad: outright when there is nothing to read it from.');
+        return out;
+    }
+
+    const pads = (audio) => {
+        const some = named.filter((n) => ((n.stream || 'v') === 'a') === audio)
+                          .map((n) => `[${n.name}]`);
+        return some.length ? some.join(', ') : 'none';
+    };
+
+    for (const s of rows) {
+        const where = labelOf(list, list.indexOf(s));
+        const label = parsePad(s.source);
+        const found = named.find((n) => n.name === label);
+        if (!found) {
+            out.push(`${where} is fed from [${label}] and this graph has no pad called that: ` +
+                     `its pictures come out of ${pads(false)} and its sound out of ` +
+                     `${pads(true)} — pick another, or rename the output on the Graph stage`);
+            continue;
+        }
+        const audio = (found.stream || 'v') === 'a';
+        if (audio !== (s.kind === 'audio'))
+            out.push(`[${label}] is ${audio ? 'sound' : 'a picture'}, and ${where} is ` +
+                     `${s.kind === 'audio' ? 'a sound stream' : 'a picture stream'} — the ` +
+                     'renderer refuses that pairing before it opens the file');
+    }
+
+    for (const n of named) {
+        if (rows.some((s) => parsePad(s.source) === n.name)) continue;
+        out.push(`nothing in the file is fed from [${n.name}] — the pad is drained and ` +
+                 'thrown away, which is legal and is probably not why you named it. Add a ' +
+                 'stream on this stage and pick it as the source.');
+    }
+    return out;
+}
+
 function destinationWarnings() {
     const out = [];
     const muxer = muxerInfo(settings.container) || { name: settings.container };
@@ -336,6 +406,8 @@ export function warnings() {
         out.push(`this render would go through the internal compositor without your ` +
                  `filters — ${why.reason || 'the graph cannot be expressed for this edit'}`);
     }
+
+    out.push(...padWarnings(settings.streams));
 
     out.push(...hardwareWarnings());
 

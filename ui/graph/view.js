@@ -470,7 +470,14 @@ function endWire(e) {
                                     : { key: other, port: w.over.port };
         const into = w.dir === 'in' ? { key: w.key, port: w.port }
                                     : { key: other, port: w.over.port };
-        overlay.wire(out.key, out.port, into.key, into.port);
+        // What this wire carries, read off the *producing* end — the only end
+        // that knows. A named output has no kind until something is wired into
+        // it, and its own socket reports nothing until then, so taking the
+        // stream from the pad the drag started at would leave an output dragged
+        // *into* from its own socket permanently kindless.
+        const stream = w.dir === 'out' ? (w.stream || w.over.stream)
+                                       : (w.over.stream || w.stream);
+        overlay.wire(out.key, out.port, into.key, into.port, stream);
         selectedWire = `${into.key}#${into.port}`;
         return drawGraph();
     }
@@ -502,17 +509,22 @@ function placeFromPalette(rec, pad) {
     // An input the graph reads is a file, not a filter: its pads are the streams
     // the probe found, and which of them a wire leaves by is the whole reason a
     // logo's picture does not arrive on a pad expecting sound.
+    // An output of your own is one input pad and nothing else, and the pad takes
+    // whatever the wire that made it brings — which is also how it learns
+    // whether it is a picture or a sound.
     const pads = rec.kind === 'input'
         ? { ins: [], outs: streamKinds(documentInputs.find((i) => i.id === rec.input)) }
-        : filterPads(rec.filter, rec.params, rec.pos);
+        : rec.kind === 'sink'
+            ? { ins: [pad.stream || 'v'], outs: [] }
+            : filterPads(rec.filter, rec.params, rec.pos);
     const want = pad.dir === 'out' ? (pads && pads.ins) : (pads && pads.outs);
     let port = 0;
     if (want && want.length) {
         const match = want.indexOf(pad.stream || 'v');
         port = match >= 0 ? match : 0;
     }
-    if (pad.dir === 'out') overlay.wire(pad.key, pad.port, rec.id, port);
-    else overlay.wire(rec.id, port, pad.key, pad.port);
+    if (pad.dir === 'out') overlay.wire(pad.key, pad.port, rec.id, port, pad.stream);
+    else overlay.wire(rec.id, port, pad.key, pad.port, pad.stream);
     select(rec.id, false);
     drawGraph();
 }

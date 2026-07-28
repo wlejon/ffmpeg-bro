@@ -3091,6 +3091,177 @@ console.log('\nturning them off');
     A.graph.overlay.clear();
 }
 
+// ── two pictures out of one render ─────────────────────────────────────────
+//
+// The other end of `ExportStream::source`'s `pad:<label>`. A file has been a
+// list of streams for some time, and every one of them was fed from one of
+// three places: the composite, the mix, or a demuxer. A **named output** is the
+// fourth: a sink a person places on the graph, wires anything into, and then
+// feeds a stream from on the Write stage — so one render can write the whole
+// picture and a crop of it, at two different sizes, out of one decode.
+//
+// What is proved here is the join. `ui_graph.js` has the model and the printed
+// label with no media at all; this is the real stage, the real command bar, the
+// real render, and the file that comes out of it read back.
+
+console.log('\na stream fed from a pad of the graph');
+{
+    // The previews hold the one render slot when they can, and this section
+    // wants it. They stay off afterwards on purpose: what follows renders too,
+    // and nothing after this is about a card's picture.
+    if (A.graph.preview.isEnabled()) { q('#gr-previews').click(); pump(150); }
+    A.graph.overlay.clear();
+    A.shell.goTo('graph');
+    pump(250);
+
+    // The composite, forked: one half goes to the render's own sink as it
+    // always did, the other is cropped and named. A `split` because a pad can
+    // be read once — which is ffmpeg's rule, not this application's.
+    const O = A.graph.overlay;
+    const clipId = A.project.clips[0].id;
+    const fork = O.addNode('split');
+    const half = O.addNode('crop', { pos: ['iw/2', 'ih', '0', '0'] });
+    const out = O.addOutput('v', 'left');
+    O.wire(`composite/overlay:${clipId}`, 0, fork.id, 0);
+    O.wire(fork.id, 0, 'out:v', 0);
+    O.wire(fork.id, 1, half.id, 0);
+    O.wire(half.id, 0, out.id, 0);
+    A.graph.draw();
+    pump(250);
+
+    const summary = A.graph.summary();
+    ok(summary.ok && summary.problems.length === 0,
+       `the graph runs: ${summary.ok ? summary.problems.map((p) => p.reason).join(' | ') || 'nothing wrong'
+                                     : summary.reason}`);
+    const card = q(`#gr-nodes [data-key="${out.id}"]`);
+    ok(!!card, 'the output is a card like any other');
+    same(q('.gn-name', card).textContent, 'left', 'called by the name you gave it');
+
+    // The Write stage. A second video row, fed from the pad rather than from
+    // the composite — and it keeps its encoder, because unlike a copy it *is*
+    // an encoded stream.
+    A.shell.goTo('write');
+    pump(200);
+    const S = A.exporter.currentSettings();
+    const keptStreams = S.streams;
+    const keptSize = { w: S.width, h: S.height, q: S.quality,
+                       a: S.rangeIn, b: S.rangeOut, path: S.path };
+    S.streams = A.exporter.defaultStreams();
+    A.exporter.redraw();
+    pump(120);
+
+    q('#ex-streams [data-add="video"]').click();
+    pump(150);
+    const vrows = qq('#ex-streams [data-kind="video"]');
+    same(vrows.length, 2, 'there are two video rows on the stage');
+    const picker = q('[data-f="stream-source"]', vrows[1]);
+    const offered = [];
+    for (const o of picker.options) offered.push(o.value);
+    ok(offered.indexOf('pad:left') >= 0,
+       `the graph’s named outputs are offered as sources: ${offered.join(' ')}`);
+    picker.value = 'pad:left';
+    picker.dispatchEvent(new Event('change'));
+    pump(200);
+
+    ok(!!q('[data-f="stream-codec"]', qq('#ex-streams [data-kind="video"]')[1]),
+       'a pad-fed row still picks an encoder — it is encoded, unlike a copy');
+
+    // Two renders' worth of settings, small enough to be a test.
+    S.width = 320;
+    S.height = 180;
+    S.quality = 34;
+    S.rangeIn = 0;
+    S.rangeOut = 1;
+
+    const spec = A.exporter.buildSpec();
+    const vs = (spec.streams || []).filter((s) => s.kind === 'video');
+    same(vs.length, 2, 'the spec carries both of them');
+    same(vs[0].source, 'composite', 'the first is the render’s own picture');
+    same(vs[1].source, 'pad:left', 'and the second names the pad by label');
+    same(vs[1].width || 0, 0,
+         'with no size on it — the job fills that in from the pad, which is the ' +
+         'only thing that knows how big a picture is half way down a graph');
+    ok(!!spec.filterGraph && spec.filterGraph.indexOf('[left]') >= 0,
+       `and the graph the renderer is handed produces it: ${spec.filterGraph || 'none'}`);
+
+    A.command.draw();
+    const text = A.command.currentCommand();
+    ok(text.indexOf('-map "[left]"') >= 0,
+       `the command bar maps it as ffmpeg would: ${text.slice(text.indexOf('-map'))}`);
+    same(text.split('-map').length - 1, 3,
+       'three -maps: the composite, the mix and the pad');
+
+    const outPath = bro.appDir + '/../out/ui-export-pads.mp4';
+    f('path').value = outPath;
+    f('path').dispatchEvent(new Event('change', { bubbles: true }));
+    pump(120);
+
+    el('ex-go').click();
+    pump(60);
+    waitFor('the two-picture render', () => {
+        const s = A.exporter.lastStatus();
+        return s && s.state !== 'running';
+    }, 180000);
+    const done = A.exporter.lastStatus();
+    same(done.state, 'done', `it renders (${done.error || 'no error'})`);
+
+    const back = bro.ffmpeg.probe(outPath);
+    const got = (back.streams || []).filter((s) => s.kind === 'video');
+    same(got.length, 2, 'two video streams came out of one render');
+    same(got[0].width, 320, `the composite is the size the settings asked for (${got[0].width})`);
+    same(got[1].width, 160,
+         `and the pad is the size the crop made it, which nothing outside libavfilter ` +
+         `could have said (${got[1].width})`);
+    same(got[1].height, got[0].height, 'at the same height, because only the width was cut');
+
+    // **Renaming it on the graph moves the row that is fed from it.** One fact
+    // in two places is the failure: a row left naming the old label would be
+    // refused by the renderer for a pad that no longer exists, over a rename
+    // that changed nothing about the graph.
+    A.shell.goTo('graph');
+    pump(200);
+    q(`#gr-nodes [data-key="${out.id}"]`).click();
+    pump(120);
+    const nameField = q('#gr-panel [data-f="outname"]');
+    ok(!!nameField, 'the panel edits the output’s name');
+    same(nameField.value, 'left', 'showing what it is called');
+    nameField.value = 'wide';
+    nameField.dispatchEvent(new Event('change'));
+    pump(200);
+    same(A.exporter.buildSpec().streams.filter((s) => s.kind === 'video')[1].source,
+         'pad:wide', 'and the stream fed from it followed the name');
+    ok(A.exporter.currentWarnings().every((w) => w.indexOf('no pad called') < 0),
+       'so nothing is left naming a pad that is not there');
+
+    // ...and when it does not, which is what the warning is for. Renamed on the
+    // model rather than through the panel, because a row that has come adrift is
+    // reachable — a stored stream list outlives the graph it was written against.
+    A.shell.goTo('write');
+    pump(150);
+    O.renameOutput(out.id, 'right');
+    pump(60);
+    const said = A.exporter.currentWarnings().join(' | ');
+    ok(/has no pad called that/.test(said),
+       `a row naming a pad that is not there is said out loud: ${said}`);
+    ok(/nothing in the file is fed from \[right\]/.test(said),
+       'and so is an output nothing reads, which is legal and is probably not what ' +
+       'somebody who named a pad meant');
+
+    // Leave the settings as they were found: `.storage.json` carries them into
+    // the next run, and a suite that passes on a clean checkout and fails on
+    // the second is the documented cost of not doing this.
+    O.clear();
+    S.streams = keptStreams;
+    S.width = keptSize.w;
+    S.height = keptSize.h;
+    S.quality = keptSize.q;
+    S.rangeIn = keptSize.a;
+    S.rangeOut = keptSize.b;
+    S.path = keptSize.path;
+    A.exporter.redraw();
+    pump(80);
+}
+
 // ── a timeline with no soundtrack anywhere on it ───────────────────────────
 //
 // **The Write stage cannot claim a stream the render will drop.** Native works

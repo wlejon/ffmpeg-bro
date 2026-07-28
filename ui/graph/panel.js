@@ -36,9 +36,14 @@
 import { el, div, span, put, head, row, fromTemplate } from '../dom.js';
 import { optionsOf, infoOf, allFilters, padsOf, isSource, sourceFilters } from './filters.js';
 import { inputs as documentInputs, streamKinds } from '../inputs.js';
-import { nameOf } from './check.js';
+import { nameOf, isUserOutput } from './check.js';
 import { whenRows } from './when.js';
 import * as overlay from './overlay.js';
+// The other half of renaming an output. A name is one fact and it is written in
+// two places — the node, and every stream row fed from it — so the two move
+// together at the moment the rename commits. This stage does not otherwise know
+// the Write stage exists, and does not learn anything else about it here.
+import { renamePad } from '../export/pads.js';
 // The same question about the same shape of data. There were two copies with
 // two thresholds and only one of them suppressed a `flags` range, so every
 // int32 AVOption printed ±2147483648 here and nowhere else.
@@ -277,7 +282,9 @@ function nodePanel(node) {
     // An input is a file with a pad per stream it is read for, so it is named
     // for the input it is rather than for one of its pads.
     const name = node.kind === 'input' ? `input ${node.index}`
-               : node.kind === 'sink' ? (node.stream === 'a' ? 'audio out' : 'video out')
+               : node.kind === 'sink' ? (isUserOutput(node)
+                    ? (node.name ? `[${node.name}]` : 'an output')
+                    : node.stream === 'a' ? 'audio out' : 'video out')
                : node.filter;
     const pads = node.kind === 'input'
         ? (node.outs || [{ stream: node.stream || 'v' }])
@@ -294,6 +301,11 @@ function nodePanel(node) {
     ];
 
     out.push(...problemRows(node));
+
+    if (isUserOutput(node)) {
+        out.push(...outputRows(node));
+        return out;
+    }
 
     if (node.kind !== 'filter') {
         out.push(div('gp-hint dim', node.kind === 'input'
@@ -364,6 +376,50 @@ function nodePanel(node) {
             'These values outrank the edit: moving, trimming or cropping this clip ' +
             'will not change them until it is unlocked.'));
 
+    return out;
+}
+
+/// An output of your own: what it is called, and what is on it.
+///
+/// **The name is the whole of the node**, which is why this column is one field.
+/// It becomes the pad label the chain feeding it is printed with, and it is what
+/// a stream on the Write stage names to be fed from here — so renaming it moves
+/// every row that was, in the same commit. A row left behind would be refused by
+/// the renderer for a pad that no longer exists, over a rename that changed
+/// nothing about the graph.
+///
+/// Commits on `change`, like everything else on this stage: on `input` the node
+/// would be renamed once per keystroke and the rows would chase it.
+function outputRows(node) {
+    const out = [
+        div('gp-hint dim',
+            'A pad of your own. Whatever is wired here comes out of the render as a stream ' +
+            'of its own — add one on the Write stage and pick “the graph’s ' +
+            `[${node.name || '…'}]” as its source. The chain feeding it is printed ending ` +
+            'in that name, so the command above and the render are the same thing.'),
+    ];
+    const field = el('input', {
+        cls: 'wide mono', 'data-f': 'outname', type: 'text', value: node.name || '',
+        placeholder: 'out2',
+        on: { change: () => {
+            noteEdit();
+            const before = node.name || '';
+            const next = field.value.trim();
+            if (next === before) return;
+            overlay.renameOutput(node.id, next);
+            renamePad(before, next);
+            changed();
+        } },
+    });
+    out.push(row('Name', field));
+    out.push(div('gp-hint dim',
+        'Letters, digits and underscores — it is a filtergraph pad label. vout and aout ' +
+        'are the derivation’s own names for the composite and the mix and cannot be used.'));
+    out.push(...padRows(node));
+    out.push(div('gp-actions', [el('button', {
+        cls: 'tiny', text: 'Remove', 'data-f': 'remove',
+        on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
+    })]));
     return out;
 }
 
@@ -710,13 +766,58 @@ function padPalette(pad) {
     ];
 }
 
+// ── outputs ────────────────────────────────────────────────────────────────
+//
+// **The forward analogue of the sources above.** Dragging backwards out of an
+// empty input pad asks "where does this come from", and the answer that leads
+// the palette is a file or a generator. Dragging *forwards* out of an output pad
+// asks "where does this go", and the answer nothing could give until now is
+// "out of the render, as a stream of its own" — every other entry is a filter
+// that does something to it on the way to somewhere else.
+//
+// Placing one names it, because a pad with no label is a pad nothing can be
+// mapped to; the name is editable the moment it lands, since the panel is
+// showing the node it just made.
+
+/// Can an output be attached to what is being held? Nothing when the wire came
+/// off an *input* pad: an output produces nothing for that wire to land on.
+function wantsOutput(pad) { return !pad.key || pad.dir === 'out'; }
+
+function outputOffer(pad, term) {
+    const name = overlay.freeOutputName();
+    if (term && name.indexOf(term) < 0 && 'output'.indexOf(term) < 0 &&
+        'pad'.indexOf(term) < 0) return [];
+    const stream = pad.key ? (pad.stream || 'v') : '';
+    return [
+        head('An output'),
+        el('button', {
+            cls: 'gp-filter', 'data-output': name,
+            on: { click: () => {
+                const rec = overlay.addOutput(stream, name);
+                sel = { kind: 'node', key: rec.id };
+                search = '';
+                if (hooks.placed) hooks.placed(rec, pad);
+                else changed();
+            } },
+        }, [span(name, 'gp-fname mono'), span('a named pad', 'gp-badge'),
+            span('this pad leaves the render as a stream of its own — map it on the ' +
+                 'Write stage', 'dim')]),
+    ];
+}
+
 function padRowsFor(pad, all) {
     const term = search.trim().toLowerCase();
     const out = [];
+    // Forward out of a pad: where it goes, before what happens to it on the way.
+    if (wantsOutput(pad) && pad.key) out.push(...outputOffer(pad, term));
     // Sources first, because a pad with nothing on it and a canvas with nothing
     // on it are both places where the question is "where does the picture come
     // from" before it is "what happens to it".
     if (wantsSource(pad)) out.push(...sourceRows(pad, term));
+    // ...and on the bare canvas, after them: nothing is being held, so neither
+    // question is the one being asked and the order is arbitrary — an output is
+    // the rarer thing to be reaching for with no wire in the air.
+    if (wantsOutput(pad) && !pad.key) out.push(...outputOffer(pad, term));
 
     const isMade = (f) => wantsSource(pad) && isSource(f.name);
     const matching = term

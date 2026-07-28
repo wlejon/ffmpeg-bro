@@ -1857,11 +1857,30 @@ about them:
 
   - **The first control on a row is where its content comes from**, and it changes
     what the rest of the row can be: made (the composite, the mix, through an
-    encoder) or copied (`copy:0:1`, no encoder at all). A copied row states its
+    encoder), taken off a **named pad of the graph** (`pad:left`, still through an
+    encoder), or copied (`copy:0:1`, no encoder at all). A copied row states its
     codec instead of offering one — there is nothing to choose, and a disabled menu
-    would say a choice was being withheld. `setSource()` is the one place that
-    moves a row between the two, and it drops what does not apply on the way: the
-    encoder going in, the span coming out.
+    would say a choice was being withheld; a pad-fed one keeps every encoder
+    control, because it *is* an encoded stream and only its pictures come from
+    somewhere else. `setSource()` is the one place that
+    moves a row between them, and it drops what does not apply on the way: the
+    encoder going in to a copy, the span coming out of one.
+    `export/pads.js` is the `pad:` half — `parsePad`, the choices (read out of
+    the *overlay*, since the outputs are what a person placed and a derivation
+    costs a whole spec), and `renamePad`, which is what makes renaming an output
+    on the Graph stage move the row fed from it rather than leaving one fact
+    written in two places. Every way of asking for a pad that cannot work — a
+    label naming no pad, a picture pad in a sound stream, `pad:` with no graph —
+    is refused by the renderer before it opens a file, and said first in
+    `export/warnings.js` in almost the same words, which is the standing rule
+    about where a refusal arrives. An output *nothing* reads is not a refusal
+    either side: the pad is drained, the render is fine, and it is worth a word
+    because the reason to name a pad is to map it. **A pad-fed audio row is outside `settings.audio`,
+    outside `setAudioIncluded` and outside `hasAudibleSound`'s
+    will-not-be-written marking**, exactly as a copied one is and for the reason
+    native gives in `outputStreams()`: those exemptions are *correctness*, not
+    thrift — the samples are libavfilter's, so a silent timeline says nothing
+    about whether the stream has anything to write.
   - **A row is a sentence, not a grid of labelled inputs** — "A2 · the mix, through
     aac · fra · “Commentary” · forced" — because what a person checks on this stage
     is whether that sentence is the one they meant. What a stream *has* is behind a
@@ -2043,9 +2062,13 @@ about them:
   ffmpeg has one**: a `scale` node *is* a filter named `scale`, and the app's
   crop, opacity and stacking are `crop`, `colorchannelmixer` and `overlay`
   rather than special cases of anything. The two ends are the exceptions, and
-  an `input` node is no longer only the derivation's: a file the graph reads on
-  its own account is one too, carrying `input` (which of the document's `-i`s)
-  and `derived: false`. `graph/derive.js` builds the skeleton
+  neither is only the derivation's any more: a file the graph reads on
+  its own account is an `input` node too, carrying `input` (which of the
+  document's `-i`s) and `derived: false`, and **a `sink` carrying a `name` is a
+  named output pad** — the other end of `ExportStream::source`'s `pad:<label>`,
+  which is what lets one render write a wide picture and a crop of it as two
+  streams. Reusing `sink` for that is deliberate: the cards, the layout, the
+  wires and the previews already know what a sink is. `graph/derive.js` builds the skeleton
   from the edit and owns every refusal and caveat; `graph/print.js` turns nodes
   into chains; `graph/check.js` says what is wrong with a finished one.
   `filtergraph.js` is the composition, with the shape callers want, so
@@ -2126,7 +2149,40 @@ about them:
   the end of a run — put a filter between the last `overlay` and the sink and
   `vout` is suddenly in the middle of a chain, printed by nothing — so
   `moveLabelsToChainEnds()` walks them forward afterwards by that same rule; it
-  is a no-op for a graph the derivation built on its own. **A node has the pads
+  is a no-op for a graph the derivation built on its own. **A named output's
+  label is that same mechanism, not a second one**: `labelUserOutputs()` writes
+  the name onto whatever feeds the sink, exactly as `g.run(…, 'vout')` does, and
+  the printer then reports it as it reports any other chain end.
+
+  Three things about labels follow from a person being able to name one, and
+  each was a graph ffmpeg refuses:
+
+  - **A fork writes several pads and one label names none of them.**
+    `split[fork]` declares a destination for the first and nothing for the
+    second, and libavfilter refuses the whole graph over the pad that is not
+    connected. So `node.outLabels` is the per-pad form beside `node.label`, a
+    chain ends in one label per output pad, and `print()`'s invented names are
+    per pad rather than per node. This was wrong before any of this existed —
+    a `split` placed by hand printed an invalid filtergraph — and the headline
+    case for a named output is a fork, so it is fixed rather than reported.
+  - **The derivation's own labels move, not yours.** `base`, `v0`, `o0`, `a0`
+    are handed out before the overlay has been seen, so an output somebody calls
+    `v0` on a two-clip timeline would be "Label found twice";
+    `avoidUserLabels()` renames the derived one. Narrowing what a person may
+    type by how many clips are on the timeline is a rule nobody could hold.
+  - **With more than one pad of a kind, the composite has to say which it is.**
+    That is the renderer's rule — one video pad is the composite whatever it is
+    called, several and it is the one labelled `vout` — and
+    `nameTheRendersPads()` mirrors it, last, after every other label has
+    settled. It is needed because `moveLabelsToChainEnds` stops at a fork, which
+    leaves `vout` mid-chain where nothing prints it.
+
+  **And an unwired `out:v` stops being a complaint** once a named output of that
+  stream is wired: the picture leaves by a name instead, which is exactly the
+  shape native permits (a graph with no `vout` is refused only where a stream
+  asks for the composite). `check.js` also owns everything a *name* has to be —
+  present, `[A-Za-z0-9_]+`, not `vout`/`aout`, not shared, and not the pad of an
+  `-i`, which cannot be renamed at all. **A node has the pads
   its filter has, not the pads its wires gave it** — `node.ins`, filled in by
   `declarePads()` from `padsOf()`, and `g.inPorts()` — because an unwired pad is
   the thing you are looking for while wiring and a count of wires cannot see
@@ -2243,6 +2299,13 @@ about them:
   each step is described in terms of what the ones before it produced, and
   reports every lock that *disagreed* with what it just derived as an
   `override`, which is what lets the outranked control say so.
+
+  `nodes` holds three things and they are one kind to this file — something a
+  person placed, held by an id that survives the rebuild: a filter on no wire,
+  an input the graph reads, and a **named output**. Only the second is refused
+  by `restore()`, and for a reason that does not apply to the other two (it
+  names a document input whose id is handed out again next run); an output's
+  name is its own, so it comes back as itself.
 
   **Structure needs a vocabulary that survives the rebuild, and there is exactly
   one**: a key. A free node carries an id from the same counter the inserts use;
@@ -2621,6 +2684,17 @@ about them:
   visible — and libavfilter's generators after them. Dragging backwards out of
   an empty input and picking a file is what makes a watermark short: what you
   get back is already wired to the pad you were trying to fill.
+
+  **And it leads with an output the other way round.** `wantsOutput()` is the
+  mirror — no wire in the air, or one that came off an *output* pad — because
+  dragging backwards asks "where does this come from" and dragging forwards asks
+  "where does this go", and until named outputs existed the only answer to the
+  second was another filter. Placing one names it (`out2`, `out3`… first free),
+  wires it, and leaves the panel showing the field that renames it. The rename
+  commits on `change` and moves every stream row fed from it, through
+  `export/pads.js`'s `renamePad` — the one place this stage knows the Write
+  stage exists, and it is there because a name is one fact and it is written in
+  two places.
 
   A wire's panel says which pads it joins and whether it is yours or the
   derivation's, because that is what `Delete` means: forgetting a wire of your

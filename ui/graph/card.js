@@ -219,8 +219,14 @@ export function buildCard(n, ctx) {
 /// own and reports the one it maps, which is the same answer `print()` gives
 /// `-map`.
 function header(n, g, key) {
+    // A pad somebody named is called by its name: that is what they will pick on
+    // the Write stage and read in the printed command, and "video out" on a card
+    // beside two others saying the same thing would be the one place on this
+    // screen that could not tell them apart.
     const name = n.kind === 'input' ? basename(n.path)
-               : n.kind === 'sink' ? (n.stream === 'a' ? 'audio out' : 'video out')
+               : n.kind === 'sink' ? (n.name !== undefined
+                    ? (n.name || 'an output')
+                    : n.stream === 'a' ? 'audio out' : 'video out')
                : n.filter;
     const mapped = n.kind === 'sink' && g.producers(n)[0];
     // A file produces one pad per stream it is read for, so it states all of
