@@ -1,12 +1,10 @@
 # ffmpeg-bro
 
-A friendly, honest GUI for ffmpeg, built on the [bro](https://github.com/wlejon/bro) engine.
+A friendly GUI for ffmpeg, built on the [bro](https://github.com/wlejon/bro) engine.
 
 ffmpeg is extraordinarily capable and extraordinarily hard to drive. This is a real
-GUI over it: open a file, see what is actually in it, play it at full quality with
-no proxy transcode, cut it on a timeline, filter it through a node graph, and export
-it — with the equivalent ffmpeg command printed live under every stage, so nothing
-about what is going to run is ever a mystery.
+GUI over it: open a file, see what is actually in it, play it at full quality with 
+cut it on a timeline, filter it through a node graph, and export it.
 
 ## What it does
 
