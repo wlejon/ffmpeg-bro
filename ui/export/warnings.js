@@ -16,6 +16,7 @@ import { readsInput, readStream, subtitleCodecsOf,
          defaultSubtitleCodec } from './subtitles.js';
 import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
 import { renderGraph } from '../filtergraph.js';
+import { whereIs } from '../graph/check.js';
 import { buildSpec, range, specSources } from './spec.js';
 import { deviceOfEncoder } from '../hardware.js';
 
@@ -268,15 +269,30 @@ function hardwareWarnings() {
     const spec = buildSpec();
     const codec = activeVideoCodec();
     const device = deviceOfEncoder(codec);
-    // The last chain is the one that feeds the sink, and whether it leaves the
-    // picture on a card is whether the last crossing in it was an upload. Read
-    // off the text rather than off the graph because this is the text the
-    // renderer is handed, and there is nothing between the two to disagree.
-    const chains = String(spec.filterGraph || '').split(';');
-    const last = chains[chains.length - 1] || '';
-    const up = last.lastIndexOf('hwupload');
-    const down = last.lastIndexOf('hwdownload');
-    const endsUp = up >= 0 && up > down;
+    // **Asked of the graph, by following the wire the encoder is fed from.**
+    //
+    // This was a text scan for `hwupload` in the last chain of
+    // `spec.filterGraph`, which is the wrong question twice over. A chain is
+    // not a wire — the run that feeds the sink can have crossed onto a card
+    // several filters earlier — and, worse, the last chain is not the sink's:
+    // `print()` walks `g.nodes` in array order and `derive()` builds the audio
+    // runs *after* the video sink, so for any render with sound in it the last
+    // chain is an `atrim`. The test was therefore unconditionally false
+    // whenever there was a soundtrack, and toggling Include audio flipped a
+    // warning about the picture.
+    //
+    // `whereIs` is `check.js`'s own resolution of the same fact, which walks
+    // upstream rather than along the array and is what the Graph stage already
+    // names nodes with.
+    let endsUp = false;
+    if (spec.filterGraph) {
+        const g = renderGraph(spec, specSources(), { overlay: overlayState() });
+        const graph = g.ok ? g.graph : null;
+        const sink = graph ? graph.byAnchor('out:v') : null;
+        const edge = sink ? graph.inEdges(sink)[0] : null;
+        const feeds = edge ? graph.node(edge.from) : null;
+        endsUp = !!feeds && whereIs(graph, feeds) === 'device';
+    }
 
     if (endsUp && !device)
         out.push(`this render leaves its picture on the card and ${codec} cannot take it ` +

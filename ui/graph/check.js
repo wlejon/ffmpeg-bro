@@ -155,51 +155,36 @@ export function problems(g, stranded = []) {
     return out;
 }
 
-/// Where the picture is, and who can read it there.
-///
-/// **libavfilter's own message for getting this wrong is four hundred pixel
-/// format names and no filter.** A `cuda` frame arriving at `scale` produces
-/// "Impossible to convert between the formats supported by the filter
-/// 'Parsed_setpts_1' and the filter 'auto_scale_0'", followed by every format
-/// swscale has ever heard of, and nothing in it says the word hardware. It is
-/// the single least readable failure in this application, and it is one
-/// sentence to explain: a picture on a card is a handle, not pixels, and a
-/// filter that reads pixels cannot have it.
-///
-/// So this walks the graph carrying one fact — is the picture up or down —
-/// and names the first node where the two disagree. Three things move it:
-/// a source that decodes on a device starts it up, `hwupload` puts it up and
-/// `hwdownload` brings it down. A filter belonging to a device wants it up;
-/// everything else wants it down.
-///
-/// **`trim`, `setpts` and their kind want neither**, and that is not a
-/// special case bolted on — a filter with no pixel format constraints passes
-/// whatever it is given, which is exactly why a render can keep its picture on
-/// the card through a build that has no `scale_cuda` in it. They are told apart
-/// by having no formats of their own to negotiate, which is a fact this side
-/// cannot ask libavfilter for; so the rule here is the conservative one, and
-/// only a filter that *belongs to a device* or is known to read pixels is
-/// judged. A filter nobody has an opinion about is left alone, because a false
-/// accusation on a graph that runs is worse than a missing note on one that
-/// does not.
-function memoryProblems(g, streams) {
-    const out = [];
-    // Nothing to say on a machine with no device: every picture is in system
-    // memory and every filter can read it.
-    if (!present().length) return out;
+/// **`trim`, `setpts` and their kind want neither memory nor a card**, and that
+/// is not a special case bolted on — a filter with no pixel format constraints
+/// passes whatever it is given, which is exactly why a render can keep its
+/// picture on the card through a build that has no `scale_cuda` in it. They are
+/// told apart by having no formats of their own to negotiate, which is a fact
+/// this side cannot ask libavfilter for; so the rule below is the conservative
+/// one, and only a filter that *belongs to a device* or is known to read pixels
+/// is judged. A filter nobody has an opinion about is left alone, because a
+/// false accusation on a graph that runs is worse than a missing note on one
+/// that does not.
+const PASSES_ANYTHING = new Set(['trim', 'setpts', 'settb', 'fps', 'select',
+                                 'null', 'copy', 'metadata', 'realtime']);
 
-    const passesAnything = new Set(['trim', 'setpts', 'settb', 'fps', 'select',
-                                    'null', 'copy', 'metadata', 'realtime']);
+/// The one fact, resolved over a whole graph: for each node, is the picture it
+/// produces on a device or in system memory.
+///
+/// **Resolved by asking upstream, not by walking the array in order.** A node's
+/// producers are earlier in `g.nodes` for a graph the derivation built and are
+/// *not* for one somebody edited: `insertAfter` appends, so a filter spliced
+/// onto the first wire sits at the end of the list. Reading the array in order
+/// therefore had every node after an insertion answering "in system memory"
+/// because the thing feeding it had not been reached yet, which is a wrong
+/// answer that looks exactly like a right one.
+///
+/// Returned as a resolver rather than a map because it is asked lazily and it
+/// memoises: two callers over one graph pay for one walk.
+function memoryMap(g) {
     const where = new Map();      // node id → 'device' | 'memory'
     const busy = new Set();
 
-    // **Resolved by asking upstream, not by walking the array in order.** A
-    // node's producers are earlier in `g.nodes` for a graph the derivation
-    // built and are *not* for one somebody edited: `insertAfter` appends, so a
-    // filter spliced onto the first wire sits at the end of the list. Reading
-    // the array in order therefore had every node after an insertion answering
-    // "in system memory" because the thing feeding it had not been reached yet,
-    // which is a wrong answer that looks exactly like a right one.
     const at = (n) => {
         if (!n) return 'memory';
         if (where.has(n.id)) return where.get(n.id);
@@ -236,12 +221,63 @@ function memoryProblems(g, streams) {
             const src = documentInputs[n.input];
             return src && src.hwaccelOutputFormat ? 'device' : 'memory';
         }
+        // A sink produces nothing; what matters about it is what arrives.
+        if (n.kind === 'sink') return arrivingAt(n);
         const filter = n.filter || '';
         if (filter === 'hwupload' || /^hwupload_/.test(filter)) return 'device';
         if (filter === 'hwdownload') return 'memory';
-        if (passesAnything.has(filter)) return arrivingAt(n);
+        if (PASSES_ANYTHING.has(filter)) return arrivingAt(n);
         return deviceOfFilter(filter) ? 'device' : 'memory';
     }
+
+    return { at, arrivingAll };
+}
+
+/// Where the picture leaving `node` is: `'device'` or `'memory'`.
+///
+/// Exported because this one fact answers three different questions in three
+/// places, and only the questions differ. `memoryProblems` below asks whether
+/// every node's expectation holds; `graph/subgraph.js` asks whether one pad's
+/// picture is on a card, so that a preview's tail knows to put an `hwdownload`
+/// in; and `export/warnings.js` asks whether the picture the *encoder* is
+/// handed ends up on one, which is the difference between a render the writer
+/// refuses and a render that copies every frame down behind your back.
+///
+/// It used to be answered in `warnings.js` by looking for `hwupload` in the
+/// last chain of the printed graph, which is not the same question and was not
+/// even the same *chain*: `print()` walks `g.nodes` in order and `derive()`
+/// builds the audio runs after the video sink, so the last chain of any render
+/// with sound in it is an `atrim`. The warning was therefore off whenever
+/// there was a soundtrack, and flipped when Include audio was toggled.
+export function whereIs(g, node) {
+    if (!g || !node) return 'memory';
+    return memoryMap(g).at(node);
+}
+
+/// Where the picture is, and who can read it there.
+///
+/// **libavfilter's own message for getting this wrong is four hundred pixel
+/// format names and no filter.** A `cuda` frame arriving at `scale` produces
+/// "Impossible to convert between the formats supported by the filter
+/// 'Parsed_setpts_1' and the filter 'auto_scale_0'", followed by every format
+/// swscale has ever heard of, and nothing in it says the word hardware. It is
+/// the single least readable failure in this application, and it is one
+/// sentence to explain: a picture on a card is a handle, not pixels, and a
+/// filter that reads pixels cannot have it.
+///
+/// So this carries the one fact above — is the picture up or down — and names
+/// the first node where the two disagree. Three things move it: a source that
+/// decodes on a device starts it up, `hwupload` puts it up and `hwdownload`
+/// brings it down. A filter belonging to a device wants it up; everything else
+/// wants it down.
+function memoryProblems(g, streams) {
+    const out = [];
+    // Nothing to say on a machine with no device: every picture is in system
+    // memory and every filter can read it.
+    if (!present().length) return out;
+
+    const passesAnything = PASSES_ANYTHING;
+    const { arrivingAll } = memoryMap(g);
 
     for (const n of g.nodes) {
         if (n.kind === 'input' || n.kind === 'sink') continue;

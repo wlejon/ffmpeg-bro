@@ -247,6 +247,64 @@ if (canDecodeSomething()) {
     console.log('  (nothing on this machine decodes this file on a device — skipped)');
 }
 
+// ── where the picture ends up, and what the sound has to do with it ────────
+//
+// **Nothing.** Whether the encoder is handed a picture on a card is a fact
+// about the wire feeding `out:v`, and it must not change because a soundtrack
+// was switched on. It did: the warning was a text scan for `hwupload` in the
+// *last chain* of the printed graph, and `derive()` builds the audio runs
+// after the video sink — so the last chain of any render with sound in it is
+// an `atrim` and the answer was unconditionally "no". Toggling Include audio
+// flipped a warning about the picture, in two clicks.
+//
+// This runs on a machine with no card at all: `hwupload` is in every build of
+// libavfilter, and `libx264` cannot be handed a device frame whatever is
+// installed.
+
+console.log('\nwhere the picture ends up, and the sound has nothing to do with it');
+A.graph.overlay.clear();
+A.shell.goTo('encode');
+pump(80);
+{
+    const S = A.exporter.currentSettings();
+    const keptCodec = S.videoCodec;
+    const keptAudio = S.audio;
+    const keptStreams = S.streams;
+
+    S.videoCodec = 'libx264';
+    A.graph.overlay.insert('composite/after-overlay', 'hwupload', { stream: 'v' });
+    pump(120);
+
+    const onCard = (list) => list.some((w) => /leaves its picture on the card/.test(w));
+
+    S.audio = true;
+    S.streams = A.exporter.defaultStreams();
+    A.exporter.redraw();
+    pump(80);
+    const withSound = A.exporter.currentWarnings();
+    ok(onCard(withSound),
+       'an hwupload on the last wire and a software encoder is refused before the ' +
+       'Render button, with a soundtrack in the render');
+
+    S.audio = false;
+    S.streams = S.streams.filter((s) => s.kind !== 'audio');
+    A.exporter.redraw();
+    pump(80);
+    const silent = A.exporter.currentWarnings();
+    ok(onCard(silent), 'and the same render without one');
+    ok(onCard(withSound) === onCard(silent),
+       'the same answer either way — the sound is not on the wire the encoder reads');
+
+    A.graph.overlay.clear();
+    S.videoCodec = keptCodec;
+    S.audio = keptAudio;
+    S.streams = keptStreams;
+    A.exporter.redraw();
+    pump(80);
+    ok(!onCard(A.exporter.currentWarnings()),
+       'and taking the hwupload off takes the warning with it');
+}
+
 function canDecodeSomething() {
     const c = A.inputs.inputs[0] && A.inputs.inputs[0].probe &&
               A.inputs.inputs[0].probe.video && A.inputs.inputs[0].probe.video.codec;
