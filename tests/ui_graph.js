@@ -2337,6 +2337,62 @@ if (!media) {
         A.graph.draw();
         pump(160);
     }
+
+    // ── every card has something to say ────────────────────────────────────
+    //
+    // The previews are taken over two seconds and the graph is drawn over the
+    // whole range, so a timeline longer than the window has cards on it for
+    // clips that window does not reach. Those used to have no preview entry at
+    // all: `sync()` derived over the window, `derive()` keeps only the clips
+    // inside it, the node was not found, its shot was dropped as gone, and
+    // `shotView` drew nothing — not a failure, not a wait, no reason. Three
+    // clips end to end left two thirds of the graph blank with every line of the
+    // code that built it looking correct.
+    //
+    // The claim is not that every node has a picture: `amix` genuinely is not in
+    // the graph at an instant where fewer than two clips are playing, and saying
+    // so is the right answer. The claim is that **nothing on the screen is
+    // silently empty**.
+    {
+        console.log('\na graph longer than the window it is previewed over');
+        overlay.clear();
+        dropFiles(400, 300, [media]);
+        waitFor('a second clip', () => A.project.clips.length === 2);
+        pump(200);
+
+        // End to end, and the previews taken from inside the second one — so
+        // every node of the first is outside the window.
+        const cs = A.project.clips;
+        cs[0].track = 0; cs[0].start = 0;
+        cs[1].track = 0; cs[1].start = cs[0].length;
+        const inSecond = cs[1].start + 1;
+        A.graph.preview.setRange(inSecond, inSecond + A.graph.preview.previewSeconds);
+        A.graph.draw();
+        pump(600);
+
+        const boxes = A.graph.placement().nodes || [];
+        ok(boxes.length > 8, `the whole edit is drawn — ${boxes.length} cards`);
+        const firstClip = boxes.filter((b) => keyOfBox(b).indexOf(`clip:${cs[0].id}`) >= 0);
+        ok(firstClip.length > 0, 'including the cards of the clip the window misses');
+
+        const silent = boxes.filter((b) => !A.graph.preview.shotFor(keyOfBox(b)));
+        if (silent.length)
+            console.log('    silent: ' + silent.map((b) => keyOfBox(b)).join(', '));
+        same(silent.length, 0, 'and not one card on the screen is left with nothing to say');
+
+        // The clip the window misses is answered *about its own seconds*, which
+        // is the whole of the fix: a window inside that clip rather than the one
+        // somebody chose somewhere else.
+        const far = A.graph.preview.shotFor(keyOfBox(firstClip[0]));
+        ok(!!far && far.from < cs[1].start,
+           `a clip outside the window is looked at inside itself (from ${far && far.from})`);
+
+        A.removeSelection && A.select(cs[1]);
+        A.removeSelection && A.removeSelection();
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
 }
 
 console.log(`\nPASS ui_graph — ${checks} checks`);

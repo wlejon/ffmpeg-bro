@@ -428,8 +428,15 @@ function shotView(key, width) {
         if (preview.isPlaying(key)) box.append(div('gn-playbar mono', span('', 'gn-clock')));
         return box;
     }
-    const box = div('gn-shot gn-shot-' + (shot.state === 'failed' ? 'fail' : 'wait'),
-                    span(shot.state === 'failed' ? (shot.reason || 'no picture') : '…', 'dim'));
+    // Three states and not two. A render that failed is red and says why; a node
+    // that is simply not in the graph at the moment the previews are taken is
+    // neither a failure nor a wait, and drawing it as either would be a lie in
+    // one direction or the other — so it takes the quiet styling and states the
+    // reason it has been given.
+    const failed = shot.state === 'failed';
+    const box = div('gn-shot gn-shot-' + (failed ? 'fail' : 'wait'),
+                    span(failed ? (shot.reason || 'no picture')
+                         : shot.state === 'absent' ? (shot.reason || 'not here') : '…', 'dim'));
     box.style.height = `${Math.round(inner * (wave ? WAVE_ASPECT : 9 / 16))}px`;
     return box;
 }

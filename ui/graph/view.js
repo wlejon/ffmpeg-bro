@@ -821,6 +821,12 @@ function syncPreviews() {
     if (preview.isEnabled())
         preview.sync(placed.nodes
             .map((b) => ({ key: panel.keyOf(b.node),
+                           // Which clip this node belongs to, for deciding *when*
+                           // to look at it. A node's key is its anchor only when
+                           // the derivation made it; one somebody inserted is
+                           // held by id and carries the clip in its anchor
+                           // instead, and both have to answer.
+                           anchor: b.node.anchor || '',
                            fit: previewFit(cardWidth(panel.keyOf(b.node))) }))
             .filter((w) => w.key));
     cards.dropUnless((key) => !!preview.shotFor(key));

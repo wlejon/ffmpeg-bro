@@ -37,7 +37,7 @@
 // holding the previous render has the file open, and on Windows that is a
 // failed render rather than a replaced file.
 
-import { derive } from './derive.js';
+import { derive, clipOf } from './derive.js';
 import { specInputs } from '../inputs.js';
 import { previewGraph } from './subgraph.js';
 import * as play from './play.js';
@@ -57,7 +57,52 @@ let on = true;
 let range = null;                 // { start, end }, snapshotted rather than live
 let seq = 0;
 
-/// key → { sig, state, path, reason }. `state` is 'pending' | 'ready' | 'failed'.
+/// **When to look at a node**, which is not one moment for the whole graph.
+///
+/// The previews are taken at a point somebody chose, and a two-second window
+/// falls inside at most a couple of clips of a long edit. Everything cut from
+/// the others is not in the graph at that instant at all — so those cards had
+/// no picture, no failure and no wait, about filters that were working
+/// perfectly. Three clips laid end to end left two thirds of the graph blank.
+///
+/// So a node the chosen point does not reach is looked at from inside its own
+/// clip instead. **Two candidates and not one**, because which nodes the
+/// derivation makes depends on where the window falls *within* the clip, not
+/// merely on which clip it is in. `adelay` is what forced that: the silence it
+/// prepends is the clip's offset from the start of the window, so a window
+/// beginning exactly where the clip does has no offset to delay by and no
+/// `adelay` node in it at all. The second candidate straddles the clip's first
+/// moment, which is the only place that node exists — and the picture it gives
+/// is the honest one, silence running into sound.
+///
+/// Nodes belonging to no clip — the canvas, the sinks, the mix — have no other
+/// moment to be looked at, and `sync` says so on the card rather than leaving it
+/// empty.
+function windowsFor(anchor, spans) {
+    const span = spans.get(clipOf(anchor));
+    if (!span) return [];
+    const a = span.start;
+    const at = { from: a, to: Math.max(a + 0.1, Math.min(span.end, a + SECONDS)) };
+    const b = Math.max(0, a - SECONDS / 2);
+    return b < a ? [at, { from: b, to: Math.max(b + 0.1, a + SECONDS / 2) }] : [at];
+}
+
+/// Where each clip sits in the render, by the id its anchors are spelt with.
+function clipSpans(spec) {
+    const spans = new Map();
+    for (const c of (spec && spec.clips) || []) {
+        if (c.id === undefined || c.id === null) continue;
+        spans.set(String(c.id), { start: Number(c.start) || 0,
+                                  end: (Number(c.start) || 0) + (Number(c.length) || 0) });
+    }
+    return spans;
+}
+
+/// key → { sig, state, path, from, to, reason }. `state` is 'pending' | 'ready'
+/// | 'failed' | 'absent', the last being a node that is in the graph on the
+/// screen and in no window this can render — see `sync`. `from`/`to` are the
+/// seconds this node in particular is looked at, which are not the same for
+/// every node; see `windowsFor`.
 const shots = new Map();
 
 const queue = [];
@@ -117,15 +162,73 @@ export function sync(wanted) {
     const spec = hooks.spec(range.start, range.end);
     const d = derive(spec, hooks.sources(), { overlay: hooks.overlay() });
     if (!d.ok) { queue.length = 0; return; }
+    const spans = clipSpans(spec);
+
+    // **A second derivation, per clip the preview point misses.**
+    //
+    // `derive()` keeps the clips that fall inside the window it is given, so
+    // this one holds only what is on screen at the chosen instant — and the
+    // view draws the graph over the *whole* range. Every node cut from a clip
+    // outside the window was therefore missing from here entirely, its shot was
+    // dropped as gone, and the card drew no picture box at all: not a failure,
+    // not a wait, nothing to say why. Three clips end to end left two thirds of
+    // the graph permanently blank.
+    //
+    // Deriving once over the whole range instead would fix that and cost far
+    // too much: the trim would be the clip's whole span, so each input would
+    // seek to the clip's beginning and decode forward to the window — an hour
+    // of decoding for a preview an hour in, which is the exact trap
+    // `ExportGraphInput::from` exists to avoid. So the window stays small and
+    // there is one derivation per *distinct* window, built only when something
+    // actually asks for one. A graph whose clips all overlap the chosen point
+    // never builds a second, which is what it always did.
+    const alts = new Map();
+    const graphAt = (win) => {
+        const k = `${win.from.toFixed(3)}-${win.to.toFixed(3)}`;
+        if (!alts.has(k)) {
+            const s = hooks.spec(win.from, win.to);
+            const dd = derive(s, hooks.sources(), { overlay: hooks.overlay() });
+            alts.set(k, dd.ok ? { graph: dd.graph, fps: s.fps } : null);
+        }
+        return alts.get(k);
+    };
 
     const live = new Set();
     let fresh = false;
     const inputSig = JSON.stringify(specInputs());
     queue.length = 0;
-    for (const { key, fit } of wanted) {
-        const node = d.graph.node(key) || d.graph.byAnchor(key);
-        if (!node) continue;
-        const g = previewGraph(d.graph, node, { fit, fps: spec.fps });
+    for (const { key, anchor, fit } of wanted) {
+        let host = d.graph, fps = spec.fps;
+        let win = { from: range.start, to: range.end };
+        let node = host.node(key) || host.byAnchor(key);
+        if (!node) {
+            // Absent at the chosen instant. If it belongs to a clip, look at it
+            // from that clip's own beginning instead.
+            for (const alt of windowsFor(anchor || key, spans)) {
+                const other = graphAt(alt);
+                const found = other && (other.graph.node(key) || other.graph.byAnchor(key));
+                if (!found) continue;
+                node = found; host = other.graph; fps = other.fps; win = alt;
+                break;
+            }
+            if (!node) {
+                // Nowhere to look. A node can be in the graph on the screen —
+                // which is derived over the whole range — and in no two seconds
+                // of it: `amix` is there because three clips are mixed across
+                // the render, and at any one instant fewer than two of them are
+                // playing, so there is no mix to draw. Said on the card, because
+                // the alternative is the blank that started all this.
+                live.add(key);
+                const before = shots.get(key);
+                if (!before || before.state !== 'absent')
+                    shots.set(key, { sig: `absent|${range.start}`, fit, state: 'absent',
+                                     path: '', from: range.start, to: range.end,
+                                     reason: 'not in the graph at the moment previewed',
+                                     graph: null });
+                continue;
+            }
+        }
+        const g = previewGraph(host, node, { fit, fps });
         if (!g.ok) continue;
         live.add(key);
 
@@ -137,7 +240,12 @@ export function sync(wanted) {
         // `-i` it reads and not how that `-i` is opened: forcing a demuxer or
         // setting a `-probesize` changes the picture without changing a
         // character of the graph.
-        const sig = `${g.filterGraph}|${JSON.stringify(g.filterInputs)}|${inputSig}`;
+        // The window is in the signature because it is part of the render: two
+        // nodes with identical chains asked about different seconds are two
+        // different pictures, and moving the preview point has to re-render
+        // whatever it moved into or out of.
+        const sig = `${g.filterGraph}|${JSON.stringify(g.filterInputs)}|${inputSig}` +
+                    `|${win.from.toFixed(3)}-${win.to.toFixed(3)}`;
         const had = shots.get(key);
         if (had && had.sig === sig) {
             had.fit = fit;
@@ -154,11 +262,12 @@ export function sync(wanted) {
         // screen, since those two cards sit side by side.
         const twin = ready(sig);
         if (twin) {
-            shots.set(key, { sig, fit, state: 'ready', path: twin.path,
+            shots.set(key, { sig, fit, state: 'ready', path: twin.path, from: win.from, to: win.to,
                              w: twin.w, h: twin.h, reason: '', graph: g });
             continue;
         }
-        shots.set(key, { sig, fit, state: 'pending', path: '', reason: '', graph: g });
+        shots.set(key, { sig, fit, state: 'pending', path: '', from: win.from, to: win.to,
+                         reason: '', graph: g });
         queue.push(key);
         fresh = true;
     }
@@ -209,7 +318,7 @@ export function tick() {
     const key = queue.shift();
     const shot = shots.get(key);
     if (!shot || shot.state !== 'pending') return;
-    const path = launch(shot.graph, range.start, range.end);
+    const path = launch(shot.graph, shot.from, shot.to);
     if (path.error) {
         shot.state = 'failed';
         shot.reason = path.error;
@@ -350,10 +459,16 @@ function finishSegment(was, p) {
 export function startPlay(key) {
     if (!on || !range || !key) return false;
     const shot = shots.get(key);
-    const until = hooks.until ? hooks.until() : range.end;
+    // From where this node's own still was taken, not from where the previews
+    // in general are: they are the same for most of the graph and are not for a
+    // clip the preview point misses, and starting a playback somewhere its
+    // first piece is guaranteed to be blank is the one place that would show.
+    const from = shot && shot.from !== undefined ? shot.from : range.start;
+    const to = shot && shot.to !== undefined ? shot.to : range.end;
+    const until = hooks.until ? hooks.until() : to;
     const seed = shot && shot.state === 'ready' && shot.path
-        ? { path: shot.path, seconds: range.end - range.start } : null;
-    return play.start(key, range.start, Math.max(until, range.end), SECONDS, seed);
+        ? { path: shot.path, seconds: to - from } : null;
+    return play.start(key, from, Math.max(until, to), SECONDS, seed);
 }
 
 export function stopPlay() { play.stop(); }
