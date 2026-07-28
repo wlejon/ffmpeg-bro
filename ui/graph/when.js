@@ -253,19 +253,28 @@ function strip(spans, clk, commit) {
         const grabbed = tAt(e);
         let working = spans;
 
+        let moved = false;
         const move = (ev) => {
             const t = tAt(ev);
             if (which) working = moveEdge(spans, i, which, t, clk.length);
             else working = shift(spans, i, held, t - grabbed, clk.length);
+            moved = true;
             paint(working);
         };
         // Committed on release and not on every move: a write locks the node and
         // redraws the whole stage, which at sixty frames a second would rebuild
         // the strip out from under the hand holding it.
+        //
+        // And not committed at all when the pointer never moved. The strip is a
+        // *reading* of the expression, so a press that changed nothing has to
+        // write nothing: `printEnable(parseEnable(text))` is not the text —
+        // `between(t,1.00,2.00)` comes back `between(t,1,2)` — and on a derived
+        // node the write is a lock, so a bare click on a span would outrank the
+        // edit for ever after.
         const up = () => {
             window.removeEventListener('mousemove', move);
             window.removeEventListener('mouseup', up);
-            commit(printEnable(working));
+            if (moved) commit(printEnable(working));
         };
         window.addEventListener('mousemove', move);
         window.addEventListener('mouseup', up);

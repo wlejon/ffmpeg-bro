@@ -187,17 +187,29 @@ export function removeInsert(id) {
     if (!any) return false;
     for (let i = state.wires.length - 1; i >= 0; i--)
         if (state.wires[i].from === id || state.wires[i].to === id) state.wires.splice(i, 1);
+    forget(id);
+    changed('remove');
+    return true;
+}
+
+/// Everything keyed by a node that has gone, other than the node itself.
+///
+/// Three places lose a node — `removeInsert`, `retain` dropping a source whose
+/// input is gone, and `restore` dropping an input node it will not put back —
+/// and each of them used to remember a different subset of this. What is left
+/// behind is not merely waste: `pins` and `sizes` are keyed by the node's id
+/// and the counter hands ids out again, so a filter spliced in afterwards
+/// arrives at a width and a position nobody gave it, and the blob grows for
+/// ever, which is what `retain()` exists to prevent.
+function forget(id) {
     // A node can itself carry insert points — an input the graph reads has one
-    // per pad — so removing it has to take what was spliced onto them. Left
-    // behind, those records name a point no derivation will ever declare again
-    // and would come back the moment the id was reused.
+    // per pad — so losing it has to take what was spliced onto them. Left
+    // behind, those records name a point no derivation will ever declare again.
     for (let i = state.inserts.length - 1; i >= 0; i--)
         if (String(state.inserts[i].anchor).indexOf(`${id}/`) === 0)
             state.inserts.splice(i, 1);
     delete state.sizes[id];
     delete state.pins[id];
-    changed('remove');
-    return true;
 }
 
 // ── wires ──────────────────────────────────────────────────────────────────
@@ -456,6 +468,7 @@ export function retain(clipIds, inputIds) {
             for (let j = state.wires.length - 1; j >= 0; j--)
                 if (state.wires[j].from === rec.id || state.wires[j].to === rec.id)
                     state.wires.splice(j, 1);
+            forget(rec.id);
             any = true;
         }
     }
@@ -527,11 +540,26 @@ export function restore() {
         };
         // Ids handed back to us must not be handed out again. Wires are counted
         // out of the same sequence as nodes, so that no two things in this file
-        // can ever be told apart by their id alone and then turn out not to be.
-        for (const rec of state.inserts.concat(state.nodes, state.wires)) {
-            const m = /^[uw](\d+)$/.exec(rec.id);
+        // can ever be told apart by their id alone and then turn out not to be
+        // — and **the ids just dropped count too**, because they are still
+        // written all over the blob even though the nodes are not coming back.
+        const ids = state.inserts.concat(state.nodes, state.wires).map((r) => r.id)
+                        .concat(Array.from(dropped));
+        for (const id of ids) {
+            const m = /^[uw](\d+)$/.exec(id);
             if (m) seq = Math.max(seq, Number(m[1]));
         }
+        // ...and what those nodes were arranged with goes with them. So does
+        // anything left over by an older version that dropped a node without
+        // it: a user node's id is `u<n>` and nothing else here is shaped like
+        // one — every anchor carries a `/` or a `:` — so a key of that shape
+        // naming no record is a node that is gone, and the blob on disk has
+        // been through this already.
+        for (const id of Array.from(dropped)) forget(id);
+        const known = new Set(state.inserts.concat(state.nodes).map((r) => r.id));
+        for (const bag of [state.sizes, state.pins])
+            for (const key of Object.keys(bag))
+                if (/^u\d+$/.test(key) && !known.has(key)) delete bag[key];
     } catch (e) { /* first run, or a blob from an older shape */ }
 }
 

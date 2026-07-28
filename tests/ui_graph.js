@@ -989,6 +989,79 @@ console.log('\na source node is not written to disk');
     overlay.clear();
 }
 
+console.log('\nwhat a node that is gone takes with it');
+{
+    // Three places lose a node — removing one, an input taken off the Sources
+    // stage, and the read above that will not put one back — and each of them
+    // has to take the same things: what was spliced onto its own pads, how wide
+    // the card was dragged and where it was dropped. Left behind, those are not
+    // merely waste: `pins` and `sizes` are keyed by the node's id, the counter
+    // hands ids out again after a restart, and the next filter spliced in
+    // arrives at a width and a position nobody gave it.
+    overlay.clear();
+    overlay.unpinAll();
+
+    const n = overlay.addNode('hflip');
+    overlay.setPin(n.id, 40, 50);
+    overlay.setSize(n.id, 300);
+    overlay.removeInsert(n.id);
+    same(overlay.pinOf(n.id), null, 'a node you remove takes its position with it');
+    same(overlay.sizeOf(n.id), 0, 'and how wide you dragged it');
+
+    overlay.clear();
+    overlay.unpinAll();
+    const src = overlay.addSource('in2');
+    overlay.setPin(src.id, 37, 778);
+    overlay.setSize(src.id, 260);
+    overlay.insert(`${src.id}/after-decode`, 'eq');
+    overlay.restore();
+    same(overlay.nodeCount(), 0, 'a node naming an input is dropped on read');
+    same(overlay.pinOf(src.id), null, 'and its position goes with it');
+    same(overlay.sizeOf(src.id), 0, 'and its width');
+    same(overlay.insertCount(), 0, 'and what was spliced onto its own pads');
+
+    // Its id goes out of circulation too, which is the whole reason the
+    // arrangement above cannot be left behind: a blob is read on a run whose
+    // counter starts at one.
+    overlay.clear();
+    localStorage.setItem('ffmpeg-bro.graph', JSON.stringify({
+        inserts: [], nodes: [{ id: 'u9000', kind: 'input', input: 'in3' }],
+        wires: [], cuts: [], locks: {}, sizes: {}, pins: {},
+    }));
+    overlay.restore();
+    same(overlay.addNode('hflip').id, 'u9001',
+         'the id of a node dropped on read is still taken out of circulation');
+
+    // ...and the blob this application has in fact been writing: the node was
+    // dropped by an earlier run and the state remembered without it, leaving a
+    // pin naming nothing at all. A user node's id is `u<n>` and nothing else in
+    // this file is shaped like one — every anchor carries a `/` or a `:` — so
+    // one naming no record is a card that has gone.
+    overlay.clear();
+    overlay.unpinAll();
+    localStorage.setItem('ffmpeg-bro.graph', JSON.stringify({
+        inserts: [], nodes: [], wires: [], cuts: [], locks: {},
+        sizes: { u85: 300 },
+        pins: { u82: { x: 37, y: 778 }, 'clip:3/scale': { x: 1, y: 2 } },
+    }));
+    overlay.restore();
+    same(overlay.pinOf('u82'), null, 'an orphaned pin is dropped');
+    same(overlay.sizeOf('u85'), 0, 'and an orphaned width');
+    same(overlay.pinOf('clip:3/scale').x, 1,
+         'while one on a derived node is kept — its anchor names a node the next ' +
+         'derivation makes again');
+
+    overlay.clear();
+    overlay.unpinAll();
+    const gone = overlay.addSource('in7');
+    overlay.setPin(gone.id, 12, 34);
+    overlay.retain([], []);
+    same(overlay.sourceInputs().length, 0, 'a source whose input has gone is dropped');
+    same(overlay.pinOf(gone.id), null, 'and takes its position with it');
+    overlay.clear();
+    overlay.unpinAll();
+}
+
 console.log('\na wire taken off is remembered as a cut');
 {
     overlay.clear();
@@ -1865,6 +1938,31 @@ if (!media) {
             ok(Math.abs(moved.spans[0].from - length * 0.2) < length * 0.06,
                `and the end went where it was dragged (${moved.spans[0].from.toFixed(2)}s of ` +
                `${length.toFixed(2)}s)`);
+        }
+
+        // **A press that moved nothing writes nothing.** The strip is a
+        // reading of the expression, and `printEnable(parseEnable(text))` is
+        // not the text — `between(t,1.00,2.00)` comes back `between(t,1,2)` —
+        // so a bare click on a span rewrote what somebody had typed, and on a
+        // derived node it wrote a lock that outranks the edit for ever after.
+        {
+            const field = document.querySelector('#gr-panel [data-f="enable"]');
+            field.value = "'between(t,1.00,2.00)'";
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            pump(200);
+            same(enableOf(), "'between(t,1.00,2.00)'",
+                 'an expression is stored exactly as it was typed');
+
+            const track = document.querySelector('#gr-panel .when-strip .when-track');
+            const grab = track.querySelector('[data-span="0"]');
+            ok(!!grab, 'the span has a body to press on');
+            const box = track.getBoundingClientRect();
+            const at = { x: box.left + box.width * 0.5, y: box.top + box.height / 2 };
+            mouse('mousedown', at, grab);
+            mouse('mouseup', at);
+            pump(200);
+            same(enableOf(), "'between(t,1.00,2.00)'",
+                 'and a press that dragged nothing leaves it exactly as it was');
         }
 
         // **An expression the control cannot draw is not rewritten.** This is
