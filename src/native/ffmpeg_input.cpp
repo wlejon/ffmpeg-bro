@@ -15,6 +15,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <mutex>
 
@@ -295,6 +296,10 @@ double inputEpoch(const MediaInput& in, double containerStart) {
 
 double inputLimit(const MediaInput& in) {
     return in.duration > 0.0 ? in.duration + in.itsoffset : 0.0;
+}
+
+int64_t inputSeekTarget(AVRational timeBase, const MediaInput& in, double at) {
+    return static_cast<int64_t>(std::llround((at + in.ss - in.itsoffset) / av_q2d(timeBase)));
 }
 
 bool inputIsEndless(const MediaInput& in) {

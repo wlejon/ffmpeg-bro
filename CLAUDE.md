@@ -470,9 +470,29 @@ codec-agnostic. Six things here are load-bearing:
   `mov_read_seek` subtracts the edit-list offset itself before searching, so an
   index timestamp handed to it verbatim searched two frames early, found no
   keyframe, walked *backwards to the start of the file*, and returned success — a
-  cut two seconds in silently copied the whole thing. `seekTarget()` is the
+  cut two seconds in silently copied the whole thing. `inputSeekTarget()` is the
   moment as the timeline means it and `streamZero()` is the moment as the index
-  reports it; they are different functions on purpose.
+  reports it; they are different functions on purpose. The first of the two now
+  lives in `ffmpeg_input.h`, beside `inputEpoch`, because it is arithmetic on an
+  input's clock and three things ask for it.
+- **A third reader was on neither clock, and nothing failed.** `export_subtitle.cpp`
+  compared a cue's raw container timestamp against a window written on the
+  input's clock, while seeking in the input's terms — so the seek and the
+  comparison had zeros that differed by exactly `-ss`, and a subtitle input
+  trimmed three seconds in wrote every cue three seconds late while dropping
+  none of the ones that were no longer in the input. **The lesson is that the
+  function telling the two clocks apart already existed and was simply not
+  called**: anything that reads packets or cues out of an `-i` is on the
+  input's clock, and `inputEpoch` is the one place that says where its zero
+  is. It costs nothing when there is no window, which is why every test in the
+  suite passed for the whole of chunk 14. `cueEpoch()` is `SourceVideo`'s and
+  `SourceAudio`'s epoch and **not** `streamZero`, deliberately: cues go into
+  the same output the composite and the mix go into, so they are placed on the
+  clock those are placed on, and `streamOrigin`'s reorder-delay correction is
+  for a clock `sub.pts` is not on. Measured, the two agree on every subtitle
+  track this suite can produce — an .srt reports no container start at all, and
+  mov_text and Matroska both put their stream's origin at zero — so what
+  separates them is a container that genuinely starts late.
 - **A copy can only start at a keyframe, and the seek is backward.** So it lands
   at or *before* the in-point and can never skip a frame the copy wanted — safe by
   construction, exactly as `ExportGraphInput::from` is. What that costs is the
@@ -978,7 +998,15 @@ Six things about `export_subtitle.*` are load-bearing:
   exactly as `CopyStreams::pumpTo` is — up to the time of the frame just written, which
   keeps the muxer's interleaving sane. A render whose only stream is subtitles has no
   frame loop at all and is driven by the cues, which is what "extract them" and "convert
-  the format" both are.
+  the format" both are. **And it is driven in *output* seconds**, so `Tap::at` is where
+  a cue lands in the file and not where it sat in the input — the two differ by the
+  input's window and by `copyFrom`, and a tap reporting the wrong one either stops
+  pumping early or never stops.
+- **A cue is placed on the input's clock, which is `cueEpoch`.** See the note on
+  telling two clocks apart under the packet path: a cue arrives with the container's
+  raw timestamp on it and the window it is judged against is the input's, so the
+  epoch has to come off before anything is compared or written. Every seek, every
+  window and every timestamp in this file is on that one clock now.
 - **The loop that drives a render with nothing composed in it keeps its own clock.** It
   used to advance half a second past wherever the copy had reached, which works while
   packets are dense and hangs the moment they are not: a subtitle track writes its first

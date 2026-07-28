@@ -129,6 +129,12 @@ private:
         /// shot.
         double from = 0.0;
         double to = 0.0;
+
+        /// What to subtract from a cue's container timestamp to put it on the
+        /// input's clock — the clock `from` and `to` are written against, and
+        /// the one the seek is made on. See `cueEpoch`.
+        double zero = 0.0;
+
         double at = 0.0;            ///< where this tap has read to, in output seconds
         bool finished = false;
         ~Tap();

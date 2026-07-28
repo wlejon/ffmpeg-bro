@@ -61,21 +61,12 @@ double streamZero(AVStream* st, const MediaInput& in) {
     return streamOrigin(st) * av_q2d(st->time_base) + in.ss - in.itsoffset;
 }
 
-/// The same moment, as `av_seek_frame` wants to hear it.
-///
-/// **A demuxer's seek clock is not its index's clock**, and mp4 is where that
-/// costs an afternoon. `mov_read_seek` takes a timestamp "relative to the edit
-/// list" — presentation time, counting from the first frame on screen — and
-/// then subtracts the edit-list offset itself before searching the index, whose
-/// entries are raw decode timestamps. Handed an index timestamp verbatim it
-/// searched two frames early, found no keyframe there, walked *backwards* to
-/// the start of the file, and returned success: a cut two seconds in silently
-/// copied the whole thing. So the target is the moment as the timeline means
-/// it, with only the input's own `-ss`/`-itsoffset` on it and none of the
-/// stream's origin.
+/// The same moment, as `av_seek_frame` wants to hear it. The arithmetic and
+/// the reason it is not `streamZero`'s live in `inputSeekTarget` — a demuxer's
+/// seek clock is not its index's clock, and the subtitle path needs the same
+/// answer this one does.
 int64_t seekTarget(AVStream* st, const MediaInput& in, double at) {
-    return static_cast<int64_t>(
-        std::llround((at + in.ss - in.itsoffset) / av_q2d(st->time_base)));
+    return inputSeekTarget(st->time_base, in, at);
 }
 
 } // namespace

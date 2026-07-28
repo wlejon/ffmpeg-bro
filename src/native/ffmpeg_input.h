@@ -241,6 +241,27 @@ double inputEpoch(const MediaInput& in, double containerStart);
 /// Where this input ends on its own clock, or 0 for "at the end of the file".
 double inputLimit(const MediaInput& in);
 
+/// The same moment `inputEpoch` measures against, as `av_seek_frame` wants to
+/// hear it: a timestamp in one stream's time base.
+///
+/// **A demuxer's seek clock is not its index's clock**, and mp4 is where that
+/// costs an afternoon. `mov_read_seek` takes a timestamp "relative to the edit
+/// list" — presentation time, counting from the first frame on screen — and
+/// then subtracts the edit-list offset itself before searching the index, whose
+/// entries are raw decode timestamps. Handed an index timestamp verbatim it
+/// searched two frames early, found no keyframe there, walked *backwards* to
+/// the start of the file, and returned success: a cut two seconds in silently
+/// copied the whole thing. So the target is the moment as the timeline means
+/// it, with only the input's own `-ss`/`-itsoffset` on it and none of the
+/// stream's own origin.
+///
+/// Every seek this renderer makes is `AVSEEK_FLAG_BACKWARD`, which is what
+/// makes that safe rather than merely correct: landing early costs reading a
+/// few packets that are then dropped, and landing late loses content nothing
+/// can get back. Two readers and the subtitle path ask, which is why it is
+/// here rather than beside any one of them.
+int64_t inputSeekTarget(AVRational timeBase, const MediaInput& in, double at);
+
 /// True when this input goes on producing frames for as long as it is asked to.
 ///
 /// `-loop 1` on an image and `-stream_loop -1` on anything make an input with

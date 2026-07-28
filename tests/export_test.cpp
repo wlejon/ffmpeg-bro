@@ -2984,6 +2984,58 @@ int main(int argc, char* argv[]) {
             checkf(back.size() == 3 && std::fabs(back[1].from - 4.0) < 0.05,
                    "and reads back as three cues on the same clock (%zu)", back.size());
 
+            // **An input's window moves the cues with it.** `-ss 3` on the
+            // subtitle input makes three seconds in the input's zero, so the
+            // cue written at 00:00:04 is one second into the output and the one
+            // at 00:00:01 is not in the input at all.
+            //
+            // Two clocks meet here and they used to be different ones: the seek
+            // was made in the input's own seconds and the comparison that
+            // decides whether a cue is inside the window was made against the
+            // container's raw presentation time. Nothing showed it because
+            // every other render in this suite leaves the window alone, where
+            // the two agree — which is precisely the shape of bug that reaches
+            // a person as "the subtitles are late by however far I trimmed".
+            {
+                const std::string outWin = "out/export-subs-window.vtt";
+                ExportSettings ws = vs;
+                ws.path = outWin;
+                ws.inputs[0].ss = 3.0;
+                st = render(ws, {});
+                checkf(st.state == ExportStatus::State::Done,
+                       "an -ss on a subtitle input renders (%s)",
+                       st.error.empty() ? "no error" : st.error.c_str());
+                const auto win = cuesOf(outWin);
+                checkf(win.size() == 2,
+                       "and drops the cue that is before the window (%zu of 3 cues)",
+                       win.size());
+                if (win.size() == 2) {
+                    checkf(std::fabs(win[0].from - 1.0) < 0.05,
+                           "with the 4 s cue one second into the output (%.2f)", win[0].from);
+                    checkf(std::fabs(win[0].to - 2.5) < 0.05,
+                           "for as long as it was on screen (%.2f)", win[0].to);
+                    checkf(std::fabs(win[1].from - 4.0) < 0.05,
+                           "and the 7 s cue four seconds in (%.2f)", win[1].from);
+                }
+            }
+
+            // `-itsoffset` is the same arithmetic with the other sign: it
+            // delays the input, so every cue arrives later by exactly it.
+            {
+                const std::string outLate = "out/export-subs-late.vtt";
+                ExportSettings ls = vs;
+                ls.path = outLate;
+                ls.inputs[0].itsoffset = 2.0;
+                st = render(ls, {});
+                checkf(st.state == ExportStatus::State::Done,
+                       "an -itsoffset on a subtitle input renders (%s)",
+                       st.error.empty() ? "no error" : st.error.c_str());
+                const auto late = cuesOf(outLate);
+                checkf(late.size() == 3 && std::fabs(late[0].from - 3.0) < 0.05,
+                       "and every cue is two seconds later (%zu cues, first at %.2f)",
+                       late.size(), late.empty() ? -1.0 : late[0].from);
+            }
+
             // The other direction, from the .ass fixture rather than from a
             // conversion of the .srt: the words differ between the two files
             // on purpose, so a render that read the wrong one is visible here.

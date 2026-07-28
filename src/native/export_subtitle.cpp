@@ -32,6 +32,36 @@ bool parseDecodeSource(const std::string& source, int* input, int* stream) {
     return true;
 }
 
+/// Where this input's zero is, for a track of cues.
+///
+/// **Two clocks meet in this file and they were not the same one.** A cue
+/// arrives carrying the container's raw presentation time; `Tap::from` and
+/// `Tap::to` are the window somebody asked for, on the input's own clock, and
+/// the seek is made in those terms. The comparison that decides whether a cue
+/// is in the window was made between the two, so the zeros differed by exactly
+/// `-ss` — a subtitle input trimmed three seconds in wrote every cue three
+/// seconds late and dropped none of the ones that were no longer in the input.
+/// With no window on an input the difference is zero, which is why every test
+/// in the suite passed and why this reaches a person as "the subtitles are
+/// late by however far I trimmed" rather than as anything failing.
+///
+/// **This is `SourceVideo`'s and `SourceAudio`'s epoch, deliberately**, and not
+/// the `streamZero` a copied stream is measured from. Cues are written into the
+/// same output the composite and the mix go into, so they have to be placed on
+/// the clock those are placed on, which is `inputEpoch` over the *container's*
+/// start. `streamZero` counts from a stream's own first packet, and that exists
+/// to undo the reorder delay a decode timestamp begins before the container's
+/// start_time — a correction for a clock this path is not on, since `sub.pts`
+/// is a presentation time and cues do not reorder. In practice the two agree on
+/// every subtitle track measurable here (an .srt reports no container start at
+/// all, and mov_text and Matroska both put their stream's origin at zero); what
+/// separates them is a container that genuinely starts late, which is mpegts,
+/// where the picture is already being placed the way this places the cues.
+double cueEpoch(AVFormatContext* fmt, const MediaInput& in) {
+    return inputEpoch(in, fmt->start_time != AV_NOPTS_VALUE
+                              ? fmt->start_time / double(AV_TIME_BASE) : 0.0);
+}
+
 SubtitleStreams::Tap::~Tap() {
     if (pkt) av_packet_free(&pkt);
     if (dec) avcodec_free_context(&dec);
@@ -104,6 +134,7 @@ bool SubtitleStreams::build(const ExportSettings& s,
         tap->pkt = av_packet_alloc();
         if (!tap->pkt) { *err = "out of memory"; return false; }
 
+        tap->zero = cueEpoch(tap->fmt, tap->in);
         tap->from = std::max(0.0, desc.copyFrom);
         tap->to = desc.copyTo;
         const double limit = inputLimit(tap->in);
@@ -122,9 +153,7 @@ bool SubtitleStreams::build(const ExportSettings& s,
         // renderer is: landing before it only costs cues that are then dropped,
         // and landing after it drops cues the render wanted.
         if (tap->from > 0.0) {
-            const int64_t target = static_cast<int64_t>(
-                std::llround((tap->from + tap->in.ss - tap->in.itsoffset) /
-                             av_q2d(st->time_base)));
+            const int64_t target = inputSeekTarget(st->time_base, tap->in, tap->from);
             if (av_seek_frame(tap->fmt, stream, target, AVSEEK_FLAG_BACKWARD) < 0)
                 LOG_WARN("subtitles: %s would not seek to %.3f s; reading from the start",
                          tap->in.path.c_str(), tap->from);
@@ -161,7 +190,7 @@ bool SubtitleStreams::pumpTap(Tap& t, double until, Writer& w, std::string* err)
         if (until > 0.0 && t.at >= until) return true;
 
         const int rc = av_read_frame(t.fmt, t.pkt);
-        if (rc == AVERROR_EOF || rc == AVERROR(EOF)) { t.finished = true; return true; }
+        if (rc == AVERROR_EOF) { t.finished = true; return true; }
         if (rc < 0) {
             // A read error part way through a subtitle track is worth the same
             // treatment a truncated file gets everywhere else here: stop this
@@ -185,13 +214,19 @@ bool SubtitleStreams::pumpTap(Tap& t, double until, Writer& w, std::string* err)
         }
         if (!got) continue;
 
-        // Where this cue is, in the output's seconds. `sub.pts` is
+        // Where this cue is, on the input's own clock. `sub.pts` is
         // AV_TIME_BASE_Q and the display times are milliseconds relative to it,
-        // which is libavcodec's arrangement rather than one chosen here.
-        const double base = sub.pts != AV_NOPTS_VALUE ? sub.pts / double(AV_TIME_BASE) : 0.0;
+        // which is libavcodec's arrangement rather than one chosen here; the
+        // epoch is what turns the container's timestamp into the input's, and
+        // it has to come off before anything is compared with `from` or `to`.
+        const double base =
+            (sub.pts != AV_NOPTS_VALUE ? sub.pts / double(AV_TIME_BASE) : 0.0) - t.zero;
         const double start = base + sub.start_display_time / 1000.0;
         const double end = base + sub.end_display_time / 1000.0;
-        t.at = std::max(t.at, start);
+        // How far this tap has read, in *output* seconds — which is the clock
+        // `pumpTo` is driven on, since it is called with the time of the frame
+        // the writer has just written.
+        t.at = std::max(t.at, start - t.from);
 
         const bool before = start < t.from - 1e-6;
         const bool after = t.to > 0.0 && start > t.to + 1e-6;
