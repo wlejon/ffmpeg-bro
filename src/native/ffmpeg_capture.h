@@ -1,10 +1,18 @@
-// Recording a device: the job whose end is somebody pressing stop.
+// Recording live inputs: the job whose end is somebody pressing stop.
 //
 // A device needs nothing new in `MediaInput` — it is `-f dshow` naming a
 // libavdevice demuxer, `-i video=…` naming what it can see, and that demuxer's
 // own options (`video_size`, `framerate`, `draw_mouse`, `rtbufsize`) in the
 // same bag `-probesize` travels in. Chunk 4 predicted that and it held: the
 // model work for capture is one line in `inputIsEndless`.
+//
+// **A recording reads a list of inputs, and the list is what makes it a
+// session.** A screen grab and a camera composited into one file is two `-i`s,
+// `[1:v]` scaled and overlaid on `[0:v]`, `[0:a]` and `[1:a]` mixed — which is
+// the same graph a render would be given and the same `-map` vocabulary on the
+// way out. Three things follow from there being several of them, and each is
+// worked out below rather than here: one reader thread per device, two clocks,
+// and sound that is stamped rather than sampled.
 //
 // **The job machine is where a device is genuinely a new shape.** `runExport`
 // walks forward from `start` to `end` at a fixed rate, asking a `FrameSource`
@@ -24,6 +32,49 @@
 // device grew a filter graph — the filtergraph parse and the `pad:<label>`
 // vocabulary. Sharing the slot is a decision and not an accident — see below.
 //
+// **One reader thread per device, because `av_read_frame` blocks.** N devices
+// cannot share a read loop: a camera that has gone quiet would starve the
+// screen grab beside it for as long as it stayed quiet, and what a session
+// records in that moment is exactly what somebody will want back. So each
+// device is read and decoded on a thread of its own which does nothing but
+// deposit frames, and the job thread runs the graph, the writer and the clock.
+// Every device is still *opened* on the caller's thread, so "there is no camera
+// called that" stays a refusal from the call that asked for the recording.
+// A read that has genuinely hung delays its own join and nothing else; that was
+// the single-device loop's limitation and it is now one per input.
+//
+// **Two clocks, and which one runs is the number of inputs.** With one input
+// there is nothing to line up against, so its own media timestamps place the
+// frames — a `-f lavfi` input that produces faster than real time records
+// faster than real time, and a device that runs a little fast or slow still
+// writes a file whose clock is the wall clock. With several, no input's clock
+// can be the master without starving the others, so the session runs on the
+// **wall clock**: one tick per output frame, and every video feed *sampled* at
+// the tick from a latest-frame slot its reader keeps filled — the newest
+// picture, or the previous one again where nothing arrived. Every feed
+// therefore reaches the graph constant-rate and aligned, `overlay`'s framesync
+// has nothing to wait for, and a stalled camera freezes its own picture and
+// only its own. That is the single-device loop's "a stall holds the last
+// picture" rule moved in front of the graph, which is where N inputs need it.
+//
+// **Sound is not sampled.** Dropping or repeating blocks of samples is
+// audible in a way a repeated picture is not, and what live sound actually
+// needs is drift compensation: two devices are two crystal oscillators and
+// 48000 Hz on one of them is not 48000 Hz on the other. So sound is pushed as
+// it arrives, stamped with its arrival on the session's wall clock, and
+// `aresample=async` is inserted between each sound buffersrc and the graph —
+// ffmpeg's own tool for exactly this — in the same place and by the same
+// mechanism the export graph inserts `transpose` for rotation.
+//
+// **The session's zero is the first tick at which every video feed has offered
+// a picture**, which is the generalisation of "the recording's zero is the
+// first picture": with two devices it is the reason a session does not open
+// with one of them black for as long as it took to wake up. A feed that is
+// sound only does not gate it, and a feed that has produced nothing at all
+// after a few seconds fails the job naming its device — a session waiting for
+// ever on a camera that is not going to answer, with "recording" on the screen,
+// is the failure worth refusing rather than the one worth being patient about.
+//
 // **A recording can run a filter graph, and it is pushed rather than pulled.**
 // `ExportSettings::filterGraph` means the same thing here as it does in a
 // render: `[0:v]crop=…[vout]` records one monitor out of a wide screen grab, and
@@ -37,13 +88,17 @@
 // running out — happens *after* the graph rather than before it, per output pad,
 // which is what makes a rate-changing filter (`fps=10`) an ordinary filter here.
 //
-// Two things about it are refusals rather than features. A capture's graph is
-// fed by the device and by nothing else, so `filterInputs` — which says which
+// Three things about it are refusals rather than features. A capture's graph is
+// fed by its devices and by nothing else, so `filterInputs` — which says which
 // *file* feeds which pad — is refused: a device cannot be cut from, and a file
-// beside it on one graph is a later chunk's. And a graph whose filters want a
+// beside one on the same graph is a later chunk's. A graph whose filters want a
 // graphics card is refused by name, because `-filter_hw_device` has nowhere to
 // be said on the Capture stage and failing inside a parse would be the least
-// readable version of it.
+// readable version of it. And **several inputs with no graph is refused**,
+// because two pictures and no statement of how they combine is not a
+// composition this or anything else could guess at — the graph is what says how
+// they go together, which is also why every stream of every input has to reach
+// it once there is more than one.
 //
 // **Stop is the normal end of a recording, not the exceptional one.** Every
 // rule about a cancelled render still writing its trailer matters more here,
@@ -80,10 +135,11 @@
 #include "ffmpeg_input.h"
 
 #include <string>
+#include <vector>
 
 namespace ffmpegbro {
 
-/// What a recording is: one device, and the file it goes into.
+/// What a recording is: the live inputs it reads, and the file they go into.
 ///
 /// Two structs rather than fields bolted onto `ExportSettings`, because they
 /// answer different questions and only one of them is new. The output half is
@@ -102,6 +158,22 @@ struct CaptureSettings {
     /// `-i` with everything else.
     MediaInput source;
 
+    /// Every device this session reads, in the order `[0:…]`, `[1:…]` … number
+    /// them for the graph.
+    ///
+    /// **Empty is not "no inputs" — it is `{source}`**, which is the same rule
+    /// `outputStreams()` follows for an empty stream list and
+    /// `ExportSettings::inputs` follows for a spec whose clips carry paths: a
+    /// caller that never heard of this field asks for exactly what it always
+    /// asked for, and every existing test still means what it meant. Given a
+    /// list, `source` is the first entry of it and nothing reads the field.
+    ///
+    /// **`-t` is still per input, and the shortest of them is the session's.**
+    /// An input that has run out has nothing further to offer the graph, so
+    /// going on would be recording whatever is left, held still, over the top
+    /// of it.
+    std::vector<MediaInput> sources;
+
     /// Where it goes and how it is encoded. `width`/`height` at zero take the
     /// device's own picture size, which is nearly always what is wanted: a
     /// capture is not composited and there is no canvas to fit it into.
@@ -109,7 +181,7 @@ struct CaptureSettings {
     ///
     /// **`filterGraph` and `streams` mean here exactly what they mean in a
     /// render**, which is why they are not fields of their own: the graph is fed
-    /// by the device rather than by files, and what comes out of its pads is
+    /// by the devices rather than by files, and what comes out of its pads is
     /// mapped with `pad:<label>` the same way. `filterInputs` is the one field
     /// of this struct a recording refuses — see the note at the top.
     ExportSettings output;
@@ -126,13 +198,14 @@ struct CaptureSettings {
 };
 
 /// Start recording on the job thread. False — with a reason — when the slot is
-/// taken or the device cannot be opened.
+/// taken or an input cannot be opened.
 ///
-/// The device is opened *here*, on the caller's thread, and not on the job
-/// thread: "there is no camera called that" is the commonest failure and it
-/// should arrive as a refusal from the call that asked for the recording,
-/// while the name that was wrong is still on screen — not as a job that starts
-/// and fails a moment later.
+/// **Every** device is opened *here*, on the caller's thread, and not on the
+/// job thread or on the reader thread that goes on to read it: "there is no
+/// camera called that" is the commonest failure and it should arrive as a
+/// refusal from the call that asked for the recording, while the name that was
+/// wrong is still on screen — not as a job that starts and fails a moment later
+/// with the second of two devices to blame and nothing saying which.
 ///
 /// `jobNumber` is which job this one is in the report channel — the same thing
 /// `startExport` hands back, and for the same reason.

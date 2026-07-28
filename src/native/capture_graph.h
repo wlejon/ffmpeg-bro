@@ -88,10 +88,11 @@ public:
 
     /// One input the graph is allowed to read, and what it can offer.
     ///
-    /// A list of one today: the device is `[0:v]` and `[0:a]`. It is a list
-    /// because the next thing this grows is a second one, and a graph half of
-    /// whose pads are fed by a device and half by a file is the shape that has
-    /// to work — so nothing below reads "the device", only "feed n".
+    /// One entry per device of the session, in the order that numbers them:
+    /// the first is `[0:v]` and `[0:a]`, the second `[1:v]` and `[1:a]`. It was
+    /// written as a list while there could only be one, which is why a session
+    /// of several needed nothing reshaped here — nothing below reads "the
+    /// device", only "feed n".
     struct FeedSource {
         int index = 0;          ///< the number in `[<index>:v]`
         bool hasVideo = false;
@@ -115,6 +116,26 @@ public:
     /// read it — in which case that stream of the device goes straight to the
     /// writer, exactly as it did before there was a graph at all.
     int feedFor(int input, bool audio) const;
+
+    /// Run these feeds as a **live session**: everything arriving here is on one
+    /// wall clock at `rate` rather than on its own device's.
+    ///
+    /// Two things change in `describeFeed`, and both of them are about several
+    /// inputs rather than about being live. A video buffersrc is told the rate,
+    /// because the caller genuinely knows it — it is sampling every feed at the
+    /// tick — and `overlay`'s framesync then has a constant-rate feed on both
+    /// pads instead of two it has to guess the alignment of. And an
+    /// `aresample=async` goes in between each sound buffersrc and the graph:
+    /// two devices are two crystal oscillators, 48000 Hz on one of them is not
+    /// 48000 Hz on the other, and stretching sound a few samples at a time to
+    /// follow the timestamps is what libavfilter has that filter for. Dropping
+    /// or repeating a block instead — which is what sampling sound the way the
+    /// pictures are sampled would amount to — is audible.
+    ///
+    /// Inserted the way `GraphSource` inserts `transpose` for rotation: a
+    /// filter between the buffersrc and the pad the graph text named, so the
+    /// graph itself is exactly what was written.
+    void setSession(AVRational rate) { session_ = rate; }
 
     /// Has every feed been described and the graph configured? Nothing comes out
     /// of a sink, and no pad has a size, until this is true.
@@ -254,6 +275,9 @@ private:
     AVFilterGraph* graph_ = nullptr;
     std::vector<std::unique_ptr<Feed>> feeds_;
     std::vector<std::unique_ptr<Sink>> sinks_;
+    /// The session's tick rate, or `{0,1}` for an input on its own clock. See
+    /// `setSession`.
+    AVRational session_{0, 1};
     Sink* vprimary_ = nullptr;
     Sink* aprimary_ = nullptr;
     bool videoDirect_ = false;

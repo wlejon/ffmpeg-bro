@@ -131,13 +131,21 @@ bool CaptureGraph::open(const std::vector<FeedSource>& inputs, std::string* err)
         const FeedSource* src = nullptr;
         for (const auto& f : inputs) if (f.index == index) { src = &f; break; }
         if (!src) {
-            ok = fail("the graph reads [" + label + "] and this recording has one input: the "
-                      "device is [0:v] and [0:a]");
+            // **The index is named**, because with a list of inputs that is the
+            // whole of what is wrong: [1:v] against one device is a graph
+            // written for a session that has not been given its second source,
+            // and "this recording has one input" leaves the reader to work out
+            // which of the labels they wrote was the offending one.
+            ok = fail("the graph reads [" + label + "] and this recording has no input " +
+                      std::to_string(index) + " — it has " + std::to_string(inputs.size()) +
+                      (inputs.size() == 1 ? " input, which is [0:v] and [0:a]"
+                                          : " inputs, numbered from [0:…] upwards in the order "
+                                            "they were given"));
             break;
         }
         if (audio ? !src->hasAudio : !src->hasVideo) {
-            ok = fail("the graph reads [" + label + "] and this device produces no " +
-                      (audio ? "sound" : "pictures"));
+            ok = fail("the graph reads [" + label + "] and input " + std::to_string(index) +
+                      " produces no " + (audio ? "sound" : "pictures"));
             break;
         }
         if (audio != (typeOfInput(in) == AVMEDIA_TYPE_AUDIO)) {
@@ -261,6 +269,12 @@ bool CaptureGraph::describeFeed(Feed& f, const AVFrame* frame, AVRational timeBa
     // the rate makes the two different clocks.
     par->time_base = timeBase;
     if (!f.audio) {
+        // A session samples every video feed at its own tick, so it is the one
+        // caller that genuinely knows the rate a buffersrc is being fed at.
+        // Telling the graph makes `overlay`'s framesync a lookup rather than a
+        // guess, and leaves `fps` a filter that decimates a known rate instead
+        // of one inferring one from the timestamps as they go by.
+        if (session_.num > 0) par->frame_rate = session_;
         par->format = frame->format;
         par->width = frame->width;
         par->height = frame->height;
@@ -278,7 +292,37 @@ bool CaptureGraph::describeFeed(Feed& f, const AVFrame* frame, AVRational timeBa
     av_channel_layout_uninit(&par->ch_layout);
     av_free(par);
     if (rc >= 0) rc = avfilter_init_dict(f.src, nullptr);
-    if (rc >= 0) rc = avfilter_link(f.src, 0, f.into, f.intoPad);
+
+    // Drift compensation, in front of the graph and not inside it.
+    //
+    // Two devices are two crystal oscillators: a microphone's 48000 samples a
+    // second and a camera's are the same number of a slightly different second,
+    // and over a few minutes that is a soundtrack visibly out of step with a
+    // picture placed on the wall clock. `aresample=async` is ffmpeg's own answer
+    // — it stretches or squeezes by a few samples at a time to follow the
+    // timestamps, which is inaudible where dropping or repeating a whole block
+    // would not be. `first_pts=0` makes the session's zero the stream's zero
+    // rather than whenever this feed's first block happened to arrive.
+    //
+    // Inserted where `GraphSource` inserts `transpose`: between the buffersrc
+    // and the pad the graph text named, so what was written is still what runs.
+    AVFilterContext* tail = f.src;
+    if (rc >= 0 && f.audio && session_.num > 0) {
+        const AVFilter* async = avfilter_get_by_name("aresample");
+        if (!async) {
+            if (err) *err = "this build has no aresample, and live sound from several devices "
+                            "cannot be kept in step without one";
+            return false;
+        }
+        AVFilterContext* smooth = nullptr;
+        const std::string name = "async_" + std::to_string(f.input);
+        rc = avfilter_graph_create_filter(&smooth, async, name.c_str(),
+                                          "async=1000:first_pts=0", nullptr, graph_);
+        if (rc >= 0) rc = avfilter_link(f.src, 0, smooth, 0);
+        if (rc >= 0) tail = smooth;
+    }
+
+    if (rc >= 0) rc = avfilter_link(tail, 0, f.into, f.intoPad);
     if (rc < 0) {
         if (err) *err = "cannot connect [" + f.label + "] to the graph: " + avErr(rc);
         return false;

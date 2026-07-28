@@ -1,6 +1,6 @@
-// Recording a device. See ffmpeg_capture.h for why this is a second job rather
-// than a flag on the render, and for what the filter graph in the middle of it
-// is and is not.
+// Recording live inputs. See ffmpeg_capture.h for why this is a second job
+// rather than a flag on the render, for what the filter graph in the middle of
+// it is and is not, and for the two clocks a session can run on.
 
 #include "ffmpeg_capture.h"
 
@@ -13,7 +13,10 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/opt.h>
+#include <libavutil/rational.h>
+#include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
@@ -21,16 +24,48 @@ extern "C" {
 #include "util/log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <deque>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace ffmpegbro {
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+/// Every input this recording reads.
+///
+/// **An empty `sources` is `{source}`**, which is the rule `outputStreams()`
+/// and `ExportSettings::inputs` already follow: a caller that never heard of
+/// the list means exactly what it always meant. One place, so nothing
+/// downstream has to ask which of the two fields it is looking at.
+std::vector<MediaInput> sourcesOf(const CaptureSettings& s) {
+    if (!s.sources.empty()) return s.sources;
+    return {s.source};
+}
+
+/// How long the session is, in seconds, or zero for until stopped.
+///
+/// `-t` belongs to an input, and with several of them the **shortest** decides:
+/// an input that has run out has nothing further to offer the graph, so going
+/// on would be recording whatever is left of the others over a picture held
+/// still. With one input this is that input's `-t` and nothing has changed.
+double limitOf(const std::vector<MediaInput>& srcs) {
+    double best = 0.0;
+    for (const auto& in : srcs)
+        if (in.duration > 0.0 && (best <= 0.0 || in.duration < best)) best = in.duration;
+    return best;
+}
 
 /// One open device: its demuxer, the two decoders it might have, and the
 /// converters into the currency the writer takes.
@@ -39,7 +74,15 @@ namespace {
 /// each, and one device is one demuxer: `-f dshow -i "video=Camera:audio=Mic"`
 /// is a single `-i` carrying both, and opening it twice would open the camera
 /// twice — which on Windows is not a slow path, it is an error.
+///
+/// **One of these per input, and in a session one reader thread per one of
+/// these.** Everything in here is touched by that thread alone once the session
+/// is running, which is what makes the decoders and the packet and frame
+/// scratch safe without a lock around any of them.
 struct Device {
+    MediaInput in;
+    int index = 0;              ///< the number in `[<index>:v]`
+
     AVFormatContext* fmt = nullptr;
     AVPacket* pkt = nullptr;
     AVFrame* frame = nullptr;
@@ -54,6 +97,13 @@ struct Device {
     SwrContext* swr = nullptr;
     AVChannelLayout outLayout{};
 
+    /// What this device offers a graph, and what a session waits for.
+    bool hasVideo() const { return vdec != nullptr; }
+    bool hasAudio() const { return adec != nullptr; }
+    std::string name() const {
+        return in.format.empty() ? in.path : in.format + " " + in.path;
+    }
+
     ~Device() {
         if (toRgba) sws_freeContext(toRgba);
         if (swr) swr_free(&swr);
@@ -65,6 +115,8 @@ struct Device {
         if (fmt) avformat_close_input(&fmt);
     }
 };
+
+using DeviceList = std::vector<std::shared_ptr<Device>>;
 
 bool openDecoder(AVFormatContext* fmt, int index, AVCodecContext** out, std::string* err) {
     AVStream* st = fmt->streams[index];
@@ -95,49 +147,33 @@ bool openDecoder(AVFormatContext* fmt, int index, AVCodecContext** out, std::str
     return true;
 }
 
-/// Open the device and settle everything that has to be known before the file
-/// can be: the picture size, the rate, and whether there is any sound.
-bool openDevice(Device& d, CaptureSettings& s, std::string* err) {
-    if (!openInput(&d.fmt, s.source, err)) return false;
+/// Open one device and settle everything about *it* that has to be known
+/// before the file can be: whether there are pictures, whether there is sound,
+/// and how that sound becomes the recording's.
+///
+/// What the *output* takes from the devices — the picture size and the rate —
+/// is `settleOutput` below, because with several inputs that is a decision
+/// about the list rather than about any one of them.
+bool openDevice(Device& d, const MediaInput& in, int index, const CaptureSettings& s,
+                std::string* err) {
+    d.in = in;
+    d.index = index;
+    if (!openInput(&d.fmt, in, err)) return false;
 
     d.videoStream = av_find_best_stream(d.fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     d.audioStream = av_find_best_stream(d.fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (d.videoStream < 0 && d.audioStream < 0) {
-        *err = s.source.path + ": this device produced neither pictures nor sound";
+        *err = in.path + ": this device produced neither pictures nor sound";
         return false;
     }
 
     if (d.videoStream >= 0) {
         std::string why;
         if (!openDecoder(d.fmt, d.videoStream, &d.vdec, &why)) {
-            *err = s.source.path + ": " + why;
+            *err = in.path + ": " + why;
             return false;
         }
-        // The device's own picture is the output picture unless somebody said
-        // otherwise. A capture is not composited — there is no canvas to fit
-        // it into — so a size of this application's choosing would be a scale
-        // nobody asked for on every frame. A filter graph *is* somebody saying
-        // otherwise, and the composite pad's size wins once it is configured.
-        if (s.output.width <= 0 || s.output.height <= 0) {
-            s.output.width = d.vdec->width;
-            s.output.height = d.vdec->height;
-        }
-        if (s.output.fps <= 0.0) {
-            const AVRational r = av_guess_frame_rate(d.fmt, d.fmt->streams[d.videoStream],
-                                                     nullptr);
-            s.output.fps = r.num > 0 && r.den > 0 ? av_q2d(r) : 30.0;
-        }
-    } else {
-        // Sound only. The writer still wants a canvas size and a rate for the
-        // video stream it is not going to open; nothing reads them.
-        if (s.output.width <= 0) s.output.width = 16;
-        if (s.output.height <= 0) s.output.height = 16;
-        if (s.output.fps <= 0.0) s.output.fps = 30.0;
     }
-    // yuv420p has no half pixels, and an odd canvas fails at avcodec_open2
-    // with an unhelpful message.
-    s.output.width = std::max(16, s.output.width & ~1);
-    s.output.height = std::max(16, s.output.height & ~1);
 
     if (d.audioStream >= 0 && s.output.includeAudio) {
         std::string why;
@@ -170,20 +206,64 @@ bool openDevice(Device& d, CaptureSettings& s, std::string* err) {
     return true;
 }
 
-/// What this device can offer a filter graph. A list of one, because the next
-/// thing this grows is a second input and nothing in `CaptureGraph` says "the
-/// device".
-std::vector<CaptureGraph::FeedSource> feedsOf(const Device& d) {
-    CaptureGraph::FeedSource f;
-    f.index = 0;
-    f.hasVideo = d.vdec != nullptr;
-    f.hasAudio = d.adec != nullptr;
-    return {f};
+/// What size and rate the file is opened for, before the graph has said
+/// otherwise.
+///
+/// **The first input that has a picture decides**, which for one device is the
+/// device and for a session is the one the others are composited onto — the
+/// order the sources were given in is the order the graph numbers them, so it
+/// is also the order somebody wrote their overlay in. A graph that says
+/// otherwise still wins: a pad's size is asked for once the graph is
+/// configured, in `Output::open`.
+void settleOutput(CaptureSettings& s, const DeviceList& devs) {
+    const Device* picture = nullptr;
+    for (const auto& d : devs) if (d->hasVideo()) { picture = d.get(); break; }
+
+    if (picture) {
+        // The device's own picture is the output picture unless somebody said
+        // otherwise. A capture is not composited — there is no canvas to fit
+        // it into — so a size of this application's choosing would be a scale
+        // nobody asked for on every frame. A filter graph *is* somebody saying
+        // otherwise, and the composite pad's size wins once it is configured.
+        if (s.output.width <= 0 || s.output.height <= 0) {
+            s.output.width = picture->vdec->width;
+            s.output.height = picture->vdec->height;
+        }
+        if (s.output.fps <= 0.0) {
+            const AVRational r = av_guess_frame_rate(
+                picture->fmt, picture->fmt->streams[picture->videoStream], nullptr);
+            s.output.fps = r.num > 0 && r.den > 0 ? av_q2d(r) : 30.0;
+        }
+    } else {
+        // Sound only. The writer still wants a canvas size and a rate for the
+        // video stream it is not going to open; nothing reads them.
+        if (s.output.width <= 0) s.output.width = 16;
+        if (s.output.height <= 0) s.output.height = 16;
+        if (s.output.fps <= 0.0) s.output.fps = 30.0;
+    }
+    // yuv420p has no half pixels, and an odd canvas fails at avcodec_open2
+    // with an unhelpful message.
+    s.output.width = std::max(16, s.output.width & ~1);
+    s.output.height = std::max(16, s.output.height & ~1);
 }
 
-/// One decoded picture as RGBA at the output size.
-const Rgba* toCanvas(Device& d, Rgba& canvas, int w, int h) {
-    const AVFrame* f = d.frame;
+/// What these devices can offer a filter graph, in the order that numbers them.
+std::vector<CaptureGraph::FeedSource> feedsOf(const DeviceList& devs) {
+    std::vector<CaptureGraph::FeedSource> out;
+    out.reserve(devs.size());
+    for (size_t i = 0; i < devs.size(); ++i) {
+        CaptureGraph::FeedSource f;
+        f.index = static_cast<int>(i);
+        f.hasVideo = devs[i]->hasVideo();
+        f.hasAudio = devs[i]->hasAudio();
+        out.push_back(f);
+    }
+    return out;
+}
+
+/// One decoded picture as RGBA at the output size. The direct path's, where
+/// there is no graph to have done it already.
+const Rgba* toCanvas(Device& d, const AVFrame* f, Rgba& canvas, int w, int h) {
     if (f->width <= 0 || f->height <= 0) return nullptr;
     const auto fmt = static_cast<AVPixelFormat>(f->format);
     d.toRgba = sws_getCachedContext(d.toRgba, f->width, f->height, fmt, w, h,
@@ -228,6 +308,209 @@ struct AudDest {
     int64_t written = 0;
 };
 
+/// Everything downstream of the graph: the file, one destination per pad, and
+/// the rules that place what arrives.
+///
+/// It is shared by both of the loops below because **neither of them changes
+/// what happens to a frame once it has left the graph** — a session and a
+/// single device differ entirely in how frames are got hold of, and not at all
+/// in where they go. Keeping that in one object is what stops the wall-clock
+/// loop growing a second, slightly different, answer to `-t`.
+struct Output {
+    CaptureSettings& s;
+    ExportStatus& st;
+    CaptureGraph* graph = nullptr;
+
+    /// Zero means until stopped. It is `-t` on the input, which is where a
+    /// command line puts it — and it is judged on *output* time, so a graph
+    /// that changes the rate still records the number of seconds asked for.
+    double limit = 0.0;
+    /// Is a picture going to arrive at all? It decides what happens to sound
+    /// that turns up before one: dropped, because letting it in would put the
+    /// whole soundtrack ahead of the picture by however long the device took to
+    /// wake up.
+    bool expectsPicture = true;
+    /// Only for a recording with no graph, where there is one device and the
+    /// question is whether it had a soundtrack.
+    bool deviceHasAudio = false;
+
+    Writer writer;
+    std::vector<VidDest> vids;
+    std::vector<AudDest> auds;
+    AudDest* mixDest = nullptr;
+    bool opened = false;
+    bool stop = false;
+    double epoch = -1.0;        ///< the first picture's timestamp; the recording's zero
+    std::string err;
+
+    Output(CaptureSettings& settings, ExportStatus& status, CaptureGraph* g)
+        : s(settings), st(status), graph(g) {}
+
+    /// **The file is opened for what the graph turned out to produce.** A pad's
+    /// size is not knowable until libavfilter has configured the graph, and the
+    /// graph is not configured until a device has handed over a frame — so with
+    /// a graph this runs on the first frame rather than up front, which is the
+    /// one ordering difference between a recording and a render on this path.
+    bool open(std::string* why);
+
+    bool writeOne(VidDest& v, const Rgba& pic, int64_t n);
+    /// Where this picture belongs, and everything owed before it. False when
+    /// the recording is over — the limit was reached, or a write failed.
+    bool place(VidDest& v, double at, const Rgba& pic);
+    bool writeSound(AudDest& a, double at, const float* samples, int frames);
+    /// One frame off one pad of the graph, to every destination reading it. A
+    /// pad read both as the composite and by name is one sink written twice,
+    /// which for a picture is simply the same picture in two streams.
+    bool emit(const CaptureGraph::Taken& tk);
+};
+
+bool Output::open(std::string* why) {
+    if (graph) {
+        if (const int w = graph->compositeWidth()) {
+            s.output.width = std::max(16, w & ~1);
+            s.output.height = std::max(16, graph->compositeHeight() & ~1);
+        }
+        if (const double r = graph->compositeRate(); r > 0.0) s.output.fps = r;
+        if (limit > 0.0)
+            st.framesTotal = std::max<int64_t>(1, std::llround(limit * s.output.fps));
+    }
+
+    const bool wantAudio = graph ? graph->hasMix() : deviceHasAudio;
+    std::vector<ExportStream> resolved = outputStreams(s.output, wantAudio);
+    std::vector<std::string> reads;
+    // The same refusals a render makes about `pad:`, in the same words: the
+    // moment differs because a recording learns its pad sizes late, and the
+    // answers must not.
+    if (!resolvePads(s.output, graph, resolved, &reads, why)) return false;
+    if (graph) {
+        graph->readPads(reads);
+        if (!reads.empty()) resolved = outputStreams(s.output, wantAudio);
+    }
+    if (!writer.open(s.output, wantAudio, why)) return false;
+    opened = true;
+
+    // The composite first, so that `vids.front()` is the picture the recording's
+    // frame count and its `-t` are about.
+    for (const auto& r : resolved)
+        if (r.kind == "video" && r.source == "composite") {
+            VidDest v;
+            v.composite = true;
+            vids.push_back(std::move(v));
+            break;
+        }
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        const ExportStream& r = resolved[i];
+        if (!isPadSource(r.source)) continue;
+        if (r.kind == "video") {
+            VidDest v;
+            v.desc = i;
+            v.label = padLabelOf(r.source);
+            vids.push_back(std::move(v));
+        } else if (r.kind == "audio") {
+            AudDest a;
+            a.desc = i;
+            a.label = padLabelOf(r.source);
+            auds.push_back(std::move(a));
+        }
+    }
+    if (writer.hasAudio()) {
+        AudDest a;
+        a.mix = true;
+        auds.push_back(std::move(a));
+    }
+    for (auto& a : auds) if (a.mix) mixDest = &a;
+    return true;
+}
+
+bool Output::writeOne(VidDest& v, const Rgba& pic, int64_t n) {
+    const bool ok = v.composite ? writer.writeVideo(pic, n, &err)
+                                : writer.writeVideoTo(v.desc, pic, n, &err);
+    if (!ok) {
+        st.state = ExportStatus::State::Failed;
+        st.error = err;
+        stop = true;
+    }
+    return ok;
+}
+
+bool Output::place(VidDest& v, double at, const Rgba& pic) {
+    // The recording's zero is the first picture. Sound that arrived before it
+    // is sound from before the recording had anything to show.
+    if (epoch < 0.0) epoch = at < 0.0 ? 0.0 : at;
+    const double rel = at < 0.0 ? double(v.next) / s.output.fps : at - epoch;
+    if (limit > 0.0 && rel >= limit) { stop = true; return false; }
+
+    // Rounded to an output frame, so a device that runs a little fast or a
+    // little slow still writes a file whose clock is the wall clock.
+    const int64_t index = std::max<int64_t>(v.next, std::llround(rel * s.output.fps));
+    // A stall holds the last picture rather than leaving a hole. Cheap because
+    // the gap is rare and one frame long when it is not; a gap left open would
+    // make the muxer's timestamps jump, which several players read as a corrupt
+    // file.
+    while (v.haveHeld && v.next < index) {
+        if (!writeOne(v, v.held, v.next)) return false;
+        v.next++;
+    }
+    if (!writeOne(v, pic, v.next)) return false;
+    v.held = pic;
+    v.haveHeld = true;
+    v.next++;
+    if (&v == vids.data()) st.framesDone = v.next;
+    return true;
+}
+
+bool Output::writeSound(AudDest& a, double at, const float* samples, int frames) {
+    const int rate = s.output.audioSampleRate;
+    const int channels = s.output.audioChannels;
+    // Sound before the first picture is dropped to the sample: a whole frame of
+    // it is twenty milliseconds, which is audible as a lip-sync error and is
+    // exactly the kind of thing nobody finds until the recording is the only
+    // copy.
+    int skip = 0;
+    if (epoch >= 0.0 && at >= 0.0 && at < epoch)
+        skip = std::min(frames, static_cast<int>(std::llround((epoch - at) * rate)));
+    else if (epoch < 0.0 && expectsPicture)
+        return true;    // no picture yet; this is sound from before the recording
+    else if (epoch < 0.0)
+        epoch = at < 0.0 ? 0.0 : at;
+
+    const int usable = frames - skip;
+    if (usable <= 0) return true;
+    const float* from = samples + static_cast<size_t>(skip) * channels;
+    const bool ok = a.mix ? writer.writeAudio(from, usable, &err)
+                          : writer.writeAudioTo(a.desc, from, usable, &err);
+    if (!ok) {
+        st.state = ExportStatus::State::Failed;
+        st.error = err;
+        stop = true;
+        return false;
+    }
+    a.written += usable;
+    // A recording with no picture in it is as long as its soundtrack.
+    if (vids.empty() && limit > 0.0 && double(a.written) / rate >= limit) {
+        stop = true;
+        return false;
+    }
+    return true;
+}
+
+bool Output::emit(const CaptureGraph::Taken& tk) {
+    if (tk.audio) {
+        for (auto& a : auds) {
+            if (a.mix ? !tk.primary : a.label != tk.label) continue;
+            if (!writeSound(a, tk.at, tk.samples, tk.frames)) return false;
+        }
+    } else {
+        for (auto& v : vids) {
+            if (v.composite ? !tk.primary : v.label != tk.label) continue;
+            if (!place(v, tk.at, *tk.picture)) return false;
+        }
+    }
+    return !stop;
+}
+
+// ── The single-device loop: media time, in one thread ───────────────────────
+
 /// The whole recording, as a read loop.
 ///
 /// It is not a walk over output frames the way `runExport` is, and it cannot
@@ -243,30 +526,16 @@ struct AudDest {
 /// frames a second stamped as such, and they are placed where they fall. The
 /// recording's zero is still the first picture written to the composite, which
 /// is why the composite sink is drained first.
-void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
-    job::Held slot;
+///
+/// **This is the one-input mode**, and it stays exactly what it was. The
+/// device's own media timestamps are the clock, which is what makes a `-f
+/// lavfi` input record faster than real time and a camera that drifts a little
+/// still come out constant rate. There is nothing to line it up against, so
+/// there is nothing for a wall clock to buy.
+void runDirect(CaptureSettings& s, ExportStatus& st, const std::shared_ptr<Device>& dev,
+               const std::function<double()>& secondsSince,
+               const std::function<void(const std::string&)>& refuse) {
     Device& d = *dev;
-
-    const auto began = std::chrono::steady_clock::now();
-    const auto secondsSince = [&began] {
-        return std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
-    };
-
-    ExportStatus st = job::status();
-    st.state = ExportStatus::State::Running;
-    st.path = s.output.path;
-    st.stage = "opening";
-    job::publish(st);
-
-    const auto refuse = [&](const std::string& why) {
-        st.state = ExportStatus::State::Failed;
-        st.error = why;
-        st.elapsedSec = secondsSince();
-        job::publish(st);
-        LOG_ERROR("capture failed: %s", why.c_str());
-        reportNote(AV_LOG_ERROR, "capture", why);
-    };
-
     std::string err;
 
     // The graph, built here rather than where the recording was asked for, for
@@ -277,193 +546,33 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
     if (!s.output.filterGraph.empty()) {
         graph = std::make_unique<CaptureGraph>(s.output.filterGraph, s.output.audioSampleRate,
                                                s.output.audioChannels, s.output.scaler);
-        if (!graph->open(feedsOf(d), &err)) { refuse(err); return; }
+        std::vector<std::shared_ptr<Device>> one{dev};
+        if (!graph->open(feedsOf(one), &err)) { refuse(err); return; }
     }
     const int vFeed = graph ? graph->feedFor(0, false) : -1;
     const int aFeed = graph ? graph->feedFor(0, true) : -1;
 
-    // Is a picture going to arrive at all? It decides what happens to sound that
-    // turns up before one: dropped, because letting it in would put the whole
-    // soundtrack ahead of the picture by however long the device took to wake up.
-    // With a graph reading the device's picture there is always one — `open()`
-    // refuses a graph that eats it and produces none.
-    const bool expectsPicture = (graph && !graph->videoDirect()) ? true : d.videoStream >= 0;
+    Output out(s, st, graph.get());
+    out.limit = limitOf({d.in});
+    out.deviceHasAudio = d.adec != nullptr;
+    // Whether the device has a picture is the whole of it: a graph can only
+    // keep one or be refused for eating it (`open()` will not accept a graph
+    // that reads the picture and produces none), so it cannot make the answer
+    // yes where the device said no. Asking the graph as well used to, which
+    // dropped every sample of a sound-only device's soundtrack — nothing was
+    // ever going to set an epoch for it to be measured against.
+    out.expectsPicture = d.hasVideo();
 
-    Writer writer;
-    bool opened = false;
-    std::vector<VidDest> vids;
-    std::vector<AudDest> auds;
-    AudDest* mixDest = nullptr;
+    const auto emit = [&out](const CaptureGraph::Taken& tk) { return out.emit(tk); };
 
-    const int rate = s.output.audioSampleRate;
-    const int channels = s.output.audioChannels;
-    // Zero means until stopped. It is `-t` on the input, which is where a
-    // command line puts it — and it is judged on *output* time, so a graph that
-    // changes the rate still records the number of seconds that was asked for.
-    const double limit = s.source.duration;
-
-    double epoch = -1.0;        // the first picture's timestamp; the recording's zero
-    bool stop = false;
-
-    // **The file is opened for what the graph turned out to produce.** A pad's
-    // size is not knowable until libavfilter has configured the graph, and the
-    // graph is not configured until the device has handed over a frame — so with
-    // a graph this runs on the first frame rather than up front, which is the
-    // one ordering difference between a recording and a render on this path.
-    const auto openWriter = [&](std::string* why) {
-        if (graph) {
-            if (const int w = graph->compositeWidth()) {
-                s.output.width = std::max(16, w & ~1);
-                s.output.height = std::max(16, graph->compositeHeight() & ~1);
-            }
-            if (const double r = graph->compositeRate(); r > 0.0) s.output.fps = r;
-            if (limit > 0.0)
-                st.framesTotal = std::max<int64_t>(1, std::llround(limit * s.output.fps));
-        }
-
-        const bool wantAudio = graph ? graph->hasMix() : d.adec != nullptr;
-        std::vector<ExportStream> resolved = outputStreams(s.output, wantAudio);
-        std::vector<std::string> reads;
-        // The same refusals a render makes about `pad:`, in the same words: the
-        // moment differs because a recording learns its pad sizes late, and the
-        // answers must not.
-        if (!resolvePads(s.output, graph.get(), resolved, &reads, why)) return false;
-        if (graph) {
-            graph->readPads(reads);
-            if (!reads.empty()) resolved = outputStreams(s.output, wantAudio);
-        }
-        if (!writer.open(s.output, wantAudio, why)) return false;
-        opened = true;
-
-        // The composite first, so that `vids.front()` is the picture the
-        // recording's frame count and its `-t` are about.
-        for (const auto& r : resolved)
-            if (r.kind == "video" && r.source == "composite") {
-                VidDest v;
-                v.composite = true;
-                vids.push_back(std::move(v));
-                break;
-            }
-        for (size_t i = 0; i < resolved.size(); ++i) {
-            const ExportStream& r = resolved[i];
-            if (!isPadSource(r.source)) continue;
-            if (r.kind == "video") {
-                VidDest v;
-                v.desc = i;
-                v.label = padLabelOf(r.source);
-                vids.push_back(std::move(v));
-            } else if (r.kind == "audio") {
-                AudDest a;
-                a.desc = i;
-                a.label = padLabelOf(r.source);
-                auds.push_back(std::move(a));
-            }
-        }
-        if (writer.hasAudio()) {
-            AudDest a;
-            a.mix = true;
-            auds.push_back(std::move(a));
-        }
-        for (auto& a : auds) if (a.mix) mixDest = &a;
-        return true;
-    };
-
-    if (!graph && !openWriter(&err)) { refuse(err); return; }
+    if (!graph && !out.open(&err)) { refuse(err); return; }
     st.stage = "recording";
     job::publish(st);
 
-    const auto writeOne = [&](VidDest& v, const Rgba& pic, int64_t n) {
-        const bool ok = v.composite ? writer.writeVideo(pic, n, &err)
-                                    : writer.writeVideoTo(v.desc, pic, n, &err);
-        if (!ok) {
-            st.state = ExportStatus::State::Failed;
-            st.error = err;
-            stop = true;
-        }
-        return ok;
-    };
-
-    /// Where this picture belongs, and everything owed before it. False when
-    /// the recording is over — the limit was reached, or a write failed.
-    const auto place = [&](VidDest& v, double at, const Rgba& pic) {
-        // The recording's zero is the first picture. Sound that arrived before
-        // it is sound from before the recording had anything to show.
-        if (epoch < 0.0) epoch = at < 0.0 ? 0.0 : at;
-        const double rel = at < 0.0 ? double(v.next) / s.output.fps : at - epoch;
-        if (limit > 0.0 && rel >= limit) { stop = true; return false; }
-
-        // Rounded to an output frame, so a device that runs a little fast or a
-        // little slow still writes a file whose clock is the wall clock.
-        const int64_t index = std::max<int64_t>(v.next, std::llround(rel * s.output.fps));
-        // A stall holds the last picture rather than leaving a hole. Cheap
-        // because the gap is rare and one frame long when it is not; a gap left
-        // open would make the muxer's timestamps jump, which several players
-        // read as a corrupt file.
-        while (v.haveHeld && v.next < index) {
-            if (!writeOne(v, v.held, v.next)) return false;
-            v.next++;
-        }
-        if (!writeOne(v, pic, v.next)) return false;
-        v.held = pic;
-        v.haveHeld = true;
-        v.next++;
-        if (&v == vids.data()) st.framesDone = v.next;
-        return true;
-    };
-
-    const auto writeSound = [&](AudDest& a, double at, const float* samples, int frames) {
-        // Sound before the first picture is dropped to the sample: a whole frame
-        // of it is twenty milliseconds, which is audible as a lip-sync error and
-        // is exactly the kind of thing nobody finds until the recording is the
-        // only copy.
-        int skip = 0;
-        if (epoch >= 0.0 && at >= 0.0 && at < epoch)
-            skip = std::min(frames, static_cast<int>(std::llround((epoch - at) * rate)));
-        else if (epoch < 0.0 && expectsPicture)
-            return true;    // no picture yet; this is sound from before the recording
-        else if (epoch < 0.0)
-            epoch = at < 0.0 ? 0.0 : at;
-
-        const int usable = frames - skip;
-        if (usable <= 0) return true;
-        const float* from = samples + static_cast<size_t>(skip) * channels;
-        const bool ok = a.mix ? writer.writeAudio(from, usable, &err)
-                              : writer.writeAudioTo(a.desc, from, usable, &err);
-        if (!ok) {
-            st.state = ExportStatus::State::Failed;
-            st.error = err;
-            stop = true;
-            return false;
-        }
-        a.written += usable;
-        // A recording with no picture in it is as long as its soundtrack.
-        if (vids.empty() && limit > 0.0 && double(a.written) / rate >= limit) {
-            stop = true;
-            return false;
-        }
-        return true;
-    };
-
-    /// One frame off one pad of the graph, to every destination reading it. A
-    /// pad read both as the composite and by name is one sink written twice,
-    /// which for a picture is simply the same picture in two streams.
-    const auto emit = [&](const CaptureGraph::Taken& tk) {
-        if (tk.audio) {
-            for (auto& a : auds) {
-                if (a.mix ? !tk.primary : a.label != tk.label) continue;
-                if (!writeSound(a, tk.at, tk.samples, tk.frames)) return false;
-            }
-        } else {
-            for (auto& v : vids) {
-                if (v.composite ? !tk.primary : v.label != tk.label) continue;
-                if (!place(v, tk.at, *tk.picture)) return false;
-            }
-        }
-        return !stop;
-    };
-
     Rgba canvas;
     std::vector<float> samples;
+    const int rate = s.output.audioSampleRate;
+    const int channels = s.output.audioChannels;
 
     const auto stamp = [&](int stream, const AVFrame* f) {
         const int64_t ts = f->best_effort_timestamp != AV_NOPTS_VALUE
@@ -472,7 +581,7 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
         return ts * av_q2d(d.fmt->streams[stream]->time_base);
     };
 
-    while (!stop) {
+    while (!out.stop) {
         if (job::stopping()) break;
 
         av_packet_unref(d.pkt);
@@ -496,7 +605,7 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
         AVCodecContext* dec = isVideo ? d.vdec : d.adec;
         if (avcodec_send_packet(dec, d.pkt) < 0) continue;
 
-        while (!stop) {
+        while (!out.stop) {
             if (avcodec_receive_frame(dec, d.frame) < 0) break;
             const int feed = isVideo ? vFeed : aFeed;
 
@@ -509,18 +618,18 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
                                  d.fmt->streams[d.pkt->stream_index]->time_base, &err)) {
                     st.state = ExportStatus::State::Failed;
                     st.error = err;
-                    stop = true;
+                    out.stop = true;
                     break;
                 }
-                if (graph->ready() && !opened && !openWriter(&err)) {
+                if (graph->ready() && !out.opened && !out.open(&err)) {
                     st.state = ExportStatus::State::Failed;
                     st.error = err;
-                    stop = true;
+                    out.stop = true;
                     break;
                 }
                 // `emit` refuses when the recording is over, and it has already
                 // said which of the two reasons it was.
-                if (opened && !graph->drain(emit, &err)) stop = true;
+                if (out.opened && !graph->drain(emit, &err)) out.stop = true;
                 continue;
             }
 
@@ -529,18 +638,18 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
             // graph at all. Nothing is written before the file exists — with a
             // graph that is the frame or two it takes to configure, and the
             // recording's zero is the first picture that *was* written.
-            if (!opened) continue;
+            if (!out.opened) continue;
             const double t = stamp(d.pkt->stream_index, d.frame);
 
             if (isVideo) {
-                if (vids.empty()) continue;
-                const Rgba* pic = toCanvas(d, canvas, s.output.width, s.output.height);
+                if (out.vids.empty()) continue;
+                const Rgba* pic = toCanvas(d, d.frame, canvas, s.output.width, s.output.height);
                 if (!pic) continue;
-                if (!place(vids.front(), t, *pic)) break;
-            } else if (mixDest) {
+                if (!out.place(out.vids.front(), t, *pic)) break;
+            } else if (out.mixDest) {
                 const int have = d.frame->nb_samples;
                 if (have <= 0) continue;
-                const int out = static_cast<int>(
+                const int outCount = static_cast<int>(
                     av_rescale_rnd(swr_get_delay(d.swr, d.adec->sample_rate) + have,
                                    rate, d.adec->sample_rate, AV_ROUND_UP));
                 // Slack past the samples asked for — see kSwrSlack in
@@ -548,7 +657,7 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
                 // what it was told, so this one had no slack at all on its
                 // first call: of the four resamplers in this binary it was the
                 // one with nothing behind it to absorb the overrun.
-                samples.assign(static_cast<size_t>(out) * channels + kSwrSlack, 0.0f);
+                samples.assign(static_cast<size_t>(outCount) * channels + kSwrSlack, 0.0f);
                 uint8_t* dst = reinterpret_cast<uint8_t*>(samples.data());
                 // `extended_data` rather than `data` for the reason
                 // `Writer::drainFifo` uses it: a planar format has one pointer
@@ -556,25 +665,25 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
                 // handing back more than 7.1 planar would be read past the end
                 // of the array.
                 const int got = swr_convert(
-                    d.swr, &dst, out,
+                    d.swr, &dst, outCount,
                     const_cast<const uint8_t**>(d.frame->extended_data), have);
                 if (got <= 0) continue;
-                if (!writeSound(*mixDest, t, samples.data(), got)) break;
+                if (!out.writeSound(*out.mixDest, t, samples.data(), got)) break;
             }
         }
 
         st.elapsedSec = secondsSince();
         st.encodeFps = st.elapsedSec > 0 ? st.framesDone / st.elapsedSec : 0;
-        if (opened) {
-            st.bytesWritten = writer.bytesSoFar();
-            st.piecesWritten = writer.piecesWritten();
+        if (out.opened) {
+            st.bytesWritten = out.writer.bytesSoFar();
+            st.piecesWritten = out.writer.piecesWritten();
         }
         // **No progress fraction.** There is no total to divide by, and a bar
         // creeping towards an end nobody chose is worse than no bar: what a
         // recording can say honestly is how long it has been going and how big
         // it has got, and both of those are facts.
-        if (limit > 0.0) {
-            st.framesTotal = std::max<int64_t>(1, std::llround(limit * s.output.fps));
+        if (out.limit > 0.0) {
+            st.framesTotal = std::max<int64_t>(1, std::llround(out.limit * s.output.fps));
             st.progress = std::min(1.0, double(st.framesDone) / double(st.framesTotal));
         }
         job::publish(st);
@@ -583,20 +692,20 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
     // Whatever the filters were still holding. A recording stopped by hand keeps
     // it; one that reached its `-t` does not, because `place` refuses past the
     // limit and that refusal ends the drain.
-    if (graph && opened && st.state == ExportStatus::State::Running) {
+    if (graph && out.opened && st.state == ExportStatus::State::Running) {
         graph->endAll();
         graph->drain(emit, &err);
     }
     // A graph builds from the first frame, so a device that never handed one
     // over leaves nothing opened and nothing written. Said rather than reported
     // as a clean recording of nothing.
-    if (!opened && st.state == ExportStatus::State::Running) {
+    if (!out.opened && st.state == ExportStatus::State::Running) {
         st.state = ExportStatus::State::Failed;
         st.error = "the device produced nothing for the filter graph to run on";
     }
 
     const bool failed = st.state == ExportStatus::State::Failed;
-    if (opened) {
+    if (out.opened) {
         if (!failed) { st.stage = "finishing"; job::publish(st); }
 
         // The trailer goes down whatever happened, exactly as it does for a
@@ -604,7 +713,7 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
         // index has lost a file that can be made again; a recording that lost
         // its index has lost the only copy of something that happened once.
         std::string finishErr;
-        if (!writer.finish(&finishErr)) {
+        if (!out.writer.finish(&finishErr)) {
             if (failed) {
                 LOG_WARN("capture: %s (while finishing a failed recording)",
                          finishErr.c_str());
@@ -615,15 +724,427 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
                 st.error = finishErr;
             }
         }
-        st.bytesWritten = writer.bytesSoFar();
-        st.piecesWritten = writer.piecesWritten();
+        st.bytesWritten = out.writer.bytesSoFar();
+        st.piecesWritten = out.writer.piecesWritten();
     }
+}
+
+// ── The session: several devices, on the wall clock ─────────────────────────
+
+/// How many blocks of sound one feed may hold before the job thread has taken
+/// them.
+///
+/// **Sound is a queue and pictures are a slot**, and that difference is the
+/// whole of decision six: a picture superseded before the next tick had no tick
+/// to appear at, so replacing it loses nothing, while a block of samples
+/// dropped or repeated is audible. Bounded all the same, because a job thread
+/// that has stalled must not be able to make a reader grow memory for as long
+/// as the recording lasts — a hundred and twenty-eight blocks is about two and
+/// a half seconds at 1024 samples and 48 kHz, and losing the oldest of them is
+/// reported.
+constexpr size_t kSoundQueue = 128;
+
+/// What one reader thread hands to the job thread.
+///
+/// Everything in here is under `m`, and nothing else crosses: the demuxer, the
+/// decoders and the scratch frame stay on the reader thread, and what arrives
+/// here is an owned reference (`av_frame_ref`) rather than a copy of any
+/// pixels.
+struct Hand {
+    std::mutex m;
+    /// The newest picture the job thread has not taken. **Newer replaces
+    /// older**: the one that goes is the one that was never going to be shown.
+    AVFrame* latest = nullptr;
+    bool sawPicture = false;
+    /// Sound in the order it arrived, each block with the moment it did.
+    std::deque<std::pair<AVFrame*, double>> sound;
+    bool warnedSound = false;
+    bool ended = false;
+
+    ~Hand() {
+        if (latest) av_frame_free(&latest);
+        for (auto& b : sound) av_frame_free(&b.first);
+    }
+};
+
+/// The reader threads and their hand-off state, joined however this leaves.
+///
+/// **The join is in a destructor** for the reason `job::Slot`'s is: a joinable
+/// `std::thread` destroyed is `std::terminate`, which reads as "the last thing
+/// it printed crashed" and is nothing of the kind. Every early return in the
+/// session below therefore stops and joins its readers without saying so.
+struct Readers {
+    std::vector<std::unique_ptr<Hand>> hands;
+    std::vector<std::thread> threads;
+    std::atomic<bool> quit{false};
+
+    void stopAll() {
+        quit.store(true);
+        for (auto& t : threads) if (t.joinable()) t.join();
+        threads.clear();
+    }
+    ~Readers() { stopAll(); }
+};
+
+/// One device, read and decoded, until somebody says stop.
+///
+/// It does nothing but deposit: the graph, the writer and the clock are the job
+/// thread's, so this thread never touches anything another one might. A read
+/// that has genuinely hung delays this thread's own join and nothing else,
+/// which is the single-device loop's limitation now held per input — the check
+/// is between reads, exactly as it always was.
+void readDevice(Device& d, Hand& h, const std::atomic<bool>& quit,
+                const std::function<double()>& secondsSince) {
+    while (!quit.load(std::memory_order_relaxed) && !job::stopping()) {
+        av_packet_unref(d.pkt);
+        const int rc = av_read_frame(d.fmt, d.pkt);
+        if (rc == AVERROR(EAGAIN)) continue;
+        if (rc < 0) {
+            if (rc != AVERROR_EOF) {
+                LOG_WARN("capture: %s: %s", d.name().c_str(), avErr(rc).c_str());
+                reportNote(AV_LOG_WARNING, "capture",
+                           d.name() + " stopped: " + avErr(rc));
+            }
+            break;
+        }
+
+        const bool isVideo = d.pkt->stream_index == d.videoStream && d.vdec;
+        const bool isAudio = d.pkt->stream_index == d.audioStream && d.adec;
+        if (!isVideo && !isAudio) continue;
+
+        AVCodecContext* dec = isVideo ? d.vdec : d.adec;
+        if (avcodec_send_packet(dec, d.pkt) < 0) continue;
+
+        while (avcodec_receive_frame(dec, d.frame) >= 0) {
+            AVFrame* owned = av_frame_alloc();
+            if (!owned) break;
+            if (av_frame_ref(owned, d.frame) < 0) { av_frame_free(&owned); break; }
+            const double arrived = secondsSince();
+
+            std::lock_guard<std::mutex> lock(h.m);
+            if (isVideo) {
+                if (h.latest) av_frame_free(&h.latest);
+                h.latest = owned;
+                h.sawPicture = true;
+            } else {
+                if (h.sound.size() >= kSoundQueue) {
+                    AVFrame* oldest = h.sound.front().first;
+                    av_frame_free(&oldest);
+                    h.sound.pop_front();
+                    if (!h.warnedSound) {
+                        h.warnedSound = true;
+                        reportNote(AV_LOG_WARNING, "capture",
+                                   d.name() + ": sound is arriving faster than the render can "
+                                              "take it, and the oldest of it is being dropped");
+                    }
+                }
+                h.sound.push_back({owned, arrived});
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lock(h.m);
+    h.ended = true;
+}
+
+/// Drop `skip` samples off the front of a decoded block, in place.
+///
+/// Pointer arithmetic rather than a copy: the frame's buffer reference still
+/// owns the whole allocation and offsetting into it is what libavfilter itself
+/// does. It is here because **sound arriving before the session's zero is
+/// dropped to the sample**, per feed — a whole block of it is twenty
+/// milliseconds, which is audible as a lip-sync error.
+void dropFront(AVFrame* f, int skip) {
+    if (skip <= 0 || skip >= f->nb_samples) return;
+    const auto fmt = static_cast<AVSampleFormat>(f->format);
+    const int bytes = av_get_bytes_per_sample(fmt);
+    if (bytes <= 0) return;
+    const int channels = f->ch_layout.nb_channels > 0 ? f->ch_layout.nb_channels : 1;
+    if (av_sample_fmt_is_planar(fmt)) {
+        for (int p = 0; p < channels; ++p) {
+            if (f->extended_data && f->extended_data[p]) f->extended_data[p] += skip * bytes;
+            if (p < AV_NUM_DATA_POINTERS && f->data[p] && f->extended_data != f->data)
+                f->data[p] += skip * bytes;
+        }
+    } else if (f->extended_data && f->extended_data[0]) {
+        f->extended_data[0] += static_cast<size_t>(skip) * bytes * channels;
+        if (f->extended_data != f->data && f->data[0])
+            f->data[0] += static_cast<size_t>(skip) * bytes * channels;
+    }
+    // `linesize[0]` is the size of a plane, so it moves with the pointers. Left
+    // behind it describes a buffer that is longer than what is now in front of
+    // the pointer, which is the shape of an overrun waiting for whichever
+    // filter reads it rather than `nb_samples`.
+    f->linesize[0] -= av_sample_fmt_is_planar(fmt) ? skip * bytes : skip * bytes * channels;
+    f->nb_samples -= skip;
+}
+
+/// Several live inputs, composited by the graph, written as one file.
+///
+/// **The session runs on the wall clock, and that is the one thing this loop
+/// does that the single-device one does not.** With several inputs no input's
+/// clock can be the master: driving off one device's frames means the others
+/// are read only when it produces, so a camera that goes quiet stops the screen
+/// grab beside it. So there is a tick per output frame at the settled rate, and
+/// each video feed is *sampled* at the tick — the newest picture its reader has
+/// put down, or the one before it again where nothing arrived. Every feed
+/// therefore reaches the graph constant rate and aligned, `overlay`'s framesync
+/// has nothing to wait for, and a stall freezes one picture rather than the
+/// session. That is the "a stall holds the last picture" rule the writer end
+/// already had, moved in front of the graph, which is where N inputs need it.
+///
+/// Sound is not sampled — see `CaptureGraph::setSession` and decision six.
+void runSession(CaptureSettings& s, ExportStatus& st, const DeviceList& devs,
+                const std::function<double()>& secondsSince,
+                const std::function<void(const std::string&)>& refuse) {
+    std::string err;
+
+    // The tick rate. Read before the graph can change `s.output.fps` — a graph
+    // ending in `fps=10` decimates what it is *given*, and what it is given is
+    // the rate the devices are being sampled at.
+    const double tickRate = s.output.fps > 0.0 ? s.output.fps : 30.0;
+    const AVRational tickHz = av_d2q(tickRate, 1000000);
+    const AVRational tickTb = av_inv_q(tickHz);
+
+    auto graph = std::make_unique<CaptureGraph>(s.output.filterGraph, s.output.audioSampleRate,
+                                                s.output.audioChannels, s.output.scaler);
+    graph->setSession(tickHz);
+    if (!graph->open(feedsOf(devs), &err)) { refuse(err); return; }
+
+    Output out(s, st, graph.get());
+    out.limit = limitOf(sourcesOf(s));
+    // A picture will arrive if any device has one: `open()` refuses a graph
+    // that reads the pictures and produces none, and every stream of every
+    // input goes through the graph in a session. A session of microphones has
+    // no picture for its sound to be measured against and must not wait for one.
+    out.expectsPicture = false;
+    for (const auto& d : devs) if (d->hasVideo()) out.expectsPicture = true;
+    const auto emit = [&out](const CaptureGraph::Taken& tk) { return out.emit(tk); };
+
+    Readers readers;
+    for (size_t i = 0; i < devs.size(); ++i) readers.hands.push_back(std::make_unique<Hand>());
+    for (size_t i = 0; i < devs.size(); ++i) {
+        Device* d = devs[i].get();
+        Hand* h = readers.hands[i].get();
+        readers.threads.emplace_back([d, h, &readers, &secondsSince] {
+            readDevice(*d, *h, readers.quit, secondsSince);
+        });
+    }
+
+    // **The session's zero is the first tick at which every video feed has
+    // offered a picture.** It is the generalisation of "the recording's zero is
+    // the first picture": a session that started before the second camera had
+    // woken up would open with that camera black for however long it took, and
+    // the black is not something anybody can get back. A feed that is sound
+    // only does not gate it — it has no picture to be waited for.
+    //
+    // Bounded, because the failure worth refusing is the other one: a session
+    // sitting for ever on a device that is never going to answer, with
+    // "recording" on the screen and nothing on disk.
+    constexpr double kWakeUp = 5.0;
+    st.stage = "waiting for the devices";
+    job::publish(st);
+    for (;;) {
+        const Device* missing = nullptr;
+        bool dead = false;
+        for (size_t i = 0; i < devs.size() && !missing; ++i) {
+            if (!devs[i]->hasVideo()) continue;
+            std::lock_guard<std::mutex> lock(readers.hands[i]->m);
+            if (!readers.hands[i]->sawPicture) {
+                missing = devs[i].get();
+                dead = readers.hands[i]->ended;
+            }
+        }
+        if (!missing) break;
+        if (job::stopping()) {
+            refuse("stopped before " + missing->name() +
+                   " had produced a picture — nothing was recorded");
+            return;
+        }
+        if (dead || secondsSince() > kWakeUp) {
+            refuse(missing->name() + " produced no pictures" +
+                   (dead ? " and stopped" : " in the first few seconds") +
+                   ", so there is nothing for the graph to composite");
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    const auto zero = Clock::now();
+    const double zeroSec = secondsSince();
+    st.stage = "recording";
+    job::publish(st);
+
+    // The last picture taken off each feed, held so that a feed with nothing
+    // new is pushed again at the tick rather than leaving a hole for framesync
+    // to wait on. Not cloned: the buffersrc keeps a reference of its own
+    // (`AV_BUFFERSRC_FLAG_KEEP_REF`), so re-stamping this one next tick cannot
+    // reach what was already queued.
+    std::vector<AVFrame*> held(devs.size(), nullptr);
+
+    int64_t tick = 0;
+    while (!out.stop) {
+        if (job::stopping()) break;
+        std::this_thread::sleep_until(
+            zero + std::chrono::duration_cast<Clock::duration>(
+                       std::chrono::duration<double>(double(tick) / tickRate)));
+        if (job::stopping()) break;
+
+        bool anyLive = false;
+        for (size_t i = 0; i < devs.size() && !out.stop; ++i) {
+            Hand& h = *readers.hands[i];
+            const int vFeed = devs[i]->hasVideo() ? graph->feedFor(devs[i]->index, false) : -1;
+            const int aFeed = devs[i]->hasAudio() ? graph->feedFor(devs[i]->index, true) : -1;
+
+            AVFrame* fresh = nullptr;
+            std::deque<std::pair<AVFrame*, double>> sound;
+            {
+                std::lock_guard<std::mutex> lock(h.m);
+                fresh = h.latest;
+                h.latest = nullptr;
+                sound.swap(h.sound);
+                if (!h.ended) anyLive = true;
+            }
+
+            if (fresh) {
+                if (held[i]) av_frame_free(&held[i]);
+                held[i] = fresh;
+            }
+            if (vFeed >= 0 && held[i]) {
+                held[i]->pts = tick;
+                if (!graph->push(vFeed, held[i], tickTb, &err)) {
+                    st.state = ExportStatus::State::Failed;
+                    st.error = err;
+                    out.stop = true;
+                }
+            }
+
+            for (auto& block : sound) {
+                AVFrame* f = block.first;
+                const int sr = f->sample_rate > 0 ? f->sample_rate : s.output.audioSampleRate;
+                // A block arrived at the moment its *last* sample did, so where
+                // it starts is that moment less its own length. Sound from
+                // before the session's zero is dropped, to the sample.
+                const double start = block.second - zeroSec - double(f->nb_samples) / sr;
+                if (aFeed >= 0 && f->nb_samples > 0) {
+                    double at = start;
+                    if (at < 0.0) {
+                        dropFront(f, static_cast<int>(std::llround(-at * sr)));
+                        at = 0.0;
+                    }
+                    if (f->nb_samples > 0) {
+                        f->pts = std::llround(at * sr);
+                        AVRational tb{1, sr};
+                        if (!graph->push(aFeed, f, tb, &err)) {
+                            st.state = ExportStatus::State::Failed;
+                            st.error = err;
+                            out.stop = true;
+                        }
+                    }
+                }
+                av_frame_free(&f);
+            }
+        }
+
+        if (!out.stop && graph->ready() && !out.opened && !out.open(&err)) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+            out.stop = true;
+        }
+        // `emit` refuses when the recording is over, and it has already said
+        // which of the two reasons it was.
+        if (!out.stop && out.opened && !graph->drain(emit, &err)) out.stop = true;
+
+        st.elapsedSec = secondsSince();
+        st.encodeFps = st.elapsedSec > 0 ? st.framesDone / st.elapsedSec : 0;
+        if (out.opened) {
+            st.bytesWritten = out.writer.bytesSoFar();
+            st.piecesWritten = out.writer.piecesWritten();
+        }
+        if (out.limit > 0.0) {
+            st.framesTotal = std::max<int64_t>(1, std::llround(out.limit * s.output.fps));
+            st.progress = std::min(1.0, double(st.framesDone) / double(st.framesTotal));
+        }
+        job::publish(st);
+
+        // Every device has ended. There is nothing further to sample and
+        // re-pushing what was held would be recording a still life.
+        if (!anyLive) break;
+        tick++;
+    }
+
+    for (AVFrame*& f : held) if (f) av_frame_free(&f);
+    readers.stopAll();
+
+    // Whatever the filters were still holding.
+    if (out.opened && st.state == ExportStatus::State::Running) {
+        graph->endAll();
+        graph->drain(emit, &err);
+    }
+    if (!out.opened && st.state == ExportStatus::State::Running) {
+        st.state = ExportStatus::State::Failed;
+        st.error = "the devices produced nothing for the filter graph to run on";
+    }
+
+    const bool failed = st.state == ExportStatus::State::Failed;
+    if (out.opened) {
+        if (!failed) { st.stage = "finishing"; job::publish(st); }
+        // The trailer goes down whatever happened. A recording that lost its
+        // index has lost the only copy of something that happened once.
+        std::string finishErr;
+        if (!out.writer.finish(&finishErr)) {
+            if (failed) {
+                LOG_WARN("capture: %s (while finishing a failed recording)", finishErr.c_str());
+                reportNote(AV_LOG_WARNING, "capture",
+                           finishErr + " (while finishing a failed recording)");
+            } else {
+                st.state = ExportStatus::State::Failed;
+                st.error = finishErr;
+            }
+        }
+        st.bytesWritten = out.writer.bytesSoFar();
+        st.piecesWritten = out.writer.piecesWritten();
+    }
+}
+
+// ── The job ────────────────────────────────────────────────────────────────
+
+/// **Which of the two loops runs is the number of inputs**, and nothing else.
+///
+/// One device has no second clock to be lined up with, so it keeps the media
+/// timestamps it always had — which is what lets a `-f lavfi` input record
+/// faster than real time and what every existing recording in this application
+/// still means. Several devices have no shared clock at all, so they get one:
+/// see `runSession`.
+void runCapture(CaptureSettings s, DeviceList devs) {
+    job::Held slot;
+
+    const auto began = Clock::now();
+    const std::function<double()> secondsSince = [&began] {
+        return std::chrono::duration<double>(Clock::now() - began).count();
+    };
+
+    ExportStatus st = job::status();
+    st.state = ExportStatus::State::Running;
+    st.path = s.output.path;
+    st.stage = "opening";
+    job::publish(st);
+
+    // A loop that gives up says so and leaves; the terminal state is still
+    // published once, at the bottom, after whatever file there was has been
+    // closed — which is the slot's rule and not either loop's.
+    const std::function<void(const std::string&)> refuse = [&st](const std::string& why) {
+        st.state = ExportStatus::State::Failed;
+        st.error = why;
+    };
+
+    if (devs.size() == 1) runDirect(s, st, devs.front(), secondsSince, refuse);
+    else runSession(s, st, devs, secondsSince, refuse);
 
     // **Stopping a recording is how a recording ends.** It is not a
     // cancellation: nothing was abandoned and nothing was lost, and the length
     // was the open question that pressing stop answered. Reporting Cancelled
-    // would make every successful recording look like a mistake, and would
-    // make the one thing worth distinguishing — a recording that failed —
+    // would make every successful recording look like a mistake, and would make
+    // the one thing worth distinguishing — a recording that failed —
     // indistinguishable from the ordinary case.
     if (st.state == ExportStatus::State::Running) {
         st.state = ExportStatus::State::Done;
@@ -655,24 +1176,42 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
 bool startCapture(const CaptureSettings& settings, std::string* error,
                   uint64_t* jobNumber) {
     CaptureSettings s = settings;
-    if (s.source.path.empty()) {
-        if (error) *error = "no device to record from";
-        return false;
-    }
+    s.sources = sourcesOf(s);
+    s.source = s.sources.front();
+
+    for (size_t i = 0; i < s.sources.size(); ++i)
+        if (s.sources[i].path.empty()) {
+            if (error) *error = s.sources.size() == 1
+                ? "no device to record from"
+                : "input " + std::to_string(i) + " has no device to record from";
+            return false;
+        }
     if (s.output.path.empty()) {
         if (error) *error = "no output file";
         return false;
     }
-    // **A capture's graph is fed by the device and by nothing else.** A
+    // **A capture's graph is fed by its devices and by nothing else.** A
     // `filterInputs` list says which *file* feeds which pad, which is the
-    // render's question: a device cannot be cut from, so a file beside it on the
-    // same graph would be an input with a window on one side and a camera on the
-    // other. It is a later chunk's, and half-supporting it here would be a door
-    // that opens onto the thing the device model says cannot be done.
+    // render's question: a device cannot be cut from, so a file beside one on
+    // the same graph would be an input with a window on one side and a camera on
+    // the other. It is a later chunk's, and half-supporting it here would be a
+    // door that opens onto the thing the device model says cannot be done.
     if (!s.output.filterInputs.empty()) {
         if (error)
             *error = "a recording's filter graph is fed by the device — [0:v] and [0:a] — "
                      "and cannot be given input files of its own";
+        return false;
+    }
+    // **Several inputs with no graph have no defined composition.** Two
+    // pictures and nothing saying how they go together is not something this or
+    // anything else could guess at, and guessing — picking the first, stacking
+    // them in the order they were given — would be a recording that succeeded
+    // while ignoring one of the devices it was told to read.
+    if (s.sources.size() > 1 && s.output.filterGraph.empty()) {
+        if (error)
+            *error = "this recording has " + std::to_string(s.sources.size()) +
+                     " inputs and no filter graph — the graph is what says how they combine, "
+                     "so [0:v] and [1:v] have nowhere to meet";
         return false;
     }
 
@@ -683,11 +1222,21 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
     // Opened before the thread exists, so "there is no camera called that"
     // arrives as a refusal from this call rather than as a job that starts and
     // fails a moment later with the name that was wrong already off the screen.
-    auto dev = std::make_shared<Device>();
+    // **Every one of them**, and on this thread rather than on the reader thread
+    // that goes on to read it, or the second of two devices would fail out of
+    // sight with nothing saying which one it was.
+    DeviceList devs;
     std::string why;
-    bool ok = openDevice(*dev, s, &why);
+    bool ok = true;
+    for (size_t i = 0; i < s.sources.size() && ok; ++i) {
+        auto dev = std::make_shared<Device>();
+        ok = openDevice(*dev, s.sources[i], static_cast<int>(i), s, &why);
+        devs.push_back(std::move(dev));
+    }
+    if (ok) settleOutput(s, devs);
+
     // And the graph is parsed here for the same reason, on a throwaway object:
-    // a filter this build has not got, a pad the device cannot feed and a chain
+    // a filter this build has not got, a pad the devices cannot feed and a chain
     // that wants a graphics card are all things the person who typed the graph
     // should be told about while it is still on the screen. What *runs* is built
     // on the job thread, because that is where the writer is built too — this
@@ -695,7 +1244,24 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
     if (ok && !s.output.filterGraph.empty()) {
         CaptureGraph probe(s.output.filterGraph, s.output.audioSampleRate,
                            s.output.audioChannels, s.output.scaler);
-        ok = probe.open(feedsOf(*dev), &why);
+        ok = probe.open(feedsOf(devs), &why);
+        // **With several inputs every stream has to go through the graph.** The
+        // bypass — a stream the graph does not read going straight to the writer
+        // — is one device's picture staying the composite, and with two devices
+        // there is no answer to which of them that would be. Said here, naming
+        // the pad, rather than by silently picking one.
+        for (size_t i = 0; ok && s.sources.size() > 1 && i < devs.size(); ++i) {
+            for (const bool audio : {false, true}) {
+                if (audio ? !devs[i]->hasAudio() : !devs[i]->hasVideo()) continue;
+                if (probe.feedFor(static_cast<int>(i), audio) >= 0) continue;
+                why = "[" + std::to_string(i) + (audio ? ":a" : ":v") +
+                      "] is not read by the graph, and with several inputs there is no "
+                      "answer to which of them the file would be of — every stream has to "
+                      "go through the graph, because the graph is what says how they combine";
+                ok = false;
+                break;
+            }
+        }
     }
     if (!ok) {
         // **The claim is given back the way the job thread gives it back.**
@@ -721,19 +1287,20 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
     {
         // **`framesTotal` stays zero when nobody knows.** The same rule
         // `inputDuration` follows: zero means unknown, not "no frames". With a
-        // `-t` on the device there *is* an end, and then it is a real total and
+        // `-t` on a device there *is* an end, and then it is a real total and
         // the percentage means something. A graph that changes the rate makes
         // this an estimate until the graph is configured, which is where it is
         // said again.
+        const double limit = limitOf(s.sources);
         ExportStatus st = job::status();
-        st.openEnded = s.source.duration <= 0.0;
+        st.openEnded = limit <= 0.0;
         st.framesTotal = st.openEnded
-            ? 0 : std::max<int64_t>(1, std::llround(s.source.duration * s.output.fps));
+            ? 0 : std::max<int64_t>(1, std::llround(limit * s.output.fps));
         st.stage = "starting";
         job::publish(st);
     }
 
-    job::run([s, dev] { runCapture(s, dev); });
+    job::run([s, devs] { runCapture(s, devs); });
     return true;
 }
 

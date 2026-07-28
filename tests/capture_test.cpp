@@ -81,6 +81,12 @@ bool haveDevice(const std::string& name) {
     return false;
 }
 
+bool haveFilter(const std::string& name) {
+    for (const auto& f : availableFilters())
+        if (f.name == name) return true;
+    return false;
+}
+
 /// A `lavfi` device input. The graph goes where the filename goes, which is
 /// what makes this a device and not a filter: libavformat is handed a URL and
 /// the demuxer decides what it means.
@@ -138,6 +144,11 @@ struct Opened {
     int sounds = 0;
     double rate = 0;        // the first picture stream's declared frame rate
     int64_t packets = 0;    // packets on the first picture stream
+    /// Each stream's own length, in the order the muxer numbered them. The
+    /// container's duration is the longest of them, which says nothing about
+    /// whether a picture and a soundtrack recorded together came out the same
+    /// length — and that is the whole question about a session.
+    std::vector<double> seconds;
 };
 
 Opened openResult(const std::string& path) {
@@ -151,6 +162,9 @@ Opened openResult(const std::string& path) {
     o.duration = fc->duration != AV_NOPTS_VALUE ? fc->duration / double(AV_TIME_BASE) : 0.0;
     int first = -1;
     for (unsigned i = 0; i < fc->nb_streams; ++i) {
+        o.seconds.push_back(fc->streams[i]->duration != AV_NOPTS_VALUE
+                                ? fc->streams[i]->duration * av_q2d(fc->streams[i]->time_base)
+                                : 0.0);
         const AVCodecParameters* p = fc->streams[i]->codecpar;
         if (p->codec_type == AVMEDIA_TYPE_VIDEO) {
             o.width = p->width;
@@ -201,7 +215,12 @@ double away(const Mean& a, const Mean& b) {
     return std::sqrt(dr * dr + dg * dg + db * db);
 }
 
-Mean meanOf(const std::string& path, int nthPicture, int skip) {
+/// The mean over the whole picture, or — given a rectangle — over that part of
+/// it. A session's second input arrives *somewhere in particular*, so the check
+/// that it arrived at all is a reading of the corner it was overlaid into and
+/// not of the average of a picture it is a sixteenth of.
+Mean meanOf(const std::string& path, int nthPicture, int skip, int rx = 0, int ry = 0,
+            int rw = 0, int rh = 0) {
     Mean m;
     AVFormatContext* fc = nullptr;
     if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0 || !fc) return m;
@@ -242,17 +261,26 @@ Mean meanOf(const std::string& path, int nthPicture, int skip) {
                 uint8_t* dst[4] = {buf.data(), nullptr, nullptr, nullptr};
                 int stride[4] = {w * 4, 0, 0, 0};
                 if (sws && sws_scale(sws, f->data, f->linesize, 0, h, dst, stride) > 0) {
+                    const int x0 = std::max(0, std::min(rx, w));
+                    const int y0 = std::max(0, std::min(ry, h));
+                    const int x1 = rw > 0 ? std::min(w, x0 + rw) : w;
+                    const int y1 = rh > 0 ? std::min(h, y0 + rh) : h;
                     double sr = 0, sg = 0, sb = 0;
-                    const size_t n = static_cast<size_t>(w) * h;
-                    for (size_t i = 0; i < n; ++i) {
-                        sr += buf[i * 4];
-                        sg += buf[i * 4 + 1];
-                        sb += buf[i * 4 + 2];
+                    size_t n = 0;
+                    for (int y = y0; y < y1; ++y)
+                        for (int x = x0; x < x1; ++x) {
+                            const size_t i = (static_cast<size_t>(y) * w + x) * 4;
+                            sr += buf[i];
+                            sg += buf[i + 1];
+                            sb += buf[i + 2];
+                            n++;
+                        }
+                    if (n > 0) {
+                        m.r = sr / n;
+                        m.g = sg / n;
+                        m.b = sb / n;
+                        m.ok = true;
                     }
-                    m.r = sr / n;
-                    m.g = sg / n;
-                    m.b = sb / n;
-                    m.ok = true;
                 }
                 av_frame_unref(f);
                 break;
@@ -339,6 +367,29 @@ CaptureSettings recording(const MediaInput& source, const std::string& path,
     c.output.crf = 30;
     c.output.filterGraph = graph;
     return c;
+}
+
+/// The same, reading several live inputs at once. `sources` is what numbers
+/// them for the graph: the first is `[0:v]`/`[0:a]`, the second `[1:…]`.
+CaptureSettings session(const std::vector<MediaInput>& sources, const std::string& path,
+                        const std::string& graph) {
+    CaptureSettings c = recording(sources.front(), path, graph);
+    c.sources = sources;
+    return c;
+}
+
+/// One audio stream out of `[aout]` and nothing else.
+///
+/// A recording with no picture in it has to say so, because an empty stream
+/// list means "the usual two" and the usual two include a composite the graph
+/// has no pad for — which is refused, correctly, by the same `resolvePads` a
+/// render goes through.
+void soundOnly(CaptureSettings& c) {
+    ExportStream a;
+    a.kind = "audio";
+    a.source = "pad:aout";
+    a.codec = "aac";
+    c.output.streams.push_back(a);
 }
 
 /// Poll to a terminal state, and then join.
@@ -961,6 +1012,258 @@ int main(int argc, char** argv) {
             }
         } else {
             std::printf("  SKIP  no libx264 to reach the pad refusal with\n");
+        }
+    }
+
+    // ── several live inputs, one file ──────────────────────────────────────
+    //
+    // A screen grab and a camera composited into one recording. Two things are
+    // genuinely new and both are about there being more than one clock in the
+    // room: every device is read on a thread of its own, because
+    // `av_read_frame` blocks and a camera that has gone quiet must not starve
+    // the grab beside it; and the session runs on the **wall clock**, sampling
+    // each video feed at a tick per output frame, because no input's clock can
+    // be the master without starving the others.
+    //
+    // **lavfi is the wrong shape for a wall clock until it is paced.** It
+    // produces frames as fast as it can, so a two-second session would sample a
+    // burst that was over in a fiftieth of a second down to almost nothing.
+    // `realtime` (and `arealtime` for sound) is libavfilter's own answer and is
+    // what makes a lavfi input behave like a device: it holds each frame back
+    // until its timestamp is due. Everything below is paced with it, which is
+    // also why these sections are the only ones in this file that cost real
+    // seconds.
+    std::printf("\nSeveral live inputs\n");
+    if (!avcodec_find_encoder_by_name("libx264")) {
+        std::printf("  SKIP  no libx264 in this build\n");
+    } else if (!haveFilter("realtime")) {
+        std::printf("  SKIP  this build has no realtime filter to pace a lavfi input with\n");
+    } else {
+        // ── two pictures, one file ────────────────────────────────────────
+        //
+        // The second input is scaled small and overlaid on the corner of the
+        // first. What decides it is the *content of that corner*: a session
+        // that read only `[0:v]` would produce a file of exactly the right
+        // size, the right length and the right rate with the second device
+        // nowhere in it, and only the picture says otherwise.
+        const std::string base = dir + "/session-base.mp4";
+        const std::string over = dir + "/session-overlay.mp4";
+        std::filesystem::remove(base);
+        std::filesystem::remove(over);
+
+        // The reference runs on its own media clock — one input, so nothing has
+        // changed for it and it need not be paced or take two real seconds.
+        CaptureSettings a = recording(lavfi("testsrc=size=320x240:rate=25", 1.0), base,
+                                      "[0:v]null[vout]");
+        a.output.includeAudio = false;
+        std::string aerr;
+        if (!startCapture(a, &aerr)) checkf(false, "the base picture records: %s", aerr.c_str());
+        else waitForJob(60.0);
+
+        CaptureSettings b = session(
+            {lavfi("testsrc=size=320x240:rate=25,realtime", 2.0),
+             lavfi("color=c=red:s=160x120:r=25,realtime", 2.0)},
+            over, "[1:v]scale=80:60[small];[0:v][small]overlay=0:0[vout]");
+        b.output.includeAudio = false;
+        std::string berr;
+        if (!startCapture(b, &berr)) {
+            checkf(false, "a session of two live pictures starts: %s", berr.c_str());
+        } else {
+            const ExportStatus st = waitForJob(60.0);
+            checkf(st.state == ExportStatus::State::Done,
+                   "a session of two live pictures finishes%s%s",
+                   st.error.empty() ? "" : ": ", st.error.c_str());
+            const Opened o = openResult(over);
+            check(o.ok, "and what it wrote opens");
+            checkf(o.pictures.size() == 1, "as one picture stream (%zu)", o.pictures.size());
+            checkf(o.width == 320 && o.height == 240,
+                   "the size of the input it was composited onto (%dx%d)", o.width, o.height);
+            check(o.indexed, "with an index — the trailer went down");
+            checkf(o.duration > 1.2 && o.duration < 2.8,
+                   "about as long as the shortest -t on it (%.2f s)", o.duration);
+
+            const Mean corner = meanOf(over, 0, 10, 0, 0, 80, 60);
+            const Mean was = meanOf(base, 0, 10, 0, 0, 80, 60);
+            checkf(corner.ok && was.ok, "both corners decode back");
+            if (corner.ok && was.ok) {
+                checkf(away(corner, was) > 20.0,
+                       "and the corner is not what the first input alone put there "
+                       "(%.1f/%.1f/%.1f against %.1f/%.1f/%.1f, apart by %.1f)",
+                       corner.r, corner.g, corner.b, was.r, was.g, was.b, away(corner, was));
+                // Red, unambiguously: a difference could be a moving bar, and a
+                // red patch could only have come from the second device.
+                checkf(corner.r > 140.0 && corner.r - corner.g > 60.0 &&
+                           corner.r - corner.b > 60.0,
+                       "and it is the second input's red (%.1f/%.1f/%.1f)", corner.r, corner.g,
+                       corner.b);
+            }
+        }
+    }
+
+    // ── two sounds, mixed ──────────────────────────────────────────────────
+    //
+    // The sound half of the same claim, and it is a different mechanism: sound
+    // is not sampled at the tick — dropping or repeating a block of samples is
+    // audible in a way a repeated picture is not — but stamped with when it
+    // arrived and smoothed by `aresample=async` in front of the graph. What is
+    // asserted is only that the second input reached the mix: two tones summed
+    // are louder than either alone, and this is not a calibration.
+    std::printf("\nTwo sounds, mixed\n");
+    if (!avcodec_find_encoder_by_name("aac")) {
+        std::printf("  SKIP  no aac in this build\n");
+    } else if (!haveFilter("arealtime")) {
+        std::printf("  SKIP  this build has no arealtime filter to pace a lavfi input with\n");
+    } else {
+        const std::string one = dir + "/session-tone-a.m4a";
+        const std::string two = dir + "/session-tone-b.m4a";
+        const std::string mix = dir + "/session-tone-mix.m4a";
+        for (const std::string& p : {one, two, mix}) std::filesystem::remove(p);
+
+        // 0.4 apiece rather than full scale: two full-scale tones summed peak
+        // at 2.0 and the encoder clips them, which would measure the clipping
+        // rather than the mix.
+        double solo[2] = {-1.0, -1.0};
+        const char* freqs[2] = {"440", "660"};
+        const std::string* paths[2] = {&one, &two};
+        for (int i = 0; i < 2; ++i) {
+            CaptureSettings s = recording(
+                lavfi(std::string("sine=frequency=") + freqs[i] + ":sample_rate=48000", 1.0),
+                *paths[i], "[0:a]volume=0.4[aout]");
+            s.output.format = "mp4";
+            soundOnly(s);
+            std::string err;
+            if (!startCapture(s, &err)) {
+                checkf(false, "a tone on its own records: %s", err.c_str());
+            } else {
+                waitForJob(60.0);
+                solo[i] = rmsOf(*paths[i]);
+            }
+        }
+        checkf(solo[0] > 0.0 && solo[1] > 0.0, "each tone alone has sound in it (%.4f, %.4f)",
+               solo[0], solo[1]);
+
+        CaptureSettings m = session(
+            {lavfi("sine=frequency=440:sample_rate=48000,arealtime", 2.0),
+             lavfi("sine=frequency=660:sample_rate=48000,arealtime", 2.0)},
+            mix,
+            "[0:a]volume=0.4[a0];[1:a]volume=0.4[a1];[a0][a1]amix=inputs=2:normalize=0[aout]");
+        m.output.format = "mp4";
+        soundOnly(m);
+        std::string merr;
+        if (!startCapture(m, &merr)) {
+            checkf(false, "a session of two live sounds starts: %s", merr.c_str());
+        } else {
+            const ExportStatus st = waitForJob(60.0);
+            checkf(st.state == ExportStatus::State::Done,
+                   "a session of two live sounds finishes%s%s", st.error.empty() ? "" : ": ",
+                   st.error.c_str());
+            const double together = rmsOf(mix);
+            const double loudest = std::max(solo[0], solo[1]);
+            checkf(together > 0.0, "and there is sound in the result (rms %.4f)", together);
+            if (together > 0.0 && loudest > 0.0)
+                checkf(together > loudest * 1.15,
+                       "louder than either alone — the second input reached the mix "
+                       "(%.4f against %.4f and %.4f, ratio %.2f)", together, solo[0], solo[1],
+                       together / loudest);
+        }
+    }
+
+    // ── a picture and a sound, and a second picture over it ────────────────
+    //
+    // The two halves at once, which is the shape a screen grab with the desktop
+    // audio plus a webcam actually has. The durations are the check worth
+    // having: sound stamped on arrival and pictures placed on the tick are two
+    // different clocks agreeing, and a file whose soundtrack is half a second
+    // longer than its picture is what disagreeing looks like.
+    std::printf("\nA session's picture and sound together\n");
+    if (!avcodec_find_encoder_by_name("libx264") || !avcodec_find_encoder_by_name("aac")) {
+        std::printf("  SKIP  no libx264/aac in this build\n");
+    } else if (!haveFilter("realtime") || !haveFilter("arealtime")) {
+        std::printf("  SKIP  this build has no realtime/arealtime to pace a lavfi input with\n");
+    } else {
+        const std::string path = dir + "/session-av.mp4";
+        std::filesystem::remove(path);
+        CaptureSettings c = session(
+            {lavfi("testsrc=size=320x240:rate=25,realtime[out0];"
+                   "sine=frequency=440:sample_rate=48000,arealtime[out1]", 2.0),
+             lavfi("color=c=blue:s=160x120:r=25,realtime", 2.0)},
+            path,
+            "[1:v]scale=80:60[small];[0:v][small]overlay=W-w:0[vout];[0:a]volume=0.4[aout]");
+        std::string err;
+        if (!startCapture(c, &err)) {
+            checkf(false, "a session with sound and two pictures starts: %s", err.c_str());
+        } else {
+            const ExportStatus st = waitForJob(60.0);
+            checkf(st.state == ExportStatus::State::Done,
+                   "a session with sound and two pictures finishes%s%s",
+                   st.error.empty() ? "" : ": ", st.error.c_str());
+            const Opened o = openResult(path);
+            check(o.ok, "and what it wrote opens");
+            checkf(o.pictures.size() == 1 && o.sounds == 1,
+                   "with both streams in it (%zu picture, %d sound)", o.pictures.size(),
+                   o.sounds);
+            if (o.seconds.size() == 2)
+                checkf(std::fabs(o.seconds[0] - o.seconds[1]) < 0.5,
+                       "and they are the same length (%.2f s of picture, %.2f s of sound)",
+                       o.seconds[0], o.seconds[1]);
+            else
+                checkf(false, "and both streams report a length (%zu)", o.seconds.size());
+            const Mean corner = meanOf(path, 0, 10, 240, 0, 80, 60);
+            if (corner.ok)
+                checkf(corner.b > 120.0 && corner.b - corner.r > 60.0,
+                       "with the second input's blue in the corner it was put in "
+                       "(%.1f/%.1f/%.1f)", corner.r, corner.g, corner.b);
+            else
+                check(false, "and the corner decodes back");
+        }
+    }
+
+    // ── what a session refuses, and in what words ──────────────────────────
+    std::printf("\nWhat a session refuses\n");
+    {
+        std::string err;
+        CaptureSettings noGraph = session({lavfi("testsrc=size=64x48:rate=25", 0.5),
+                                           lavfi("testsrc=size=64x48:rate=25", 0.5)},
+                                          dir + "/session-refused.mp4", "");
+        checkf(!startCapture(noGraph, &err), "two inputs with no graph are refused");
+        checkf(err.find("no filter graph") != std::string::npos,
+               "saying that the graph is what says how they combine (%s)", err.c_str());
+
+        err.clear();
+        CaptureSettings absent = recording(lavfi("testsrc=size=64x48:rate=25", 0.5),
+                                           dir + "/session-refused.mp4",
+                                           "[0:v][1:v]overlay[vout]");
+        absent.output.includeAudio = false;
+        checkf(!startCapture(absent, &err),
+               "a graph reading an input that was not given is refused");
+        checkf(err.find("[1:v]") != std::string::npos &&
+                   err.find("no input 1") != std::string::npos,
+               "naming the index that is missing (%s)", err.c_str());
+
+        // A device that opens, reports a picture stream, and never produces a
+        // frame. Without the bound, a session sits on it for ever with
+        // "recording" on the screen and nothing on disk.
+        err.clear();
+        CaptureSettings dead = session(
+            {lavfi("testsrc=size=64x48:rate=25,realtime", 3.0),
+             lavfi("testsrc=size=64x48:rate=25:duration=1,trim=end=0", 3.0)},
+            dir + "/session-dead.mp4", "[0:v][1:v]overlay[vout]");
+        dead.output.includeAudio = false;
+        if (!avcodec_find_encoder_by_name("libx264")) {
+            std::printf("  SKIP  no libx264 to reach the never-produced refusal with\n");
+        } else if (!startCapture(dead, &err)) {
+            // Refused before the job — the device would not open at all, which
+            // is a different (and earlier) answer than the one under test.
+            checkf(!err.empty(),
+                   "a device with nothing in it was refused at the open instead (%s)",
+                   err.c_str());
+        } else {
+            const ExportStatus st = waitForJob(30.0);
+            checkf(st.state == ExportStatus::State::Failed,
+                   "a device that never produces a picture fails the session (%s)",
+                   st.stage.c_str());
+            checkf(st.error.find("no pictures") != std::string::npos,
+                   "naming the device rather than waiting for ever (%s)", st.error.c_str());
         }
     }
 

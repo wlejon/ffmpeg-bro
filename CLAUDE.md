@@ -191,7 +191,12 @@ against footage the fixtures do not resemble:
 # with sound, and through a filter graph pushed rather than pulled: a crop
 # checked by what it is a picture *of*, two pads as two streams of one file, a
 # rate change, sound filtered while the picture goes round, and every refusal.
-# Needs no media: it records from `lavfi`.
+# And a **session** of several live inputs at once — two pictures overlaid, two
+# sounds mixed, a picture and a sound alongside a second picture — checked by
+# what is in the corner of the frame and how loud the result is rather than by
+# its size. Needs no media: it records from `lavfi`, paced by the `realtime`
+# and `arealtime` filters, which is what makes an input that produces as fast
+# as it can behave like a device a wall clock can sample.
 ./build/Release/ffmpeg-bro-capturetest out
 
 # the Capture stage: choosing a device, its options in front of its -i, a
@@ -802,6 +807,39 @@ what it looks like at `t` (there is no seeking a camera), it has no `end`, and t
 clock is the device's rather than the render's. So recording is a **second job**, not
 a flag on the first, and what the two share is what does not care — `Writer`, and the
 one slot.
+
+**A recording reads a list of inputs, and that is what makes it a session.**
+`CaptureSettings::sources` is a `std::vector<MediaInput>` and an empty one is
+`{source}` — the same an-empty-list-is-the-usual rule `outputStreams()` and
+`ExportSettings::inputs` follow, so every caller that only ever wanted one device
+still means what it meant. Five things about several of them, and each is a
+consequence of there being more than one clock in the room. **One reader thread per
+device**, because `av_read_frame` blocks and a camera that has gone quiet would
+otherwise starve the screen grab beside it; each owns its demuxer, its decoders and
+nothing else, and every device is still *opened* on the caller's thread so a name
+that is wrong is a refusal rather than a job that fails a moment later. **Two
+clocks, keyed on the input count**: one input keeps the media timestamps it always
+had — which is what lets a `-f lavfi` input record faster than real time — and
+several run on the **wall clock**, a tick per output frame with each video feed
+*sampled* at the tick from a latest-frame slot its reader keeps filled. That is the
+"a stall holds the last picture" rule moved in front of the graph, where N inputs
+need it: every feed arrives CFR and aligned, `overlay`'s framesync has nothing to
+wait for, and a stalled camera freezes its own picture only. **Sound is not
+sampled** — dropping or repeating blocks of samples is audible where a repeated
+picture is not — so it is pushed as it arrives, stamped with its arrival on the
+session clock, through a small bounded queue, with an `aresample=async=1000:first_pts=0`
+inserted between each sound buffersrc and the graph exactly where `GraphSource`
+inserts `transpose` for rotation. Two devices are two crystal oscillators and that
+is where the drift goes. **The session's zero is the first tick at which every video
+feed has offered a picture**, which is "the recording's zero is the first picture"
+generalised — it is the reason a session of two devices does not open with one of
+them black — bounded at a few seconds so that a device which is never going to
+answer fails the job naming itself rather than leaving "recording" on the screen for
+ever. And **several inputs require a graph**: two pictures with nothing saying how
+they combine is not a composition anything could guess at, which is also why every
+stream of every input has to reach the graph once there is more than one — the
+bypass that lets an unread stream go straight to the writer has no answer to *which*
+device's picture the composite would be.
 
 Five decisions here, and they were written expecting streaming *out* to be the second
 job of this shape with the ends swapped. It turned out not to be one: a stream is an

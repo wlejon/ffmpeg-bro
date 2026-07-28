@@ -846,12 +846,43 @@ JSValue js_recordStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     c.output.height = static_cast<int>(numProp(ctx, spec, "height", 0));
     c.output.fps = numProp(ctx, spec, "fps", 0);
 
-    JSValue src = JS_GetPropertyStr(ctx, spec, "source");
-    if (!JS_IsObject(src)) {
-        JS_FreeValue(ctx, src);
-        return JS_ThrowTypeError(ctx, "record.start(spec) needs a source: the device as an -i");
+    // `sources` is the list and `source` is the one-input spelling of it, read
+    // the way `CaptureSettings` reads them: a list wins, and an absent list is
+    // `{source}`. Two spellings rather than one because every caller that has
+    // ever asked for a recording asked for one device, and a session is the new
+    // thing rather than the only thing.
+    JSValue list = JS_GetPropertyStr(ctx, spec, "sources");
+    if (JS_IsArray(list)) {
+        const uint32_t len = arrayLength(ctx, list);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, list, i);
+            if (!JS_IsObject(item)) {
+                JS_FreeValue(ctx, item);
+                JS_FreeValue(ctx, list);
+                return JS_ThrowTypeError(
+                    ctx, "record.start(spec).sources[%u] is not a device as an -i", i);
+            }
+            MediaInput in = inputFromJs(ctx, item);
+            JS_FreeValue(ctx, item);
+            if (in.path.empty()) {
+                JS_FreeValue(ctx, list);
+                return JS_ThrowTypeError(
+                    ctx, "record.start(spec).sources[%u] has no device to open", i);
+            }
+            c.sources.push_back(std::move(in));
+        }
     }
-    c.source = inputFromJs(ctx, src);
+    JS_FreeValue(ctx, list);
+
+    JSValue src = JS_GetPropertyStr(ctx, spec, "source");
+    if (JS_IsObject(src)) {
+        c.source = inputFromJs(ctx, src);
+    } else if (c.sources.empty()) {
+        JS_FreeValue(ctx, src);
+        return JS_ThrowTypeError(ctx,
+                                 "record.start(spec) needs a source, or a sources list: the "
+                                 "device (or devices) as -i");
+    }
     JS_FreeValue(ctx, src);
 
     std::string err;
