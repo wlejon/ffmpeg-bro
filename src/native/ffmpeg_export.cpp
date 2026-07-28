@@ -161,22 +161,10 @@ std::string padList(const std::vector<std::string>& labels) {
     return out.empty() ? std::string("none") : out;
 }
 
-/// Everything about `pad:<label>` that has to be settled before a file is
-/// opened: which pad each stream reads, how big it is, and every way of asking
-/// for one that cannot work.
-///
-/// **Here rather than in the writer, because it is the one place that has both
-/// halves.** The writer has never heard of a filter graph and the graph has
-/// never heard of the stream list; the job holds both, and a refusal belongs
-/// where the decision is — which for a label that names no pad means before a
-/// muxer has been opened and a header written, not at the first frame.
-///
-/// It fills in the sizes as well as refusing, and it fills them into
-/// `s.streams` rather than into the resolved list: the writer resolves the list
-/// again out of the settings, and a size written only into the copy would be a
-/// size the encoder is never opened with. Filled by *label* and not by position,
-/// so nothing has to know which entries `outputStreams()` dropped.
-bool resolvePads(ExportSettings& s, GraphSource* graph,
+} // namespace
+
+// See ffmpeg_export.h for why this is here and why both jobs go through it.
+bool resolvePads(ExportSettings& s, PadProvider* graph,
                  const std::vector<ExportStream>& resolved,
                  std::vector<std::string>* reads, std::string* err) {
     for (auto& st : s.streams) {
@@ -253,6 +241,8 @@ bool resolvePads(ExportSettings& s, GraphSource* graph,
             }
     return true;
 }
+
+namespace {
 
 /// One walk over the range: ask the edit what the output looks like at this
 /// instant, hand it to the writer, say how far along it is. Every step past

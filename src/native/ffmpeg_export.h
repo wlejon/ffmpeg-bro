@@ -583,6 +583,67 @@ inline std::string padLabelOf(const std::string& source) {
     return isPadSource(source) ? source.substr(4) : std::string();
 }
 
+/// What a filter graph can be asked about the pads it ends in.
+///
+/// Narrow on purpose, and free of libavfilter: what `resolvePads()` below needs
+/// to know is which labels exist, which kind each one is, how big a picture pad
+/// turned out to be, and which pad — if any — is the one nobody had to name.
+/// None of that is a question about *when* frames arrive, which is the whole of
+/// what separates the two graphs in this binary: `GraphSource` is pulled by a
+/// render walking a range and `CaptureGraph` is pushed by a device that decides
+/// for itself when a frame exists. They answer this identically, so `pad:` works
+/// in a recording for exactly the reasons it works in a render.
+class PadProvider {
+public:
+    virtual ~PadProvider() = default;
+
+    virtual bool hasPad(const std::string& label) const = 0;
+    virtual bool padIsAudio(const std::string& label) const = 0;
+    virtual int padWidth(const std::string& label) const = 0;
+    virtual int padHeight(const std::string& label) const = 0;
+
+    /// Whether anything says which pad is the composite (or the mix). False
+    /// only where the honest answer is that nobody said — several pads of that
+    /// kind and none of them labelled `vout` (or `aout`) — in which case a
+    /// stream asking for the composite has to be refused by name.
+    virtual bool hasComposite() const = 0;
+    virtual bool hasMix() const = 0;
+
+    /// Every output pad of a kind, in the order the graph declared them, for a
+    /// refusal that has to say what there was instead.
+    virtual std::vector<std::string> padLabels(bool audio) const = 0;
+
+    /// Which pads something is going to read by name. Told rather than
+    /// discovered, because the difference matters before the first frame: a
+    /// sound pad nobody is writing is drained and thrown away as it arrives,
+    /// and finding out afterwards that somebody wanted it is too late.
+    virtual void readPads(const std::vector<std::string>& labels) = 0;
+};
+
+/// Everything about `pad:<label>` that has to be settled before a file is
+/// opened: which pad each stream reads, how big it is, and every way of asking
+/// for one that cannot work.
+///
+/// **Here rather than in the writer, because it is the one place that has both
+/// halves.** The writer has never heard of a filter graph and the graph has
+/// never heard of the stream list; the job holds both, and a refusal belongs
+/// where the decision is — which for a label that names no pad means before a
+/// muxer has been opened and a header written, not at the first frame.
+///
+/// It fills in the sizes as well as refusing, and it fills them into
+/// `s.streams` rather than into the resolved list: the writer resolves the list
+/// again out of the settings, and a size written only into the copy would be a
+/// size the encoder is never opened with. Filled by *label* and not by position,
+/// so nothing has to know which entries `outputStreams()` dropped.
+///
+/// **Both jobs call it and the sentences are therefore one set.** A render knows
+/// its pad sizes before it starts and a recording does not — the graph is
+/// configured from the first frame the device hands over — so the moment differs
+/// and the answers must not.
+bool resolvePads(ExportSettings& s, PadProvider* graph,
+                 const std::vector<ExportStream>& resolved,
+                 std::vector<std::string>* reads, std::string* err);
+
 /// The streams this render will actually write, with every default filled in.
 ///
 /// One place, so that nothing downstream has to know whether the caller gave a

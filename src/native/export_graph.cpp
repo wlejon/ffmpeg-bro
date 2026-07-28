@@ -50,38 +50,32 @@ double frameTime(const AVFilterContext* sink, const AVFrame* f) {
 
 GraphSource::GraphSource(const ExportSettings& s) : settings_(s) {}
 
-/// `avfilter_graph_parse2`, in the three steps it is made of, so that a device
-/// can be handed to the filters that need one *between* being created and being
-/// initialised.
-///
-/// **`hwupload` refuses to initialise without a device**, and there is nowhere
-/// to put one: the filter takes no argument that could name it and reads
-/// `AVFilterContext::hw_device_ctx`, which does not exist until the filter does.
-/// `avfilter_graph_parse2` creates and initialises in one call, so a device
-/// assigned after it has already come too late — "A hardware device reference is
-/// required to upload frames to", from inside a parse, with nothing in the
-/// message about which filter meant it.
-///
-/// The segment API is the seam ffmpeg's own CLI uses for exactly this, and this
-/// is `graph_parse()` in `ffmpeg_filter.c` written out. With no device named it
-/// is `avfilter_graph_parse2` in three lines instead of one, which is why there
-/// is no fast path here to disagree with.
-int GraphSource::parseGraph(AVFilterInOut** inputs, AVFilterInOut** outputs) {
+// See export_graph.h for why the parse is in three steps and why it is a free
+// function rather than a member of either graph.
+int parseFilterGraph(AVFilterGraph* graph, const std::string& text, AVBufferRef* hwDevice,
+                     AVFilterInOut** inputs, AVFilterInOut** outputs,
+                     std::string* wantsDevice) {
     AVFilterGraphSegment* seg = nullptr;
-    int rc = avfilter_graph_segment_parse(graph_, settings_.filterGraph.c_str(), 0, &seg);
+    int rc = avfilter_graph_segment_parse(graph, text.c_str(), 0, &seg);
     if (rc < 0) return rc;
 
     rc = avfilter_graph_segment_create_filters(seg, 0);
-    if (rc >= 0 && hwDevice_) {
-        // Every filter that declared it wants one gets the device the render
-        // named. A filter that was given its own in its arguments keeps it:
-        // `-filter_hw_device` is the default, not an override.
-        for (unsigned i = 0; i < graph_->nb_filters && rc >= 0; ++i) {
-            AVFilterContext* f = graph_->filters[i];
-            if (!f->filter || !(f->filter->flags & AVFILTER_FLAG_HWDEVICE)) continue;
-            if (f->hw_device_ctx) continue;
-            f->hw_device_ctx = av_buffer_ref(hwDevice_);
+    // Every filter that declared it wants one gets the device the caller named.
+    // A filter that was given its own in its arguments keeps it:
+    // `-filter_hw_device` is the default, not an override.
+    for (unsigned i = 0; rc >= 0 && i < graph->nb_filters; ++i) {
+        AVFilterContext* f = graph->filters[i];
+        if (!f->filter || !(f->filter->flags & AVFILTER_FLAG_HWDEVICE)) continue;
+        if (f->hw_device_ctx) continue;
+        if (hwDevice) {
+            f->hw_device_ctx = av_buffer_ref(hwDevice);
             if (!f->hw_device_ctx) rc = AVERROR(ENOMEM);
+        } else if (wantsDevice) {
+            // Stopped here rather than left to fail inside `segment_apply`,
+            // where the message names no filter. Only for a caller that has no
+            // device to offer in the first place.
+            *wantsDevice = f->filter->name ? f->filter->name : "a filter";
+            rc = AVERROR(ENOSYS);
         }
     }
     if (rc >= 0) rc = avfilter_graph_segment_apply(seg, 0, inputs, outputs);
@@ -146,7 +140,7 @@ bool GraphSource::build(std::string* err) {
 
     AVFilterInOut* inputs = nullptr;
     AVFilterInOut* outputs = nullptr;
-    int rc = parseGraph(&inputs, &outputs);
+    int rc = parseFilterGraph(graph_, settings_.filterGraph, hwDevice_, &inputs, &outputs);
     if (rc < 0) {
         avfilter_inout_free(&inputs);
         avfilter_inout_free(&outputs);

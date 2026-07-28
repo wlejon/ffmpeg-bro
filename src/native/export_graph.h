@@ -71,7 +71,37 @@ namespace ffmpegbro {
 class SourceVideo;
 class SourceAudio;
 
-class GraphSource : public FrameSource {
+/// `avfilter_graph_parse2`, in the three steps it is made of, so that a device
+/// can be handed to the filters that need one *between* being created and being
+/// initialised.
+///
+/// **`hwupload` refuses to initialise without a device**, and there is nowhere
+/// to put one: the filter takes no argument that could name it and reads
+/// `AVFilterContext::hw_device_ctx`, which does not exist until the filter does.
+/// `avfilter_graph_parse2` creates and initialises in one call, so a device
+/// assigned after it has already come too late — "A hardware device reference is
+/// required to upload frames to", from inside a parse, with nothing in the
+/// message about which filter meant it.
+///
+/// The segment API is the seam ffmpeg's own CLI uses for exactly this, and this
+/// is `graph_parse()` in `ffmpeg_filter.c` written out. With no device named it
+/// is `avfilter_graph_parse2` in three lines instead of one, which is why there
+/// is no fast path here to disagree with.
+///
+/// **One parse, two callers.** `GraphSource` pulls its graph and `CaptureGraph`
+/// pushes into one; what they share is that the graph is a graph, and a second
+/// copy of this walk would be a second place for the device gap to be got wrong.
+///
+/// `wantsDevice`, when given, changes what happens to a graph that needs a
+/// device and was handed none: the parse stops before the filters are
+/// initialised and the first such filter's name is written there, so a caller
+/// with no hardware path at all can say so plainly. Null — which is what the
+/// render passes — leaves libavfilter to answer in its own words.
+int parseFilterGraph(AVFilterGraph* graph, const std::string& text, AVBufferRef* hwDevice,
+                     AVFilterInOut** inputs, AVFilterInOut** outputs,
+                     std::string* wantsDevice = nullptr);
+
+class GraphSource : public FrameSource, public PadProvider {
 public:
     explicit GraphSource(const ExportSettings& s);
     ~GraphSource() override;
@@ -106,21 +136,21 @@ public:
     // a label that names no pad, a picture pad in a sound stream, a composite
     // asked of a graph that never said which pad it was.
 
-    bool hasPad(const std::string& label) const { return sinkFor(label) != nullptr; }
-    bool padIsAudio(const std::string& label) const;
-    int padWidth(const std::string& label) const;
-    int padHeight(const std::string& label) const;
+    bool hasPad(const std::string& label) const override { return sinkFor(label) != nullptr; }
+    bool padIsAudio(const std::string& label) const override;
+    int padWidth(const std::string& label) const override;
+    int padHeight(const std::string& label) const override;
 
     /// Whether this graph says which of its pads is the composite (or the mix).
     /// False only for a graph with several pads of that kind and none of them
     /// labelled `vout` (or `aout`) — where the honest answer is that nobody
     /// said, and a stream asking for the composite has to be refused by name.
-    bool hasComposite() const { return vprimary_ != nullptr; }
-    bool hasMix() const { return aprimary_ != nullptr; }
+    bool hasComposite() const override { return vprimary_ != nullptr; }
+    bool hasMix() const override { return aprimary_ != nullptr; }
 
     /// Every output pad of a kind, in the order the graph declared them. For a
     /// refusal that has to say what there was instead.
-    std::vector<std::string> padLabels(bool audio) const;
+    std::vector<std::string> padLabels(bool audio) const override;
 
     /// Which pads the render is going to read by name.
     ///
@@ -129,7 +159,7 @@ public:
     /// tick, and finding out that somebody wanted it after the first tick has
     /// already dropped its first frames is too late. The composite and the mix
     /// are always read and need not be named.
-    void readPads(const std::vector<std::string>& labels);
+    void readPads(const std::vector<std::string>& labels) override;
 
     /// The pool the last video pad produces into, or null for a graph that
     /// ends in system memory. Asked of libavfilter (`av_buffersink_get_
@@ -221,10 +251,6 @@ private:
         Sink& operator=(const Sink&) = delete;
     };
 
-    /// The parse, in the three steps it is made of, so a device can be handed
-    /// to `hwupload` between its filter being created and being initialised.
-    /// See the note above the definition.
-    int parseGraph(AVFilterInOut** inputs, AVFilterInOut** outputs);
     bool attachInput(AVFilterInOut* in, std::string* err);
     bool attachOutput(AVFilterInOut* out, std::string* err);
     /// Which sink is the composite and which is the mix. See the note above
