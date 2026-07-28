@@ -282,16 +282,23 @@ void CopyStreams::fill(Reader& r) {
     while (!r.havePending && !r.eof) {
         av_packet_unref(r.pending);
         if (av_read_frame(r.fmt, r.pending) < 0) { r.eof = true; break; }
+        if (!haveStamp(r.pending)) continue;
 
-        Tap* tap = nullptr;
-        for (auto& t : r.taps)
-            if (t.stream == r.pending->stream_index && !t.finished) tap = &t;
-        if (!tap || !haveStamp(r.pending)) continue;
-
-        const AVRational tb = r.fmt->streams[tap->stream]->time_base;
-        const double at = stampOf(r.pending) * av_q2d(tb) - tap->zero;
-        if (tap->to > 0.0 && at > tap->to + 1e-9) {
-            tap->finished = true;
+        // Every tap this packet is for, not one of them. Two output streams may
+        // copy one input stream, and each one's window is its own — so a packet
+        // past the end of the first is still inside the second, and the search
+        // is per tap all the way down.
+        r.pendingTaps.clear();
+        double at = 0.0;
+        for (auto& t : r.taps) {
+            if (t.finished || t.stream != r.pending->stream_index) continue;
+            const AVRational tb = r.fmt->streams[t.stream]->time_base;
+            const double when = stampOf(r.pending) * av_q2d(tb) - t.zero;
+            if (t.to > 0.0 && when > t.to + 1e-9) { t.finished = true; continue; }
+            if (r.pendingTaps.empty()) at = when;
+            r.pendingTaps.push_back(&t);
+        }
+        if (r.pendingTaps.empty()) {
             bool any = false;
             for (const auto& t : r.taps) if (!t.finished) any = true;
             if (!any) r.eof = true;
@@ -303,13 +310,13 @@ void CopyStreams::fill(Reader& r) {
         // whole of A/V sync across a copy: taken per stream, a soundtrack would
         // move by however far the picture's first keyframe was from it.
         if (!r.haveEpoch) {
+            const AVRational tb = r.fmt->streams[r.pending->stream_index]->time_base;
             r.haveEpoch = true;
             r.epochUs = static_cast<int64_t>(std::llround(stampOf(r.pending) * av_q2d(tb) *
                                                           AV_TIME_BASE));
             if (!started_) { started_ = true; startedAt_ = at; }
         }
         r.havePending = true;
-        r.pendingTap = tap;
     }
 }
 
@@ -331,7 +338,22 @@ bool CopyStreams::pumpTo(double until, Writer& w, std::string* err) {
             if (r.pending->dts != AV_NOPTS_VALUE) r.pending->dts -= shift;
             r.pending->pos = -1;
 
-            if (!w.writeCopiedPacket(r.pendingTap->desc, r.pending, err)) return false;
+            // The muxer takes the reference it is given, so every tap past the
+            // first gets one of its own. One tap is the ordinary case and pays
+            // nothing for the general one.
+            for (size_t i = 0; i + 1 < r.pendingTaps.size(); ++i) {
+                AVPacket* copy = av_packet_alloc();
+                if (!copy || av_packet_ref(copy, r.pending) < 0) {
+                    if (copy) av_packet_free(&copy);
+                    *err = "out of memory copying a packet into two streams";
+                    return false;
+                }
+                const bool ok = w.writeCopiedPacket(r.pendingTaps[i]->desc, copy, err);
+                av_packet_free(&copy);
+                if (!ok) return false;
+                ++packets_;
+            }
+            if (!w.writeCopiedPacket(r.pendingTaps.back()->desc, r.pending, err)) return false;
             position_ = std::max(position_, at);
             ++packets_;
             r.havePending = false;

@@ -89,9 +89,11 @@ int GraphSource::parseGraph(AVFilterInOut** inputs, AVFilterInOut** outputs) {
     return rc;
 }
 
+GraphSource::Feed::~Feed() {
+    if (first) av_frame_free(&first);
+}
+
 GraphSource::~GraphSource() {
-    for (auto& f : feeds_)
-        if (f->first) av_frame_free(&f->first);
     if (vframe_) av_frame_free(&vframe_);
     if (aframe_) av_frame_free(&aframe_);
     if (down_) av_frame_free(&down_);
@@ -489,7 +491,17 @@ const Rgba& GraphSource::canvasAt(double) {
         vframe_ = f;
     }
 
-    if (vframe_->format == AV_PIX_FMT_RGBA) {
+    // The copy is a fast path for a frame that is already the canvas, and the
+    // size has to be part of that test rather than assumed from it. `build()`
+    // refuses a graph whose size disagrees with the render — but only when the
+    // render is not following the graph, and under `sizeFromGraph` there is a
+    // sixteen-pixel floor, so a last pad smaller than that produces a canvas
+    // legitimately bigger than the frame. Sized from the canvas, the copy then
+    // read rows the frame does not have. A node preview of anything tiny is two
+    // clicks away from it. Anything that does not match goes through the scaler
+    // below, which is where a resize belongs anyway.
+    if (vframe_->format == AV_PIX_FMT_RGBA && vframe_->width == canvas_.width &&
+        vframe_->height == canvas_.height) {
         const uint8_t* src = vframe_->data[0];
         uint8_t* dst = canvas_.data.data();
         for (int y = 0; y < canvas_.height; ++y) {

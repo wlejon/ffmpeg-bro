@@ -32,6 +32,7 @@
 #include "ffmpeg_capture.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_input.h"
+#include "ffmpeg_report.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -358,6 +359,65 @@ int main(int argc, char** argv) {
             checkf(o.duration > 0.1, "with the part that was recorded in it (%.2f s)",
                    o.duration);
         }
+    }
+
+    // ── a recording that never starts ──────────────────────────────────────
+    //
+    // `startCapture` opens the device before it starts a thread, so that "there
+    // is no camera called that" arrives as a refusal from the call rather than
+    // as a job that fails a moment later. What that path has to do is give back
+    // everything the claim took — and the claim takes two things, not one: the
+    // run slot, and a number in the report channel that every `av_log` line
+    // said from here on is stamped with. `job::Held` closes both, and it lives
+    // inside the job body, which this path never reaches.
+    //
+    // With only the slot given back, the channel's job number stayed set for
+    // the rest of the process: a probe, a decoder complaining during playback
+    // and the next render's own messages were all attributed to a recording
+    // that never happened. Nothing fails, nothing is slow, and every surface
+    // reading the report is quietly wrong — which is why it is asserted here
+    // rather than left to be noticed.
+    std::printf("\nA recording that never starts\n");
+    {
+        const uint64_t before = currentRenderJob();
+        checkf(before == 0, "nothing is being said for, before this (%llu)",
+               static_cast<unsigned long long>(before));
+
+        CaptureSettings bad;
+        bad.source.path = "video=there-is-no-such-device";
+        bad.source.format = "dshow";
+        bad.output.path = dir + "/capture-never.mp4";
+        bad.output.format = "mp4";
+        bad.output.videoCodec = "libx264";
+        std::string err;
+        const bool started = startCapture(bad, &err);
+        checkf(!started, "a device that is not there is refused (%s)", err.c_str());
+        checkf(!err.empty(), "with a reason on it");
+
+        const uint64_t after = currentRenderJob();
+        checkf(after == 0,
+               "and the report channel is not left attributing every later line to it "
+               "(job %llu)", static_cast<unsigned long long>(after));
+
+        // And the slot itself is free, which was already true and is the other
+        // half of the same sentence: one of the two being given back is the
+        // state this exists to make unreachable.
+        CaptureSettings ok = bad;
+        ok.source = lavfi("testsrc=size=160x120:rate=25", 0.4);
+        ok.output.path = dir + "/capture-after-failure.mp4";
+        ok.output.preset = "ultrafast";
+        ok.output.crf = 30;
+        ok.output.includeAudio = false;
+        std::string why;
+        const bool again = avcodec_find_encoder_by_name("libx264")
+                               ? startCapture(ok, &why) : false;
+        if (avcodec_find_encoder_by_name("libx264")) {
+            checkf(again, "and the next recording still gets the slot (%s)", why.c_str());
+            if (again) waitForJob(30.0);
+        } else {
+            std::printf("  SKIP  the slot is still free — no libx264 to record with\n");
+        }
+        checkf(currentRenderJob() == 0, "with the channel closed again after it");
     }
 
     // ── sound ──────────────────────────────────────────────────────────────

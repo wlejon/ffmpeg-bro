@@ -103,6 +103,17 @@ private:
         /// so it is kept until the graph is configured and can take it.
         AVFrame* first = nullptr;
         bool closed = false;        // its end-of-stream has been handed over
+
+        /// `first` is this object's, so it goes when this object does.
+        /// `attachInput` builds a feed and only pushes it into `feeds_` once
+        /// every link has been made, so a rotation this build has no hardware
+        /// transpose for — or a link libavfilter refuses — used to drop the
+        /// cloned frame on the floor. The render fails either way; a failure
+        /// that also leaks is still worth not writing.
+        ~Feed();
+        Feed() = default;
+        Feed(const Feed&) = delete;
+        Feed& operator=(const Feed&) = delete;
     };
 
     /// The parse, in the three steps it is made of, so a device can be handed

@@ -142,7 +142,13 @@ private:
         AVFormatContext* fmt = nullptr;
         AVPacket* pending = nullptr;
         bool havePending = false;
-        const Tap* pendingTap = nullptr;
+
+        /// Every live tap this packet belongs to, which is usually one and is
+        /// not always. `-map 0:1 -map 0:1` is a legal thing to ask for — two
+        /// rows out of one input stream differing only in their disposition —
+        /// and a single pointer here silently gave every packet to one of them
+        /// and left the other stream in the file empty.
+        std::vector<Tap*> pendingTaps;
         bool eof = false;
         bool haveEpoch = false;
         int64_t epochUs = 0;        ///< the first packet's dts, container clock

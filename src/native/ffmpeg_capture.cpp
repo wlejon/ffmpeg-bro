@@ -74,6 +74,10 @@ bool openDecoder(AVFormatContext* fmt, int index, AVCodecContext** out, std::str
     }
     AVCodecContext* dec = avcodec_alloc_context3(codec);
     if (!dec || avcodec_parameters_to_context(dec, st->codecpar) < 0) {
+        // The allocation may well have succeeded and only the copy failed, in
+        // which case there is a context to give back. The `avcodec_open2`
+        // branch below already gets this right.
+        if (dec) avcodec_free_context(&dec);
         if (err) *err = "could not set up the decoder";
         return false;
     }
@@ -458,6 +462,16 @@ bool startCapture(const CaptureSettings& settings, std::string* error) {
     auto dev = std::make_shared<Device>();
     std::string why;
     if (!openDevice(*dev, s, &why)) {
+        // **The claim is given back the way the job thread gives it back.**
+        // `job::claim()` numbers the render in the report channel as well as
+        // taking the slot, and `job::Held` is what closes that number again —
+        // but it lives inside the job body, which this path never reaches.
+        // Freeing the slot on its own left the channel's job number set for the
+        // rest of the process, so every `av_log` line said afterwards by
+        // anything at all — a probe, a decoder during playback, the next render
+        // — was attributed to a recording that never happened. Declared first
+        // so it runs last, which is the same rule the job body follows.
+        job::Held slot;
         job::release();
         ExportStatus st = job::status();
         st.state = ExportStatus::State::Failed;

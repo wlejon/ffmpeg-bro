@@ -671,9 +671,16 @@ const AVCodec* defaultSubtitleEncoder(const std::string& muxerName) {
     const AVOutputFormat* ofmt = muxerNamed(muxerName);
     if (!ofmt) return nullptr;
     const AVCodec* fallback = nullptr;
+    // **Only an actual no is a no.** `avformat_query_codec` has three answers
+    // and the third — `AVERROR_PATCHWELCOME` — means the muxer was never taught
+    // to answer, which is not the same as refusing. `Writer::openSubtitleStream`
+    // has always read it that way and this read it as a refusal, so the two
+    // halves of one question could disagree: the picker would offer nothing for
+    // a muxer that shrugs while the writer would happily open it. No muxer
+    // reaching here shrugs today, which is why nothing showed it.
     for (const auto& c : availableSubtitleEncoders()) {
         const AVCodec* e = avcodec_find_encoder_by_name(c.id.c_str());
-        if (!e || avformat_query_codec(ofmt, e->id, FF_COMPLIANCE_NORMAL) != 1) continue;
+        if (!e || avformat_query_codec(ofmt, e->id, FF_COMPLIANCE_NORMAL) == 0) continue;
         if (c.textSub) return e;
         if (!fallback) fallback = e;
     }

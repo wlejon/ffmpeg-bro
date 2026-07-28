@@ -380,7 +380,13 @@ Four things about the graph path are load-bearing:
   writer was opened for one size and saying so plainly beats a scaler quietly resizing
   every frame. On, the sink is asked and the writer is opened for the answer. That is what
   previewing a node in the middle of a graph needs, since nothing outside libavfilter
-  knows how big the picture is half way through.
+  knows how big the picture is half way through. **The sixteen-pixel floor it puts under
+  the sink's answer is the one case where the canvas is legitimately bigger than the
+  frame**, and `GraphSource::canvasAt`'s RGBA fast path — a row-by-row memcpy sized from
+  the canvas — read past the end of the frame because of it. The size is part of the test
+  now, not an assumption behind it: a frame that is not exactly the canvas goes through
+  the scaler, which is where a resize belonged anyway. Reachable in two clicks, from a
+  node preview of anything tiny.
 - **The parse is `avfilter_graph_segment_*`, not `avfilter_graph_parse2`.** They do the
   same thing; the difference is that the segment API stops between creating the filters
   and initialising them, and that gap is the only moment `-filter_hw_device` can be
@@ -523,6 +529,16 @@ codec-agnostic. Six things here are load-bearing:
   copied out of one file keep the offset they had, which is the whole of A/V sync;
   a zero taken per stream would move a soundtrack by however far the picture's
   first keyframe was from it.
+- **A packet may be for more than one output stream.** `-map 0:1 -map 0:1` is
+  a legal thing to ask for and two rows differing only in their disposition is
+  the reason somebody would, so `Reader::pendingTaps` is a list. It was one
+  pointer, filled by a search that did not stop, which silently gave every
+  packet to one of the two and left the other stream in the file empty — a
+  valid file, missing a track. The muxer takes the reference it is handed, so
+  every tap past the first gets `av_packet_ref`'d one of its own; one tap pays
+  nothing for the general case. Note the windows are per tap all the way down:
+  a packet past the end of the first row's span can still be inside the
+  second's.
 - **A copied audio stream is not the mix.** `outputStreams()` drops audio streams
   on a silent timeline and must not drop this one; `Writer::hasAudio()` reports
   only mix-fed streams, or a render would decode every clip's sound to hand it to
@@ -719,6 +735,14 @@ open-ended shape with the ends swapped) should reuse rather than re-take:
   forwarders. **`Slot`'s destructor joins**, because a function-local static holding a
   joinable `std::thread` calls `std::terminate` at exit — which reads as "the last
   thing it printed crashed" and is nothing of the kind.
+  **`claim()` takes two things and `Held` gives back two**: the slot, and a number in
+  the report channel that every `av_log` line said from here on is stamped with. Any
+  path that claims and then leaves without starting a thread has to use `Held` rather
+  than calling `release()` on its own — `startCapture`'s device-open failure was doing
+  the latter, so the channel's job number stayed set for the rest of the process and
+  every line said afterwards by anything at all was attributed to a recording that
+  never happened. Nothing fails and nothing is slow; every surface reading the report
+  is quietly wrong, which is the only kind of bug a report channel can have.
 - **Stop is the *normal* end of a recording**, so a stopped recording reports `Done`.
   A render is `Cancelled` because something was abandoned; a recording's length was
   the open question and stopping answered it. Reporting `Cancelled` would make every

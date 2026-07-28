@@ -1509,6 +1509,66 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // **A last pad smaller than the canvas the writer was opened for.**
+    // `sizeFromGraph` takes the sink's size and then puts a sixteen-pixel floor
+    // under it, because yuv420p has no half pixels and no encoder here will
+    // take an 8x8 picture. So the canvas can legitimately be *bigger* than the
+    // frame arriving from the graph, and the RGBA fast path — a row-by-row
+    // memcpy sized from the canvas — read past the end of that frame. Reachable
+    // from a node preview of anything tiny, which is the one place in this
+    // application that turns `sizeFromGraph` on.
+    //
+    // A flat colour is what makes it assertable: upscaled, every pixel of the
+    // 16x16 output is that colour, and a copy that ran off the end of an 8x8
+    // frame fills the bottom two thirds of the canvas with whatever followed it
+    // in the heap.
+    {
+        std::printf("\na graph smaller than the smallest picture\n");
+        const std::string outTiny = "out/export-graph-tiny.mp4";
+        ExportSettings ts = baseSettings(outTiny);
+        ts.endTime = 0.4;
+        ts.sizeFromGraph = true;
+        ts.includeAudio = false;
+        ts.filterInputs = {};
+        ts.filterGraph = "color=c=green:s=8x8:r=25,format=rgba[vout]";
+        st = render(ts, {});
+        checkf(st.state == ExportStatus::State::Done,
+               "a graph whose last pad is 8x8 renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        if (st.state == ExportStatus::State::Done) {
+            const ProbeResult ot = probeMedia(outTiny);
+            const StreamSummary* tv = nullptr;
+            for (const auto& s2 : ot.streams) if (s2.kind == "video") { tv = &s2; break; }
+            checkf(tv && tv->width == 16 && tv->height == 16,
+                   "at the sixteen-pixel floor (%dx%d)", tv ? tv->width : 0,
+                   tv ? tv->height : 0);
+            VideoPipeline v;
+            if (v.open(outTiny)) {
+                v.advanceTo(static_cast<TimeNs>(0.2 * 1e9));
+                if (v.hasFrame()) {
+                    const auto& rgba = v.currentRgba();
+                    // Green all the way down, not green over rubbish. The rows
+                    // past the eighth are the ones the copy invented.
+                    int wrong = 0, seen = 0;
+                    for (int y = 0; y < 16; ++y)
+                        for (int x = 0; x < 16; ++x) {
+                            const size_t i = (size_t(y) * 16 + x) * 4;
+                            if (i + 2 >= rgba.size()) continue;
+                            ++seen;
+                            if (rgba[i + 1] < 90 || rgba[i] > 90 || rgba[i + 2] > 90) ++wrong;
+                        }
+                    checkf(seen > 0 && wrong == 0,
+                           "and every pixel of it is the colour the graph made "
+                           "(%d of %d are not)", wrong, seen);
+                } else {
+                    check(false, "the tiny render has a frame in it");
+                }
+            } else {
+                check(false, "the tiny render opens");
+            }
+        }
+    }
+
     // ── a graph that produces something out of nothing ─────────────────────
     //
     // Every render above starts from a file on a timeline. libavfilter has
@@ -2475,6 +2535,43 @@ int main(int argc, char* argv[]) {
         bad.inputs = {in};
         bad.startTime = 0;
         bad.endTime = 1.0;
+
+        // **One input stream copied into two output streams.** `-map 0:1 -map
+        // 0:1` is a legal thing to ask ffmpeg for, and two rows differing only
+        // in their disposition is the reason somebody would — a track that is
+        // default and a duplicate of it that is not. Nothing in the UI produces
+        // it today, which is why the tap search giving every packet to the
+        // *last* matching tap had never been noticed: the first output stream
+        // came out empty and the file was valid.
+        {
+            ExportSettings twice = bad;
+            twice.path = "out/copy-twice.mp4";
+            twice.endTime = 1.0;
+            ExportStream a1;
+            a1.kind = "video";
+            a1.source = "copy:0:" + std::to_string(srcVideo);
+            a1.copyTo = kSpan;
+            a1.disposition = "+default";
+            ExportStream a2 = a1;
+            a2.disposition = "0";
+            twice.streams = {a1, a2};
+            st = render(twice, {});
+            checkf(st.state == ExportStatus::State::Done,
+                   "one input stream copied into two output streams runs (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+            if (st.state == ExportStatus::State::Done) {
+                const auto one = packetsOf(twice.path, 0);
+                const auto two = packetsOf(twice.path, 1);
+                checkf(!one.empty() && one.size() == two.size(),
+                       "and both of them have the packets (%zu and %zu)", one.size(),
+                       two.size());
+                size_t alike = 0;
+                for (size_t i = 0; i < one.size() && i < two.size(); ++i)
+                    if (one[i].data == two[i].data) ++alike;
+                checkf(!one.empty() && alike == one.size(),
+                       "byte for byte the same packets (%zu of %zu)", alike, one.size());
+            }
+        }
 
         ExportSettings noStream = bad;
         {
