@@ -3,6 +3,7 @@
 #include "ffmpeg_hardware.h"
 
 #include "export_frame.h"       // avErr
+#include "ffmpeg_report.h"      // LogQuiet
 
 extern "C" {
 #include <libavfilter/avfilter.h>
@@ -96,6 +97,17 @@ void fillFilters(HwDevice& d) {
 }
 
 std::vector<HwDevice> probe() {
+    // **Behind a mute, for the reason `globPatternsSupported()` is.** This asks
+    // by failing: every device type this build was compiled with and this
+    // machine has no card for answers with an error, and on a machine with
+    // NVIDIA cards `amf` answers `AMFQueryVersion failed with error 1` at
+    // AV_LOG_ERROR. The channel is what a *render* said, and a render that went
+    // perfectly would otherwise open its report drawer red over a question the
+    // application put to itself before anybody pressed anything. What the
+    // failure was is not lost — it is `HwDevice::error`, reported by
+    // `bro.ffmpeg.hardware()`, which is where somebody asking about a card
+    // looks.
+    LogQuiet quiet;
     std::vector<HwDevice> out;
     AVHWDeviceType t = AV_HWDEVICE_TYPE_NONE;
     while ((t = av_hwdevice_iterate_types(t)) != AV_HWDEVICE_TYPE_NONE) {
