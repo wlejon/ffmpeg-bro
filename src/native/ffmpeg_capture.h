@@ -20,8 +20,30 @@
 //
 // So this is a second job rather than a flag on the first, and what the two
 // share is the parts that do not care: `Writer` (the encoders, the muxer, the
-// trailer, the stream list) and the one slot in ffmpeg_job.h. Sharing the slot
-// is a decision and not an accident — see below.
+// trailer, the stream list), the one slot in ffmpeg_job.h, and — since the
+// device grew a filter graph — the filtergraph parse and the `pad:<label>`
+// vocabulary. Sharing the slot is a decision and not an accident — see below.
+//
+// **A recording can run a filter graph, and it is pushed rather than pulled.**
+// `ExportSettings::filterGraph` means the same thing here as it does in a
+// render: `[0:v]crop=…[vout]` records one monitor out of a wide screen grab, and
+// several output pads become several streams of one file exactly as they do for
+// an export. What differs is the direction. `GraphSource` walks a bounded range
+// asking the graph what the output looks like at an instant and drives its
+// inputs backwards from a sink until they answer; `CaptureGraph`
+// (capture_graph.h) is handed a decoded frame with the device's own timestamp on
+// it and empties every sink of whatever fell out. So placement — a timestamp
+// becoming an output frame number, a stall holding the last picture, `-t`
+// running out — happens *after* the graph rather than before it, per output pad,
+// which is what makes a rate-changing filter (`fps=10`) an ordinary filter here.
+//
+// Two things about it are refusals rather than features. A capture's graph is
+// fed by the device and by nothing else, so `filterInputs` — which says which
+// *file* feeds which pad — is refused: a device cannot be cut from, and a file
+// beside it on one graph is a later chunk's. And a graph whose filters want a
+// graphics card is refused by name, because `-filter_hw_device` has nowhere to
+// be said on the Capture stage and failing inside a parse would be the least
+// readable version of it.
 //
 // **Stop is the normal end of a recording, not the exceptional one.** Every
 // rule about a cancelled render still writing its trailer matters more here,
@@ -84,6 +106,12 @@ struct CaptureSettings {
     /// device's own picture size, which is nearly always what is wanted: a
     /// capture is not composited and there is no canvas to fit it into.
     /// `fps` at zero takes the rate the device reports.
+    ///
+    /// **`filterGraph` and `streams` mean here exactly what they mean in a
+    /// render**, which is why they are not fields of their own: the graph is fed
+    /// by the device rather than by files, and what comes out of its pads is
+    /// mapped with `pad:<label>` the same way. `filterInputs` is the one field
+    /// of this struct a recording refuses — see the note at the top.
     ExportSettings output;
 
     /// Zero rather than `ExportSettings`' 1920×1080 at 30, because for a

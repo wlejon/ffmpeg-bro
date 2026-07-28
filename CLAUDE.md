@@ -187,7 +187,10 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-directory>
 
 # native: a device as an endless input, and recording one — bounded, stopped,
-# with sound. Needs no media: it records from `lavfi`.
+# with sound, and through a filter graph pushed rather than pulled: a crop
+# checked by what it is a picture *of*, two pads as two streams of one file, a
+# rate change, sound filtered while the picture goes round, and every refusal.
+# Needs no media: it records from `lavfi`.
 ./build/Release/ffmpeg-bro-capturetest out
 
 # the Capture stage: choosing a device, its options in front of its -i, a
@@ -354,8 +357,9 @@ them to change alone:
 | `ffmpeg_export.cpp` | the job: one thread, **N passes**, the status the UI polls |
 | `ffmpeg_job.*` | **the one slot both kinds of job run in**, and the three rules that go with it |
 | `ffmpeg_capture.*` | recording a device: the job whose end is somebody pressing stop |
+| `capture_graph.*` | **libavfilter with a device pushed into it** — the same graph, driven from the other end |
 | `export_timeline.*` | **what the output looks like at t** — the `FrameSource` seam, and the track stack's answer to it |
-| `export_graph.*` | libavfilter's answer to the same two questions |
+| `export_graph.*` | libavfilter's answer to the same two questions, and the parse both graphs share |
 | `export_copy.*` | **the packet path** — streams that are not made at all, and where a copy can start |
 | `export_source.*` | one clip's pictures, one clip's sound |
 | `export_compositor.*` | placing a picture in the canvas: crop, scale, alpha |
@@ -370,7 +374,13 @@ them to change alone:
 `FrameSource` two questions per output frame — the canvas at `t`, and the samples between
 `t` and the next frame — and asks nothing else, so a second implementation cost the job one
 line. `TimelineSource` is the track stack; `GraphSource` parses a `-filter_complex` and runs
-it. **Which one runs is `ExportSettings::filterGraph` being empty or not**, and the two are
+it. **There are two filter graph classes in this binary and the difference between them is
+which end drives**: `GraphSource` is *pulled* — a render walks a bounded range asking what
+the output looks like at an instant, and the graph is driven backwards from a sink until it
+yields that frame — while `CaptureGraph` (capture_graph.h) is *pushed*, because a device
+cannot be asked what it looks like at `t`. What they share is what does not care about time:
+`parseFilterGraph()`, the `PadProvider` vocabulary and the sink-per-unconsumed-output rule.
+**Which one runs is `ExportSettings::filterGraph` being empty or not**, and the two are
 measured against each other in `tests/export_test.cpp` — the same edit rendered both ways,
 compared as PSNR, 43 dB and holding. **The assertion is that number**, `worst > 43.0`,
 against a measurement of 43.6 that repeats to the decimal; it read 34 for a while, which is
@@ -422,7 +432,8 @@ Six things about the graph path are load-bearing:
   with several it is the one labelled `vout` (`aout` for the mix). Several and no `vout`
   is not an error until something asks for the composite, and then it is refused naming
   the labels there were, in `resolvePads()` in `ffmpeg_export.cpp` — the one place
-  holding both the stream list and the graph. **One tick advances every video sink
+  holding both the stream list and the graph, and asked through `PadProvider` so that a
+  recording is refused in the same words at the moment its own graph configures. **One tick advances every video sink
   together**, in `canvasAt`, because a pad pulled at another moment is a stream out of
   step with the picture beside it; nothing is converted until a pad is asked for. A sink
   nobody reads is still emptied, since libavfilter holds every frame it has pushed at one
@@ -849,6 +860,49 @@ One limitation to know before extending this: `job::stopping()` is only checked
 between `av_read_frame` calls, so a device that has stalled is not stopped until its
 next frame arrives. At 10–30 fps that is under a tenth of a second. A device that has
 been unplugged is a different matter and is what `rw_timeout` is for.
+
+**A recording can run a filter graph, and the graph is pushed.**
+`ExportSettings::filterGraph` means here what it means in a render — `[0:v]crop=…[vout]`
+records one monitor out of a wide screen grab — and it needed a second graph class
+(`capture_graph.*`) rather than a mode of `GraphSource`, for the reason recording needed a
+second job: a device cannot be asked what it looks like at `t`. A decoded frame goes into
+its buffersrc with the device's own timestamp on it and **every sink is then drained until
+EAGAIN**; nothing in that path may ask an input for a frame. Four consequences:
+
+- **Placement moves after the graph, per pad.** What is placed on the output frame grid is
+  what came *out* of a sink, on the clock the graph gave it, and each pad holds its own last
+  picture over its own stall. So a rate-changing filter is an ordinary filter: `fps=10`
+  produces frames stamped ten to the second and they are put where they fall. `-t` is judged
+  on output time for the same reason. The recording's zero is still the first picture written
+  to the composite, which is why the composite sink is drained first.
+- **`pad:<label>` works in a recording**, through the same `resolvePads()` and the same
+  sentences — a wide grab split into two cropped streams of one file. The one ordering
+  difference is that a pad's size is not known until libavfilter has configured the graph and
+  the graph is not configured until the device has handed over a frame, so the pads are
+  resolved and the writer opened on the job thread, on the first frame, rather than up front.
+  A frame arriving before that is queued per feed (bounded), because two streams of one
+  device do not produce their first frame at the same instant.
+- **A device stream the graph does not read goes straight to the writer**, exactly as it did
+  before there was a graph: `[0:a]volume=0.5[aout]` filters the microphone and leaves the
+  screen alone, and `[0:v]crop=…[vout]` leaves the soundtrack alone. Where the device keeps
+  its own picture, *that* is the composite and a video pad of the graph is only reachable by
+  name — two answers to "which picture is the canvas" is a file with one of them silently in
+  it.
+- **Two things are refused rather than half-supported.** `filterInputs` says which *file*
+  feeds which pad, which is the render's question: a device cannot be cut from, so a
+  recording's graph is fed by `[0:v]` and `[0:a]` and nothing else (a second input is a later
+  chunk, which is why `CaptureGraph` is written in terms of "feed n" and never "the device").
+  And a graph whose filters want a graphics card is refused by name at open, because
+  `-filter_hw_device` has nowhere to be said on the Capture stage — that refusal is what the
+  `wantsDevice` out-parameter on the shared parse exists for.
+
+Everything else about the job is unchanged: stop is Done, progress is open-ended, the
+trailer goes down whatever happened, `job::Held` gives the slot back, and the device is
+opened on the caller's thread so that a camera that is not there is a refusal rather than a
+job that fails a moment later. The *graph* is parsed on the caller's thread too — on a
+throwaway object, so that a filter this build has not got is a refusal from the call that
+asked for the recording — and built again on the job thread, because what runs is built
+where it runs.
 
 **A render is a list of passes, and an empty list is one pass that overrides
 nothing.** `ExportPass` is the render with overrides — a graph and its inputs, an
