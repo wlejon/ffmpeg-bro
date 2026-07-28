@@ -253,6 +253,26 @@ function inputInfo(spec, id) {
     return null;
 }
 
+/// Does this clip's `-i` have a soundtrack for the mix to read at all?
+///
+/// **A muted clip and a clip of a file with no audio stream are two different
+/// facts**, and only the first was ever asked about. `volume` defaults to 1 and
+/// `muted` to false whatever the file turns out to contain, so a video-only
+/// input produced an `[0:a]atrim…[a0]` chain reading a pad that does not exist
+/// — a graph real ffmpeg refuses with "Stream specifier ':a' matches no
+/// streams", printed under every stage as the command about to be run.
+///
+/// Asked of `spec.inputInfo`, which runs parallel to `spec.inputs` and carries
+/// what the probe found, so this stays a pure function of the spec. **A spec
+/// that does not carry it answers yes**, which is what this always assumed and
+/// is what keeps every hand-written spec in `tests/` deriving exactly as it did.
+function clipHasSound(spec, clip) {
+    const list = Array.isArray(spec.inputInfo) ? spec.inputInfo : [];
+    const info = list[clip.input];
+    if (!info || !Array.isArray(info.streams)) return true;
+    return info.streams.indexOf('a') >= 0;
+}
+
 /// Which control on the properties panel a node's value came from — so that a
 /// lock can be reported *there*, against the field it outranks, rather than
 /// only on a stage the person editing may not be looking at.
@@ -756,7 +776,8 @@ export function derive(spec, sources, opts = {}) {
     if (over) g.connect(over, vsink, 0);
 
     if (spec.audio !== false) {
-        const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0);
+        const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0 &&
+                                                clipHasSound(spec, clip));
         const tails = heard.map(({ clip, w, i, key }) => {
             // The clip's own input node, given a second output. A pad is added
             // when something reads it rather than for every stream the file

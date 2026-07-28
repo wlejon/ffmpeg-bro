@@ -228,6 +228,19 @@ export function streamKinds(input) {
     return out.length ? out : ['v'];
 }
 
+/// Is there a soundtrack in this input for anything to read?
+///
+/// The one-word form of `streamKinds`, because it is asked as a yes or no in
+/// several places and `indexOf('a') >= 0` written out at each of them is the
+/// shape a disagreement grows in. **This is not the same question as whether a
+/// clip is muted**: a muted clip has sound and is not being listened to, and a
+/// video-only file has none to listen to — and only the first was ever asked,
+/// which is how the Write stage came to offer "the mix, through aac" for a
+/// timeline with nothing to mix.
+export function hasSound(input) {
+    return streamKinds(input).indexOf('a') >= 0;
+}
+
 /// What this input is set to, in one line, for a card and for the spine.
 export function summary(input) {
     const bits = [];

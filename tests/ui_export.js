@@ -12,10 +12,16 @@
 // to dismiss it. The path goes into the text field instead, which is what the
 // field is for.
 //
-// Usage: ffmpeg-bro-headless ui/ tests/ui_export.js -- <media-file>
+// Usage: ffmpeg-bro-headless ui/ tests/ui_export.js -- <media-file> [<video-only file>]
+//
+// The second file, if given, is one with **no audio stream in it at all** —
+// which is a different file from one whose soundtrack is quiet, and is the only
+// thing that separates "the mix" from "a mix nothing feeds". The last section
+// is skipped without it.
 
 const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
 const media = args[0];
+const videoOnly = args[1] || '';
 assert(media, 'pass a media file: ... tests/ui_export.js -- <file>');
 
 function pump(ms) {
@@ -2744,6 +2750,88 @@ console.log('\nturning them off');
     pump(200);
     ok(A.graph.preview.isEnabled(), 'and back on again');
     A.graph.overlay.clear();
+}
+
+// ── a timeline with no soundtrack anywhere on it ───────────────────────────
+//
+// **The Write stage cannot claim a stream the render will drop.** Native works
+// it out by opening: `wantAudio` is set only where a clip's audio actually
+// opened, and `outputStreams()` then leaves out every non-copied audio stream.
+// This side had no equivalent term — a row tested `settings.audio` and the
+// derivation tested `muted`/`volume`, neither of which knows what is in the
+// file — so a video-only timeline drew "A1 · the mix, through aac" and the
+// command bar printed `[0:a]atrim…`, `-map [a0]` and `-c:a aac` against an `-i`
+// with no audio in it. Pasted into a real ffmpeg that is *Stream specifier ':a'
+// matches no streams*, which is the whole printed-command claim breaking.
+//
+// It goes last because it clears the timeline.
+
+if (videoOnly) {
+    console.log('\na timeline with no soundtrack anywhere on it');
+    A.shell.goTo('compose');
+    pump(80);
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    for (const i of A.inputs.inputs.slice()) A.inputs.removeInput(i);
+    pump(120);
+
+    dropFiles(400, 300, [videoOnly]);
+    waitFor('the video-only file to load', () => A.project.clips.length > 0);
+    pump(200);
+
+    const only = A.inputs.inputs[0];
+    same(A.inputs.streamKinds(only).join(','), 'v',
+         'the probe found a picture and nothing else');
+    ok(!A.inputs.hasSound(only), 'so there is no soundtrack in it to read');
+
+    const S2 = A.exporter.currentSettings();
+    ok(S2.audio, 'Include audio is still on — nobody turned it off');
+    ok(S2.streams.some((s) => s.kind === 'audio'),
+       'and the row is still on the stage, because adding a file with sound would use it');
+
+    A.shell.goTo('write');
+    pump(150);
+    // The note itself, not the row's `textContent` — a row carries an encoder
+    // menu and reading the whole of it back would be quoting sixty codec names
+    // into the log.
+    const note = q('#ex-streams [data-kind="audio"] .ex-stream-none');
+    ok(note && /will not be written/.test(note.textContent),
+       `but it says so on the row (${note ? note.textContent.trim() : 'nothing said'})`);
+
+    const spec2 = A.exporter.buildSpec();
+    ok(!(spec2.streams || []).some((s) => s.kind === 'audio'),
+       'the spec carries no audio stream, which is what the renderer would do anyway');
+
+    A.command.draw();
+    const line2 = A.command.currentCommand();
+    ok(line2.indexOf('[0:a]') < 0, 'the printed graph reads no pad the -i does not produce');
+    ok(line2.indexOf('-map "[a0]"') < 0 && line2.indexOf('-map [a0]') < 0,
+       'nothing is mapped from one');
+    ok(line2.indexOf('-c:a') < 0, 'no audio encoder is named');
+    ok(line2.indexOf(' -an') >= 0, 'and -an says so out loud, as ffmpeg spells it');
+
+    // The render itself, because "the spec is right" is not the claim — the
+    // claim is that what comes out is a file, and a video-only render is the
+    // one this used to describe wrongly.
+    S2.width = 160; S2.height = 90; S2.quality = 34;
+    S2.rangeIn = 0; S2.rangeOut = 1;
+    const out2 = bro.appDir + '/../out/silent-render.mp4';
+    f('path').value = out2;
+    f('path').dispatchEvent(new Event('change', { bubbles: true }));
+    pump(80);
+    el('ex-go').click();
+    pump(60);
+    waitFor('the video-only render', () => {
+        const s = A.exporter.lastStatus();
+        return s && s.state !== 'running';
+    }, 120000);
+    const done2 = A.exporter.lastStatus();
+    same(done2.state, 'done', `it renders (${done2.error || 'no error'})`);
+    const back = bro.ffmpeg.probe(out2);
+    ok(!!back.video, 'and what came out has a picture in it');
+    ok(!back.audio, 'and no audio stream, which is what every screen said');
+} else {
+    console.log('\n(no video-only file given — the silent-timeline section is skipped)');
 }
 
 console.log(`\n${checks} checks passed`);

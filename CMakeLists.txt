@@ -171,6 +171,11 @@ enable_testing()
 set(FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 set(FIXTURE_A "${FIXTURE_DIR}/landscape.mp4")
 set(FIXTURE_B "${FIXTURE_DIR}/portrait.mp4")
+# A file with **no audio stream in it at all**, which is not the same file as
+# one whose soundtrack is quiet: it is the only thing that separates "the mix"
+# from "a mix nothing feeds", and every screen in this application used to
+# claim a soundtrack for it.
+set(FIXTURE_SILENT "${FIXTURE_DIR}/silent.mp4")
 
 add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
 set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
@@ -203,7 +208,7 @@ add_test(NAME ui-hardware COMMAND ffmpeg-bro-headless
          -- "${FIXTURE_A}")
 add_test(NAME ui-export COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
-         -- "${FIXTURE_A}")
+         -- "${FIXTURE_A}" "${FIXTURE_SILENT}")
 # Inputs that are assembled, from the drop that groups them to the Write stage
 # that says what a run of files will be called. Takes the fixture *directory*
 # rather than one file, because what it is about is a folder of frames.

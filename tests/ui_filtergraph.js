@@ -205,6 +205,46 @@ console.log('\naudio that is not heard');
     ok(!silent.chains.some((c) => c.indexOf(':a]') >= 0), 'and no audio chains');
 }
 
+// ── an input with no soundtrack in it ──────────────────────────────────────
+//
+// **A muted clip and a clip of a file with no audio stream are two different
+// facts**, and only the first was ever asked. `volume` defaults to 1 and
+// `muted` to false whatever the file contains, so a video-only input produced
+// `[0:a]atrim…[a0]`, a `-map [a0]` and a `-c:a aac` — a command real ffmpeg
+// refuses with *Stream specifier ':a' matches no streams*. The renderer itself
+// was right all along: `wantAudio` is set only where a clip's audio actually
+// opened, so the file came out with no soundtrack and every screen said it
+// would have one.
+//
+// It is a pure function of the spec because `inputInfo` carries what the probe
+// found, index-aligned with `inputs` — the same field the graph already reads
+// to build an input node it can name.
+
+console.log('\nan input with no soundtrack in it');
+{
+    const one = { path: 'a.mp4', format: '', options: {} };
+    const withInfo = (streams) => spec({
+        clips: [clip({ input: 0 })],
+        inputs: [one],
+        inputInfo: [{ id: 'in1', name: 'a.mp4', path: 'a.mp4', streams }],
+    });
+
+    const mute = filtergraph(withInfo(['v']));
+    ok(mute.ok, 'a video-only input still describes');
+    same(mute.audio, null, 'and has no audio pad for the muxer to map');
+    ok(!mute.chains.some((c) => c.indexOf(':a]') >= 0),
+       'because nothing reads a pad the -i does not produce');
+
+    const heard = filtergraph(withInfo(['v', 'a']));
+    same(heard.audio, '[a0]', 'the same input with a soundtrack in it is read for one');
+
+    // Every spec written by hand before the field existed — which is most of
+    // this file, and `make_fixture.cpp`, and the node previews — says nothing
+    // about what its inputs contain, and has to go on meaning what it meant.
+    same(filtergraph(spec()).audio, '[a0]',
+         'a spec that does not say what its inputs contain is assumed to have sound');
+}
+
 // ── colour ─────────────────────────────────────────────────────────────────
 //
 // Measured against the renderer, colour is most of the difference between this

@@ -1072,6 +1072,9 @@ body.fs #cropbox { display: none; }
    changes shape with it. */
 .ex-stream-src { max-width: 210px; }
 .ex-stream-copied { color: var(--accent); }
+/* A row the render will drop, said on the row rather than in the warnings
+   list: the decision it is about was taken here. */
+.ex-stream-none { color: var(--bad); }
 
 /* Where a copy can start. The marks are the keyframes, on the input's own
    clock, and the line is the in-point drawn against them — a copy can only

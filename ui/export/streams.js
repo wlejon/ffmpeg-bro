@@ -36,7 +36,8 @@
 
 import { el, div, span, put, select, row, head, fromTemplate, show } from '../dom.js';
 import { basename } from '../format.js';
-import { inputs } from '../inputs.js';
+import { project } from '../project.js';
+import { inputs, hasSound } from '../inputs.js';
 import { settings, activeVideoCodec, activeAudioCodec } from './state.js';
 import { videoEncoders, audioEncoders, muxerInfo, dispositions,
          codecTags } from './capabilities.js';
@@ -47,6 +48,7 @@ import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
          defaultSubtitleSource } from './subtitles.js';
+import { wires as overlayWires } from '../graph/overlay.js';
 
 let host = null;
 let hooks = {};
@@ -198,6 +200,33 @@ function syncAudioFlag() {
     settings.audio = settings.streams.some((s) => s.kind === 'audio' && !isCopy(s));
 }
 
+/// Is there anything on this timeline for the mix to be made of?
+///
+/// **The term the JS side did not have.** Native decides by opening: `wantAudio`
+/// in `export_timeline.cpp` is set only when a clip's `SourceAudio::open`
+/// succeeds, and `outputStreams()` then drops every non-copied audio stream. So
+/// a video-only timeline has always produced a file with no soundtrack in it,
+/// correctly — while this stage drew "A1 · the mix, through aac" for that stream
+/// and the command bar printed `-map [a0]` against an `-i` with no `[0:a]` in
+/// it. Pasted into a real ffmpeg that fails with *Stream specifier ':a' matches
+/// no streams*, which is the printed-command claim breaking.
+///
+/// It is derived here rather than found out by opening because the UI cannot
+/// open anything: what it has is `streamKinds()`, the probe's own answer, and
+/// native stays authoritative for the render itself.
+///
+/// **A copied soundtrack is outside this**, as it is outside `settings.audio`:
+/// its packets come out of a demuxer whether or not this edit has any sound.
+///
+/// The graph is the other half of it. A `sine` or an `anullsrc` wired to
+/// `audio out` is a render with a soundtrack and no clip anywhere near it —
+/// `derive()` grows the `out:a` sink for exactly that — so the mix is fed by
+/// an audible clip *or* by a wire somebody drew.
+export function hasAudibleSound() {
+    if (project.clips.some((c) => !c.muted && c.volume > 0 && hasSound(c.input))) return true;
+    return overlayWires().some((w) => w.to === 'out:a');
+}
+
 // ── what goes to the renderer ──────────────────────────────────────────────
 
 /// The rows as `render.start` wants them, with every default resolved.
@@ -218,7 +247,13 @@ export function streamSpecs(over = {}) {
         // A copied soundtrack is not the mix, so the Encode stage's Include
         // switch has nothing to say about it: its packets come out of a
         // demuxer whether or not this edit has any sound in it.
-        if (s.kind === 'audio' && !settings.audio && !isCopy(s)) continue;
+        //
+        // Nor is a mix that nothing feeds. Native drops it either way — it
+        // finds out by opening — so this is the same file with or without the
+        // term; what changes is that the command bar stops printing `-map
+        // [a0]` for a pad no `-i` produces, which is a command that fails.
+        if (s.kind === 'audio' && !isCopy(s) && (!settings.audio || !hasAudibleSound()))
+            continue;
         // A subtitle row with nowhere to read from is a row somebody added
         // before adding the file. Dropped rather than sent, exactly as a
         // pathless attachment is: `warnings()` says so where a refusal from
@@ -450,13 +485,22 @@ function says(s) {
             label: e.label + (legal.indexOf(e.id) < 0 ? `  (not in ${settings.container})` : ''),
         })));
 
-    return [
+    const out = [
         picker,
         span('through', 'dim'),
         select({ cls: 'ex-stream-codec', 'data-f': 'stream-codec',
                  on: { change: (e) => { s.codec = e.target.value; hooks.changed(); } } },
                choices, s.codec || ''),
     ];
+    // **A mix nothing feeds.** The render drops this stream — native finds out
+    // by opening and `streamSpecs()` says the same thing from the probe — so a
+    // row that went on stating "the mix, through aac" would be describing a
+    // track the file will not have. Said on the row rather than in the warnings
+    // list, because that is where the decision it is about was taken.
+    if (s.kind === 'audio' && !hasAudibleSound())
+        out.push(span('— nothing on the timeline has a soundtrack, so this stream will ' +
+                      'not be written', 'ex-stream-none'));
+    return out;
 }
 
 /// A subtitle row: which track, and what it comes out as.

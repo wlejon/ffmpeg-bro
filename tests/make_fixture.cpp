@@ -61,6 +61,13 @@ struct Recipe {
     double seconds;
     double toneHz;
     uint8_t tint;          // which channel the gradient leans on
+    // **A file with no audio stream at all**, which is a different fact from a
+    // file whose audio is silent and is the one the UI kept getting wrong: a
+    // stream list that offers "the mix, through aac" for a timeline with
+    // nothing to mix prints `-map [a0]` against an `-i` that has no `[0:a]`,
+    // and real ffmpeg answers "Stream specifier ':a' matches no streams".
+    // Only a fixture with the stream genuinely absent separates the two.
+    bool sound;
 };
 
 /// A frame that is different from every other frame: a vertical gradient, a
@@ -95,7 +102,7 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
     s.audioCodec = "aac";
     s.crf = 20;
     s.preset = "veryfast";
-    s.includeAudio = true;
+    s.includeAudio = r.sound;
     s.audioSampleRate = 48000;
     s.audioChannels = 2;
 
@@ -119,6 +126,7 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
             return false;
         }
 
+        if (!r.sound) continue;
         const int64_t upTo = std::llround((double(n + 1) / r.fps) * s.audioSampleRate);
         const int count = static_cast<int>(upTo - samplesWritten);
         if (count > 0) {
@@ -143,8 +151,11 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
         std::fprintf(stderr, "%s: %s\n", r.name, err.c_str());
         return false;
     }
-    std::printf("  %s  %dx%d %.0f fps %.1fs %.0f Hz  %lld bytes\n", r.name, r.width, r.height,
-                r.fps, r.seconds, r.toneHz, static_cast<long long>(writer.bytesSoFar()));
+    const std::string tone = r.sound ? std::to_string(int(r.toneHz)) + " Hz"
+                                     : std::string("no audio stream");
+    std::printf("  %s  %dx%d %.0f fps %.1fs %s  %lld bytes\n", r.name, r.width, r.height,
+                r.fps, r.seconds, tone.c_str(),
+                static_cast<long long>(writer.bytesSoFar()));
     return true;
 }
 
@@ -291,9 +302,16 @@ int main(int argc, char* argv[]) {
     // comfortably longer than that at its own rate — sixty frames is 2.4 s at
     // 25 fps and 2 s at 30. Ten and eight seconds leave room for that, for the
     // export test's range, and for the player test to play through.
+    // The third has **no audio stream in it at all**, which is not the same
+    // file as one whose soundtrack is quiet. Half of this application's model
+    // of a render is "the mix", and every part of it that assumed a clip has a
+    // soundtrack to contribute passed against the two above — the Write stage
+    // offered a stream nothing feeds and the command bar printed `-map [a0]`
+    // for a pad no `-i` produces. Short, because nothing measures it.
     const Recipe recipes[] = {
-        {"landscape.mp4", 640, 360, 25.0, 10.0, 440.0, 1},
-        {"portrait.mp4",  360, 640, 30.0,  8.0, 660.0, 2},
+        {"landscape.mp4", 640, 360, 25.0, 10.0, 440.0, 1, true},
+        {"portrait.mp4",  360, 640, 30.0,  8.0, 660.0, 2, true},
+        {"silent.mp4",    480, 270, 25.0,  4.0,   0.0, 0, false},
     };
 
     std::printf("writing fixtures into %s\n", dir.string().c_str());
