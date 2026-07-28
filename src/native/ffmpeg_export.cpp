@@ -151,6 +151,109 @@ bool composesAnything(const ExportSettings& s) {
     return false;
 }
 
+/// A pad's label as a refusal should say it, with the unlabelled pad named
+/// rather than left as an empty pair of brackets.
+std::string padList(const std::vector<std::string>& labels) {
+    std::string out;
+    for (const auto& l : labels)
+        out += (out.empty() ? "" : ", ") + (l.empty() ? std::string("an unlabelled one")
+                                                      : "[" + l + "]");
+    return out.empty() ? std::string("none") : out;
+}
+
+/// Everything about `pad:<label>` that has to be settled before a file is
+/// opened: which pad each stream reads, how big it is, and every way of asking
+/// for one that cannot work.
+///
+/// **Here rather than in the writer, because it is the one place that has both
+/// halves.** The writer has never heard of a filter graph and the graph has
+/// never heard of the stream list; the job holds both, and a refusal belongs
+/// where the decision is — which for a label that names no pad means before a
+/// muxer has been opened and a header written, not at the first frame.
+///
+/// It fills in the sizes as well as refusing, and it fills them into
+/// `s.streams` rather than into the resolved list: the writer resolves the list
+/// again out of the settings, and a size written only into the copy would be a
+/// size the encoder is never opened with. Filled by *label* and not by position,
+/// so nothing has to know which entries `outputStreams()` dropped.
+bool resolvePads(ExportSettings& s, GraphSource* graph,
+                 const std::vector<ExportStream>& resolved,
+                 std::vector<std::string>* reads, std::string* err) {
+    for (auto& st : s.streams) {
+        if (!isPadSource(st.source)) continue;
+        const std::string label = padLabelOf(st.source);
+
+        // A cue is not made here and neither is an attachment — there is
+        // nothing in this binary that turns a picture into either — so a pad
+        // feeding one is a spec that could not mean anything.
+        if (st.kind != "video" && st.kind != "audio") {
+            *err = "a " + st.kind + " stream cannot be fed from '" + st.source +
+                   "' — a graph pad is a picture or a sound, and a " + st.kind +
+                   " stream comes out of an input";
+            return false;
+        }
+        if (!graph) {
+            *err = "'" + st.source + "' names a pad of a filter graph, and this render has "
+                   "no graph in it — the picture comes from the timeline";
+            return false;
+        }
+        if (!graph->hasPad(label)) {
+            *err = "this graph has no pad called [" + label + "]: its pictures come out of " +
+                   padList(graph->padLabels(false)) + " and its sound out of " +
+                   padList(graph->padLabels(true));
+            return false;
+        }
+        const bool audio = graph->padIsAudio(label);
+        if (audio != (st.kind == "audio")) {
+            *err = "[" + label + "] is " + (audio ? "sound" : "a picture") +
+                   ", and the stream fed from it is " +
+                   (st.kind == "audio" ? "a sound stream" : "a picture stream");
+            return false;
+        }
+        // Whatever the pad settled on, unless the caller said otherwise — in
+        // which case the writer's scaler resizes into it, exactly as it does
+        // for a composite-fed stream that named a size of its own.
+        if (!audio && st.width <= 0) {
+            st.width = graph->padWidth(label);
+            st.height = graph->padHeight(label);
+        }
+        reads->push_back(label);
+    }
+
+    if (!graph) return true;
+
+    // **A composite asked of a graph that never said which pad it is.** One
+    // picture pad is the canvas whatever it is labelled, so this is only
+    // reachable with several — and then the name is the only thing that can
+    // decide. Said against the resolved list because that is where the render
+    // this application has always written lives: an empty `streams` is one
+    // video stream fed from the composite, and it has to be refused too rather
+    // than write a file of black.
+    if (!graph->hasComposite())
+        for (const auto& st : resolved)
+            if (st.kind == "video" && st.source == "composite") {
+                *err = "this graph ends in " + padList(graph->padLabels(false)) +
+                       " and no pad is labelled [vout], so nothing says which of them is "
+                       "the picture — label one vout, or map the streams with pad:<label>";
+                return false;
+            }
+    // The same for the mix, and it is asked of what the *caller wrote* rather
+    // than of the resolved list. With no `aout` there is no mix, `hasAudio()`
+    // is false, and `outputStreams()` has already dropped every mix-fed row as
+    // "the timeline is silent" — so by the time the resolved list exists the
+    // thing to complain about is gone, and what is left is a file quietly
+    // missing a soundtrack somebody asked for.
+    if (!graph->hasMix())
+        for (const auto& st : s.streams)
+            if (st.kind == "audio" && (st.source.empty() || st.source == "mix")) {
+                *err = "this graph ends in " + padList(graph->padLabels(true)) +
+                       " and no pad is labelled [aout], so nothing says which of them is "
+                       "the mix — label one aout, or map the streams with pad:<label>";
+                return false;
+            }
+    return true;
+}
+
 /// One walk over the range: ask the edit what the output looks like at this
 /// instant, hand it to the writer, say how far along it is. Every step past
 /// "how far along" belongs to something else, which is what keeps this readable
@@ -197,6 +300,12 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // Which of the two answers to "what does the output look like at t" this
     // render uses, and the only line in the job that knows there are two.
     std::unique_ptr<FrameSource> source;
+    // The same object as `source` where the render goes through libavfilter,
+    // and null everywhere else. Held because a `pad:` stream is a question
+    // about the *graph* — which pads there are, how big each one is — and
+    // `FrameSource` deliberately knows nothing about pads it has not been
+    // asked for.
+    GraphSource* graph = nullptr;
     if (!composes) {
         // Nothing to compose: every stream is packets. The frame source is not
         // built at all, so a rewrap of a two-hour file does not open a decoder.
@@ -216,6 +325,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         // node half-way down a graph is not something anything outside
         // libavfilter could have said before it was configured.
         if (s.sizeFromGraph) { s.width = g->outWidth(); s.height = g->outHeight(); }
+        graph = g.get();
         source = std::move(g);
     } else {
         source = std::make_unique<TimelineSource>(s, std::move(clips));
@@ -227,7 +337,41 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // is nowhere else to get them from. `outputStreams` is asked with the same
     // `wantAudio` on both sides, so a copy's index means the same stream here
     // and in the writer.
-    const std::vector<ExportStream> resolved = outputStreams(s, wantAudio);
+    std::vector<ExportStream> resolved = outputStreams(s, wantAudio);
+
+    // Which streams read a pad of the graph by name, and what that costs the
+    // rest of the job: a size for each, a refusal for anything that cannot
+    // work, and — the part that has to happen before the first tick — telling
+    // the graph which sound pads somebody is listening to, since the ones
+    // nobody is are thrown away as they arrive.
+    {
+        std::vector<std::string> reads;
+        if (!resolvePads(s, graph, resolved, &reads, &err)) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+            st.elapsedSec = secondsSince();
+            setStatus(st);
+            LOG_ERROR("export failed: %s", err.c_str());
+            reportNote(AV_LOG_ERROR, "render", err);
+            return;
+        }
+        if (graph) graph->readPads(reads);
+        // Again, because the sizes just written into `s.streams` are part of
+        // what the list resolves to and the copy above was taken before them.
+        if (!reads.empty()) resolved = outputStreams(s, wantAudio);
+    }
+
+    // The streams a pad feeds, by the index the writer numbers them with. Held
+    // as a list rather than looked up per frame: it is walked once per output
+    // frame and it never changes.
+    struct PadStream { size_t desc; std::string label; };
+    std::vector<PadStream> padVideo, padAudio;
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        if (!isPadSource(resolved[i].source)) continue;
+        (resolved[i].kind == "audio" ? padAudio : padVideo)
+            .push_back({i, padLabelOf(resolved[i].source)});
+    }
+
     CopyStreams copies;
     SubtitleStreams subs;
     // The subtitle path, built alongside the packet path and for the same
@@ -262,7 +406,7 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
         return;
     }
 
-    std::vector<float> mix;
+    std::vector<float> mix, padMix;
     const int rate = s.audioSampleRate;
     const int channels = s.audioChannels;
     int64_t samplesWritten = 0;
@@ -312,22 +456,59 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
                 st.error = err;
                 break;
             }
-        }
-
-        // The samples this frame covers, counted from the start of the render
-        // so rounding never loses or repeats one at a frame boundary.
-        if (writer.hasAudio()) {
-            const int64_t upTo = std::llround((double(n + 1) / s.fps) * rate);
-            const int frames = static_cast<int>(std::max<int64_t>(0, upTo - samplesWritten));
-            if (frames > 0) {
-                mix.assign(static_cast<size_t>(frames) * channels, 0.0f);
-                timeline.mixInto(mix.data(), s.startTime + double(samplesWritten) / rate,
-                                 frames, rate, channels);
-                if (!writer.writeAudio(mix.data(), frames, &err)) {
+            // The graph's other pictures, on the tick `canvasAt` just
+            // performed. Asked after it and never before: one tick advances
+            // every pad together, and a pad pulled on its own would be a
+            // stream whose frames are out of step with the canvas.
+            for (const auto& p : padVideo) {
+                const Rgba* picture = timeline.padAt(p.label);
+                if (!picture) continue;      // refused before the render started
+                if (!writer.writeVideoTo(p.desc, *picture, n, &err)) {
                     st.state = ExportStatus::State::Failed;
                     st.error = err;
                     break;
                 }
+            }
+            if (st.state != ExportStatus::State::Running) break;
+        }
+
+        // The samples this frame covers, counted from the start of the render
+        // so rounding never loses or repeats one at a frame boundary. One count
+        // for every soundtrack this file has, because they are all the same
+        // seconds of the same render — what differs is only where each one's
+        // samples come from.
+        if (writer.hasAudio() || !padAudio.empty()) {
+            const int64_t upTo = std::llround((double(n + 1) / s.fps) * rate);
+            const int frames = static_cast<int>(std::max<int64_t>(0, upTo - samplesWritten));
+            const double from = s.startTime + double(samplesWritten) / rate;
+            if (frames > 0) {
+                // Only where a stream is fed by the mix. `hasAudio()` counts
+                // exactly those, which is what keeps a render whose only sound
+                // comes off a pad from decoding every clip's soundtrack to
+                // hand it to nobody.
+                if (writer.hasAudio()) {
+                    mix.assign(static_cast<size_t>(frames) * channels, 0.0f);
+                    timeline.mixInto(mix.data(), from, frames, rate, channels);
+                    if (!writer.writeAudio(mix.data(), frames, &err)) {
+                        st.state = ExportStatus::State::Failed;
+                        st.error = err;
+                        break;
+                    }
+                }
+                for (const auto& p : padAudio) {
+                    // Its own buffer, because it is its own soundtrack: summed
+                    // into the mix's it would be one stream carrying both.
+                    padMix.assign(static_cast<size_t>(frames) * channels, 0.0f);
+                    if (!timeline.padMixInto(p.label, padMix.data(), from, frames, rate,
+                                             channels))
+                        continue;
+                    if (!writer.writeAudioTo(p.desc, padMix.data(), frames, &err)) {
+                        st.state = ExportStatus::State::Failed;
+                        st.error = err;
+                        break;
+                    }
+                }
+                if (st.state != ExportStatus::State::Running) break;
                 samplesWritten = upTo;
             }
         }

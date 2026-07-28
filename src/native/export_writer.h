@@ -45,6 +45,14 @@
 // kind needs to get a frame into the file. `writeVideo` feeds every video
 // stream mapped to the composite and `writeAudio` feeds every audio stream
 // mapped to the mix, which is why the job above did not change at all.
+//
+// **Not every stream is fed by all of them at once, and that is the second
+// shape.** A stream mapped to a named pad of the filter graph is a different
+// picture — one of several the graph produces — so it is fed on its own,
+// through `writeVideoTo`/`writeAudioTo` and by descriptor index. The job knows
+// which pad belongs to which stream because it resolved the list; this knows
+// only that the picture it was handed goes to exactly one place, and its size
+// need not be the render's.
 #pragma once
 
 #include "export_frame.h"
@@ -101,6 +109,14 @@ public:
     /// editor will accept.
     bool writeVideo(const Rgba& canvas, int64_t index, std::string* err);
 
+    /// The same, into exactly one stream — the one at `desc` in the resolved
+    /// list, which is the numbering `outputStreams()` produced and the job
+    /// walks. For a stream fed from a named pad of the filter graph, whose
+    /// picture is not the canvas and whose size need not be the render's; the
+    /// scaler converts whatever arrives into what the encoder was opened for.
+    /// A `desc` that was resolved away writes nothing and is not an error.
+    bool writeVideoTo(size_t desc, const Rgba& picture, int64_t index, std::string* err);
+
     /// True when this render's pictures never come down: every video stream fed
     /// from the composite was opened against the frames context `open()` was
     /// given, and the job should be calling `writeVideoFrame` instead.
@@ -124,6 +140,11 @@ public:
     /// time and the video loop produces however many one frame covers — and
     /// because two encoders in one file rarely agree on that number.
     bool writeAudio(const float* interleaved, int frames, std::string* err);
+
+    /// The same, into exactly one stream: a soundtrack that came off a named
+    /// pad of the graph rather than out of the mix. Same numbering as
+    /// `writeVideoTo`, same silence about a stream that was resolved away.
+    bool writeAudioTo(size_t desc, const float* interleaved, int frames, std::string* err);
 
     /// One packet of a copied stream, in that stream's *input* time base and
     /// already shifted so that the copy's zero is the file's. It goes through
@@ -263,6 +284,14 @@ private:
         // video
         AVFrame* vframe = nullptr;
         SwsContext* toEncoder = nullptr;
+        /// The size of picture `toEncoder` was built to take, and where the
+        /// colour half of it came from. Kept because the scaler is remade when
+        /// a picture of another size arrives — which is what a pad-fed stream
+        /// whose size the caller named does — and a context rebuilt without
+        /// the colour details converts through libswscale's BT.601 default.
+        int srcW = 0, srcH = 0;
+        int dstSpace = SWS_CS_ITU709;
+        bool dstFullRange = false;
         /// This stream's encoder was opened against a hardware frames context,
         /// so `vframe` and `toEncoder` are both null and the picture arrives
         /// through `writeVideoFrame`.
@@ -326,6 +355,16 @@ private:
 
     bool openVideoStream(Out& o, std::string* err);
     bool openAudioStream(Out& o, bool* skipped, std::string* err);
+    /// The RGBA-in, encoder-out conversion for one stream, built for the size
+    /// of picture that is actually arriving. See the note above the definition:
+    /// swscale does the resize and the format change in one call, which is what
+    /// makes a proxy stream and a pad-fed stream the same mechanism.
+    bool ensureScaler(Out& o, int srcW, int srcH, std::string* err);
+    /// One picture into one stream — the body `writeVideo` and `writeVideoTo`
+    /// share, since what differs between them is only which streams get which
+    /// picture.
+    bool writeVideoInto(Out& o, const Rgba& canvas, int64_t index, std::string* err);
+    bool writeAudioInto(Out& o, const float* interleaved, int frames, std::string* err);
     bool openAttachment(Out& o, std::string* err);
 
     /// A stream of cues rather than of frames: no pixel format, no rate

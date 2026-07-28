@@ -431,7 +431,18 @@ std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio)
         // still writes one — which is exactly what "replace the audio" and
         // "extract the soundtrack" are, and dropping it here would have made
         // both of them silently impossible.
-        if (st.kind == "audio" && !isCopySource(st.source) &&
+        //
+        // **Nor is a stream fed from a graph pad**, and it is the same kind of
+        // claim: this exception is *correctness*, not thrift. `wantAudio` is
+        // "the mix has something feeding it", and a `pad:` stream's sound is
+        // made inside libavfilter out of whatever that chain reads — a `sine`,
+        // a second file, the same clips through an `amix` this render is not
+        // the mix of. Dropped here, a graph that produces two soundtracks and
+        // maps neither to the mix would write a file with no sound in it and
+        // say nothing. (The thrift guard is `Writer::hasAudio()`, which counts
+        // only the mix-fed streams so that nothing decodes a clip's sound for
+        // a stream that will never ask for a sample.)
+        if (st.kind == "audio" && !isCopySource(st.source) && !isPadSource(st.source) &&
             (!wantAudio || !s.includeAudio))
             continue;
 
@@ -738,11 +749,24 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // stream, rather than discovered at the first frame.
     {
         int nativeStreams = 0, softwareStreams = 0;
-        std::string oddOne;
+        std::string oddOne, padOne;
         for (const auto& out : outs_) {
             if (out->desc.kind != "video" || out->copied) continue;
             if (out->native) ++nativeStreams;
             else { ++softwareStreams; if (oddOne.empty()) oddOne = out->desc.codec; }
+            if (isPadSource(out->desc.source) && padOne.empty()) padOne = out->desc.source;
+        }
+        // A pad-fed stream first, because it is the specific answer and the
+        // mixture below is the general one. Reading a pad means reading pixels,
+        // and this render's pictures are on a card by the render's own request
+        // — bringing one down per frame on its behalf is the readback the whole
+        // path exists to avoid, done quietly for somebody who asked for the
+        // opposite.
+        if (nativeStreams && !padOne.empty()) {
+            *err = "'" + padOne + "' reads pixels and this render's pictures never come "
+                   "down — take the hardware filters off the graph, or drop the pad-fed "
+                   "stream";
+            return false;
         }
         if (nativeStreams && softwareStreams) {
             *err = "this render keeps its pictures on the card, and '" +
@@ -822,35 +846,56 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     return true;
 }
 
+/// One picture into one stream. The body both write paths share, because what
+/// differs between the canvas and a pad is only which streams are handed which
+/// picture — everything from the scaler down is the same act.
+bool Writer::writeVideoInto(Out& o, const Rgba& canvas, int64_t index, std::string* err) {
+    if (!ensureScaler(o, canvas.width, canvas.height, err)) return false;
+    if (av_frame_make_writable(o.vframe) < 0) {
+        *err = "cannot write to the encoder's frame";
+        return false;
+    }
+
+    const uint8_t* src[4] = {canvas.data.data(), nullptr, nullptr, nullptr};
+    const int srcStride[4] = {canvas.stride, 0, 0, 0};
+    if (sws_scale(o.toEncoder, src, srcStride, 0, canvas.height,
+                  o.vframe->data, o.vframe->linesize) <= 0) {
+        *err = "colour conversion failed";
+        return false;
+    }
+    o.vframe->pts = index;
+    // Where the picture *is* in the output, which is what
+    // `-force_key_frames` is written against: seconds from the start of the
+    // file, not from the start of the timeline. Whoever knows the range
+    // subtracted its start before the times got here.
+    const double t = settings_.fps > 0 ? double(index) / settings_.fps : 0.0;
+    o.vframe->pict_type =
+        o.keys.wants(index, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    o.vframe->flags = (o.vframe->flags & ~(AV_FRAME_FLAG_INTERLACED |
+                                           AV_FRAME_FLAG_TOP_FIELD_FIRST)) |
+                      o.frameFlags;
+    return encode(o, o.vframe, err);
+}
+
 bool Writer::writeVideo(const Rgba& canvas, int64_t index, std::string* err) {
     for (auto& out : outs_) {
         Out& o = *out;
-        if (o.desc.kind != "video" || o.copied) continue;
-        if (av_frame_make_writable(o.vframe) < 0) {
-            *err = "cannot write to the encoder's frame";
-            return false;
-        }
-
-        const uint8_t* src[4] = {canvas.data.data(), nullptr, nullptr, nullptr};
-        const int srcStride[4] = {canvas.stride, 0, 0, 0};
-        if (sws_scale(o.toEncoder, src, srcStride, 0, canvas.height,
-                      o.vframe->data, o.vframe->linesize) <= 0) {
-            *err = "colour conversion failed";
-            return false;
-        }
-        o.vframe->pts = index;
-        // Where the picture *is* in the output, which is what
-        // `-force_key_frames` is written against: seconds from the start of the
-        // file, not from the start of the timeline. Whoever knows the range
-        // subtracted its start before the times got here.
-        const double t = settings_.fps > 0 ? double(index) / settings_.fps : 0.0;
-        o.vframe->pict_type =
-            o.keys.wants(index, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
-        o.vframe->flags = (o.vframe->flags & ~(AV_FRAME_FLAG_INTERLACED |
-                                               AV_FRAME_FLAG_TOP_FIELD_FIRST)) |
-                          o.frameFlags;
-        if (!encode(o, o.vframe, err)) return false;
+        // Composite-fed only. A pad-fed stream is a different picture and is
+        // handed its own through `writeVideoTo`; giving it the canvas here
+        // would write the canvas twice and never write the pad at all.
+        if (o.desc.kind != "video" || o.copied || isPadSource(o.desc.source)) continue;
+        if (!writeVideoInto(o, canvas, index, err)) return false;
     }
+    return true;
+}
+
+bool Writer::writeVideoTo(size_t desc, const Rgba& picture, int64_t index, std::string* err) {
+    for (auto& out : outs_) {
+        if (out->descIndex != desc) continue;
+        return writeVideoInto(*out, picture, index, err);
+    }
+    // The stream was resolved away, which is the same "nothing to write it to
+    // and nothing wrong" `writeCopiedPacket` answers with.
     return true;
 }
 
@@ -872,13 +917,9 @@ bool Writer::writeVideoFrame(AVFrame* frame, int64_t index, std::string* err) {
     return true;
 }
 
-bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) {
-    if (frames <= 0) return true;
-
-    for (auto& out : outs_) {
-        Out& o = *out;
-        if (o.desc.kind != "audio" || o.copied) continue;
-
+/// One block of interleaved float into one stream's resampler and fifo.
+bool Writer::writeAudioInto(Out& o, const float* interleaved, int frames, std::string* err) {
+    {
         const int maxOut = static_cast<int>(av_rescale_rnd(
             swr_get_delay(o.swr, o.enc->sample_rate) + frames,
             o.enc->sample_rate, settings_.audioSampleRate, AV_ROUND_UP));
@@ -906,7 +947,7 @@ bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) 
         const int written = swr_convert(o.swr, o.aconv->extended_data, o.aconv->nb_samples,
                                         &in, frames);
         if (written < 0) { *err = "audio resample failed"; return false; }
-        if (written == 0) continue;
+        if (written == 0) return true;
 
         if (av_audio_fifo_write(o.fifo, reinterpret_cast<void* const*>(o.aconv->extended_data),
                                 written) < written) {
@@ -914,6 +955,29 @@ bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) 
             return false;
         }
         if (!drainFifo(o, false, err)) return false;
+    }
+    return true;
+}
+
+bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) {
+    if (frames <= 0) return true;
+    for (auto& out : outs_) {
+        Out& o = *out;
+        // Mix-fed only, for the reason `writeVideo` is composite-fed only: a
+        // pad's sound is a different soundtrack and arrives through
+        // `writeAudioTo`.
+        if (o.desc.kind != "audio" || o.copied || isPadSource(o.desc.source)) continue;
+        if (!writeAudioInto(o, interleaved, frames, err)) return false;
+    }
+    return true;
+}
+
+bool Writer::writeAudioTo(size_t desc, const float* interleaved, int frames,
+                          std::string* err) {
+    if (frames <= 0) return true;
+    for (auto& out : outs_) {
+        if (out->descIndex != desc) continue;
+        return writeAudioInto(*out, interleaved, frames, err);
     }
     return true;
 }
@@ -1084,13 +1148,20 @@ void Writer::close() {
 }
 
 bool Writer::openVideoStream(Out& o, std::string* err) {
-    // `composite` is the canvas; `copy:0:1` was taken by the branch above.
-    // Anything else is a caller naming a source that does not exist. There is no
-    // empty case to allow for: `outputStreams()` resolves every default before
-    // anything gets here, which is what it exists to do.
-    if (o.desc.source != "composite") {
+    // `composite` is the canvas, `pad:<label>` is one of the graph's other
+    // outputs, and `copy:0:1` was taken by the branch above. Anything else is a
+    // caller naming a source that does not exist. There is no empty case to
+    // allow for: `outputStreams()` resolves every default before anything gets
+    // here, which is what it exists to do.
+    //
+    // Whether the label names a pad this graph has is not asked here and cannot
+    // be: the writer has never heard of the graph, and the job — which has both
+    // — refuses an unknown label by name before this is called.
+    const bool padFed = isPadSource(o.desc.source);
+    if (o.desc.source != "composite" && !padFed) {
         *err = "a video stream cannot be fed from '" + o.desc.source +
-               "' — it is the composite, or copy:<input>:<stream>";
+               "' — it is the composite, a graph pad (pad:<label>), or "
+               "copy:<input>:<stream>";
         return false;
     }
 
@@ -1109,8 +1180,16 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     // A rational frame rate, not a double: 30000/1001 has to survive into
     // the container as itself or every timestamp downstream drifts.
     const AVRational fps = av_d2q(settings_.fps, 1000000);
-    o.enc->width = settings_.width;
-    o.enc->height = settings_.height;
+    // This stream's own size where it was given one, which for a `pad:` stream
+    // the job has already filled in from the sink. Everything below that used
+    // to read the settings' two numbers reads these instead — the gop, the
+    // fallback bitrate, the colour tags and the scaler — because they are all
+    // statements about *this* picture, and a proxy stream half the size of the
+    // master crossing the 720-line boundary is a real case of them differing.
+    const int outW = o.desc.width > 0 ? o.desc.width : settings_.width;
+    const int outH = o.desc.height > 0 ? o.desc.height : settings_.height;
+    o.enc->width = outW;
+    o.enc->height = outH;
     o.enc->time_base = av_inv_q(fps);
     o.enc->framerate = fps;
     o.enc->pix_fmt = pickPixelFormat(codec);
@@ -1128,7 +1207,13 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     // frames fails inside the encoder with a message about surfaces. Where they
     // do not agree this quietly stays on the ordinary path and the graph brings
     // the picture down, which is slower and correct.
-    if (hwFrames_ && isHardwareEncoder(codec)) {
+    //
+    // Never for a pad-fed stream: the pool is the *composite's*, and a pad is a
+    // different picture that this render is going to read as pixels anyway.
+    // `open()` refuses the combination outright a few lines further on, with a
+    // sentence, rather than letting it come out as a stream encoded from the
+    // wrong pad's surfaces.
+    if (hwFrames_ && !padFed && isHardwareEncoder(codec)) {
         auto* pool = reinterpret_cast<AVHWFramesContext*>(hwFrames_->data);
         auto* dev = reinterpret_cast<AVHWDeviceContext*>(pool->device_ref->data);
         if (encoderDeviceType(codec) == dev->type) {
@@ -1204,7 +1289,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     const bool wide = settings_.colorspace == "bt2020";
     const bool hd = settings_.colorspace == "bt709" ||
                     (settings_.colorspace.empty() || settings_.colorspace == "auto"
-                         ? settings_.height >= 720 : false);
+                         ? outH >= 720 : false);
     if (wide) {
         o.enc->colorspace = AVCOL_SPC_BT2020_NCL;
         o.enc->color_primaries = AVCOL_PRI_BT2020;
@@ -1241,8 +1326,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
         // No constant-quality control: pick a bitrate from the picture
         // rather than let the encoder's 200 kbps default ruin it.
         const double bpp = 0.07;
-        o.enc->bit_rate = static_cast<int64_t>(
-            settings_.width * settings_.height * settings_.fps * bpp);
+        o.enc->bit_rate = static_cast<int64_t>(outW * outH * settings_.fps * bpp);
     }
     if (!o.desc.preset.empty() && hasOption(codec, "preset"))
         av_opt_set(o.enc->priv_data, "preset", o.desc.preset.c_str(), 0);
@@ -1291,14 +1375,45 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     o.vframe->height = o.enc->height;
     if (av_frame_get_buffer(o.vframe, 0) < 0) { *err = "out of memory"; return false; }
 
-    o.toEncoder = sws_getCachedContext(nullptr, settings_.width, settings_.height,
-                                       AV_PIX_FMT_RGBA, settings_.width, settings_.height,
-                                       o.enc->pix_fmt, scalerFlag(settings_.scaler),
-                                       nullptr, nullptr, nullptr);
+    // The colour, kept beside the scaler because the scaler is rebuilt whenever
+    // a picture of a size it was not expecting arrives and the two statements
+    // have to travel together — a context remade without the details converts
+    // through libswscale's BT.601 default and the stream goes green in the
+    // shadows for the rest of the render.
+    o.dstSpace = wide ? SWS_CS_BT2020 : (hd ? SWS_CS_ITU709 : SWS_CS_ITU601);
+    o.dstFullRange = fullRange;
+    // What size of picture this stream expects to be handed: the canvas for a
+    // composite-fed stream, the pad's own for one fed from the graph. It is a
+    // starting guess and not a promise — `ensureScaler` remakes the context if
+    // what turns up is a different size, which is what makes a stream whose
+    // size the caller *named* work as well as one whose size was asked of the
+    // sink.
+    if (!ensureScaler(o, padFed ? outW : settings_.width, padFed ? outH : settings_.height,
+                      err))
+        return false;
+    return true;
+}
+
+/// The conversion from whatever picture arrives into what the encoder takes.
+///
+/// **swscale does the size and the format in one**, which is what makes a proxy
+/// stream and a pad-fed stream the same mechanism as the plain one: the source
+/// is an RGBA buffer of some size and the destination is the encoder's format at
+/// the encoder's size, and there is nothing else to arrange. Rebuilt only when
+/// the incoming size changes, which in a steady render is never —
+/// `sws_getCachedContext` hands back the same context for the same parameters,
+/// so the check is here to catch the first frame rather than to be paid for on
+/// every one.
+bool Writer::ensureScaler(Out& o, int srcW, int srcH, std::string* err) {
+    if (o.toEncoder && srcW == o.srcW && srcH == o.srcH) return true;
+    o.toEncoder = sws_getCachedContext(o.toEncoder, srcW, srcH, AV_PIX_FMT_RGBA,
+                                       o.enc->width, o.enc->height, o.enc->pix_fmt,
+                                       scalerFlag(settings_.scaler), nullptr, nullptr,
+                                       nullptr);
     if (!o.toEncoder) { *err = "cannot build the output colour converter"; return false; }
-    setColorspace(o.toEncoder, SWS_CS_ITU709, 1,
-                  wide ? SWS_CS_BT2020 : (hd ? SWS_CS_ITU709 : SWS_CS_ITU601),
-                  fullRange ? 1 : 0);
+    setColorspace(o.toEncoder, SWS_CS_ITU709, 1, o.dstSpace, o.dstFullRange ? 1 : 0);
+    o.srcW = srcW;
+    o.srcH = srcH;
     return true;
 }
 

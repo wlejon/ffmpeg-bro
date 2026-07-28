@@ -410,6 +410,11 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
                 // would write by hand.
                 st.crf = static_cast<int>(numProp(ctx, item, "crf", -1));
                 st.bitrateKbps = static_cast<int>(numProp(ctx, item, "bitrate", 0));
+                // 0 is "the render's" for a composite-fed stream and "ask the
+                // graph" for one fed from a pad — see ExportStream. A stream
+                // that says nothing about its size is by far the usual one.
+                st.width = static_cast<int>(numProp(ctx, item, "width", 0));
+                st.height = static_cast<int>(numProp(ctx, item, "height", 0));
                 st.preset = strProp(ctx, item, "preset", "");
                 st.pixelFormat = strProp(ctx, item, "pixelFormat", "");
                 st.sampleRate = static_cast<int>(numProp(ctx, item, "sampleRate", 0));
