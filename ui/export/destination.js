@@ -33,13 +33,21 @@
 // is a different feature and is not this one.
 
 import { settings } from './state.js';
+import { urlScheme } from '../format.js';
 
-/// The scheme of a URL, or '' for a path. A Windows drive letter is a colon in
-/// a path and not a scheme, which is why the run before the colon has to be
-/// longer than one character.
+/// The scheme of a destination, or '' for somewhere on the filesystem.
+///
+/// The parse is `format.js`'s, so the reading end and the writing end cannot
+/// come to different answers about what a string is. The **policy** is here,
+/// and it is the renderer's: `isLocalPath` in `export_writer.cpp` treats a
+/// `file:` URL as "the long way of writing" a path, because that is what
+/// libavformat's `file` protocol is. So it comes back as '' here too — a
+/// `file:///C:/out.mp4` render writes a file that can be stat'd and opened, and
+/// calling it a stream took the "Open the result" button away from it and made
+/// the panel say there was nothing to size.
 export function schemeOf(path) {
-    const m = /^([A-Za-z][A-Za-z0-9+.-]+):\/\//.exec(String(path || ''));
-    return m ? m[1].toLowerCase() : '';
+    const s = urlScheme(path);
+    return s === 'file' ? '' : s;
 }
 
 export const outputProtocols = () =>
@@ -158,7 +166,7 @@ export function openable(kind, path = settings.path) {
     if (kind === 'stream') return '';
     if (kind === 'several') {
         const local = (settings.destinations || []).find((d) => d.path && !schemeOf(d.path));
-        return local ? local.path : '';
+        return local ? localPath(local.path) : '';
     }
     if (kind === 'files' && bro.ffmpeg.hasFramePattern(path)) {
         const start = Number(settings.extraFormat.start_number);
@@ -168,5 +176,14 @@ export function openable(kind, path = settings.path) {
             return '';
         }
     }
-    return path;
+    return localPath(path);
 }
+
+/// The path behind a `file:` URL. The renderer is handed the URL and opens it
+/// through libavformat's `file` protocol; anything on this side that wants to
+/// *look at* the result wants the path, because bro's `<video src>` resolves
+/// anything not starting with `/`, `\` or `x:` against the document.
+/// `localPathOf` in `export_writer.cpp` strips the same five characters for the
+/// same reason.
+export const localPath = (p) =>
+    (String(p || '').slice(0, 5).toLowerCase() === 'file:' ? String(p).slice(5) : String(p || ''));

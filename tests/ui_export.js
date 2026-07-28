@@ -1071,6 +1071,26 @@ console.log('\nwhere the render goes');
     // C:\ is a colon in a path, not a scheme. Getting this wrong would call
     // every Windows path a stream.
     same(D.schemeOf('C:/videos/out.mp4'), '', 'a drive letter is not a protocol');
+    // And the same drive letter with a doubled slash after it, which is the
+    // form that got past the guard while there were two copies of this parse:
+    // the reading end read `c` as a protocol and drew "not in this build"
+    // against a perfectly ordinary path.
+    same(D.schemeOf('C://videos/out.mp4'), '',
+         'nor is it one when the path happens to have two slashes after it');
+    same(A.inputs.schemeOf('C://videos/out.mp4'), '',
+         'and the reading end says the same, because it is the same parse');
+
+    // `file:` is the long way of writing a path, which is what the renderer
+    // says: `isLocalPath` in export_writer.cpp stats a `file:` URL rather than
+    // reporting what it sent. A screen that called it a stream would take the
+    // "Open the result" button away from a file sitting on the disk.
+    same(D.schemeOf('file:///C:/videos/out.mp4'), '',
+         'a file: URL is not a stream — it is a path spelt out');
+    same(D.kindOf(bro.ffmpeg.muxers.find((m) => m.name === 'mp4'), 'file:///C:/out.mp4'),
+         'file', 'so it is one file');
+    same(D.openable('file', 'file:///C:/out.mp4'), '///C:/out.mp4',
+         'and what to open is the path behind it, the same five characters ' +
+         'localPathOf() strips');
 
     // The protocol's own options, in the same column the muxer's are in and
     // the same bag they travel in — which is what libavformat does with what a

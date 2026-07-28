@@ -58,3 +58,25 @@ export function basename(p) {
     const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
     return i >= 0 ? p.slice(i + 1) : p;
 }
+
+/// The scheme a URL names, in lower case, or '' for a plain path.
+///
+/// **The run before the colon has to be longer than one character**, because a
+/// Windows drive letter is a colon in a path and not a scheme: `C://media/x.mp4`
+/// is a file and `c` is not a protocol. There were two copies of this, one with
+/// that guard and one without, so the same string was a stream at one end of the
+/// application and a path at the other — the reading end drew "Protocol: c ·
+/// not in this build" for an ordinary path.
+///
+/// This is the same rule `isLocalPath` applies in `export_writer.cpp`, and it
+/// has to stay the same rule: that function decides whether the render stats a
+/// file or reports what it sent, and a screen that disagreed with it would say
+/// there is nothing to open about a file sitting on the disk.
+///
+/// It answers `file` for `file://` rather than deciding what that means. Both
+/// callers then say so themselves, because "a `file:` URL is the long way of
+/// writing a path" is a policy and not a parse.
+export function urlScheme(path) {
+    const m = /^([A-Za-z][A-Za-z0-9+.-]+):\/\//.exec(String(path || ''));
+    return m ? m[1].toLowerCase() : '';
+}

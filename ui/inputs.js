@@ -29,7 +29,7 @@
 // answer: run the file through a different demuxer or a different `-probesize`
 // and it says something else, which is exactly what the Sources stage is for.
 
-import { basename } from './format.js';
+import { basename, urlScheme } from './format.js';
 import { changed } from './project.js';
 
 /// Every input, in the order they were added. **The index is the `-i` number**
@@ -325,12 +325,17 @@ export function isImagePath(path) {
     return (bro.ffmpeg.imageExtensions || []).indexOf(m[1].toLowerCase()) >= 0;
 }
 
-/// The scheme a URL names, or '' for a plain path. `file` is left as '' too:
-/// the protocol column is about the ones somebody chose.
+/// The scheme a URL names, or '' for a plain path.
+///
+/// The parse is `format.js`'s — there were two of them and only one carried the
+/// Windows drive-letter guard, so `C://media/x.mp4` drew a "Protocol: c · not in
+/// this build" row for an ordinary path. The **policy** stays here, because it
+/// is one: `file` comes back as '' because a `file:` URL is the long way of
+/// writing a path, which is what `isLocalPath` in `export_writer.cpp` says too,
+/// and the protocol column is about the ones somebody chose.
 export function schemeOf(path) {
-    const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(String(path || ''));
-    if (!m) return '';
-    return m[1].toLowerCase() === 'file' ? '' : m[1].toLowerCase();
+    const s = urlScheme(path);
+    return s === 'file' ? '' : s;
 }
 
 /// Everything the render has to be told about the inputs, in spec order.
