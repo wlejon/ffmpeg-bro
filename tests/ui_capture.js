@@ -65,6 +65,14 @@ function inFrontOfTheInput(line, what) {
 waitFor('the app', () => globalThis.__ffmpegBroReady);
 const A = globalThis.__ffmpegBro;
 const cap = A.capture;
+/// The `-i`s this recording reads, as the document's own input objects.
+///
+/// **Not `capture.inputs`, which is a list of ids.** A device activated here is
+/// an ordinary input in `ui/inputs.js` — the same list a file lands in — so a
+/// card's device is `input.format`, what follows the `-i` is `input.path`, and
+/// its window is `input.to`. That is the whole point of the collapse and the
+/// test says it in the same vocabulary the rest of the application does.
+const CI = () => cap.captureInputs();
 
 console.log('\nthe stage');
 {
@@ -91,9 +99,9 @@ console.log('\nchoosing one');
 {
     q('[data-device="lavfi"]').click();
     pump(300);
-    same(cap.capture.inputs[0].device, 'lavfi', 'the device is chosen');
-    ok(cap.capture.inputs[0].source.indexOf('testsrc') === 0,
-       `and it starts from something openable (${cap.capture.inputs[0].source})`);
+    same(CI()[0].format, 'lavfi', 'the device is chosen');
+    ok(CI()[0].path.indexOf('testsrc') === 0,
+       `and it starts from something openable (${CI()[0].path})`);
     ok(text('#cap-list').indexOf('does not list its sources') >= 0,
        'a device with nothing to enumerate says so rather than showing an empty list');
 
@@ -124,7 +132,7 @@ console.log('\nits options are its demuxer’s');
     field.value = '64M';
     field.dispatchEvent(new Event('change'));
     pump(150);
-    same(cap.capture.inputs[0].options.rtbufsize, '64M',
+    same(CI()[0].options.rtbufsize, '64M',
          'and it lands in the device’s option bag');
 }
 
@@ -248,19 +256,31 @@ console.log('\na recording that does have an end');
 console.log('\na second device is a second -i, not a second recording');
 {
     same(cap.capture.inputs.length, 1, 'one input to start with');
-    q('[data-f="capadd"]').click();
-    pump(200);
-    same(cap.capture.inputs.length, 2, 'adding one appends an input');
-    same(qa('[data-card]').length, 2, 'and a card, so both devices are on screen at once');
+    const before = A.inputs.inputs.length;
 
-    // The left column edits whichever card is focused, and adding one focuses
-    // it — otherwise choosing a device would silently change the first.
+    // **Activating is the whole gesture.** There is no blank card to fill in,
+    // because a blank card is a state the shared input list cannot hold — an
+    // `-i` with no path is an `-i` that will not open, and it would sit on the
+    // Sources stage saying so. Clicking a device appends one that is already
+    // openable.
     q('[data-device="lavfi"]').click();
     pump(300);
-    same(cap.capture.inputs[1].device, 'lavfi', 'the device lands on the new input');
-    same(cap.capture.inputs[0].device, 'lavfi', 'and the first one is untouched');
+    same(cap.capture.inputs.length, 2, 'activating a device appends an -i');
+    same(qa('[data-card]').length, 2, 'and a card, so both devices are on screen at once');
+    same(CI()[1].format, 'lavfi', 'the new input is the device that was clicked');
+    same(CI()[0].format, 'lavfi', 'and the first one is untouched');
     ok(text('#cap-list').indexOf('editing [1]') >= 0,
        'the column says which input it is about, because there is now more than one');
+
+    // The point of the collapse: it is the *document's* list that grew, so a
+    // device is reachable from everywhere an input is.
+    same(A.inputs.inputs.length, before + 1,
+         'and it went into the document’s input list, not a private one');
+    ok(A.inputs.inputs.some((i) => i.id === cap.capture.inputs[1]),
+       'the card holds an id into that list rather than an object of its own');
+    same(A.inputs.kindOf(CI()[1]), 'device',
+         'where it is known to be a device, off the libavdevice registry');
+    ok(A.inputs.endless(CI()[1]), 'and to have no end, which is the same rule the engine applies');
 }
 
 console.log('\ntwo inputs with no graph have nowhere to meet');
@@ -364,14 +384,22 @@ console.log('\nrecording a session of two devices');
     }
 }
 
-console.log('\ntaking one back out');
+console.log('\nreleasing one');
 {
+    const before = A.inputs.inputs.length;
+    const gone = cap.capture.inputs[1];
     q('[data-f="capremove"][data-input="1"]').click();
     pump(250);
     same(cap.capture.inputs.length, 1, 'the input is gone');
     same(qa('[data-card]').length, 1, 'and so is its card');
-    ok(cap.capture.inputs.length === 1 && !q('[data-f="capremove"]'),
-       'the last input cannot be removed — a recording of nothing is not a state');
+    // Both lists, because activating put it in both. An `-i` left behind on
+    // the Sources stage by a card being closed would be a file handle nobody
+    // asked for.
+    same(A.inputs.inputs.length, before - 1,
+         'and it left the document’s input list too — releasing is the opposite of activating');
+    ok(!A.inputs.byId(gone), 'the id it held resolves to nothing, because nothing holds it');
+    ok(!!q('[data-f="capremove"]'),
+       'the last card still has a × — no cards is an ordinary state now that the list is shared');
 
     // The graph field stays, because a single input can run one too. That is
     // the other thing this stage could not previously ask for.
@@ -433,6 +461,15 @@ console.log('\nthis machine’s own devices');
         ok(cap.takesRegion('gdigrab'),
            'gdigrab does, because its demuxer has all three of those options');
 
+        // Released first, so the screen grabber is the only card there is.
+        // Activating *appends* — clicking a device no longer re-points the
+        // focused card at it — so without this the queries below would answer
+        // about the lavfi card still standing at [0].
+        while (cap.capture.inputs.length) { q('[data-f="capremove"]').click(); pump(120); }
+        same(qa('[data-card]').length, 0, 'no devices activated is an ordinary state');
+        ok(text('#cap-settings').indexOf('Click a device on the left') >= 0,
+           'and the stage says what to do rather than showing a form about nothing');
+
         q('[data-device="gdigrab"]').click();
         pump(2500);
         const shown = !!q('[data-f="preview"]');
@@ -474,7 +511,7 @@ console.log('\nthis machine’s own devices');
             const dragH = Math.round(pic.clientHeight * 0.5);
             cap.setRegionFromDrag({ x: 4, y: 4 }, { x: 4 + dragW, y: 4 + dragH });
             pump(200);
-            const o = cap.capture.inputs[0].options;
+            const o = CI()[0].options;
             ok(!!o.video_size && !!o.offset_x && !!o.offset_y,
                `dragging sets -offset_x -offset_y -video_size (${o.offset_x},${o.offset_y} ${
                    o.video_size})`);
@@ -492,7 +529,7 @@ console.log('\nthis machine’s own devices');
 
             q('[data-f="capwhole"]').click();
             pump(200);
-            ok(!cap.capture.inputs[0].options.video_size,
+            ok(!CI()[0].options.video_size,
                'giving the whole screen back removes them');
 
             // A drag that runs off the edge is the common one on a small card,
@@ -510,7 +547,7 @@ console.log('\nthis machine’s own devices');
             cap.setRegionFromDrag({ x: 4, y: 4 },
                                   { x: full.clientWidth * 4, y: full.clientHeight * 4 });
             pump(200);
-            const big = cap.capture.inputs[0].options;
+            const big = CI()[0].options;
             const bw = Number(big.video_size.split('x')[0]);
             const bh = Number(big.video_size.split('x')[1]);
             ok(bw + Number(big.offset_x) <= realW && bh + Number(big.offset_y) <= realH,

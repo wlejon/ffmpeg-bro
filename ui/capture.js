@@ -5,28 +5,38 @@
 // *is* an input — `-f gdigrab -i desktop` is an `-i` with a demuxer and an
 // option bag, and the model treats it as one — so the tempting place for it is
 // the Sources stage beside the file picker. It is the wrong place, and the
-// reason is not layout: an input on that stage is something the render about to
-// happen will *read*, and a device cannot be. It never ends, so nothing can be
-// cut from it and it cannot go on a timeline; and what you do with a device is
-// not configure it and move on, it is watch it and then press record. That is a
-// moment, not a setting, and it wants a screen.
+// reason is not layout: what you do with a device is not configure it and move
+// on, it is watch it and then press record. That is a moment, not a setting,
+// and it wants a screen.
 //
-// **Why it is first on the spine.** The spine is the pipeline, and every other
-// card on it is a question about the file that comes *out*. Capture is the one
-// question about the file that goes *in*: it is where an input comes from when
-// there is not one yet. The arrow from Capture to Sources is real — what a
-// recording writes is opened as an input, and `Add to the timeline` is that
-// arrow being followed — it is simply crossed at a different time from the
-// others. When nothing is being recorded the card says so, which is a statement
-// about this machine rather than a claim about the render.
+// **What it is not is a second input list, and that is the change this file has
+// just been through.** It used to hold its own array of `{device, source,
+// options, seconds}`, probe them itself, and register its own preview tokens —
+// a parallel model of an `-i` that `ui/inputs.js` already had. The consequence
+// was not duplication for its own sake, it was that a device activated here
+// existed *nowhere else in the application*: not on Sources, not in the graph's
+// source palette, not in a spec. It could be recorded and it could not be used.
+//
+// So a device now goes into the same list a file does. `capture.inputs` is a
+// list of **document input ids**, `ui/inputs.js` owns the objects, and
+// everything that reads that list — the Sources stage, `graph/panel.js`'s
+// palette, `specInputs()` — sees a device the moment it is activated, without
+// any of them being taught what a device is. They did not need teaching:
+// `kindOf()` has answered `'device'` and `endless()` has answered true since
+// inputs became first class.
+//
+// **Activating is the verb, and it is the only one.** Clicking a device in the
+// left column adds an `-i`; the `×` on its card takes it out again. There is no
+// blank card waiting to be filled in, because a blank card was a state the
+// shared list cannot hold — an input with no path is an input that will not
+// open, and it would sit on the Sources stage saying so. A recording of nothing
+// is simply no cards.
 //
 // **A recording reads a list of inputs, and one device is that list with one in
 // it.** There is no singular case in this file and none in the engine either:
-// `capture.inputs` is always an array, `record.start` is always given `sources`,
-// and `CaptureSettings::sources` treats an empty list as `{source}` so that the
-// one spelling and the many are the same call. Writing the single device as a
-// special case is how a stage comes to have two code paths that disagree about
-// what `-t` means.
+// `record.start` is always given `sources`, and `CaptureSettings::sources`
+// treats an empty list as `{source}` so that the one spelling and the many are
+// the same call.
 //
 // **A card per input, each with its own picture, rather than one picture and a
 // selector.** The whole argument for this stage is that you watch a device
@@ -34,8 +44,8 @@
 // devices — it is the only moment you can see that the camera is pointed the
 // right way *and* that the screen grab has the right monitor in it. A selector
 // would show one of them and imply the other was fine. The cost is real and is
-// paid deliberately: N `<video>` elements, N preview registrations, and two
-// cameras held open at once before a recording that will want them both.
+// paid deliberately: N `<video>` elements and two cameras held open at once
+// before a recording that will want them both.
 //
 // What is *not* multiplied is the option table. It stays one column on the
 // right, showing the focused card's device, because `optionColumn()` is a
@@ -54,27 +64,26 @@
 // **The graph is a field, and with several inputs it is not optional.** A
 // recording has been able to run a filter graph since the engine grew one, for
 // one input as much as for several — `[0:v]crop=…[vout]` records one monitor
-// out of a wide screen grab — and nothing here offered it. Now it is a field,
-// and it is the same string `-filter_complex` takes. Several inputs *require*
-// one, because two pictures and nothing saying how they combine is not a
-// composition anything could guess at, and the engine refuses rather than
-// picking one.
+// out of a wide screen grab — and several inputs *require* one, because two
+// pictures and nothing saying how they combine is not a composition anything
+// could guess at, and the engine refuses rather than picking one.
 //
-// The preset buttons write a real graph into that field and then get out of the
-// way. They are not modes and there is no layout the field cannot express: what
-// a button does is type for you, the string it typed is the string that runs,
-// and editing it afterwards keeps the edit. They are built from what the
-// devices actually *are* — an input with no sound contributes no `[n:a]` — for
-// the same reason nothing else here is a hardcoded list.
+// The field is where that string is typed **for now**, and it is the next thing
+// to go: a device in the shared list is a node the Graph stage can already
+// place (`overlay.addSource(input.id)`), so the editor that exists is a better
+// place to build a composition than a textarea and three preset buttons. The
+// presets stay only until it is wired, because a stage that requires a graph
+// and offers no way to make one is worse than a hardcoded list of three.
 //
-// **The preview is the real decode path.** A device registered as an input
-// (`bro.ffmpeg.inputs.define`) is played through an ordinary `<video>`, which
-// is the same backend, the same decoder and the same renderer everything else
-// in this application uses. There is no preview-only path, for the reason the
-// node previews have none: a preview that agreed with the recording most of the
-// time would be worse than none, because it would be trusted. What it does
-// *not* show is the graph — the picture on a card is that device, not the
-// composition, for the same structural reason the viewer cannot show a filter.
+// **The preview is the real decode path.** A device in the input list is
+// registered by `ui/inputs.js` like every other one, and is played through an
+// ordinary `<video>` — the same backend, the same decoder and the same renderer
+// everything else in this application uses. There is no preview-only path, for
+// the reason the node previews have none: a preview that agreed with the
+// recording most of the time would be worse than none, because it would be
+// trusted. What it does *not* show is the graph — the picture on a card is that
+// device, not the composition, for the same structural reason the viewer cannot
+// show a filter.
 //
 // The one device that cannot be previewed is `lavfi`, and it is worth knowing
 // why because it is a fact about the seam rather than about the device. lavfi's
@@ -88,30 +97,25 @@ import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename, shellArg } from './format.js';
 import { optionColumn } from './opttable.js';
 import { schemeOf, protocolLinked } from './export/destination.js';
+import { changed as projectChanged } from './project.js';
+import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
+         asInput as inputSpec } from './inputs.js';
 
 let refs = {};
 let hooks = {};
 
 // ── what is being captured ─────────────────────────────────────────────────
 //
-// One object, because it is a list of `-i`s plus where they go. Held here
-// rather than in project.js on purpose: a capture is not part of the edit and
-// does not belong in a project file — the recording it produces does.
-
-/// One input. Exactly the four things that belong to an `-i` and nothing about
-/// the file coming out, which is why adding a device cannot disturb the
-/// encoder settings and removing one cannot take the path with it.
-function newInput() {
-    return {
-        device: '',         // the libavdevice demuxer: `-f gdigrab`
-        source: '',         // what goes after the `-i`
-        options: {},        // the demuxer's own options
-        seconds: 0,         // `-t`; 0 is until stopped
-    };
-}
+// The `-i`s are **not here**: `inputs` is a list of ids into `ui/inputs.js`.
+// What is here is everything about the file coming *out*, which is a decision
+// this stage owns and no other list does — a recording is its own pipeline and
+// the Encode stage describes a different render.
 
 export const capture = {
-    inputs: [newInput()],   // never empty: a recording of nothing is not a state
+    /// Document input ids, in the order that numbers them for the graph: the
+    /// first is `[0:v]`/`[0:a]`, the second `[1:…]`. That order is this array's
+    /// order and nothing else, which is why activating a device appends.
+    inputs: [],
     graph: '',              // `-filter_complex`, and required once there are two
     path: '',               // where the recording goes
     format: 'matroska',     // the muxer, by name
@@ -123,7 +127,7 @@ export const capture = {
 /// Which card the left column and the option column are editing.
 ///
 /// Not a selection in the timeline's sense — every card is live and every card
-/// is recorded. It is only the answer to "when you click a device, which input
+/// is recorded. It is only the answer to "when you click a source, which input
 /// did you mean", and clicking anywhere on a card is how it moves.
 let focus = 0;
 
@@ -175,9 +179,31 @@ function defaultPath() {
     try { return bro.ffmpeg.tempPath(`capture-${stamp}.mkv`); } catch (e) { return ''; }
 }
 
-/// The input the left column and the option column are pointed at.
+/// The inputs this recording reads, as the document's own objects.
+///
+/// **Pruned on the way out, and that is not tidying.** An input can be removed
+/// on the Sources stage — it is an ordinary `-i` there, and a device nothing is
+/// recording is a reasonable thing to take out of the list — and an id left
+/// pointing at nothing would be an `-i` the command bar prints as `undefined`
+/// and the engine refuses. One list, one owner, and this is the cost of that:
+/// the reference has to be checked rather than assumed.
+export function captureInputs() {
+    const out = [];
+    for (let i = capture.inputs.length - 1; i >= 0; i--)
+        if (!byId(capture.inputs[i])) capture.inputs.splice(i, 1);
+    for (const id of capture.inputs) {
+        const input = byId(id);
+        if (input) out.push(input);
+    }
+    return out;
+}
+
+/// The input the left column and the option column are pointed at, or null when
+/// nothing has been activated yet — which is the state this stage opens in.
 export function focused() {
-    return capture.inputs[focus] || capture.inputs[0];
+    const all = captureInputs();
+    if (!all.length) return null;
+    return all[Math.min(focus, all.length - 1)];
 }
 
 /// Every input device this build has, by name. Video and audio devices are
@@ -208,34 +234,28 @@ export function sourcesOf(name, refresh) {
     return list;
 }
 
-/// One input as an `-i`, in the shape `probe`, `inputs.define` and
-/// `record.start` all take. One function, so what is previewed and what is
-/// recorded cannot come to be different inputs.
-export function asInput(inp) {
-    const i = inp || focused();
-    return {
-        path: i.source,
-        format: i.device,
-        options: Object.assign({}, i.options),
-        t: i.seconds || 0,
-    };
+/// One input as the native side wants it. `ui/inputs.js`'s own shape, so what
+/// is probed, what is previewed and what is recorded cannot come to be
+/// described differently — and so a `-hwaccel` or an `-ss` set on the Sources
+/// stage reaches the recording rather than being quietly dropped on the way.
+export function asInput(input) {
+    return inputSpec(input || focused() || {});
 }
 
-/// Every input, in the order that numbers them for the graph: the first is
-/// `[0:v]`/`[0:a]`, the second `[1:…]`. That order is the array's order and
-/// nothing else, which is why adding a device appends rather than sorting.
+/// Every input, in `-i` order.
 export function asInputs() {
-    return capture.inputs.map((i) => asInput(i));
+    return captureInputs().map((i) => inputSpec(i));
 }
 
-/// Is this recording ready to start? Every input needs a device and something
-/// after the `-i`, and several of them need a graph — the last is the engine's
-/// rule, checked here so the button is honest rather than so the refusal is
-/// avoided. `record.start` still refuses; this stops the press.
+/// Is this recording ready to start? There has to be at least one device, each
+/// needs something after the `-i`, and several of them need a graph — the last
+/// is the engine's rule, checked here so the button is honest rather than so
+/// the refusal is avoided. `record.start` still refuses; this stops the press.
 export function ready() {
-    if (!capture.inputs.length) return false;
-    for (const i of capture.inputs) if (!i.device || !i.source) return false;
-    if (capture.inputs.length > 1 && !capture.graph.trim()) return false;
+    const all = captureInputs();
+    if (!all.length) return false;
+    for (const i of all) if (!i.format || !i.path) return false;
+    if (all.length > 1 && !capture.graph.trim()) return false;
     return true;
 }
 
@@ -270,25 +290,85 @@ export function takesRegion(name) {
     return has('offset_x') && has('offset_y') && has('video_size');
 }
 
+// ── activating and releasing ───────────────────────────────────────────────
+
+/// Turn a device into an `-i` the whole application can see.
+///
+/// **Appends rather than replacing the focused card.** Clicking a device used
+/// to change what the current card was pointed at, which made sense while this
+/// stage owned a private array of blanks. It does not now: an input is a thing
+/// that exists, and the two gestures a person wants are "give me this one too"
+/// and "take that one away". Changing a device is those two.
+export function activate(name) {
+    const list = sourcesOf(name);
+    let path = '';
+    if (list.ok && list.sources.length) {
+        const first = list.sources.find((s) => (s.mediaTypes || []).indexOf('video') >= 0) ||
+                      list.sources[0];
+        path = sourceArg(first);
+    } else if (HINTS[name]) {
+        path = HINTS[name];
+    }
+    const input = addInput({ path, format: name, options: {} });
+    capture.inputs.push(input.id);
+    focus = capture.inputs.length - 1;
+    projectChanged('inputs');
+    if (hooks.changed) hooks.changed();
+    drawCapture();
+    syncPreviews();
+    return input;
+}
+
+/// Take one input out of the recording **and out of the document**.
+///
+/// Both, because activating put it in both, and an `-i` left behind on the
+/// Sources stage by a card being closed would be a file handle nobody asked
+/// for. The graph is the exception the other way round: a node reading this
+/// input is a node whose source has gone, which `graph/check.js` reports by
+/// name — that is a problem to be shown, not a removal to be refused.
+export function release(i) {
+    const id = capture.inputs[i];
+    const input = byId(id);
+    if (!input) return;
+    dropCard(i);
+    capture.inputs.splice(i, 1);
+    dropInput(input);
+    if (focus >= capture.inputs.length) focus = capture.inputs.length - 1;
+    if (focus < 0) focus = 0;
+    if (hooks.changed) hooks.changed();
+    drawCapture();
+    syncPreviews();
+}
+
+/// Change one of the referenced inputs, and put back everything that follows.
+/// `updateInput` reopens it when the change is one that reopens a file, which
+/// for a device is every change there is.
+function change(input, patch) {
+    updateInput(input, patch);
+    projectChanged('inputs');
+    redraw();
+}
+
 // ── the cards ──────────────────────────────────────────────────────────────
 //
 // One card per input, built once and kept. **Not rebuilt on every draw**, for
 // the reason the stage views are never unmounted: the `<video>` in a card *is*
 // the decoder, and `put()`ing over it would tear a device down and open it
-// again every time a checkbox moved. So the roots are reconciled against
-// `capture.inputs` — create what is missing, remove what is extra — and only
-// the rows inside them are redrawn.
+// again every time a checkbox moved. So the roots are reconciled against the
+// input list — create what is missing, remove what is extra — and only the rows
+// inside them are redrawn.
 
 const cards = [];   // parallel to capture.inputs
 
 /// Make the card list match the input list, then draw each card.
 function syncCards() {
     if (!refs.cards) return;
+    const all = captureInputs();
 
-    while (cards.length > capture.inputs.length) dropCard(cards.length - 1);
-    while (cards.length < capture.inputs.length) cards.push(buildCard());
+    while (cards.length > all.length) dropCard(cards.length - 1);
+    while (cards.length < all.length) cards.push(buildCard());
 
-    if (focus >= capture.inputs.length) focus = capture.inputs.length - 1;
+    if (focus >= all.length) focus = all.length - 1;
     if (focus < 0) focus = 0;
 
     for (let i = 0; i < cards.length; i++) {
@@ -298,12 +378,10 @@ function syncCards() {
         c.root.className = 'cap-card' + (i === focus ? ' on' : '');
         drawCardRows(i);
     }
-    put(refs.add, () => [el('button', {
-        cls: 'tiny', 'data-f': 'capadd', text: '+ another device',
-        title: 'A second -i. Several inputs are composited by the filter graph — which is ' +
-               'why the graph stops being optional the moment there are two.',
-        on: { click: addInput },
-    })]);
+    put(refs.add, () => all.length ? [span(
+        'Every activated device is an -i of this recording, numbered above in the order the ' +
+        'graph reads them. Click another device on the left to add one; it appears on the ' +
+        'Sources stage and in the graph’s source list at the same moment.', 'dim')] : []);
 }
 
 /// The DOM one card is, made once.
@@ -318,7 +396,7 @@ function buildCard() {
     const rows = el('div', { cls: 'cap-card-rows' });
     const title = el('div', { cls: 'cap-card-head' });
     const root = el('div', { cls: 'cap-card' }, [title, pic, rows]);
-    const card = { root, pic, marquee, rows, title, video: null, error: '', key: '', probe: null };
+    const card = { root, pic, marquee, rows, title, video: null, key: '' };
     // Clicking anywhere on a card is how the left column and the option column
     // come to be about it — including on the picture, which is also where a
     // region is dragged. A drag is not a click, so the focus is taken on
@@ -334,66 +412,71 @@ function buildCard() {
 function dropCard(i) {
     const c = cards[i];
     if (!c) return;
-    releasePreview(c, i);
+    releasePreview(c);
     if (c.root.parentNode) c.root.parentNode.removeChild(c.root);
     cards.splice(i, 1);
 }
 
-export function addInput() {
-    capture.inputs.push(newInput());
-    focus = capture.inputs.length - 1;
-    if (hooks.changed) hooks.changed();
-    drawCapture();
-    syncPreviews();
-}
-
-/// Remove one input. Refused at the last one, because a recording of nothing is
-/// not a state this stage can be in — the empty case is a device not yet
-/// chosen, which is what a blank card already says.
-export function removeInput(i) {
-    if (capture.inputs.length <= 1) return;
-    capture.inputs.splice(i, 1);
-    dropCard(i);
-    if (focus >= capture.inputs.length) focus = capture.inputs.length - 1;
-    if (hooks.changed) hooks.changed();
-    drawCapture();
-    syncPreviews();
+/// Why this card has no picture, or '' when it has one.
+///
+/// Read off the input's own probe rather than kept here, because the probe is
+/// the input's answer and there is one of it: run the device through a
+/// different option bag and it says something else, which is exactly what the
+/// option column on the right is for.
+function pictureRefusal(input) {
+    if (input.error) return input.error;
+    const p = input.probe;
+    if (!p) return '';
+    if (!p.video)
+        return p.audio
+            ? 'this device produces sound and no picture — there is nothing to show, ' +
+              'but it can still be recorded'
+            : 'this device produced neither pictures nor sound';
+    // The one refusal that is about the seam rather than about the device. See
+    // the note at the top of this file: lavfi's packets are pointers to decoded
+    // frames and bro's are bytes, so the crossing loses them.
+    if (p.video.codec === 'wrapped_avframe')
+        return 'the lavfi device hands over decoded frames rather than packets, and the ' +
+               'media interface between this binary and the engine carries bytes — so it ' +
+               'cannot be played here. It records normally.';
+    return '';
 }
 
 function drawCardRows(i) {
     const c = cards[i];
-    const inp = capture.inputs[i];
+    const input = captureInputs()[i];
+    if (!c || !input) return;
+    const several = capture.inputs.length > 1;
 
     put(c.title, () => {
         const out = [
             span(`[${i}]`, 'cap-card-n mono'),
-            span(inp.device ? `-f ${inp.device}` : 'no device yet',
-                 inp.device ? 'mono cap-card-dev' : 'dim cap-card-dev'),
+            span(`-f ${input.format}`, 'mono cap-card-dev'),
         ];
-        if (capture.inputs.length > 1)
-            out.push(el('button', {
-                cls: 'tiny cap-card-x', 'data-f': 'capremove', 'data-input': String(i),
-                text: '×', title: 'Take this input out of the recording',
-                on: { click: () => removeInput(i) },
-            }));
+        out.push(el('button', {
+            cls: 'tiny cap-card-x', 'data-f': 'capremove', 'data-input': String(i),
+            text: '×', title: 'Release this device — it leaves the recording and the input list',
+            on: { click: () => release(i) },
+        }));
         return out;
     });
 
     put(c.rows, () => {
         const source = el('input', {
             cls: 'wide', 'data-f': 'capsource', 'data-input': String(i), type: 'text',
-            value: inp.source,
-            placeholder: HINTS[inp.device] || 'what this device is asked for after -i',
-            on: { change: () => setSource(source.value.trim(), i) },
+            value: input.path,
+            placeholder: HINTS[input.format] || 'what this device is asked for after -i',
+            on: { change: () => change(input, { path: source.value.trim() }) },
         });
+        // `-t` is the input's own window, which `ui/inputs.js` carries as an end
+        // time: with no `-ss` in front of it those are the same number, and the
+        // native reader takes either. Holding both here would be holding two
+        // fields that can disagree.
         const seconds = el('input', {
             cls: 'num', 'data-f': 'capseconds', 'data-input': String(i), type: 'text',
-            value: inp.seconds ? String(inp.seconds) : '',
+            value: input.to ? String(input.to) : '',
             placeholder: 'until stopped',
-            on: { change: () => {
-                inp.seconds = Number(seconds.value) || 0;
-                redraw();
-            } },
+            on: { change: () => change(input, { to: Number(seconds.value) || 0 }) },
         });
         const out = [row('-i', source), row('-t', seconds)];
 
@@ -401,100 +484,53 @@ function drawCardRows(i) {
         // column on the right, which shows one device at a time — so the card
         // is where you see that the *other* one has a region set on it without
         // having to click over to it and back.
-        const keys = Object.keys(inp.options).filter((k) => inp.options[k] !== '');
+        const keys = Object.keys(input.options).filter((k) => input.options[k] !== '');
         if (keys.length)
             out.push(row('', span(
-                keys.map((k) => `-${k} ${inp.options[k]}`).join('  '), 'dim mono cap-card-opts')));
+                keys.map((k) => `-${k} ${input.options[k]}`).join('  '), 'dim mono cap-card-opts')));
 
-        if (c.error) out.push(div('cap-error', c.error));
-        else if (!c.video && inp.device) out.push(div('cap-note dim', 'No picture yet.'));
+        const why = pictureRefusal(input);
+        if (why) out.push(div('cap-error', why));
+        else if (!c.video) out.push(div('cap-note dim', 'No picture yet.'));
+        if (several && !why)
+            out.push(row('', span(
+                `reaches the graph as [${i}:v]` +
+                (input.probe && input.probe.audio ? ` and [${i}:a]` : ''), 'dim mono')));
         return out;
     });
 }
 
 // ── the previews ───────────────────────────────────────────────────────────
 
-/// One registration per card, under an id of its own.
-///
-/// `inputs.define` resolves a token to an input, so two cards sharing one id
-/// would be two pictures of whichever device was defined last. The id carries
-/// the card's index for the same reason the pad labels do: it is the only thing
-/// that distinguishes them.
-function previewId(i) { return `capture-preview-${i}`; }
-
 /// Point every card's `<video>` at its device, opening and closing only what
 /// changed.
 ///
-/// Keyed on everything that changes what is opened, so that typing in the
-/// option column re-opens the device and moving the mouse does not. The element
-/// is reused rather than rebuilt: `src = next` is a reload, and a preview that
-/// blinked every time a checkbox moved would be unwatchable.
+/// **There is no registration here any more.** `ui/inputs.js` defines every
+/// input under its own id and hands back `input.src`, so a card plays the same
+/// token the Sources stage and the viewer would — one registration per `-i`
+/// rather than one per place it is shown. Keyed on `input.key`, which is that
+/// module's own answer to "would this open differently", so typing in the
+/// option column re-opens the device and moving the mouse does not.
 function syncPreviews() {
     if (!refs.cards) return;
-    for (let i = 0; i < cards.length; i++) syncPreview(i);
+    const all = captureInputs();
+    for (let i = 0; i < cards.length; i++) syncPreview(cards[i], all[i], i);
     // **The presets are drawn again here, and this order is the whole reason
     // they work.** What a preset can write depends on which inputs have a
-    // picture and which have sound, and that is not known until each device has
-    // been probed — which happens here, after `drawCapture()` has already been
-    // over the panel once. Drawn only from `drawCapture()`, the buttons would
-    // be built against last edit's answer and a device just chosen would offer
-    // nothing.
+    // picture and which have sound, and that is `probe()`'s answer — which
+    // `updateInput` has only just refreshed. Drawn only from `drawCapture()`,
+    // the buttons would be built against last edit's answer.
     drawGraph();
 }
 
-function syncPreview(i) {
-    const c = cards[i];
-    const inp = capture.inputs[i];
-    if (!c || !inp) return;
+function syncPreview(c, input, i) {
+    if (!c || !input) return;
+    if (input.key === c.key) return;
+    c.key = input.key;
 
-    const input = asInput(inp);
-    const key = JSON.stringify(input);
-    if (key === c.key) return;
-    c.key = key;
-    c.error = '';
-    c.probe = null;
-
-    if (!inp.device || !inp.source) { releasePreview(c, i); drawCardRows(i); return; }
-
-    // Probed first, because the failure that matters — a camera name that is
-    // not exactly right — arrives here as a sentence and arrives at the
-    // `<video>` as a black rectangle. The answer is kept: what the presets can
-    // write depends on which inputs have a picture and which have sound, and
-    // this is where that is known.
-    let probe = null;
-    try { probe = bro.ffmpeg.probe(input); } catch (e) {
-        c.error = String((e && e.message) || e);
-        releasePreview(c, i);
-        drawCardRows(i);
-        return;
-    }
-    c.probe = probe;
-
-    if (!probe.video) {
-        c.error = probe.audio
-            ? 'this device produces sound and no picture — there is nothing to show, ' +
-              'but it can still be recorded'
-            : 'this device produced neither pictures nor sound';
-        releasePreview(c, i);
-        drawCardRows(i);
-        return;
-    }
-    // The one refusal that is about the seam rather than about the device. See
-    // the note at the top of this file: lavfi's packets are pointers to decoded
-    // frames and bro's are bytes, so the crossing loses them.
-    if (probe.video.codec === 'wrapped_avframe') {
-        c.error = 'the lavfi device hands over decoded frames rather than packets, and ' +
-                  'the media interface between this binary and the engine carries bytes ' +
-                  '— so it cannot be played here. It records normally.';
-        releasePreview(c, i);
-        drawCardRows(i);
-        return;
-    }
-
-    let src = '';
-    try { src = bro.ffmpeg.inputs.define(previewId(i), input); } catch (e) {
-        c.error = String((e && e.message) || e);
-        releasePreview(c, i);
+    if (!input.path || pictureRefusal(input) || !input.src) {
+        releasePreview(c);
+        c.key = input.key;
         drawCardRows(i);
         return;
     }
@@ -503,7 +539,9 @@ function syncPreview(i) {
         c.video = el('video', { cls: 'cap-video', 'data-f': 'preview', 'data-input': String(i) });
         c.pic.append(c.video);
     }
-    c.video.setAttribute('src', src);
+    // Reused rather than rebuilt: `src = next` is a reload, and a preview that
+    // blinked every time a checkbox moved would be unwatchable.
+    c.video.setAttribute('src', input.src);
     try { c.video.play(); } catch (e) { /* it starts on the next frame */ }
     drawCardRows(i);
 }
@@ -514,18 +552,22 @@ function syncPreview(i) {
 /// that cannot be opened by the recording, because a DirectShow device is
 /// exclusive. So the previews are torn down before `record.start` and put back
 /// afterwards, and leaving this stage releases them too.
-function releasePreview(c, i) {
+///
+/// **What is released is the element, not the registration.** The token belongs
+/// to the input and the input outlives this stage; forgetting it here would
+/// unregister an `-i` that the Sources stage, the graph and a render are
+/// entitled to open. It is playing that holds a device, not being defined.
+function releasePreview(c) {
     if (c.video) {
         try { c.video.pause(); } catch (e) { /* already gone */ }
         if (c.video.parentNode) c.video.parentNode.removeChild(c.video);
         c.video = null;
     }
-    try { bro.ffmpeg.inputs.forget(previewId(i)); } catch (e) { /* not registered */ }
     c.key = '';
 }
 
 export function stopPreviews() {
-    for (let i = 0; i < cards.length; i++) releasePreview(cards[i], i);
+    for (const c of cards) releasePreview(c);
 }
 
 /// Coming to the stage: take a picture of each device. Leaving it: give them
@@ -550,15 +592,15 @@ export function summary() {
         const secs = st.elapsed || 0;
         return ['recording', `${clock(secs)} · ${bytes(st.bytes || 0)}`];
     }
-    const live = capture.inputs.filter((i) => i.device);
+    const live = captureInputs();
     if (!live.length) return ['no device', `${devices().length} available`];
     if (live.length > 1)
         return [`${live.length} inputs`,
-                capture.graph.trim() ? live.map((i) => i.device).join(' + ')
+                capture.graph.trim() ? live.map((i) => i.format).join(' + ')
                                      : 'no graph — they have nowhere to meet'];
-    const bits = [live[0].source || 'nothing chosen'];
-    if (live[0].seconds) bits.push(`-t ${live[0].seconds}`);
-    return [`-f ${live[0].device}`, bits.join(' · ')];
+    const bits = [live[0].path || 'nothing chosen'];
+    if (live[0].to) bits.push(`-t ${live[0].to}`);
+    return [`-f ${live[0].format}`, bits.join(' · ')];
 }
 
 // ── recording ──────────────────────────────────────────────────────────────
@@ -569,7 +611,7 @@ export function startRecording() {
         if (hooks.flash)
             hooks.flash(capture.inputs.length > 1 && !capture.graph.trim()
                 ? 'Several inputs need a filter graph — it is what says how they combine'
-                : 'Choose a device first');
+                : 'Activate a device first');
         return;
     }
     if (!capture.path) capture.path = defaultPath();
@@ -672,12 +714,14 @@ export function drawCapture() {
 function drawDevices() {
     put(refs.list, () => {
         const all = devices();
-        const out = [head(capture.inputs.length > 1
+        const active = captureInputs();
+        const out = [head(active.length > 1
             ? `Devices · ${all.length} · editing [${focus}]`
             : `Devices · ${all.length}`)];
         if (!all.length)
             return [div('dim pad', 'This build registered no capture devices.')];
         for (const d of all) {
+            const using = active.filter((i) => i.format === d.name).length;
             // A div and not a `<button>`, for the reason `.src-row` on the
             // Sources stage is one: the base button rule is a 26px single-line
             // control and this engine will not grow one past it however the
@@ -685,39 +729,24 @@ function drawDevices() {
             // whatever is underneath. A row that is a row lays out correctly and
             // takes its own click listener like anything else here.
             out.push(el('div', {
-                cls: 'cap-device' + (d.name === focused().device ? ' on' : ''),
+                cls: 'cap-device' + (using ? ' on' : ''),
                 'data-device': d.name,
-                on: { click: () => pickDevice(d.name) },
+                title: 'Activate this device — it becomes an -i of this recording and an ' +
+                       'input the rest of the application can read',
+                on: { click: () => activate(d.name) },
             }, [
-                div('cap-device-name mono', d.name),
+                div('cap-device-name mono', d.name +
+                    (using > 1 ? ` · ${using} activated` : using ? ' · activated' : '')),
                 div('cap-device-what dim', `${d.longName || ''} · ${d.kinds.join(' · ')}`),
             ]));
         }
-        if (focused().device) out.push(...sourceRows());
+        const inp = focused();
+        if (inp) out.push(...sourceRows(inp));
+        else out.push(div('cap-note dim',
+            'Click a device to activate it. Activating is what adds the -i — it appears here ' +
+            'as a card, on the Sources stage as an input, and in the graph’s source list.'));
         return out;
     });
-}
-
-function pickDevice(name) {
-    const inp = focused();
-    if (inp.device === name) return;
-    inp.device = name;
-    // The options belong to the demuxer that is going away with it. Carrying
-    // `draw_mouse` over to a camera would be carrying a key that stops the open
-    // — the same reason changing the muxer empties its bag one stage along.
-    inp.options = {};
-    inp.source = '';
-    const list = sourcesOf(name);
-    if (list.ok && list.sources.length) {
-        const first = list.sources.find((s) => (s.mediaTypes || []).indexOf('video') >= 0) ||
-                      list.sources[0];
-        inp.source = sourceArg(first);
-    } else if (HINTS[name]) {
-        inp.source = HINTS[name];
-    }
-    if (hooks.changed) hooks.changed();
-    drawCapture();
-    syncPreviews();
 }
 
 /// What one enumerated source is called after the `-i`.
@@ -735,9 +764,8 @@ function sourceArg(s) {
     return s.description || s.name;
 }
 
-function sourceRows() {
-    const inp = focused();
-    const list = sourcesOf(inp.device);
+function sourceRows(inp) {
+    const list = sourcesOf(inp.format);
     const out = [head('What it can see')];
 
     if (!list.ok) {
@@ -745,15 +773,15 @@ function sourceRows() {
         // device name and says so; an empty list here would read as a machine
         // with no cameras in it.
         out.push(div('cap-note dim', list.error ||
-            `${inp.device} does not list its sources.`));
-        if (HINTS[inp.device])
+            `${inp.format} does not list its sources.`));
+        if (HINTS[inp.format])
             out.push(el('button', {
                 cls: 'tiny', 'data-f': 'caphint',
-                text: `Use ${HINTS[inp.device]}`,
+                text: `Use ${HINTS[inp.format]}`,
                 title: 'A starting point out of ffmpeg’s documentation — libavdevice has no ' +
                        'call that returns it, so it is a hint and not a capability. The field ' +
                        'takes anything.',
-                on: { click: () => setSource(HINTS[inp.device], focus) },
+                on: { click: () => setSource(HINTS[inp.format], inp) },
             }));
         return out;
     }
@@ -761,9 +789,9 @@ function sourceRows() {
     for (const s of list.sources) {
         const arg = sourceArg(s);
         out.push(el('div', {
-            cls: 'cap-device' + (arg === inp.source ? ' on' : ''),
+            cls: 'cap-device' + (arg === inp.path ? ' on' : ''),
             'data-source': s.description || s.name,
-            on: { click: () => setSource(arg, focus) },
+            on: { click: () => setSource(arg, inp) },
         }, [
             div('cap-device-name', s.description || s.name),
             div('cap-device-what dim mono', (s.mediaTypes || []).join(' · ') || 'unknown'),
@@ -776,31 +804,30 @@ function sourceRows() {
     // recorded together actually is — one demuxer, one seek, one file. That is
     // a different thing from two *devices*, which is two `-i`s and a card each.
     const audio = list.sources.filter((s) => (s.mediaTypes || []).indexOf('audio') >= 0);
-    if (audio.length && inp.source.indexOf('video=') === 0)
+    if (audio.length && inp.path.indexOf('video=') === 0)
         out.push(div('cap-note dim',
             'A camera and a microphone are one -i: video=… and audio=… joined with a colon. ' +
-            'Click a sound source to add it. A separate device is a separate input — ' +
-            '“+ another device” below.'));
+            'Click a sound source to add it. A separate device is a separate input — click ' +
+            'it above.'));
 
     out.push(el('button', {
         cls: 'tiny', 'data-f': 'caprescan', text: 'Rescan',
         title: 'Ask the device again — this is the one query here that talks to hardware',
-        on: { click: () => { sourcesOf(inp.device, true); drawCapture(); } },
+        on: { click: () => { sourcesOf(inp.format, true); drawCapture(); } },
     }));
     return out;
 }
 
-function setSource(arg, i) {
-    const inp = capture.inputs[i] || focused();
+function setSource(arg, inp) {
+    if (!inp) return;
     // A sound source clicked while a camera is chosen joins it rather than
     // replacing it: `video=Cam:audio=Mic` is one input and two streams, which
     // is what dshow means by it.
-    if (arg.indexOf('audio=') === 0 && inp.source.indexOf('video=') === 0 &&
-        inp.source.indexOf(':audio=') < 0)
-        inp.source = `${inp.source}:${arg}`;
-    else
-        inp.source = arg;
-    redraw();
+    const path = (arg.indexOf('audio=') === 0 && inp.path.indexOf('video=') === 0 &&
+                  inp.path.indexOf(':audio=') < 0)
+        ? `${inp.path}:${arg}`
+        : arg;
+    change(inp, { path });
 }
 
 // ── the graph ──────────────────────────────────────────────────────────────
@@ -837,6 +864,14 @@ function drawGraph() {
             : 'A recording can run a filter graph like a render can: one screen grab cropped ' +
               'to one monitor is [0:v]crop=…[vout]. Leave it empty and the device is written ' +
               'as it comes.', 'dim')));
+        // Said here because it is now true and was not: an activated device is
+        // a node the Graph stage can place, so the composition has a second and
+        // better home. This field stays until that one can drive a recording.
+        if (capture.inputs.length)
+            out.push(row('', span(
+                'These devices are ordinary inputs, so the Graph stage can already read them ' +
+                '— its source list offers every -i this document has. Typing the chain here ' +
+                'is the older way and still the one a recording runs.', 'dim')));
         return out;
     });
 }
@@ -845,14 +880,15 @@ function drawGraph() {
 /// there. Empty when the layout does not apply — two pictures cannot be put
 /// side by side when only one input has one.
 function presetButtons() {
+    const all = captureInputs();
+    if (all.length < 2) return [];
     const vids = [], auds = [];
-    capture.inputs.forEach((inp, i) => {
-        const p = cards[i] && cards[i].probe;
+    all.forEach((input, i) => {
+        const p = input.probe;
         if (!p) return;
         if (p.video) vids.push(i);
         if (p.audio) auds.push(i);
     });
-    if (capture.inputs.length < 2) return [];
 
     const out = [];
     const offer = (id, label, title, text) => {
@@ -864,10 +900,10 @@ function presetButtons() {
     };
     offer('pip', 'Picture in picture',
           'The second picture scaled into the corner of the first, and the sound mixed',
-          pictureInPicture(vids, auds));
+          pictureInPicture(all, vids, auds));
     offer('side', 'Side by side',
           'Every picture scaled to one height and stacked across, and the sound mixed',
-          sideBySide(vids, auds));
+          sideBySide(all, vids, auds));
     offer('sound', 'Just the sound mixed',
           'Every input is a microphone: one mixed soundtrack and no picture',
           soundOnly(vids, auds));
@@ -887,13 +923,18 @@ function mixChain(auds) {
 
 function join(chains) { return chains.filter(Boolean).join(';'); }
 
-function pictureInPicture(vids, auds) {
+function videoOf(all, i) {
+    const p = all[i] && all[i].probe;
+    return (p && p.video) || null;
+}
+
+function pictureInPicture(all, vids, auds) {
     // Exactly two pictures. With three there is no obvious corner for the third
     // and a button that quietly used two of them would be a button that
     // recorded less than it was asked to.
     if (vids.length !== 2) return '';
-    const w = cards[vids[0]] && cards[vids[0]].probe && cards[vids[0]].probe.video
-        ? cards[vids[0]].probe.video.width : 0;
+    const v = videoOf(all, vids[0]);
+    const w = v ? v.width : 0;
     // A quarter of the width it is going over, rounded even because yuv420p has
     // no half pixels. `-2` keeps the aspect and lands on an even height.
     const pip = Math.max(2, Math.round((w ? w / 4 : 480) / 2) * 2);
@@ -904,13 +945,13 @@ function pictureInPicture(vids, auds) {
     ]);
 }
 
-function sideBySide(vids, auds) {
+function sideBySide(all, vids, auds) {
     if (vids.length < 2) return '';
     // `hstack` wants one height across every input, so they are scaled to it
     // rather than being handed to a filter that would refuse them. The first
     // picture's height is the one that does not change.
-    const p = cards[vids[0]] && cards[vids[0]].probe && cards[vids[0]].probe.video;
-    const h = p && p.height ? Math.max(2, Math.round(p.height / 2) * 2) : 720;
+    const v = videoOf(all, vids[0]);
+    const h = v && v.height ? Math.max(2, Math.round(v.height / 2) * 2) : 720;
     return join([
         ...vids.map((i) => `[${i}:v]scale=-2:${h}[s${i}]`),
         `${vids.map((i) => `[s${i}]`).join('')}hstack=inputs=${vids.length}[vout]`,
@@ -930,11 +971,12 @@ function soundOnly(vids, auds) {
 
 function drawSettings() {
     put(refs.settings, () => {
-        if (!capture.inputs.some((i) => i.device))
+        if (!capture.inputs.length)
             return [div('dim pad',
-                'Choose a device on the left. A device is an input — `-f gdigrab -i desktop` ' +
-                'is an -i with a demuxer and that demuxer’s options, exactly like a file — ' +
-                'and what makes it different is that it never ends.')];
+                'Click a device on the left to activate it. A device is an input — ' +
+                '`-f gdigrab -i desktop` is an -i with a demuxer and that demuxer’s options, ' +
+                'exactly like a file — and what makes it different is that it never ends. ' +
+                'Activating one puts it in the same list every file is in.')];
 
         const path = el('input', {
             cls: 'wide', 'data-f': 'cappath', type: 'text', value: capture.path,
@@ -1040,7 +1082,7 @@ function destinationRows() {
 /// can reproduce.
 function regionRows() {
     const inp = focused();
-    if (!takesRegion(inp.device)) return [];
+    if (!inp || !takesRegion(inp.format)) return [];
     const o = inp.options;
     const set = o.video_size || o.offset_x || o.offset_y;
     return [
@@ -1059,8 +1101,7 @@ function regionRows() {
                 delete next.video_size;
                 delete next.offset_x;
                 delete next.offset_y;
-                inp.options = next;
-                redraw();
+                change(inp, { options: next });
             } },
         })) : null,
     ].filter(Boolean);
@@ -1151,7 +1192,7 @@ export function drawRecording() {
                     cls: 'tiny', 'data-f': 'capuse', text: 'Add to the timeline',
                     on: { click: () => { if (hooks.open) hooks.open(lastFile); } },
                 }));
-            } else if (capture.inputs.some((i) => i.device)) {
+            } else if (capture.inputs.length) {
                 out.push(span('Nothing recorded yet.', 'dim'));
             }
         }
@@ -1175,9 +1216,9 @@ export function drawRecording() {
 /// see `limitOf` in ffmpeg_capture.cpp.
 function shortest() {
     let best = 0;
-    for (const i of capture.inputs) {
-        if (!i.seconds) continue;
-        if (!best || i.seconds < best) best = i.seconds;
+    for (const i of captureInputs()) {
+        if (!i.to) continue;
+        if (!best || i.to < best) best = i.to;
     }
     return best;
 }
@@ -1221,7 +1262,7 @@ function fitOne(c) {
 // direction the black bars are.
 //
 // Wired per card at the moment the card is built, and it closes over the card
-// rather than over its index: removing an input renumbers every card after it,
+// rather than over its index: releasing an input renumbers every card after it,
 // and a listener holding the old number would set a region on the wrong device.
 
 function wireRegionDrag(card) {
@@ -1239,7 +1280,8 @@ function wireRegionDrag(card) {
 
     card.pic.addEventListener('mousedown', (e) => {
         const i = cards.indexOf(card);
-        if (i < 0 || !takesRegion(capture.inputs[i].device) || !card.video || recording) return;
+        const input = captureInputs()[i];
+        if (i < 0 || !input || !takesRegion(input.format) || !card.video || recording) return;
         from = at(e);
         card.marquee.classList.remove('hidden');
         e.preventDefault();
@@ -1271,8 +1313,8 @@ function wireRegionDrag(card) {
 export function setRegionFromDrag(from, to, index) {
     const i = index || 0;
     const c = cards[i];
-    const inp = capture.inputs[i];
-    if (!c || !c.video || !inp) return;
+    const input = captureInputs()[i];
+    if (!c || !c.video || !input) return;
     const shownW = c.video.clientWidth || 1;
     const shownH = c.video.clientHeight || 1;
     const realW = c.video.videoWidth || shownW;
@@ -1295,33 +1337,35 @@ export function setRegionFromDrag(from, to, index) {
         Math.abs(to.y - from.y) * realH / shownH)) & ~1);
     if (w < 16 || h < 16) return;   // a click, not a drag
 
-    const next = Object.assign({}, inp.options);
+    const next = Object.assign({}, input.options);
     next.offset_x = String(Math.max(0, x));
     next.offset_y = String(Math.max(0, y));
     next.video_size = `${w}x${h}`;
-    inp.options = next;
-    redraw();
+    change(input, { options: next });
 }
 
 // ── the option column ──────────────────────────────────────────────────────
 
 function optionRows() {
     const inp = focused();
-    if (!inp.device) return [];
+    if (!inp) return [];
     let all = [];
-    try { all = bro.ffmpeg.demuxerOptions(inp.device) || []; } catch (e) { all = []; }
+    try { all = bro.ffmpeg.demuxerOptions(inp.format) || []; } catch (e) { all = []; }
     return optionColumn({
         name: 'capoptsearch',
         title: capture.inputs.length > 1
-            ? `[${focus}] ${inp.device} options · ${all.length}`
-            : `${inp.device} options · ${all.length}`,
+            ? `[${focus}] ${inp.format} options · ${all.length}`
+            : `${inp.format} options · ${all.length}`,
         note: 'What this device takes, out of its own option table and libavformat’s generic ' +
               'one — the same column the encoder’s and the muxer’s options get. An unknown ' +
               'key stops the open rather than being ignored.',
         options: all,
         bag: inp.options,
         hint: 'Anything set here is passed straight to the device.',
-        onChange: () => redraw(),
+        // The bag is edited in place, so the input has to be told to open
+        // again with it — the same call the Sources stage makes after editing
+        // a file's demuxer options, and for the same reason.
+        onChange: () => { reprobe(inp); projectChanged('inputs'); redraw(); },
     });
 }
 
@@ -1340,21 +1384,31 @@ function optionRows() {
 /// graph, and a recording has no compositor — the string in the field is handed
 /// to `avfilter_graph_parse2` and nothing rewrites it on the way.
 export function commandParts() {
-    if (!capture.inputs.some((i) => i.device && i.source)) return null;
+    const all = captureInputs().filter((i) => i.format && i.path);
+    if (!all.length) return null;
 
     const inputs = [];
-    for (const inp of capture.inputs) {
-        if (!inp.device || !inp.source) continue;
-        inputs.push('-f', shellArg(inp.device));
-        for (const k of Object.keys(inp.options))
-            if (inp.options[k] !== '' && inp.options[k] !== undefined)
-                inputs.push(`-${k}`, shellArg(inp.options[k]));
+    for (const input of all) {
+        inputs.push('-f', shellArg(input.format));
+        // Everything the input carries that goes in front of the `-i`, and not
+        // only the demuxer bag: a `-hwaccel` or a `-probesize` set on the
+        // Sources stage is part of this `-i` now, and a bar that printed the
+        // device without them would be printing a different open from the one
+        // the recording performs.
+        for (const bag of [input.options, input.decoderOptions || {}])
+            for (const k of Object.keys(bag))
+                if (bag[k] !== '' && bag[k] !== undefined)
+                    inputs.push(`-${k}`, shellArg(bag[k]));
+        if (input.hwaccel) inputs.push('-hwaccel', shellArg(input.hwaccel));
+        if (input.hwaccelDevice) inputs.push('-hwaccel_device', shellArg(input.hwaccelDevice));
+        if (input.hwaccelOutputFormat)
+            inputs.push('-hwaccel_output_format', shellArg(input.hwaccelOutputFormat));
         // `-t` in front of the `-i`, where it belongs: after it, it would limit
         // the *output* — nearly the same file and a different instruction,
         // which is exactly the kind of thing this bar exists to stop somebody
         // guessing at.
-        if (inp.seconds) inputs.push('-t', String(inp.seconds));
-        inputs.push('-i', shellArg(inp.source));
+        if (input.to) inputs.push('-t', String(input.to));
+        inputs.push('-i', shellArg(input.path));
     }
 
     const enc = effectiveVideo();

@@ -50,11 +50,27 @@ whose output is a file, and then you open that file — so the arrow from Captur
 Sources is real, just crossed at a different moment. `Add to the timeline` is that
 arrow being followed.
 
-**A device is an input.** `-f dshow` names a libavdevice demuxer, `-i video=…` names
-what it can see, and everything else about it is that demuxer's own options — in the
-same bag `-probesize` travels in, printed in front of the same `-i`. Nothing about a
-device is a feature of this application, which is why the whole stage is four
-questions:
+**A device is an input, and it is in the same list every file is in.** `-f dshow`
+names a libavdevice demuxer, `-i video=…` names what it can see, and everything else
+about it is that demuxer's own options — in the same bag `-probesize` travels in,
+printed in front of the same `-i`. Nothing about a device is a feature of this
+application.
+
+**Clicking a device activates it**, and activating is what adds the `-i`. This stage
+used to keep a private list of devices, which meant a device it could record existed
+nowhere else: not on Sources, not in the graph's source list, not in a spec. It now
+adds an ordinary input, so the moment you activate a camera it appears on the Sources
+stage with its demuxer and its option bag, and in the Graph stage's source list beside
+every file — with a picture socket, a sound socket, or both, according to what
+`probe()` found. The `×` on a card **releases** it, out of the recording and out of
+the input list together. No devices activated is an ordinary state; so is one device
+activated and never recorded.
+
+What is *not* possible is laying a device on the timeline, and that is not a gap: a
+clip is an in-point and a length, and a live input has neither. It is refused by name,
+with what to do instead.
+
+The stage is four questions:
 
 - **Which device.** libavdevice's own list: on Windows `dshow`, `gdigrab`, `vfwcap`
   and `lavfi`. On another platform it is a different list and nothing here changes.
@@ -72,13 +88,18 @@ questions:
 - **How they combine**, once there is more than one — which is the filter graph,
   and is below.
 
-**Several devices are several `-i`s, and a card each.** `+ another device` appends
-an input; the cards sit across the stage in the order that numbers them for the
-graph, so the first is `[0:v]`/`[0:a]` and the second `[1:…]`. Each card is a whole
-input — its `-i`, its `-t`, its own option bag — and clicking one is what points the
-device list and the option column at it, which the column's heading says. The last
-input cannot be removed: a recording of nothing is not a state, and an input with no
-device chosen already says that better.
+**Several devices are several `-i`s, and a card each.** Clicking a second device
+appends another input; the cards sit across the stage in the order that numbers them
+for the graph, so the first is `[0:v]`/`[0:a]` and the second `[1:…]`. Each card is a
+whole input — its `-i`, its `-t`, its own option bag — and clicking one is what points
+the device list and the option column at it, which the column's heading says. Because
+a card is a document input, an option set on it anywhere is set on it everywhere: a
+`-probesize` typed on the Sources stage reaches the recording, and the command bar
+prints it in front of that `-i`.
+
+Changing a card's device is releasing one and activating another, which is two clicks
+and is the honest spelling: a device and its option bag go together, and carrying
+`draw_mouse` over to a camera would be carrying a key that stops the open.
 
 `-t` belongs to an **input** rather than to the recording, exactly as it does on a
 command line, and **the shortest of them is when the session ends** — an input that
@@ -111,6 +132,13 @@ string handed to `avfilter_graph_parse2`, and editing it afterwards keeps the ed
 They are built from what the devices actually are, so an input with no sound
 contributes no `[n:a]` and `Just the sound mixed` is not offered while anything has a
 picture — a graph that left `[0:v]` unread is one the engine would refuse.
+
+The field is where that string is typed **for now**. Now that an activated device is
+an ordinary input, the Graph stage can already read one — its source list offers every
+`-i` this document has — so a composition has a second and better home than a textarea
+and three preset buttons. What is missing is the other direction: the graph a recording
+runs is still this string, not that stage's nodes. Until it is wired, three presets
+beat a stage that requires a graph and offers no way to make one.
 
 **A region is dragged, not typed.** Drag a box on an input's picture and it becomes
 `-offset_x`, `-offset_y` and `-video_size` — that input's own demuxer options, in the
@@ -2118,6 +2146,13 @@ Honest list of what does not work:
   per-node preview is the shape of the answer and it is about the render's
   graph, not the recording's. So a picture-in-picture is judged by its numbers
   and then by playing back the take.
+- **Building a recording's graph on the Graph stage.** Half of this is done: an
+  activated device is a document input, so that stage's source list offers it and
+  a node reading `[0:v]` of a screen grab can be placed and wired like any other.
+  What does not exist is the way back — `record.start` is given a
+  `-filter_complex` string, and nothing turns those nodes into one or knows that
+  a recording is what is being described. So the Capture stage keeps a field and
+  three presets, and they are the older way.
 - **A file beside a device on the same graph.** A capture's graph is fed by its
   devices and by nothing else: `filterInputs` — which says which *file* feeds
   which pad — is refused outright. Overlaying a title card on a screen grab as

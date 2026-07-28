@@ -29,6 +29,11 @@ import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
+// Which inputs a recording reads. The same question `graphReads()` asks of the
+// overlay, asked of the other thing that reads an `-i` without a clip being cut
+// from it — and it is only answerable at all because a device now lands in this
+// list rather than in a private one on that stage.
+import { capture } from './capture.js';
 import { optionColumn } from './opttable.js';
 import * as graph from './graph/overlay.js';
 import { COMPOSITE_POINT } from './graph/derive.js';
@@ -161,9 +166,18 @@ function drawList() {
             // stage cannot afford to get wrong, and a subtitle file would
             // otherwise read that way permanently.
             const written = subtitleWriters.has(inputs.indexOf(input));
+            // A device the Capture stage has activated is read by the
+            // recording, which is a use this list would otherwise not know
+            // about — and "unused" beside a camera that is about to be
+            // recorded is the same mistake as "unused" beside a logo the
+            // render is about to open. It is asked of the capture rather than
+            // guessed from `kindOf`, because a `-f dshow` forced here by hand
+            // is a device nothing is recording and should say so.
+            const recorded = capture.inputs.indexOf(input.id) >= 0;
             node.querySelector('.src-used').textContent =
                 input.error ? 'unreadable'
                 : [used ? `${used} clip${used === 1 ? '' : 's'}` : '',
+                   recorded ? 'activated for a recording' : '',
                    written ? 'written into the output' : '',
                    inGraph ? 'read by the graph' : ''].filter(Boolean).join(' · ') || 'unused';
             node.addEventListener('click', () => {
