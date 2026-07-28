@@ -2107,6 +2107,102 @@ if (!media) {
         A.graph.draw();
         pump(160);
     }
+
+    // ── the column, across a redraw nobody asked for ───────────────────────
+    //
+    // Values in the column commit on `change`, deliberately, because
+    // committing on `input` locks the node between keystrokes. So what has
+    // been typed and not yet committed is not in the model — and this column
+    // is rebuilt whole on every derivation, including the ones nothing on
+    // screen asked for: a node preview finishing a second later rebuilds the
+    // stage while somebody is half way through a number.
+    console.log('\nthe column keeps the field being typed into');
+    {
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+        const key = `clip:${clipId}/scale`;
+        const card = document.querySelector(`#gr-nodes [data-key="${key}"]`);
+        ok(!!card, 'the derived scale is on the stage');
+        card.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(160);
+
+        const field = () => document.querySelector('#gr-panel [data-pos="0"]');
+        ok(!!field(), 'and its width is a field in the column');
+        field().value = 'iw*0.5';
+        field().focus();
+        pump(20);
+
+        A.graph.draw();
+        pump(200);
+        same(field().value, 'iw*0.5',
+             'a redraw nobody asked for leaves what is half typed where it was');
+        same(overlay.lockCount(), 0,
+             'and it is still uncommitted — nothing was written to the model');
+
+        field().dispatchEvent(new Event('change', { bubbles: true }));
+        pump(200);
+        same(overlay.lockCount(), 1, 'committing it locks the node, as typing anywhere does');
+        ok(!!field() && field().value === 'iw*0.5',
+           'and the field is still the one in hand, carrying what was typed');
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
+
+    // ── a `+` opened on a wire that then goes away ─────────────────────────
+    //
+    // `derive()` rebuilds its list of insert points from scratch every time,
+    // and a point is the one kind of selection that can stop existing while it
+    // is open: the clip it names is one edit away from not being in the graph.
+    // Held as an object, the palette went on offering filters for a wire that
+    // was not there, and picking one recorded an insert against an anchor no
+    // derivation declares — skipped without a word, stuck in the overlay for
+    // ever, and reading as an edit that went to nothing.
+    console.log('\nan insert point whose wire has gone');
+    {
+        overlay.clear();
+        A.project.clips[0].muted = false;
+        A.graph.draw();
+        pump(200);
+
+        // The clip's sound, leaving its input node by the second pad — one `-i`
+        // with a picture pad and a sound pad, which is what a file is here.
+        const P = A.graph.placement();
+        const r = vp.getBoundingClientRect();
+        const from = boxOf(`clip:${clipId}/in`);
+        const w = P.wires.find((x) => x.edge.from === from.node.id &&
+                                      (x.edge.fromPort || 0) === 1);
+        ok(!!w, 'the wire carrying the clip’s sound is drawn');
+        const mid = { x: ((w.x1 + w.x2) / 2) * P.zoom + P.panX + r.left,
+                      y: ((w.y1 + w.y2) / 2) * P.zoom + P.panY + r.top };
+        mouse('mousemove', mid);
+        pump(120);
+        const plus = document.querySelector('#gr-nodes .gp-plus');
+        ok(!!plus, 'hovering it offers a +');
+        plus.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(160);
+        ok(!!document.querySelector('#gr-panel [data-f="filtersearch"]'),
+           'clicking it opens the palette for that point');
+        ok(document.getElementById('gr-panel').textContent.indexOf('clip audio') >= 0,
+           'and the column names the point it is about');
+
+        // Now take the wire away with the `+` still open. Muting the clip is
+        // the shortest way: there is no sound to put a filter on any more.
+        A.project.clips[0].muted = true;
+        A.graph.draw();
+        pump(200);
+        same(document.querySelectorAll('#gr-panel [data-f="filtersearch"]').length, 0,
+             'the palette stands down rather than offering filters for a wire that has gone');
+        ok(!!document.querySelector('#gr-panel [data-f="pointgone"]'),
+           'and says so, rather than blanking itself');
+        same(overlay.insertCount(), 0, 'nothing was recorded against it');
+
+        A.project.clips[0].muted = false;
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
 }
 
 console.log(`\nPASS ui_graph — ${checks} checks`);

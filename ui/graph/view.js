@@ -524,8 +524,12 @@ function selectWire(w) {
     const to = lastGraph && lastGraph.node(w.edge.to);
     selection.clear();
     primary = null;
+    // The key and the pad, and deliberately not the node: the panel keeps this
+    // across redraws, and every node object in it belongs to a graph that the
+    // next derivation throws away. `wirePanel` re-resolves from the key, which
+    // is what makes the wire survive the rebuild at all.
     panel.selectWire(to ? { key: panel.keyOf(to), port: w.edge.port || 0,
-                            node: to, stream: w.stream } : null);
+                            stream: w.stream } : null);
     selectedWire = to ? `${panel.keyOf(to)}#${w.edge.port || 0}` : null;
     markSelection();
     paint();
@@ -684,7 +688,7 @@ export function drawGraph() {
         paint();
         note(d.reason ? `No graph: ${d.reason}.` : 'No graph.');
         status(null);
-        panel.draw(null);
+        panel.draw(null, [], []);
         return;
     }
     note('');
@@ -759,7 +763,10 @@ export function drawGraph() {
     }
     apply();
     status(print(d.graph), d);
-    panel.draw(d.graph, d.problems);
+    // The points as well as the graph: an insert point somebody has open is
+    // re-resolved against the derivation that has just run, rather than being
+    // held from the one that declared it.
+    panel.draw(d.graph, d.problems, d.points);
     markSelection();
     cards.restoreFocus(refs.nodes);
     syncPreviews();

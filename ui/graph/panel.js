@@ -43,12 +43,15 @@ import * as overlay from './overlay.js';
 let refs = {};
 let hooks = {};
 
-/// `{ kind: 'node', key } | { kind: 'point', point } | null`. A node is held by
-/// key rather than by object, because the object is thrown away and remade
+/// `{ kind: 'node', key } | { kind: 'point', id } | null`. Both are held by
+/// name rather than by object, because the object is thrown away and remade
 /// every time the timeline moves — see `keyOf`.
 let sel = null;
 let search = '';
 let graph = null;
+/// The insert points the last derivation declared. Held so that an open one can
+/// be re-resolved rather than trusted — see `contents`.
+let points = [];
 /// How many nodes are selected in total. The panel is about one of them — a
 /// column of forty options for four nodes at once is not a thing — but it has to
 /// say that there are others, or a `Delete` that takes four away is a surprise.
@@ -69,18 +72,22 @@ export function initPanel(r, h) {
 }
 
 export function selectedKey() { return sel && sel.kind === 'node' ? sel.key : null; }
-export function selectedPoint() { return sel && sel.kind === 'point' ? sel.point.id : null; }
+export function selectedPoint() { return sel && sel.kind === 'point' ? sel.id : null; }
 
 export function selectNode(key, count) {
     sel = key ? { kind: 'node', key } : null;
     selectedCount = count === undefined ? (key ? 1 : 0) : count;
-    draw(graph, trouble);
+    draw(graph, trouble, points);
 }
 
+/// A `+` somebody clicked. Held **by id**, for the reason a node is held by
+/// key: the object is thrown away and remade by the next derivation, and an
+/// insert point is the one kind of selection that can stop existing while it is
+/// open — the clip it names is one delete away.
 export function openPoint(point) {
-    sel = point ? { kind: 'point', point } : null;
+    sel = point ? { kind: 'point', id: point.id } : null;
     search = '';
-    draw(graph, trouble);
+    draw(graph, trouble, points);
 }
 
 /// A pad with a wire in the air, or a place on the canvas with nothing but a
@@ -89,14 +96,15 @@ export function openPoint(point) {
 export function openPad(pad) {
     sel = pad ? { kind: 'pad', pad } : null;
     search = '';
-    draw(graph, trouble);
+    draw(graph, trouble, points);
 }
 
-/// A wire somebody clicked. `{ key, port, node, stream }`, or null.
+/// A wire somebody clicked. `{ key, port, stream }`, or null — names only, for
+/// the reason a node is held by key: this outlives the graph it was clicked in.
 export function selectWire(wire) {
     sel = wire ? { kind: 'wire', wire } : null;
     selectedCount = 0;
-    draw(graph, trouble);
+    draw(graph, trouble, points);
 }
 
 export function clearSelection() { sel = null; }
@@ -104,18 +112,114 @@ export function clearSelection() { sel = null; }
 /// Draw against the graph as it is now. Called after every derivation, so a
 /// selection that no longer exists — a clip trimmed out of the range, a node
 /// removed — falls back to nothing rather than to a stale card.
-export function draw(g, problems) {
+export function draw(g, problems, ps) {
     graph = g;
     trouble = problems || [];
+    points = ps || [];
     if (!refs.panel) return;
-    if (!g || !sel) return put(refs.panel, () => empty());
-    if (sel.kind === 'point') return put(refs.panel, () => palette(sel.point));
-    if (sel.kind === 'pad') return put(refs.panel, () => padPalette(sel.pad));
-    if (sel.kind === 'wire') return put(refs.panel, () => wirePanel(sel.wire));
+    noteFocus();
+    put(refs.panel, () => contents(g));
+    restoreFocus();
+}
+
+function contents(g) {
+    if (!g || !sel) return empty();
+    if (sel.kind === 'point') {
+        // Re-resolved rather than held. `derive()` rebuilds the point list from
+        // scratch every time, so a `+` opened on a clip's wire and then left
+        // open while that clip is deleted names an anchor no derivation
+        // declares — and picking a filter would record an insert that
+        // `applyOverlay` skips without a word, leaving a record stuck in the
+        // overlay for ever and an edit that went to nothing.
+        const point = points.find((p) => p.id === sel.id);
+        if (!point) return pointGone();
+        return palette(point);
+    }
+    if (sel.kind === 'pad') return padPalette(sel.pad);
+    if (sel.kind === 'wire') return wirePanel(sel.wire);
 
     const node = find(g, sel.key);
-    if (!node) { sel = null; return put(refs.panel, () => empty()); }
-    put(refs.panel, () => nodePanel(node));
+    if (!node) { sel = null; return empty(); }
+    return nodePanel(node);
+}
+
+/// The wire a `+` was clicked on is not in this graph any more.
+function pointGone() {
+    return [
+        head('Insert'),
+        div('gp-hint dim',
+            'The wire you opened this on is not in the graph any more — the clip it ' +
+            'belonged to has been trimmed out of the range, deleted, or had the stream ' +
+            'this point was on taken off it. Nothing was put anywhere.'),
+        el('button', { cls: 'tiny', text: 'Close', 'data-f': 'pointgone',
+                       on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
+    ];
+}
+
+// ── the field being used, across a redraw ──────────────────────────────────
+//
+// This column is rebuilt whole on every derivation, and a derivation is not
+// only something you asked for: a node preview finishing a second later
+// rebuilds the stage too, and it does it while somebody is half way through
+// typing `iw*0.5` into a `scale`. Values here commit on `change` —
+// deliberately, because committing on `input` locks the node between
+// keystrokes — so what has been typed and not yet committed is not in the
+// model, and a column rebuilt from the model silently eats it.
+//
+// The same pair `card.js` has, one column to the right, with the same two
+// rules: the field is remembered by *what it is* rather than by which element
+// it was, since the element is gone by the time this matters; and an edit that
+// has already recorded an intent stands this down, because putting the old
+// text back over the value that edit just committed would be undoing it.
+//
+// Not extracted into something both files call. They identify a field
+// differently — a card's is a node key and a param name, this one's is
+// whichever attribute the control was built with — and the shared part is four
+// lines of `document.activeElement`.
+let wanted = null;
+
+/// How a control in this column is named, in the order the attributes are
+/// looked for. Every one is written by the code that builds the control, so a
+/// control that moves keeps its name. Only fields: a button carries `data-f`
+/// too and refocusing one after a redraw would be taking focus rather than
+/// keeping it.
+const FIELD_ATTRS = ['data-f', 'data-opt', 'data-pos', 'data-edge', 'data-span'];
+
+function fieldName(node) {
+    if (!node || !node.getAttribute) return '';
+    if (node.tagName !== 'INPUT' && node.tagName !== 'SELECT') return '';
+    for (const a of FIELD_ATTRS) {
+        const v = node.getAttribute(a);
+        if (v) return `${a}="${v}"`;
+    }
+    return '';
+}
+
+/// Called from a commit, before the write: keep the focus where it is, and do
+/// *not* put the text back — the value the redraw builds is the one that was
+/// just committed, and a blank positional argument deliberately comes back as
+/// the derived value rather than as the blank.
+function noteEdit() { wanted = { name: fieldName(document.activeElement) }; }
+
+function noteFocus() {
+    if (wanted || !refs.panel) return;
+    const active = document.activeElement;
+    const name = fieldName(active);
+    if (!name) return;
+    if (!refs.panel.contains || !refs.panel.contains(active)) return;
+    wanted = { name, value: active.value };
+}
+
+function restoreFocus() {
+    if (!wanted || !refs.panel) return;
+    const { name, value } = wanted;
+    wanted = null;
+    if (!name) return;
+    const node = refs.panel.querySelector(`[${name}]`);
+    if (!node) return;
+    if (value !== undefined && node.value !== undefined && node.value !== value)
+        node.value = value;
+    if (node.focus) { try { node.focus(); } catch (e) { /* not focusable here */ } }
 }
 
 /// Every problem the last derivation found, so the column can say what is wrong
@@ -230,6 +334,7 @@ function nodePanel(node) {
     // every filter, out of `AVFilterContext`'s class, and whether *this* filter
     // honours it is a flag the registry carries.
     out.push(...whenRows(node, graph, (value) => {
+        noteEdit();
         overlay.edit(node, { params: { enable: value } });
         changed();
     }));
@@ -315,6 +420,7 @@ function positionalRows(node, options) {
             const field = el('input', {
                 cls: 'wide mono', 'data-pos': String(i), type: 'text', value: String(v),
                 on: { change: () => {
+                    noteEdit();
                     const next = node.pos.slice();
                     next[i] = field.value.trim() || String(v);
                     overlay.edit(node, { pos: next });
@@ -398,7 +504,11 @@ function optionRow(node, o) {
     item.querySelector('.ex-opt-help').textContent = o.help || '';
     if (cur !== '') item.classList.add('set');
 
-    const apply = (v) => { overlay.edit(node, { params: { [o.name]: v } }); changed(); };
+    const apply = (v) => {
+        noteEdit();
+        overlay.edit(node, { params: { [o.name]: v } });
+        changed();
+    };
 
     let control;
     if (o.values && o.values.length) {
@@ -460,7 +570,7 @@ function palette(point) {
                                  : 'A filter here reads the picture as it is at this point.'),
         row('Find', field),
         list,
-        el('button', { cls: 'tiny', text: 'Cancel', on: { click: () => { sel = null; draw(graph, trouble); } } }),
+        el('button', { cls: 'tiny', text: 'Cancel', on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
     ];
 }
 
@@ -604,7 +714,7 @@ function padPalette(pad) {
         row('Find', field),
         list,
         el('button', { cls: 'tiny', text: 'Cancel',
-                       on: { click: () => { sel = null; draw(graph, trouble); } } }),
+                       on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
     ];
 }
 
