@@ -1418,9 +1418,12 @@ bool Writer::ensureScaler(Out& o, int srcW, int srcH, std::string* err) {
 }
 
 bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
-    if (o.desc.source != "mix") {
+    // The mix, or one of the graph's other sound pads. Whether the label names
+    // a pad this graph has is the job's question, for the reason it is the
+    // job's on the picture side: this has never heard of a filter graph.
+    if (o.desc.source != "mix" && !isPadSource(o.desc.source)) {
         *err = "an audio stream cannot be fed from '" + o.desc.source +
-               "' — it is the mix, or copy:<input>:<stream>";
+               "' — it is the mix, a graph pad (pad:<label>), or copy:<input>:<stream>";
         return false;
     }
 

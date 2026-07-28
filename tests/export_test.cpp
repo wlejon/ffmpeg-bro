@@ -49,6 +49,12 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
 #include <libavutil/log.h>
+// A file with several pictures or several soundtracks in it has to be read one
+// stream at a time, which means decoding and converting here rather than
+// through probeMedia() or VideoPipeline — both of which answer for the *file*
+// and pick the best stream of a kind.
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 }
 
 // NOMINMAX because windows.h's `min`/`max` macros eat every std::min in the
@@ -316,6 +322,190 @@ int streamIndexOf(const std::string& path, AVMediaType kind) {
     const int idx = av_find_best_stream(fc, kind, -1, -1, nullptr, 0);
     avformat_close_input(&fc);
     return idx;
+}
+
+/// Every stream of a kind, in the order the muxer numbered them — which is the
+/// order the stream list was written in, and the whole of what "the list is the
+/// numbering" means.
+std::vector<int> streamsOfKind(const AVFormatContext* fc, AVMediaType kind) {
+    std::vector<int> out;
+    for (unsigned i = 0; i < fc->nb_streams; ++i)
+        if (fc->streams[i]->codecpar->codec_type == kind) out.push_back(static_cast<int>(i));
+    return out;
+}
+
+/// One frame of one *named* stream, as RGBA.
+///
+/// `VideoPipeline` answers for a file — the best video stream in it — and a
+/// render that writes three pictures has to be asked about each of them, so
+/// this opens a stream by index and decodes to the frame covering `at`. The
+/// buffer carries the slack every buffer libswscale writes into needs: a row
+/// writer emits a whole SIMD block per store and the last one goes past the
+/// width however carefully the width was worked out.
+struct Picture {
+    std::vector<uint8_t> rgba;
+    int width = 0, height = 0;
+    bool ok() const { return width > 0 && height > 0; }
+};
+
+Picture frameOf(const std::string& path, int stream, double at) {
+    Picture out;
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0) return out;
+    if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); return out; }
+    if (stream < 0 || stream >= static_cast<int>(fc->nb_streams)) {
+        avformat_close_input(&fc);
+        return out;
+    }
+
+    AVStream* st = fc->streams[stream];
+    const AVCodec* dec = avcodec_find_decoder(st->codecpar->codec_id);
+    AVCodecContext* ctx = dec ? avcodec_alloc_context3(dec) : nullptr;
+    if (!ctx || avcodec_parameters_to_context(ctx, st->codecpar) < 0 ||
+        avcodec_open2(ctx, dec, nullptr) < 0) {
+        if (ctx) avcodec_free_context(&ctx);
+        avformat_close_input(&fc);
+        return out;
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    AVFrame* kept = av_frame_alloc();
+    double bestT = -1;
+    bool have = false;
+    const auto consider = [&] {
+        const double t = frame->pts == AV_NOPTS_VALUE ? 0.0
+                                                      : frame->pts * av_q2d(st->time_base);
+        // The last frame at or before the moment asked for, and failing that
+        // the first there is — a stream whose every frame is later than `at`
+        // still has a picture and answering with none would read as a stream
+        // that produced nothing.
+        if (!have || (t <= at + 1e-9 && t > bestT)) {
+            av_frame_unref(kept);
+            av_frame_ref(kept, frame);
+            bestT = t;
+            have = true;
+        }
+        av_frame_unref(frame);
+    };
+    while (pkt && frame && kept && av_read_frame(fc, pkt) >= 0) {
+        if (pkt->stream_index == stream && avcodec_send_packet(ctx, pkt) >= 0)
+            while (avcodec_receive_frame(ctx, frame) >= 0) consider();
+        av_packet_unref(pkt);
+    }
+    if (frame && kept && avcodec_send_packet(ctx, nullptr) >= 0)
+        while (avcodec_receive_frame(ctx, frame) >= 0) consider();
+
+    if (have) {
+        out.width = kept->width;
+        out.height = kept->height;
+        out.rgba.assign(static_cast<size_t>(out.width) * out.height * 4 + 256, 0);
+        SwsContext* sws = sws_getContext(kept->width, kept->height,
+                                         static_cast<AVPixelFormat>(kept->format), out.width,
+                                         out.height, AV_PIX_FMT_RGBA, SWS_BICUBIC, nullptr,
+                                         nullptr, nullptr);
+        if (sws) {
+            uint8_t* dst[4] = {out.rgba.data(), nullptr, nullptr, nullptr};
+            int stride[4] = {out.width * 4, 0, 0, 0};
+            sws_scale(sws, kept->data, kept->linesize, 0, kept->height, dst, stride);
+            sws_freeContext(sws);
+        } else {
+            out.width = out.height = 0;
+        }
+    }
+    if (pkt) av_packet_free(&pkt);
+    if (frame) av_frame_free(&frame);
+    if (kept) av_frame_free(&kept);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fc);
+    return out;
+}
+
+/// How alike a picture and a rectangle of another picture are, in dB.
+///
+/// What a graph that cuts one picture into pieces needs: the left-hand stream
+/// is a claim about the left half of the composite, and only comparing the two
+/// says whether the pads came out in the order they were mapped. `psnr()` above
+/// wants two buffers of one size.
+double psnrOfRegion(const Picture& part, const Picture& whole, int x0, int y0) {
+    if (!part.ok() || !whole.ok()) return -1.0;
+    if (x0 + part.width > whole.width || y0 + part.height > whole.height) return -1.0;
+    double se = 0;
+    size_t n = 0;
+    for (int y = 0; y < part.height; ++y)
+        for (int x = 0; x < part.width; ++x) {
+            const size_t a = (static_cast<size_t>(y) * part.width + x) * 4;
+            const size_t b = (static_cast<size_t>(y + y0) * whole.width + (x + x0)) * 4;
+            for (int c = 0; c < 3; ++c, ++n) {
+                const double d = static_cast<double>(part.rgba[a + c]) - whole.rgba[b + c];
+                se += d * d;
+            }
+        }
+    if (!n) return -1.0;
+    const double mse = se / static_cast<double>(n);
+    return mse <= 0 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+/// How loud one *named* audio stream is, over the whole of it.
+///
+/// `analyzeAudioPeaks` answers for a file, and a file with two soundtracks in
+/// it is exactly the case where that is the wrong question: two streams that
+/// are meant to differ by a `volume=0.5` are indistinguishable unless each is
+/// measured on its own.
+double rmsOfStream(const std::string& path, int stream) {
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) < 0) return -1.0;
+    if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); return -1.0; }
+    if (stream < 0 || stream >= static_cast<int>(fc->nb_streams)) {
+        avformat_close_input(&fc);
+        return -1.0;
+    }
+    AVStream* st = fc->streams[stream];
+    const AVCodec* dec = avcodec_find_decoder(st->codecpar->codec_id);
+    AVCodecContext* ctx = dec ? avcodec_alloc_context3(dec) : nullptr;
+    if (!ctx || avcodec_parameters_to_context(ctx, st->codecpar) < 0 ||
+        avcodec_open2(ctx, dec, nullptr) < 0) {
+        if (ctx) avcodec_free_context(&ctx);
+        avformat_close_input(&fc);
+        return -1.0;
+    }
+
+    SwrContext* swr = nullptr;
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    std::vector<float> buf;
+    double sum = 0;
+    size_t n = 0;
+    const auto take = [&] {
+        const int channels = std::max(1, frame->ch_layout.nb_channels);
+        if (!swr) {
+            if (swr_alloc_set_opts2(&swr, &frame->ch_layout, AV_SAMPLE_FMT_FLT,
+                                    frame->sample_rate, &frame->ch_layout,
+                                    static_cast<AVSampleFormat>(frame->format),
+                                    frame->sample_rate, 0, nullptr) < 0 ||
+                !swr || swr_init(swr) < 0)
+                return;
+        }
+        // Slack past what the resample can produce, for the reason every other
+        // buffer handed to libswresample in this repo has it.
+        buf.assign(static_cast<size_t>(frame->nb_samples + 256) * channels + 256, 0.0f);
+        auto* dst = reinterpret_cast<uint8_t*>(buf.data());
+        const int got = swr_convert(swr, &dst, frame->nb_samples + 256,
+                                    const_cast<const uint8_t**>(frame->extended_data),
+                                    frame->nb_samples);
+        for (int i = 0; i < got * channels; ++i, ++n) sum += double(buf[i]) * buf[i];
+    };
+    while (pkt && frame && av_read_frame(fc, pkt) >= 0) {
+        if (pkt->stream_index == stream && avcodec_send_packet(ctx, pkt) >= 0)
+            while (avcodec_receive_frame(ctx, frame) >= 0) { take(); av_frame_unref(frame); }
+        av_packet_unref(pkt);
+    }
+    if (swr) swr_free(&swr);
+    if (pkt) av_packet_free(&pkt);
+    if (frame) av_frame_free(&frame);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fc);
+    return n ? std::sqrt(sum / double(n)) : -1.0;
 }
 
 /// One subtitle cue, read back out of a file.
@@ -1803,6 +1993,364 @@ int main(int argc, char* argv[]) {
                 check(false, "both renders open for comparison");
             }
         }
+    }
+
+    // ── a graph that produces more than one thing ──────────────────────────
+    //
+    // Everything above this point renders a graph that ends in one picture and
+    // at most one sound, because that is what a render was: a composite and a
+    // mix. A filter graph does not have to end that way and neither does a
+    // file — `[0:v]split=3` and three `crop`s is a wide screen grab becoming
+    // three streams of one mp4 — so `ExportStream::source` takes `pad:<label>`
+    // and the renderer opens a sink per output pad.
+    //
+    // What is worth asserting about it is not that the streams exist. Three
+    // video streams of the right sizes pass for a file where every one of them
+    // is the same picture, or where the two halves came out the wrong way
+    // round, which are exactly the mistakes this mechanism can make. So the
+    // pads are compared against the *composite* they were cut from: the left
+    // stream against the left half of the canvas, pixel for pixel through the
+    // same encoder.
+    {
+        std::printf("\na graph whose pads are streams of their own\n");
+
+        const ExportClip c = leftHalf(first, srcDuration);
+        const int half = kW / 2;                 // even, because yuv420p is
+        char text[1024];
+        std::snprintf(text, sizeof(text),
+            "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,format=rgba,"
+            "split=3[m][b][cc];"
+            "[m]null[vout];"
+            "[b]crop=%d:%d:0:0[left];"
+            "[cc]crop=%d:%d:%d:0[right]",
+            c.inPoint, c.inPoint + c.length, kW, kH,
+            half, kH,
+            half, kH, half);
+
+        const std::string outP = "out/export-pads.mp4";
+        ExportSettings sp = baseSettings(outP);
+        sp.endTime = 1.0;
+        sp.includeAudio = false;
+        sp.filterGraph = text;
+        sp.filterInputs = {{"0:v", first, "v"}};
+        sp.filterInputs[0].from = c.inPoint;
+
+        ExportStream whole;
+        whole.kind = "video";
+        whole.source = "composite";
+        whole.codec = "libx264";
+        ExportStream left = whole;
+        left.source = "pad:left";
+        ExportStream right = whole;
+        right.source = "pad:right";
+        sp.streams = {whole, left, right};
+
+        st = render(sp, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a graph split into three pictures renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            std::vector<int> vs;
+            {
+                Opened f(outP);
+                check(!!f, "and the result opens");
+                if (f) vs = streamsOfKind(f.fc, AVMEDIA_TYPE_VIDEO);
+                checkf(vs.size() == 3, "with three video streams in it (%zu)", vs.size());
+                if (vs.size() == 3) {
+                    // The list order is the muxer's numbering, so the halves
+                    // are streams 1 and 2 and their size is the pad's rather
+                    // than the render's — asked of the sink after the graph was
+                    // configured, because nothing outside libavfilter knew it.
+                    const AVCodecParameters* p0 = f.fc->streams[vs[0]]->codecpar;
+                    const AVCodecParameters* p1 = f.fc->streams[vs[1]]->codecpar;
+                    const AVCodecParameters* p2 = f.fc->streams[vs[2]]->codecpar;
+                    checkf(p0->width == kW && p0->height == kH,
+                           "the composite at the render's size (%dx%d)", p0->width,
+                           p0->height);
+                    checkf(p1->width == half && p1->height == kH && p2->width == half &&
+                               p2->height == kH,
+                           "and each pad at the size its own pad settled on (%dx%d, %dx%d)",
+                           p1->width, p1->height, p2->width, p2->height);
+                }
+            }
+
+            if (vs.size() == 3) {
+                // The picture, not the plumbing. Both halves went through the
+                // same encoder as the composite they were cut from, so what is
+                // left between them is two x264 passes over the same pixels —
+                // and every real mistake here (the crop taken from the wrong
+                // edge, the two pads swapped, one stream fed the canvas)
+                // scores far below this.
+                const double at = 0.6;
+                const Picture whole0 = frameOf(outP, vs[0], at);
+                const Picture left0 = frameOf(outP, vs[1], at);
+                const Picture right0 = frameOf(outP, vs[2], at);
+                const double dl = psnrOfRegion(left0, whole0, 0, 0);
+                const double dr = psnrOfRegion(right0, whole0, half, 0);
+                std::printf("        left %.1f dB, right %.1f dB\n", dl, dr);
+                checkf(dl > 35.0, "the left stream is the left of the composite (%.1f dB)", dl);
+                checkf(dr > 35.0, "and the right stream is the right of it (%.1f dB)", dr);
+                // And they are not each other, which is what says the two pads
+                // are two pictures rather than one read twice. A moving bar
+                // over a gradient is different down its two halves; if a
+                // future fixture is not, this is the check that will say so.
+                const double swapped = psnrOfRegion(left0, whole0, half, 0);
+                checkf(swapped < dl - 3.0,
+                       "and the halves are not interchangeable (%.1f dB the wrong way round)",
+                       swapped);
+            }
+        }
+    }
+
+    // **A sound pad beside the mix**, which is the half of this that cannot be
+    // faked. Two pictures can share one buffer and still come out right,
+    // because a picture is read where it lies; two soundtracks cannot, because
+    // a fifo is *consumed*. One buffer between them hands each stream alternate
+    // blocks of the other's samples and writes two tracks that are each half of
+    // both — which is a file that plays, at about the right length, and is
+    // wrong. So the pad is `volume=0.5` of the very samples the mix gets, and
+    // what is measured is that it came out half as loud.
+    if (srcHasAudio && srcAudible) {
+        std::printf("\na second soundtrack off a pad\n");
+
+        const ExportClip c = leftHalf(first, srcDuration);
+        char text[1024];
+        std::snprintf(text, sizeof(text),
+            "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,format=rgba[vout];"
+            "[0:a]atrim=start=%g:end=%g,asetpts=PTS-STARTPTS,asplit[aout][d];"
+            "[d]volume=0.5[quiet]",
+            c.inPoint, c.inPoint + c.length, kW, kH,
+            c.inPoint, c.inPoint + c.length);
+
+        const std::string outQ = "out/export-pad-audio.mkv";
+        ExportSettings sq = baseSettings(outQ);
+        sq.endTime = 1.0;
+        sq.format = "matroska";
+        sq.filterGraph = text;
+        sq.filterInputs = {{"0:v", first, "v"}, {"0:a", first, "a"}};
+        for (auto& in : sq.filterInputs) in.from = c.inPoint;
+
+        ExportStream v;
+        v.kind = "video";
+        v.source = "composite";
+        v.codec = "libx264";
+        ExportStream loud;
+        loud.kind = "audio";
+        loud.source = "mix";
+        loud.codec = "aac";
+        loud.bitrateKbps = 192;
+        ExportStream quiet = loud;
+        quiet.source = "pad:quiet";
+        sq.streams = {v, loud, quiet};
+
+        st = render(sq, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a graph with two soundtracks renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            std::vector<int> as;
+            {
+                Opened f(outQ);
+                check(!!f, "and the result opens");
+                if (f) as = streamsOfKind(f.fc, AVMEDIA_TYPE_AUDIO);
+            }
+            checkf(as.size() == 2, "with two audio streams in it (%zu)", as.size());
+            if (as.size() == 2) {
+                const double loudRms = rmsOfStream(outQ, as[0]);
+                const double quietRms = rmsOfStream(outQ, as[1]);
+                const double ratio = loudRms > 0 ? quietRms / loudRms : -1.0;
+                std::printf("        mix %.4f, pad %.4f, ratio %.3f\n", loudRms, quietRms,
+                            ratio);
+                checkf(loudRms > 0.005, "the mix is audible (%.4f rms)", loudRms);
+                // Half, within what an encode at 192 kbps and a decode either
+                // side of it move it by. A shared fifo puts this at about 0.75
+                // and a pad reading the mix's own buffer puts it at 1.0, so the
+                // window is wide enough to be stable and nowhere near either.
+                checkf(ratio > 0.42 && ratio < 0.58,
+                       "and the pad is half as loud, sample for sample (%.3f)", ratio);
+            }
+        }
+    }
+
+    // **A render whose every picture comes from a pad**, which is the case
+    // there is no composite at all: nothing is labelled `vout`, so nothing says
+    // which pad is the canvas, and that is not an error — it is a file made of
+    // two halves and no whole.
+    {
+        std::printf("\na render with no composite in it\n");
+
+        const ExportClip c = leftHalf(first, srcDuration);
+        const int half = kW / 2;
+        char text[1024];
+        std::snprintf(text, sizeof(text),
+            "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,format=rgba,"
+            "split=2[b][cc];"
+            "[b]crop=%d:%d:0:0[left];"
+            "[cc]crop=%d:%d:%d:0[right]",
+            c.inPoint, c.inPoint + c.length, kW, kH,
+            half, kH,
+            half, kH, half);
+
+        const std::string outN = "out/export-pads-only.mp4";
+        ExportSettings sn = baseSettings(outN);
+        sn.endTime = 0.8;
+        sn.includeAudio = false;
+        sn.filterGraph = text;
+        sn.filterInputs = {{"0:v", first, "v"}};
+        sn.filterInputs[0].from = c.inPoint;
+
+        ExportStream left;
+        left.kind = "video";
+        left.source = "pad:left";
+        left.codec = "libx264";
+        ExportStream right = left;
+        right.source = "pad:right";
+        sn.streams = {left, right};
+
+        st = render(sn, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a render whose every picture is a pad finishes (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        if (st.state == ExportStatus::State::Done) {
+            Opened f(outN);
+            const std::vector<int> vs = f ? streamsOfKind(f.fc, AVMEDIA_TYPE_VIDEO)
+                                          : std::vector<int>();
+            checkf(vs.size() == 2, "with two video streams and no third (%zu)", vs.size());
+            if (vs.size() == 2)
+                checkf(f.fc->streams[vs[0]]->codecpar->width == half,
+                       "each at its pad's size (%d)", f.fc->streams[vs[0]]->codecpar->width);
+        }
+
+        // And the other half of that: the same graph, asked for the composite.
+        // With two pads and neither of them labelled, nothing says which is the
+        // picture — so it is refused, naming the labels there *were*, because
+        // the fix is to label one of them or to map them.
+        ExportSettings sc = sn;
+        sc.path = "out/export-pads-nocomposite.mp4";
+        ExportStream whole;
+        whole.kind = "video";
+        whole.source = "composite";
+        whole.codec = "libx264";
+        sc.streams = {whole};
+        const ExportStatus cs = render(sc, clipsA);
+        checkf(cs.state == ExportStatus::State::Failed &&
+                   mentions(cs.error, "[left]") && mentions(cs.error, "vout"),
+               "and asking such a graph for the composite is refused, with the labels (%s)",
+               cs.error.empty() ? "it rendered, which it must not" : cs.error.c_str());
+    }
+
+    // **A second stream of the same picture at half the size**, which is a
+    // proxy beside the master and needed no graph at all: one canvas, two
+    // encoders, and the scaler each stream already had doing the resize as well
+    // as the colour. It is here because it is the other thing a per-stream size
+    // buys, and because it is the cheapest possible check that the size on a
+    // stream is not quietly the render's.
+    {
+        std::printf("\na proxy stream beside the master\n");
+
+        const std::string outX = "out/export-proxy.mp4";
+        ExportSettings sx = baseSettings(outX);
+        sx.endTime = 0.8;
+        sx.includeAudio = false;
+
+        ExportStream master;
+        master.kind = "video";
+        master.source = "composite";
+        master.codec = "libx264";
+        ExportStream proxy = master;
+        proxy.width = kW / 2;
+        proxy.height = kH / 2;
+        sx.streams = {master, proxy};
+
+        st = render(sx, clipsA);
+        checkf(st.state == ExportStatus::State::Done,
+               "a render with a proxy stream finishes (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+        if (st.state == ExportStatus::State::Done) {
+            Opened f(outX);
+            const std::vector<int> vs = f ? streamsOfKind(f.fc, AVMEDIA_TYPE_VIDEO)
+                                          : std::vector<int>();
+            checkf(vs.size() == 2, "with two video streams (%zu)", vs.size());
+            if (vs.size() == 2)
+                checkf(f.fc->streams[vs[0]]->codecpar->width == kW &&
+                           f.fc->streams[vs[1]]->codecpar->width == kW / 2 &&
+                           f.fc->streams[vs[1]]->codecpar->height == kH / 2,
+                       "one the size of the render and one half of it (%d, %dx%d)",
+                       f.fc->streams[vs[0]]->codecpar->width,
+                       f.fc->streams[vs[1]]->codecpar->width,
+                       f.fc->streams[vs[1]]->codecpar->height);
+        }
+    }
+
+    // Every way of asking for a pad that cannot work, refused where the
+    // decision was made rather than at the first frame — which for a label
+    // nobody can resolve means before a muxer has opened a file.
+    {
+        std::printf("\npads that are not there\n");
+
+        const ExportClip c = leftHalf(first, srcDuration);
+        char text[1024];
+        std::snprintf(text, sizeof(text),
+            "[0:v]trim=start=%g:end=%g,setpts=PTS-STARTPTS,scale=%d:%d,format=rgba,"
+            "split=2[m][b];[m]null[vout];[b]crop=%d:%d:0:0[left]",
+            c.inPoint, c.inPoint + c.length, kW, kH, kW / 2, kH);
+
+        ExportStream whole;
+        whole.kind = "video";
+        whole.source = "composite";
+        whole.codec = "libx264";
+
+        ExportSettings sb = baseSettings("out/export-pad-unknown.mp4");
+        sb.endTime = 0.4;
+        sb.includeAudio = false;
+        sb.filterGraph = text;
+        sb.filterInputs = {{"0:v", first, "v"}};
+        ExportStream nope;
+        nope.kind = "video";
+        nope.source = "pad:nope";
+        nope.codec = "libx264";
+        sb.streams = {whole, nope};
+        ExportStatus bs = render(sb, clipsA);
+        checkf(bs.state == ExportStatus::State::Failed && mentions(bs.error, "[nope]") &&
+                   mentions(bs.error, "[left]"),
+               "a pad nothing is called is refused, saying what there was (%s)",
+               bs.error.empty() ? "it rendered, which it must not" : bs.error.c_str());
+
+        // The same stream with no graph behind it at all. The picture comes
+        // from the timeline, so there are no pads to name and saying which is
+        // the whole of the answer.
+        ExportSettings sg2 = baseSettings("out/export-pad-nograph.mp4");
+        sg2.endTime = 0.4;
+        sg2.includeAudio = false;
+        ExportStream stray;
+        stray.kind = "video";
+        stray.source = "pad:left";
+        stray.codec = "libx264";
+        sg2.streams = {whole, stray};
+        bs = render(sg2, clipsA);
+        checkf(bs.state == ExportStatus::State::Failed && mentions(bs.error, "no graph"),
+               "and so is a pad on a render that has no graph (%s)",
+               bs.error.empty() ? "it rendered, which it must not" : bs.error.c_str());
+
+        // And a pad on a subtitle stream, which is not a narrower version of
+        // the same mistake: nothing in this binary turns a picture into cues,
+        // so there is no pad that could ever feed one.
+        ExportSettings ss2 = baseSettings("out/export-pad-subtitle.mkv");
+        ss2.endTime = 0.4;
+        ss2.format = "matroska";
+        ss2.includeAudio = false;
+        ss2.filterGraph = text;
+        ss2.filterInputs = {{"0:v", first, "v"}};
+        ExportStream cue;
+        cue.kind = "subtitle";
+        cue.source = "pad:left";
+        ss2.streams = {whole, cue};
+        bs = render(ss2, clipsA);
+        checkf(bs.state == ExportStatus::State::Failed && mentions(bs.error, "subtitle"),
+               "and a subtitle stream cannot be fed from one at all (%s)",
+               bs.error.empty() ? "it rendered, which it must not" : bs.error.c_str());
     }
 
     // ── what the render said ───────────────────────────────────────────────

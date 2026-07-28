@@ -413,6 +413,25 @@ Six things about the graph path are load-bearing:
   now, not an assumption behind it: a frame that is not exactly the canvas goes through
   the scaler, which is where a resize belonged anyway. Reachable in two clicks, from a
   node preview of anything tiny.
+- **A graph ends in as many pads as it ends in, and each of them can be a stream.**
+  `attachOutput` opens a buffersink per unconsumed output; a stream fed `pad:<label>`
+  reads one by name and is opened for the size that pad settled on, asked of the sink
+  after `avfilter_graph_config` because nothing else knows it. **Which pad is the
+  composite is a rule, not a position**: one picture pad is the canvas whatever it is
+  labelled — today's behaviour, which is what keeps every existing spec rendering — and
+  with several it is the one labelled `vout` (`aout` for the mix). Several and no `vout`
+  is not an error until something asks for the composite, and then it is refused naming
+  the labels there were, in `resolvePads()` in `ffmpeg_export.cpp` — the one place
+  holding both the stream list and the graph. **One tick advances every video sink
+  together**, in `canvasAt`, because a pad pulled at another moment is a stream out of
+  step with the picture beside it; nothing is converted until a pad is asked for. A sink
+  nobody reads is still emptied, since libavfilter holds every frame it has pushed at one
+  and the memory grows with the render — a picture pad by being pulled like any other, a
+  sound pad by being drained only as far as what is already there, because driving the
+  inputs for a stream nobody is writing would read a whole file to throw it away. The
+  resampler and the fifo are **per sink**: one fifo between two sound pads hands each
+  stream alternate blocks of the other's samples, which is a file that plays and is two
+  tracks that are each half of both.
 - **The parse is `avfilter_graph_segment_*`, not `avfilter_graph_parse2`.** They do the
   same thing; the difference is that the segment API stops between creating the filters
   and initialising them, and that gap is the only moment `-filter_hw_device` can be
@@ -464,7 +483,10 @@ a list. Four things about it are load-bearing:
   not numbered — no input index means "everything, stacked". `copy:0:1` is the
   third answer and it is an input and a stream in it: the writer branches on the
   prefix in `Writer::open` rather than growing a second list beside this one.
-  See the packet path below.
+  See the packet path below. `decode:<input>:<stream>` is the fourth and belongs
+  to subtitles; **`pad:<label>` is the fifth** and is a named output pad of the
+  filter graph — `-map [left]` — which is how one render comes to produce
+  several different pictures. See the pad-fed streams note under the graph path.
 - **The list order is the muxer's numbering.** Streams are created in list
   order and there is no second sorting pass anywhere, which is what makes
   `-metadata:s:a:1` mean the stream the UI drew second.
