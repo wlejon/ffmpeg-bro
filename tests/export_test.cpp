@@ -1225,14 +1225,20 @@ int main(int argc, char* argv[]) {
                 std::printf("        %.1fs: %.1f dB\n", at, db);
                 worst = std::min(worst, db);
             }
-            // Comfortably over forty when the two agree, and what is left is
-            // two independent x264 passes over near-identical pictures rather
-            // than any disagreement about the edit. What a real one looks like
-            // is well under twenty: a frame out of step, a crop taken from the
-            // wrong edge, or a source decoded through the wrong matrix all land
-            // there, which is why the threshold has room under it and is still
-            // nowhere near what a mistake would score.
-            checkf(worst > 34.0,
+            // **43 dB, which is the number the documents quote and the number
+            // this measures.** Over these three instants the fixture scores
+            // 43.8, 43.7 and 43.6 dB, repeatably — what is left at that level
+            // is two independent x264 passes over near-identical pictures and
+            // not any disagreement about the edit. The threshold used to be 34,
+            // which had absorbed nine decibels of slack nobody could account
+            // for: the whole value of a second render path is that it is the
+            // same render, and a check with that much room in it would sit
+            // green through a real regression. What a real one looks like is
+            // well under twenty — a frame out of step, a crop taken from the
+            // wrong edge, a source decoded through the wrong matrix — so the
+            // gap under this is still enormous. Raise it if it measures higher;
+            // do not lower it to make something pass.
+            checkf(worst > 43.0,
                    "the graph renders the same picture as the track stack (%.1f dB)", worst);
 
             // And the same sound. A graph whose `atrim` starts a beat late, or
@@ -1282,14 +1288,20 @@ int main(int argc, char* argv[]) {
                     a.advanceTo(static_cast<TimeNs>(at * 1e9));
                     b.advanceTo(static_cast<TimeNs>(at * 1e9));
                     if (!a.hasFrame() || !b.hasFrame()) { worst = -1.0; break; }
-                    worst = std::min(worst, psnr(a.currentRgba(), b.currentRgba(), kW, kH));
+                    const double db = psnr(a.currentRgba(), b.currentRgba(), kW, kH);
+                    std::printf("        %.1fs: %.1f dB\n", at, db);
+                    worst = std::min(worst, db);
                 }
-                // Higher than the cross-path threshold on purpose: these two
-                // renders composited identical frames, so the only difference
-                // left is two x264 passes over the same pictures. Anything the
-                // seek got wrong — a frame late, a keyframe short — is a
-                // different picture and lands far below.
-                checkf(worst > 40.0,
+                // **Identical, not merely close**, which is what the documents
+                // say and what this measures: 99.0 is `psnr()`'s answer for a
+                // squared error of zero, and all three instants give it. These
+                // two renders composited the very same frames and encoded them
+                // with the same encoder at the same settings, so there is
+                // nothing left for them to differ by — the threshold was 40,
+                // which is what you would write if you expected two x264 passes
+                // and would therefore have accepted a seek that changed the
+                // picture by a little.
+                checkf(worst >= 99.0,
                        "and produces the same frames as decoding from zero (%.1f dB)", worst);
             } else {
                 check(false, "both graph renders open for comparison");

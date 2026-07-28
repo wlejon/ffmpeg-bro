@@ -355,8 +355,11 @@ them to change alone:
 line. `TimelineSource` is the track stack; `GraphSource` parses a `-filter_complex` and runs
 it. **Which one runs is `ExportSettings::filterGraph` being empty or not**, and the two are
 measured against each other in `tests/export_test.cpp` — the same edit rendered both ways,
-compared as PSNR, 43 dB and holding. Do not let that check be loosened: the whole value of
-a second path is that it is the same render.
+compared as PSNR, 43 dB and holding. **The assertion is that number**, `worst > 43.0`,
+against a measurement of 43.6 that repeats to the decimal; it read 34 for a while, which is
+nine decibels of slack nobody could account for and enough room for a real regression to sit
+green in. Do not let that check be loosened: the whole value of a second path is that it is
+the same render.
 
 Four things about the graph path are load-bearing:
 
@@ -379,7 +382,8 @@ Four things about the graph path are load-bearing:
   `AVSEEK_FLAG_BACKWARD`, so it lands at or *before* what it is given and can never skip a
   frame the graph still wants; too small only costs decoding and too large is not
   reachable. `tests/export_test.cpp` renders the same graph with and without it and
-  requires the frames to be identical (99 dB), not merely close.
+  requires the frames to be identical, not merely close — 99 dB being the test's own
+  answer for a squared error of zero, and `>= 99.0` therefore meaning bit for bit.
 - **`ExportSettings::sizeFromGraph` lets the graph say how big the picture is.** Off — the
   export — a last pad that is a different size from the render is an error, because the
   writer was opened for one size and saying so plainly beats a scaler quietly resizing
