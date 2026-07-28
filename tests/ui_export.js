@@ -753,6 +753,45 @@ console.log('\nthe Write stage is the output’s stream list');
        'a tag this container has never heard of is called out, not left to write_header');
     S.streams[0].tag = '';
 
+    // **And the case that actually happens**, which `zzzz` above does not
+    // reach: `hvc1` is a real tag, right in an mp4, and meaningless in
+    // Matroska. It is the example CLAUDE.md names and the one somebody arrives
+    // at by choosing a tag on the Write stage and then changing the container —
+    // so it has to be the container that decides, not the string.
+    {
+        const codec = bro.ffmpeg.encoders.some((e) => e.id === 'libx265') ? 'libx265' : '';
+        const inMp4 = codec ? bro.ffmpeg.codecTags('mp4', codec) : [];
+        const inMkv = codec ? bro.ffmpeg.codecTags('matroska', codec) : [];
+        if (inMp4.indexOf('hvc1') >= 0) {
+            ok(inMkv.indexOf('hvc1') < 0,
+               `hvc1 is mp4 vocabulary and not Matroska's (mp4: ${inMp4.join(' ')}; ` +
+               `matroska: ${inMkv.join(' ') || 'none'})`);
+            const wasContainer = S.container, wasCodec = S.videoCodec;
+            S.container = 'mp4';
+            S.videoCodec = codec;
+            S.streams[0].tag = 'hvc1';
+            S.streams[0].codec = codec;
+            f('vcodec').dispatchEvent(new Event('change'));
+            pump(60);
+            ok(A.exporter.currentWarnings().join(' | ').indexOf('does not know') < 0,
+               'and in an mp4 it is not warned about');
+            S.container = 'matroska';
+            f('vcodec').dispatchEvent(new Event('change'));
+            pump(60);
+            ok(A.exporter.currentWarnings().join(' | ')
+                   .indexOf("matroska muxer does not know 'hvc1'") >= 0,
+               'the same tag in Matroska is refused before the render, naming both');
+            S.container = wasContainer;
+            S.videoCodec = wasCodec;
+            S.streams[0].tag = '';
+            S.streams[0].codec = '';
+            f('vcodec').dispatchEvent(new Event('change'));
+            pump(60);
+        } else {
+            console.log('  (no libx265 with an hvc1 tag in this build)');
+        }
+    }
+
     // An attachment is a row because it *is* a stream — it has an index and
     // the muxer writes it out of the stream at header time. A chapter is not,
     // which is why it lives beside the list.
@@ -1489,6 +1528,18 @@ console.log('\ntwo passes are a rate-control mode, not a switch');
        'the second reads them and writes the output');
     ok(/-passlogfile \S+/.test(lines[0]) && /-passlogfile \S+/.test(lines[1]),
        'and both name the log');
+
+    // **The bow-out.** A caller that names its own option bag has taken the
+    // passes with it, and the caller that does is the A/B comparison's lossless
+    // reference: it is `crf 0` and there is no bitrate for a second pass to
+    // spend, so a reference that quietly ran two would be measured against a
+    // different encode from the one the wipe is showing. The preview's own spec
+    // keeps them, because the candidate is the render being judged.
+    same((A.exporter.buildSpec({ videoOptions: { crf: 0, preset: 'ultrafast' } })
+              .passes || []).length,
+         0, 'a render that names its own options is one pass, whatever the mode says');
+    same((A.exporter.previewSpec({ path: 'out/x.mp4' }).passes || []).length, 2,
+         'and the candidate keeps both, because it is the encode being judged');
 
     S.rate = 'quality';
     f('vcodec').dispatchEvent(new Event('change'));
@@ -2468,6 +2519,31 @@ console.log('\na filter inserted on the graph');
         // passes.
         const heard = (p.streams || []).filter((s) => s.kind === 'audio');
         same(heard.length, 1, 'with the soundtrack the graph describes');
+    }
+
+    // **And the other outcome, which is the one that has to be said out loud.**
+    // A graph the derivation refuses does not stop the render: it goes through
+    // the internal compositor instead, which has no filter path in it at all,
+    // and what comes out is a successful file with the filters missing. That is
+    // the failure the whole lock discipline exists against, so `warnings.js`
+    // says so with the reason — and nothing asserted it. A node placed and not
+    // wired is the ordinary way to be in that state.
+    {
+        const stray = A.graph.overlay.addNode('vflip');
+        A.exporter.redraw();
+        pump(80);
+        const spec = A.exporter.buildSpec();
+        same(spec.filterGraph, undefined,
+             'a graph with a problem in it is not attached to the spec');
+        const said = A.exporter.currentWarnings().join(' | ');
+        ok(said.indexOf('would go through the internal compositor without your filters') >= 0,
+           `and the stage says the render will happen without them (${said})`);
+        ok(/vflip/.test(said), 'with the reason, which names the node it is about');
+        A.graph.overlay.removeInsert(stray.id);
+        A.exporter.redraw();
+        pump(80);
+        ok(!!A.exporter.buildSpec().filterGraph,
+           'and taking it off puts the render back on the graph path');
     }
 }
 

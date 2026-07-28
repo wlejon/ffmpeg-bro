@@ -1521,6 +1521,25 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // **And the other half of that switch, which is the export's half.** With
+    // `sizeFromGraph` off, a last pad that is a different size from the render
+    // is an *error*: the writer has already been opened for one size, and
+    // saying so plainly beats a scaler quietly resizing every frame of a render
+    // somebody is about to keep. Nothing asserted it, and the failure it guards
+    // against is invisible — a file that opens, plays, and is the wrong shape.
+    {
+        ExportSettings mismatch = baseSettings("out/export-graph-mismatch.mp4");
+        mismatch.endTime = 0.4;
+        mismatch.includeAudio = false;
+        mismatch.filterInputs = {};
+        mismatch.filterGraph = "color=c=red:s=64x64:r=25,format=rgba[vout]";
+        const ExportStatus mm = render(mismatch, {});
+        checkf(mm.state == ExportStatus::State::Failed &&
+                   mm.error.find("64x64") != std::string::npos,
+               "a graph that is not the size of the render is refused, with both sizes (%s)",
+               mm.error.empty() ? "it rendered, which it must not" : mm.error.c_str());
+    }
+
     // **A last pad smaller than the canvas the writer was opened for.**
     // `sizeFromGraph` takes the sink's size and then puts a sixteen-pixel floor
     // under it, because yuv420p has no half pixels and no encoder here will
@@ -1834,6 +1853,34 @@ int main(int argc, char* argv[]) {
         for (size_t i = 1; i < d.logs.size(); ++i)
             if (d.logs[i].seq != d.logs[i - 1].seq + 1) ordered = false;
         check(ordered, "and what survives is still consecutively numbered");
+
+        // **A question the application put to itself is not something a render
+        // said.** Two places in this binary ask libav something by trying it
+        // and letting it fail — whether this build's image2 can glob, and which
+        // hardware device types can be created — and both of those failures are
+        // logged at AV_LOG_ERROR by code that has no idea it is being
+        // interrogated. Left in the channel they colour a perfectly good
+        // render's report drawer red before anybody has pressed anything.
+        // `LogQuiet` is the guard, it is thread-local so that asking on the UI
+        // thread cannot cost the render thread its words, and until now nothing
+        // checked that it mutes anything at all.
+        {
+            const uint64_t quietFrom = d.logCursor;
+            {
+                LogQuiet quiet;
+                av_log(nullptr, AV_LOG_ERROR, "exporttest: asked and answered\n");
+            }
+            av_log(nullptr, AV_LOG_ERROR, "exporttest: said out loud\n");
+            const ReportDrain q = drainReport(quietFrom, metaFrom, kAll);
+            bool heardQuiet = false, heardLoud = false;
+            for (const auto& m : q.logs) {
+                if (m.text.find("asked and answered") != std::string::npos) heardQuiet = true;
+                if (m.text.find("said out loud") != std::string::npos) heardLoud = true;
+            }
+            check(!heardQuiet, "a line said inside a LogQuiet does not reach the channel");
+            check(heardLoud, "and the guard is over the moment it goes out of scope");
+            d = drainReport(quietFrom, metaFrom, kAll);
+        }
 
         // The half chunk 10 is built on: a filter that measures rather than
         // paints, and the numbers it hangs on every frame that goes past.
@@ -3060,8 +3107,16 @@ int main(int argc, char* argv[]) {
         const std::filesystem::path fixtures = std::filesystem::path(first).parent_path();
         const std::filesystem::path srt = fixtures / "cues.srt";
         const std::filesystem::path ass = fixtures / "cues.ass";
+        // **A skip, not a failure.** Every suite here runs standalone against
+        // any real file — that is what the standalone command lines in
+        // CLAUDE.md and README are for — and a real file is not sitting beside
+        // a `cues.srt` this repository generated. Under `ctest` the fixtures
+        // are always there and the whole section runs; pointed at somebody's
+        // footage it says what it is not doing rather than failing at it.
         const bool haveCues = std::filesystem::exists(srt) && std::filesystem::exists(ass);
-        checkf(haveCues, "the subtitle fixtures are there (%s)", srt.string().c_str());
+        if (!haveCues)
+            std::printf("  SKIP  no cues.srt/cues.ass beside %s — the subtitle sections "
+                        "want the generated fixtures\n", first.c_str());
 
         const auto sencs = availableSubtitleEncoders();
         std::string names;
