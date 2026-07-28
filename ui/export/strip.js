@@ -68,9 +68,16 @@ function paintStrip() {
     // Sized from the element, not from a number here: it is as wide as the
     // window, and a canvas drawn at one size and stretched to another is a
     // blurred one.
+    //
+    // **A zero is not a size, it is a strip nobody can see.** `prepare()` draws
+    // everything and runs for the Write stage as well as for Encode, where this
+    // is `display:none` and measures nothing — and a fallback of 420×62 is a
+    // fabricated size that the strip is then repainted at, thrown away on the
+    // way back. Waiting is what `refitStrip()` below is for.
     const box = canvas.getBoundingClientRect();
-    const w = Math.max(80, Math.round(box.width || 420));
-    const h = Math.max(30, Math.round(box.height || 62));
+    if (!(box.width > 0) || !(box.height > 0)) return;
+    const w = Math.max(80, Math.round(box.width));
+    const h = Math.max(30, Math.round(box.height));
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
@@ -139,6 +146,11 @@ function paintStrip() {
 
 /// The strip is as wide as the window, and the window is entitled to change
 /// size. Called once a frame; a repaint only happens when the size moved.
+///
+/// Width alone, because the height is 62px in the stylesheet and nothing on
+/// this stage can change it — and because this is the one thing that asks
+/// again after `paintStrip()` has stood down over a strip that was not on
+/// screen when it was first drawn.
 export function refitStrip() {
     if (!canvas) return;
     const w = Math.round(canvas.getBoundingClientRect().width);

@@ -33,7 +33,12 @@ const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     // forgotten destination list is a workspace that opens
                     // saying it will write to several places and naming none.
                     'destinations',
-                    'streams', 'metadata'];
+                    // `title` beside `metadata` for the reason it is a named
+                    // field rather than a key in it: both reach the render, and
+                    // a title carries into the next edit exactly as a language
+                    // or a comment does. Unlike `chapters`, it names nothing on
+                    // this particular timeline.
+                    'streams', 'metadata', 'title'];
 
 let fresh = true;
 

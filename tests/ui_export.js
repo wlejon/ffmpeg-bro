@@ -123,6 +123,40 @@ ok(clip.length > 0.5, `clip trimmed to ${clip.length.toFixed(2)}s for a quick re
        'an untagged stream reads as empty rather than as a word that looks like a value');
 }
 
+// ── a panel that has never been on screen measures nothing ─────────────────
+//
+// A stage this application has not shown yet has never been through layout, so
+// everything in it reports a box of zero — and the standing rule is that a
+// measurement of zero is ignored rather than laundered into a number. The
+// range strip lives on the Encode stage and `prepare()` draws it for the Write
+// stage too, so **going straight to Write** is exactly the case: a fallback of
+// 420×62 sized the canvas to something it never is, and the paint that went
+// with it was thrown away on the way to Encode.
+//
+// It has to be first in this suite, because the second visit to anything is a
+// visit to a panel that has been laid out once and keeps its box.
+
+console.log('\na panel that has never been on screen');
+{
+    const strip = el('ex-strip-c');
+    ok(strip.getBoundingClientRect().width === 0,
+       'the range strip measures nothing before its stage has ever been shown');
+    const was = `${strip.width}x${strip.height}`;
+
+    ok(A.shell.goTo('write'), 'the Write stage opens without going through Encode first');
+    pump(160);
+    same(`${strip.width}x${strip.height}`, was,
+         `and the strip is not painted at a size it never has (${strip.width}x${strip.height})`);
+
+    A.shell.goTo('encode');
+    pump(160);
+    ok(strip.width > 100 && strip.getBoundingClientRect().width > 100,
+       `it is painted the moment it is really on screen (${strip.width}x${strip.height})`);
+
+    A.shell.goTo('compose');
+    pump(80);
+}
+
 // ── the spec matches the edit ──────────────────────────────────────────────
 //
 // This is the join that matters: the renderer knows nothing about fit, zoom,
@@ -907,6 +941,63 @@ console.log('\nchoosing a muxer');
     pump(40);
 }
 
+// ── a container that holds no picture ──────────────────────────────────────
+//
+// wav, mp3 and flac are sound and nothing else, so picking one leaves the
+// render with no video encoder at all — and the rate control still has modes,
+// because a bitrate and two passes are what any encoder can be asked for. The
+// clamp that keeps the settings honest used to give up before it reached the
+// rate whenever there was no encoder to look at, so `quality` survived into a
+// control that could not offer it: a segmented row with nothing selected, no
+// slider and no bitrate field. The same "no control for the mode you are in"
+// state a stored mpeg2video used to reach, and this one needs no stored blob.
+
+console.log('\na container that holds no picture');
+{
+    const wasContainer = S.container, wasRate = S.rate;
+    S.rate = 'quality';
+    A.shell.goTo('write');
+    pump(60);
+    f('container-open').click();
+    pump(40);
+    f('fmtsearch').value = 'wav';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    const row = q('[data-muxer="wav"]');
+    ok(!!row, 'wav is in the picker');
+    row.click();
+    pump(80);
+    same(S.videoCodec, '', 'picking it leaves no video encoder — it holds no picture');
+
+    A.shell.goTo('encode');
+    pump(80);
+    const chosen = Array.prototype.slice.call(qq('[data-seg="rate"]'))
+        .filter((b) => b.className.indexOf('on') >= 0);
+    same(chosen.length, 1,
+         `the rate control has exactly one mode selected (${
+             Array.prototype.slice.call(qq('[data-seg="rate"]'))
+                 .map((b) => b.getAttribute('data-v') + (b.className.indexOf('on') >= 0 ? '*' : ''))
+                 .join(' ')})`);
+    ok(S.rate !== 'quality', `and it is not one nothing here can do (${S.rate})`);
+    ok(!!f('vbitrate') || !!f('quality'),
+       'so the control for the mode it is in is on the screen');
+
+    // Put it back where the rest of this suite expects it.
+    A.shell.goTo('write');
+    pump(60);
+    f('container-open').click();
+    pump(40);
+    f('fmtsearch').value = 'mp4';
+    f('fmtsearch').dispatchEvent(new Event('input'));
+    pump(40);
+    q('[data-muxer="mp4"]').click();
+    pump(60);
+    S.rate = wasRate;
+    same(S.container, wasContainer, 'and back to where the rest of this suite starts from');
+    A.shell.goTo('encode');
+    pump(60);
+}
+
 // ── where the render goes ──────────────────────────────────────────────────
 //
 // A destination stopped being a path and two flags. Four shapes, and the whole
@@ -1666,6 +1757,32 @@ console.log('\nwriting part of the timeline');
     S.rangeOut = 0;
 }
 
+// ── the title ──────────────────────────────────────────────────────────────
+//
+// A real field that reaches the render, and the named counterpart of
+// `settings.metadata` — which is remembered between edits. This was neither:
+// it committed without telling anything, so the command bar and the spine went
+// on describing a render that no longer matched, and it was dropped on the way
+// out. Not `changed`, because a title is metadata about the file rather than
+// anything about the picture, and throwing away a candidate render that cost
+// ten seconds over one is the division the stream list already draws.
+
+console.log('\nthe title of the file');
+{
+    A.shell.goTo('encode');
+    pump(60);
+    if (!f('title')) { f('advanced').click(); pump(80); }
+    ok(!!f('title'), 'the title is a field in the advanced column');
+    f('title').value = 'Programme one';
+    f('title').dispatchEvent(new Event('change'));
+    pump(80);
+    same(A.exporter.buildSpec().title, 'Programme one', 'and reaches the spec');
+    ok(A.command.currentCommand().indexOf('title=Programme one') > 0,
+       'the command says -metadata title=…, because it reaches the muxer');
+    ok(el('cmd-line').textContent.indexOf('Programme one') > 0,
+       'and the bar under the stage was re-said rather than left describing the old one');
+}
+
 // ── set it up and go ───────────────────────────────────────────────────────
 
 console.log('\nrendering');
@@ -1721,6 +1838,15 @@ screenshot('out/export-02-done.png');
 console.log('\nwhat came out');
 const p = bro.ffmpeg.probe(outPath);
 ok(!!p.video, 'the output probes as media with a video track');
+// Starting a render is what writes the settings down, so this is where the
+// remembered block can be read: `title` is in it, beside the metadata bag it
+// is the named counterpart of.
+{
+    let blob = {};
+    try { blob = JSON.parse(localStorage.getItem('ffmpeg-bro.export') || '{}'); } catch (e) {}
+    same(blob.title, 'Programme one',
+         'and the title is remembered for the next edit, as a codec or a language is');
+}
 ok(p.video.width === 320 && p.video.height === 180,
    `at the size that was asked for (${p.video.width}x${p.video.height})`);
 ok(Math.abs(p.video.fps - 25) < 0.01, `at the frame rate that was asked for (${p.video.fps})`);
@@ -1851,6 +1977,27 @@ console.log('\nthe A/B preview');
     pump(120);
     ok(Math.abs(cv.currentTime - held) < 1e-3,
        `and steps back to where it started (${cv.currentTime.toFixed(3)} vs ${held.toFixed(3)})`);
+
+    // **The two `<video>` elements are the decoders.** `prepare()` draws
+    // everything and runs for the Encode stage *and* for the Write stage —
+    // stepping between the two is one visit — so a stage rebuilt on every
+    // arrival cloned a fresh `tpl-pv-wipe` and started both files again from
+    // frame 0. Walking over to set a filename and back should not restart the
+    // comparison you were half way through, which is checked here while it is
+    // paused on a frame somebody went and found.
+    {
+        const at = cv.currentTime;
+        ok(at > 0.05 && cv.paused, `paused on a frame in the middle (${at.toFixed(2)}s)`);
+        A.shell.goTo('write');
+        pump(160);
+        A.shell.goTo('encode');
+        pump(160);
+        ok(q('#ex-pv-stage-host .pv-cand') === cv &&
+           q('#ex-pv-stage-host .pv-ref') === rv,
+           'the same two elements come back from the Write stage');
+        ok(Math.abs(cv.currentTime - at) < 0.05,
+           `and the picture stayed where it was (${cv.currentTime.toFixed(2)}s)`);
+    }
 
     screenshot('out/export-03b-playing.png');
     A.exporter.togglePreviewPlay();

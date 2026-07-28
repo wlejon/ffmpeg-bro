@@ -103,10 +103,18 @@ export function applyIntent(id) {
 export function clampToEncoder() {
     const codec = activeVideoCodec();
     const info = encoderInfo(codec);
-    if (!info) return;
 
+    // The rate mode first, and **outside the encoder check**. A container with
+    // no video in it — wav, mp3, flac — leaves `videoCodec` empty, and an empty
+    // codec still has rate modes: `rateModes('')` is a bitrate and two passes,
+    // because those are what every encoder can be asked for. Left on `quality`
+    // with nothing that has a CRF, the segmented control comes up with nothing
+    // selected and neither the slider nor the bitrate field is drawn — the same
+    // "no control for the mode you are in" state a stored mpeg2video used to
+    // reach, and this one needs no stored blob at all.
     const modes = rateModes(codec);
     if (modes.indexOf(settings.rate) < 0) settings.rate = modes[0] || 'bitrate';
+    if (!info) return;
 
     const q = qualityRange(codec);
     if (settings.quality < q.min || settings.quality > q.max) {

@@ -64,6 +64,10 @@ export function initExport(refs, h) {
                format: byId('ex-format-opts') }, {
         changed: after,
         tweaked: () => { invalidateCandidate(); updateSummary(); },
+        // The same third hook the stream list has, and it means the same thing:
+        // a control that changes what is *in* the file rather than what the
+        // picture looks like only re-says what will be written.
+        restated: updateSummary,
     });
     // The stream list changes what is *in* the file and not what the picture
     // looks like, so a language or a disposition must not throw away a

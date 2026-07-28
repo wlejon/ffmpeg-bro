@@ -724,8 +724,10 @@ function rateRows(codec, info) {
 
     if (settings.rate === 'quality' && modes.indexOf('quality') >= 0) {
         const q = qualityRange(codec);
+        // Held, not given an id: `rateRows()` rebuilds this on every draw, and
+        // an id on a repeatable element is the thing bro's element index cannot
+        // keep straight. Nothing looks it up anyway.
         qualityLabel = span('', 'mono dim');
-        qualityLabel.id = 'ex-qval';
         const slider = el('input', {
             'data-f': 'quality', type: 'range', min: q.min, max: q.max, value: settings.quality,
             on: { input: () => {
@@ -857,10 +859,16 @@ const COLOURS = [{ id: 'auto', label: 'auto (by height)' }, { id: 'bt709', label
                  { id: 'bt601', label: 'BT.601 (SD)' }, { id: 'bt2020', label: 'BT.2020 (wide)' }];
 
 function advancedRows(codec) {
+    // `restated`, not `changed`: a title is metadata about the file and not
+    // anything about the picture, so it must not throw away a candidate render
+    // that cost ten seconds — which is the same division the stream list's
+    // language and disposition controls already make. It did neither before,
+    // and so reached the spec without the summary or the command bar ever
+    // saying so.
     const title = el('input', {
         cls: 'wide', 'data-f': 'title', type: 'text', value: settings.title,
         placeholder: 'written as metadata',
-        on: { change: () => { settings.title = title.value; } },
+        on: { change: () => { settings.title = title.value; hooks.restated(); } },
     });
 
     return [

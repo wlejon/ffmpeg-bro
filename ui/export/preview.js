@@ -179,15 +179,35 @@ export function drawPreviewStats() {
 
 // ── drawing ────────────────────────────────────────────────────────────────
 
+/// What the stage is currently showing, so that it is rebuilt only when that
+/// changes.
+///
+/// **The two `<video>` elements are the decoders.** `put()` throws them away
+/// and a fresh `tpl-pv-wipe` starts both files again from frame 0 — and
+/// `prepare()` draws everything and runs for the Encode stage *and* for the
+/// Write stage, stepping between the two being one visit. So walking over to
+/// set a filename and back restarted the comparison you were half way through
+/// watching. `drawPreviewStats()` exists for exactly this reason on the
+/// measurement path; this is the same rule for the redraw the shell causes.
+///
+/// A busy stage is a progress bar with a percentage on it and is redrawn every
+/// frame, which is what the empty key says.
+let showing = null;
+
 export function drawPreview() {
     const busy = currentJob() === 'reference' || currentJob() === 'candidate';
     const have = preview.refReady && preview.candReady;
 
-    put(panes.stage, () => stage(busy, have));
+    const key = busy ? null
+        : `${have}|${preview.mode}|${preview.refPath}|${preview.candPath}|` +
+          `${preview.error}|${settings.previewLength}`;
+    if (key === null || key !== showing || !node.ref || !node.ref.parentNode) {
+        showing = key;
+        put(panes.stage, () => stage(busy, have));
+        if (have) attachPreviewVideos();
+    }
     put(panes.controls, () => controls(busy, have));
     put(panes.stats, () => statLines());
-
-    if (have) attachPreviewVideos();
 }
 
 function stage(busy, have) {

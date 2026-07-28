@@ -650,8 +650,13 @@ function copyRows(s, restate) {
         value: Number(s[key]) || 0, placeholder,
         on: { change: (e) => {
             s[key] = Math.max(0, Number(e.target.value) || 0);
-            drawStreams();
+            // Restated first, then redrawn. `restate` closes over the tail of
+            // the row it was made for, and `drawStreams()` has just detached
+            // it — harmless only because the redraw recomputes the same text,
+            // which is not a thing to leave lying about. `bsfRows` already
+            // does it this way round.
             restate();
+            drawStreams();
         } },
     });
 
@@ -687,7 +692,7 @@ function copyRows(s, restate) {
         out.push(div('ex-add', el('button', {
             cls: 'tiny', text: `Snap to ${land.toFixed(2)} s`, 'data-f': 'copy-snap',
             title: 'Move the in-point to the keyframe the copy would start on anyway',
-            on: { click: () => { s.copyFrom = land; drawStreams(); restate(); } },
+            on: { click: () => { s.copyFrom = land; restate(); drawStreams(); } },
         })));
     out.push(div('ex-note dim',
         `${list.times.length} keyframe${list.times.length === 1 ? '' : 's'}, from the ` +
@@ -705,8 +710,9 @@ function subNum(s, key, restate) {
         value: Number(s[key]) || 0,
         on: { change: (e) => {
             s[key] = Math.max(0, Number(e.target.value) || 0);
+            // `restate` ends in `hooks.restated()` already; saying it twice ran
+            // the whole warnings pass twice on every keystroke.
             restate();
-            hooks.restated();
         } },
     });
 }
@@ -725,7 +731,7 @@ function keyframeStrip(s, list, span0, restate) {
         'data-kf': t.toFixed(3),
         title: `${t.toFixed(2)} s`,
         style: { left: at(t) },
-        on: { click: () => { s.copyFrom = t; drawStreams(); restate(); } },
+        on: { click: () => { s.copyFrom = t; restate(); drawStreams(); } },
     }));
     return div('ex-kf-strip', [
         div('ex-kf-track', marks),
@@ -849,8 +855,8 @@ function dispositionToggles(s, restate) {
             // Written the way ffmpeg's own `-disposition` argument is, so what
             // is stored is what would be typed.
             s.disposition = on.size ? '+' + Array.from(on).join('+') : '';
-            drawStreams();
             restate();
+            drawStreams();
         } },
     })));
 }
