@@ -2387,6 +2387,40 @@ if (!media) {
         ok(!!far && far.from < cs[1].start,
            `a clip outside the window is looked at inside itself (from ${far && far.from})`);
 
+        // ── a waveform is not an animation ─────────────────────────────────
+        //
+        // `showwaves` draws the sound a column at a time, so the last frame of
+        // one of these renders is the whole waveform and every frame before it
+        // is a partial — which is why the audio tail ends in a `tpad` that
+        // clones that last frame. Looped, the finished picture is wiped back to
+        // nothing twice a second on every sound card at once, and the `tpad` is
+        // paid for and thrown away. A picture card still loops: two seconds of
+        // motion is what it is for.
+        {
+            const waveVideo = () => document.querySelector('#gr-nodes .gn-wave video');
+            const picVideo = () => {
+                for (const s of document.querySelectorAll('#gr-nodes .gn-shot')) {
+                    if ((s.getAttribute('class') || '').indexOf('gn-wave') >= 0) continue;
+                    const v = s.querySelector('video');
+                    if (v) return v;
+                }
+                return null;
+            };
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline && !(waveVideo() && picVideo())) pump(250);
+
+            const w = waveVideo(), p = picVideo();
+            if (!w) {
+                // Said out loud rather than passing quietly: a check that
+                // skipped for want of a render would look like a check.
+                console.log('  SKIP  whether a waveform loops — no sound card was ready in time');
+            } else {
+                ok(w.loop === false, 'a waveform card runs once and settles on the finished picture');
+                if (p) ok(p.loop === true, 'and a picture card still loops its couple of seconds');
+                else console.log('  SKIP  whether a picture card loops — none was ready in time');
+            }
+        }
+
         A.removeSelection && A.select(cs[1]);
         A.removeSelection && A.removeSelection();
         overlay.clear();

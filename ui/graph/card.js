@@ -387,11 +387,22 @@ export function placeSockets(node, h) {
 
 // ── the picture ────────────────────────────────────────────────────────────
 
-/// The looping couple of seconds a card shows when it is not being played.
-function showStill(pair, path) {
+/// The couple of seconds a card shows when it is not being played.
+///
+/// **A waveform runs once and stops; a picture loops.** `showwaves` draws the
+/// sound progressively, a column of samples per frame, so the last frame of one
+/// of these renders is the whole waveform and every frame before it is a
+/// partial — which is why the audio tail in `preview.js` ends with a `tpad` that
+/// clones that last frame rather than letting the render come up short. Looped,
+/// all of that is thrown away: the completed picture is on screen for an instant
+/// and then wiped back to nothing, over and over, on every sound card in the
+/// graph at once. Nobody asked those cards to animate, and a graph of them
+/// flickering is a screen nobody can read. Run once, the `tpad` does what it was
+/// put there to do and the card settles on the finished waveform.
+function showStill(pair, path, wave) {
     const v = pair.a;
     v.classList.remove('gn-off');
-    v.loop = true;
+    v.loop = !wave;
     if (v.__path === path) return;
     v.__path = path;
     v.src = path;
@@ -423,7 +434,7 @@ function shotView(key, width) {
         // front and what is in it, and putting the still back on every redraw
         // would jump the picture to the beginning of the range whenever anything
         // on this screen changed.
-        if (!preview.isPlaying(key)) showStill(pair, shot.path);
+        if (!preview.isPlaying(key)) showStill(pair, shot.path, wave);
         box.append(playButton(key));
         if (preview.isPlaying(key)) box.append(div('gn-playbar mono', span('', 'gn-clock')));
         return box;
