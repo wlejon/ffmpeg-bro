@@ -31,6 +31,24 @@
 // honest reading of the graph and the wrong thing for a clip an hour into a
 // file; when the derivation starts telling this path where each input's window
 // begins, that is where the seek belongs.
+//
+// **A graph ends in as many pads as it ends in.** One sink is opened per
+// unconsumed output, and which of them is the composite is a rule rather than a
+// position: with one video pad it is that pad whatever it is labelled — which
+// is every render written before this and every test in the suite — and with
+// several it is the one labelled `vout`, the name the derivation has always
+// given it. The rest are addressable by name, as `pad:<label>` on a stream, and
+// so is the composite: both names reach one sink, which for a picture is simply
+// the same picture read twice.
+//
+// **One tick advances every video sink together**, in `canvasAt`. They come out
+// of one graph and a pad pulled at a different moment from the canvas is a
+// stream whose frames are out of step with it. Nothing is converted until a pad
+// is actually asked for, so an unmapped sink costs a pull and no pixels — and it
+// *is* pulled: a sink nobody reads holds every frame the graph pushes at it, and
+// the memory grows with the length of the render. An unmapped sound pad is
+// drained the same way and never blocks, because driving the inputs on behalf of
+// a pad nobody is writing would read a file to throw it away.
 #pragma once
 
 #include "export_frame.h"
@@ -71,8 +89,47 @@ public:
     int outWidth() const { return settings_.width; }
     int outHeight() const { return settings_.height; }
 
-    bool hasAudio() const override { return asink_ != nullptr; }
+    bool hasAudio() const override { return aprimary_ != nullptr; }
     const Rgba& canvasAt(double t) override;
+
+    /// This tick's picture for a named pad. See `FrameSource::padAt`.
+    const Rgba* padAt(const std::string& label) override;
+    bool padMixInto(const std::string& label, float* dst, double from, int frames, int rate,
+                    int channels) override;
+
+    // ── what the graph turned out to end in ────────────────────────────────
+    //
+    // Asked by the job after `build()`, because a stream fed from a pad is
+    // opened for the size that pad settled on and nothing outside libavfilter
+    // knows what that is until the graph is configured. Every refusal that
+    // could be made from these is made there, before the writer opens a file:
+    // a label that names no pad, a picture pad in a sound stream, a composite
+    // asked of a graph that never said which pad it was.
+
+    bool hasPad(const std::string& label) const { return sinkFor(label) != nullptr; }
+    bool padIsAudio(const std::string& label) const;
+    int padWidth(const std::string& label) const;
+    int padHeight(const std::string& label) const;
+
+    /// Whether this graph says which of its pads is the composite (or the mix).
+    /// False only for a graph with several pads of that kind and none of them
+    /// labelled `vout` (or `aout`) — where the honest answer is that nobody
+    /// said, and a stream asking for the composite has to be refused by name.
+    bool hasComposite() const { return vprimary_ != nullptr; }
+    bool hasMix() const { return aprimary_ != nullptr; }
+
+    /// Every output pad of a kind, in the order the graph declared them. For a
+    /// refusal that has to say what there was instead.
+    std::vector<std::string> padLabels(bool audio) const;
+
+    /// Which pads the render is going to read by name.
+    ///
+    /// Told rather than discovered, because the difference matters before the
+    /// first frame: an unmapped sound pad is drained and thrown away on every
+    /// tick, and finding out that somebody wanted it after the first tick has
+    /// already dropped its first frames is too late. The composite and the mix
+    /// are always read and need not be named.
+    void readPads(const std::vector<std::string>& labels);
 
     /// The pool the last video pad produces into, or null for a graph that
     /// ends in system memory. Asked of libavfilter (`av_buffersink_get_
@@ -88,7 +145,12 @@ public:
     /// is why `FrameSource::exhausted` is documented as a question to ask
     /// *after* `canvasAt` — the frame that discovered it is the black one this
     /// answer exists to stop being written.
-    bool exhausted(double) const override { return videoEnded_; }
+    ///
+    /// It is about the composite, as it always was. A graph that never said
+    /// which pad that is has no canvas to run out of, so the question falls
+    /// back to every picture pad having ended — which is the same statement
+    /// about a render whose every video stream comes from a pad.
+    bool exhausted(double) const override;
 
 private:
     /// One buffersrc and the reader that fills it.
@@ -116,12 +178,75 @@ private:
         Feed& operator=(const Feed&) = delete;
     };
 
+    /// One buffersink and everything one output pad of the graph needs to
+    /// become a stream: this tick's frame, the RGBA it is converted into when
+    /// somebody asks, and — for a sound pad — its own resampler and fifo.
+    ///
+    /// **The resampler and the fifo are per sink and not shared**, which is the
+    /// whole of what telling two sound pads apart amounts to: one fifo between
+    /// them would hand each stream alternate blocks of the other's samples, and
+    /// what that writes is two tracks that are each half of both.
+    struct Sink {
+        std::string label;
+        bool audio = false;
+        /// Something reads this pad by name. False for a pad the render is not
+        /// writing, which is pulled and dropped rather than left to fill up.
+        bool mapped = false;
+        AVFilterContext* ctx = nullptr;
+        bool ended = false;
+
+        /// This tick's frame, or a scratch frame to pull sound into.
+        AVFrame* frame = nullptr;
+        /// Where a hardware frame is brought down when a pad on a card is
+        /// asked for as pixels. Per sink, because two pads can be on two
+        /// different devices and one buffer between them would swap pictures.
+        AVFrame* down = nullptr;
+
+        // video: converted on demand, so a sink nobody reads costs a pull.
+        Rgba rgba;
+        bool converted = false;
+        SwsContext* toRgba = nullptr;
+
+        // audio: whatever the pad settled on, resampled into the render's
+        // interleaved float and buffered until the job asks for a block.
+        SwrContext* swr = nullptr;
+        AVSampleFormat swrFmt = AV_SAMPLE_FMT_NONE;
+        int swrRate = 0;
+        std::vector<float> fifo;
+        size_t head = 0;
+
+        ~Sink();
+        Sink() = default;
+        Sink(const Sink&) = delete;
+        Sink& operator=(const Sink&) = delete;
+    };
+
     /// The parse, in the three steps it is made of, so a device can be handed
     /// to `hwupload` between its filter being created and being initialised.
     /// See the note above the definition.
     int parseGraph(AVFilterInOut** inputs, AVFilterInOut** outputs);
     bool attachInput(AVFilterInOut* in, std::string* err);
     bool attachOutput(AVFilterInOut* out, std::string* err);
+    /// Which sink is the composite and which is the mix. See the note above
+    /// the definition: one pad of a kind is that kind's answer whatever it is
+    /// called, and several make the name the decision.
+    void choosePrimaries();
+    const Sink* sinkFor(const std::string& label) const;
+    Sink* sinkFor(const std::string& label);
+    /// Pull one frame into every picture sink and empty every sound sink
+    /// nobody is reading. The one place the graph is advanced.
+    void tick();
+    /// One sink's frame, converted into `dst`: a row-by-row copy when it is
+    /// already RGBA at that size, the scaler when it is not, and a download
+    /// first when it is still on a card. False when there was nothing to
+    /// convert or the conversion failed, which the callers draw as black.
+    bool convertInto(Sink& s, Rgba& dst, SwsContext** scaler);
+    /// This sink's picture as RGBA at the pad's own size, converted at most
+    /// once per tick and black once the pad's branch has ended.
+    const Rgba* padPicture(Sink& s);
+    /// Add this sink's next `frames` samples into `dst`, pulling the graph as
+    /// far as it takes. The mix and a named pad are the same act.
+    void fillAudio(Sink& s, float* dst, int frames);
     /// Open the file behind `feed` and configure its buffersrc from the first
     /// frame — the formats have to be known before the graph is configured, and
     /// a decoder does not always know its own pixel format until it has decoded
@@ -132,43 +257,33 @@ private:
     bool pushSome();
     bool pushOne(Feed& feed);
     /// Pull one frame out of a sink, feeding the graph until it yields.
-    int pull(AVFilterContext* sink, AVFrame* into);
-    void takeSamples(const AVFrame* f);
-    int available() const;
+    int pull(Sink& sink, AVFrame* into);
+    /// Sound out of one sink and into its own fifo, resampled to the render's
+    /// rate and channel count on the way.
+    void takeSamples(Sink& s, const AVFrame* f);
+    int available(const Sink& s) const;
 
     ExportSettings settings_;
     AVFilterGraph* graph_ = nullptr;
-    AVFilterContext* vsink_ = nullptr;
-    AVFilterContext* asink_ = nullptr;
-    // One frame each: the two sinks are pulled from independently and a shared
-    // one would have the mixer overwrite the picture the writer is about to be
-    // handed.
-    AVFrame* vframe_ = nullptr;
-    AVFrame* aframe_ = nullptr;
+    /// One per unconsumed output pad, in the order the parse declared them.
+    std::vector<std::unique_ptr<Sink>> sinks_;
+    /// The composite and the mix, or null where the graph did not say which
+    /// pad that is. Pointers into `sinks_`, which nothing adds to after
+    /// `build()`.
+    Sink* vprimary_ = nullptr;
+    Sink* aprimary_ = nullptr;
     std::vector<std::unique_ptr<Feed>> feeds_;
 
+    /// The composite, at the render's size. Separate from the primary sink's
+    /// own buffer because the two are not always the same picture: under
+    /// `sizeFromGraph` the canvas has a sixteen-pixel floor the pad does not,
+    /// and a pad read *both* as the composite and by name is one sink asked
+    /// for two sizes.
     Rgba canvas_;
-    SwsContext* toRgba_ = nullptr;
-    /// Where a hardware frame is brought down when the compositor's question is
-    /// the one being asked of a graph that kept its pictures on the card. The
-    /// arrangement is legal and slow, and the alternative — refusing — would
-    /// mean a `_cuda` filter could not be previewed on a card in a node.
-    AVFrame* down_ = nullptr;
+    SwsContext* toCanvas_ = nullptr;
     /// `-filter_hw_device`, held for the life of the graph because every filter
     /// that declared `AVFILTER_FLAG_HWDEVICE` was handed a reference to it.
     AVBufferRef* hwDevice_ = nullptr;
-    bool videoEnded_ = false;
-
-    // Sound leaves the graph in whatever format it settled on and in frames of
-    // whatever length; the mixer wants interleaved floats at the render's rate,
-    // a block at a time. One fifo and one resampler is the whole of the
-    // difference.
-    SwrContext* swr_ = nullptr;
-    AVSampleFormat swrFmt_ = AV_SAMPLE_FMT_NONE;
-    int swrRate_ = 0;
-    std::vector<float> fifo_;
-    size_t head_ = 0;
-    bool audioEnded_ = false;
 };
 
 } // namespace ffmpegbro

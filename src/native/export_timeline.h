@@ -2,11 +2,13 @@
 //
 // This is the seam between *what to render* and *how to write it*. The job
 // above it owns a clock and a writer and knows nothing about clips; this owns
-// clips and knows nothing about encoders. Between them passes one canvas and
-// one block of samples per output frame.
+// clips and knows nothing about encoders. What passes between them, per output
+// frame, is the canvas and a block of the mix — and, for a render whose graph
+// produces more than one thing, whatever *named pads* the stream list asked
+// for besides.
 //
 // **That seam is where a node graph attaches**, and now does: `FrameSource`
-// below is the two questions written down, `TimelineSource` is the track
+// below is what the job asks written down, `TimelineSource` is the track
 // stack's answer, and `GraphSource` in export_graph.h is libavfilter's. The job
 // asks nothing else of either, which is why adding the second one left
 // `runExport` a walk over frames with one line changed.
@@ -30,11 +32,15 @@ namespace ffmpegbro {
 struct Rgba;
 class ClipSources;
 
-/// The two questions, and nothing else. Whatever answers them can be rendered.
+/// What the job asks, and nothing else. Whatever answers it can be rendered.
 ///
 /// Deliberately narrow: every widening of this is a thing the job has to know
 /// about the edit, and the job's whole claim is that it knows nothing about
-/// the edit.
+/// the edit. Three of the questions are the whole of the ordinary render — is
+/// there sound, what does the canvas look like at `t`, what does it sound like
+/// between here and the next frame — and everything below them is optional,
+/// answers "no" by default, and exists because one kind of source can say
+/// something the track stack cannot.
 class FrameSource {
 public:
     virtual ~FrameSource() = default;
@@ -62,6 +68,38 @@ public:
     /// default is "there is always more", which is the honest answer for
     /// anything that has not been taught to say otherwise.
     virtual bool exhausted(double t) const { return false; }
+
+    // ── the other things a render produces ─────────────────────────────────
+    //
+    // A filter graph can end in more than one pad, and each of them is a
+    // picture or a sound in its own right: a 6400-wide screen grab split by
+    // `crop` into two halves is two streams of the output file and neither of
+    // them is the canvas. `ExportStream::source` names one as `pad:<label>`,
+    // and these two are how the job asks for it.
+    //
+    // Optional, and false/null by default, because the track stack has no such
+    // thing — a timeline produces one canvas and one mix, and a render that
+    // asked it for a pad is a spec the job refuses long before a frame is
+    // written. Nothing that predates this changes shape.
+
+    /// This tick's picture for a named output pad, converted to RGBA.
+    ///
+    /// **Only meaningful straight after `canvasAt(t)` for the same `t`**: one
+    /// tick advances every pad together, because they come out of one graph
+    /// and pulling them at different moments would put a stream's frames out
+    /// of step with the canvas they were made beside. Black once that pad's
+    /// branch has ended, which is the convention `canvasAt` already follows;
+    /// null for a label that names no pad, which is a caller's mistake and is
+    /// refused before the render starts.
+    virtual const Rgba* padAt(const std::string& label) { return nullptr; }
+
+    /// The same as `mixInto`, for a named output pad rather than for the mix.
+    /// False when there is no such pad, so a caller can tell "no sound here"
+    /// from "no such thing".
+    virtual bool padMixInto(const std::string& label, float* dst, double from, int frames,
+                            int rate, int channels) {
+        return false;
+    }
 
     // ── the picture that never came down ───────────────────────────────────
     //

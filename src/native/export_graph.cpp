@@ -93,12 +93,21 @@ GraphSource::Feed::~Feed() {
     if (first) av_frame_free(&first);
 }
 
+/// Everything one sink owns, given back. `ctx` is the graph's and goes with it.
+GraphSource::Sink::~Sink() {
+    if (frame) av_frame_free(&frame);
+    if (down) av_frame_free(&down);
+    if (toRgba) sws_freeContext(toRgba);
+    if (swr) swr_free(&swr);
+}
+
 GraphSource::~GraphSource() {
-    if (vframe_) av_frame_free(&vframe_);
-    if (aframe_) av_frame_free(&aframe_);
-    if (down_) av_frame_free(&down_);
-    if (swr_) swr_free(&swr_);
-    if (toRgba_) sws_freeContext(toRgba_);
+    if (toCanvas_) sws_freeContext(toCanvas_);
+    // Before the graph, because each sink holds a filter context the graph owns
+    // and reading the teardown the other way round invites somebody to touch one
+    // after it has gone.
+    sinks_.clear();
+    vprimary_ = aprimary_ = nullptr;
     // The graph owns every filter in it, including the sources and sinks
     // linked in above, so this is the whole teardown.
     if (graph_) avfilter_graph_free(&graph_);
@@ -116,12 +125,8 @@ bool GraphSource::build(std::string* err) {
         return false;
     };
 
-    vframe_ = av_frame_alloc();
-    aframe_ = av_frame_alloc();
-    down_ = av_frame_alloc();
     graph_ = avfilter_graph_alloc();
-    if (!graph_ || !vframe_ || !aframe_ || !down_)
-        return fail("out of memory building the graph");
+    if (!graph_) return fail("out of memory building the graph");
 
     // `-filter_hw_device`: the device every filter in this graph that needs one
     // gets. It is what makes `hwupload` work at all — the filter takes no
@@ -155,10 +160,20 @@ bool GraphSource::build(std::string* err) {
     avfilter_inout_free(&outputs);
     if (!ok) return false;
 
-    if (!vsink_) return fail("the filter graph has no picture coming out of it");
+    bool anyVideo = false;
+    for (const auto& s : sinks_) if (!s->audio) anyVideo = true;
+    if (!anyVideo) return fail("the filter graph has no picture coming out of it");
 
     rc = avfilter_graph_config(graph_, nullptr);
     if (rc < 0) return fail("the filter graph will not run: " + avErr(rc));
+
+    choosePrimaries();
+    // Nothing below is about a pad-fed stream: those are opened for whatever
+    // size their own sink settled on, which is what `padWidth`/`padHeight` are
+    // for. What is checked here is the *canvas*, which is the one picture the
+    // render has an opinion about — and a graph that never said which pad is
+    // the composite has no canvas to disagree with.
+    if (!vprimary_) return true;
 
     // The graph decides its own output size, and the writer was opened for the
     // one in the settings. Caught here, where it can be said plainly, rather
@@ -167,7 +182,7 @@ bool GraphSource::build(std::string* err) {
     // the answer is taken. Rounded down to even because yuv420p has no half
     // pixels; a graph that lands on an odd size gets a one-pixel resize on the
     // way into the canvas rather than an encoder that refuses.
-    const int w = av_buffersink_get_w(vsink_), h = av_buffersink_get_h(vsink_);
+    const int w = av_buffersink_get_w(vprimary_->ctx), h = av_buffersink_get_h(vprimary_->ctx);
     if (settings_.sizeFromGraph) {
         settings_.width = std::max(16, w & ~1);
         settings_.height = std::max(16, h & ~1);
@@ -177,7 +192,7 @@ bool GraphSource::build(std::string* err) {
                     std::to_string(settings_.height));
     }
 
-    const AVRational r = av_buffersink_get_frame_rate(vsink_);
+    const AVRational r = av_buffersink_get_frame_rate(vprimary_->ctx);
     if (r.den > 0 && r.num > 0 && std::abs(av_q2d(r) - settings_.fps) > 0.01) {
         // Not fatal — the frames are stamped by the writer at the output rate
         // whatever arrives — but it means the graph and the render disagree
@@ -365,22 +380,33 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
     return true;
 }
 
+/// One sink per unconsumed output pad, however many there are.
+///
+/// This used to refuse the second output of a kind, which was the truth while a
+/// render was one picture and one soundtrack: there was nowhere for a second pad
+/// to go. A file is a list of streams now and `pad:<label>` is where it goes, so
+/// what is left here is bookkeeping — a buffersink, its label, and the order the
+/// parse handed them over in, which is the order `padLabels` reports and
+/// therefore the order a refusal lists them in.
 bool GraphSource::attachOutput(AVFilterInOut* out, std::string* err) {
-    const bool audio = typeOfOutput(out) == AVMEDIA_TYPE_AUDIO;
-    AVFilterContext*& slot = audio ? asink_ : vsink_;
-    if (slot) {
-        if (err) *err = std::string("the graph has two ") + (audio ? "sound" : "picture") +
-                        " outputs and a render writes one";
-        return false;
-    }
+    auto sink = std::make_unique<Sink>();
+    sink->audio = typeOfOutput(out) == AVMEDIA_TYPE_AUDIO;
+    sink->label = nameOf(out);
+    sink->frame = av_frame_alloc();
+    sink->down = av_frame_alloc();
+    if (!sink->frame || !sink->down) { if (err) *err = "out of memory"; return false; }
 
-    const char* kind = audio ? "abuffersink" : "buffersink";
-    const std::string name = std::string("out_") + (audio ? "a" : "v");
-    int rc = avfilter_graph_create_filter(&slot, avfilter_get_by_name(kind), name.c_str(),
+    const char* kind = sink->audio ? "abuffersink" : "buffersink";
+    // Numbered, because two sinks cannot share a name inside one graph and a
+    // pad's own label is not always there to use — an unlabelled last pad is
+    // the ordinary shape of every graph this application derived.
+    const std::string name = std::string("out_") + (sink->audio ? "a" : "v") +
+                             std::to_string(sinks_.size());
+    int rc = avfilter_graph_create_filter(&sink->ctx, avfilter_get_by_name(kind), name.c_str(),
                                           nullptr, nullptr, graph_);
-    if (rc >= 0) rc = avfilter_link(out->filter_ctx, out->pad_idx, slot, 0);
+    if (rc >= 0) rc = avfilter_link(out->filter_ctx, out->pad_idx, sink->ctx, 0);
     if (rc < 0) {
-        if (err) *err = std::string("cannot take the ") + (audio ? "sound" : "picture") +
+        if (err) *err = std::string("cannot take the ") + (sink->audio ? "sound" : "picture") +
                         " out of the graph: " + avErr(rc);
         return false;
     }
@@ -388,6 +414,80 @@ bool GraphSource::attachOutput(AVFilterInOut* out, std::string* err) {
     // what comes out is converted here, where the colour tags of the frame are
     // to hand. Constraining it would be the same conversion done by a filter
     // libavfilter inserts, with the tags guessed instead of read.
+    sinks_.push_back(std::move(sink));
+    return true;
+}
+
+/// Which pad is the composite, and which is the mix.
+///
+/// **One pad of a kind is that kind's answer whatever it is labelled.** That is
+/// today's behaviour written down: every graph this application has ever
+/// rendered ends in one picture pad, sometimes called `vout` and sometimes
+/// called nothing at all, and it is the canvas either way. Making the name
+/// decide would refuse every spec in the suite.
+///
+/// With several, the name is the only thing that can decide, and the name is the
+/// one the derivation has always used. A graph with several and no `vout` is not
+/// an error here — a render whose every video stream comes from a named pad is a
+/// perfectly good render — so what happens is that there is no composite, and
+/// the job refuses only if something asked for one.
+void GraphSource::choosePrimaries() {
+    for (const bool audio : {false, true}) {
+        Sink*& slot = audio ? aprimary_ : vprimary_;
+        Sink* only = nullptr;
+        Sink* named = nullptr;
+        int count = 0;
+        for (auto& s : sinks_) {
+            if (s->audio != audio) continue;
+            ++count;
+            only = s.get();
+            if (s->label == (audio ? "aout" : "vout")) named = s.get();
+        }
+        slot = count == 1 ? only : named;
+        // The composite and the mix are read whether or not anybody named them.
+        if (slot) slot->mapped = true;
+    }
+}
+
+const GraphSource::Sink* GraphSource::sinkFor(const std::string& label) const {
+    if (label.empty()) return nullptr;
+    for (const auto& s : sinks_) if (s->label == label) return s.get();
+    return nullptr;
+}
+
+GraphSource::Sink* GraphSource::sinkFor(const std::string& label) {
+    return const_cast<Sink*>(static_cast<const GraphSource*>(this)->sinkFor(label));
+}
+
+bool GraphSource::padIsAudio(const std::string& label) const {
+    const Sink* s = sinkFor(label);
+    return s && s->audio;
+}
+
+int GraphSource::padWidth(const std::string& label) const {
+    const Sink* s = sinkFor(label);
+    return s && !s->audio ? av_buffersink_get_w(s->ctx) : 0;
+}
+
+int GraphSource::padHeight(const std::string& label) const {
+    const Sink* s = sinkFor(label);
+    return s && !s->audio ? av_buffersink_get_h(s->ctx) : 0;
+}
+
+std::vector<std::string> GraphSource::padLabels(bool audio) const {
+    std::vector<std::string> out;
+    for (const auto& s : sinks_) if (s->audio == audio) out.push_back(s->label);
+    return out;
+}
+
+void GraphSource::readPads(const std::vector<std::string>& labels) {
+    for (const auto& label : labels)
+        if (Sink* s = sinkFor(label)) s->mapped = true;
+}
+
+bool GraphSource::exhausted(double) const {
+    if (vprimary_) return vprimary_->ended;
+    for (const auto& s : sinks_) if (!s->audio && !s->ended) return false;
     return true;
 }
 
@@ -435,9 +535,9 @@ bool GraphSource::pushSome() {
     return pushed;
 }
 
-int GraphSource::pull(AVFilterContext* sink, AVFrame* into) {
+int GraphSource::pull(Sink& sink, AVFrame* into) {
     for (;;) {
-        const int rc = av_buffersink_get_frame(sink, into);
+        const int rc = av_buffersink_get_frame(sink.ctx, into);
         if (rc != AVERROR(EAGAIN)) {
             // Whatever the graph measured about this frame, on its way past.
             //
@@ -445,174 +545,233 @@ int GraphSource::pull(AVFilterContext* sink, AVFrame* into) {
             // silencedetect, ebur128, signalstats, psnr, ssim — answers a
             // question rather than changing a picture, and libavfilter's way of
             // answering is to hang the numbers on the frame. Harvested here, in
-            // the one place both sinks are read from, so that adding a measuring
+            // the one place every sink is read from, so that adding a measuring
             // filter to a graph is all anybody has to do to see its numbers.
             // Costs a null check per frame when there are none, which is every
             // render that is not measuring anything.
             if (rc >= 0 && into->metadata)
-                reportFrameMetadata(sink == asink_, frameTime(sink, into), into->metadata);
+                reportFrameMetadata(sink.audio, frameTime(sink.ctx, into), into->metadata);
             return rc;
         }
         if (!pushSome()) return AVERROR_EOF;
     }
 }
 
-const Rgba& GraphSource::canvasAt(double) {
-    canvas_.resize(settings_.width, settings_.height);
-
-    const auto black = [this]() -> const Rgba& {
-        std::fill(canvas_.data.begin(), canvas_.data.end(), uint8_t{0});
-        return canvas_;
-    };
-    if (videoEnded_) return black();
-
-    av_frame_unref(vframe_);
-    if (pull(vsink_, vframe_) < 0) {
+/// One frame out of every picture sink, and the sound nobody wants thrown away.
+///
+/// **The pads move together or not at all.** They come out of one graph, and a
+/// pad pulled at a different moment from the canvas is a stream whose frames are
+/// out of step with the picture they were made beside — which is invisible in
+/// the file and obvious the moment two streams of it are played together.
+///
+/// A sink nobody reads is still emptied, and that is not tidiness: libavfilter
+/// holds every frame it has pushed at a sink until somebody takes it, so a pad
+/// left alone grows with the length of the render. What differs between the two
+/// kinds is *how*: a picture pad is pulled like any other, because the graph has
+/// to be driven forward anyway and this is where that happens; a sound pad is
+/// taken only as far as what is already there, because driving the inputs on
+/// behalf of a stream nobody is writing would read a whole file to throw it away.
+void GraphSource::tick() {
+    for (auto& sp : sinks_) {
+        Sink& s = *sp;
+        if (s.audio) {
+            if (s.mapped || s.ended) continue;
+            for (;;) {
+                const int rc = av_buffersink_get_frame(s.ctx, s.frame);
+                if (rc < 0) {
+                    if (rc != AVERROR(EAGAIN)) s.ended = true;
+                    break;
+                }
+                if (s.frame->metadata)
+                    reportFrameMetadata(true, frameTime(s.ctx, s.frame), s.frame->metadata);
+                av_frame_unref(s.frame);
+            }
+            continue;
+        }
+        // Nothing is converted here. A pad nobody asks for costs a pull and no
+        // pixels, which is what makes draining an unread sink cheap enough to
+        // be unconditional.
+        s.converted = false;
+        if (s.ended) continue;
+        av_frame_unref(s.frame);
         // The graph has run out before the render has. Black, not a freeze on
         // the last picture: that is what the track stack shows when nothing
         // covers the playhead, and a still frame would read as a stall.
-        videoEnded_ = true;
-        return black();
+        if (pull(s, s.frame) < 0) s.ended = true;
     }
+}
+
+bool GraphSource::convertInto(Sink& s, Rgba& dst, SwsContext** scaler) {
+    if (s.ended || !s.frame->data[0]) return false;
 
     // The graph kept its pictures on the card and the *compositor's* question is
     // being asked of it — which is what happens when a `_cuda` chain is
     // previewed on a node, or when the encoder at the far end is a software one.
     // Legal, and the readback is exactly the cost this whole path exists to
     // avoid; a render that wanted to avoid it takes `nativeAt` instead.
-    if (vframe_->hw_frames_ctx) {
+    if (s.frame->hw_frames_ctx) {
         std::string why;
-        AVFrame* f = vframe_;
-        if (!downloadFrame(&f, &down_, &why)) {
-            videoEnded_ = true;
+        if (!downloadFrame(&s.frame, &s.down, &why)) {
+            s.ended = true;
             reportNote(AV_LOG_ERROR, "graph", why);
-            return black();
+            return false;
         }
-        vframe_ = f;
     }
+    const AVFrame* f = s.frame;
 
-    // The copy is a fast path for a frame that is already the canvas, and the
-    // size has to be part of that test rather than assumed from it. `build()`
-    // refuses a graph whose size disagrees with the render — but only when the
-    // render is not following the graph, and under `sizeFromGraph` there is a
-    // sixteen-pixel floor, so a last pad smaller than that produces a canvas
-    // legitimately bigger than the frame. Sized from the canvas, the copy then
-    // read rows the frame does not have. A node preview of anything tiny is two
-    // clicks away from it. Anything that does not match goes through the scaler
-    // below, which is where a resize belongs anyway.
-    if (vframe_->format == AV_PIX_FMT_RGBA && vframe_->width == canvas_.width &&
-        vframe_->height == canvas_.height) {
-        const uint8_t* src = vframe_->data[0];
-        uint8_t* dst = canvas_.data.data();
-        for (int y = 0; y < canvas_.height; ++y) {
-            std::memcpy(dst, src, static_cast<size_t>(canvas_.width) * 4);
-            src += vframe_->linesize[0];
-            dst += canvas_.stride;
+    // The copy is a fast path for a frame that is already the picture asked
+    // for, and the size has to be part of that test rather than assumed from
+    // it. `build()` refuses a graph whose size disagrees with the render — but
+    // only when the render is not following the graph, and under
+    // `sizeFromGraph` there is a sixteen-pixel floor, so a last pad smaller
+    // than that produces a canvas legitimately bigger than the frame. Sized
+    // from the canvas, the copy then read rows the frame does not have. A node
+    // preview of anything tiny is two clicks away from it. Anything that does
+    // not match goes through the scaler below, which is where a resize belonged
+    // anyway.
+    if (f->format == AV_PIX_FMT_RGBA && f->width == dst.width && f->height == dst.height) {
+        const uint8_t* src = f->data[0];
+        uint8_t* out = dst.data.data();
+        for (int y = 0; y < dst.height; ++y) {
+            std::memcpy(out, src, static_cast<size_t>(dst.width) * 4);
+            src += f->linesize[0];
+            out += dst.stride;
         }
-        return canvas_;
+        return true;
     }
 
     // A graph that ends somewhere other than RGBA still renders; it just pays
     // for a conversion the writer will partly undo. Done with the frame's own
     // tags rather than swscale's default, which is BT.601 whatever the picture
     // says it is.
-    const auto fmt = static_cast<AVPixelFormat>(vframe_->format);
-    toRgba_ = sws_getCachedContext(toRgba_, vframe_->width, vframe_->height, fmt,
-                                   canvas_.width, canvas_.height, AV_PIX_FMT_RGBA,
-                                   scalerFlag(settings_.scaler), nullptr, nullptr, nullptr);
-    if (!toRgba_) return black();
-    setColorspace(toRgba_, swsSpaceFor(vframe_->colorspace, vframe_->height),
-                  vframe_->color_range == AVCOL_RANGE_JPEG ? 1 : 0, SWS_CS_ITU709, 1);
-    uint8_t* dst[4] = {canvas_.data.data(), nullptr, nullptr, nullptr};
-    int stride[4] = {canvas_.stride, 0, 0, 0};
-    if (sws_scale(toRgba_, vframe_->data, vframe_->linesize, 0, vframe_->height, dst,
-                  stride) <= 0)
-        return black();
+    const auto fmt = static_cast<AVPixelFormat>(f->format);
+    *scaler = sws_getCachedContext(*scaler, f->width, f->height, fmt, dst.width, dst.height,
+                                   AV_PIX_FMT_RGBA, scalerFlag(settings_.scaler), nullptr,
+                                   nullptr, nullptr);
+    if (!*scaler) return false;
+    setColorspace(*scaler, swsSpaceFor(f->colorspace, f->height),
+                  f->color_range == AVCOL_RANGE_JPEG ? 1 : 0, SWS_CS_ITU709, 1);
+    uint8_t* out[4] = {dst.data.data(), nullptr, nullptr, nullptr};
+    int stride[4] = {dst.stride, 0, 0, 0};
+    return sws_scale(*scaler, f->data, f->linesize, 0, f->height, out, stride) > 0;
+}
+
+const Rgba& GraphSource::canvasAt(double) {
+    tick();
+    canvas_.resize(settings_.width, settings_.height);
+
+    const auto black = [this]() -> const Rgba& {
+        std::fill(canvas_.data.begin(), canvas_.data.end(), uint8_t{0});
+        return canvas_;
+    };
+    // No pad said it was the canvas, which is a graph whose every picture goes
+    // to a named stream. There is still a canvas — the range is the range and
+    // the writer may still have a composite-fed stream on some other path — and
+    // black is what it honestly contains.
+    if (!vprimary_) return black();
+    if (!convertInto(*vprimary_, canvas_, &toCanvas_)) return black();
     return canvas_;
 }
 
+const Rgba* GraphSource::padPicture(Sink& s) {
+    // The pad's own size, which is the size the stream fed from it was opened
+    // for: `padWidth`/`padHeight` are asked of this very sink, so the writer's
+    // scaler has nothing to do beyond the colour.
+    s.rgba.resize(std::max(1, av_buffersink_get_w(s.ctx)),
+                  std::max(1, av_buffersink_get_h(s.ctx)));
+    if (s.converted) return &s.rgba;
+    s.converted = true;
+    if (!convertInto(s, s.rgba, &s.toRgba))
+        std::fill(s.rgba.data.begin(), s.rgba.data.end(), uint8_t{0});
+    return &s.rgba;
+}
+
+const Rgba* GraphSource::padAt(const std::string& label) {
+    Sink* s = sinkFor(label);
+    if (!s || s->audio) return nullptr;
+    return padPicture(*s);
+}
+
 AVBufferRef* GraphSource::hwFrames() const {
-    return vsink_ ? av_buffersink_get_hw_frames_ctx(vsink_) : nullptr;
+    return vprimary_ ? av_buffersink_get_hw_frames_ctx(vprimary_->ctx) : nullptr;
 }
 
 const AVFrame* GraphSource::nativeAt(double) {
-    if (videoEnded_) return nullptr;
-    av_frame_unref(vframe_);
-    if (pull(vsink_, vframe_) < 0) {
-        // No black frame at the end of this path, deliberately. Black in the
-        // encoder's format would have to be made in system memory and uploaded,
-        // which is the readback this path exists to avoid — done once a frame
-        // for however much of the range is left over. A render that keeps its
-        // pictures on the card ends when its graph does, and README says so.
-        videoEnded_ = true;
-        return nullptr;
-    }
-    return vframe_;
+    if (!vprimary_) return nullptr;
+    tick();
+    // No black frame at the end of this path, deliberately. Black in the
+    // encoder's format would have to be made in system memory and uploaded,
+    // which is the readback this path exists to avoid — done once a frame
+    // for however much of the range is left over. A render that keeps its
+    // pictures on the card ends when its graph does, and README says so.
+    return vprimary_->ended ? nullptr : vprimary_->frame;
 }
 
 // ── Sound ──────────────────────────────────────────────────────────────────
 
-int GraphSource::available() const {
+int GraphSource::available(const Sink& s) const {
     const int ch = std::max(1, settings_.audioChannels);
-    return static_cast<int>((fifo_.size() - head_) / ch);
+    return static_cast<int>((s.fifo.size() - s.head) / ch);
 }
 
-void GraphSource::takeSamples(const AVFrame* f) {
+void GraphSource::takeSamples(Sink& s, const AVFrame* f) {
     const auto inFmt = static_cast<AVSampleFormat>(f->format);
     const int channels = std::max(1, settings_.audioChannels);
-    if (!swr_ || inFmt != swrFmt_ || f->sample_rate != swrRate_) {
-        if (swr_) swr_free(&swr_);
+    if (!s.swr || inFmt != s.swrFmt || f->sample_rate != s.swrRate) {
+        if (s.swr) swr_free(&s.swr);
         AVChannelLayout out{};
         av_channel_layout_default(&out, channels);
-        const int rc = swr_alloc_set_opts2(&swr_, &out, AV_SAMPLE_FMT_FLT,
+        const int rc = swr_alloc_set_opts2(&s.swr, &out, AV_SAMPLE_FMT_FLT,
                                            settings_.audioSampleRate, &f->ch_layout, inFmt,
                                            f->sample_rate, 0, nullptr);
         av_channel_layout_uninit(&out);
-        if (rc < 0 || !swr_ || swr_init(swr_) < 0) return;
-        swrFmt_ = inFmt;
-        swrRate_ = f->sample_rate;
+        if (rc < 0 || !s.swr || swr_init(s.swr) < 0) return;
+        s.swrFmt = inFmt;
+        s.swrRate = f->sample_rate;
     }
 
-    const int64_t delay = swr_get_delay(swr_, settings_.audioSampleRate);
+    const int64_t delay = swr_get_delay(s.swr, settings_.audioSampleRate);
     const int maxOut = static_cast<int>(av_rescale_rnd(
         delay + f->nb_samples, settings_.audioSampleRate, f->sample_rate, AV_ROUND_UP));
     if (maxOut <= 0) return;
 
     // Slack past the samples asked for — see kSwrSlack in export_frame.h.
-    const size_t base = fifo_.size();
-    fifo_.resize(base + static_cast<size_t>(maxOut) * channels + kSwrSlack);
-    auto* dst = reinterpret_cast<uint8_t*>(fifo_.data() + base);
-    const int written = swr_convert(swr_, &dst, maxOut,
+    const size_t base = s.fifo.size();
+    s.fifo.resize(base + static_cast<size_t>(maxOut) * channels + kSwrSlack);
+    auto* dst = reinterpret_cast<uint8_t*>(s.fifo.data() + base);
+    const int written = swr_convert(s.swr, &dst, maxOut,
                                     const_cast<const uint8_t**>(f->extended_data),
                                     f->nb_samples);
-    fifo_.resize(base + static_cast<size_t>(std::max(0, written)) * channels);
+    s.fifo.resize(base + static_cast<size_t>(std::max(0, written)) * channels);
 }
 
-/// The rate and channel count are the settings' — the graph was configured for
-/// them and the job asks with them — so the parameters that say so again are
-/// not read. One place decides what the sound of a render is.
-void GraphSource::mixInto(float* dst, double, int frames, int, int) {
-    if (!asink_) return;
+/// One sound pad's next `frames` samples, added into `dst`.
+///
+/// **The resampler and the fifo are the sink's**, which is the whole of what
+/// having several sound pads costs: two streams read at the same moment are two
+/// positions in two buffers, and one buffer between them would hand each of them
+/// alternate blocks of the other's sound.
+void GraphSource::fillAudio(Sink& s, float* dst, int frames) {
     const int channels = std::max(1, settings_.audioChannels);
 
     int done = 0;
     while (done < frames) {
-        if (available() == 0) {
-            if (audioEnded_) break;
-            av_frame_unref(aframe_);
-            if (pull(asink_, aframe_) < 0) { audioEnded_ = true; break; }
-            takeSamples(aframe_);
+        if (available(s) == 0) {
+            if (s.ended) break;
+            av_frame_unref(s.frame);
+            if (pull(s, s.frame) < 0) { s.ended = true; break; }
+            takeSamples(s, s.frame);
             continue;
         }
-        const int n = std::min(frames - done, available());
-        const float* src = fifo_.data() + head_;
+        const int n = std::min(frames - done, available(s));
+        const float* src = s.fifo.data() + s.head;
         const int count = n * channels;
         for (int i = 0; i < count; ++i) dst[done * channels + i] += src[i];
-        head_ += static_cast<size_t>(count);
+        s.head += static_cast<size_t>(count);
         done += n;
-        if (head_ >= 65536) {
-            fifo_.erase(fifo_.begin(), fifo_.begin() + static_cast<long>(head_));
-            head_ = 0;
+        if (s.head >= 65536) {
+            s.fifo.erase(s.fifo.begin(), s.fifo.begin() + static_cast<long>(s.head));
+            s.head = 0;
         }
     }
 
@@ -622,6 +781,22 @@ void GraphSource::mixInto(float* dst, double, int frames, int, int) {
     const size_t total = static_cast<size_t>(frames) * channels;
     for (size_t i = 0; i < total; ++i)
         dst[i] = dst[i] < -1.0f ? -1.0f : (dst[i] > 1.0f ? 1.0f : dst[i]);
+}
+
+/// The rate and channel count are the settings' — the graph was configured for
+/// them and the job asks with them — so the parameters that say so again are
+/// not read. One place decides what the sound of a render is.
+void GraphSource::mixInto(float* dst, double, int frames, int, int) {
+    if (!aprimary_) return;
+    fillAudio(*aprimary_, dst, frames);
+}
+
+bool GraphSource::padMixInto(const std::string& label, float* dst, double, int frames, int,
+                             int) {
+    Sink* s = sinkFor(label);
+    if (!s || !s->audio) return false;
+    fillAudio(*s, dst, frames);
+    return true;
 }
 
 } // namespace ffmpegbro

@@ -123,6 +123,22 @@ struct ExportStream {
     /// growing a second list beside this one. Such a stream reaches no encoder
     /// at all: its packets come out of a demuxer and go into the muxer, which
     /// is what makes a rewrap instant and a cut lossless. See export_copy.h.
+    ///
+    /// **And `pad:<label>` is a named output pad of the filter graph**, which is
+    /// how one render comes to produce several different pictures: a wide screen
+    /// grab cut in two by `crop`, a proxy beside a master, a waveform beside the
+    /// sound it is of. It is `-map [left]` written down, and the label is
+    /// libavfilter's own — the text between the brackets at the end of a chain,
+    /// verbatim, because inventing a second vocabulary for it would be a name to
+    /// keep in step with the graph.
+    ///
+    /// The composite and the mix are the pads the graph did not have to name:
+    /// with one picture pad it *is* the composite whatever it is labelled, and
+    /// with several it is the one labelled `vout` (`aout` for sound). So a graph
+    /// with two pads and a render that wants the canvas has to say which, and a
+    /// spec that does not is refused naming the labels there were. Nothing that
+    /// predates this changes: one pad in, one pad out, and `composite` still
+    /// means it.
     std::string source;
 
     /// The span of the input a copied stream takes, in the input's own seconds.
@@ -180,6 +196,19 @@ struct ExportStream {
 
     int crf = -1;                   // video: <0 takes ExportSettings::crf
     int bitrateKbps = 0;            // 0 takes the render's, per kind
+
+    /// How big this stream's picture is. 0 is the render's, which is what every
+    /// stream fed from the composite has always been.
+    ///
+    /// Two things want it. A stream fed from a graph pad is whatever size that
+    /// pad settled on and nothing outside libavfilter knows what that is, so the
+    /// job fills these in from the sink once the graph is configured — leaving
+    /// them at 0 for a `pad:` stream means "ask the graph", not "the render's".
+    /// And a second composite-fed stream at half the size is a proxy beside the
+    /// master, which is the same one canvas through two encoders and costs
+    /// nothing but the scale it was already doing.
+    int width = 0;
+    int height = 0;
     std::string preset;             // empty takes the render's
     std::string pixelFormat;        // empty takes the render's
     int sampleRate = 0;             // audio: 0 takes the render's
@@ -538,6 +567,21 @@ struct ExportSettings {
     // would write a file of the wrong size rather than refusing to.
     bool sizeFromGraph = false;
 };
+
+/// Is this stream fed by a named output pad of the filter graph, and which?
+///
+/// Here rather than beside the graph because it is a fact about the *spec* —
+/// three files ask it and none of them wants libavfilter's headers for the
+/// question. `isCopySource` and `isDecodeSource` live with the machinery that
+/// answers them because each of those has machinery; this one is a prefix.
+inline bool isPadSource(const std::string& source) {
+    return source.rfind("pad:", 0) == 0;
+}
+
+/// The label between the brackets, or "" for anything that is not a pad source.
+inline std::string padLabelOf(const std::string& source) {
+    return isPadSource(source) ? source.substr(4) : std::string();
+}
 
 /// The streams this render will actually write, with every default filled in.
 ///
