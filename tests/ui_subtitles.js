@@ -288,6 +288,51 @@ const track = back.streams.find((s) => s.kind === 'subtitle');
 ok(!!track, 'the file has a subtitle stream in it');
 same(track && track.codec, 'mov_text', 'written as mov_text, which is what mp4 holds');
 
+// ── and a rewrap keeps them ────────────────────────────────────────────────
+//
+// `Rewrap <file>` used to write a row for every video and audio stream and
+// silently leave the subtitle track behind — a shortcut that *succeeds* and
+// hands back a file that is not the one it was asked for, which is the worst
+// outcome this stage has. It writes a `copy:` row for the cues too now, which
+// is the honest first answer for a shortcut that deliberately leaves the
+// container alone: the packets that are already there, on an ordinary row that
+// can be flipped to `convert` if the target will not hold them.
+
+console.log('\na rewrap keeps the cues');
+{
+    A.shell.goTo('sources');
+    pump(60);
+    type(el('src-path'), outPath);
+    click(el('src-add'));
+    pump(120);
+    const made = A.inputs.inputs[A.inputs.inputs.length - 1];
+    ok(!!made.probe && made.probe.streams.some((s) => s.kind === 'subtitle'),
+       'the file just written is opened as an input, cues and all');
+
+    A.shell.goTo('write');
+    pump(80);
+    const button = q(`#ex-streams [data-rewrap="${made.id}"]`);
+    ok(!!button, 'and the stage offers to rewrap it');
+    click(button);
+    pump(80);
+
+    const made2 = A.exporter.buildSpec().streams;
+    ok(made2.every((s) => /^copy:/.test(s.source)),
+       `every row of a rewrap is still a copy (${made2.map((s) => s.source).join(' ')})`);
+    const cue = made2.find((s) => s.kind === 'subtitle');
+    ok(!!cue, 'including one for the subtitle track, which used to be dropped');
+    ok(cue && /^copy:/.test(cue.source),
+       `carried rather than converted (${cue && cue.source})`);
+    ok(commandText().indexOf('-c:s copy') >= 0 ||
+       /-c:s:\d+ copy/.test(commandText()),
+       'and the command copies it');
+
+    A.exporter.currentSettings().streams = A.exporter.defaultStreams();
+    A.exporter.currentSettings().audio = true;
+    A.exporter.redraw();
+    pump(60);
+}
+
 // ── burned in ──────────────────────────────────────────────────────────────
 
 console.log('\nburned into the picture');

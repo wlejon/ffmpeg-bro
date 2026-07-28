@@ -8,8 +8,8 @@
 // timeline without any of them being transcoded first.
 
 import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
-         nextClipAfter, sourceTime, resolveOverlaps, onChange, changed, select,
-         selectMany, selectFollow, isSelected, splitClip, trackCount,
+         resolveOverlaps, onChange, changed, select,
+         selectMany, isSelected, splitClip, trackCount,
          applyInput, clipsOf } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as assemble from './sequence.js';
@@ -38,7 +38,7 @@ import * as shell from './shell.js';
 import * as capture from './capture.js';
 import { initSources, drawSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
-         applyAudio, applyAudioAll, tick as tickTransport } from './transport.js';
+         applyAudioAll, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
 import * as report from './report.js';
 

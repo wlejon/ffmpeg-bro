@@ -145,12 +145,26 @@ export function inPointNote(row) {
 /// `copy:` sources, and everything about them can be read, changed and undone on
 /// the rows themselves afterwards. That is the same rule the Report drawer's
 /// measurement shortcuts follow — the node they add is an ordinary node.
+///
+/// **Cues are carried too, and it is a copy that carries them.** A rewrap that
+/// silently left the subtitle track behind was handing back a file that is not
+/// the one it was asked for — the worst outcome this stage has, because it
+/// *succeeds*. Written as `copy:` like everything else here rather than as the
+/// `decode:` a fresh subtitle row would default to: a rewrap deliberately leaves
+/// the container alone, so the honest first answer is the packets that are
+/// already there, and a container that will not hold that codec is refused by
+/// name with the row still on the screen to be flipped to `convert`.
+///
+/// `span` is the in/out point every row is cut at, and every caller passes null.
+/// It is the seam for a copy that follows the timeline, which README lists as
+/// not built: the renderer takes `copyFrom`/`copyTo` per row and nothing here
+/// yet knows how to turn a trimmed clip into them.
 export function rewrapRows(inputIndex, newId, span) {
     const input = inputs[inputIndex];
     if (!input || !input.probe) return [];
     const rows = [];
     for (const s of input.probe.streams) {
-        if (s.kind !== 'video' && s.kind !== 'audio') continue;
+        if (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'subtitle') continue;
         rows.push({
             id: newId(),
             kind: s.kind,

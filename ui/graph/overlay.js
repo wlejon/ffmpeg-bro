@@ -374,13 +374,6 @@ export function setPin(key, x, y) {
     changed('pin');
 }
 
-export function unpin(key) {
-    if (!key || !state.pins[key]) return false;
-    delete state.pins[key];
-    changed('pin');
-    return true;
-}
-
 export function pinCount() { return Object.keys(state.pins).length; }
 
 /// Give the whole graph back to the layout.
@@ -574,6 +567,13 @@ export function restore() {
     } catch (e) { /* first run, or a blob from an older shape */ }
 }
 
+/// **The whole state, including the input nodes `restore()` will refuse to put
+/// back.** That looks like waste and is not: those records are the only surviving
+/// evidence of which ids were handed out, and `restore()` reads them for exactly
+/// that — it scans them into `seq` so a node made next run cannot be issued an id
+/// the blob still mentions, and it uses them to find the `pins` and `sizes` that
+/// belonged to them and delete those too. Write only what comes back and the
+/// reader loses the list it cleans up from. See the note beside the `dropped` set.
 export function remember() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); }
     catch (e) { /* not fatal: the graph still runs, it just will not be there next time */ }

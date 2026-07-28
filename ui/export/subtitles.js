@@ -25,8 +25,15 @@
 // filter's arguments with `:` and separates filters with `,`, so a Windows path
 // with a drive letter in it goes into `subtitles=` unusable: libavfilter
 // complains about an option called `/media/cues` and nothing in that message
-// mentions the colon. One function, used by the graph and by the command bar,
-// so the printed command and the render cannot escape it differently.
+// mentions the colon.
+//
+// One function, and it is called at the moment a node is *made* rather than at
+// the moment one is printed — `ui/sources.js` is its only importer, for the `As
+// a filter` line and for `burnIn()`. That is deliberate: what is stored on the
+// node is the escaped string, so the graph, the render and the command bar are
+// all reading one value that was escaped once. A second call in `command.js`
+// would be a second escaping, and two escapings are how a printed command comes
+// to differ from the render it claims to describe.
 
 import { inputs } from '../inputs.js';
 import { muxerInfo } from './capabilities.js';
@@ -34,10 +41,6 @@ import { muxerInfo } from './capabilities.js';
 /// Every subtitle encoder this build links. Discovered rather than named — see
 /// `availableSubtitleEncoders` — so a build that gains one gains it here.
 export const subtitleEncoders = () => (bro.ffmpeg.subtitleEncoders || []);
-
-export function subtitleInfo(id) {
-    return subtitleEncoders().find((e) => e.id === id) || null;
-}
 
 /// `decode:1:0` → `{ input: 1, stream: 0 }`, or null.
 export function parseDecode(source) {
@@ -135,12 +138,6 @@ export function defaultSubtitleCodec(container) {
 
 export const holdsSubtitles = (container) => subtitleCodecsOf(container).length > 0;
 
-/// Which encoder a subtitle row comes to: its own, or the container's.
-export function subtitleCodecOf(row, container) {
-    if (row && row.codec) return row.codec;
-    return defaultSubtitleCodec(container);
-}
-
 // ── burning one into the picture ───────────────────────────────────────────
 
 /// A path as a filter argument has to be written.
@@ -174,32 +171,11 @@ export function filterPath(path) {
     return `'${out}'`;
 }
 
-/// Is this a file the `subtitles` filter can read? libavformat's own answer:
-/// the demuxers whose name says subtitle, plus the extensions they declare.
-/// Nothing is written down here for the reason nothing else is — a build with
-/// another subtitle demuxer in it reads another kind of file.
-export function isSubtitlePath(path) {
-    const m = /\.([A-Za-z0-9]+)$/.exec(String(path || ''));
-    if (!m) return false;
-    return subtitleExtensions().indexOf(m[1].toLowerCase()) >= 0;
-}
-
-let extensions = null;
-
-/// Every extension a subtitle demuxer in this build declares.
-///
-/// Read off `bro.ffmpeg.demuxers` rather than listed, and matched by the
-/// demuxer being one whose *muxer* counterpart writes subtitles — which is the
-/// only question libavformat can be asked that means "this file is subtitles".
-/// A container that also holds pictures (mp4, Matroska) is deliberately not in
-/// it: dropping one of those is dropping a video.
-function subtitleExtensions() {
-    if (extensions) return extensions;
-    const subs = new Set();
-    for (const m of (bro.ffmpeg.muxers || [])) {
-        if (!m.defaultSubtitle || m.defaultVideo || m.defaultAudio) continue;
-        for (const e of m.extensions || []) subs.add(String(e).toLowerCase());
-    }
-    extensions = Array.from(subs);
-    return extensions;
-}
+// There was an `isSubtitlePath(path)` here, over a list of extensions built by
+// asking libavformat which muxers declare a subtitle codec and neither a video
+// nor an audio one — so mp4 and Matroska were correctly not in it, because
+// dropping one of those is dropping a video. Nothing ever called it, and the
+// reason is worth keeping: `inputs.js`'s `kindOf()` answers the same question
+// from the *probe*, and an input whose every stream is subtitles is a subtitle
+// file whatever it happens to be called. Asking the file beats asking its name
+// wherever there is a file to ask.

@@ -565,11 +565,15 @@ codec-agnostic. Six things here are load-bearing:
   nothing for the general case. Note the windows are per tap all the way down:
   a packet past the end of the first row's span can still be inside the
   second's.
-- **A copied audio stream is not the mix.** `outputStreams()` drops audio streams
-  on a silent timeline and must not drop this one; `Writer::hasAudio()` reports
-  only mix-fed streams, or a render would decode every clip's sound to hand it to
-  nobody. Both are one-line exceptions and both are load-bearing: "replace the
-  audio" and "extract the soundtrack" are impossible without them.
+- **A copied audio stream is not the mix**, and the two one-line exceptions that
+  say so are not the same kind of claim. `outputStreams()` drops audio streams on
+  a silent timeline and must not drop a copied one: that one is **correctness**,
+  and without it "replace the audio" and "extract the soundtrack" write a file
+  with no streams in it. `Writer::hasAudio()` reporting only mix-fed streams is a
+  **performance** guard — mutation-tested, so state it as one: `writeAudio` skips
+  a copied stream itself, so counting one costs a decode of every clip's sound on
+  behalf of a stream that will never ask for a sample, and changes nothing that
+  is written. Both are worth keeping; only the first is worth a test.
 - **A codec named on a copied stream is an error.** There is no encoder, so it
   would be a setting that silently did nothing — the failure every option bag in
   this repo is written against. Likewise `avformat_query_codec` returning a
@@ -1137,8 +1141,10 @@ all in `availableFilters()`), and `GraphSource` parses whatever it is given. The
 is `ui/export/subtitles.js`, which owns `filterPath()` — the escaping — because a
 filtergraph separates a filter's arguments with `:` and a Windows drive letter therefore
 makes `subtitles=` unusable with an error message that names half a path and never
-mentions the colon. One function, used by the Sources panel, the burn-in shortcut and
-the command bar.
+mentions the colon. One function, called at the moment a node is *made* — the Sources
+panel's `As a filter` line and the burn-in shortcut — so that what is stored on the node
+is one string escaped once, which the graph, the render and the command bar then all
+read verbatim.
 
 **Four things reach the output that are not options of an encoder or of a muxer**, and
 each one needed a named field rather than a key in a bag. They are worth knowing as a
@@ -1794,8 +1800,11 @@ about them:
   **The muxer picker lives in `form.js`'s `outputRows()`, drawn into `#ex-dest` on the
   Write stage**, with the muxer's own option table in `#ex-format-opts` beside it — the
   same relationship the encoder's advanced column has to the settings form, and the same
-  rows (`bagRows`/`optionRow` take the bag now, so the encoder's `extraVideo` and the
-  muxer's `extraFormat` are one mechanism). It is the filter palette's shape rather than
+  rows (`bagRows`/`optionRow` take the bag now, so the encoder's `extraVideo`, the audio
+  encoder's `extraAudio` and the muxer's `extraFormat` are one mechanism —
+  `extraAudio` was declared, persisted and read on every render by `audioOptions()` with
+  nothing anywhere writing to it, which made the audio encoder the one bag in this
+  application with no column). It is the filter palette's shape rather than
   a `<select>`, because 182 entries is the palette's problem one stage later: a statement
   of what is chosen, a search over name, long name and extension, and facets that are
   each a query (`fits` is `avformat_query_codec`, `stills`/`noFile`/`device` are flags).
@@ -1876,6 +1885,14 @@ about them:
     ten seconds. Which is also why the detail's fields commit on `change` and rewrite
     the row's tail in place rather than redrawing the list under the caret — the same
     build/measure split the range strip and the graph cards use.
+    **The path field on the same stage is the same distinction**, and was on the wrong
+    side of it: every destination commit ran `invalidateCandidate()`, so typing a
+    filename discarded a candidate render and the PSNR numbers under the wipe — which
+    is exactly what somebody walks over to the Write stage to do, usually straight
+    after looking at the comparison. `referenceKey()` already leaves the path out. The
+    one exception is `image2`, where the extension names a *codec* rather than a
+    container, so `followExtension()` really can change the encoder; asking whether it
+    did is the whole test, since nothing else in that handler can.
 
 - `export/copy.js` — **the decision to copy a stream rather than encode it**, and
   where a copy can start. `parseCopy`/`copySource` are the one place that reads and
@@ -1905,6 +1922,14 @@ about them:
     shortcuts follow, where what you get is an ordinary node on the graph. It
     deliberately leaves the container alone: which muxer to write is the whole of
     the remaining decision and it is taken on its own control a foot away.
+    **It carries the cues too**, as `copy:` like everything else it writes — it
+    used to take the video and the audio and silently leave the subtitle track
+    behind, which is a shortcut that *succeeds* while handing back a file that is
+    not the one it was asked for. `copy:` and not the `decode:` a fresh subtitle
+    row would default to, because a rewrap is not changing the container and the
+    honest first answer is the packets that are already there; a container that
+    will not hold them is refused by name with the row still on the screen to be
+    flipped to `convert`.
 
   `ui/command.js` grew an input *plan* for this. A `-map` counts input files on the
   command line and the graph's `[0:v]` counts the same list, so a copied input has to
@@ -1939,24 +1964,29 @@ about them:
 
   Four things here are load-bearing:
 
-  - **`filterPath()` is the escaping, and it lives here because three callers need
-    it.** A filtergraph separates a filter's arguments with `:` and its filters with
-    `,`, so `C:/media/cues.srt` reaches libavfilter as a filter option called `C` and
-    the complaint names half a path without ever mentioning the drive letter. The
-    Sources panel, the `Burn it into the picture` shortcut and `ui/command.js` all
-    call it, so the printed command and the render cannot escape differently. The
-    same rule the Sources stage already recorded for `movie=`.
+  - **`filterPath()` is the escaping, and it is called where a node is made rather
+    than where one is printed.** A filtergraph separates a filter's arguments with `:`
+    and its filters with `,`, so `C:/media/cues.srt` reaches libavfilter as a filter
+    option called `C` and the complaint names half a path without ever mentioning the
+    drive letter. `ui/sources.js` is its only importer — the `As a filter` line and
+    `burnIn()` — and what goes onto the node is the escaped string, so the graph, the
+    render and `ui/command.js` all read one value that was escaped once. A second call
+    in the printer would be a second escaping, which is how a printed command comes to
+    differ from the render it describes. The same rule the Sources stage already
+    recorded for `movie=`.
   - **Burning in is a filter and stays one.** `burnIn()` in `sources.js` calls
     `overlay.insert('composite/after-overlay', 'subtitles', …)` and goes to the Graph
     stage — an ordinary node, printed by the command bar, movable and deletable. The
     rule `measure.js`'s offers follow: a shortcut that produced something you
     could not then find is worse than no shortcut.
-  - **`subtitleExtensions()` asks libavformat.** Which files are subtitles is the
-    muxers that declare a subtitle codec and neither a video nor an audio one, so
-    mp4 and Matroska are correctly *not* in it — dropping one of those is dropping a
-    video. `inputs.js`'s `kindOf()` answers the same question from the probe instead,
-    which is better where there is one: an input whose every stream is subtitles is a
-    subtitle file whatever it is called.
+  - **Which files are subtitles is asked of the *probe*, not of the name.**
+    `inputs.js`'s `kindOf()` is the answer: an input whose every stream is subtitles
+    is a subtitle file whatever it happens to be called. There was a second answer
+    here — an `isSubtitlePath()` over the extensions of every muxer that declares a
+    subtitle codec and neither a video nor an audio one, which correctly left out mp4
+    and Matroska because dropping one of those is dropping a video — and nothing ever
+    called it. It is gone; the note stays, because the list it built is the right
+    answer for the one case there is no file to ask, and somebody will want it again.
   - **The viewer cannot show a soft track and `warnings.js` says so.** There is no
     subtitle path in playback — the same structural reason there is no filter path —
     so the honest move is the sentence, not an overlay that would then disagree with

@@ -159,8 +159,6 @@ function blobOf(messages, filter, job) {
         .join('\n');
 }
 
-const numeric = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
-
 /// The last value of a series, as a number, or null.
 function lastOf(series, key) {
     const s = series.get ? series.get(key) : null;

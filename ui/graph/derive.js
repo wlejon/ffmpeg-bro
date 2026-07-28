@@ -40,7 +40,7 @@
 // right is worse than no graph, because the whole reason to show one is that it
 // can be taken somewhere else and run.
 
-import { makeGraph, byKey, keyOf } from './model.js';
+import { makeGraph, byKey } from './model.js';
 import { padsOf, isSource } from './filters.js';
 import { problems } from './check.js';
 
@@ -368,6 +368,18 @@ function applyOverlay(g, points, ov, overrides) {
         // Not an error and not something to throw away: a clip trimmed out of
         // the render range takes its insert points with it, and the node comes
         // back when the clip does.
+        //
+        // **And, unlike a stranded wire, not reported either** — which is the
+        // one place in this file that departs from "keep what you could not
+        // place and say so", so it is worth being explicit about why. A wire
+        // whose pad stopped existing leaves an *input pad empty*: the graph on
+        // screen is one libavfilter refuses, the person has to put the count
+        // back by hand, and rendering it as though the connection had never
+        // been made would be a different render. An insert whose anchor is out
+        // of range adds no node at all — there is nothing wrong with the graph
+        // that is drawn, nothing to act on, and the state comes back on its own
+        // the moment the range or the timeline includes that clip again.
+        // Reported, it would fire on every drag of the range handles.
         if (!point) continue;
         const after = g.node(point.at);
         if (!after) continue;

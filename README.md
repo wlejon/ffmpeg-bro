@@ -1383,11 +1383,13 @@ through the option column:
   does. Off by default: a range is a decision somebody made, and quietly writing
   less of it than was asked for is the wrong half of the trade.
 
-**Every option the encoder has** is available under Advanced. The list is
-`av_opt_next` over the encoder's `AVClass` — name, type, range, default, help
-text and named values, straight out of libavcodec — with a search box over it.
-x264 reports 48 options here, x265 many more. Nothing about them is written
-down in this repo, so an ffmpeg upgrade that adds an option adds it to the app.
+**Every option the encoder has** is available under Advanced — both encoders,
+the picture's and the sound's, in a column each with a search of its own. The
+list is `av_opt_next` over the encoder's `AVClass` — name, type, range, default,
+help text and named values, straight out of libavcodec — with a search box over
+it. x264 reports 48 options here, x265 many more, `aac` 82. Nothing about them
+is written down in this repo, so an ffmpeg upgrade that adds an option adds it
+to the app.
 
 This works because there is no private path from the controls to the encoder:
 a Quality slider produces `{crf: 20}`, the raw editor produces `{crf: 20}`, and
@@ -1739,10 +1741,14 @@ nothing is decoded:
 | **Extract** | one stream on its own |
 
 `Rewrap <file>` under the list is the short way to all four: it fills the list
-with one copied row per stream of that input. **It is a shortcut and not a
-mode** — what it leaves behind is ordinary rows with ordinary sources, so
-everything it decided is on the screen and can be changed or undone a row at a
-time. Nothing on this stage behaves differently afterwards.
+with one copied row per stream of that input — picture, sound and cues alike.
+**It is a shortcut and not a mode** — what it leaves behind is ordinary rows
+with ordinary sources, so everything it decided is on the screen and can be
+changed or undone a row at a time. Nothing on this stage behaves differently
+afterwards. It leaves the container alone, which is the whole of the remaining
+decision and is taken on its own control a foot away; a subtitle track the new
+container will not hold is refused by name, with the row still there to be
+switched from carrying it to converting it.
 
 **A copy can only start at a keyframe**, and that is the one cost worth knowing
 about the whole packet path. Open a copied row and the keyframes are drawn on

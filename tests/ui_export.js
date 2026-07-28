@@ -508,6 +508,61 @@ if (aqOption()) {
 f('optsearch').value = '';
 f('optsearch').dispatchEvent(new Event('input'));
 pump(40);
+
+// ── and the same column for the audio encoder ──────────────────────────────
+//
+// `settings.extraAudio` was declared, persisted and read on every render by
+// `audioOptions()`, and nothing anywhere wrote to it: the audio encoder was the
+// one option bag in this application with no column. Every other one has one —
+// the video encoder's beside it, the muxer's on the Write stage, the demuxer's,
+// the protocol's and the decoder's on Sources.
+//
+// Its own search box, because the term belongs to the *list*: `opttable.js`
+// keys it by the column's name so that two columns cannot filter each other.
+{
+    ok(A.exporter.currentSettings().audioCodec === 'aac',
+       'the audio encoder is the one the preset chose');
+    ok(!!f('aoptsearch'), 'the audio encoder has an option column of its own');
+    ok(f('aoptsearch') !== f('optsearch'),
+       'and its own search, so the two columns do not filter each other');
+
+    f('aoptsearch').value = 'aac_coder';
+    f('aoptsearch').dispatchEvent(new Event('input'));
+    pump(60);
+    // Re-queried each time: setting an option redraws the form, so a reference
+    // held across that is a reference to an element no longer on screen.
+    const coder = () => el('ex-advanced').querySelector('[data-opt="aac_coder"]');
+    ok(!!coder(), 'searching it finds an option that is aac’s and not x264’s');
+    if (coder()) {
+        const choices = bro.ffmpeg.encoderOptions('aac')
+            .find((x) => x.name === 'aac_coder').values.map((v) => v.name);
+        ok(choices.length > 1, `with its named values out of libavcodec (${choices.join(' ')})`);
+        const pick = choices[choices.length - 1];
+        coder().value = pick;
+        coder().dispatchEvent(new Event('change'));
+        pump(60);
+        // The separator that matters: it has to reach the *audio* bag and the
+        // *audio* half of the spec, not the video one it sits beside.
+        ok(A.exporter.buildSpec().audioOptions.aac_coder === pick,
+           `setting one reaches the audio encoder (-aac_coder ${pick})`);
+        ok(A.exporter.buildSpec().videoOptions.aac_coder === undefined,
+           'and not the video one');
+        // Printed against the audio stream — `-aac_coder:a`, because unqualified
+        // an option in an ffmpeg command line means every stream.
+        ok(new RegExp(`-aac_coder:a\\S* ${pick}\\b`).test(A.command.currentCommand()),
+           'and the command bar prints it against the audio stream');
+        // Left set, this would be applied to every render below.
+        coder().value = '';
+        coder().dispatchEvent(new Event('change'));
+        pump(60);
+        ok(A.exporter.buildSpec().audioOptions.aac_coder === undefined,
+           'clearing it takes it back out');
+    }
+    f('aoptsearch').value = '';
+    f('aoptsearch').dispatchEvent(new Event('input'));
+    pump(40);
+}
+
 screenshot('out/export-01b-advanced.png');
 // The form redraws on its own when this is toggled, without the summary. The
 // filename beside "Choose…" belongs to the form and used to come back blank —
@@ -2228,6 +2283,60 @@ console.log('\nthe A/B preview');
            'the same two elements come back from the Write stage');
         ok(Math.abs(cv.currentTime - at) < 0.05,
            `and the picture stayed where it was (${cv.currentTime.toFixed(2)}s)`);
+    }
+
+    // **And naming the file does not throw the comparison away.** The reason
+    // anybody walks to the Write stage half way through an A/B is to set the
+    // filename, and every commit there used to run `invalidateCandidate()` —
+    // so typing one discarded a candidate render and the PSNR numbers under
+    // the wipe, both of which cost ten seconds. `referenceKey()` already
+    // leaves the path out; this is the other half of that decision.
+    {
+        const was = A.exporter.currentSettings().path;
+        A.shell.goTo('write');
+        pump(120);
+        const field = q('#st-write [data-f="path"]');
+        ok(!!field, 'the Write stage has the path field');
+        field.value = 'out/export-renamed.mp4';
+        field.dispatchEvent(new Event('change'));
+        pump(120);
+        ok(A.exporter.currentSettings().path === 'out/export-renamed.mp4',
+           'typing a filename sets it');
+        const st = A.exporter.previewState();
+        ok(st.refReady && st.candReady,
+           'and both halves of the comparison survive it');
+        ok(!!st.stats && st.stats.bytes > 0,
+           `along with what the candidate measured (${st.stats ? st.stats.bytes : 0} bytes)`);
+        ok(A.command.currentCommand().indexOf('export-renamed.mp4') > 0,
+           'while the command bar says where it now goes');
+
+        // image2 is the exception and has to stay one: its extension names a
+        // *codec*, so a path really can change what the encoder is, and then
+        // the candidate is of something else and must go. Everything the
+        // container change touches is put back afterwards — `ui/.storage.json`
+        // carries settings between runs, and a section that leaves the encoder
+        // somewhere odd fails a section four hundred lines away in the next one.
+        const held = { container: S.container, videoCodec: S.videoCodec,
+                       rate: S.rate, quality: S.quality };
+        S.container = 'image2';
+        field.value = 'out/export-renamed%04d.png';
+        field.dispatchEvent(new Event('change'));
+        pump(120);
+        ok(S.videoCodec === 'png', `an image2 path chooses the encoder (${S.videoCodec})`);
+        ok(!A.exporter.previewState().candReady,
+           'and that one does invalidate the candidate, because it changed the picture');
+
+        S.container = held.container;
+        S.videoCodec = held.videoCodec;
+        S.rate = held.rate;
+        S.quality = held.quality;
+        field.value = was;
+        field.dispatchEvent(new Event('change'));
+        pump(120);
+        ok(S.path === was && S.videoCodec === held.videoCodec,
+           'and the settings are put back as they were found');
+        A.shell.goTo('encode');
+        pump(160);
     }
 
     screenshot('out/export-03b-playing.png');

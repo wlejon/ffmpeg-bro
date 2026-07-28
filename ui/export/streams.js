@@ -97,9 +97,12 @@ export function normalizeStreams() {
             const at = readsInput(s);
             const gone = !at || !inputs[at.input] || !(inputs[at.input].probe || {}).streams;
             if (gone) {
-                const put = defaultSubtitleSource(settings.container);
-                if (!put) continue;
-                s.source = put;
+                // Not called `put`: that is `dom.js`'s, imported at the top of
+                // this file, and shadowing it here made one of the two names in
+                // this module mean something else for eight lines.
+                const fallback = defaultSubtitleSource(settings.container);
+                if (!fallback) continue;
+                s.source = fallback;
             }
         }
         // A copy names an input by index, and the index is the document's `-i`

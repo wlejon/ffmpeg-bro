@@ -150,9 +150,24 @@ function oneTargetRows(kind) {
         cls: 'wide', 'data-f': 'path', type: 'text', value: settings.path,
         on: { change: () => {
             settings.path = path.value.trim();
+            // **A filename is not a picture.** `referenceKey()` deliberately
+            // leaves the path out, so naming the file must not throw away a
+            // candidate render and the PSNR numbers under the wipe that cost
+            // ten seconds to produce — the same division the stream rows draw
+            // between `changed` and `restated`, and it is felt here because
+            // setting a filename is the one thing everybody walks over to the
+            // Write stage to do, usually after looking at the comparison.
+            //
+            // The exception is image2, where the extension names a *codec*
+            // rather than a container: `out.png` really does change what the
+            // encoder is, and then the candidate is genuinely of something
+            // else. `followExtension()` is the only thing here that can do it,
+            // so asking whether it did is the whole test.
+            const was = settings.videoCodec;
             followExtension();
             refreshFileLabel();
-            hooks.tweaked();
+            if (settings.videoCodec !== was) hooks.changed();
+            else hooks.restated();
         } },
     });
 
@@ -896,6 +911,7 @@ function advancedRows(codec) {
         }))),
         row('Title', title),
         ...rawOptionRows(codec),
+        ...rawAudioOptionRows(),
     ];
 }
 
@@ -1035,6 +1051,37 @@ function rawOptionRows(codec) {
         options: all,
         bag: settings.extraVideo,
         hint: 'Anything set here is passed straight to the encoder.',
+        onChange: () => hooks.changed(),
+    });
+}
+
+/// The same column again, for the *audio* encoder.
+///
+/// `settings.extraAudio` existed, was persisted, and was read on every render
+/// by `audioOptions()` — and nothing anywhere wrote to it, so `-c:a libopus`
+/// could be given a bitrate and a channel count and nothing else, while its
+/// video counterpart had eighty options. Every other bag in this application
+/// has a column: the video encoder's here, the muxer's on the Write stage, the
+/// demuxer's, the protocol's and the decoder's on Sources. This was the gap.
+///
+/// Its own search box (`aoptsearch`), because the search term is about *this*
+/// list — `opttable.js` keys it by the column's name for exactly that reason,
+/// and two columns sharing one would filter each other.
+///
+/// Drawn only where there is an audio encoder to configure. A render with the
+/// sound switched off, or into a container that holds none, has no table to
+/// show and an empty column would read as an encoder with no options.
+function rawAudioOptionRows() {
+    const codec = activeAudioCodec();
+    if (!settings.audio || !codec) return [];
+    const all = optionsOf(codec);
+    if (!all.length) return [];
+    return optionColumn({
+        name: 'aoptsearch',
+        title: `${codec} options · ${all.length}`,
+        options: all,
+        bag: settings.extraAudio,
+        hint: 'Anything set here is passed straight to the audio encoder.',
         onChange: () => hooks.changed(),
     });
 }

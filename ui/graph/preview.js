@@ -98,8 +98,6 @@ export function setRange(start, end) {
     play.stop();
 }
 
-export function rangeStart() { return range ? range.start : 0; }
-
 export const previewSeconds = SECONDS;
 
 export function shotFor(key) { return shots.get(key) || null; }

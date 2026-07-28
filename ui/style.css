@@ -317,15 +317,6 @@ button.st.warn .st-name::after {
     overflow-y: auto;
 }
 
-.panel-title {
-    padding: 7px 12px;
-    font-size: 11px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--dim);
-    background: var(--panel-hi);
-    border-bottom: 1px solid var(--line);
-}
 .pad { padding: 10px 12px; }
 
 /* One line, always. The transform heading carries the clip's name, and a

@@ -37,7 +37,7 @@
 //   means "not on screen" rather than "empty" — the redraw is refused rather than
 //   believed.
 
-import { el, div, span, put } from '../dom.js';
+import { el, span, put } from '../dom.js';
 import { clock } from '../format.js';
 import { buildSpec, previewSpec, specSources, range as exportRange } from '../export/spec.js';
 import { parseEnable, isOnAt } from './enable.js';

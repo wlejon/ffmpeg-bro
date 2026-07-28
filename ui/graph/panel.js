@@ -75,7 +75,6 @@ export function initPanel(r, h) {
     hooks = h || {};
 }
 
-export function selectedKey() { return sel && sel.kind === 'node' ? sel.key : null; }
 export function selectedPoint() { return sel && sel.kind === 'point' ? sel.id : null; }
 
 export function selectNode(key, count) {
