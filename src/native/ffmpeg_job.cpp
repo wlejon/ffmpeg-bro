@@ -44,14 +44,14 @@ Slot& slot() {
 
 } // namespace
 
-bool claim(const std::string& path, std::string* err) {
+uint64_t claim(const std::string& path, std::string* err) {
     Slot& s = slot();
     if (s.running.load()) {
         // Named for the slot rather than for either job: what is in it may be
         // a render or a recording, and a recording refused because "an export
         // is already running" would send somebody looking for an export.
         if (err) *err = "a job is already running";
-        return false;
+        return 0;
     }
     // The previous thread has set running=false but may not have returned yet.
     if (s.thread.joinable()) s.thread.join();
@@ -61,7 +61,7 @@ bool claim(const std::string& path, std::string* err) {
     // Numbered before the thread exists, so that the first thing the job says
     // — which is often the reason it will not start — already carries the job
     // it belongs to.
-    beginRenderReport();
+    const uint64_t number = beginRenderReport();
     {
         std::lock_guard<std::mutex> lock(s.mu);
         s.status = ExportStatus{};
@@ -69,7 +69,7 @@ bool claim(const std::string& path, std::string* err) {
         s.status.path = path;
         s.status.stage = "starting";
     }
-    return true;
+    return number;
 }
 
 void run(std::function<void()> fn) {

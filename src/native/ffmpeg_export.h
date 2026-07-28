@@ -621,9 +621,15 @@ struct ExportStatus {
 /// `error` — if a job is already running or the settings cannot work.
 ///
 /// The clips are copied: the caller's model is free to change underneath.
+///
+/// `jobNumber` is which render this one is in the report channel, for a caller
+/// that means to read back what it said. It is handed over here because this is
+/// the only moment it is unambiguous: `exportStatus().job` is the render running
+/// *now*, so it is already zero by the time a caller sees a terminal state.
 bool startExport(const ExportSettings& settings,
                  const std::vector<ExportClip>& clips,
-                 std::string* error);
+                 std::string* error,
+                 uint64_t* jobNumber = nullptr);
 
 /// Where the job has got to. Safe to call from any thread, any time.
 ExportStatus exportStatus();

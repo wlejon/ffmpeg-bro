@@ -49,19 +49,39 @@ import { settings, preview, outputFps } from './state.js';
 export function metrics() {
     return [
         { id: 'psnr', filter: 'psnr', label: 'PSNR', key: 'lavfi.psnr.psnr_avg',
-          unit: ' dB', decimals: 2,
+          unit: ' dB', decimals: 2, combine: overErrors,
           hint: 'peak signal-to-noise ratio over the whole preview — higher is closer to ' +
                 'the lossless reference; above about 40 dB the difference is hard to see' },
         { id: 'ssim', filter: 'ssim', label: 'SSIM', key: 'lavfi.ssim.All',
-          unit: '', decimals: 4,
+          unit: '', decimals: 4, combine: mean,
           hint: 'structural similarity, 0 to 1 — what survived of the picture’s structure ' +
                 'rather than of its exact values' },
         { id: 'vmaf', filter: 'libvmaf', label: 'VMAF', key: 'lavfi.vmaf.score',
-          unit: '', decimals: 1,
+          unit: '', decimals: 1, combine: mean,
           hint: 'Netflix’s perceptual score, 0 to 100 — the one of the three that was ' +
                 'trained on what people actually notice' },
     ].filter((m) => !!infoOf(m.filter));
 }
+
+/// How a render's worth of frames comes to the one number under the wipe, and
+/// it is not the same question for all three.
+///
+/// **What these filters hang on a frame is that frame's value, not a running
+/// total.** The figure for the whole comparison is the one each of them prints
+/// at end of input, and it is a combination of every frame rather than the last
+/// of them — a lossless intra frame at the top of a GOP scores several
+/// decibels above the frames that follow it, so "the last value" is a lottery
+/// with a spread of five or six dB on a two-second preview.
+///
+/// A decibel is the logarithm of an error, so the mean of the decibels is not
+/// the PSNR of the mean error: averaging them lets a handful of nearly-perfect
+/// frames drown out the ones that fell apart, which are the frames somebody
+/// choosing a setting is looking for. ffmpeg averages the errors and takes the
+/// logarithm of that, and so does this — the peak value cancels, which is why
+/// this works without knowing the bit depth. SSIM and VMAF are already scores
+/// rather than logarithms and their summaries are plain means.
+const mean = (vs) => vs.reduce((a, v) => a + v, 0) / vs.length;
+const overErrors = (vs) => -10 * Math.log10(mean(vs.map((v) => Math.pow(10, -v / 10))));
 
 /// Can this comparison be made at all?
 ///
@@ -134,24 +154,42 @@ export function qualitySpec(range) {
     };
 }
 
-/// What the last comparison found, read out of the channel the render measured
-/// into. Nothing is stored twice: the numbers live in the report as series and
-/// this is a reading of them.
+/// What the comparison numbered `job` found, read out of the channel it
+/// measured into. Nothing is stored twice: the numbers live in the report as
+/// series and this is a reading of them.
+///
+/// Three things about the reading are load-bearing, and all three were wrong in
+/// a way that put a number on screen under settings that did not produce it.
+///
+/// **The channel is drained first.** This is asked in the very frame the render
+/// that measured reports `done`, and the report's own drain runs *after* the
+/// export is polled — so without this it read whatever had arrived by the
+/// previous frame. A comparison that began and ended between two frames had
+/// said nothing at all yet and the wipe reported no measurement; one that was
+/// half drained handed over a single frame's value.
+///
+/// **The points are filtered by render, not the series.** A series accumulates
+/// across every render that ever measured that key, and each *point* carries
+/// the render it came off. Filtering the series by its own `job` — which is
+/// whichever render spoke last — either threw away everything or kept two
+/// comparisons' frames in one average.
+///
+/// **The frames are combined, not sampled.** See `combine` above.
 export function qualityResult(job) {
+    // The answers *are* the channel's, so read the channel before reading them.
+    report.drain();
     const out = [];
     for (const m of metrics()) {
         const s = report.seriesFor(m.key);
-        if (!s || !s.points.length) continue;
-        if (job && s.job !== job) continue;
-        // The last value, because every one of these filters accumulates: the
-        // metadata on the final frame is the figure for the whole comparison,
-        // which is also what the filter prints at end of input.
-        let v = null;
-        for (let i = s.points.length - 1; i >= 0 && v === null; i--)
-            if (Number.isFinite(s.points[i].v)) v = s.points[i].v;
-        if (v === null) continue;
+        if (!s) continue;
+        const vs = s.points
+            .filter((p) => (!job || p.job === job) && Number.isFinite(p.v))
+            .map((p) => p.v);
+        if (!vs.length) continue;
+        const v = m.combine(vs);
+        if (!Number.isFinite(v)) continue;
         out.push({ id: m.id, label: m.label, key: m.key, unit: m.unit,
-                   hint: m.hint, value: v,
+                   hint: m.hint, value: v, frames: vs.length,
                    text: `${v.toFixed(m.decimals)}${m.unit}` });
     }
     return out;

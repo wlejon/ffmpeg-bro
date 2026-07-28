@@ -550,7 +550,7 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
 // ── Public surface ─────────────────────────────────────────────────────────
 
 bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& clips,
-                 std::string* error) {
+                 std::string* error, uint64_t* jobNumber) {
     ExportSettings s = settings;
     // yuv420p has no half pixels, and an odd canvas is a failure at
     // avcodec_open2 with an unhelpful message. Round rather than refuse —
@@ -585,7 +585,9 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
         return false;
     }
 
-    if (!job::claim(s.path, error)) return false;
+    const uint64_t number = job::claim(s.path, error);
+    if (!number) return false;
+    if (jobNumber) *jobNumber = number;
     {
         // A render knows how long it is before it starts, which is the whole
         // difference between it and a recording: this number is what makes a

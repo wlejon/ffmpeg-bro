@@ -255,19 +255,25 @@ export { warnings as currentWarnings };
 // ── running ────────────────────────────────────────────────────────────────
 
 /// Hand a spec to the host and remember what the slot is being used for.
+/// Returns the number the host gave this render, so that whatever started it
+/// can find what it said afterwards. `poll()`'s own `job` cannot answer that:
+/// it is the render running *now* and is zero from the instant one ends, which
+/// is the frame a caller comes to read.
 function launch(spec, kind) {
+    let job = 0;
     try {
-        bro.ffmpeg.render.start(spec);
+        job = Number(bro.ffmpeg.render.start(spec)) || 0;
         setJob(kind);
         lastPoll = bro.ffmpeg.render.poll();
     } catch (e) {
         setJob(null);
         preview.error = String(e.message || e);
         drawPreview();
-        return;
+        return 0;
     }
     if (kind === 'export') { showPanel('progress'); drawProgress(lastPoll); }
     else drawPreview();
+    return job;
 }
 
 /// Run the graph over the range and keep nothing but what it measured.

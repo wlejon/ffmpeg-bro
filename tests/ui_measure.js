@@ -421,6 +421,12 @@ ok(scored && scored.length === metrics.length,
 const p = (scored || []).find((m) => m.id === 'psnr');
 ok(p && p.value > 10 && p.value < 99,
    `PSNR is a real measurement of the two files (${p && p.value.toFixed(2)} dB)`);
+// These filters hang a value on every frame rather than a running total, and
+// the reading is asked for in the frame the render reports done — so a number
+// combined from one frame means the channel had not been drained when it was
+// read, and the score under the wipe is a lottery rather than a measurement.
+ok(p && p.frames > 1,
+   `over every frame of the comparison rather than one of them (${p && p.frames} frames)`);
 ok(!!report.seriesFor('lavfi.psnr.psnr_avg'),
    'and it arrived through the same channel cropdetect uses, as a series');
 

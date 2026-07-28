@@ -126,28 +126,51 @@ export function openReport() { setOpen(true); }
 /// that only listened while one panel was on screen would have holes in it
 /// exactly where somebody went to look at something.
 export function tick() {
-    let p;
-    try {
-        p = bro.ffmpeg.render.poll({ log: state.cursor.log, meta: state.cursor.meta, max: 500 });
-    } catch (e) {
-        return;
-    }
-    state.job = p.job || 0;
-    const c = p.cursor || {};
-    state.cursor.log = c.log || state.cursor.log;
-    state.cursor.meta = c.meta || state.cursor.meta;
-    state.dropped.log += c.logDropped || 0;
-    state.dropped.meta += c.metaDropped || 0;
+    drain();
+    if (dirty) draw();
+}
 
-    const logs = p.log || [];
-    const meta = p.meta || [];
-    if (!logs.length && !meta.length) {
-        if (dirty) draw();
-        return;
+/// Take everything the channel is holding, right now.
+///
+/// One poll is capped — 500 records — so this keeps asking until the channel
+/// has nothing left rather than taking one bite a frame. The bound is a
+/// backstop against a host call that never says it is empty, not a budget: the
+/// native rings are 512 messages and 8192 samples, so a full one empties in
+/// eighteen asks.
+///
+/// **It is on the surface because a number wants the channel drained before it
+/// is read.** Draining once a frame is the right shape for something read by
+/// eye. It is the wrong shape for the A/B comparison's PSNR, whose answers
+/// arrive here as series and which is asked for them in the very frame the
+/// render that measured them reports `done` — the frame loop drains *after*
+/// the export is polled, so the reading saw whatever had arrived by the
+/// previous frame: nothing at all for a comparison that began and ended
+/// between two frames, and one arbitrary frame's value otherwise.
+export function drain() {
+    let got = false;
+    for (let i = 0; i < 64; i++) {
+        let p;
+        try {
+            p = bro.ffmpeg.render.poll(
+                { log: state.cursor.log, meta: state.cursor.meta, max: 500 });
+        } catch (e) {
+            return got;
+        }
+        state.job = p.job || 0;
+        const c = p.cursor || {};
+        state.cursor.log = c.log || state.cursor.log;
+        state.cursor.meta = c.meta || state.cursor.meta;
+        state.dropped.log += c.logDropped || 0;
+        state.dropped.meta += c.metaDropped || 0;
+
+        const logs = p.log || [];
+        const meta = p.meta || [];
+        if (!logs.length && !meta.length) return got;
+        for (const m of logs) addMessage(m);
+        for (const s of meta) addSample(s);
+        got = true;
     }
-    for (const m of logs) addMessage(m);
-    for (const s of meta) addSample(s);
-    draw();
+    return got;
 }
 
 function noteJob(job, at) {

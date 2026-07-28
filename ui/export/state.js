@@ -148,6 +148,11 @@ export const preview = {
     // moment the candidate is invalidated, because the previous settings' score
     // under the new settings' picture is the one way this could mislead.
     quality: null,
+    // Which render the comparison was, as the host numbered it. The measurements
+    // arrive in the report channel keyed to it, and every record there says
+    // which render said it — so without this the reading would be over whatever
+    // frames were in the series, including a previous comparison's.
+    qualityJob: 0,
     measuring: false,
     wipe: 0.5,
     mode: 'wipe',               // wipe | side

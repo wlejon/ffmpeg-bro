@@ -38,13 +38,21 @@
 namespace ffmpegbro {
 namespace job {
 
-/// Take the slot, and reset the status to a fresh Running one. False with a
-/// reason in `err` when something already has it.
+/// Take the slot, and reset the status to a fresh Running one. Returns the
+/// number this job will be known by in the report channel — 0, with a reason in
+/// `err`, when something already has it.
 ///
 /// The status is seeded here rather than by the caller so that a `poll()`
 /// between `claim()` and the job thread's first `publish()` sees a job that has
 /// started, not the previous job's terminal state.
-bool claim(const std::string& path, std::string* err);
+///
+/// **The number is handed back and not merely recorded.** Every record in the
+/// report channel says which render it was said during, which is only useful to
+/// somebody who knows which render they started — and `exportStatus().job` is
+/// the render running *now*, so it is zero from the instant a job ends, which
+/// is exactly the moment whatever started it comes to read what it measured.
+/// The one place the number is unambiguous is here.
+uint64_t claim(const std::string& path, std::string* err);
 
 /// Hand the work to the job thread. Only after a successful `claim`.
 void run(std::function<void()> fn);

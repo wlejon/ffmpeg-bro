@@ -137,10 +137,11 @@ export function previewFinished(p) {
     }
     if (currentJob() === 'quality') {
         // The answers are in the report as series; this is a reading of them
-        // rather than a second copy. `p.job` is the render they were measured
-        // during, so a stale series from an earlier comparison cannot be
-        // mistaken for this one's.
-        preview.quality = qualityResult(p.job || 0);
+        // rather than a second copy. `preview.qualityJob` is the number the
+        // host gave *this* comparison when it started, so an earlier one's
+        // frames cannot be mistaken for it — `p.job` cannot be used for that,
+        // because it is the render running now and this render has just ended.
+        preview.quality = qualityResult(preview.qualityJob);
         preview.measuring = false;
         return false;
     }
@@ -166,7 +167,7 @@ export function startQuality() {
     const spec = qualitySpec(previewRange());
     if (!spec) return false;
     preview.measuring = true;
-    hooks.launch(spec, 'quality');
+    preview.qualityJob = hooks.launch(spec, 'quality') || 0;
     return true;
 }
 

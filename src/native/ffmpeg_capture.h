@@ -105,7 +105,11 @@ struct CaptureSettings {
 /// should arrive as a refusal from the call that asked for the recording,
 /// while the name that was wrong is still on screen — not as a job that starts
 /// and fails a moment later.
-bool startCapture(const CaptureSettings& s, std::string* error);
+///
+/// `jobNumber` is which job this one is in the report channel — the same thing
+/// `startExport` hands back, and for the same reason.
+bool startCapture(const CaptureSettings& s, std::string* error,
+                  uint64_t* jobNumber = nullptr);
 
 /// Stop the recording. The normal end: the frame being written is finished,
 /// the trailer goes down, and the status reports Done.

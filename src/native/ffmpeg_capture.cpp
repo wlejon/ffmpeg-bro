@@ -443,7 +443,8 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
 
 } // namespace
 
-bool startCapture(const CaptureSettings& settings, std::string* error) {
+bool startCapture(const CaptureSettings& settings, std::string* error,
+                  uint64_t* jobNumber) {
     CaptureSettings s = settings;
     if (s.source.path.empty()) {
         if (error) *error = "no device to record from";
@@ -454,7 +455,9 @@ bool startCapture(const CaptureSettings& settings, std::string* error) {
         return false;
     }
 
-    if (!job::claim(s.output.path, error)) return false;
+    const uint64_t number = job::claim(s.output.path, error);
+    if (!number) return false;
+    if (jobNumber) *jobNumber = number;
 
     // Opened before the thread exists, so "there is no camera called that"
     // arrives as a refusal from this call rather than as a job that starts and

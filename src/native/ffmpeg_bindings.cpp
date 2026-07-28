@@ -677,9 +677,17 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     JS_FreeValue(ctx, arr);
 
     std::string err;
-    if (!startExport(s, clips, &err))
+    uint64_t jobNumber = 0;
+    if (!startExport(s, clips, &err, &jobNumber))
         return JS_ThrowTypeError(ctx, "cannot start the render: %s", err.c_str());
-    return JS_TRUE;
+    // **Which render this is**, rather than `true`. Every record in the channel
+    // below says which render it was said during, and a caller that means to
+    // read its own render's measurements back has nowhere else to learn the
+    // number: `poll()`'s `job` is the render running *now*, so it is already
+    // zero by the frame a caller sees `done` — which is precisely the frame it
+    // comes to read. A positive integer is truthy, so nothing that only checked
+    // for success notices.
+    return JS_NewInt64(ctx, static_cast<int64_t>(jobNumber));
 }
 
 const char* stateName(ExportStatus::State s) {
@@ -842,9 +850,13 @@ JSValue js_recordStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     JS_FreeValue(ctx, src);
 
     std::string err;
-    if (!startCapture(c, &err))
+    uint64_t jobNumber = 0;
+    if (!startCapture(c, &err, &jobNumber))
         return JS_ThrowTypeError(ctx, "cannot start recording: %s", err.c_str());
-    return JS_TRUE;
+    // The job number, as `render.start` hands it back and for the same reason:
+    // a recording shares the slot, the status and the channel, so it shares how
+    // what it said is found again.
+    return JS_NewInt64(ctx, static_cast<int64_t>(jobNumber));
 }
 
 JSValue js_recordStop(JSContext* ctx, JSValueConst, int, JSValueConst*) {
