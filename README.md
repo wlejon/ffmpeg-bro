@@ -561,6 +561,13 @@ instant `poll()` reports a terminal state — the run slot is released before
 the status is published, so chaining a second render off the first's `done` is
 safe, which is what the preview does.
 
+**It returns the number of the render it started**, and `record.start` returns
+the number of the recording. That is the only moment the number is unambiguous:
+`poll()`'s `job` is the render running *now*, so it is zero from the instant one
+ends — which is exactly the frame a caller comes to read what its render said.
+Every record in the channel below carries the render it was said during, and
+this is where the other half of that pairing comes from.
+
 A clip in a render spec is an input, a slice of it, and a rectangle in the output
 canvas — `{ input, start, length, inPoint, x, y, w, h, crop, opacity, volume,
 muted, z }`. `input` indexes `inputs`; a clip carrying a `path` and no index is
@@ -1952,6 +1959,14 @@ cannot be describing a different render; the answers arrive through the same
 channel `cropdetect` uses, as series, so the frame where the encode fell apart
 is a place you can point at on a plot.
 
+**The number is the whole comparison and not a frame of it.** `psnr` and `ssim`
+hang a value on every frame they pass rather than a running total — a frame at
+the top of a GOP scores several decibels above what follows it — so the figure
+under the wipe is every frame combined, the way each filter combines them at end
+of input: PSNR over the errors, because a decibel is the logarithm of one and
+averaging decibels lets a handful of easy frames drown out the frames somebody
+choosing a setting is actually looking at.
+
 ### Preview
 
 The hard part of encoding is not finding the settings, it is knowing what they
@@ -2022,6 +2037,14 @@ with is in it on every machine, card or no card — so nothing is drawn from it.
 worked, and the picker is cut down again by whether this build's decoder for
 *this codec* has a configuration for that device. Two RTX 4090s still do not
 give you a CUDA ProRes decoder.
+
+That question is asked by *failing*, so it is asked with the report channel
+muted. Every type the build carries and this machine has no card for answers
+with an error — on a machine with NVIDIA cards, `AMFQueryVersion failed with
+error 1` — and those are not things a render said: left in the channel they
+open the report drawer red under a render that went perfectly, before anybody
+has pressed anything. What the failure was is reported as the device's own
+`error`, which is where somebody asking about a card is already looking.
 
 **Unavailable refuses, and says why. It never falls back silently.** A type that
 is compiled in and absent, a driver that will not answer, a codec the card
@@ -2331,7 +2354,8 @@ stated exactly rather than hoped for out of a fixture. The cut those spans
 produce is then made on the real timeline through the real split. Last, the A/B
 comparison is rendered and measured, and a better setting has to measure better
 — the one check that says the number is about the encoder rather than about the
-plumbing.
+plumbing, and beside it that the score was combined from more than one frame,
+which is what says the channel had actually been drained when it was read.
 
 `ui_report.js` drives a render the renderer has something to complain about —
 a graph running at half the output rate, with `cropdetect` measuring on the way

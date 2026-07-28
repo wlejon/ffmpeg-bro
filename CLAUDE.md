@@ -700,6 +700,17 @@ filesystem can hold — and behind `LogQuiet`, which is a thread-local mute on t
 report channel added for exactly this: a question the application put to itself
 is not something a render said.
 
+**`hwDevices()` is the second question of that shape and is muted the same way.**
+It finds out what this machine has by creating a device of every type the build
+carries and seeing which fail, and every failure is an `AV_LOG_ERROR` from code
+that has no idea it is being interrogated — on a machine with NVIDIA cards, `amf`
+answers `AMFQueryVersion failed with error 1`. Left in the channel, a render that
+went perfectly opens its report drawer red over something said before anybody
+pressed anything. Nothing is lost: the reason is `HwDevice::error`, reported by
+`bro.ffmpeg.hardware()`, which is where somebody asking about a card is looking.
+`LogQuiet` mutes the console as well as the channel, which is right for both of
+these and would be wrong for anything a render said.
+
 **How an input's options reach playback, and why it is a token.** bro's `<video>`
 takes a src *string* and the media backend is registered generically, so there is
 nowhere to pass an options object: the string has to name the input. `defineInput()`
@@ -1467,6 +1478,31 @@ about them:
   the preview while it runs: the two `<video>` elements *are* the decoders, and
   rebuilding the stage would stop the playback it is measuring. `drawPreviewStats()`
   exists for exactly that.
+
+  **Reading the answer is three separate decisions and all three were wrong**, in a
+  way that put a PSNR number on screen under settings that did not produce it — and
+  which surfaced only as `ui_measure.js` failing three or four runs in eight:
+  - **The channel is drained before it is read.** The result is asked for in the very
+    frame the render that measured it publishes `done`, and the frame loop drains the
+    report *after* it polls the export — so the reading saw whatever had arrived by
+    the previous frame. A comparison that began and ended between two frames had said
+    nothing yet and the wipe reported no measurement at all; a half-drained one handed
+    over one arbitrary frame's value. `report.drain()` is on the surface for this and
+    keeps asking until the channel is empty, because one poll is capped at 500 records.
+  - **`render.start` hands back the number of the render it started.** `poll()`'s `job`
+    is the render running *now* and is zero from the instant one ends, which is exactly
+    the frame a caller comes to read what it said, so there was nowhere to learn which
+    render a series' points belonged to. `job::claim()` already numbered the job before
+    the thread existed; it returns that number now and `startExport`/`startCapture`
+    pass it out. A series accumulates across every render that ever measured its key
+    and each *point* carries its own job, so the filtering is on the points.
+  - **A metric's frame metadata is that frame's value, not a running total.** `psnr`
+    and `ssim` hang a number on every frame they pass and print the summary at end of
+    input; an intra frame at the top of a GOP scores several dB above what follows it,
+    so "the last point" has a five or six dB spread on a two-second preview. The points
+    are combined here the way each filter combines them — PSNR over the errors, because
+    decibels are logarithms and the mean of them is not the PSNR of the mean error;
+    SSIM and VMAF over the scores.
 - `sources.js` — the Sources stage, which is the **input editor**: three columns for
   the list, what this input is set to and what came back, and the demuxer's option
   table beside it. It was a read-only list derived from the timeline, which is an
