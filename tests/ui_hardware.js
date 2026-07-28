@@ -64,6 +64,20 @@ function pick(node, value) {
     node.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+/// Is `what` printed *in front of* the `-i`, which is the whole of what makes
+/// it an input option?
+///
+/// A function rather than the obvious `line.indexOf(what) < line.indexOf(' -i ')`
+/// because that spelling passes for a command that never mentions `what` at
+/// all: `indexOf` answers −1, and −1 is less than every index there is. So an
+/// option that quietly stopped being printed would go on satisfying the
+/// assertion that it is printed in the right place.
+function inFrontOfTheInput(line, what) {
+    const at = line.indexOf(what);
+    const i = line.indexOf(' -i ');
+    return at >= 0 && i >= 0 && at < i;
+}
+
 waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
 const A = globalThis.__ffmpegBro;
 
@@ -74,8 +88,12 @@ console.log('\nthe machine, not the build');
 const built = bro.ffmpeg.hwaccels || [];
 const found = bro.ffmpeg.hardware() || [];
 ok(built.length > 0, `the build reports ${built.length} device types`);
-ok(found.length === built.length,
-   'and the probe answers about every one of them, present or not');
+// **By name, not by count.** Both of these walk `av_hwdevice_iterate_types`, so
+// their lengths are equal however wrong either of them is; what is worth
+// asserting is that the probe answers about the *same* types the build
+// declares, which is the join the whole picker rests on.
+same(found.map((d) => d.name).sort().join(','), built.slice().sort().join(','),
+     'and the probe answers about every one of them by name, present or not');
 ok(found.every((d) => typeof d.present === 'boolean'),
    'each with a yes or no about this machine rather than a name alone');
 
@@ -151,9 +169,8 @@ if (canDecode.length) {
     // in front of its own `-i` — after it, `-hwaccel` is not an option at all.
     A.command.draw();
     const line = A.command.currentCommand();
-    ok(line.indexOf(`-hwaccel ${device}`) >= 0, `the command prints -hwaccel ${device}`);
-    ok(line.indexOf(`-hwaccel ${device}`) < line.indexOf(' -i '),
-       'in front of the -i, where an input option has to be');
+    ok(inFrontOfTheInput(line, `-hwaccel ${device}`),
+       `the command prints -hwaccel ${device} in front of the -i, where an input option has to be`);
 
     click(qq('[data-seg="srchwkeep"]')[1]);
     pump(80);
@@ -161,7 +178,7 @@ if (canDecode.length) {
        `keeping them up sets -hwaccel_output_format ${input.hwaccelOutputFormat}`);
     A.command.draw();
     const kept = A.command.currentCommand();
-    ok(kept.indexOf(`-hwaccel_output_format ${input.hwaccelOutputFormat}`) >= 0,
+    ok(inFrontOfTheInput(kept, `-hwaccel_output_format ${input.hwaccelOutputFormat}`),
        'and the command says so, in front of the -i as well');
 
     // Back to the CPU. The output format has to go with it: left behind it

@@ -68,11 +68,15 @@ ok(!!el('rep-head') && el('rep-head').textContent.length > 0,
    `and says something without being asked: "${el('rep-head').textContent.trim()}"`);
 ok(el('rep-body').classList.contains('hidden'), 'collapsed, because nothing is wrong');
 
+// The *shape* of a drain, which is all that can be claimed here: nothing has
+// rendered, so both arrays are legitimately allowed to be empty and asserting
+// that they came back is not asserting that anything was drained. What a drain
+// actually does is checked below, against a render that had something to say.
 const poll = bro.ffmpeg.render.poll({ log: 0, meta: 0, max: 10 });
 ok(Array.isArray(poll.log) && Array.isArray(poll.meta) && poll.cursor,
-   'render.poll(cursor) drains the channel');
+   'render.poll(cursor) comes back with the two arrays and a cursor');
 ok(typeof poll.cursor.log === 'number' && typeof poll.cursor.meta === 'number',
-   'and hands back a cursor to carry forward');
+   'and the cursor is a pair of numbers to carry forward');
 const plain = bro.ffmpeg.render.poll();
 ok(plain.log === undefined && plain.meta === undefined,
    'a poll that did not ask for messages does not pay for them');
@@ -115,7 +119,14 @@ const job = state.lastJob;
 ok(job > 0, `the frame loop drained it without being asked (render #${job})`);
 
 const said = report.messages().filter((m) => m.job === job);
-ok(said.length > 0, `${said.length} messages arrived, all pinned to this render`);
+ok(said.length > 0, `${said.length} messages arrived under this render's own number`);
+// And the drain moved: the cursor taken before any of this was rendered is
+// behind where the channel now is, which is the claim the shape check above
+// deliberately could not make.
+const after = bro.ffmpeg.render.poll({ log: poll.cursor.log, meta: poll.cursor.meta, max: 1 });
+ok(after.cursor.log > poll.cursor.log || after.cursor.meta > poll.cursor.meta,
+   `the cursor advanced over the render (log ${poll.cursor.log} → ${after.cursor.log}, ` +
+   `meta ${poll.cursor.meta} → ${after.cursor.meta})`);
 
 const warning = said.find((m) => m.level === 'warning' && /fps/.test(m.text));
 ok(!!warning, 'the rate the graph runs at is reported as a warning');
@@ -157,11 +168,18 @@ ok(rows.length > 0, `${rows.length} messages are on screen`);
 const shown = Array.from(rows).map((r) => r.getAttribute('data-level'));
 ok(shown.every((l) => l === 'warning' || l === 'error' || l === 'fatal' || l === 'panic'),
    'and at the default level they are the ones worth reading, not the whole log');
+// **Against the record it is drawing, not against emptiness.** A row that put
+// a placeholder in every field would satisfy `length > 0` in all three and say
+// nothing about whether the level, the source and the text on screen are the
+// ones libav said.
 const first = q('.rep-msg');
-ok(q('.rep-lv', first).textContent.length > 0 &&
-   q('.rep-src', first).textContent.length > 0 &&
-   q('.rep-text', first).textContent.length > 0,
-   'each carrying its level, its source and what was said');
+const drawn = report.messages().filter((m) => m.severity <= 24 && m.job === job)[0];
+ok(!!drawn &&
+   q('.rep-lv', first).textContent === drawn.level &&
+   q('.rep-src', first).textContent === (drawn.source || '—') &&
+   q('.rep-text', first).textContent === drawn.text,
+   `each carrying its own level, source and text (${drawn && drawn.level} · ` +
+   `${drawn && drawn.source})`);
 
 // Everything is still there — the quiet half is a filter, not a discard. That
 // matters: the render where the info line turns out to be the answer is the

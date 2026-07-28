@@ -347,9 +347,6 @@ int main(int argc, char** argv) {
 
             checkf(st.state == ExportStatus::State::Done,
                    "stopping a recording is Done, not Cancelled (%s)", st.stage.c_str());
-            checkf(st.framesDone >= caught,
-                   "the frame it was on was finished (%lld caught, %lld written)",
-                   static_cast<long long>(caught), static_cast<long long>(st.framesDone));
             checkf(st.bytesWritten > 0, "and the file has bytes in it (%lld)",
                    static_cast<long long>(st.bytesWritten));
 
@@ -358,6 +355,19 @@ int main(int argc, char** argv) {
             check(o.indexed, "and it has an index — this is the whole point");
             checkf(o.duration > 0.1, "with the part that was recorded in it (%.2f s)",
                    o.duration);
+            // **Against the file, not against the counter.** `framesDone` only
+            // ever goes up, so comparing it with a value read out of it a
+            // moment earlier is a comparison of a number with itself and passes
+            // whatever the stop did. What the claim is about is whether the
+            // frames the status counted are on disk, and only the file can
+            // answer that: at 25 fps a recording of `framesDone` pictures is
+            // that many twenty-fifths long, give or take the last one.
+            const double wanted = (st.framesDone - 1) / 25.0;
+            checkf(o.duration >= wanted && st.framesDone >= caught,
+                   "and every frame it counted is in it (%lld caught, %lld written, "
+                   "%.2f s on disk against %.2f s of frames)",
+                   static_cast<long long>(caught), static_cast<long long>(st.framesDone),
+                   o.duration, wanted);
         }
     }
 

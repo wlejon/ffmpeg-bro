@@ -857,8 +857,12 @@ console.log('\na batch');
     ok(A.project.clips.every((c) => c.start === 0), 'all starting together at zero');
     ok(A.project.selection.length === 3, 'and all three selected');
 
-    waitFor('all three decoders', () => A.activeClips().length === 3, 20000);
-    ok(A.activeClips().length === 3, 'the playhead is inside all three at once');
+    // One act, not two. `waitFor` asserts on its own timeout, so an `ok()` on
+    // the same predicate a line later can only ever pass — the wait returned
+    // true, or the process has already died inside it. Asserting on what the
+    // wait answered is the same check made once.
+    ok(waitFor('all three decoders', () => A.activeClips().length === 3, 20000),
+       'the playhead is inside all three at once');
     const boxes = A.activeClips().map((c) => c.frame.getBoundingClientRect());
     ok(boxes.every((b) => b.width > 4 && b.height > 4), 'each has a cell with a picture in it');
     // Cells must not sit on top of each other — the whole point of a grid.

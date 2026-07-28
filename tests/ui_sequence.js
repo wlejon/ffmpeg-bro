@@ -172,8 +172,11 @@ console.log('\na still is a decision about how long it is');
     A.setPlayhead(0);
     pump(120);
     A.play();
-    waitFor('the still to play', () => A.transport.t > 0.4, 6000);
-    ok(A.transport.t > 0.4, `a held still plays — the playhead reached ${A.transport.t.toFixed(2)}`);
+    // Asserting on what the wait answered rather than on the same predicate
+    // again: `waitFor` asserts on its own timeout, so a second `ok()` on it
+    // cannot do anything but pass.
+    ok(waitFor('the still to play', () => A.transport.t > 0.4, 6000),
+       `a held still plays — the playhead reached ${A.transport.t.toFixed(2)}`);
     A.pause();
     pump(80);
 
@@ -209,8 +212,7 @@ console.log('\na sequence plays like any other clip');
     A.setPlayhead(0);
     pump(150);
     A.play();
-    waitFor('the sequence to play', () => A.transport.t > 0.5, 8000);
-    ok(A.transport.t > 0.5,
+    ok(waitFor('the sequence to play', () => A.transport.t > 0.5, 8000),
        `an image sequence plays through the same <video> everything else does ` +
        `(reached ${A.transport.t.toFixed(2)})`);
     A.pause();

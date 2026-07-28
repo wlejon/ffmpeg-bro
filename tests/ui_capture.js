@@ -48,6 +48,20 @@ function same(a, b, what) {
 }
 const text = (sel) => (q(sel) || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim();
 
+/// Is `what` printed *in front of* the `-i`, which is the whole of what makes
+/// it an input option?
+///
+/// A function rather than the obvious `line.indexOf(what) < line.indexOf('-i ')`
+/// because that spelling passes for a command that never mentions `what` at
+/// all: `indexOf` answers −1, and −1 is less than every index there is. So an
+/// option that silently stopped being printed would go on satisfying the
+/// assertion that it is printed in the right place.
+function inFrontOfTheInput(line, what) {
+    const at = line.indexOf(what);
+    const i = line.indexOf('-i ');
+    return at >= 0 && i >= 0 && at < i;
+}
+
 waitFor('the app', () => globalThis.__ffmpegBroReady);
 const A = globalThis.__ffmpegBro;
 const cap = A.capture;
@@ -115,7 +129,7 @@ console.log('\nthe command it is');
     const line = A.command.currentCommand();
     console.log(`  ${line}`);
     ok(line.indexOf('-f lavfi') >= 0, 'the device is the demuxer, named with -f');
-    ok(line.indexOf('-rtbufsize 64M') < line.indexOf('-i '),
+    ok(inFrontOfTheInput(line, '-rtbufsize 64M'),
        'and its options are in front of the -i, where input options go');
     ok(line.indexOf('-i testsrc') >= 0, 'the source is what -i is handed');
     // The bar is describing the capture rather than the render, which is the
@@ -128,7 +142,7 @@ console.log('\nthe command it is');
     seconds.dispatchEvent(new Event('change'));
     pump(120);
     const withT = A.command.currentCommand();
-    ok(withT.indexOf('-t 2') >= 0 && withT.indexOf('-t 2') < withT.indexOf('-i '),
+    ok(inFrontOfTheInput(withT, '-t 2'),
        '-t is in front of the -i too: after it, it would limit the output instead');
     seconds.value = '';
     seconds.dispatchEvent(new Event('change'));
@@ -318,7 +332,7 @@ console.log('\nthis machine’s own devices');
                    scale.toFixed(2)}×)`);
 
             const line = A.command.currentCommand();
-            ok(line.indexOf(`-video_size ${o.video_size}`) < line.indexOf('-i '),
+            ok(inFrontOfTheInput(line, `-video_size ${o.video_size}`),
                'and the command bar prints the region in front of the -i');
 
             q('[data-f="capwhole"]').click();
@@ -326,7 +340,13 @@ console.log('\nthis machine’s own devices');
             ok(!cap.capture.options.video_size, 'giving the whole screen back removes them');
         }
     } else {
-        ok(true, 'no gdigrab in this build — this is not Windows');
+        // No assertion here, and deliberately none. The rule this block opens
+        // with is that whatever the answer is it is asserted — but there is
+        // nothing to assert about a device that is not in the build, and the
+        // only claim available ("gdigrab is absent") is the `if` above written
+        // out again. An `ok(true, …)` standing here would count as a check and
+        // prove nothing, which is worse than the honest gap.
+        console.log('  no gdigrab in this build — this is not Windows');
     }
 
     const cams = bro.ffmpeg.deviceSources('dshow');

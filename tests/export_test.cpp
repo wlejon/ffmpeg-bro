@@ -2747,12 +2747,40 @@ int main(int argc, char* argv[]) {
         const ExportStatus h = render(sh, {leftHalf(first, srcDuration)});
         checkf(h.state == ExportStatus::State::Done, "an hls render finishes (%s)",
                h.error.empty() ? "no error" : h.error.c_str());
-        // The playlist *is* `path`, so it is not one of the pieces — the
-        // pieces are the segments, which is exactly the number worth showing.
-        checkf(h.piecesWritten >= 2, "the segments are counted and the playlist is not (%lld)",
-               (long long)h.piecesWritten);
         checkf(h.bytesWritten > 4096, "the run has bytes in it (%lld)",
                (long long)h.bytesWritten);
+
+        // **Counted against the playlist, not against a floor.** What this has
+        // to catch is `hls` rewriting its playlist on every segment: `>= 2`
+        // passes at forty, and forty is exactly what an `io_open` hook that did
+        // not treat a file opened twice as one file would report for four
+        // segments.
+        //
+        // The upper bound is the segments plus one, not the segments, and the
+        // one is a fact about hlsenc worth knowing: **it writes the playlist
+        // through a temporary name and renames it**, so the file that *is*
+        // `path` — and would therefore not be counted — is opened as
+        // `out/hls.m3u8.tmp`, which is not. A build whose hlsenc writes the
+        // playlist in place answers with the segments alone, and both are
+        // right; what neither of them can be is a multiple of the segment
+        // count.
+        {
+            std::ifstream listIn(std::filesystem::path("out/hls.m3u8"));
+            const std::string list((std::istreambuf_iterator<char>(listIn)),
+                                   std::istreambuf_iterator<char>());
+            int named = 0;
+            size_t at = 0;
+            while ((at = list.find("hls", at)) != std::string::npos) {
+                const size_t end = list.find(".ts", at);
+                if (end == std::string::npos) break;
+                ++named;
+                at = end + 3;
+            }
+            checkf(named > 1 && h.piecesWritten >= named && h.piecesWritten <= named + 1,
+                   "each segment is counted once and the playlist at most once "
+                   "(%lld pieces for %d segments)",
+                   (long long)h.piecesWritten, named);
+        }
         const Opened back("out/hls.m3u8");
         check(!!back, "and what it wrote opens through the playlist it named");
         if (back)

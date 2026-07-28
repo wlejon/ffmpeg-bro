@@ -284,8 +284,11 @@ int main(int argc, char* argv[]) {
             SourceVideo v;
             std::string err;
             const bool opened = v.open(in, &err);
-            checkf(!opened && !err.empty(),
-                   "an -hwaccel %s this machine does not have refuses (%s)",
+            // Naming it, for the reason the line above names its own: an empty
+            // check on a non-empty string passes for "no such file", which is
+            // what it did while the fixture path was wrong.
+            checkf(!opened && err.find(missing->name) != std::string::npos,
+                   "an -hwaccel %s this machine does not have refuses, naming it (%s)",
                    missing->name.c_str(), err.c_str());
         } else {
             std::printf("        (every compiled-in type works here; nothing absent to try)\n");
@@ -322,14 +325,58 @@ int main(int argc, char* argv[]) {
     std::printf("\nDecoding %s on %s\n",
                 avcodec_get_name(static_cast<AVCodecID>(videoCodec)), dev->name.c_str());
 
-    // A codec the device has no decoder for. Not every build has one to try,
-    // so it is guarded the same way the absent type is.
+    // **A codec the device cannot decode is refused before a packet is read**,
+    // which is the third of this file's refusals and the one people are
+    // surprised by: two RTX 4090s still do not give you a CUDA FFV1 decoder.
+    //
+    // Asserting it needs a file in a codec nothing here decodes on a card, and
+    // the fixtures are deliberately not that — they are H.264 so the rest of
+    // this suite has something to measure. So one is written. FFV1 is native to
+    // libavcodec, is in every build, and no vendor has ever shipped hardware
+    // for it; the others are there in case a build somehow lacks the encoder.
+    // Which of them qualifies is *asked* rather than assumed, because the whole
+    // argument of this file is that capabilities are measured and not tabled.
     {
-        const AVCodec* dec = avcodec_find_decoder(AV_CODEC_ID_PRORES);
-        if (dec && !decoderTakesDevice(dec, hwTypeNamed(dev->name), nullptr))
-            checkf(true, "%s has no ProRes decoder in this build, and the check that "
-                         "says so is the one that runs before a packet is read",
-                   dev->name.c_str());
+        const AVCodec* enc = nullptr;
+        for (const char* name : {"ffv1", "prores", "mjpeg"}) {
+            const AVCodec* c = avcodec_find_encoder_by_name(name);
+            if (c && !deviceThatDecodes(c->id)) { enc = c; break; }
+        }
+        if (!enc) {
+            std::printf("        (every codec tried decodes on a card here — "
+                        "nothing for the refusal to be about)\n");
+        } else {
+            ExportSettings s = baseSettings("out/hw_nodecode.mkv");
+            s.format = "matroska";
+            s.videoCodec = enc->name;
+            s.endTime = 0.4;
+            {
+                MediaInput in;
+                in.path = file;
+                s.inputs.push_back(in);
+            }
+            ExportClip c = wholeCanvas(0);
+            c.length = s.endTime;
+            const ExportStatus made = render(s, {c});
+            checkf(made.state == ExportStatus::State::Done,
+                   "a few frames of %s are written to compare against (%s)", enc->name,
+                   made.error.empty() ? "no error" : made.error.c_str());
+
+            MediaInput in;
+            in.path = s.path;
+            in.hwaccel = dev->name;
+            SourceVideo v;
+            std::string err;
+            const bool opened = v.open(in, &err);
+            // Named twice on purpose: the device and the codec are the two
+            // halves of the answer, and "cannot decode" without either of them
+            // is the message this refusal exists to be better than.
+            checkf(!opened && err.find(dev->name) != std::string::npos &&
+                       err.find(enc->name) != std::string::npos,
+                   "and -hwaccel %s on a %s file refuses at open, naming both (%s)",
+                   dev->name.c_str(), enc->name,
+                   err.empty() ? "it opened, which it must not" : err.c_str());
+        }
     }
 
     // ── the render, both ways ──────────────────────────────────────────────
