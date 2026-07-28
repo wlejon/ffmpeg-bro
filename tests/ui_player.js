@@ -554,6 +554,87 @@ console.log('\ntracks');
     pump(40);
 }
 
+// ── a drag that rebuilds the lanes under itself ────────────────────────────
+//
+// Dragging a clip into the spare top lane is the one gesture that changes the
+// track count, and changing the track count drops and rebuilds every row —
+// half way through the drag that is doing it. So this is the one place where
+// what the drag is holding on to has to outlive what it is standing on:
+//
+// - the lane the press started on is detached the instant the clip crosses,
+//   and a detached element measures `left: 0` — so a drag that kept the
+//   element it began on would put the clip's origin at the left edge of the
+//   *window* rather than of the lane, and the clip would jump sideways by the
+//   width of the track heads and then snap to the wrong neighbours; and
+// - the `document` listeners the drag is delivered through cannot belong to
+//   the row either, or removing the row would end the gesture that removed it.
+//
+// Both are checked by one assertion: after crossing, the clip still follows
+// the pointer, and it lands where the pointer let go.
+
+console.log('\ndragging across tracks');
+{
+    const a = A.project.clips[0];
+    a.start = 0;
+    a.track = 0;
+    A.setPlayhead(0);
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(60);
+
+    const lane0 = rectOf(A.timeline.laneOf(0).lane);
+    const yOf = (track) => {
+        const r = rectOf(A.timeline.laneOf(track).lane);
+        return r.top + r.height / 2;
+    };
+    const grabX = lane0.left + lane0.width * 0.30;
+    const dropX = lane0.left + lane0.width * 0.55;
+    // What the pointer asked for, in seconds, measured the way the lane maps
+    // them. The tolerance is four pixels of that same lane — enough for the
+    // rounding a synthesised pointer does and nothing else: a drag measured
+    // against a detached lane lands the clip a whole lane offset out.
+    const wanted = A.timeline.xToTime(dropX - lane0.left) -
+                   A.timeline.xToTime(grabX - lane0.left);
+    const slack = A.timeline.xToTime(4) - A.timeline.xToTime(0);
+
+    mouseDown(grabX, yOf(0));
+    pump(20);
+    mouseMove(grabX + 6, yOf(0));
+    pump(20);
+    // Up into the spare lane. This is the move that rebuilds every row.
+    mouseMove(grabX + 8, yOf(1));
+    pump(40);
+    ok(a.track === 1, 'dragging up into the spare lane restacks the clip');
+    ok(A.timeline.laneOf(2) !== null,
+       'which rebuilds the lanes — there is a new spare above it now');
+
+    // ...and the drag is still live, and still measuring against a lane that
+    // is in the document.
+    mouseMove(dropX, yOf(1));
+    pump(40);
+    mouseUp(dropX, yOf(1));
+    pump(60);
+
+    ok(Math.abs(a.start - wanted) < slack,
+       `the clip landed where the pointer let go: ${a.start.toFixed(3)}s, ` +
+       `asked for ${wanted.toFixed(3)}s (±${slack.toFixed(3)}s)`);
+    ok(a.track === 1, 'and stayed on the track it was dragged to');
+
+    // Once released, the pointer moves nothing: the drag ended even though the
+    // row it started on was taken away in the middle of it.
+    const settled = a.start;
+    mouseMove(lane0.left + lane0.width * 0.8, yOf(1));
+    pump(40);
+    ok(a.start === settled, 'and a pointer move after the release moves nothing');
+
+    a.track = 0;
+    a.start = 0;
+    A.setPlayhead(0);
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(60);
+}
+
 // ── the grid ───────────────────────────────────────────────────────────────
 //
 // The shape is chosen so a cell is the canvas's own aspect, because the clips

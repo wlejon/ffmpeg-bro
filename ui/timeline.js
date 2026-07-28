@@ -451,18 +451,41 @@ function laneAtY(clientY) {
 
 // One helper for press-and-track: the pointer leaving the element mid-drag is
 // normal, and losing the drag when it does is not.
+//
+// **There is one pair of document listeners for the whole timeline, not one
+// pair per call**, and both halves of that matter.
+//
+// A pair per call accumulates. `wireVideoLane()` runs per lane on every
+// `syncLanes()`, and `syncLanes()` drops and rebuilds every row the moment the
+// track count changes — so dragging a clip into the spare top lane and back
+// leaves ten dead handlers behind, firing on every pointer move for the rest of
+// the session and each retaining a detached lane and the clip that was in it.
+// That is the sort of thing that gets blamed on "it just gets slow".
+//
+// And the obvious fix — a disposer called when the row is removed — would take
+// the drag with it, because *the drag is what removed the row*: crossing into
+// the spare lane is exactly the gesture that changes the track count. So the
+// listeners outlive every element, and which handler is live is a module fact
+// rather than a per-closure one. Only one gesture can be in flight at a time,
+// there being one pointer.
+let dragging = null;
+let documentWired = false;
+
 function tracked(el, onDown, onMove, onUp) {
-    let live = false;
+    if (!documentWired) {
+        documentWired = true;
+        document.addEventListener('mousemove', (e) => { if (dragging) dragging.move(e); });
+        document.addEventListener('mouseup', (e) => {
+            const d = dragging;
+            if (!d) return;
+            dragging = null;
+            if (d.up) d.up(e);
+        });
+    }
     el.addEventListener('mousedown', (e) => {
         if (onDown(e) === false) return;
-        live = true;
+        dragging = { move: onMove, up: onUp };
         e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => { if (live) onMove(e); });
-    document.addEventListener('mouseup', (e) => {
-        if (!live) return;
-        live = false;
-        if (onUp) onUp(e);
     });
 }
 
@@ -508,12 +531,25 @@ function snapTime(t, exclude) {
 /// A video lane: press to seek and select, drag to move or trim, drag upward
 /// to change track.
 function wireVideoLane(entry) {
-    const lane = entry.lane;
     let drag = null;
 
-    tracked(lane,
+    // The lane to measure against is looked up on every event rather than
+    // captured, because a cross-track drag rebuilds the lanes underneath
+    // itself: `moveClip` changes the track count, `syncLanes()` drops every
+    // row, and the element the press started on is detached — where
+    // `getBoundingClientRect()` reports `left: 0`. The scale would still be
+    // right (`laneWidth()` comes from the new `lanes[0]`) and only the origin
+    // wrong, so the clip jumped sideways by the width of the track heads the
+    // instant it crossed tracks and stayed there, snapping to the wrong
+    // neighbours for the rest of the drag. `laneOf` exists for exactly this.
+    const liveLane = () => {
+        const l = laneOf(entry.track);
+        return l ? l.lane : entry.lane;
+    };
+
+    tracked(entry.lane,
         (e) => {
-            const x = localX(e, lane);
+            const x = localX(e, liveLane());
             const grab = grabAt(x, entry.track);
             // Pressing anywhere on a lane moves the playhead there — including
             // on a clip, so the picture and the panel are about the thing you
@@ -528,7 +564,7 @@ function wireVideoLane(entry) {
             } : null;
         },
         (e) => {
-            const x = localX(e, lane);
+            const x = localX(e, liveLane());
             if (!drag) { onSeek(xToTime(x), false); return; }
             const t = xToTime(x);
             const delta = t - drag.grabTime;
