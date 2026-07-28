@@ -30,7 +30,7 @@ import { project } from './project.js';
 import { div, span, put, show } from './dom.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
-import { buildSpec, specSources } from './export/spec.js';
+import { freshSpec, specSources } from './export/spec.js';
 import { parseCopy } from './export/copy.js';
 import { parseDecode, defaultSubtitleCodec } from './export/subtitles.js';
 import { kindOf } from './export/destination.js';
@@ -143,7 +143,10 @@ function bsfArgs(out, s, kind, idx, count) {
 /// settings of the renderer's own, and a command missing them describes a
 /// different file from the one about to be written.
 export function parts() {
-    const spec = buildSpec();
+    // One derivation for this whole invocation. `warnings()` opens its own for
+    // the same reason: a memo that lived past a synchronous answer would have
+    // to know about every place a setting is written.
+    const spec = freshSpec();
     const codec = spec.videoCodec;
     const g = filtergraph(spec, specSources(), { overlay: overlayState() });
     const colour = outputColor(spec);

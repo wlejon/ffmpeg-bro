@@ -331,6 +331,23 @@ const S = A.exporter.currentSettings();
     pump(40);
 }
 
+// **The spec is memoised for exactly one answer, and no longer.** `warnings()`
+// used to build five of them per redraw and now builds one, which is worth
+// having on a panel that redraws on every keystroke — but a memo that outlived
+// a call would have to know about every place a setting is written, including
+// the ones a test writes directly. So this is the check that it does not: a
+// change and then a read, with no redraw in between.
+{
+    const wasW = S.width, wasH = S.height;
+    const odd = () => A.exporter.currentWarnings().some((t) => /even dimensions/.test(t));
+    S.width = 640; S.height = 360;
+    ok(!odd(), 'an even output is not complained about');
+    S.width = 641;
+    ok(odd(), 'and the very next answer knows about a change nothing redrew for');
+    S.width = wasW; S.height = wasH;
+    ok(!odd(), 'and knows when it is put back');
+}
+
 S.videoCodec = 'libx264';
 S.rate = 'quality';
 S.quality = 20;

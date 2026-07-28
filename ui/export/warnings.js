@@ -14,10 +14,9 @@ import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
 import { kindOf, schemeOf, protocolLinked } from './destination.js';
 import { readsInput, readStream, subtitleCodecsOf,
          defaultSubtitleCodec } from './subtitles.js';
-import { isEmpty as noUserNodes, current as overlayState } from '../graph/overlay.js';
-import { renderGraph } from '../filtergraph.js';
+import { isEmpty as noUserNodes } from '../graph/overlay.js';
 import { whereIs } from '../graph/check.js';
-import { buildSpec, range, specSources } from './spec.js';
+import { range, freshSpec, currentSpec, currentGraph } from './spec.js';
 import { deviceOfEncoder } from '../hardware.js';
 
 /// How many frames this render will write. A single-frame range written into
@@ -266,7 +265,7 @@ function destinationWarnings() {
 ///     where somebody notices it took longer than they expected.
 function hardwareWarnings() {
     const out = [];
-    const spec = buildSpec();
+    const spec = currentSpec();
     const codec = activeVideoCodec();
     const device = deviceOfEncoder(codec);
     // **Asked of the graph, by following the wire the encoder is fed from.**
@@ -286,7 +285,7 @@ function hardwareWarnings() {
     // names nodes with.
     let endsUp = false;
     if (spec.filterGraph) {
-        const g = renderGraph(spec, specSources(), { overlay: overlayState() });
+        const g = currentGraph() || { ok: false };
         const graph = g.ok ? g.graph : null;
         const sink = graph ? graph.byAnchor('out:v') : null;
         const edge = sink ? graph.inEdges(sink)[0] : null;
@@ -312,6 +311,9 @@ function hardwareWarnings() {
 
 export function warnings() {
     const out = [];
+    // One derivation for the whole of this answer. Everything below reads
+    // `currentSpec()`; this is the only place that builds one.
+    freshSpec();
     out.push(...destinationWarnings());
 
     // The filters go through libavfilter, and the way they get there is
@@ -329,8 +331,8 @@ export function warnings() {
     // `overlay` you placed a minute ago has nothing on it.
     out.push(...copyWarnings(settings.streams));
 
-    if (!noUserNodes() && !buildSpec().filterGraph) {
-        const why = renderGraph(buildSpec(), specSources(), { overlay: overlayState() });
+    if (!noUserNodes() && !currentSpec().filterGraph) {
+        const why = currentGraph() || {};
         out.push(`this render would go through the internal compositor without your ` +
                  `filters — ${why.reason || 'the graph cannot be expressed for this edit'}`);
     }

@@ -337,8 +337,10 @@ export function buildSpec(over = {}) {
     // of them — the export, and both halves of the A/B preview — and a
     // reference rendered without the filters would be comparing the picture
     // against a different picture.
+    lastGraph = null;
     if (!isEmpty()) {
         const g = renderGraph(spec, specSources(), { overlay: overlayState() });
+        lastGraph = g;
         if (g.ok) {
             spec.filterGraph = g.filterGraph;
             spec.filterInputs = g.filterInputs;
@@ -363,6 +365,54 @@ export function buildSpec(over = {}) {
         if (named) spec.filterHwDeviceIndex = named.hwaccelDevice;
     }
     return spec;
+}
+
+// ── the same spec, asked for five times ────────────────────────────────────
+//
+// `warnings()` asked `buildSpec()` for one three times and derived a graph a
+// fourth; `parts()` asks for a fifth. Both run on every redraw of the export
+// panel, which redraws on every keystroke — so five full derivations of the
+// same edit, each walking every clip through `viewer.placement()` and building
+// a filtergraph, for one answer that could not have changed between them.
+//
+// **Nothing in `buildSpec()` is wrong to be there and it is deliberately not
+// decomposed.** The three fields the renderer ignores — `clip.id`, `inputInfo`
+// and `origin` — each exist for `graph/derive.js` and each are documented where
+// they are set. It is simply not free, and it was being called as though it
+// were.
+//
+// **The memo lives for exactly one answer.** Each of the two readers begins
+// with `freshSpec()` and everything inside it takes `currentSpec()`, so the
+// cache cannot outlive a synchronous call and there is no model change it could
+// be stale across. The obvious alternative — invalidating from listeners — would
+// have to name every place a setting is written, which is most of the export
+// UI and all of the tests that write into `settings` directly, and a spec that
+// is quietly one edit behind is worse than a slow one.
+
+/// The `renderGraph()` answer the last `buildSpec()` made, or null where the
+/// overlay was empty and there was nothing to derive.
+///
+/// A side channel rather than part of the return, because `buildSpec()`'s
+/// answer is the spec — it is what `render.start` is handed and what five other
+/// callers read — and wrapping it would touch every one of them. `currentGraph()`
+/// is the only reader and it takes it in the same breath as the spec.
+let lastGraph = null;
+let cache = null;
+
+/// Build one now, and hold it for whatever asks next. The entry point.
+export function freshSpec() { cache = null; return currentSpec(); }
+
+/// The spec this answer is being written about.
+export function currentSpec() {
+    if (!cache) cache = { spec: buildSpec(), graph: lastGraph };
+    return cache.spec;
+}
+
+/// The derivation that spec was built with — `{ ok, filterGraph, graph }` or
+/// `{ ok: false, reason }`, and null where there was no user graph to derive.
+export function currentGraph() {
+    currentSpec();
+    return cache.graph;
 }
 
 /// A render that is about the *picture*, not about the output file: the A/B
