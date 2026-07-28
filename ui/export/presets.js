@@ -2,16 +2,37 @@
 //
 // Most renders are one of about six things, and picking the six well is worth
 // more than any single control. Each one is filtered against what this build
-// has rather than assumed: a machine without an NVIDIA card does not get
-// offered the NVIDIA one.
+// has rather than assumed — and the GPU one against what this *machine* has,
+// which is not the same question and is the whole of `ui/hardware.js`.
 
 import { settings, activeVideoCodec, outputExt } from './state.js';
 import { encoderInfo, audioInfo, audioEncoders,
          rateModes, qualityRange } from './capabilities.js';
 import { withExtension } from './spec.js';
+import { present } from '../hardware.js';
 
 function firstAvailable(...ids) {
     for (const id of ids) if (encoderInfo(id)) return id;
+    return '';
+}
+
+/// The first of these that a device **on this machine** reports.
+///
+/// `bro.ffmpeg.encoders` is the build's registry, and a vcpkg ffmpeg carries
+/// every NVENC, AMF and QSV encoder on a machine with no graphics card in it —
+/// so a "Fast (GPU)" filtered against that is offered everywhere, badged by
+/// nothing, warned about by nothing, and fails at `avcodec_open2` with the
+/// render already started. `hardware.js` opens each device type and reports
+/// what happened, and this is the one preset that has to ask it.
+///
+/// **The candidate list stays**, because it is not a list of what is supported
+/// — it is the order of preference, and H.264 before HEVC before AV1 is a
+/// decision about what will play on the other end. What the machine answers is
+/// which of them exists; which of those to reach for first is still ours.
+function firstOnACard(...ids) {
+    const here = new Set();
+    for (const d of present()) for (const e of d.encoders || []) here.add(e);
+    for (const id of ids) if (here.has(id) && encoderInfo(id)) return id;
     return '';
 }
 
@@ -24,7 +45,7 @@ export function intents() {
     const out = [];
     const h264 = firstAvailable('libx264');
     const h265 = firstAvailable('libx265');
-    const gpu = firstAvailable('h264_nvenc', 'hevc_nvenc', 'h264_amf', 'hevc_amf', 'h264_qsv');
+    const gpu = firstOnACard('h264_nvenc', 'hevc_nvenc', 'h264_amf', 'hevc_amf', 'h264_qsv');
     const prores = firstAvailable('prores_ks');
 
     if (h264) out.push({

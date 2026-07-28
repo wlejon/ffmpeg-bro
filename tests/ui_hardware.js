@@ -198,6 +198,22 @@ if (hwNames.length) {
     ok(marked.length === 0, 'no encoder here runs on a card, and none is marked as one');
 }
 
+// **The starting points ask the machine, not the build.** `bro.ffmpeg.encoders`
+// carries every NVENC, AMF and QSV encoder on a machine with no card in it, so
+// a "Fast (GPU)" preset filtered against that is offered everywhere and fails
+// at `avcodec_open2` with the render already begun. Stated as a property of the
+// list rather than as a branch, so it is asserted on every machine: where the
+// preset exists at all, the encoder it applies is one a device that *answered*
+// reports.
+const gpuIntent = A.exporter.intents().find((i) => i.id === 'gpu');
+ok(!gpuIntent ||
+   working.some((d) => (d.encoders || []).indexOf(gpuIntent.apply.videoCodec) >= 0),
+   gpuIntent
+       ? `the GPU preset names an encoder a device here reports (${gpuIntent.apply.videoCodec})`
+       : 'no GPU preset is offered, and no device here reports an encoder for one');
+if (!hwNames.length)
+    ok(!gpuIntent, 'and with nothing on this machine to run it on, it is not offered at all');
+
 // ── a hardware frame reaching a software filter ────────────────────────────
 //
 // libavfilter's own message for this is four hundred pixel format names and no

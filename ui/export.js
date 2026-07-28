@@ -424,6 +424,12 @@ export function currentSettings() { return settings; }
 /// without knowing what the default is made of.
 export { defaultStreams };
 
+/// The starting points on offer, as data rather than as buttons. On the surface
+/// because what a test needs to say about them is a property of the *list* —
+/// that a GPU preset is only offered for an encoder this machine has — and
+/// reading that off the DOM would mean clicking one to find out what it applies.
+export { intents };
+
 /// Redraw everything from the settings as they now are. The app itself never
 /// needs this — every control redraws what it changed — but a test that writes
 /// into `settings` directly has changed the model behind the form's back.
