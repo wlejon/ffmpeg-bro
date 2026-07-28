@@ -14,8 +14,9 @@ engine, with libav* linked in directly. Two halves:
   DOM environment. No Node, no npm, no bundler, no package.json: `ui/index.html` loads
   `ui/*.js` directly.
 
-Read `README.md` first — it documents the user-facing behaviour (timeline, viewer, keyboard)
-in detail and lists what does not work yet.
+Read `docs/manual.md` first — it documents the user-facing behaviour (timeline, viewer,
+keyboard) in detail and lists what does not work yet. README.md is the short, user-facing
+version; `docs/api.md` is the `bro.ffmpeg` JS surface.
 
 ## Building and running
 
@@ -216,8 +217,8 @@ everywhere: enumeration answers something, a type reported present can be create
 and is shared rather than remade, a type reported absent refuses with a sentence,
 a codec the device cannot decode is refused before a packet is read. **Numbers are
 printed and never asserted on**, because a threshold on them would be a statement
-about the machine and not about the code; where they belong is README, beside the
-name of the hardware they came from. Do not turn one into a check.
+about the machine and not about the code; where they belong is docs/manual.md, beside
+the name of the hardware they came from. Do not turn one into a check.
 
 The one equivalence check needs its threshold explained rather than tuned. **A
 hardware decoder is not bit-exact with a software one and is not required to be**
@@ -236,7 +237,7 @@ everybody blames is 3–4% of it: NVDEC is a throughput engine being asked for o
 frame at a time. Hardware *encode* is two to three times faster above SD and
 slower below it. So the win is entirely the encoder, the two are separate
 decisions in the UI, and every comment in this repo that used to say "the
-readback is the cost" now says what was measured. README has the tables.
+readback is the cost" now says what was measured. docs/manual.md has the tables.
 
 **Testing capture is awkward and must not be fudged.** CI has no camera, so both
 suites drive `lavfi` — libavfilter's *input device* (`-f lavfi -i testsrc=…`), which
@@ -346,7 +347,7 @@ been no one player element for some time.
 ### Native side
 
 The encode half is **one file per stage of the render**, because each changes for a
-different reason and the three things README's "Not yet" list wants next each need one of
+different reason and the three things the manual's "Not yet" list wants next each need one of
 them to change alone:
 
 | File | What |
@@ -1468,7 +1469,7 @@ about them:
   **This replaced the Edit/Output tabs**, which were a modal in disguise. The reason
   is structural: ffmpeg's model is inputs → streams → a filter graph → encoders → a
   muxer, and an NLE's is a lossy projection of it — which is exactly why every item
-  on README's "Not yet" list (stream copy, `-map`, two-pass, filters, hardware paths)
+  on the manual's "Not yet" list (stream copy, `-map`, two-pass, filters, hardware paths)
   had nowhere to live.
 - `command.js` — the invocation, under every stage, live. Not a summary line: this
   application's argument is that ffmpeg should stop being a thing you guess at, and
@@ -1682,7 +1683,7 @@ about them:
 
   The second is `decodeCost` and `encodeCost`, which are two sentences and are the
   reason this file has an opinion. **A control labelled "hardware acceleration"
-  would be wrong about half of what it does**: measured (README has the numbers),
+  would be wrong about half of what it does**: measured (docs/manual.md has the numbers),
   decoding on the card here is two to six times *slower* than libavcodec threaded
   across thirty-two cores, and encoding on it is two to three times faster above SD.
   So they are two decisions in the two places they belong — the device is on

@@ -131,7 +131,7 @@ struct MediaInput {
     /// slower at 1080p, so `-hwaccel` on an input is a loss whatever this field
     /// says. What wins is the encoder, which is a decision about a stream and
     /// not about an input. The numbers, and what follows from them, are in
-    /// README.
+    /// docs/manual.md.
     std::string hwaccelOutputFormat;
 
     /// `-ss` before `-i`: where this input starts. The input's clock is

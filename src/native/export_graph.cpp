@@ -697,7 +697,7 @@ const AVFrame* GraphSource::nativeAt(double) {
     // encoder's format would have to be made in system memory and uploaded,
     // which is the readback this path exists to avoid — done once a frame
     // for however much of the range is left over. A render that keeps its
-    // pictures on the card ends when its graph does, and README says so.
+    // pictures on the card ends when its graph does, and docs/manual.md says so.
     return vprimary_->ended ? nullptr : vprimary_->frame;
 }
 

@@ -411,7 +411,7 @@ public:
         // the *decode* that makes `-hwaccel` a loss on the timeline, because
         // libavcodec threaded across every core is several times faster than
         // one NVDEC stream pulled a frame at a time. The UI says so where the
-        // choice is made. See README.
+        // choice is made.
         if (frame_->hw_frames_ctx) {
             std::string why;
             if (!downloadFrame(&frame_, &swap_, &why)) {
