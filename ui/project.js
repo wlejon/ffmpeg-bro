@@ -43,6 +43,25 @@ export const project = {
 /// that they cannot come apart if it ever is.
 export function projectFps() { return project.fps || 25; }
 
+/// How long the media behind a clip is, out of a probe.
+///
+/// **The video track's own duration, not the container's.** They differ — an
+/// audio track routinely runs a fraction of a second past the last picture —
+/// and it is the pictures that decide how long a clip is, because the playhead
+/// runs out of frames before it runs out of file.
+///
+/// This is `lengthOf()` in `ui/inputs.js` written a second time, and that is a
+/// decision rather than an oversight: `inputs.js` imports `changed` from here,
+/// so importing back would close a cycle for one three-line function. Two
+/// copies inside this file was the thing worth fixing — `makeClip` and
+/// `applyInput` each had one, and a clip made one way could have disagreed
+/// with the same clip after its input was reopened. If a third caller ever
+/// wants it, the answer is a leaf module both can import, not a cycle.
+function mediaLength(probe) {
+    if (!probe) return 0;
+    return (probe.video && probe.video.duration) || probe.format.duration || 0;
+}
+
 const listeners = [];
 
 /// Subscribe to any change to the model. Coarse on purpose: the redraws it
@@ -77,10 +96,7 @@ function defaultTransform() {
 /// the input is reopened.
 export function makeClip(input) {
     const probe = input.probe;
-    // The video track's own duration, not the container's. They differ — an
-    // audio track routinely runs a fraction of a second past the last picture
-    // — and it is the pictures that decide how long a clip is.
-    const media = (probe.video && probe.video.duration) || probe.format.duration || 0;
+    const media = mediaLength(probe);
     return {
         id: nextId++,
         input,
@@ -128,10 +144,7 @@ export function applyInput(input) {
         c.src = input.src;
         c.probe = input.probe;
         c.name = basename(input.path);
-        const media = input.probe
-            ? (input.probe.video && input.probe.video.duration) ||
-              input.probe.format.duration || 0
-            : 0;
+        const media = mediaLength(input.probe);
         c.media = media;
         if (input.probe && input.probe.video) {
             c.width = input.probe.video.displayWidth;

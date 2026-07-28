@@ -28,6 +28,7 @@
 
 import { project } from './project.js';
 import { div, span, put, show } from './dom.js';
+import { shellArg as arg } from './format.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
 import { freshSpec, specSources } from './export/spec.js';
@@ -65,13 +66,6 @@ export function initCommand(r) {
         draw();
     });
     refs.copy.addEventListener('click', copy);
-}
-
-/// Quoting for a shell. Only when it is needed, because a command line full of
-/// quotes that do nothing is harder to read and this one is meant to be read.
-function arg(v) {
-    const s = String(v);
-    return /[\s"'\\$`&|;<>(){}[\]*?!#~]/.test(s) ? `"${s.replace(/(["\\$`])/g, '\\$1')}"` : s;
 }
 
 // The video options that an audio encoder also has, and so the ones that have

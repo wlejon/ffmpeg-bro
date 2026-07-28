@@ -43,7 +43,7 @@
 // detected by asking `probe()` what the codec is, not by a list.
 
 import { div, span, el, put, row, head } from './dom.js';
-import { clock, bytes, basename } from './format.js';
+import { clock, bytes, basename, shellArg } from './format.js';
 import { optionColumn } from './opttable.js';
 import { schemeOf, protocolLinked } from './export/destination.js';
 
@@ -926,20 +926,16 @@ function optionRows() {
 /// exact, because there is no filtergraph in a capture at all.
 export function commandParts() {
     if (!capture.device || !capture.source) return null;
-    const arg = (v) => {
-        const s = String(v);
-        return /[\s"'\\$`&|;<>(){}[\]*?!#~]/.test(s) ? `"${s.replace(/(["\\$`])/g, '\\$1')}"` : s;
-    };
 
-    const inputs = ['-f', arg(capture.device)];
+    const inputs = ['-f', shellArg(capture.device)];
     for (const k of Object.keys(capture.options))
         if (capture.options[k] !== '' && capture.options[k] !== undefined)
-            inputs.push(`-${k}`, arg(capture.options[k]));
+            inputs.push(`-${k}`, shellArg(capture.options[k]));
     // `-t` in front of the `-i`, where it belongs: after it, it would limit the
     // *output* — nearly the same file and a different instruction, which is
     // exactly the kind of thing this bar exists to stop somebody guessing at.
     if (capture.seconds) inputs.push('-t', String(capture.seconds));
-    inputs.push('-i', arg(capture.source));
+    inputs.push('-i', shellArg(capture.source));
 
     const enc = effectiveVideo();
     const out = [];
@@ -948,7 +944,7 @@ export function commandParts() {
     if (enc && enc.crf && capture.quality) out.push('-crf', String(capture.quality));
     if (enc && enc.preset) out.push('-preset', 'veryfast');
     if (capture.format) out.push('-f', capture.format);
-    out.push(arg(capture.path || 'capture.mkv'));
+    out.push(shellArg(capture.path || 'capture.mkv'));
 
     return { pre: ['ffmpeg'], inputs, out };
 }

@@ -203,6 +203,12 @@ export function plainInputFor(path) {
 }
 
 /// How long this input is, on its own clock. Zero when it could not be read.
+///
+/// The video stream's own duration comes first because they differ: an audio
+/// track routinely runs a fraction of a second past the last picture, and it is
+/// the pictures a clip's length is measured in. `ui/project.js` says the same
+/// thing a second time, in `mediaLength()`, and says there why — this module
+/// imports `changed` from that one, so the import cannot go the other way.
 export function lengthOf(input) {
     const p = input.probe;
     if (!p) return 0;

@@ -80,3 +80,19 @@ export function urlScheme(path) {
     const m = /^([A-Za-z][A-Za-z0-9+.-]+):\/\//.exec(String(path || ''));
     return m ? m[1].toLowerCase() : '';
 }
+
+/// One argument of a command line, quoted for a shell — and only when it needs
+/// to be, because a command full of quotes that do nothing is harder to read
+/// and the whole point of printing one is that it is read.
+///
+/// Here rather than in `command.js` because there are two command bars: the
+/// render's and the capture's, and `capture.js` cannot import from `command.js`
+/// since `command.js` already imports `commandParts` from it. Two byte-identical
+/// copies is what that produced, and the failure they would come to is the one
+/// this application can least afford — a printed command that cannot be pasted
+/// and run, differing from the one beside it by which characters somebody
+/// remembered to escape.
+export function shellArg(v) {
+    const s = String(v);
+    return /[\s"'\\$`&|;<>(){}[\]*?!#~]/.test(s) ? `"${s.replace(/(["\\$`])/g, '\\$1')}"` : s;
+}
