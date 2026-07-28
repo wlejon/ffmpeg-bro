@@ -1653,7 +1653,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-inputtest <file>          # an -i: forced demuxer, options, window, token
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
-./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, and recording one
+./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, recording one, and a session of several
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>] [<rotated>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
@@ -1704,6 +1704,17 @@ it is then opening it either produces frames or says why it did not. A test that
 quietly passed because it found no camera would be worse than no test. On Windows
 with a desktop session, gdigrab opens — including headless — so what runs here is the
 real screen grabber.
+
+A **session** — several devices at once — needs one thing more from the vehicle:
+a lavfi input produces as fast as it can be read, and two of them free-running
+would exercise none of what several inputs are about. So the session sections
+pace each one with the `realtime`/`arealtime` filter, which is what makes the
+wall clock the thing under test rather than a formality, and they skip by name
+where a build has not got it. What they assert is what several inputs added:
+that two pictures composited by the graph both reach the file, that two sounds
+mixed by it do, that a session of picture and sound together lines up, and that
+the refusals fire — several inputs with no graph, and a device that produces
+nothing failing the job naming itself rather than waiting for ever.
 
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
 last picture in the file, zooms the timeline, moves and deletes a clip, scales
@@ -2045,9 +2056,20 @@ Honest list of what does not work:
   watched and recorded. Live *through* the edit — a camera composited with a
   title and streamed out — is a different thing again and needs the render loop
   to run on the wall clock.
-- **Two devices at once.** A camera and a microphone are one `-i` when the same
-  demuxer can open both, which on Windows dshow can. Two separate devices — a
-  webcam and a USB interface — are two `-i`s, and a recording opens one.
+- **Two devices at once, from the Capture stage.** A camera and a microphone are
+  one `-i` when the same demuxer can open both, which on Windows dshow can. Two
+  separate devices — a screen grab and a webcam — are two `-i`s, and *the engine
+  records them*: `record.start` takes a `sources` list, reads each device on a
+  thread of its own, runs the session on the wall clock and composites them
+  through the filter graph, which is documented in docs/api.md and covered by the
+  `capture` suite. What is missing is the stage. `ui/capture.js` sends the one
+  device spelling — `source` — because every control there is singular: one
+  device picker, one source list, one option table, one preview. A second device
+  needs all five again and a graph beside them, and the graph is not optional
+  furniture — several inputs with no `filterGraph` is a refusal, because two
+  pictures and nothing saying how they combine is not a composition anything
+  could guess at. So the capability is real and reachable from a script, and the
+  application cannot yet ask for it.
 - **A destination editor on the Capture stage.** Recording and streaming the
   same capture works — it is `-f tee` and the same `Writer` — but the argument
   is typed into the path field there rather than built from a list. The Write

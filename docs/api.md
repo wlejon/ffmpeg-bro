@@ -355,9 +355,9 @@ bro.ffmpeg.render.start({ …,
 // option table belongs to an encoder, and x264's `preset` on `wrapped_avframe`
 // is an unknown option, which is an error here rather than a shrug.
 
-// Recording a device — the second kind of job in the same slot, polled through
-// the same `render.poll()`. A separate pair of calls because what it is given
-// is different (one device, no timeline) and because **stop is the normal end
+// Recording live inputs — the second kind of job in the same slot, polled
+// through the same `render.poll()`. A separate pair of calls because what it is
+// given is different (devices, no timeline) and because **stop is the normal end
 // of a recording**, which is a different act from cancelling a render even
 // though it is the same signal.
 bro.ffmpeg.record.start({ source: { path: 'desktop', format: 'gdigrab',
@@ -372,7 +372,47 @@ bro.ffmpeg.record.start({ source: { path: 'desktop', format: 'gdigrab',
                           path: 'out/take1.mkv', format: 'matroska' })
 bro.ffmpeg.record.stop()
 
+// **A recording reads a list of devices, and `source` is the one-device
+// spelling of it.** `sources` numbers them for the graph — the first is
+// `[0:v]`/`[0:a]`, the second `[1:…]` — and an absent list means `{source}`, so
+// a caller that has never heard of the field asks for what it always asked for.
+// Given a list, `source` is ignored. A screen grab with a camera in the corner:
+bro.ffmpeg.record.start({ sources: [{ path: 'desktop', format: 'gdigrab' },
+                                    { path: 'video=Elgato Facecam', format: 'dshow' }],
+                          filterGraph: '[1:v]scale=480:-2[pip];' +
+                                       '[0:v][pip]overlay=W-w-32:H-h-32[vout]',
+                          path: 'out/take1.mkv', format: 'matroska' })
+
+// Three things are refused rather than guessed at, all of them before the job
+// starts and with the reason named:
+//
+//   - **several inputs and no `filterGraph`** — two pictures and nothing saying
+//     how they combine, where picking one would be a recording that succeeded
+//     while ignoring a device it was told to read;
+//   - **a stream no pad reads, once there is more than one input** — the bypass
+//     that sends an unfiltered stream straight to the writer has no answer to
+//     which device's picture the file would be of, so it is named by pad
+//     (`[1:a] is not read by the graph…`) rather than silently dropped;
+//   - **`filterInputs`** at all — that field says which *file* feeds which pad,
+//     and a capture's graph is fed by its devices.
+//
+// Every device is opened by this call, on the calling thread, so "there is no
+// camera called that" is a throw from `record.start` with the device that
+// failed named in it — not a job that starts and fails a moment later with the
+// second of two devices to blame and nothing saying which.
+//
+// One input keeps its own media timestamps, so a `-f lavfi` source still
+// records faster than real time. Several run on the wall clock: a tick per
+// output frame, each video feed sampled at the tick and the previous picture
+// pushed again where nothing new arrived. Sound is not sampled — it is pushed
+// as it arrives through `aresample=async`, because two devices are two crystal
+// oscillators and a repeated block of samples is audible where a repeated
+// picture is not. See ffmpeg_capture.h for why each of those is what it is.
+
 // `source.t` is `-t`: how long to record for, and **zero means until stopped**.
+// It stays per input with a `sources` list, and **the shortest of them is the
+// session's** — an input that has run out has nothing further to offer the
+// graph, so going on would be recording the others over a picture held still.
 // With no `-t` the job reports `openEnded: true`, `totalFrames: 0` and
 // `progress: 0` — zero meaning nobody knows, the same rule `probe()` follows
 // for an input with no length. Anything drawing a progress bar has to read
