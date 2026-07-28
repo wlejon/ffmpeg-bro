@@ -326,9 +326,20 @@ export function unlock(anchor) {
 /// Everything a person put *into* the graph. Card sizes and positions stay: they
 /// are how you like looking at it, not part of it, and throwing them away with
 /// the filters would be a second surprise on top of an intended one.
+///
+/// **The ones held by a node of yours do not**, and that is the same rule
+/// `forget()` follows one function up. A pin held by an anchor names a node the
+/// next derivation makes again; a pin held by `u<n>` names something this call
+/// has just thrown away, whose id is never handed out again — so it is not an
+/// arrangement that has been kept, it is the blob growing on every Clear.
 export function clear() {
+    const keep = (from) => {
+        const out = {};
+        for (const k of Object.keys(from)) if (!/^u\d+$/.test(k)) out[k] = from[k];
+        return out;
+    };
     state = { inserts: [], nodes: [], wires: [], cuts: [], locks: {},
-              sizes: state.sizes, pins: state.pins };
+              sizes: keep(state.sizes), pins: keep(state.pins) };
     changed('clear');
 }
 

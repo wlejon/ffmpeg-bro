@@ -1051,6 +1051,21 @@ console.log('\nwhat a node that is gone takes with it');
          'while one on a derived node is kept — its anchor names a node the next ' +
          'derivation makes again');
 
+    // And `Clear my filters and locks`, which keeps the arrangement — but only
+    // where it can still mean something. A pin held by an anchor names a node
+    // the next derivation makes again; one held by a node of yours names
+    // something Clear has just thrown away, and it is what put the two pins
+    // with no nodes anywhere near them into this checkout's own blob.
+    overlay.clear();
+    overlay.unpinAll();
+    const mine = overlay.addNode('hflip');
+    overlay.setPin(mine.id, 8, 9);
+    overlay.setPin('clip:3/scale', 400, 90);
+    overlay.clear();
+    same(overlay.pinOf(mine.id), null, 'Clear takes the position of a node it cleared');
+    ok(!!overlay.pinOf('clip:3/scale'),
+       'and keeps the one on a derived node, which is still going to be there');
+
     overlay.clear();
     overlay.unpinAll();
     const gone = overlay.addSource('in7');
