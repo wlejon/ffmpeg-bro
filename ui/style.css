@@ -830,18 +830,76 @@ body.fs #cropbox { display: none; }
 }
 .cap-settings { flex: 1; overflow-y: auto; min-height: 0; }
 
+/* One card per input, across. They share the room rather than each taking a
+   fixed share of it: `flex: 1` with `min-width: 0` means one device gets the
+   whole width and four get a quarter each, and the picture inside is fitted to
+   whatever that came to. Wrapping is deliberately off — a card on a second row
+   is a device you cannot see while looking at the first. */
+.cap-cards {
+    flex-shrink: 0;
+    height: 46%;
+    min-height: 220px;
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+.cap-card {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-top: 2px solid transparent;
+    padding: 4px 6px 6px;
+    overflow: hidden;
+}
+/* Which card the device list and the option column are about. A border rather
+   than a background, because the card is mostly picture and tinting a live
+   preview would be tinting the thing you are judging. */
+.cap-card.on { border-top-color: var(--accent); }
+.cap-card-head { display: flex; align-items: center; gap: 6px; padding-bottom: 4px; }
+.cap-card-n { color: var(--accent); font-weight: 600; font-size: 11px; }
+.cap-card-dev { font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.cap-card-x { flex-shrink: 0; }
+.cap-card-rows { flex-shrink: 0; overflow: hidden; padding-top: 4px; }
+.cap-card-opts { font-size: 10px; }
+.cap-add { flex-shrink: 0; padding: 6px 0; }
+
 /* The live picture. Positioned, because the region marquee is dragged over it
    and a rectangle in page coordinates would follow the window instead of the
    screen it is framing. */
-.cap-preview {
+/* `min-height` and not just `flex: 1`: the rows under the picture are content
+   and the picture is the flexible part, so a card with an error on it and a
+   couple of options set would squeeze the picture towards nothing — and a
+   region is dragged on this, where every pixel of picture is thirty of screen
+   on a wide desktop. The picture keeps its floor and the card scrolls instead. */
+.cap-pic {
     position: relative;
-    flex-shrink: 0;
-    height: 42%;
-    min-height: 140px;
+    flex: 1;
+    min-height: 110px;
     background: #0b0d11;
     border: 1px solid var(--line);
     overflow: hidden;
 }
+
+/* The filter graph, typed or written by a preset button. A textarea and not an
+   input: a two-input graph is two chains and a semicolon, and reading one back
+   through a 26px slot is how a misplaced bracket stays invisible. */
+.cap-graph { flex-shrink: 0; padding-bottom: 4px; }
+.cap-graph-field {
+    width: 100%;
+    box-sizing: border-box;
+    resize: none;
+    background: #0e1014;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 4px 6px;
+}
+.cap-presets { display: flex; gap: 6px; flex-wrap: wrap; }
 /* Placed in pixels by fitPreview(), not stretched to the box: a region is
    dragged on this picture, and a picture that is not the shape of the screen
    is a rectangle that is not the shape of the one you drew. */
@@ -891,8 +949,10 @@ body.fs #cropbox { display: none; }
 .cap-device.on { background: #1e222b; border-left-color: var(--accent); }
 .cap-device-name { font-size: 13px; font-weight: 600; }
 .cap-device-what { font-size: 11px; }
-#cap-settings input.wide, #cap-options input.wide { width: 100%; box-sizing: border-box; }
+#cap-settings input.wide, #cap-options input.wide,
+#cap-cards input.wide { width: 100%; box-sizing: border-box; }
 #cap-settings select.wide { width: 100%; box-sizing: border-box; }
+#cap-cards input[data-f="capseconds"] { width: 90px; }
 /* Long enough for the word it is placeholdered with: "until stopped" is the
    whole of what an empty -t means and a field that clips it says "until stc". */
 #cap-settings input[data-f="capseconds"] { width: 110px; }
@@ -2005,7 +2065,7 @@ select.gn-f { text-align: left; }
     color: var(--dim);
     cursor: pointer;
 }
-.gp-plus:hover { color: var(--fg); border-color: var(--blue); }
+.gp-plus:hover { color: var(--text); border-color: var(--blue); }
 .gp-plus.on { color: var(--bg); background: var(--blue); border-color: var(--blue); }
 
 /* The column beside the graph. Scrolls on its own: a filter with forty options

@@ -21,7 +21,7 @@
     <nav id="spine"></nav>
 
     <div id="stages">
-    <!-- Capture: a device, what it can see, and the recording it becomes.
+    <!-- Capture: the devices a recording reads, and the file they become.
 
          First on the spine, and it is the one card that is not a question
          about the file coming out — it is the question about the file going
@@ -30,18 +30,22 @@
          "Add to the timeline" does. See ui/capture.js.
 
          Three columns like Sources, in the order the questions come: which
-         device and what it can see, what it is set to with its live picture,
-         and the demuxer's own option table beside it. -->
+         device and what it can see, the inputs themselves with a live picture
+         each, and the demuxer's own option table beside them.
+
+         The cards are built by capture.js and kept, not redrawn: the <video>
+         in a card is the decoder, so putting over it would close a device and
+         open it again every time a field moved. -->
     <section id="st-capture" class="stage-view hidden">
         <div class="cap-main">
             <div id="cap-list" class="cap-list"></div>
             <div class="cap-mid">
-                <!-- The live picture, and the region dragged on it. Not a
-                     preview path of its own: an ordinary <video> playing the
-                     device through the same backend everything else uses. -->
-                <div id="cap-preview" class="cap-preview">
-                    <div id="cap-marquee" class="cap-marquee hidden"></div>
-                </div>
+                <div id="cap-cards" class="cap-cards"></div>
+                <div id="cap-add" class="cap-add"></div>
+                <!-- What says how several inputs combine. Not optional once
+                     there are two of them — the engine refuses rather than
+                     guessing at a composition. -->
+                <div id="cap-graph" class="cap-graph"></div>
                 <div id="cap-note" class="cap-note-area"></div>
                 <div id="cap-bar" class="cap-bar"></div>
                 <div id="cap-settings" class="cap-settings"></div>

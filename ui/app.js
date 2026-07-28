@@ -114,8 +114,12 @@ initSources({
 capture.initCapture({
     list: el('cap-list'),
     settings: el('cap-settings'),
-    preview: el('cap-preview'),
-    marquee: el('cap-marquee'),
+    // One card per input, built and kept by capture.js — including the picture
+    // and the marquee dragged on it, which is why neither is named here. A
+    // fixed preview node would be one device's, and this stage reads several.
+    cards: el('cap-cards'),
+    add: el('cap-add'),
+    graph: el('cap-graph'),
     bar: el('cap-bar'),
     note: el('cap-note'),
     options: el('cap-options'),
@@ -130,7 +134,6 @@ capture.initCapture({
     // the capture rather than the render.
     changed: () => { shell.drawSpine(); command.draw(); },
 });
-capture.initRegionDrag(el('cap-preview'), el('cap-marquee'));
 
 // What was inserted and locked last time, before anything asks for a graph.
 graphOverlay.restore();

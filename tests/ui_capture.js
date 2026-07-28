@@ -91,16 +91,19 @@ console.log('\nchoosing one');
 {
     q('[data-device="lavfi"]').click();
     pump(300);
-    same(cap.capture.device, 'lavfi', 'the device is chosen');
-    ok(cap.capture.source.indexOf('testsrc') === 0,
-       `and it starts from something openable (${cap.capture.source})`);
+    same(cap.capture.inputs[0].device, 'lavfi', 'the device is chosen');
+    ok(cap.capture.inputs[0].source.indexOf('testsrc') === 0,
+       `and it starts from something openable (${cap.capture.inputs[0].source})`);
     ok(text('#cap-list').indexOf('does not list its sources') >= 0,
        'a device with nothing to enumerate says so rather than showing an empty list');
 
     // The one refusal that is about the seam between this binary and the
     // engine rather than about the device.
-    ok(text('#cap-note').indexOf('decoded frames rather than packets') >= 0,
-       `lavfi cannot be previewed, and the reason is stated: ${text('#cap-note')}`);
+    // Said on the card whose device it is, not in one note for the stage:
+    // with several inputs the question is always *which* of them could not be
+    // shown, and a stage-wide sentence cannot answer it.
+    ok(text('#cap-cards').indexOf('decoded frames rather than packets') >= 0,
+       `lavfi cannot be previewed, and the reason is stated: ${text('#cap-cards')}`);
     ok(!q('[data-f="preview"]'), 'so there is no video element pretending otherwise');
 }
 
@@ -121,7 +124,8 @@ console.log('\nits options are its demuxer’s');
     field.value = '64M';
     field.dispatchEvent(new Event('change'));
     pump(150);
-    same(cap.capture.options.rtbufsize, '64M', 'and it lands in the device’s option bag');
+    same(cap.capture.inputs[0].options.rtbufsize, '64M',
+         'and it lands in the device’s option bag');
 }
 
 console.log('\nthe command it is');
@@ -135,7 +139,8 @@ console.log('\nthe command it is');
     // The bar is describing the capture rather than the render, which is the
     // point of it being a stage: the timeline's render is a different file.
     ok(line.indexOf('-filter_complex') < 0,
-       'and there is no filtergraph in it — a capture composites nothing');
+       'and no -filter_complex, because the graph field is empty — one device with nothing ' +
+       'asked of it is written as it comes');
 
     const seconds = q('[data-f="capseconds"]');
     seconds.value = '2';
@@ -240,6 +245,148 @@ console.log('\na recording that does have an end');
     pump(100);
 }
 
+console.log('\na second device is a second -i, not a second recording');
+{
+    same(cap.capture.inputs.length, 1, 'one input to start with');
+    q('[data-f="capadd"]').click();
+    pump(200);
+    same(cap.capture.inputs.length, 2, 'adding one appends an input');
+    same(qa('[data-card]').length, 2, 'and a card, so both devices are on screen at once');
+
+    // The left column edits whichever card is focused, and adding one focuses
+    // it — otherwise choosing a device would silently change the first.
+    q('[data-device="lavfi"]').click();
+    pump(300);
+    same(cap.capture.inputs[1].device, 'lavfi', 'the device lands on the new input');
+    same(cap.capture.inputs[0].device, 'lavfi', 'and the first one is untouched');
+    ok(text('#cap-list').indexOf('editing [1]') >= 0,
+       'the column says which input it is about, because there is now more than one');
+}
+
+console.log('\ntwo inputs with no graph have nowhere to meet');
+{
+    same(cap.capture.graph, '', 'nothing has written a graph yet');
+    ok(!cap.ready(), 'so the recording is not ready to start');
+    ok(q('[data-f="caprecord"]').disabled, 'and the button says so rather than failing later');
+    ok(text('#cap-bar').indexOf('nowhere for [0:v] and [1:v] to meet') >= 0,
+       `with the reason, which is the engine's own: ${text('#cap-bar')}`);
+    // The same refusal from the engine, in case the button ever stops asking.
+    let threw = '';
+    try {
+        bro.ffmpeg.record.start({ sources: cap.asInputs(), path: `${bro.appDir}/../out/x.mkv` });
+    } catch (e) { threw = String(e.message || e); }
+    ok(threw.indexOf('no filter graph') >= 0,
+       `record.start refuses it too, naming the graph: ${threw}`);
+}
+
+console.log('\na preset writes a graph, and the field is what runs');
+{
+    ok(!!q('[data-preset="side"]'), 'two pictures can be put side by side');
+    ok(!!q('[data-preset="pip"]'), 'and one can go in the corner of the other');
+    ok(!q('[data-preset="sound"]'),
+       'and “just the sound” is not offered, because these inputs have pictures — a graph ' +
+       'that left [0:v] unread would be refused');
+
+    q('[data-preset="side"]').click();
+    pump(200);
+    const g = cap.capture.graph;
+    console.log(`  ${g}`);
+    ok(g.indexOf('hstack=inputs=2') >= 0, `the button wrote a real graph (${g})`);
+    ok(g.indexOf('[vout]') >= 0, 'ending in a pad the muxer can map');
+    ok(g.indexOf('[0:v]') >= 0 && g.indexOf('[1:v]') >= 0,
+       'that reads every picture, because with several inputs an unread stream is refused');
+    same(q('[data-f="capgraph"]').value, g, 'and the field shows it — it is not a hidden mode');
+
+    // Typed over, and it stays typed over. A preset is a keyboard, not a state.
+    const field = q('[data-f="capgraph"]');
+    field.value = '[0:v][1:v]hstack=inputs=2[vout]';
+    field.dispatchEvent(new Event('change'));
+    pump(150);
+    same(cap.capture.graph, '[0:v][1:v]hstack=inputs=2[vout]', 'an edit to the field is kept');
+    ok(cap.ready(), 'and with a graph the recording is ready');
+    // Two cards, a picture each, and the graph that joins them — the state the
+    // stage exists to let somebody judge before pressing record.
+    screenshot('out/ui-capture-two.png');
+}
+
+console.log('\nthe command two inputs come to');
+{
+    const line = A.command.currentCommand();
+    console.log(`  ${line}`);
+    same(line.split('-f lavfi').length - 1, 2, 'two devices are two -f/-i pairs');
+    same(line.split(' -i ').length - 1, 2, 'and two -i, in the order the graph numbers them');
+    ok(line.indexOf('-filter_complex') >= 0,
+       'the graph is printed, and exactly: nothing rewrites the string on the way to libav');
+    ok(line.indexOf('-map [vout]') >= 0,
+       'and what the muxer takes is named, because the graph labelled it');
+}
+
+console.log('\nrecording a session of two devices');
+{
+    // Paced, for the reason capture_test.cpp paces its sessions: a lavfi input
+    // produces as fast as it can be read, and two free-running ones exercise
+    // none of what a wall-clock session is about.
+    const paced = (bro.ffmpeg.filters || []).some((f) => f.name === 'realtime');
+    if (!paced) {
+        console.log('  SKIP  this build has no realtime filter to pace a lavfi input with');
+    } else {
+        const sources = qa('[data-f="capsource"]');
+        const sizes = ['size=320x240:rate=25', 'size=320x240:rate=25'];
+        for (let i = 0; i < 2; i++) {
+            sources[i].value = `testsrc=${sizes[i]},realtime`;
+            sources[i].dispatchEvent(new Event('change'));
+        }
+        pump(200);
+        const secs = qa('[data-f="capseconds"]');
+        for (const s of secs) { s.value = '2'; s.dispatchEvent(new Event('change')); }
+        pump(200);
+
+        const out = `${bro.appDir}/../out/ui-capture-session.mkv`;
+        const path = q('[data-f="cappath"]');
+        path.value = out;
+        path.dispatchEvent(new Event('change'));
+        pump(150);
+
+        q('[data-f="caprecord"]').click();
+        pump(200);
+        ok(cap.isRecording(), 'a session of two devices starts');
+        ok(waitFor('the session to end', () => !cap.isRecording(), 40000),
+           'and ends on its own, because -t belongs to the inputs');
+
+        const probe = bro.ffmpeg.probe(out);
+        ok(!!probe.video, 'what it wrote opens and has a picture');
+        // The graph is what makes the file: two 320-wide pictures stacked
+        // across is one 640-wide picture, which nothing but the graph could
+        // have produced.
+        same(probe.video.width, 640,
+             `and it is both of them side by side (${probe.video.width}x${probe.video.height})`);
+        same(probe.video.height, 240, 'at the height they were scaled to');
+    }
+}
+
+console.log('\ntaking one back out');
+{
+    q('[data-f="capremove"][data-input="1"]').click();
+    pump(250);
+    same(cap.capture.inputs.length, 1, 'the input is gone');
+    same(qa('[data-card]').length, 1, 'and so is its card');
+    ok(cap.capture.inputs.length === 1 && !q('[data-f="capremove"]'),
+       'the last input cannot be removed — a recording of nothing is not a state');
+
+    // The graph field stays, because a single input can run one too. That is
+    // the other thing this stage could not previously ask for.
+    const field = q('[data-f="capgraph"]');
+    ok(!!field, 'one input still has a graph field');
+    field.value = '';
+    field.dispatchEvent(new Event('change'));
+    pump(150);
+    ok(cap.ready(), 'and with one input an empty graph is fine — the device is written as it is');
+    const secs = q('[data-f="capseconds"]');
+    secs.value = '';
+    secs.dispatchEvent(new Event('change'));
+    pump(100);
+}
+
 console.log('\na live input cannot be laid on a timeline');
 {
     const input = A.inputs.addInput({ path: 'testsrc=size=320x240:rate=25', format: 'lavfi' });
@@ -297,14 +444,14 @@ console.log('\nthis machine’s own devices');
         if (shown) {
             ok(waitFor('the screen', () => q('[data-f="preview"]').videoWidth > 0),
                'and the picture is the screen, decoded through the ordinary <video> path');
-            ok(text('#cap-settings').indexOf('Drag a box on the picture') >= 0,
+            ok(text('#cap-settings').indexOf('Drag a box on') >= 0,
                'a region is picked rather than typed');
 
             // The picture is fitted inside its panel rather than stretched to
             // it, because a region is dragged on it and a squashed picture
             // would be a squashed rectangle.
             const pic = q('[data-f="preview"]');
-            const panel = q('#cap-preview');
+            const panel = q('.cap-pic');
             ok(Math.abs(pic.clientWidth / pic.clientHeight -
                         pic.videoWidth / pic.videoHeight) < 0.05,
                `the picture is the shape of the screen (${pic.clientWidth}x${
@@ -316,10 +463,18 @@ console.log('\nthis machine’s own devices');
             // rectangle on the picture becomes the demuxer's own options in
             // the screen's own pixels. Measured before the drag, because
             // setting a region reopens the device at that size.
+            //
+            // Dragged as a *fraction of the picture* rather than in fixed
+            // pixels, because the picture is as wide as the room the other
+            // cards left it: on a wide desktop shown in a card, two hundred
+            // pixels of mouse is more screen than there is screen, and the test
+            // would be measuring the clamp instead of the arithmetic.
             const scale = pic.videoWidth / pic.clientWidth;
-            cap.setRegionFromDrag({ x: 20, y: 16 }, { x: 220, y: 136 });
+            const dragW = Math.round(pic.clientWidth * 0.5);
+            const dragH = Math.round(pic.clientHeight * 0.5);
+            cap.setRegionFromDrag({ x: 4, y: 4 }, { x: 4 + dragW, y: 4 + dragH });
             pump(200);
-            const o = cap.capture.options;
+            const o = cap.capture.inputs[0].options;
             ok(!!o.video_size && !!o.offset_x && !!o.offset_y,
                `dragging sets -offset_x -offset_y -video_size (${o.offset_x},${o.offset_y} ${
                    o.video_size})`);
@@ -327,8 +482,8 @@ console.log('\nthis machine’s own devices');
             const h = Number(o.video_size.split('x')[1]);
             ok(w % 2 === 0 && h % 2 === 0,
                'and the rectangle is even on both sides, because yuv420p has no half pixels');
-            ok(Math.abs(w - 200 * scale) <= 4,
-               `in the screen’s pixels rather than the panel’s (${w} for 200 shown at ${
+            ok(Math.abs(w - dragW * scale) <= 4,
+               `in the screen’s pixels rather than the card’s (${w} for ${dragW} shown at ${
                    scale.toFixed(2)}×)`);
 
             const line = A.command.currentCommand();
@@ -337,7 +492,33 @@ console.log('\nthis machine’s own devices');
 
             q('[data-f="capwhole"]').click();
             pump(200);
-            ok(!cap.capture.options.video_size, 'giving the whole screen back removes them');
+            ok(!cap.capture.inputs[0].options.video_size,
+               'giving the whole screen back removes them');
+
+            // A drag that runs off the edge is the common one on a small card,
+            // and an unclamped rectangle is one libavdevice refuses at the open
+            // ("capture area extends outside window area") — so the region
+            // never leaves the screen it is a region of.
+            //
+            // Done here, on a picture that is the whole screen again, because a
+            // region *reopens the device at that size*: dragged on an
+            // already-cropped picture, the numbers below would be a fraction of
+            // the crop rather than of the screen.
+            const full = q('[data-f="preview"]');
+            ok(waitFor('the whole screen again', () => full.videoWidth > 0), 'the picture is back');
+            const realW = full.videoWidth, realH = full.videoHeight;
+            cap.setRegionFromDrag({ x: 4, y: 4 },
+                                  { x: full.clientWidth * 4, y: full.clientHeight * 4 });
+            pump(200);
+            const big = cap.capture.inputs[0].options;
+            const bw = Number(big.video_size.split('x')[0]);
+            const bh = Number(big.video_size.split('x')[1]);
+            ok(bw + Number(big.offset_x) <= realW && bh + Number(big.offset_y) <= realH,
+               `a drag past the edge is clamped to the screen (${big.video_size} at ${
+                   big.offset_x},${big.offset_y} of ${realW}x${realH})`);
+
+            q('[data-f="capwhole"]').click();
+            pump(200);
         }
     } else {
         // No assertion here, and deliberately none. The rule this block opens

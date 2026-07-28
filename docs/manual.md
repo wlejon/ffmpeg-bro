@@ -40,7 +40,8 @@ laid over the footage must not take the clock away from the thing being watched.
 ## Capture
 
 `D` (or the first card on the spine) is where an input comes from when there is not
-one yet: a screen, a camera, a microphone, recorded to a file.
+one yet: a screen, a camera, a microphone — one of them or several at once,
+composited and recorded to a file.
 
 It is **first on the spine and it is the one card that is not about the render**.
 Every other stage is a question about the file coming out; this is the question
@@ -52,7 +53,7 @@ arrow being followed.
 **A device is an input.** `-f dshow` names a libavdevice demuxer, `-i video=…` names
 what it can see, and everything else about it is that demuxer's own options — in the
 same bag `-probesize` travels in, printed in front of the same `-i`. Nothing about a
-device is a feature of this application, which is why the whole stage is three
+device is a feature of this application, which is why the whole stage is four
 questions:
 
 - **Which device.** libavdevice's own list: on Windows `dshow`, `gdigrab`, `vfwcap`
@@ -68,20 +69,59 @@ questions:
   encoder's and the muxer's options already use: `video_size`, `framerate`,
   `draw_mouse`, `offset_x`, `audio_buffer_size`, `rtbufsize`. An unknown key stops
   the open rather than being ignored.
+- **How they combine**, once there is more than one — which is the filter graph,
+  and is below.
 
-**A live preview, before you commit to a recording.** The picture is an ordinary
-`<video>` playing the device through the same backend, the same decoder and the same
-renderer everything else in this application plays through. There is no preview-only
-path, for the reason the node previews have none: a preview that agreed with the
-recording most of the time would be worse than none, because it would be trusted.
+**Several devices are several `-i`s, and a card each.** `+ another device` appends
+an input; the cards sit across the stage in the order that numbers them for the
+graph, so the first is `[0:v]`/`[0:a]` and the second `[1:…]`. Each card is a whole
+input — its `-i`, its `-t`, its own option bag — and clicking one is what points the
+device list and the option column at it, which the column's heading says. The last
+input cannot be removed: a recording of nothing is not a state, and an input with no
+device chosen already says that better.
 
-**A region is dragged, not typed.** Drag a box on the picture and it becomes
-`-offset_x`, `-offset_y` and `-video_size` — the demuxer's own options, in the
+`-t` belongs to an **input** rather than to the recording, exactly as it does on a
+command line, and **the shortest of them is when the session ends** — an input that
+has run out has nothing further to offer the graph, so going on would be recording
+the others over a picture held still.
+
+**A live preview per card, before you commit to a recording.** Each picture is an
+ordinary `<video>` playing that device through the same backend, the same decoder and
+the same renderer everything else in this application plays through. There is no
+preview-only path, for the reason the node previews have none: a preview that agreed
+with the recording most of the time would be worse than none, because it would be
+trusted. Two cameras are therefore two devices held open before a recording that will
+want them both, which is the cost of being able to see that the camera is pointed the
+right way *and* that the screen grab has the right monitor in it. What a card shows
+is that device and not the composition — the graph is not previewed here, for the
+same structural reason the viewer cannot show a filter.
+
+**The graph is a field, and with several inputs it is not optional.** A recording has
+been able to run a filter graph for as long as the engine has had one, at one input
+as much as at several: `[0:v]crop=…[vout]` records one monitor out of a wide screen
+grab. Several inputs *require* one — two pictures and nothing saying how they combine
+is refused rather than guessed at, and once there is more than one input **every**
+stream of every input has to reach a pad, because a stream going straight to the
+writer would be one device's picture silently becoming the file. Both refusals name
+what is wrong and which pad it is about.
+
+The preset buttons write a real graph into that field and then get out of the way.
+They are not modes: what a button does is type for you, the string it typed is the
+string handed to `avfilter_graph_parse2`, and editing it afterwards keeps the edit.
+They are built from what the devices actually are, so an input with no sound
+contributes no `[n:a]` and `Just the sound mixed` is not offered while anything has a
+picture — a graph that left `[0:v]` unread is one the engine would refuse.
+
+**A region is dragged, not typed.** Drag a box on an input's picture and it becomes
+`-offset_x`, `-offset_y` and `-video_size` — that input's own demuxer options, in the
 screen's own pixels, printed in the command a foot below. Which devices can be asked
 for a region is a question about their option table rather than a list of names here:
 a device takes a rectangle when it has all three of those options, which a screen
 grabber does and a camera does not. The picture is fitted rather than stretched,
-because a squashed picture would be a squashed rectangle.
+because a squashed picture would be a squashed rectangle — and the rectangle is
+**clamped to the screen**, because a card is only as wide as the room the other cards
+left it, one pixel of a wide desktop shown small is thirty of screen, and a rectangle
+running off the edge is one libavdevice refuses at the open.
 
 **Recording says what it can say and no more.** Elapsed, frames written, bytes on
 disk — and, out loud, that there is no percentage: a fraction needs a total and a
@@ -1796,8 +1836,21 @@ every other stage refused while it runs, and then stopped — which is `done` an
 `cancelled` — leaving a file that probes and lands on the timeline. Then the same
 with a `-t`, which does have a percentage and ends by itself. It also lays a device
 on the timeline and requires the refusal, drags a region on the live screen and
-checks the numbers it becomes are in the screen's pixels rather than the panel's, and
-asserts that leaving the stage gives the device back.
+checks the numbers it becomes are in the screen's pixels rather than the card's — and
+that a drag off the edge is clamped, because an unclamped rectangle is one
+libavdevice refuses at the open — and asserts that leaving the stage gives the device
+back.
+
+The session half adds a second input and follows what changes: the card and the
+column that say which input they are about, the refusal at two inputs with no graph
+asserted **twice** — once as the disabled button and once from `record.start`, so
+that a button which stopped asking would still be caught — a preset writing a graph
+that reads every picture, that graph surviving being typed over, two `-f`/`-i` pairs
+and one exact `-filter_complex` in the command bar, and then a real recording of two
+paced lavfi devices whose file comes back **640 wide from two 320-wide pictures**.
+That last number is the assertion worth having: nothing but the graph could have
+produced it, so a session that quietly recorded one device would fail rather than
+pass with a plausible file.
 
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
@@ -2056,20 +2109,22 @@ Honest list of what does not work:
   watched and recorded. Live *through* the edit — a camera composited with a
   title and streamed out — is a different thing again and needs the render loop
   to run on the wall clock.
-- **Two devices at once, from the Capture stage.** A camera and a microphone are
-  one `-i` when the same demuxer can open both, which on Windows dshow can. Two
-  separate devices — a screen grab and a webcam — are two `-i`s, and *the engine
-  records them*: `record.start` takes a `sources` list, reads each device on a
-  thread of its own, runs the session on the wall clock and composites them
-  through the filter graph, which is documented in docs/api.md and covered by the
-  `capture` suite. What is missing is the stage. `ui/capture.js` sends the one
-  device spelling — `source` — because every control there is singular: one
-  device picker, one source list, one option table, one preview. A second device
-  needs all five again and a graph beside them, and the graph is not optional
-  furniture — several inputs with no `filterGraph` is a refusal, because two
-  pictures and nothing saying how they combine is not a composition anything
-  could guess at. So the capability is real and reachable from a script, and the
-  application cannot yet ask for it.
+- **Seeing the composition before you record it.** A session's cards show each
+  device — that is the whole point of them, and it is what tells you the camera
+  is pointed the right way — but *what the graph makes of them together* is not
+  drawn anywhere until the file exists. It is the same structural reason the
+  viewer cannot show a filter: a preview here is the engine decoding a device
+  into a `<video>` and there is no filtergraph in that path. The Graph stage's
+  per-node preview is the shape of the answer and it is about the render's
+  graph, not the recording's. So a picture-in-picture is judged by its numbers
+  and then by playing back the take.
+- **A file beside a device on the same graph.** A capture's graph is fed by its
+  devices and by nothing else: `filterInputs` — which says which *file* feeds
+  which pad — is refused outright. Overlaying a title card on a screen grab as
+  it records is therefore not something this can express, and the refusal names
+  the reason rather than failing somewhere inside the parse. A graph whose
+  filters want a graphics card is refused the same way, because
+  `-filter_hw_device` has nowhere to be said on this stage.
 - **A destination editor on the Capture stage.** Recording and streaming the
   same capture works — it is `-f tee` and the same `Writer` — but the argument
   is typed into the path field there rather than built from a list. The Write
