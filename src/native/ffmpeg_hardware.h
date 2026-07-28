@@ -31,11 +31,16 @@
 //
 // The cached device contexts are deliberately never freed. A `static` holding
 // an `AVBufferRef*` that unrefs at exit would tear a CUDA context down after
-// the driver has begun its own shutdown, which is the same class of bug as the
-// engine outliving its audio engine (see CLAUDE.md) and has the same symptom:
-// a crash on the way out, after every check has passed, blaming whatever ran
-// last. A process-lifetime device costs one context and ends when the process
-// does.
+// the driver has begun its own shutdown, and **a shutdown that frees a service
+// before the objects that call into it fails silently and blames whatever ran
+// last**. That general shape cost this repository an afternoon once already,
+// from the other side: bro's `~Engine` reset `audioEngine_` before `document_`,
+// `~ElVideo` calls `closeStream` on it through a non-owning pointer, and any
+// document that had played sound corrupted the heap at exit — which surfaced
+// as the headless binary here dying after every check had passed. The symptom
+// is the same either way: a crash on the way out, with nothing wrong at the
+// place it is reported. A process-lifetime device costs one context and ends
+// when the process does.
 #pragma once
 
 #include <string>

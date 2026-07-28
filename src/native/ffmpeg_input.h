@@ -19,8 +19,13 @@
 // `<video>` takes a src string and the media backend is registered generically,
 // so an input reaches it through the registry at the bottom of this file — the
 // element is handed a token naming the input, and the backend swaps the token
-// for the real URL and its options on the way into libavformat. See CLAUDE.md
-// for why that is a token rather than the path itself.
+// for the real URL and its options on the way into libavformat. It is a token
+// rather than the path itself because a path carries none of the rest of the
+// input — the demuxer, its options and the window are decisions taken while the
+// file is opened, and a src string has nowhere to put them — and because bro
+// resolves anything not starting with `/` or `x:` against the document, so a
+// `https://…` src would otherwise become a path under `ui/`. See the
+// `bro.ffmpeg.inputs` section of docs/api.md.
 #pragma once
 
 #include <string>

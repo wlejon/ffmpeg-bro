@@ -829,7 +829,7 @@ console.log('\nthe Write stage is the output’s stream list');
 
     // **And the case that actually happens**, which `zzzz` above does not
     // reach: `hvc1` is a real tag, right in an mp4, and meaningless in
-    // Matroska. It is the example CLAUDE.md names and the one somebody arrives
+    // Matroska. It is the example docs/manual.md names and the one somebody arrives
     // at by choosing a tag on the Write stage and then changing the container —
     // so it has to be the container that decides, not the string.
     {
