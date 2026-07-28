@@ -324,6 +324,26 @@ function clipHasSound(spec, clip) {
     return info.streams.indexOf('a') >= 0;
 }
 
+/// And does it have a picture?
+///
+/// The mirror of the question above, asked of the same list for the same
+/// reason. A clip of a file with sound and no video is an ordinary clip — it
+/// contributes to the mix and to nothing else — so it gets no `[0:v]` pad, no
+/// `trim`/`scale` run and no `overlay` onto the canvas. Without the term it got
+/// all three: `viewer.placement()` hands back no rectangle for one, and the
+/// derivation refused the whole edit with "a clip has no rectangle to be drawn
+/// in" — a true sentence about a graph that should not have been trying to draw
+/// it.
+///
+/// **A spec that does not carry `inputInfo` answers yes**, which is what every
+/// hand-written spec in `tests/` has always meant.
+function clipHasPicture(spec, clip) {
+    const list = Array.isArray(spec.inputInfo) ? spec.inputInfo : [];
+    const info = list[clip.input];
+    if (!info || !Array.isArray(info.streams)) return true;
+    return info.streams.indexOf('v') >= 0;
+}
+
 /// Which control on the properties panel a node's value came from — so that a
 /// lock can be reported *there*, against the field it outranks, rather than
 /// only on a stage the person editing may not be looking at.
@@ -767,15 +787,26 @@ export function derive(spec, sources, opts = {}) {
         const clip = spec.clips[ci];
         const w = windowOf(clip, start, end);
         if (!w) continue;                       // outside the range; not an error
+        // A clip that puts nothing on the canvas is not asked for a rectangle.
+        // It is still kept — it is in the mix — and it still gets an `-i`, so
+        // the numbering the graph gives its pads counts it like any other.
+        const picture = clipHasPicture(spec, clip);
         const c = cropOf(clip);
-        if (c.l + c.r >= 1 || c.t + c.b >= 1)
-            return refuse(`a clip is cropped away to nothing`);
-        if (!(clip.w > 0 && clip.h > 0) ||
-            ![clip.x, clip.y, clip.w, clip.h].every(Number.isFinite))
-            return refuse('a clip has no rectangle to be drawn in');
-        kept.push({ clip, w, i: kept.length, key: clipKey(clip, ci),
+        if (picture) {
+            if (c.l + c.r >= 1 || c.t + c.b >= 1)
+                return refuse(`a clip is cropped away to nothing`);
+            if (!(clip.w > 0 && clip.h > 0) ||
+                ![clip.x, clip.y, clip.w, clip.h].every(Number.isFinite))
+                return refuse('a clip has no rectangle to be drawn in');
+        }
+        kept.push({ clip, w, picture, i: kept.length, key: clipKey(clip, ci),
                     src: Array.isArray(sources) ? sources[ci] : null });
     }
+    // The clips that put something on the canvas, in paint order. Everything
+    // about the picture is measured against this list and everything about the
+    // sound against `kept`, because the two stop being the same list the moment
+    // a clip has only one of them.
+    const shown = kept.filter((k) => k.picture);
     // **A render with nothing on the timeline is a legitimate render.** `ffmpeg
     // -f lavfi -i testsrc -t 5 out.mp4` is a thing people do every day, and the
     // moment the graph can hold a node that produces something out of nothing
@@ -813,7 +844,7 @@ export function derive(spec, sources, opts = {}) {
     // offset too — `color` always starts at zero and a canvas left there while
     // every clip was shifted would composite the clips against the wrong frames
     // of it, which is a black picture rather than a subtle one.
-    const base = kept.length ? g.run([], [
+    const base = shown.length ? g.run([], [
         { filter: 'color', anchor: 'base',
           params: { c: 'black', s: `${W}x${H}`, r: n(fps, 6), d: n(length, 6) } },
         ...(off ? [{ filter: 'setpts', anchor: 'base/setpts', posNames: ['expr'],
@@ -845,7 +876,8 @@ export function derive(spec, sources, opts = {}) {
     // Nodes are pushed in the order their chains are printed in, and print.js
     // walks the array — so a clip's whole run goes down before the next clip's,
     // and the overlays after all of them.
-    const heads = kept.map(({ clip, w, src, i, key }) => {
+    kept.forEach((k) => {
+        const { clip, w, src, i, key } = k;
         // `index` is the `-i` number this graph gives the input and `input` is
         // which of the spec's inputs that is. Two numbers because they count
         // different things: a graph numbers the pads it reads, in the order it
@@ -859,9 +891,18 @@ export function derive(spec, sources, opts = {}) {
         const input = g.add({ kind: 'input', index: i, path: clip.path,
                               input: clip.input === undefined ? -1 : clip.input,
                               anchor: `${key}/in`, from: w.srcIn, onDevice,
-                              outs: [{ stream: 'v' }] });
+                              outs: [] });
         inputs.set(key, input);
-        const tail = g.run(input, videoSteps(clip, w, src, key, off, onDevice), `v${i}`);
+        // **A pad is added when something reads it**, which is the rule the
+        // sound side already followed and which the picture side could take for
+        // granted while every clip had one. A clip of a file with no video in it
+        // is read for its sound and nothing else, so its node's only socket is
+        // the one the audio pass below adds — the card says what this render
+        // does with the file, not what the file happens to contain.
+        if (!k.picture) return;
+        input.outs.push({ stream: 'v' });
+        k.head = g.run({ node: input, out: 0 },
+                       videoSteps(clip, w, src, key, off, onDevice), `v${i}`);
         // Two points per clip, and they are two different pictures: before the
         // scale a filter sees the source at its own size, in its own pixel
         // format and colour; after it, the clip as it will be composited —
@@ -869,7 +910,6 @@ export function derive(spec, sources, opts = {}) {
         // anything that works in pixels does.
         point(`${key}/after-decode`, input, 0, 'v', 'after decode');
         point(`${key}/after-scale`, g.byAnchor(`${key}/format`), 0, 'v', 'after scale');
-        return tail;
     });
 
     // The files the *graph* reads that no clip accounts for — a logo laid over
@@ -934,11 +974,11 @@ export function derive(spec, sources, opts = {}) {
 
     let over = base;
     let lastOverlay = null;
-    kept.forEach(({ clip, key }, i) => {
+    shown.forEach(({ clip, key, head }, i) => {
         const c = cropOf(clip);
         const x = clip.x + clip.w * c.l;
         const y = clip.y + clip.h * c.t;
-        const last = i === kept.length - 1;
+        const last = i === shown.length - 1;
         // `eof_action=pass` because a clip is shorter than the render: when it
         // ends the canvas has to carry on rather than the whole graph stopping,
         // which is the default and would truncate the output at the first clip
@@ -946,7 +986,7 @@ export function derive(spec, sources, opts = {}) {
         const steps = [{ filter: 'overlay', anchor: `composite/overlay:${key.slice(5)}`,
                          posNames: ['x', 'y'], pos: [px(x), px(y)],
                          params: { eof_action: 'pass' } }];
-        over = g.run([over, heads[i]], steps, last ? 'vout' : `o${i}`);
+        over = g.run([over, head], steps, last ? 'vout' : `o${i}`);
         lastOverlay = g.byAnchor(`composite/overlay:${key.slice(5)}`);
     });
     // The composite, before it is converted into the encoder's colour.
@@ -958,8 +998,23 @@ export function derive(spec, sources, opts = {}) {
     // RGBA in the render you got. Two pictures from one insert point is worse
     // than one fewer insert point.
     point(COMPOSITE_POINT, lastOverlay, 0, 'v', 'after compositing');
-    const vsink = g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' });
-    if (over) g.connect(over, vsink, 0);
+    // The pad the muxer maps for the picture exists when there is a picture for
+    // it to map — the same rule `out:a` follows below, arrived at from the other
+    // end. A timeline of nothing but sound has no composite, and an unwired
+    // video sink there would refuse every render of it with "nothing is wired to
+    // video out": a true statement about the graph and a false one about the
+    // edit.
+    //
+    // With *nothing* on the timeline the sink stays, because that is the
+    // generator case — `ffmpeg -f lavfi -i testsrc -t 5` — where an unwired
+    // video out is exactly what the `testsrc` you have just placed needs
+    // somewhere to go. Same for a wire somebody has already drawn to it.
+    const wantsPicture = over || !kept.length ||
+        (opts.overlay && (opts.overlay.wires || []).some((w) => w.to === 'out:v'));
+    if (wantsPicture) {
+        const vsink = g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' });
+        if (over) g.connect(over, vsink, 0);
+    }
 
     if (spec.audio !== false) {
         const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0 &&

@@ -10,7 +10,7 @@
 import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
-         applyInput, clipsOf } from './project.js';
+         applyInput, clipsOf, hasPicture } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
@@ -325,22 +325,18 @@ function openInput(input, opts = {}) {
         return null;
     }
     const probe = input.probe;
-    if (!probe.video) {
-        // bro's <video> drives its clock from decoded pictures, so a track
-        // list with no video has nothing to advance. Say so instead of
-        // loading something that will sit at 0:00 forever.
-        flash(probe.audio ? 'audio-only files are not playable yet — this needs a video track'
-                          : 'no audio or video track in this file');
+    // **The refusal is that there is nothing to play, not that there is no
+    // picture.** A file with sound and no video is an ordinary clip: it
+    // contributes to the mix and to nothing else, which is what a music bed
+    // dropped on a timeline is. bro's `<video>` drives its clock from decoded
+    // pictures where there are any and from the media clock where there are
+    // not, so such a file reaches readyState 4, reports a duration off its
+    // audio track and advances while it plays.
+    if (!probe.video && !probe.audio) {
+        flash('no audio or video track in this file');
         return null;
     }
 
-    // An input with no length cannot be laid out, and there are two ways to
-    // have one. A single picture *is* no time at all: libavformat says so, and
-    // bro's `<video>` agrees, since it drives its clock from decoded pictures
-    // and one picture is nothing to advance through. An endless input — a
-    // `-loop` or a `-stream_loop` — is the other way round and has no length
-    // for the opposite reason. Both are said plainly, and both are fixed in the
-    // one place the number belongs, which is the input's own window.
     // There are three ways for an input to have no length, and this is where
     // they are told apart, because the answer to each is somewhere different.
     // A single picture *is* no time at all: libavformat says so, and bro's
@@ -713,7 +709,13 @@ stage.addEventListener('wheel', (e) => {
 
 function updateCropUI() {
     const c = project.selected;
-    if (!cropMode || !c || !c.frame) { cropbox.classList.add('hidden'); return; }
+    // Nothing to crop where there is no picture: `placement()` hands back no
+    // rectangle for one, and a crop box drawn against it would be a two-pixel
+    // square in the corner of the stage inviting a gesture with no meaning.
+    if (!cropMode || !c || !c.frame || !hasPicture(c)) {
+        cropbox.classList.add('hidden');
+        return;
+    }
     const s = viewer.stageSize();
     const p = viewer.placement(c, s.w, s.h);
     const cr = c.xform.crop;

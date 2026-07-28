@@ -2,6 +2,16 @@
 
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
+// For `rotationOf` and `avErr`. This file is the MIT-facing half and used to
+// include none of the encode headers, keeping its own copy of both — which was
+// tolerable while they were four lines each and stopped being so when a display
+// matrix had to be read the same way at both ends. **Rotation has one answer in
+// this binary**: the export reader turns the picture with it, the playback
+// backend reports it to bro, and the probe tells the UI, and two of those
+// reading the side datum with arithmetic of their own is how a file comes to be
+// laid out at one size and rendered at another. `export_frame.cpp` is in the
+// same static library, so this costs nothing but the include.
+#include "export_frame.h"
 
 #include "util/log.h"
 #include "video/audio_decoder.h"
@@ -13,7 +23,6 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
-#include <libavutil/display.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
@@ -67,11 +76,11 @@ constexpr AVRational kNsTimeBase{1, 1000000000};
 /// which is precisely the misreading that produced the corruption above. The
 /// value is the same because the block sizes are; whether it is *needed* is a
 /// separate fact per library, and a reader checking one of these sites has to
-/// be able to see which question it is looking at. (`export_frame.h` keeps the
-/// same pair for the encode side. It is not shared with this file on purpose:
-/// this is the MIT-facing half and does not include the encode headers.)
+/// be able to see which question it is looking at. The resampler's half is
+/// `kSwrSlack` in `export_frame.h`, which this file now includes; this one
+/// stays here because it sizes three YUV planes packed into one allocation,
+/// which is a shape that exists nowhere on the encode side.
 constexpr size_t kSwsSlack = 256;
-constexpr size_t kSwrSlack = 256;
 
 TimeNs toNs(int64_t ts, AVRational tb) {
     if (ts == AV_NOPTS_VALUE) return AV_NOPTS_VALUE;
@@ -80,12 +89,6 @@ TimeNs toNs(int64_t ts, AVRational tb) {
 
 int64_t fromNs(TimeNs ns, AVRational tb) {
     return av_rescale_q(ns, kNsTimeBase, tb);
-}
-
-std::string avErr(int code) {
-    char buf[AV_ERROR_MAX_STRING_SIZE] = {0};
-    av_strerror(code, buf, sizeof(buf));
-    return buf;
 }
 
 Codec toBroCodec(AVCodecID id) {
@@ -214,6 +217,13 @@ public:
             if (isVideo) {
                 t.width = static_cast<uint32_t>(par->width);
                 t.height = static_cast<uint32_t>(par->height);
+                // Phones record landscape frames and write the correction into
+                // the container rather than turning the pixels, so this is the
+                // only thing that says a 1920x1080 clip is shown 1080x1920.
+                // `width`/`height` stay the size of what the decoder produces —
+                // the swap is bro's, in `VideoPipeline::displayWidth` — because
+                // this is metadata about the picture and not a property of it.
+                t.rotationDegrees = rotationOf(st);
                 // Prefers the container's declared rate and falls back to one
                 // measured from the timestamps, which is what makes this
                 // sensible for a variable-frame-rate phone capture.
@@ -829,17 +839,18 @@ ProbeResult probeMedia(const MediaInput& in) {
                 if (const char* v = av_color_transfer_name(par->color_trc)) s.colorTransfer = v;
             // Rotation lives in a display matrix side-datum; a phone video is
             // 1920x1080 on disk and 1080x1920 on screen, and only this says so.
-            if (const AVPacketSideData* sd = av_packet_side_data_get(
-                    par->coded_side_data, par->nb_coded_side_data,
-                    AV_PKT_DATA_DISPLAYMATRIX)) {
-                double deg = av_display_rotation_get(reinterpret_cast<const int32_t*>(sd->data));
-                if (deg == deg) {   // not NaN
-                    int d = static_cast<int>(-deg);
-                    d %= 360;
-                    if (d < 0) d += 360;
-                    s.rotation = d;
-                }
-            }
+            //
+            // **There is one answer to it in this binary, and this is not a
+            // second reading of the matrix.** There used to be: this block
+            // truncated where `rotationOf` rounds (an 89.9999° matrix reported
+            // 271) and accepted angles that are not quarter turns, which no
+            // path here can apply — so the Sources stage could report a
+            // rotation the render would not honour and the player could not
+            // express. The export reader turns the picture with `rotationOf`
+            // and the playback backend above reports it to bro with
+            // `rotationOf`; a probe that disagreed with either would lay a clip
+            // out at a size nothing produces.
+            s.rotation = rotationOf(st);
         } else if (par->codec_type == AVMEDIA_TYPE_AUDIO) {
             s.sampleRate = par->sample_rate;
             s.channels = par->ch_layout.nb_channels;

@@ -62,6 +62,21 @@ function mediaLength(probe) {
     return (probe.video && probe.video.duration) || probe.format.duration || 0;
 }
 
+/// Does this clip put anything on the canvas?
+///
+/// **A clip with no picture is not a hole in the canvas.** It contributes to the
+/// mix and to nothing else: no rectangle, no cell in the grid, no lane of
+/// thumbnails, no `[0:v]` pad in the graph. That is what a music bed dropped on
+/// a timeline is, and it is the whole of what "an audio-only file is an ordinary
+/// clip" costs.
+///
+/// Asked of the probe rather than of `clip.width`, because the probe is the
+/// answer the input gave and `applyInput()` keeps it in step; a size is
+/// something derived from it. One home, because six files ask.
+export function hasPicture(clip) {
+    return !!(clip && clip.probe && clip.probe.video);
+}
+
 const listeners = [];
 
 /// Subscribe to any change to the model. Coarse on purpose: the redraws it
@@ -146,10 +161,19 @@ export function applyInput(input) {
         c.name = basename(input.path);
         const media = mediaLength(input.probe);
         c.media = media;
+        // The *shown* size, which is the coded size swapped at a quarter turn:
+        // a clip laid out at the coded size is a portrait picture in a
+        // landscape box. And no size at all when the reopened input turned out
+        // to have no picture in it — a demuxer forced or a window cut can take
+        // the video stream away, and a clip that went on claiming the size it
+        // used to have would be claiming a rectangle nothing renders into.
         if (input.probe && input.probe.video) {
             c.width = input.probe.video.displayWidth;
             c.height = input.probe.video.displayHeight;
             c.fps = input.probe.video.fps || c.fps;
+        } else {
+            c.width = 0;
+            c.height = 0;
         }
         c.inPoint = Math.max(0, Math.min(c.inPoint, Math.max(0, media)));
         c.length = Math.max(0, Math.min(c.length, media - c.inPoint));

@@ -23,6 +23,14 @@
 //     that is a property of the names rather than of the pixels. They are
 //     written by the same `Writer` through the `image2` muxer, which makes
 //     them the check that the picture side of it works at all.
+//   - **Two of them are about a stream the others take for granted.**
+//     `rotated.mp4` is stored sideways and carries a display matrix saying so,
+//     which is the only thing that separates a portrait clip laid out upright
+//     from one laid out on its side; `sound.m4a` has no video stream in it at
+//     all, which is the mirror of `silent.mp4` and the only thing that
+//     separates a clip from a clip with a picture in it. Neither can be faked
+//     with content: a picture that happens to be tall is not a rotated one, and
+//     a picture that happens to be black is not an absent one.
 //   - **The two files differ in every way a render cares about**: size, aspect,
 //     frame rate and duration. A test that passes only because both inputs are
 //     1080p25 is a test that has not been run. This one is not decoration: the
@@ -41,6 +49,11 @@
 #include "export_writer.h"
 #include "ffmpeg_export.h"
 
+extern "C" {
+#include <libavutil/display.h>
+}
+
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -156,6 +169,182 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
     std::printf("  %s  %dx%d %.0f fps %.1fs %s  %lld bytes\n", r.name, r.width, r.height,
                 r.fps, r.seconds, tone.c_str(),
                 static_cast<long long>(writer.bytesSoFar()));
+    return true;
+}
+
+/// A file with sound in it and **no video stream at all** — the mirror of
+/// `silent.mp4` one stream kind over.
+///
+/// It earns its keep the same way that one does. Half of this application's
+/// model of an edit is "a picture at t", and every part of it that assumed a
+/// clip has one passed against the three files above: the viewer laid a clip
+/// with no pictures out as a black rectangle over whatever was beneath it, the
+/// timeline drew it as a clip whose thumbnails had not arrived yet, the
+/// derivation refused the whole edit with "a clip has no rectangle to be drawn
+/// in", and the Write stage offered a composite for a timeline that has nothing
+/// to compose. A file whose picture is merely black does not separate any of
+/// those from working; only one with the stream genuinely absent does.
+///
+/// Written through the same `Writer` as everything else, with a stream list of
+/// exactly one audio stream — which is the whole of how you say "no picture" to
+/// it, since an empty list is the renderer's sentinel for the usual two.
+bool writeSoundOnly(const std::filesystem::path& path, double seconds, double toneHz) {
+    ExportSettings s;
+    s.path = path.string();
+    s.format = "mp4";
+    // Unused by an audio stream, and set anyway: a size of zero anywhere in a
+    // spec is the sort of thing a later reader treats as a question.
+    s.width = 640;
+    s.height = 360;
+    s.fps = 25.0;
+    s.startTime = 0;
+    s.endTime = seconds;
+    s.audioCodec = "aac";
+    s.includeAudio = true;
+    s.audioSampleRate = 48000;
+    s.audioChannels = 2;
+    ExportStream a;
+    a.kind = "audio";
+    a.source = "mix";
+    a.codec = "aac";
+    s.streams.push_back(a);
+
+    Writer writer;
+    std::string err;
+    if (!writer.open(s, true, &err)) {
+        std::fprintf(stderr, "%s: %s\n", path.string().c_str(), err.c_str());
+        return false;
+    }
+
+    const int block = 1024;
+    const int64_t total = static_cast<int64_t>(std::llround(seconds * s.audioSampleRate));
+    std::vector<float> samples;
+    for (int64_t at = 0; at < total; at += block) {
+        const int count = static_cast<int>(std::min<int64_t>(block, total - at));
+        samples.assign(static_cast<size_t>(count) * s.audioChannels, 0.0f);
+        for (int i = 0; i < count; ++i) {
+            const double t = double(at + i) / s.audioSampleRate;
+            const float v = static_cast<float>(0.5 * std::sin(2.0 * kPi * toneHz * t));
+            for (int c = 0; c < s.audioChannels; ++c)
+                samples[static_cast<size_t>(i) * s.audioChannels + c] = v;
+        }
+        if (!writer.writeAudio(samples.data(), count, &err)) {
+            std::fprintf(stderr, "%s: %s\n", path.string().c_str(), err.c_str());
+            return false;
+        }
+    }
+    if (!writer.finish(&err)) {
+        std::fprintf(stderr, "%s: %s\n", path.string().c_str(), err.c_str());
+        return false;
+    }
+    std::printf("  %s  no video stream, %.0f Hz %.1fs  %lld bytes\n",
+                path.filename().string().c_str(), toneHz, seconds,
+                static_cast<long long>(writer.bytesSoFar()));
+    return true;
+}
+
+/// A file whose pictures are stored one way up and meant to be seen another —
+/// which is what every phone in the world writes.
+///
+/// **A display matrix is a fact about a container, not about a picture**, so
+/// this is a stream copy of a fixture that already exists with the side datum
+/// added to the output stream. Going through the `Writer` instead would mean
+/// giving `ExportStream` a rotation field, which would be a knob on the render
+/// for the benefit of a test: nothing in this application writes a rotated file
+/// on purpose, and everything in it has to *read* one correctly. The remux is
+/// the honest shape and it is thirty lines.
+///
+/// **`av_display_rotation_set` and `av_display_rotation_get` are not inverses**,
+/// and the sign is worth writing down because getting it wrong writes a fixture
+/// that is rotated the other way and passes every check that does not name a
+/// number. `set(θ)` builds its matrix from `-θ` radians and `get` returns
+/// `-atan2(m[1], m[0])`, so `get(set(θ)) == -θ`; `rotationOf` then negates once
+/// more to turn libav's anticlockwise convention into the clockwise one bro
+/// wants. The two negations cancel, so `set(90)` is what a fixture that has to
+/// be turned a quarter turn *clockwise* to be upright is written with.
+bool writeRotated(const std::filesystem::path& src, const std::filesystem::path& dst,
+                  int degrees) {
+    AVFormatContext* in = nullptr;
+    int rc = avformat_open_input(&in, src.string().c_str(), nullptr, nullptr);
+    if (rc < 0 || avformat_find_stream_info(in, nullptr) < 0) {
+        std::fprintf(stderr, "%s: cannot reopen (%s)\n", src.string().c_str(),
+                     avErr(rc).c_str());
+        if (in) avformat_close_input(&in);
+        return false;
+    }
+
+    AVFormatContext* oc = nullptr;
+    if (avformat_alloc_output_context2(&oc, nullptr, nullptr, dst.string().c_str()) < 0 || !oc) {
+        std::fprintf(stderr, "%s: no muxer\n", dst.string().c_str());
+        avformat_close_input(&in);
+        return false;
+    }
+
+    std::vector<int> mapping(in->nb_streams, -1);
+    for (unsigned i = 0; i < in->nb_streams; ++i) {
+        AVStream* is = in->streams[i];
+        AVStream* os = avformat_new_stream(oc, nullptr);
+        if (!os || avcodec_parameters_copy(os->codecpar, is->codecpar) < 0) {
+            std::fprintf(stderr, "%s: cannot copy stream %u\n", dst.string().c_str(), i);
+            avformat_close_input(&in);
+            avformat_free_context(oc);
+            return false;
+        }
+        // The muxer picks its own tag; the input's belongs to the input's
+        // container even when it is the same one.
+        os->codecpar->codec_tag = 0;
+        os->time_base = is->time_base;
+        mapping[i] = os->index;
+
+        if (is->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) continue;
+        AVPacketSideData* sd = av_packet_side_data_new(
+            &os->codecpar->coded_side_data, &os->codecpar->nb_coded_side_data,
+            AV_PKT_DATA_DISPLAYMATRIX, sizeof(int32_t) * 9, 0);
+        if (!sd) {
+            std::fprintf(stderr, "%s: no room for a display matrix\n", dst.string().c_str());
+            avformat_close_input(&in);
+            avformat_free_context(oc);
+            return false;
+        }
+        av_display_rotation_set(reinterpret_cast<int32_t*>(sd->data), double(degrees));
+    }
+
+    if (!(oc->oformat->flags & AVFMT_NOFILE) &&
+        (rc = avio_open(&oc->pb, dst.string().c_str(), AVIO_FLAG_WRITE)) < 0) {
+        std::fprintf(stderr, "%s: %s\n", dst.string().c_str(), avErr(rc).c_str());
+        avformat_close_input(&in);
+        avformat_free_context(oc);
+        return false;
+    }
+    if ((rc = avformat_write_header(oc, nullptr)) < 0) {
+        std::fprintf(stderr, "%s: %s\n", dst.string().c_str(), avErr(rc).c_str());
+        avformat_close_input(&in);
+        if (oc->pb) avio_closep(&oc->pb);
+        avformat_free_context(oc);
+        return false;
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    while (av_read_frame(in, pkt) >= 0) {
+        const int to = mapping[pkt->stream_index];
+        if (to >= 0) {
+            av_packet_rescale_ts(pkt, in->streams[pkt->stream_index]->time_base,
+                                 oc->streams[to]->time_base);
+            pkt->stream_index = to;
+            pkt->pos = -1;
+            if (av_interleaved_write_frame(oc, pkt) < 0) break;
+        }
+        av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+    av_write_trailer(oc);
+    const int64_t bytes = oc->pb ? avio_size(oc->pb) : 0;
+    if (oc->pb) avio_closep(&oc->pb);
+    avformat_close_input(&in);
+    avformat_free_context(oc);
+
+    std::printf("  %s  %d° display matrix  %lld bytes\n", dst.filename().string().c_str(),
+                degrees, static_cast<long long>(bytes));
     return true;
 }
 
@@ -317,6 +506,12 @@ int main(int argc, char* argv[]) {
     std::printf("writing fixtures into %s\n", dir.string().c_str());
     for (const auto& r : recipes)
         if (!write(r, dir / r.name)) return 1;
+
+    // The two files that are each about a stream the others take for granted:
+    // one that is stored sideways, and one with no picture in it at all. See
+    // the functions themselves for why neither can be faked with content.
+    if (!writeSoundOnly(dir / "sound.m4a", 6.0, 330.0)) return 1;
+    if (!writeRotated(dir / "landscape.mp4", dir / "rotated.mp4", 90)) return 1;
 
     // Stills, in the arrangement a sequence scan has to make sense of: a
     // padded run, a file beside it that is not part of one, and an unpadded

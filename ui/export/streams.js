@@ -38,7 +38,7 @@
 
 import { el, div, span, put, select, row, head, fromTemplate, show } from '../dom.js';
 import { basename } from '../format.js';
-import { project } from '../project.js';
+import { project, hasPicture } from '../project.js';
 import { inputs, hasSound, lengthOf as inputLength } from '../inputs.js';
 import { settings, activeVideoCodec, activeAudioCodec } from './state.js';
 import { videoEncoders, audioEncoders, muxerInfo, dispositions,
@@ -204,6 +204,10 @@ export function removeStream(id) {
 /// silent and say nothing.
 const madeOfTheMix = (s) => s.kind === 'audio' && !isCopy(s) && !isPad(s);
 
+/// The same distinction one stream kind over: a picture this render *composes*,
+/// as against one it copies or takes off a named pad of the graph.
+const madeOfTheComposite = (s) => s.kind === 'video' && !isCopy(s) && !isPad(s);
+
 export function setAudioIncluded(on) {
     settings.audio = !!on;
     if (!on)
@@ -243,6 +247,27 @@ export function hasAudibleSound() {
     return overlayWires().some((w) => w.to === 'out:a');
 }
 
+/// Is there anything on this timeline for the composite to be made of?
+///
+/// The mirror of the term above, and it arrived with audio-only inputs for the
+/// same reason that one arrived with the silent fixture: `settings.streams`
+/// carries a video row whatever the timeline turns out to hold, so a timeline of
+/// nothing but sound drew "V1 · the composite, through libx264" and rendered a
+/// black rectangle at the canvas size. That is not a failed render — it is a
+/// file twice the size it should be with a picture in it nobody asked for, which
+/// is the failure this list exists to catch.
+///
+/// **Only a timeline that has clips and no pictures among them answers no.** An
+/// empty timeline is the generator case — `ffmpeg -f lavfi -i testsrc` — where
+/// the picture comes from the graph and the composite is exactly what should be
+/// written; so is a wire drawn to `video out`. Both are the same two exemptions
+/// `hasAudibleSound` makes and for the same reason.
+export function hasVisiblePicture() {
+    if (!project.clips.length) return true;
+    if (project.clips.some(hasPicture)) return true;
+    return overlayWires().some((w) => w.to === 'out:v');
+}
+
 // ── what goes to the renderer ──────────────────────────────────────────────
 
 /// The rows as `render.start` wants them, with every default resolved.
@@ -274,6 +299,13 @@ export function streamSpecs(over = {}) {
         // libavfilter's, so the timeline having nothing audible on it says
         // nothing about whether the stream has anything to write.
         if (madeOfTheMix(s) && (!settings.audio || !hasAudibleSound())) continue;
+        // And a composite nothing feeds, which is the same claim about the
+        // other half of the file: a timeline of nothing but sound has no
+        // picture to write, and a black rectangle at the canvas size is not
+        // what "render this" meant. Unlike the mix, native cannot decide it by
+        // opening — a graph with a generator in it composes a picture out of
+        // nothing at all — so this side is the only one that can say so.
+        if (madeOfTheComposite(s) && !hasVisiblePicture()) continue;
         // A subtitle row with nowhere to read from is a row somebody added
         // before adding the file. Dropped rather than sent, exactly as a
         // pathless attachment is: `warnings()` says so where a refusal from
@@ -531,6 +563,10 @@ function says(s) {
     // nothing about whether that chain produces samples.
     if (madeOfTheMix(s) && !hasAudibleSound())
         out.push(span('— nothing on the timeline has a soundtrack, so this stream will ' +
+                      'not be written', 'ex-stream-none'));
+    // The same sentence about the picture, for a timeline that is only sound.
+    if (madeOfTheComposite(s) && !hasVisiblePicture())
+        out.push(span('— nothing on the timeline has a picture, so this stream will ' +
                       'not be written', 'ex-stream-none'));
     return out;
 }

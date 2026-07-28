@@ -10,7 +10,7 @@
 // renderer as it always did. Stacking and opacity are the same deal: z-index
 // and an opacity on the window, both free.
 
-import { project, isSelected } from './project.js';
+import { project, isSelected, hasPicture } from './project.js';
 import { inserts } from './graph/overlay.js';
 
 /// Does this clip have filters of its own on the graph? Read here rather than
@@ -30,8 +30,24 @@ export function initViewer(refs) {
     viewerEl = refs.viewer;
 }
 
-/// The clip that owns the moment — topmost, so it is the picture in front.
-export function activeClip() { return active.length ? active[active.length - 1] : null; }
+/// The clip that owns the moment — the topmost one with a picture, so it is
+/// literally the picture in front.
+///
+/// **A clip with no picture is only the answer when nothing else is**, and that
+/// is a deliberate choice rather than a fallback nobody thought about. The
+/// transport takes this as the master clock, and a clock exists to say what
+/// moment is *on screen*: a music bed dropped on a lane above the footage would
+/// otherwise take the clock away from the thing being watched — and take frame
+/// stepping with it, since `stepFrame()` moves by decoded pictures and a
+/// soundtrack has none to move by. With nothing but sound under the playhead the
+/// topmost clip is still the answer, because bro drives `currentTime` from the
+/// media clock where there is no picture, which is the whole of what makes an
+/// audio-only timeline play.
+export function activeClip() {
+    for (let i = active.length - 1; i >= 0; i--)
+        if (hasPicture(active[i])) return active[i];
+    return active.length ? active[active.length - 1] : null;
+}
 export function activeClips() { return active; }
 
 /// Build a clip's picture: a crop window with a video inside it. Sizing waits
@@ -72,8 +88,16 @@ export function detachClip(clip) {
     if (i >= 0) active.splice(i, 1);
 }
 
+/// A clip's crop window is shown while the playhead is inside it — unless there
+/// is no picture in it, in which case it never is.
+///
+/// The element stays: it *is* the decoder and it *is* the sound, and the clip is
+/// active in every other respect. What it must not be is laid out, because a
+/// `<video>` with no picture keeps the 300×150 replaced-element box and would
+/// sit as a black rectangle over whatever is beneath it. One place writes
+/// `display`, so this is the one place that has to know.
 function setVisible(clip, on) {
-    if (clip.frame) clip.frame.style.display = on ? 'block' : 'none';
+    if (clip.frame) clip.frame.style.display = on && hasPicture(clip) ? 'block' : 'none';
 }
 
 /// Show exactly this set of clips and no others. Everything else is paused —
@@ -150,7 +174,9 @@ export function gridShape(n, aspect) {
 /// timeline does rather than jumping around as clips are added.
 function cellFor(clip, sw, sh) {
     if (project.layout !== 'grid') return null;
-    const order = project.clips;
+    // Only the clips with pictures get cells. A grid is a wall of monitors, and
+    // a sound file among them is not a dark monitor — it is not a monitor.
+    const order = project.clips.filter(hasPicture);
     const i = order.indexOf(clip);
     if (i < 0) return null;
     const { cols, rows } = gridShape(order.length, sw / sh);
@@ -171,6 +197,14 @@ const GRID_GUTTER = 3;
 /// separately because the crop UI needs it to turn a dragged handle back into
 /// a fraction of the source.
 export function placement(clip, sw, sh) {
+    // **A clip with no picture has no rectangle**, and this is where that is
+    // decided because this is where layout is resolved: the renderer is handed
+    // what this returns, so the export follows for free and nothing downstream
+    // has to learn that a clip can be sound only. Not a rectangle of zero
+    // opacity and not one off the edge of the canvas — no rectangle, so that
+    // anything asking "where does this go" gets the honest answer nowhere.
+    if (!hasPicture(clip)) return { w: 0, h: 0, x: 0, y: 0, cell: null };
+
     // In a grid the clip's own placement is set aside: every cell is the same
     // size and every picture is fitted inside its cell. Zoom and pan still
     // apply, so one cell can be pushed in on a detail while the others stay put.
@@ -200,6 +234,9 @@ export function placement(clip, sw, sh) {
 
 function place(clip, sw, sh) {
     if (!clip.frame) return;
+    // Nothing to place. `setVisible` keeps its window hidden whatever the
+    // active set says, so there is no box here to size.
+    if (!hasPicture(clip)) return;
     const p = placement(clip, sw, sh);
     const c = clip.xform.crop;
     const fw = Math.max(1, p.w * (1 - c.l - c.r));
@@ -250,7 +287,7 @@ export function stageSize() {
 export function clipAtPoint(sx, sy) {
     for (let i = active.length - 1; i >= 0; i--) {
         const c = active[i];
-        if (!c.frame) continue;
+        if (!c.frame || !hasPicture(c)) continue;
         const l = parseFloat(c.frame.style.left) || 0;
         const t = parseFloat(c.frame.style.top) || 0;
         const w = parseFloat(c.frame.style.width) || 0;

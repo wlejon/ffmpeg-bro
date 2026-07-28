@@ -15,6 +15,28 @@ second ahead of the mixer. What you see is the decoder's output at full quality.
 Non-4:2:0 sources (10-bit HDR, 4:2:2 broadcast, 4:4:4 ProRes, RGB screen
 captures) are converted by swscale on the way through.
 
+**A clip recorded sideways plays the right way up.** Phones do not turn the
+pixels; they record landscape frames and write the correction into the container
+as a display matrix. That matrix reaches the player — the decoded frames stay the
+size they were coded at and the *shown* size is the swapped pair, which is what a
+clip is laid out against, so a 1920×1080 file tagged for a quarter turn is a
+1080×1920 clip on a 1080×1920 canvas. The turning is a transform on the quad the
+frame is drawn as rather than a pass over the pixels, so it costs nothing per
+frame. Anything that is not a quarter turn is read as no rotation at all: a size
+can be swapped or not, and a picture drawn at an angle inside a box laid out for
+a rectangle is worse than the picture as it was stored.
+
+**A file with no picture in it is an ordinary clip.** Drop an `.mp3`, a `.wav` or
+an `.m4a` on the timeline and it lays out with the length of its audio track,
+plays, moves the playhead and goes into the mix. What it does not do is take up
+room on the canvas: it has no rectangle, no cell in a grid, no filmstrip and no
+`[0:v]` pad in the graph, and a render of a timeline with nothing but sound on it
+writes a file with a soundtrack and no video stream. The one thing it will not
+do is step: `[` and `]` move by decoded pictures, and a soundtrack has none, so
+stepping through a timeline of sound moves clip to clip. The master clock stays
+with the topmost clip that *has* a picture wherever there is one — a music bed
+laid over the footage must not take the clock away from the thing being watched.
+
 ## Capture
 
 `D` (or the first card on the spine) is where an input comes from when there is not
@@ -1613,25 +1635,31 @@ cmake --build build --config Release && ctest --test-dir build -C Release
 gradient and a tone at a known level, differing in size, aspect, frame rate and length,
 and a third with **no audio stream in it at all**, which is not the same file as one
 whose soundtrack is quiet and is the only thing that separates "the mix" from "a mix
-nothing feeds" — and runs every suite against them. Nothing is checked in and nothing depends on what a
-file you happened to have lying around contains.
+nothing feeds" — and runs every suite against them. Two more are each about a stream
+the rest take for granted: one with **no video stream in it at all**, the mirror of
+the silent one and the only thing separating the composite from a composite nothing
+feeds, and one whose pictures carry a **display matrix**, which is the only thing
+separating a clip laid out upright from one laid out on its side. Neither can be
+faked with content: a picture that happens to be black is not an absent one and a
+picture that happens to be tall is not a rotated one. Nothing is checked in and
+nothing depends on what a file you happened to have lying around contains.
 
 Each suite also runs standalone against any real file, which is how to check behaviour
 against footage the fixtures do not resemble:
 
 ```
-./build/Release/ffmpeg-bro-decodetest <file>          # backend: demux, decode, seek, audio
+./build/Release/ffmpeg-bro-decodetest <file> [--rotated <file>] [--sound-only <file>]
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-inputtest <file>          # an -i: forced demuxer, options, window, token
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
 ./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, and recording one
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>] [<rotated>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-dir>
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only file>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
@@ -1876,13 +1904,14 @@ the order shown, carries libavcodec's own option table and prints as one
 
 Honest list of what does not work:
 
-- **Audio-only files.** bro's `<video>` drives its clock from decoded pictures,
-  so a file with no video track has nothing to advance. The UI says so rather
-  than sitting at 0:00.
-- **Rotation on playback.** Export reads the container's display matrix and
-  writes the picture upright. `<video>` does not: bro's decode path carries no
-  rotation, so a phone clip shot upright plays on its side and exports
-  correctly. The export is the one that is right, which is the wrong way round.
+- **Rotation in the filmstrip.** A clip stored sideways now plays, lays out and
+  exports the right way up. The timeline's *thumbnails* are the one place the
+  display matrix does not reach: `bro.media.thumbnails` decodes with a reader of
+  its own and hands back pictures at the coded size, so a phone clip shot upright
+  has a strip of landscape frames lying on their side underneath a portrait
+  picture. It is wrong for exactly the reason laying the clip out at the coded
+  size was wrong, and the fix belongs in bro's media analysis, which is handed
+  the rotation and does not apply it.
 - **Filters on playback.** A filter you put on the graph runs when you render,
   in the export preview, and in the node's own preview on the Graph stage. The
   *viewer* cannot show it: playback is the engine decoding into a `<video>` and

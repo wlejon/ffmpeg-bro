@@ -34,6 +34,18 @@ public:
     bool covers(double t) const {
         return t >= spec.start - 1e-9 && t < spec.start + spec.length - 1e-9;
     }
+
+    /// Whether this clip puts anything on the canvas at all.
+    ///
+    /// A clip with no rectangle is one that contributes to the mix and to
+    /// nothing else — a music bed, or any clip of a file with no video stream
+    /// in it, which `viewer.placement()` says so about by handing back a
+    /// rectangle of no size. Without the question the compositor opens it,
+    /// fails, and reports a missing picture in the log for a file that was
+    /// never asked for one; and it is a question rather than a flag because
+    /// the rectangle is already the whole of what the renderer is told about
+    /// where a clip goes.
+    bool hasPicture() const { return spec.w > 0.5 && spec.h > 0.5; }
 };
 
 TimelineSource::TimelineSource(const ExportSettings& s, std::vector<ExportClip> clips)
@@ -63,7 +75,7 @@ TimelineSource::~TimelineSource() = default;
 const Rgba& TimelineSource::canvasAt(double t) {
     comp_->clear();
     for (auto& cs : clips_) {
-        if (!cs->covers(t) || cs->videoFailed) continue;
+        if (!cs->covers(t) || cs->videoFailed || !cs->hasPicture()) continue;
         if (!cs->video) {
             cs->video = std::make_unique<SourceVideo>();
             std::string open;

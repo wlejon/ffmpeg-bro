@@ -67,19 +67,27 @@ export function add(node, children) {
 /// claimants where the code plainly meant one to replace the other. That bug
 /// is fixed upstream; the order is still the honest one, and a signature that
 /// only accepts a builder cannot be called the other way round.
-/// **This clears with `removeChild`, not `replaceChildren`, and that is not a
-/// style choice.** In this engine `replaceChildren()` *destroys* the subtree it
-/// removes rather than detaching it: every descendant is dead afterwards, and
-/// appending one back into the document silently does nothing — no error, no
-/// exception, `childNodes.length` simply stays zero. A plain `<span>` behaves
-/// the same way, so it is not about any one element type.
+/// **This clears with `removeChild`, not `replaceChildren` and not `remove()`,
+/// and that is not a style choice.** `replaceChildren()` used to *destroy* the
+/// subtree it removed rather than detaching it: every descendant was dead
+/// afterwards, and appending one back into the document silently did nothing —
+/// no error, no exception, `childNodes.length` simply stayed zero. A plain
+/// `<span>` behaved the same way, so it was never about any one element type.
 ///
-/// It costs nothing until something wants to *keep* a node across a rebuild,
-/// and then it costs an afternoon: the Graph stage holds one `<video>` per node
+/// It cost nothing until something wanted to *keep* a node across a rebuild,
+/// and then it cost an afternoon: the Graph stage holds one `<video>` per node
 /// so that a preview arriving for one card does not restart the other eight,
 /// and seven of the nine came back blank with everything about the code that
-/// built them looking correct. Detaching one child at a time is what the DOM
-/// says happens and leaves the elements alive.
+/// built them looking correct.
+///
+/// `replaceChildren` is fixed upstream (bro `83357173`) and this loop stays,
+/// because **`el.remove()` and `el.replaceWith()` still destroy the node they
+/// remove** — deliberately, since `remove()` is the only JS removal path that
+/// reclaims anything and making it spec-correct would pin every detached
+/// element for the document's lifetime. So the rule is: `removeChild` when you
+/// want the node back, `remove()` only for a node you are finished with.
+/// Detaching one child at a time is what the DOM says happens and is the only
+/// route here that leaves the elements alive.
 export function put(node, build) {
     if (!node) return node;
     while (node.firstChild) node.removeChild(node.firstChild);

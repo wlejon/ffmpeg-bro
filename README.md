@@ -111,11 +111,10 @@ honest, complete list:
 - Playback cannot show filters, soft subtitles or generated sources — those appear
   in node previews and the export preview, which are real renders; affected clips
   are badged `fx` rather than left looking broken.
-- A phone clip plays on its side (export reads the rotation correctly; playback
-  does not yet).
+- A phone clip plays, lays out and exports the right way up, but the timeline's
+  filmstrip still shows its frames on their side.
 - No project file — graph work persists per machine in local storage, not per
   edit.
-- Audio-only files do not play.
 
 ## License
 

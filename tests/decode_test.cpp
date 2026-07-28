@@ -8,6 +8,13 @@
 // that caused it instead of at a black rectangle.
 //
 // Usage: ffmpeg-bro-decodetest <media-file> [more files...]
+//                              [--rotated <file>] [--sound-only <file>]
+//
+// The two named arguments are for the fixtures whose whole point is one fact —
+// a display matrix on the stream, and a file with no video stream in it. Named
+// rather than positional because what is asserted about each is *that* fact,
+// and a test that guessed which file was which from its name would be one
+// rename away from asserting nothing.
 
 #include "ffmpeg_backend.h"
 
@@ -257,6 +264,97 @@ void testFile(const std::string& path) {
     }
 }
 
+// ── a clip recorded sideways ───────────────────────────────────────────────
+//
+// The decoder hands the picture back as it was coded; only the container's
+// display matrix says which way up it is meant to be seen. `TrackInfo` carries
+// it now, so the size a page lays a clip out at is the *shown* size and the two
+// differ by a swap at a quarter turn. Nothing about this is visible in the
+// pixels, which is why it needs a fixture with the side datum on it and why
+// every check below is about the metadata rather than about the picture.
+void testRotated(const std::string& path) {
+    std::printf("\n%s (rotated)\n", path.c_str());
+
+    // What the file says, asked of the probe the UI reads.
+    auto p = ffmpegbro::probeMedia(path);
+    checkf(p.ok, "probe succeeded (%s)", p.ok ? p.formatName.c_str() : p.error.c_str());
+    const ffmpegbro::StreamSummary* v = nullptr;
+    for (const auto& s : p.streams) if (s.kind == "video") { v = &s; break; }
+    check(v != nullptr, "the fixture has a video stream");
+    if (!v) return;
+    checkf(v->rotation == 90, "probe reports a 90 degree rotation (got %d)", v->rotation);
+
+    // And what the *backend* says, which is the number bro lays out against.
+    // Two readings of one display matrix is exactly the bug this fixture is
+    // here to catch, so both are asserted and they have to agree.
+    VideoPipeline pipe;
+    if (!pipe.open(path)) { check(false, "VideoPipeline::open"); return; }
+    checkf(pipe.rotationDegrees() == 90, "the track reports 90 degrees clockwise (got %d)",
+           pipe.rotationDegrees());
+    checkf(pipe.frameWidth() == v->width && pipe.frameHeight() == v->height,
+           "the frames are still the coded size (%dx%d)", pipe.frameWidth(), pipe.frameHeight());
+    checkf(pipe.displayWidth() == pipe.frameHeight() &&
+               pipe.displayHeight() == pipe.frameWidth(),
+           "and are shown swapped (%dx%d)", pipe.displayWidth(), pipe.displayHeight());
+
+    // A rotated file still decodes like any other: the correction is
+    // presentation and the pictures are untouched.
+    pipe.advanceTo(0);
+    check(pipe.hasFrame(), "first frame decoded");
+    check(hasContent(pipe.currentRgba()), "and it has image content");
+    checkf(pipe.currentRgba().size() ==
+               size_t(pipe.frameWidth()) * pipe.frameHeight() * 4,
+           "RGBA buffer is sized for the coded frame, not the shown one");
+}
+
+// ── a file with no picture in it ───────────────────────────────────────────
+//
+// bro's pipeline takes a source when *either* half of it decodes, so a file of
+// sound plays: it has a duration, a clock that advances, an end that fires
+// once, and no frames to step. Everything here is the mirror image of what
+// `testFile` asserts about a file with pictures.
+void testSoundOnly(const std::string& path) {
+    std::printf("\n%s (sound only)\n", path.c_str());
+
+    auto p = ffmpegbro::probeMedia(path);
+    checkf(p.ok, "probe succeeded (%s)", p.ok ? p.formatName.c_str() : p.error.c_str());
+    bool anyVideo = false;
+    for (const auto& s : p.streams) if (s.kind == "video") anyVideo = true;
+    check(!anyVideo, "the fixture really has no video stream in it");
+
+    VideoPipeline pipe;
+    if (!pipe.open(path)) { check(false, "VideoPipeline::open on a file with no picture"); return; }
+    check(true, "VideoPipeline::open");
+    check(!pipe.hasVideo(), "the pipeline says it has no picture");
+    checkf(pipe.durationNs() > 0, "duration comes off the audio track (%.3f s)",
+           pipe.durationNs() / 1e9);
+    checkf(pipe.audioSampleRate() > 0 && pipe.audioChannels() > 0,
+           "audio track: %u Hz, %u channels", pipe.audioSampleRate(), pipe.audioChannels());
+    check(pipe.frameWidth() == 0 && pipe.frameHeight() == 0,
+          "and reports no frame size, rather than a plausible one");
+
+    // The clock is the media clock: there are no pictures for it to be the
+    // timestamps of. Advancing has to move it and never move it backwards.
+    const TimeNs dur = pipe.durationNs();
+    pipe.advanceTo(0);
+    TimeNs last = -1;
+    int backwards = 0;
+    for (TimeNs t = 0; t < dur; t += 100 * 1000000LL) {
+        pipe.advanceTo(t);
+        if (pipe.currentPts() < last) backwards++;
+        last = pipe.currentPts();
+    }
+    checkf(backwards == 0, "the clock never goes backwards (%d violations)", backwards);
+    checkf(last > dur / 2, "and reached %.3f s of %.3f s", last / 1e9, dur / 1e9);
+    check(!pipe.stepFrame(1), "there is no frame to step to");
+    check(!pipe.hasFrame(), "and never a frame to show");
+
+    // A seek re-arms the end, which is what makes playing it twice work.
+    pipe.seekTo(0);
+    checkf(pipe.currentPts() < 500 * 1000000LL, "seek back to 0 landed at %.3f s",
+           pipe.currentPts() / 1e9);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -266,7 +364,8 @@ int main(int argc, char* argv[]) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <media-file> [more...]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <media-file> [more...] "
+                             "[--rotated <file>] [--sound-only <file>]\n", argv[0]);
         return 2;
     }
 
@@ -279,15 +378,27 @@ int main(int argc, char* argv[]) {
     for (const auto& h : hw) std::printf(" %s", h.c_str());
     std::printf("%s\n", hw.empty() ? " (none)" : "");
 
+    std::vector<std::string> plain;
+    std::string rotated, soundOnly;
     for (int i = 1; i < argc; ++i) {
-        testFile(argv[i]);
+        const std::string arg = argv[i];
+        if (arg == "--rotated" && i + 1 < argc) rotated = argv[++i];
+        else if (arg == "--sound-only" && i + 1 < argc) soundOnly = argv[++i];
+        else plain.push_back(arg);
+    }
+
+    for (const auto& path : plain) {
+        testFile(path);
 
         // probe() must agree with what the pipeline actually opened.
-        auto p = ffmpegbro::probeMedia(argv[i]);
+        auto p = ffmpegbro::probeMedia(path);
         checkf(p.ok, "probe succeeded (%s)", p.ok ? p.formatName.c_str() : p.error.c_str());
         checkf(p.durationSec > 0, "probe duration %.3f s", p.durationSec);
         checkf(!p.streams.empty(), "probe found %zu streams", p.streams.size());
     }
+
+    if (!rotated.empty()) testRotated(rotated);
+    if (!soundOnly.empty()) testSoundOnly(soundOnly);
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

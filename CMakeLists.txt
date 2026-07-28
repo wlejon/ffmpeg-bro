@@ -177,11 +177,24 @@ set(FIXTURE_B "${FIXTURE_DIR}/portrait.mp4")
 # from "a mix nothing feeds", and every screen in this application used to
 # claim a soundtrack for it.
 set(FIXTURE_SILENT "${FIXTURE_DIR}/silent.mp4")
+# The mirror of it: sound and **no video stream at all**. A clip of one is an
+# ordinary clip that contributes to the mix and to nothing else, and every
+# screen in this application used to claim a picture for it — a black rectangle
+# in the viewer, an empty filmstrip on the lane, a composite on the Write stage.
+set(FIXTURE_SOUND "${FIXTURE_DIR}/sound.m4a")
+# Pictures stored one way up and meant to be seen another, which is what every
+# phone writes. Nothing here can be told from the pixels: it is a display matrix
+# on the stream, and it is the only thing saying a 640x360 file is shown 360x640.
+set(FIXTURE_ROTATED "${FIXTURE_DIR}/rotated.mp4")
 
 add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
 set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
 
-add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}")
+# The plain arguments are files to put through the whole walk; the two named
+# ones are the fixtures whose *point* is a single fact, so the fact is asserted
+# by name rather than guessed at from a filename.
+add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}"
+         --rotated "${FIXTURE_ROTATED}" --sound-only "${FIXTURE_SOUND}")
 add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
@@ -192,9 +205,13 @@ add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
 add_test(NAME capture COMMAND ffmpeg-bro-capturetest "out")
 set_tests_properties(capture PROPERTIES TIMEOUT 300
                      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# The third and fourth files are the two whose point is one fact each: a clip
+# stored sideways has to play the right way up, and a clip with no picture in it
+# has to be an ordinary clip. Both sections are skipped without them, which is
+# what keeps this runnable by hand against two files.
 add_test(NAME ui-player COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_player.js"
-         -- "${FIXTURE_A}" "${FIXTURE_B}")
+         -- "${FIXTURE_A}" "${FIXTURE_B}" "${FIXTURE_ROTATED}" "${FIXTURE_SOUND}")
 # The Sources stage as the input editor: an input added by typing a path, a
 # demuxer forced, an option set, a window cut, and every one of those printed
 # before its own -i.
@@ -207,9 +224,12 @@ add_test(NAME ui-sources COMMAND ffmpeg-bro-headless
 add_test(NAME ui-hardware COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_hardware.js"
          -- "${FIXTURE_A}")
+# The second file has no audio stream in it and the third has no video stream,
+# which are the two halves of the same question: what does this application
+# write for a file that is missing one of the streams it takes for granted.
 add_test(NAME ui-export COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
-         -- "${FIXTURE_A}" "${FIXTURE_SILENT}")
+         -- "${FIXTURE_A}" "${FIXTURE_SILENT}" "${FIXTURE_SOUND}")
 # Inputs that are assembled, from the drop that groups them to the Write stage
 # that says what a run of files will be called. Takes the fixture *directory*
 # rather than one file, because what it is about is a folder of frames.

@@ -65,9 +65,9 @@ int scalerFlag(const std::string& name);
 /// four of them — the graph's tail, the writer's per-stream resampler, the
 /// export reader and the capture loop — and three of the four were written by
 /// copying one of the others. One number, so a fifth cannot be written without
-/// it. (The playback backend in `ffmpeg_backend.cpp` has its own copy of this
-/// pair on purpose: it is the MIT-facing half and does not include the encode
-/// side.)
+/// it. `ffmpeg_backend.cpp` is the fifth and reads it from here; it keeps a
+/// `kSwsSlack` of its own because the shape it sizes — three YUV planes packed
+/// into one allocation, each needing the slack — exists nowhere on this side.
 constexpr size_t kSwrSlack = 256;
 
 // ── An RGBA picture, however it was stored on the way in ───────────────────

@@ -11,7 +11,7 @@
 // because how many there are is a property of the edit.
 
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
-         isSelected, select, trimClip } from './project.js';
+         isSelected, select, trimClip, hasPicture } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { el, put } from './dom.js';
 
@@ -182,9 +182,23 @@ function drawVideoLane(track, canvas) {
         const l = Math.max(0, x0), r = Math.min(w, x1);
         if (r <= l) continue;
         const selected = isSelected(clip);
+        // A clip with no picture in it is drawn in the waveform lane's colours
+        // and says what it is. Left in the video lane's blue with an empty
+        // filmstrip it reads as a clip whose thumbnails have not arrived — a
+        // state that resolves itself a second later, and this one never will.
+        // It stays on its lane rather than being hidden, because the lane is
+        // the track it is on and where it sits in the stack is an edit.
+        const sound = !hasPicture(clip);
 
-        ctx.fillStyle = selected ? '#2a4666' : '#223449';
+        ctx.fillStyle = sound ? (selected ? '#24422f' : '#1d3227')
+                              : (selected ? '#2a4666' : '#223449');
         ctx.fillRect(l, 0, r - l, h);
+
+        if (sound && r - l > 60 && h > 14) {
+            ctx.font = '10px Consolas, monospace';
+            ctx.fillStyle = '#8a92a0';
+            ctx.fillText('sound only', l + 6, h / 2 + 3);
+        }
 
         if (clip.film && clip.film.count > 0) {
             const { bitmap, width: tw, height: th, count, times } = clip.film;
@@ -219,7 +233,7 @@ function drawVideoLane(track, canvas) {
             ctx.fillText(Math.round(clip.xform.opacity * 100) + '%', l + 5, 10);
         }
 
-        ctx.strokeStyle = selected ? '#ff8c42' : '#3d6183';
+        ctx.strokeStyle = selected ? '#ff8c42' : (sound ? '#35604a' : '#3d6183');
         ctx.lineWidth = selected ? 2 : 1;
         ctx.strokeRect(l + 0.5, 0.5, Math.max(1, r - l - 1), h - 1);
 

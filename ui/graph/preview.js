@@ -425,8 +425,13 @@ function finishShot(was, p) {
             // cheap.
             try {
                 const info = bro.ffmpeg.probe(was.path);
-                shot.w = (info.video && info.video.width) || 0;
-                shot.h = (info.video && info.video.height) || 0;
+                // The size it is *shown* at, which is what a card is laid out
+                // against. The two are the same for anything this application
+                // wrote — nothing here puts a display matrix on an output — but
+                // asking for the coded size where the shown one is meant is the
+                // habit that lays a portrait clip out as a landscape one.
+                shot.w = (info.video && info.video.displayWidth) || 0;
+                shot.h = (info.video && info.video.displayHeight) || 0;
             } catch (e) {
                 shot.state = 'failed';
                 shot.reason = 'nothing came out of it';

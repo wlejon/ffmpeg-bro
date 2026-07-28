@@ -24,6 +24,14 @@ onmessage = (e) => {
         postMessage({ clip: id, kind: 'peaks', error: String(err && err.message || err) });
     }
 
+    // `count: 0` is "there is no picture in this file" rather than "grab none
+    // of it": a filmstrip of a soundtrack is a whole-file decode that ends in
+    // an error, and the queue still has to be told this job is over.
+    if (job.count === 0) {
+        postMessage({ clip: id, kind: 'thumbs', done: true });
+        return;
+    }
+
     try {
         const thumbs = bro.media.thumbnails(job.path, {
             count: job.count || 32,

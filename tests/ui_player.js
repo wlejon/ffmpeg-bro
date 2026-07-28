@@ -12,7 +12,12 @@
 const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
 const media = args[0];
 const second = args[1];
-assert(media, 'pass a media file: ... tests/ui_player.js -- <file> [<file2>]');
+// The two files whose point is one fact each, and whose sections are skipped
+// without them: a clip stored sideways, and a clip with no picture in it.
+const rotated = args[2];
+const soundOnly = args[3];
+assert(media, 'pass a media file: ... tests/ui_player.js -- <file> [<file2>] ' +
+              '[<rotated>] [<sound-only>]');
 
 function pump(ms) {
     const steps = Math.max(1, Math.ceil(ms / 20));
@@ -915,6 +920,109 @@ console.log('\na batch');
        'a crop the three disagree on shows as mixed, not as one of their values');
     A.project.clips[0].xform.crop.l = 0;
     A.viewer.refreshAll();
+}
+
+// ── a clip recorded sideways plays the right way up ────────────────────────
+//
+// Phones do not turn the pixels; they record landscape frames and write the
+// correction into the container. Nothing about that is visible in what is
+// decoded, so the whole of this section is about sizes: the element reports the
+// size the picture is *shown* at, and the app lays the clip out against that.
+
+if (rotated) {
+    console.log('\na rotated clip');
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+
+    const rp = bro.ffmpeg.probe(rotated);
+    ok(rp.video.rotation === 90, `the file says 90 degrees (${rp.video.rotation})`);
+    ok(rp.video.displayWidth === rp.video.height && rp.video.displayHeight === rp.video.width,
+       `probe swaps the size for it (${rp.video.width}x${rp.video.height} coded, ` +
+       `${rp.video.displayWidth}x${rp.video.displayHeight} shown)`);
+
+    dropFiles(400, 300, [rotated]);
+    waitFor('the rotated file to load', () => A.project.clips.length === 1);
+    const rc = A.project.clips[0];
+    waitFor('a decoded frame', () => A.video() && A.video().videoWidth > 0);
+    const rv = A.video();
+
+    // The element is the thing a page lays out against, and it reports the
+    // shown size. Asserted on the *element* rather than on the probe because
+    // this is the half that lives in bro and the half this application trusts.
+    ok(rv.videoRotation === 90, `<video> reports videoRotation ${rv.videoRotation}`);
+    ok(rv.videoWidth === rp.video.displayWidth && rv.videoHeight === rp.video.displayHeight,
+       `and videoWidth/Height are the shown pair (${rv.videoWidth}x${rv.videoHeight})`);
+    ok(rv.videoWidth < rv.videoHeight,
+       'so a file coded landscape presents as the portrait clip it is');
+
+    // And the app agrees, which is the thing that was actually broken: a clip
+    // laid out at the coded size is a portrait picture in a landscape box.
+    ok(rc.width === rv.videoWidth && rc.height === rv.videoHeight,
+       `the clip is laid out at ${rc.width}x${rc.height}`);
+    ok(A.project.width === rc.width && A.project.height === rc.height,
+       `and the canvas was seeded from it (${A.project.width}x${A.project.height})`);
+    const box = rc.frame.getBoundingClientRect();
+    ok(box.height > box.width, `its picture is taller than it is wide (${
+        Math.round(box.width)}x${Math.round(box.height)})`);
+    flush();
+    screenshot('out/13-rotated.png');
+}
+
+// ── a file with no picture in it is an ordinary clip ───────────────────────
+//
+// It contributes to the mix and to nothing else. So it opens, it lays out with
+// a real length, it plays and the playhead moves — and it is not a black
+// rectangle over whatever is beneath it, not a lane of missing thumbnails, and
+// not a rectangle in the render.
+
+if (soundOnly) {
+    console.log('\na clip with no picture');
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+
+    const sp = bro.ffmpeg.probe(soundOnly);
+    ok(!sp.video && !!sp.audio, 'the file really has sound and no picture');
+
+    dropFiles(400, 300, [soundOnly]);
+    waitFor('the sound-only file to load', () => A.project.clips.length === 1);
+    const sc = A.project.clips[0];
+    ok(Math.abs(sc.length - sp.format.duration) < 0.05,
+       `it laid out with a real length (${sc.length.toFixed(3)}s)`);
+    ok(sc.width === 0 && sc.height === 0, 'and with no size, rather than a plausible one');
+    ok(A.video() === sc.video, 'it is the clip that owns the moment, there being no other');
+
+    // The element exists — it *is* the decoder and the sound — and its window
+    // is not laid out, because a <video> with no picture keeps the 300x150
+    // replaced-element box and would sit black over everything below it.
+    ok(!!sc.video, 'it has a <video>, because that is the decoder');
+    ok(sc.frame.style.display === 'none', 'and its window is never shown');
+    const place = A.viewer.placement(sc, 1920, 1080);
+    ok(place.w === 0 && place.h === 0, 'placement() gives it no rectangle');
+
+    // Which the render follows for free: the spec carries that rectangle, and
+    // the Write stage drops a composite nothing feeds.
+    const spec = A.exporter.buildSpec();
+    ok(spec.clips.length === 1 && spec.clips[0].w === 0 && spec.clips[0].h === 0,
+       'so the spec sends no rectangle for it either');
+
+    // It plays, on the media clock, with no pictures to drive anything.
+    A.transport.muted = true;
+    A.setPlayhead(0);
+    const t0 = A.transport.t;
+    A.play();
+    pump(900);
+    A.pause();
+    pump(80);
+    ok(A.transport.t > t0 + 0.2,
+       `the playhead moved while it played (${t0.toFixed(3)} → ${A.transport.t.toFixed(3)})`);
+
+    // The waveform is read and the filmstrip is not asked for at all.
+    ok(waitFor('the waveform', () => !!sc.peaks, 20000), 'its waveform was analysed');
+    ok(!sc.film, 'and no filmstrip was grabbed for a file with no pictures in it');
+    flush();
+    screenshot('out/14-sound-only.png');
 }
 
 console.log(`\n${checks} checks passed`);

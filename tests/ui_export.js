@@ -27,16 +27,20 @@
 // to dismiss it. The path goes into the text field instead, which is what the
 // field is for.
 //
-// Usage: ffmpeg-bro-headless ui/ tests/ui_export.js -- <media-file> [<video-only file>]
+// Usage: ffmpeg-bro-headless ui/ tests/ui_export.js
+//            -- <media-file> [<video-only file>] [<sound-only file>]
 //
 // The second file, if given, is one with **no audio stream in it at all** —
 // which is a different file from one whose soundtrack is quiet, and is the only
-// thing that separates "the mix" from "a mix nothing feeds". The last section
-// is skipped without it.
+// thing that separates "the mix" from "a mix nothing feeds". The third is its
+// mirror, with **no video stream in it at all**, which is the only thing that
+// separates the composite from a composite nothing feeds. The last two sections
+// are one each and are skipped without them.
 
 const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
 const media = args[0];
 const videoOnly = args[1] || '';
+const soundOnly = args[2] || '';
 assert(media, 'pass a media file: ... tests/ui_export.js -- <file>');
 
 function pump(ms) {
@@ -3342,6 +3346,78 @@ if (videoOnly) {
     ok(!back.audio, 'and no audio stream, which is what every screen said');
 } else {
     console.log('\n(no video-only file given — the silent-timeline section is skipped)');
+}
+
+// ── a timeline with no picture anywhere on it ──────────────────────────────
+//
+// The mirror of the section above, and the reason it is a section of its own is
+// that the two are answered in different places. Native decides about the mix by
+// opening; it cannot decide about the composite the same way, because a graph
+// with a generator in it composes a picture out of nothing at all — so this side
+// is the only one that can say a timeline of nothing but sound has no picture to
+// write. Without the term the Write stage drew "V1 · the composite, through
+// libx264" and the render put a black rectangle at the canvas size into the
+// file: not a failure, which is what makes it worth a test.
+
+if (soundOnly) {
+    console.log('\na timeline with no picture anywhere on it');
+    A.shell.goTo('compose');
+    pump(80);
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    for (const i of A.inputs.inputs.slice()) A.inputs.removeInput(i);
+    pump(120);
+
+    dropFiles(400, 300, [soundOnly]);
+    waitFor('the sound-only file to load', () => A.project.clips.length > 0);
+    pump(200);
+
+    const only = A.inputs.inputs[0];
+    same(A.inputs.streamKinds(only).join(','), 'a',
+         'the probe found a soundtrack and nothing else');
+    const clip = A.project.clips[0];
+    ok(clip.length > 1, `and it laid out with a real length (${clip.length.toFixed(3)}s)`);
+
+    const S4 = A.exporter.currentSettings();
+    ok(S4.streams.some((s) => s.kind === 'video'),
+       'the video row is still on the stage, because adding a file with a picture would use it');
+
+    A.shell.goTo('write');
+    pump(150);
+    const note4 = q('#ex-streams [data-kind="video"] .ex-stream-none');
+    ok(note4 && /will not be written/.test(note4.textContent),
+       `but it says so on the row (${note4 ? note4.textContent.trim() : 'nothing said'})`);
+
+    const spec4 = A.exporter.buildSpec();
+    ok(!(spec4.streams || []).some((s) => s.kind === 'video'),
+       'the spec carries no video stream');
+    ok((spec4.streams || []).some((s) => s.kind === 'audio'),
+       'and does carry the soundtrack, which is the whole of what this render is');
+
+    A.command.draw();
+    const line4 = A.command.currentCommand();
+    ok(line4.indexOf(' -vn') >= 0, '-vn says so out loud, as ffmpeg spells it');
+    ok(line4.indexOf('-c:v') < 0, 'and no video encoder is named');
+
+    // The render, because "the spec is right" is not the claim.
+    S4.rangeIn = 0; S4.rangeOut = 2;
+    const out4 = bro.appDir + '/../out/sound-only-render.mp4';
+    f('path').value = out4;
+    f('path').dispatchEvent(new Event('change', { bubbles: true }));
+    pump(80);
+    el('ex-go').click();
+    pump(60);
+    waitFor('the sound-only render', () => {
+        const s = A.exporter.lastStatus();
+        return s && s.state !== 'running';
+    }, 120000);
+    const done4 = A.exporter.lastStatus();
+    same(done4.state, 'done', `it renders (${done4.error || 'no error'})`);
+    const back4 = bro.ffmpeg.probe(out4);
+    ok(!!back4.audio, 'and what came out has a soundtrack in it');
+    ok(!back4.video, 'and no video stream, which is what every screen said');
+} else {
+    console.log('\n(no sound-only file given — the pictureless-timeline section is skipped)');
 }
 
 // ── what is carried between runs ───────────────────────────────────────────

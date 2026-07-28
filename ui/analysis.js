@@ -6,7 +6,7 @@
 // one queue: adding a second clip while the first is still being read waits
 // its turn rather than fighting it for the disk.
 
-import { project, changed } from './project.js';
+import { project, changed, hasPicture } from './project.js';
 
 let worker = null;
 let queued = 0;
@@ -61,7 +61,12 @@ export function analyzeClip(clip) {
         // registry `<video>` does, and resolves a token the same way.
         path: clip.src || clip.path,
         buckets: Math.max(600, Math.min(6000, Math.round(clip.length * 12))),
-        count,
+        // A file with no picture in it has no filmstrip, and asking for one is
+        // a whole-file decode that ends in an error. The worker already keeps
+        // the two halves apart so a failed strip cannot take the waveform down
+        // with it — this is about not spending the decode at all, and about
+        // not putting a line in the log for something that was never wrong.
+        count: hasPicture(clip) ? count : 0,
         height: 96,
     });
 }

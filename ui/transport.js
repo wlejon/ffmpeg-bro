@@ -9,8 +9,17 @@
 // Three invariants earn their comments, because each was arrived at from a
 // failure that looked like something else:
 //
-//   - **The topmost clip under the playhead is the master clock.** It is the
-//     picture in front, so it is the thing that knows what moment is on screen.
+//   - **The topmost clip under the playhead *with a picture in it* is the
+//     master clock.** It is the picture in front, so it is the thing that knows
+//     what moment is on screen. The qualification arrived with audio-only
+//     clips and is a decision rather than a detail: bro will now drive
+//     `currentTime` from the media clock for a source with no picture, so a
+//     music bed dropped on a lane above the footage *could* be the master —
+//     and taking the clock away from the thing being watched would take frame
+//     stepping with it, `stepFrame()` moving by decoded pictures that a
+//     soundtrack does not have. With nothing but sound under the playhead the
+//     topmost clip is the master, which is what makes an audio-only timeline
+//     play at all. `viewer.activeClip()` is where the rule lives.
 //   - **Everything else is chased, not driven.** Several decoders each
 //     free-running on their own audio clock come apart within a minute, and
 //     correcting every frame would mean a seek per clip per frame. A seek only
@@ -102,6 +111,11 @@ export function step(frames) {
         setPlayhead(frames > 0 ? clip.start : clip.start + clip.length - 1e-4);
         return;
     }
+    // A clip with no picture has no frames to step, and `stepFrame` says so by
+    // returning 0 — so a timeline of nothing but sound steps clip to clip
+    // rather than by some invented fraction of a second. There is no frame
+    // boundary to land on and pretending otherwise is what the whole of this
+    // function exists not to do.
     if (clip.video.stepFrame(frames)) {
         transport.t = clip.start + clip.video.currentTime - clip.inPoint;
         tell();

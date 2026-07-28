@@ -528,9 +528,18 @@ means and still does. Rectangles rather than fit/zoom/pan modes on purpose: the 
 is worked out once, in `ui/viewer.js`, and both the screen and the encoder are
 driven from the same answer.
 
+A clip of a file with no video stream in it sends a rectangle of no size, which
+is what the compositor reads as "this one is in the mix and nowhere else". It is
+the same statement `viewer.placement()` makes on screen, which is why there is no
+separate field for it.
+
 `displayWidth`/`displayHeight` account for the rotation in the container's
 display matrix — a phone video is 1920×1080 on disk and 1080×1920 on screen, and
-only that side-datum says so.
+only that side-datum says so. `rotation` is the angle itself, in degrees
+clockwise, and it is always 0, 90, 180 or 270: anything else is reported as no
+rotation, because no path in this binary can apply one and a number nothing
+honours is worse than none. `<video>` reports the same pair as
+`videoWidth`/`videoHeight` and the angle as `videoRotation`, read-only.
 
 A stream's `duration` is its own, not the container's. They differ: a recording
 routinely stops the audio a fraction of a second after the last picture, so a
