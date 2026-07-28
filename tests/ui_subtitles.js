@@ -214,6 +214,27 @@ const mkvCodecs = Array.from(
 ok(mkvCodecs.indexOf('ass') >= 0 || mkvCodecs.indexOf('ssa') >= 0,
    `Matroska offers the ASS encoder (${mkvCodecs.join(' ')})`);
 ok(mkvCodecs.indexOf('subrip') >= 0, 'and subrip, which mp4 would not take');
+
+// **What a new row defaults to is asked, not preferred**, and the carry branch
+// is the half nothing tested. `avformat_query_codec` says Matroska holds
+// subrip, so a row added here reads the packets as they are; the identical
+// track into an mp4 came out `decode:` above, because mp4 holds exactly one
+// subtitle codec and it is not this one. Defaulting to either unconditionally
+// gets half the rows wrong — and the wrong half that still renders, a needless
+// re-encode of a track that could have been carried, is the half nobody
+// notices.
+{
+    click(q('[data-add="subtitle"]'));
+    pump(60);
+    const S = A.exporter.currentSettings();
+    const added = S.streams.filter((s) => s.kind === 'subtitle').pop();
+    ok(added && /^copy:/.test(added.source),
+       `into Matroska a new row carries the packets it already has (${added && added.source})`);
+    S.streams = S.streams.filter((s) => s !== added);
+    A.exporter.redraw();
+    pump(60);
+}
+
 A.exporter.currentSettings().container = before;
 A.exporter.redraw();
 pump(60);

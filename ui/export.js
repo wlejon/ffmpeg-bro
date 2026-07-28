@@ -453,3 +453,12 @@ export function previewState() { return preview; }
 /// can state exactly what a destination becomes without driving a form or
 /// starting a render, which is how ui_filtergraph.js is written against specs.
 export { destination };
+
+/// What is carried between runs, and the repair on the way back in.
+///
+/// On the surface because `restore()` runs once at boot and `remember()` runs
+/// on a render, so the round trip — and everything it deliberately does *not*
+/// carry — is otherwise reachable only by starting the application twice. It is
+/// also the documented source of cross-run surprise in this repo: a run that
+/// leaves the settings somewhere odd hands them to the next one.
+export { restore as restoreSettings, remember as rememberSettings };

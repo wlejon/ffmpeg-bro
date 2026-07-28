@@ -3049,4 +3049,63 @@ if (videoOnly) {
     console.log('\n(no video-only file given — the silent-timeline section is skipped)');
 }
 
+// ── what is carried between runs ───────────────────────────────────────────
+//
+// `localStorage` is the one thing in this application that outlives the process,
+// and it has already cost an afternoon: a botched run left `videoCodec:
+// mpeg2video` behind, which has no CRF, so the quality slider was not drawn and
+// an assertion four hundred lines earlier failed on a checkout where nothing
+// had changed. Both halves of that are asserted here — what is carried, and
+// what a stored blob written by an older shape of this application does when it
+// comes back in.
+
+console.log('\nwhat survives a restart, and what does not');
+{
+    const S3 = A.exporter.currentSettings();
+    const kept = { container: S3.container, videoCodec: S3.videoCodec, quality: S3.quality,
+                   metadata: S3.metadata, chapters: S3.chapters,
+                   rangeIn: S3.rangeIn, rangeOut: S3.rangeOut };
+
+    S3.quality = 27;
+    S3.metadata = { comment: 'carried' };
+    S3.chapters = [{ start: 0, end: 1, title: 'Opening' }];
+    A.exporter.rememberSettings();
+
+    // Changed behind the store's back, then restored: whatever comes back is
+    // what the blob carried and nothing else.
+    S3.quality = 11;
+    S3.metadata = {};
+    S3.chapters = [];
+    A.exporter.restoreSettings();
+    same(S3.quality, 27, 'a setting somebody chose comes back');
+    same((S3.metadata || {}).comment, 'carried', 'and so does the container metadata');
+    // A chapter is a pair of times on *this* timeline, so carrying "Opening,
+    // 0 to 1 s" into the next edit would put a mark somewhere that means
+    // nothing — unlike a codec or a language, which mean the same thing
+    // whatever is being written.
+    same((S3.chapters || []).length, 0, 'and a chapter deliberately does not');
+
+    // The repair. Nothing writes these shapes today, which is exactly why they
+    // are worth a test: `metadata: null` reaches `Object.keys()` on the Write
+    // stage and takes the whole stage down at boot, where nothing on the screen
+    // says which key did it.
+    const raw = JSON.parse(localStorage.getItem('ffmpeg-bro.export'));
+    raw.metadata = null;
+    raw.extraVideo = 'not an object';
+    raw.destinations = 7;
+    raw.container = 'mkv';           // what this field held before muxers had names
+    localStorage.setItem('ffmpeg-bro.export', JSON.stringify(raw));
+    A.exporter.restoreSettings();
+    ok(S3.metadata && typeof S3.metadata === 'object', 'a null bag comes back as an empty one');
+    ok(S3.extraVideo && typeof S3.extraVideo === 'object', 'and so does one that is a string');
+    ok(Array.isArray(S3.destinations), 'a destination list that is a number comes back a list');
+    same(S3.container, 'matroska',
+         'and a container written as an extension is the muxer libavformat guesses from it');
+
+    Object.assign(S3, kept);
+    A.exporter.rememberSettings();
+    A.exporter.redraw();
+    pump(40);
+}
+
 console.log(`\n${checks} checks passed`);
