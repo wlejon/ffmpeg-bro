@@ -327,7 +327,12 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
                 const int out = static_cast<int>(
                     av_rescale_rnd(swr_get_delay(d.swr, d.adec->sample_rate) + have,
                                    rate, d.adec->sample_rate, AV_ROUND_UP));
-                samples.assign(static_cast<size_t>(out) * channels, 0.0f);
+                // Slack past the samples asked for — see kSwrSlack in
+                // export_frame.h. `assign` on a fresh vector allocates exactly
+                // what it was told, so this one had no slack at all on its
+                // first call: of the four resamplers in this binary it was the
+                // one with nothing behind it to absorb the overrun.
+                samples.assign(static_cast<size_t>(out) * channels + kSwrSlack, 0.0f);
                 uint8_t* dst = reinterpret_cast<uint8_t*>(samples.data());
                 const int got = swr_convert(d.swr, &dst, out,
                                             const_cast<const uint8_t**>(d.frame->data), have);

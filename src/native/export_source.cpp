@@ -420,8 +420,16 @@ void SourceAudio::append() {
         delay + frame_->nb_samples, outRate_, frame_->sample_rate, AV_ROUND_UP));
     if (maxOut <= 0) return;
 
+    // Sized past what was asked for — see kSwrSlack in export_frame.h. The
+    // count handed to `swr_convert` stays the unpadded one, because the slack
+    // is somewhere for the last SIMD store to land and not room for more
+    // samples. This buffer was sized exactly for a long time and never fell
+    // over, which is the whole hazard: a `std::vector` that has grown
+    // geometrically usually has spare capacity behind it, so the overrun lands
+    // in slack the allocator happened to leave and the mistake is invisible
+    // until the one call where it does not.
     const size_t base = fifo_.size();
-    fifo_.resize(base + static_cast<size_t>(maxOut) * outChannels_);
+    fifo_.resize(base + static_cast<size_t>(maxOut) * outChannels_ + kSwrSlack);
     auto* dst = reinterpret_cast<uint8_t*>(fifo_.data() + base);
     const int written = swr_convert(swr_, &dst, maxOut,
                                     const_cast<const uint8_t**>(frame_->extended_data),

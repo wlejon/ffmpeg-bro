@@ -680,6 +680,46 @@ int main(int argc, char* argv[]) {
                         "(pass a file with sound to check the mixer)\n");
     }
 
+    // ── the sound, resampled ───────────────────────────────────────────────
+    //
+    // Every other render here asks for the rate the source already has, so
+    // libswresample has nothing to do and the buffers it writes into are never
+    // asked for an awkward number of samples. 48000 → 44100 is 147/160, so no
+    // frame's output count is a whole number of SIMD blocks and every one of
+    // them makes the resampler's last store go past the count it was given.
+    //
+    // That overrun is what `kSwrSlack` is padding for, and it is worth being
+    // plain about what this check does and does not do: it exercises the two
+    // buffers that used to be sized exactly (`SourceAudio`'s fifo and the
+    // writer's `aconv`), but a few bytes written past a `std::vector` usually
+    // land in capacity the allocator left behind, so a render that is missing
+    // the slack still finishes. The assertion here is about the resampling
+    // being right; the guard against the overrun is the constant.
+    if (srcHasAudio) {
+        std::printf("\nthe sound at a rate the source is not\n");
+        const std::string outR = "out/export-resampled.mp4";
+        ExportSettings sr = baseSettings(outR);
+        sr.audioSampleRate = 44100;
+        const ExportStatus rst = render(sr, {leftHalf(first, srcDuration)});
+        checkf(rst.state == ExportStatus::State::Done, "a render at 44.1 kHz finishes (%s)",
+               rst.error.empty() ? "no error" : rst.error.c_str());
+        if (rst.state == ExportStatus::State::Done) {
+            const ProbeResult ri = probeMedia(outR);
+            check(ri.ok, "and the file opens");
+            const StreamSummary* ra = nullptr;
+            for (const auto& s : ri.streams) if (s.kind == "audio" && !ra) ra = &s;
+            check(ra != nullptr, "with a soundtrack in it");
+            if (ra) checkf(ra->sampleRate == 44100, "at 44.1 kHz (%d)", ra->sampleRate);
+            AudioPeaks rp;
+            check(analyzeAudioPeaks(outR, 64, rp), "the resampled audio decodes");
+            double loudest = 0;
+            for (float v : rp.rms) loudest = std::max(loudest, double(v));
+            if (srcAudible)
+                checkf(loudest > 0.0005,
+                       "and came through the rate change (peak rms %.4f)", loudest);
+        }
+    }
+
     // ── cancelling ─────────────────────────────────────────────────────────
     //
     // Stopping half way has to leave a playable file rather than a truncated
