@@ -66,6 +66,17 @@ export const isTee = () => settings.container === 'tee';
 /// whatever its destinations are, a URL is a stream whatever the muxer thinks,
 /// and what is left is a set or a file depending on whether the muxer writes
 /// what it was named with.
+///
+/// **There are two `kindOf`s in this application and they are not related.**
+/// `ui/inputs.js`'s answers *what an `-i` is* — a file, a sequence, a still, a
+/// concat list, a device, a file of cues; this one answers *what shape the
+/// output is*. No file imports both and neither should be reached for by the
+/// other's callers. They overlap on exactly one sub-fact, `hasFramePattern`,
+/// and even there they differ on purpose: the reading end also counts
+/// `pattern_type=glob` as a run of pictures, because that is a way of naming
+/// one to the `image2` *demuxer*, and there is no such thing at the writing
+/// end — a muxer numbers its files and has nothing to match against. A
+/// difference between them is not drift to be reconciled.
 export function kindOf(muxer, path = settings.path) {
     if (isTee()) return 'several';
     if (schemeOf(path)) return 'stream';

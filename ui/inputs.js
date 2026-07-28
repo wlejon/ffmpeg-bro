@@ -272,6 +272,15 @@ export function summary(input) {
 /// the demuxer and the option bag — a sequence is a path with `%04d` in it, a
 /// still is an image file that is not one — so a `kind` field would be a
 /// second place for the same fact to live and the two would drift.
+///
+/// **The other `kindOf` is not a variant of this one.**
+/// `ui/export/destination.js` has a function of the same name answering *what
+/// shape the output is* — one file, a set, a stream, several at once — which
+/// is a different question about a different end of the render. Nothing
+/// imports both, and the one sub-fact they share is `hasFramePattern`: here a
+/// `pattern_type=glob` bag is a sequence as well, because that is the other
+/// way of naming a run to the `image2` demuxer, and there is no writing-end
+/// equivalent for the destination's copy to be missing.
 export function kindOf(input) {
     // A device first, because it is the one kind that is not read off the path
     // at all: `-f gdigrab -i desktop` is a device and `-i desktop` is a file

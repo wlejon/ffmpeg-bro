@@ -31,6 +31,7 @@ import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 import { optionColumn } from './opttable.js';
 import * as graph from './graph/overlay.js';
+import { COMPOSITE_POINT } from './graph/derive.js';
 import { streamsOf } from './export/streams.js';
 import { readsInput, filterPath } from './export/subtitles.js';
 import { goTo } from './shell.js';
@@ -500,15 +501,21 @@ function subtitleRows(input) {
 /// The short way to `subtitles=`, and it is short only in the sense that it
 /// knows the name of the filter and how to write the path.
 ///
-/// **What it places is an ordinary node**, at `composite/after-overlay`, which
-/// is the same point the palette offers and the same one a measurement lands
-/// at. It appears on the Graph stage, it is printed by the command bar, it can
-/// be moved, configured and deleted there, and nothing about the render behaves
+/// **What it places is an ordinary node**, at `COMPOSITE_POINT`, which is the
+/// same point the palette offers and the same one a measurement lands at. It
+/// appears on the Graph stage, it is printed by the command bar, it can be
+/// moved, configured and deleted there, and nothing about the render behaves
 /// differently because this button rather than the palette put it there — the
 /// rule chunk 10's measurement offers follow, for the same reason: a shortcut
 /// that produced something you could not then find is worse than no shortcut.
+///
+/// The anchor comes from `derive.js` rather than being written out, because
+/// `applyOverlay` drops an insert whose point no derivation declares without a
+/// word — right for a clip trimmed out of the range, and silent ruin for a name
+/// that has drifted: this button would go on placing a record nothing ever
+/// resolves, and the only symptom is that pressing it does nothing.
 function burnIn(input) {
-    graph.insert('composite/after-overlay', 'subtitles',
+    graph.insert(COMPOSITE_POINT, 'subtitles',
                  { params: { filename: filterPath(input.path) } });
     if (hooks.changed) hooks.changed();
     goTo('graph');

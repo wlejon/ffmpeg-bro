@@ -252,6 +252,22 @@ function audioSteps(clip, w, key, off) {
 const clipKey = (clip, i) =>
     `clip:${clip.id !== undefined && clip.id !== null ? clip.id : `#${i}`}`;
 
+/// The two insert points that are not about one clip: the whole canvas, and the
+/// whole soundtrack.
+///
+/// Named here because this is where they are declared, and exported because two
+/// other files place nodes at them — `ui/measure.js`, which puts a measuring
+/// filter where the thing being measured is, and `ui/sources.js`, whose
+/// `Burn it into the picture` puts a `subtitles` filter over the composite.
+/// **An insert whose anchor no derivation declares is dropped without a word**
+/// (see `applyOverlay`), which is right for a clip that has been trimmed out of
+/// the range and is silent ruin for a name that has been mistyped: the button
+/// does nothing, the node never appears, and there is nothing on the screen to
+/// say so. A constant is what makes that unreachable rather than something to
+/// remember.
+export const COMPOSITE_POINT = 'composite/after-overlay';
+export const MIX_POINT = 'audio/after-mix';
+
 /// One of the document's inputs, by the id the overlay wrote down.
 ///
 /// `spec.inputInfo` runs parallel to `spec.inputs` and carries what the graph
@@ -810,7 +826,7 @@ export function derive(spec, sources, opts = {}) {
     // there would sit in the encoder's colour in the command you copied and in
     // RGBA in the render you got. Two pictures from one insert point is worse
     // than one fewer insert point.
-    point('composite/after-overlay', lastOverlay, 0, 'v', 'after compositing');
+    point(COMPOSITE_POINT, lastOverlay, 0, 'v', 'after compositing');
     const vsink = g.add({ kind: 'sink', stream: 'v', anchor: 'out:v' });
     if (over) g.connect(over, vsink, 0);
 
@@ -845,7 +861,7 @@ export function derive(spec, sources, opts = {}) {
         // With one audible clip there is no mixer, and this point sits on that
         // clip's own tail — which is the same wire the muxer maps and the right
         // place for something that applies to the whole soundtrack.
-        point('audio/after-mix', out, 0, 'a', 'after mixing');
+        point(MIX_POINT, out, 0, 'a', 'after mixing');
         // The pad the muxer maps exists when something maps it — either the
         // edit's own soundtrack, or a wire somebody drew to it.
         //

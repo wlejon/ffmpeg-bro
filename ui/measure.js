@@ -47,16 +47,20 @@
 
 import * as overlay from './graph/overlay.js';
 import { infoOf } from './graph/filters.js';
+import { COMPOSITE_POINT, MIX_POINT } from './graph/derive.js';
 
 // ── where a measurement goes ───────────────────────────────────────────────
 //
 // Two named points, because those are the two things anybody measures: the
 // whole picture as it will be written, and the whole soundtrack as it will be
-// written. Both are `derive.js`'s own anchors, so a filter put here is a filter
-// on the graph — visible on the Graph stage, printed by the command bar, and
-// run by libavfilter — rather than something this file does privately.
-const PICTURE = 'composite/after-overlay';
-const SOUND = 'audio/after-mix';
+// written. Both are `derive.js`'s own anchors — taken from it rather than
+// written out again, because an insert whose anchor no derivation declares is
+// dropped in silence, so a name typed wrong here would be a button that does
+// nothing at all — so a filter put here is a filter on the graph, visible on
+// the Graph stage, printed by the command bar and run by libavfilter, rather
+// than something this file does privately.
+const PICTURE = COMPOSITE_POINT;
+const SOUND = MIX_POINT;
 
 /// What can be measured, offered where somebody would want it.
 ///
