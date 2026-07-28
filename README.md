@@ -1275,8 +1275,11 @@ containers will hold a codec comes from `avformat_query_codec` rather than from
 a table, so picking WebM narrows the codec list to the two that are legal in it.
 
 **Start from** is the top row: six named starting points — web, small, HEVC,
-ProRes master, GPU, lossless — each filtered against what this build has, so
-the NVIDIA one is absent on a machine without one. Most renders are one of
+ProRes master, GPU, lossless — each filtered against what this build has, and
+the GPU one against what this *machine* has, so it is absent on a machine with
+no card in it. Those are two different questions and the second one is the one
+that matters here: a vcpkg ffmpeg carries every NVENC, AMF and QSV encoder
+whether or not there is anything to run them on. Most renders are one of
 these, and the twenty controls below are for the render that is not.
 
 **Rate control** is offered as the modes the encoder actually has: constant
@@ -1456,7 +1459,9 @@ a second answer that could disagree with the first. `AVFMT_NOFILE` is
 libavformat's own way of saying *I do not write the file you named me with* —
 which is exactly what a segmenter, a playlist writer and `tee` all are — a frame
 pattern in the name is what makes `image2` a run rather than one picture, and a
-URL is a URL. The muxer picker's **Streaming** facet is the same query.
+URL is a URL — except `file:`, which is the long way of writing a path and is
+read as one, because that is what the renderer does with it. The muxer picker's
+**Streaming** facet is the same query.
 
 Each shape then gets what it needs and nothing else. A URL says which protocol
 it names and **whether this build has it**, because a URL naming a protocol that
@@ -1566,6 +1571,13 @@ every render is. `+ Video`, `+ Audio`, `+ Subtitle` and `+ Attachment` add one;
 away, including the last video stream, which is what a sound-only render is.
 Everything a row does not say it takes from the Encode stage, so a second audio
 track is one click and not twenty controls.
+
+**A stream nothing feeds is not written, and the row says so.** Drop a file with
+no audio track on the timeline and the mix has nothing to be made of — the
+render leaves the stream out, which is right, and the row that would have
+claimed it says it will not be written rather than describing a track that will
+not be there. It stays on the stage, because adding a file with sound will use
+it. The command bar prints `-an`, which is how ffmpeg spells the same thing.
 
 **The first word of the row is where its content comes from**, and there are
 two answers. The composite and the mix are made — the edit, composited and
@@ -2140,8 +2152,10 @@ cmake --build build --config Release && ctest --test-dir build -C Release
 ```
 
 `ctest` generates its own media — two files with known content, a moving bar over a
-gradient and a tone at a known level, differing in size, aspect, frame rate and length —
-and runs every suite against them. Nothing is checked in and nothing depends on what a
+gradient and a tone at a known level, differing in size, aspect, frame rate and length,
+and a third with **no audio stream in it at all**, which is not the same file as one
+whose soundtrack is quiet and is the only thing that separates "the mix" from "a mix
+nothing feeds" — and runs every suite against them. Nothing is checked in and nothing depends on what a
 file you happened to have lying around contains.
 
 Each suite also runs standalone against any real file, which is how to check behaviour
@@ -2159,7 +2173,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-dir>
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only file>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>

@@ -45,9 +45,12 @@ cmake --build build --config Release && ctest --test-dir build -C Release
 
 `ctest` writes the fixture media into `build/fixtures/` (a CTest `FIXTURES_SETUP` test, so
 it is made once and only when something will use it) and runs every suite against it —
-two mp4s, plus a folder of stills for the sequence work: a padded run, an unpadded run
+two mp4s with sound, **a third with no audio stream in it at all**, plus a folder of
+stills for the sequence work: a padded run, an unpadded run
 whose numbers cross from one digit to two, and a file beside them that is part of
-neither. The third of those is the case that decides whether the sequence scan is any
+neither. The silent one is not the same file as one whose soundtrack is quiet — it is
+the only thing that separates "the mix" from "a mix nothing feeds", and every screen in
+this application used to claim a soundtrack for it. The third of those is the case that decides whether the sequence scan is any
 good, and it is written by the same `Writer` through the `image2` muxer, which makes the
 fixtures the check that the picture side of that works at all. They are generated rather than checked in, and generated with **known content** —
 a moving bar over a gradient, a 440/660 Hz tone at -6 dBFS, two different sizes, aspects,
@@ -132,8 +135,10 @@ against footage the fixtures do not resemble:
 
 # the encode side end to end: the spine's stages, controls -> ffmpeg options,
 # the advanced option editor, the command bar, both halves of the A/B preview,
-# the stream list and the copy decision on it, and loading the result back
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file>
+# the stream list and the copy decision on it, and loading the result back.
+# The second file has **no audio stream in it**, which is what separates the
+# mix from a mix nothing feeds; the last section is skipped without one.
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only file>]
 
 # the Sources stage as the input editor: an input added by typing a path with
 # nothing on the timeline, a demuxer forced, an option set, a window cut, and
@@ -1009,6 +1014,11 @@ once to mix. Notable:
   refuses the contradiction, and it refuses it as `EINVAL` from `avcodec_open2` —
   which arrives as "cannot open the mjpeg encoder: Invalid argument" with no mention
   of colour. Reachable in two clicks, because picking image2 lands on mjpeg.
+  **`outputColor()` in `ui/graph/derive.js` carries the same term**, or the command
+  bar prints `-color_range tv` and `out_range=tv` for a render that tags and converts
+  to JPEG range — copy that command and you get a different picture. Only an explicit
+  choice reaches it: left on auto the writer takes `pickPixelFormat`, which prefers
+  `yuv420p` wherever the encoder has it, and mjpeg does.
 - **Output size is measured over the run of files, not stat'd from the path.** A
   render into `out%04d.png` writes many files and there is no file called that;
   `Writer::sizeOnDisk` walks the names from the muxer's own `start_number` — asked
@@ -1502,6 +1512,12 @@ about them:
   every filter-family question comes from that. There is no list of hardware
   filters, encoders or decoders written down anywhere: each device reports its own,
   built by walking libavcodec's `avcodec_get_hw_config` and libavfilter's registry.
+  **The "Fast (GPU)" preset asks it too**, through `firstOnACard()` in
+  `export/presets.js`. Filtered against `bro.ffmpeg.encoders` instead, it was offered
+  on every machine — a vcpkg ffmpeg carries every NVENC, AMF and QSV encoder whether
+  or not there is a card — badged by nothing, warned about by nothing, and failing at
+  `avcodec_open2` with the render already started. The candidate list stays, because
+  it is the order of preference and not a list of what is supported.
 
   The second is `decodeCost` and `encodeCost`, which are two sentences and are the
   reason this file has an opinion. **A control labelled "hardware acceleration"
@@ -1637,6 +1653,22 @@ about them:
     `]` are escaped in values), and then the command bar quotes the lot for the shell.
     On Windows that doubles every backslash in a path, which looks wrong and is right.
     An argument assembled on somebody's behalf is exactly the one that has to be visible.
+  - **What a scheme is, is `format.js`'s `urlScheme()` and there is one of it.** There
+    were two, and only one carried the guard that a Windows drive letter is a colon in
+    a path and not a scheme — so `C://media/x.mp4` was an ordinary path to this stage
+    and protocol `c` to the Sources stage, which drew "not in this build" against it.
+    The **policy** stays at each call site because it is one, and both of them answer
+    `''` for `file:`: that is what `isLocalPath` in `export_writer.cpp` says, and it is
+    the function deciding whether the render stats a file or reports what it sent, so
+    a screen disagreeing with it says there is nothing to open about a file on the
+    disk. `openable()` hands back the path behind such a URL, stripping the five
+    characters `localPathOf` strips.
+  - **`[` and `]` in a tee destination cannot be escaped, and are not.**
+    `tee_write_header` splits the list with `av_get_token` — which removes a backslash
+    and keeps what follows — and only then tests whether the first character of the
+    slave is a `[`. So `\[` arrives as `[` and is read as the option bracket exactly
+    as an unescaped one would be. A destination whose path begins with `[` is
+    unreachable through `tee`; an escape there would be a guard that does nothing.
   - **`openable()` answers "open the result" per shape**, because a set of files is not
     "done, here is your file": the playlist for `hls`/`dash` (it is what was named and the
     only thing that says the order), the first picture of a numbered run (a run has no
@@ -1733,6 +1765,24 @@ about them:
     while a track list insists it should not have. A **copied** audio row is outside
     it in both directions: the switch is about the thing the encoder is fed, and a
     stream whose packets come out of a demuxer is not made of it.
+  - **A mix nothing feeds is not a stream in the file**, and that is a third fact
+    beside those two. Native decides it by opening — `wantAudio` in
+    `export_timeline.cpp` is set only where a clip's `SourceAudio::open` succeeded,
+    and `outputStreams()` then drops every non-copied audio stream — so a
+    video-only timeline has always written a file with no soundtrack. This side had
+    no equivalent term: a row tested `settings.audio` and `derive()` tested
+    `muted`/`volume`, and `volume` is 1 and `muted` is false whatever a probe found.
+    So the stage drew "A1 · the mix, through aac" for a stream that was always going
+    to be dropped and the command bar printed `[0:a]atrim…`, `-map [a0]` and
+    `-c:a aac` against an `-i` with no audio in it — which real ffmpeg refuses with
+    *Stream specifier ':a' matches no streams*. `hasAudibleSound()` here is the
+    term, over `streamKinds()`, counting an overlay wire into `audio out` as well
+    since a `sine` there is a soundtrack with no clip near it; `derive()` asks the
+    same question of `spec.inputInfo` so that it stays a pure function of its
+    argument, and **a spec that does not carry that field answers yes**, which is
+    what every hand-written spec in `tests/` has always meant. The row stays on the
+    stage and says it will not be written, because adding a file with sound will use
+    it.
   - **Nothing is tabled.** The dispositions are `bro.ffmpeg.dispositions` (every bit,
     through `av_disposition_to_string`), the fourccs are `bro.ffmpeg.codecTags(ext,
     codec)`, the codecs are the encoder lists. A row cannot offer what the render
@@ -2004,7 +2054,17 @@ about them:
   hardware — the single least readable failure in this application, and one
   sentence to explain. So `memoryProblems()` carries one fact through the graph
   (is the picture up or down) and names the first node where the two disagree.
-  Three things about it were learnt the hard way:
+  **That fact is `whereIs(g, node)` and it is exported**, because three places ask
+  it of three different questions and only the questions differ: whether every
+  node's expectation holds (here), whether one pad's picture is on a card so a
+  preview's tail needs an `hwdownload` (`graph/subgraph.js`), and whether the
+  picture the *encoder* is handed ends up on one (`export/warnings.js`). The last
+  of those used to answer by looking for `hwupload` in the last chain of the
+  printed graph, which is neither the same question nor even the same chain —
+  `print()` walks the node array in order and `derive()` builds the audio runs
+  after the video sink, so the last chain of any render with sound in it is an
+  `atrim` and the answer was unconditionally no.
+  Three things about the walk were learnt the hard way:
 
   - **Resolve by asking upstream, not by walking `g.nodes` in order.** A node's
     producers are earlier in the array for a graph the derivation built and are
@@ -2479,6 +2539,27 @@ about them:
   order is the `project.clips` array order (already sorted bottom-track-first) as `z`.
 - **App preferences go in `localStorage`, not `bro.settings`.** bro's settings are a closed
   schema of engine keys; an unknown key is warned about and dropped.
+- **The timeline's rate and the output's are two questions, one home each.**
+  `projectFps()` in `ui/project.js` is what the ruler steps by, what a timecode counts
+  frames in and what the spine's Compose card states; `outputFps()` in
+  `ui/export/state.js` is what the encoder is asked for. A 60 fps render off a 25 fps
+  timeline is an ordinary thing to want, so they are not merged — but the *fallback*
+  behind them was written out at eight points of use in two different answers, 25 at
+  one end and 30 at the other. Nothing was ever visibly wrong (`project` is seeded at
+  25 and `makeClip` falls back to 25, so `project.fps` is never zero and the `|| 30`
+  arms were unreachable); one home is what keeps a probe reporting no rate from making
+  one moment read as two timecodes. The `|| 30` in `derive()` and in the command bar's
+  `-g` are a different question again — they are defaults for a *spec* with no rate in
+  it, which is a hand-written one.
+- **`buildSpec()` is memoised for exactly one answer, and no longer.** `warnings()` and
+  `command.parts()` each open with `freshSpec()` and everything inside them reads
+  `currentSpec()`; between them they used to derive the same edit five times per
+  redraw of a panel that redraws on every keystroke (measured: `warnings()` 1.46 ms →
+  0.44 ms, a redraw pass 2.40 ms → 1.43 ms). The memo cannot outlive a synchronous
+  call, which is what makes it safe: invalidating from listeners would have to name
+  every place a setting is written, and a spec quietly one edit behind is worse than a
+  slow one. `currentGraph()` hands back the derivation that spec was built with, so
+  the hardware warning and the "without your filters" refusal share one `renderGraph()`.
 
 ## Style
 
