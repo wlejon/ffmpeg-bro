@@ -217,6 +217,14 @@ function updateSummary() {
     const frames = Math.max(1, Math.round(r.length * fps));
     const clips = project.clips.length;
     const codec = activeVideoCodec();
+    // The reader, not the raw field. `settings.audioCodec` is blanked whenever
+    // the container changes and again on load when the build lacks what was
+    // stored, and "" there means "whatever this container's default is" rather
+    // than "no sound" — so reading it directly made the summary say *silent*
+    // about a render with a soundtrack in it. That is the whole reason
+    // `activeAudioCodec()` exists, and the video half was already using its
+    // counterpart one line up.
+    const acodec = activeAudioCodec();
 
     // What the file will be, in the terms the file will be described in by
     // whatever opens it next. A measurement beats an estimate, so the preview's
@@ -234,7 +242,7 @@ function updateSummary() {
         div('mono', `${settings.width}×${settings.height} · ${fps.toFixed(3)} fps · ` +
                     `${clock(r.length)} · ${frames} frames${size}`),
         div('mono dim', `${codec || '?'}` +
-            (settings.audio && settings.audioCodec ? ` + ${settings.audioCodec}` : ' · silent') +
+            (settings.audio && acodec ? ` + ${acodec}` : ' · silent') +
             ` · ${settings.container} · ${clips} clip${clips === 1 ? '' : 's'} flattened`),
     ]);
     put(el_.warnings, () => warnings().map((t) => div('warn', t)));

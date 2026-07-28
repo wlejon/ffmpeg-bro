@@ -237,6 +237,26 @@ ok(!!f('container-open'), 'and the muxer picker');
 ok(el('ex-summary').textContent.indexOf('frames') >= 0,
    `it states what will be written: ` +
    el('ex-summary').textContent.replace(/\s+/g, ' ').trim());
+
+// **The summary is written from the readers, not from the raw fields.** An
+// empty `settings.audioCodec` means "whatever this container's default is",
+// which for mp4 is aac — and it is empty for every render nobody has touched
+// the audio codec on, because changing the container blanks it. Read
+// literally, the line said the render was *silent* while a soundtrack was
+// about to be written, which is the one thing this line exists to state.
+{
+    const S0 = A.exporter.currentSettings();
+    const kept = S0.audioCodec;
+    S0.audioCodec = '';
+    A.exporter.redraw();
+    pump(40);
+    const line = el('ex-summary').textContent.replace(/\s+/g, ' ');
+    ok(S0.audio && line.indexOf('silent') < 0 && line.indexOf('aac') >= 0,
+       `an unset audio codec is the container's own, not silence (${line.trim()})`);
+    S0.audioCodec = kept;
+    A.exporter.redraw();
+    pump(40);
+}
 A.shell.goTo('encode');
 pump(40);
 
