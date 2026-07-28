@@ -656,11 +656,15 @@ console.log('\ngrid');
     pump(60);
     const celled = A.viewer.placement(clip, s.w, s.h);
     ok(!!celled.cell, 'a clip in grid layout gets a cell');
-    if (A.project.clips.length === 1) {
-        ok(celled.w <= stacked.w + 1, 'one clip fills its cell, which is the whole canvas');
-    } else {
-        ok(celled.w < stacked.w, 'and its picture is smaller than it was on the whole canvas');
-    }
+    // One clip by the time the script gets here — the second file's clip was
+    // deleted back at "deleting the selected clip removes it" and the split put
+    // its own halves back — so a grid of one is the whole canvas. Said as an
+    // assertion rather than as an `if`, because the branch for several clips
+    // that used to stand beside this was reachable from nowhere in the file and
+    // read as coverage of a case nothing here exercises. The several-clip
+    // arrangement is the batch section at the bottom, which has its own checks.
+    ok(A.project.clips.length === 1, 'one clip on the timeline, so its cell is the canvas');
+    ok(celled.w <= stacked.w + 1, 'and it fills that cell');
     A.setLayout('stack');
     pump(60);
     ok(!A.viewer.placement(clip, s.w, s.h).cell, 'and back to the whole canvas');
@@ -745,10 +749,10 @@ pump(20);
 
 console.log('\nthe graph stage');
 {
-    const chain = A.shell.stages();
-    ok(chain.indexOf('graph') === chain.indexOf('compose') + 1 &&
-       chain.indexOf('graph') === chain.indexOf('encode') - 1,
-       'Graph sits between Compose and Encode, where it is in ffmpeg');
+    // Where Graph sits on the spine is asserted in tests/ui_graph.js, which
+    // needs no media for it and states it as the two separate facts it is. It
+    // was here as well, in one combined `ok`, and a claim proved in two places
+    // is a claim that can be half-fixed.
 
     // Through the keyboard, because a stage you can only reach by clicking a
     // card is one the keyboard is lying about.

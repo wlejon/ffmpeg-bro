@@ -1404,8 +1404,6 @@ console.log('\nseveral destinations at once');
     ok(A.exporter.currentWarnings().some((w) => w.indexOf('nowhere to go') >= 0),
        'and none at all is called out rather than rendered');
     S.destinations = [];
-
-    S.destinations = [];
 }
 
 console.log('\nprogress says something true for each shape');

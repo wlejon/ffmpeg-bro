@@ -52,10 +52,10 @@ function type(node, value) {
     node.value = value;
     node.dispatchEvent(new Event('change', { bubbles: true }));
 }
-function choose(node, value) {
-    node.value = value;
-    node.dispatchEvent(new Event('change', { bubbles: true }));
-}
+// A `<select>` and a text field are set the same way — write the value, then
+// send `change` — so this is `type` under the name that reads right at a menu.
+// One body: two identical ones are two things to keep in step.
+const choose = type;
 
 let checks = 0;
 function ok(cond, what) {

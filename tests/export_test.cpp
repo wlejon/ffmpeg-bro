@@ -791,8 +791,6 @@ int main(int argc, char* argv[]) {
         checkf(false, "could not start the cancellable render: %s", err.c_str());
     }
 
-    // ── refusing the impossible ────────────────────────────────────────────
-
     // ── the option bag ─────────────────────────────────────────────────────
     //
     // Every setting in the dialog past the codec is an ffmpeg option applied

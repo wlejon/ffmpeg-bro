@@ -338,11 +338,6 @@ console.log('\nthe caveat that cannot be fixed');
        `30 into 25 is called out: "${resampled.caveats.find((c) => c.indexOf('rate') >= 0)}"`);
 }
 
-// ── what it refuses ────────────────────────────────────────────────────────
-//
-// A graph that is nearly right is worse than no graph: the only reason to show
-// one is that it can be taken somewhere else and run.
-
 // ── the graph to run, as opposed to the graph to print ─────────────────────
 //
 // `bro.ffmpeg.render.start` takes the same graph, with two differences that are
