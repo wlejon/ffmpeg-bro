@@ -2498,6 +2498,97 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // **Both streams of one input, copied.** Two load-bearing rules meet in
+        // this one render and nothing else in the suite touches either of them,
+        // because every other `copy:` here is a picture:
+        //
+        //  - **A copied audio stream is not the mix.** `outputStreams()` drops
+        //    audio on a silent timeline, and there is no timeline at all here —
+        //    so the one-line exception for a copied source is the only thing
+        //    keeping the soundtrack in the file. Take it out and "extract the
+        //    soundtrack" and "replace the audio" become quietly impossible,
+        //    which is what this catches: the file comes back with one stream.
+        //  - **The first packet decides the file's zero, one zero per input.**
+        //    Two streams out of one file keep the offset they had between them,
+        //    which is the whole of A/V sync; a zero taken per stream would move
+        //    the soundtrack by however far the picture's first keyframe was
+        //    from it, and both files would still open and still be valid.
+        //
+        // The third rule of that group — `Writer::hasAudio()` counting only
+        // mix-fed streams — is deliberately *not* asserted here, because it
+        // turns out not to be assertable from the outside at all:
+        // `Writer::writeAudio` skips a copied stream itself, so counting one in
+        // `hasAudio()` costs a render the decode of every clip's soundtrack and
+        // changes nothing about what is written. It is a cost rather than a
+        // wrong file, and a check that claimed otherwise would be describing
+        // something this suite cannot see.
+        if (srcAudio >= 0) {
+            ExportSettings both;
+            both.path = "out/copy-both.mkv";
+            both.format = "matroska";
+            both.inputs = {in};
+            both.startTime = 0;
+            both.endTime = 1.0;   // ignored: a copy's length is its own span
+            both.faststart = false;
+            {
+                ExportStream v;
+                v.kind = "video";
+                v.source = "copy:0:" + std::to_string(srcVideo);
+                both.streams.push_back(v);
+                ExportStream a;
+                a.kind = "audio";
+                a.source = "copy:0:" + std::to_string(srcAudio);
+                both.streams.push_back(a);
+            }
+            st = render(both, {});
+            checkf(st.state == ExportStatus::State::Done,
+                   "a render whose picture and sound are both copied runs (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+
+            const auto srcA = packetsOf(first, srcAudio);
+            const auto outA2 = packetsOf(both.path, 1);
+            {
+                Opened o(both.path);
+                checkf(o && o.fc->nb_streams == 2,
+                       "with the soundtrack still in it on a timeline that has no sound "
+                       "to mix (%u streams)", o ? o.fc->nb_streams : 0u);
+                if (o && o.fc->nb_streams == 2)
+                    check(o.fc->streams[0]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                              o.fc->streams[1]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO,
+                          "in the order the list asked for");
+            }
+            size_t sameA = 0;
+            for (size_t i = 0; i < outA2.size() && i < srcA.size(); ++i)
+                if (srcA[i].data == outA2[i].data) ++sameA;
+            checkf(!srcA.empty() && outA2.size() == srcA.size() && sameA == srcA.size(),
+                   "every audio packet byte for byte, so nothing encoded it (%zu of %zu)",
+                   sameA, srcA.size());
+
+            // The offset between the two, in seconds, on each side. One zero
+            // per input means it survives; a zero per stream means it does not.
+            const auto srcV = packetsOf(first, srcVideo);
+            const auto outV = packetsOf(both.path, 0);
+            // Presentation timestamps, and a fall back to decode ones where a
+            // container keeps only the one it needs: matroska leaves an audio
+            // packet's dts unset, which is not a missing timestamp so much as a
+            // container saying it has no reordering to describe.
+            const auto when = [](const Pkt& p) {
+                const int64_t t = p.pts != AV_NOPTS_VALUE ? p.pts : p.dts;
+                return t == AV_NOPTS_VALUE ? 0.0 : t * av_q2d(p.timeBase);
+            };
+            if (!srcV.empty() && !srcA.empty() && !outV.empty() && !outA2.empty()) {
+                const double wasV = when(srcV[0]);
+                const double wasA = when(srcA[0]);
+                const double isV = when(outV[0]);
+                const double isA = when(outA2[0]);
+                checkf(std::fabs((isV - isA) - (wasV - wasA)) < 0.005,
+                       "and the picture and the sound keep the offset they had "
+                       "(%.3f s in, %.3f s out)", wasV - wasA, isV - isA);
+            } else {
+                check(false, "both streams read back for the sync comparison");
+            }
+        }
+
         // A copied picture beside an encoded soundtrack: two paths into one
         // muxer, interleaved by the writer that was already there.
         if (srcAudio >= 0) {

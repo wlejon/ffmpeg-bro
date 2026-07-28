@@ -1095,6 +1095,26 @@ console.log('\na wire taken off is remembered as a cut');
     same(globalThis.__ffmpegBro.renderGraph(oneClip(), null, { overlay: overlay.current() }).ok,
          false, 'and a render is refused rather than made from a graph that will not run');
 
+    // **And so is the printed one.** Both halves of `filtergraph.js` refuse,
+    // and only one of them was ever asked to: `renderGraph()` produces
+    // something that will be run here and `filtergraph()` produces something
+    // somebody is invited to paste into a shell, which is the same obligation
+    // one machine over. The whole argument for printing a command is that it
+    // can be taken elsewhere and run, and a chain list for a graph libavfilter
+    // would reject is that argument breaking.
+    {
+        const printed = globalThis.__ffmpegBro.filtergraph(
+            oneClip(), null, { overlay: overlay.current() });
+        same(printed.ok, false, 'the command bar refuses it too, rather than printing chains');
+        ok(Array.isArray(printed.problems) && printed.problems.length > 0 && !!printed.graph,
+           'carrying the problems and the graph, so the stage can mark the node');
+        same(printed.reason, printed.problems[0].reason,
+             `and the reason it gives is the first of them: ${printed.reason}`);
+        ok(printed.problems.some((p) => /video out|overlay/.test(p.reason)),
+           'which are about the pad the cut left empty');
+        ok(!printed.chains, 'with no chains on it at all');
+    }
+
     // The skeleton grows the wire back on every rebuild, so the absence has to
     // be written down — which is why a cut is a thing rather than the lack of
     // one.

@@ -1815,10 +1815,69 @@ console.log('\na stream copied rather than encoded');
     A.graph.overlay.insert('clip:' + A.project.clips[0].id + '/after-scale', 'hflip');
     pump(60);
     said = A.exporter.currentWarnings().join(' | ');
-    ok(said.indexOf('do not reach a copied stream') >= 0,
+    // Named in full. `the filters on the Graph stage do not reach a copied
+    // stream` and `the crop and opacity on this clip do not reach a copied
+    // stream` share their tail, so the substring alone would have been
+    // satisfied by whichever of the two happened to be there.
+    ok(said.indexOf('the filters on the Graph stage do not reach a copied stream') >= 0,
        `a filter on the graph is refused against a copied stream (${said})`);
     A.graph.overlay.clear();
     pump(60);
+
+    // The other three ways a copy contradicts the edit. Each is a setting
+    // somebody made that will not be in the file, and each of them renders
+    // *successfully* if it is not said — handing back the input again, which is
+    // the worst outcome this stage has. Three claims, no render between them.
+    {
+        const clip = A.project.clips[0];
+        const before = A.exporter.currentWarnings().join(' | ');
+        ok(before.indexOf('a copy is one input’s packets') < 0 &&
+           before.indexOf('the packets go into the file as they are') < 0 &&
+           before.indexOf('a copy is not resized') < 0,
+           'one clip, uncropped, at the source’s own size warns about none of the three');
+
+        // A second clip. Counted rather than listed: what matters is that what
+        // is in the file is one input's packets and not the composition.
+        const was = A.project.clips.length;
+        A.duplicateClip ? A.duplicateClip(clip)
+                        : A.project.clips.push(Object.assign({}, clip,
+                              { id: clip.id + 1000, start: clip.start + clip.length }));
+        A.exporter.redraw();
+        pump(60);
+        said = A.exporter.currentWarnings().join(' | ');
+        ok(said.indexOf('a copy is one input’s packets') >= 0 &&
+           said.indexOf(`${A.project.clips.length} clips`) >= 0,
+           `a second clip on the timeline is refused, counted (${said})`);
+        A.project.clips.length = was;
+        A.exporter.redraw();
+        pump(60);
+
+        // A crop. Nothing decodes the picture, so nothing can trim it.
+        const crop = clip.xform.crop;
+        clip.xform.crop = { l: 0.1, t: 0, r: 0, b: 0 };
+        A.exporter.redraw();
+        pump(60);
+        said = A.exporter.currentWarnings().join(' | ');
+        ok(said.indexOf('the crop and opacity on this clip do not reach a copied stream') >= 0,
+           `a crop is refused (${said})`);
+        clip.xform.crop = crop;
+
+        // An output of a different size. A copy is not resized, so the file is
+        // whatever went in — which the summary above it would still be calling
+        // the output size.
+        const S = A.exporter.currentSettings();
+        const w = S.width, h = S.height;
+        S.width = w + 320;
+        A.exporter.redraw();
+        pump(60);
+        said = A.exporter.currentWarnings().join(' | ');
+        ok(said.indexOf('a copy is not resized') >= 0 &&
+           said.indexOf(`${S.width}×${S.height}`) >= 0,
+           `an output of a different size is refused, with both sizes (${said})`);
+        S.width = w; S.height = h;
+        A.exporter.redraw();
+        pump(60);
+    }
 
     // The shortcut. Whatever it sets has to be visible in the list afterwards —
     // it writes ordinary rows and there is no hidden mode.
