@@ -2064,7 +2064,7 @@ about them:
   `print()` walks the node array in order and `derive()` builds the audio runs
   after the video sink, so the last chain of any render with sound in it is an
   `atrim` and the answer was unconditionally no.
-  Three things about the walk were learnt the hard way:
+  Four things about the walk were learnt the hard way:
 
   - **Resolve by asking upstream, not by walking `g.nodes` in order.** A node's
     producers are earlier in the array for a graph the derivation built and are
@@ -2079,6 +2079,17 @@ about them:
     still decodes its soundtrack with libavcodec, and leaving that out reported
     the `atrim` hanging off the same `-i` as a filter that could not read what
     reached it.
+  - **An input can already be up, and the fact rides on the node.**
+    `-hwaccel_output_format` is what decides it, `derive.js`'s `inputOnDevice()`
+    is the one place that reads it, and it is written onto the input node as
+    `onDevice` — so a graph answers out of itself rather than out of the
+    document's live input list, which is what `derive()` being a pure function of
+    its arguments means. Two copies of that question is what there was: one term
+    short here (`hwaccelOutputFormat` alone rather than `hwaccel &&
+    hwaccelOutputFormat`) and read off module state, and `subgraph.js` had no
+    term for it at all — so previewing the card of a clip opened with `-hwaccel
+    cuda -hwaccel_output_format cuda` skipped the `hwdownload` and failed with
+    exactly the message this check exists to explain.
 
   It is deliberately conservative: only a filter that *belongs to a device*, or
   one known to pass anything through (`trim`, `setpts`, `fps`…), is judged at

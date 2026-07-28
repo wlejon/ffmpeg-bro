@@ -46,8 +46,8 @@
 import { print } from './print.js';
 import { streamsOf } from './model.js';
 import { isSource } from './filters.js';
+import { whereIs } from './check.js';
 import { inputsOf } from '../filtergraph.js';
-import { deviceOfFilter } from '../hardware.js';
 
 /// `--good`, as libavfilter spells a colour. The waveform is the same green the
 /// timeline draws its audio lane in, because it is the same thing.
@@ -167,8 +167,17 @@ export function previewGraph(g, node, opts = {}) {
     // refusal for which is four hundred format names and no filter. Nothing is
     // lost by downloading: the preview is drawn in a `<video>` at three hundred
     // pixels wide and was never going to stay on the card.
-    if (onDevice(view, node)) chains.push(`[${head}]hwdownload,format=nv12[hwdl]`);
-    const shown = onDevice(view, node) ? 'hwdl' : head;
+    //
+    // **Asked of `check.js`, which is where that fact lives.** This used to be
+    // a walk of its own, and it was one term short: it knew about `hwupload`,
+    // `hwdownload` and a filter belonging to a device, and nothing about an
+    // *input* that decodes on one — so previewing the card of a clip opened
+    // with `-hwaccel cuda -hwaccel_output_format cuda` skipped the download and
+    // failed with exactly the message the Graph stage exists to explain. The
+    // three callers ask three different questions and share this one answer.
+    const up = whereIs(view, node) === 'device';
+    if (up) chains.push(`[${head}]hwdownload,format=nv12[hwdl]`);
+    const shown = up ? 'hwdl' : head;
 
     // `trunc(iw/2)*2` keeps the width even and `h=-2` keeps the height even
     // and the aspect right, which between them are what stop an odd size
@@ -176,32 +185,6 @@ export function previewGraph(g, node, opts = {}) {
     chains.push(`[${shown}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
     return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs,
              pad: '[pv]', audio: false };
-}
-
-/// Is the picture leaving `node` still on a device?
-///
-/// The same walk `check.js` does, asked of the pruned view and only about the
-/// node being previewed — a preview does not need to know where every picture
-/// in the graph is, only where this one ends up. `hwupload` puts it up,
-/// `hwdownload` brings it down, a filter belonging to a device keeps it up, and
-/// anything that reads pixels would not have got this far without the checker
-/// saying so.
-function onDevice(view, node) {
-    const seen = new Set();
-    const at = (n) => {
-        if (!n || seen.has(n.id)) return false;
-        seen.add(n.id);
-        const f = n.filter || '';
-        if (f === 'hwupload' || /^hwupload_/.test(f)) return true;
-        if (f === 'hwdownload') return false;
-        if (n.kind === 'filter' && deviceOfFilter(f)) return true;
-        for (const e of view.inEdges(n)) {
-            const from = view.node(e.from);
-            if (from && at(from)) return true;
-        }
-        return false;
-    };
-    return at(node);
 }
 
 /// The two chains that turn a sound pad into something a card can show and

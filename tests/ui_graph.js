@@ -1445,6 +1445,51 @@ console.log('\nthe graph, cut off at one node');
     ok(/^\[0:v\]scale=/.test(source.filterGraph),
        `which is the stream itself: ${source.filterGraph}`);
 
+    // ── an input whose pictures start out on a card ────────────────────────
+    //
+    // **The preview's tail is `scale`, which reads pixels.** A clip opened with
+    // `-hwaccel cuda -hwaccel_output_format cuda` hands the graph a device
+    // handle at `[0:v]`, so a preview of *that node* has to bring it down
+    // first — and it did not, because this file walked the wires for an
+    // `hwupload` and knew nothing about an input that was already up. What came
+    // back was libavfilter's four hundred pixel format names, from the one
+    // stage in this application whose whole job is to explain that message.
+    //
+    // Written against a hand-made spec rather than a machine with a card in it,
+    // for the reason the rest of this file is: where the picture starts out is
+    // a fact the derivation writes onto the input node out of `spec.inputs`,
+    // and asserting on it needs no device to exist.
+    {
+        const spec = oneClip({ input: 0 });
+        spec.inputs = [{ path: 'a.mp4', hwaccel: 'cuda', hwaccelOutputFormat: 'cuda' }];
+        const up = derive(spec);
+        const node = up.graph.byAnchor('clip:7/in');
+        ok(node.onDevice === true,
+           'the derivation records that this -i keeps its pictures on the card');
+
+        const shown = previewGraph(up.graph, node, { fit: 160 });
+        ok(shown.ok && /^\[0:v\]hwdownload,format=nv12\[hwdl\];\[hwdl\]scale=/
+            .test(shown.filterGraph),
+           `so its own card brings them down before the fit: ${shown.filterGraph}`);
+
+        // And exactly once. The derivation puts an `hwdownload` at the head of
+        // the clip's chain already, so every node past it is looking at a
+        // picture in system memory and a second download would be a filter that
+        // libavfilter refuses outright.
+        const after = previewGraph(up.graph, up.graph.byAnchor('clip:7/trim'), { fit: 160 });
+        same(after.filterGraph.split('hwdownload').length - 1, 1,
+             'and a node below the derivation’s own hwdownload does not download twice');
+
+        // The same input with no `-hwaccel` in front of the output format is
+        // not on a card: `-hwaccel_output_format` names the format a *device's*
+        // frames come back as and means nothing without one. Asked in one place
+        // now, so the graph and the printed command cannot answer differently.
+        const half = oneClip({ input: 0 });
+        half.inputs = [{ path: 'a.mp4', hwaccelOutputFormat: 'cuda' }];
+        same(derive(half).graph.byAnchor('clip:7/in').onDevice, false,
+             'an output format with no -hwaccel in front of it is not a device');
+    }
+
     // The picture sink is the one node on the screen that means *the render*,
     // and it has no pad of its own — so it shows the pad it maps, which is
     // exactly what its producer shows.
