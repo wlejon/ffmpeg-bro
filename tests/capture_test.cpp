@@ -11,9 +11,10 @@
 // `-f` naming a libavdevice demuxer.
 //
 // **`-f lavfi` is not the same mechanism as a source filter on the graph.**
-// Chunk 8 will put `color`, `testsrc`, `sine` and `movie` into the *filter
+// The Graph stage puts `color`, `testsrc`, `sine` and `movie` into the *filter
 // graph*, where they are nodes with no input pad and the graph is what runs
-// them. The lavfi *device* wraps a whole filtergraph up as a demuxer so that
+// them — `tests/ui_graph.js` is where that is covered. The lavfi *device* wraps
+// a whole filtergraph up as a demuxer so that
 // libavformat can read it as an `-i`. They look alike, they are spelled almost
 // alike, and they are two different places in the pipeline: one is an input and
 // the other is part of the filter chain applied to inputs. Do not let a test of

@@ -32,9 +32,12 @@ cmake --build build --config Release
 `bro` is added via `add_subdirectory`, so a change under `../bro` rebuilds through this
 project's build. `BRO_BUILD_EXECUTABLES` stays off — no second `bro.exe` is produced.
 
-Targets: `ffmpeg-bro` (windowed), `ffmpeg-bro-headless` (scripted), `ffmpeg-bro-core`
-(the shared static lib), `ffmpeg-bro-decodetest`, `ffmpeg-bro-hwtest`,
-`ffmpeg-bro-perftest`.
+Targets: `ffmpeg-bro` (windowed), `ffmpeg-bro-headless` (scripted) and
+`ffmpeg-bro-core` (the shared static lib the two are built on), plus one executable per
+native suite — `ffmpeg-bro-decodetest`, `ffmpeg-bro-exporttest`, `ffmpeg-bro-captest`,
+`ffmpeg-bro-inputtest`, `ffmpeg-bro-seqtest`, `ffmpeg-bro-capturetest`,
+`ffmpeg-bro-hwtest`, `ffmpeg-bro-perftest` — and `ffmpeg-bro-mkfixture`, which `ctest`
+runs first to make the media everything else is measured against.
 
 ## Tests
 
@@ -136,6 +139,10 @@ against footage the fixtures do not resemble:
 # the encode side end to end: the spine's stages, controls -> ffmpeg options,
 # the advanced option editor, the command bar, both halves of the A/B preview,
 # the stream list and the copy decision on it, and loading the result back.
+# Its last seven hundred lines are the Graph stage *as it reaches a render* —
+# a filter changing the picture that comes out, a card's value outranking the
+# edit, a node previewed and played — which is why they are here and not in
+# ui_graph.js, which needs no media and is about the model.
 # The second file has **no audio stream in it**, which is what separates the
 # mix from a mix nothing feeds; the last section is skipped without one.
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only file>]
@@ -170,6 +177,14 @@ against footage the fixtures do not resemble:
 # the drain off the frame loop, a warning that is visible and attributed, and
 # a measuring filter's values as a named series over time
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
+
+# the three things people mean by subtitles, each a different mechanism: a
+# track beside the picture (a stream row, carried or converted), burned into
+# the picture (a `subtitles` node on the graph, path escaped), and out on its
+# own (a render whose only stream is cues). Renders both and reads them back,
+# because a track described correctly and not written is the failure. Takes the
+# fixture *directory* — it wants `cues.srt` and `cues.ass` beside the video.
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-directory>
 
 # native: a device as an endless input, and recording one — bounded, stopped,
 # with sound. Needs no media: it records from `lavfi`.
@@ -224,7 +239,7 @@ readback is the cost" now says what was measured. README has the tables.
 suites drive `lavfi` — libavfilter's *input device* (`-f lavfi -i testsrc=…`), which
 is a device in every respect that matters (registered by `avdevice_register_all()`,
 forced with `-f`, no duration, never ends) and opens anywhere. **It is not the same
-mechanism as a source filter on the graph**, which chunk 8 adds: `testsrc` as a
+mechanism as a source filter on the graph**, which the Graph stage also has: `testsrc` as a
 *filter* is a node with no input pad inside a filtergraph, and the lavfi *device*
 wraps a whole graph up as a demuxer so libavformat can read it as an `-i`. They are
 spelt almost identically and they are two different places in the pipeline; say so
@@ -263,7 +278,9 @@ Six traps when writing headless tests here:
   key press takes. `ui_player.js`'s `key()` helper is the one place that does it.
 - **Never trigger a native file dialog.** `showSaveFileDialog` / `showOpenFileDialog` block
   the JS thread until dismissed, and headless is not a safe harbour — there is no window to
-  dismiss them at. `ui_export.js` types into `#ex-path` rather than pressing "Choose…".
+  dismiss them at. `ui_export.js` types into `#st-write [data-f="path"]` rather than
+  pressing "Choose…". (Nothing built at runtime carries an id — see `ui/dom.js` — so the
+  path field is reached by its stage and its `data-f` name, not by one.)
 - **Paths handed to `<video src>` must be absolute.** `bro.ffmpeg.probe()` resolves relative
   to the process cwd but `<video src>` resolves relative to the *document* (`ui/`), so a
   relative path silently probes fine and plays black. Use `bro.appDir + '/../out/x.mp4'`.
@@ -361,7 +378,7 @@ nine decibels of slack nobody could account for and enough room for a real regre
 green in. Do not let that check be loosened: the whole value of a second path is that it is
 the same render.
 
-Four things about the graph path are load-bearing:
+Six things about the graph path are load-bearing:
 
 - **The graph ends in the compositing space, not the encoder's.** What leaves the last pad
   is a picture; converting it into the encoder's format and colour is the writer's job on
@@ -521,7 +538,7 @@ codec-agnostic. Six things here are load-bearing:
   called**: anything that reads packets or cues out of an `-i` is on the
   input's clock, and `inputEpoch` is the one place that says where its zero
   is. It costs nothing when there is no window, which is why every test in the
-  suite passed for the whole of chunk 14. `cueEpoch()` is `SourceVideo`'s and
+  suite passed for the whole of the subtitle work. `cueEpoch()` is `SourceVideo`'s and
   `SourceAudio`'s epoch and **not** `streamZero`, deliberately: cues go into
   the same output the composite and the mix go into, so they are placed on the
   clock those are placed on, and `streamOrigin`'s reorder-delay correction is
@@ -576,7 +593,7 @@ nobody thought to list is a fourcc the menu will not have. `streamDispositions()
 has no such problem: a disposition is a single bit and `av_disposition_to_string`
 names it, so asking for every bit in turn *is* the whole vocabulary.
 
-**`ffmpeg_report.*` is the render's back-channel, and chunk 10's foundation.**
+**`ffmpeg_report.*` is the render's back-channel, and what `ui/measure.js` stands on.**
 `ExportStatus` answers "how far along"; this answers "what happened". Two
 bounded rings behind one mutex, drained through `render.poll(cursor)`:
 
@@ -606,9 +623,13 @@ bounded rings behind one mutex, drained through `render.poll(cursor)`:
 Four properties are load-bearing:
 
 - **Every record carries the render it was said during**, 0 for none.
-  `startExport` numbers the render; the `RunningFlag` guard in `runExport` is
-  declared *first* so it runs *last*, after the writer's teardown — what libav
-  says while a muxer closes a file belongs to the render that opened it.
+  `job::claim()` is what numbers it — before the thread exists, which is why
+  `startExport` and `startCapture` can hand the number straight back out and why
+  `render.start`/`record.start` return a number rather than `true`. The `job::Held`
+  guard in the job body is declared *first* so it runs *last*, after the writer's
+  teardown — what libav says while a muxer closes a file belongs to the render that
+  opened it. Any path that claims and then leaves without starting a thread has to
+  use `Held` too; see the note under the job slot.
 - **The drain is a cursor, not a flush.** Records are numbered and never
   renumbered, so two consumers cannot take each other's messages and a dropped
   poll loses nothing. It is also why **a render's last words are readable after
@@ -727,7 +748,7 @@ the one that decided it:
   is resolved against the document and becomes a path under `ui/`. The leading slash
   in the token is not decoration — it is why this works without touching bro.
 
-### Recording, and the shape chunk 13 needs
+### Recording, and the shape a job with no end has
 
 **A device needed nothing new in `MediaInput`.** It is `-f dshow` naming a
 libavdevice demuxer, `-i video=…` naming what it can see, and that demuxer's own
@@ -744,8 +765,13 @@ clock is the device's rather than the render's. So recording is a **second job**
 a flag on the first, and what the two share is what does not care — `Writer`, and the
 one slot.
 
-Five decisions here, each of which chunk 13 (streaming *out*, which is the same
-open-ended shape with the ends swapped) should reuse rather than re-take:
+Five decisions here, and they were written expecting streaming *out* to be the second
+job of this shape with the ends swapped. It turned out not to be one: a stream is an
+ordinary export whose destination is a URL, so it goes through `runExport` and the
+protocol does the rest. What it did reuse is the progress vocabulary — bytes sent and
+a bitrate rather than a percentage — which `ui/export/progress.js` reaches by treating
+a `stream` destination as open-ended in JS, since the native job has an end and knows
+it. The five stand as the rules any job with no end gets wrong the same way:
 
 - **The slot lives in `ffmpeg_job.h`, owned by neither job.** It carries the three
   rules that both of them get wrong in the same way if left to remember: the slot is
@@ -877,18 +903,19 @@ things about how that is handled are load-bearing:
   `write_header` with `Invalid data found when processing input` and no mention of
   extradata anywhere in it.
 
-**What chunk 14 (subtitles) inherits from this.** Nothing here narrowed the stream list:
-`ExportStream::kind` is still a string and `source` is still where the content comes from,
-so a `"subtitle"` kind slots in beside `"video"`, `"audio"` and `"attachment"` with a
-fourth `openXStream()`. Three things this chunk added are directly useful to it — a copied
-stream already reaches the muxer without an encoder, which is what extracting or rewrapping
-a subtitle track is; `piecesWritten` and the `io_open` hook already account for a muxer
-that writes a sidecar (`-f webvtt` beside an `hls` render is exactly that shape); and
-`kindOf()` on the Write stage already says when the destination is a set, which is the case
-where a subtitle track becomes a separate playlist rather than a stream in the file. The
-one thing that is *not* there is a source for a subtitle stream: burning one in is a
-filter (`subtitles=`, on the graph), and carrying one through is `copy:` — everything else
-needs a decoder and an encoder this application has never opened.
+**What subtitles inherited from this, and it was nearly everything.** Nothing here
+narrowed the stream list: `ExportStream::kind` is a string and `source` is where the
+content comes from, so `"subtitle"` slotted in beside `"video"`, `"audio"` and
+`"attachment"` with a fourth `openXStream()` and no change to the shape. Three things
+carried straight over — a copied stream already reached the muxer without an encoder,
+which is what extracting or rewrapping a subtitle track is; `piecesWritten` and the
+`io_open` hook already accounted for a muxer that writes a sidecar (`-f webvtt` beside
+an `hls` render is exactly that shape); and `kindOf()` on the Write stage already said
+when the destination is a set, which is the case where a subtitle track becomes a
+separate playlist rather than a stream in the file. What had to be added was a source
+that decodes: `decode:<input>:<stream>` beside `copy:`, and with it the one subtitle
+decoder and the one subtitle encoder this binary opens. See **Subtitles are the fourth
+stream kind** below for what that cost.
 
 **`tee` is the muxer, not two `Writer`s, and the reason is what `tee` means.** Chunk 12
 sketched two writers fed from one `FrameSource` and the seams do allow it — but `tee` is
@@ -906,7 +933,7 @@ through one set of seek/timestamp/reordering semantics.
 
 `ffmpeg_bindings.cpp` installs `bro.ffmpeg` (`probe`, `version`, `hwaccels`,
 `openOnStart`, `encoders`, `muxers`, `demuxers`, `decoders`, `protocols`, `devices`,
-`filters`, `bitstreamFilters`, the six `*Options(name)` lookups, `deviceSources`,
+`filters`, `bitstreamFilters`, the seven `*Options(name)` lookups, `deviceSources`,
 `keyframes`, `inputs.*`, `render.*`,
 …) via `EngineConfig::installHostBindings`, so it exists in every realm including
 workers. `probe()` is synchronous on purpose, and takes an input rather than only a
@@ -917,7 +944,7 @@ playback registry; the ids are the UI's and the tokens are opaque strings to it.
 
 **The rule for what is built at startup and what is asked for on demand is the size of
 the answer, and the option tables are always the expensive part.** The registries —
-182 muxers, 364 demuxers, 532 decoders, 500 filters, 50 bitstream filters — are names,
+182 muxers, 364 demuxers, 532 decoders, 488 filters, 50 bitstream filters — are names,
 long names, extensions and flags, and are built once per process (function-local statics
 in `ffmpeg_capabilities.cpp`) and converted per realm. Every option table is a function:
 `encoderOptions`, `muxerOptions`, `demuxerOptions`, `decoderOptions`, `protocolOptions`,
@@ -1193,7 +1220,7 @@ private `rc`.
 `ui/inputs.js` and `ui/project.js` are the model: the `-i`s, and what is on the
 timeline. **A clip references an input rather than carrying a path** — what is opened,
 with which demuxer, with which options and over which window is the input's business,
-and two clips cut from one file are two clips of one `-i`. Four rules there are
+and two clips cut from one file are two clips of one `-i`. Six rules there are
 load-bearing:
 
 - **The index in `inputs` is the `-i` number.** `buildSpec()` sends the whole list and
@@ -1364,8 +1391,8 @@ about them:
   encoder that are not in
   `videoOptions()`**, so a command built from the bag alone is quietly incomplete: the
   colour tags and the conversion into them, the keyframe interval (two seconds here,
-  250 frames in x264), and the scaler, which is a flag rather than an option. Since
-  chunk 11 there are more of them and they are all named fields on the spec —
+  250 frames in x264), and the scaler, which is a flag rather than an option. There are
+  more of them now and they are all named fields on the spec —
   `-force_key_frames`, `-flags +ildct+ilme` with `-field_order`, `-threads`,
   `-thread_type`, `-fps_mode cfr`, `-shortest`, `-bsf:v` and the decoder options in
   front of the right `-i`.
@@ -1387,7 +1414,7 @@ about them:
   for the same reason: one states what is about to run, the other what came back.
   Two kinds of thing drawn as two, because they are not the same kind of fact —
   levelled, attributed messages are a list, and a filter's measurements are a line.
-  Four decisions to keep:
+  Five decisions to keep:
   - **The series model is the thing later work stands on.** A series is
     `{ key, stream, numeric, points: [{ t, v, raw, job }], min, max, count }`, keyed by
     libavfilter's own metadata name *verbatim*. That name already says both which
@@ -1630,11 +1657,16 @@ about them:
   build can do — `muxers()`, `muxerInfo()`, `extOf()`, `formatOptionsOf()`),
   `options` (settings → `-key value`), `spec` (the model → what the renderer
   wants), `streams` (what the file is made of), `destination` (where it goes),
-  `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress`.
+  `presets`, `warnings`, `store`, `form`, `preview`, `strip`, `progress` — and
+  `controls`, which is the smallest of them and the reason `form.js` is readable: a
+  labelled row, a number field with its unit, a cluster of buttons. It holds nothing
+  and decides nothing; `row` and `head` moved out of it into `ui/dom.js` when the
+  Sources stage wanted the same rows, which is the rule for anything here that a
+  second stage comes to want.
   `buildSpec()` turns the model into what `bro.ffmpeg.render.start` wants. **Two stages,
   not a modal**: what the picture is put through (Encode) and where it goes (Write) are
   different decisions taken at different moments, so `#st-encode` and `#st-write` are
-  siblings of `#st-compose` under `#stages`. The four hide each other rather than
+  siblings of `#st-compose` under `#stages`. All six stages hide each other rather than
   unmounting — the viewer's `<video>` elements *are* the decoders, and tearing them down to
   look at an export would mean rebuilding and re-seeking every one on the way back.
   Consequences: anything in the frame loop that measures a panel has to ignore a
@@ -1824,8 +1856,10 @@ about them:
     stage and says it will not be written, because adding a file with sound will use
     it.
   - **Nothing is tabled.** The dispositions are `bro.ffmpeg.dispositions` (every bit,
-    through `av_disposition_to_string`), the fourccs are `bro.ffmpeg.codecTags(ext,
-    codec)`, the codecs are the encoder lists. A row cannot offer what the render
+    through `av_disposition_to_string`), the fourccs are
+    `bro.ffmpeg.codecTags(container, codec)` — a muxer's *name*, since a fourcc is a
+    container's vocabulary and nothing in libavformat is identified by an extension —
+    and the codecs are the encoder lists. A row cannot offer what the render
     would then refuse.
   - **The bitstream filter chain is an ordered list and is drawn as one** — a
     numbered row per filter with the arrows to move it — because the order is the
@@ -1915,7 +1949,7 @@ about them:
   - **Burning in is a filter and stays one.** `burnIn()` in `sources.js` calls
     `overlay.insert('composite/after-overlay', 'subtitles', …)` and goes to the Graph
     stage — an ordinary node, printed by the command bar, movable and deletable. The
-    rule chunk 10's measurement offers follow: a shortcut that produced something you
+    rule `measure.js`'s offers follow: a shortcut that produced something you
     could not then find is worse than no shortcut.
   - **`subtitleExtensions()` asks libavformat.** Which files are subtitles is the
     muxers that declare a subtitle codec and neither a video nor an audio one, so
@@ -2273,8 +2307,9 @@ about them:
     rule stays — so agreeing at the moment of placing is what makes the ordinary
     case work without `sizeFromGraph`, which remains what the node previews use
     and only they. For an export the size is a decision somebody made.
-  - **A generator has no length**, and the convention chunks 5 and 6 left is
-    followed rather than a third one invented: `-t` is the only thing that can
+  - **A generator has no length**, and the convention `inputDuration` and a
+    recording already share is followed rather than a third one invented: `-t` is
+    the only thing that can
     answer and zero means nobody knows. `export/spec.js`'s `graphLength()` is a
     generator's own `duration`/`d` or a referenced input's length, and `range()`
     falls back to it when the timeline has no duration. Nothing saying anything
@@ -2568,11 +2603,16 @@ about them:
   They differ routinely (audio outlives the last picture) and using the container's leaves
   the playhead running past the end of the video.
 - **The topmost clip under the playhead is the master clock** while playing. Other active
-  clips are *chased* — corrected only when they drift past `DRIFT_LIMIT` (~2 frames) —
-  because correcting every frame means a seek per clip per frame, and free-running decoders
-  come apart within a minute.
-- **`setPlayhead(t, seek=false)`** exists because writing `currentTime` back while the
-  decoder drives the clock fights it. When paused, `adoptDecoderTime()` reports where the
+  clips are *chased* — corrected only when they drift past `DRIFT_LIMIT`, which is 0.12 s,
+  three frames at 25 fps and rather more at 60 — because correcting every frame means a
+  seek per clip per frame, and free-running decoders come apart within a minute.
+- **`setPlayhead(t, seek = true)`** exists because writing `currentTime` back while the
+  decoder drives the clock fights it, so *playback* is the caller that passes `false`.
+  The default is the seek, which is what every other caller wants and what makes a
+  plain `setPlayhead(t)` move the picture; reading it the other way round gets you a
+  `currentTime` write on every active clip from a call you believed was inert. A clip
+  that has just come into view is seeked whatever the caller said, because its decoder
+  is parked wherever it was left. When paused, `adoptDecoderTime()` reports where the
   picture actually is, not where the seek asked for.
 - **Frame stepping uses `video.stepFrame()`**, not `currentTime += 1/fps`: fps is an average
   and the seconds round-trip misses frame boundaries, so a back-step lands where it started.

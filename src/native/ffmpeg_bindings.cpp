@@ -1150,11 +1150,14 @@ JSValue js_deviceSources(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
 JSValue js_codecTags(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1]))
         return JS_ThrowTypeError(ctx, "codecTags(container, codec) requires both names");
-    const char* ext = JS_ToCString(ctx, argv[0]);
+    // Named `container` and not `ext`: this is the muxer's own name, the thing
+    // `-f` takes. Calling it an extension is how a caller comes to pass "mkv"
+    // to a function that only knows "matroska".
+    const char* container = JS_ToCString(ctx, argv[0]);
     const char* codec = JS_ToCString(ctx, argv[1]);
     JSValue out = JS_NULL;
-    if (ext && codec) out = stringsToJs(ctx, codecTags(ext, codec));
-    if (ext) JS_FreeCString(ctx, ext);
+    if (container && codec) out = stringsToJs(ctx, codecTags(container, codec));
+    if (container) JS_FreeCString(ctx, container);
     if (codec) JS_FreeCString(ctx, codec);
     return JS_IsNull(out) ? JS_NewArray(ctx) : out;
 }

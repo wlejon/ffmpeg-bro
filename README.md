@@ -204,17 +204,35 @@ bro.ffmpeg.protocols      // { input: ["file","https","srt",...], output: [...] 
 bro.ffmpeg.devices        // [{ name: "gdigrab", longName, kind: "video",
                           //    direction: "input" }, ...]
 
-// Option tables, one at a time. Same walk, four more kinds of thing: there are
+// Every filter libavfilter was built with — four hundred and eighty-eight of
+// them — which is what the Graph stage's palette is and why there is no list of
+// supported filters written down anywhere. `inputs`/`outputs` are the declared
+// pad *types* (`"V"`, `"A"`, `"VV"`, `""`), so a filter with no inputs is a
+// source and libavfilter is what says which. `dynamic*` means the count comes
+// from an option — see `padsOf()` in ui/graph/filters.js, which is the one
+// question libavfilter will not simply answer. `timeline` is
+// AVFILTER_FLAG_SUPPORT_TIMELINE, and it decides whether an `enable=` control
+// is offered at all: a filter without it *refuses* the expression rather than
+// ignoring it.
+bro.ffmpeg.filters
+// → [{ name: "cropdetect", description, inputs: "V", outputs: "V",
+//      dynamicInputs: false, dynamicOutputs: false, timeline: false }, ...]
+
+// Option tables, one at a time. Same walk, six more kinds of thing: there are
 // a hundred and eighty muxers and three hundred and fifty demuxers, and their
-// option tables are the expensive part of describing any of them.
+// option tables are the expensive part of describing any of them — which is why
+// each is a function and only the registries above are built at startup.
 bro.ffmpeg.encoderOptions("libx265")
 bro.ffmpeg.muxerOptions("mp4")        // movflags, and libavformat's generic ones
 bro.ffmpeg.demuxerOptions("mp4")      // and -fflags, for the other end
 bro.ffmpeg.decoderOptions("h264")     // -skip_frame, -skip_loop_filter, -thread_type
 bro.ffmpeg.protocolOptions("srt")     // what a destination is configured with
+bro.ffmpeg.filterOptions("scale")     // what a node on the Graph stage is set to
 bro.ffmpeg.bsfOptions("h264_metadata")   // and the stage between the two
 // → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
 //      values: [{ name, help, value }, ...] }, ...]
+// One walk, one shape, seven callers — which is what lets `ui/opttable.js` be a
+// single component and not one editor per kind of thing.
 
 // The stage of the pipeline that is neither an encoder nor a muxer: bitstream
 // filters work on packets that are already encoded, in between. `codecs` is
@@ -223,8 +241,13 @@ bro.ffmpeg.bsfOptions("h264_metadata")   // and the stage between the two
 bro.ffmpeg.bitstreamFilters
 // → [{ name: "h264_mp4toannexb", codecs: ["h264"] },
 //     { name: "setts", codecs: [] }, ...]
-// → [{ name: "crf", help, type: "double", unit, min, max, default, hasRange,
-//      values: [{ name, help, value }, ...] }, ...]
+
+// Every disposition bit a stream can carry, named the way `-disposition:s:0`
+// names them. Unlike the fourccs below this one *can* be enumerated exactly:
+// a disposition is a single bit and `av_disposition_to_string` names it, so
+// asking for every bit in turn is the whole vocabulary.
+bro.ffmpeg.dispositions
+// → ["default", "dub", "original", "comment", "lyrics", "karaoke", "forced", ...]
 
 // What one capture device can see right now. A function and not a list,
 // because it is the one query here that talks to hardware — enumerating
@@ -2230,8 +2253,8 @@ camera.** The vehicle is `lavfi` — libavfilter's *input device*, `-f lavfi -i
 testsrc=size=320x240:rate=25` — which is a device in exactly the way gdigrab is
 (registered by `avdevice_register_all()`, opened by a forced `-f`, reporting no
 duration, never ending) and is openable on any machine. It is **not** the same
-mechanism as a source filter inside a filtergraph, which is a thing the Graph stage
-will grow: `testsrc` as a *filter* is a node with no input pad, and the lavfi
+mechanism as a source filter inside a filtergraph, which the Graph stage also has:
+`testsrc` as a *filter* is a node with no input pad, and the lavfi
 *device* wraps a whole graph up as a demuxer so libavformat can read it as an `-i`.
 Two different places in the pipeline spelt almost identically.
 
@@ -2457,9 +2480,13 @@ Honest list of what does not work:
   and that is the only way to move through it: there is no scrub bar, no way
   back, and nothing to jump with. Somewhere else to start from means moving the
   playhead and pressing `At playhead`.
-- **Undo, on the graph.** Everything else in the application is a model edit;
-  the graph overlay is not on that stack, so a wire cut by mistake is put back
-  by wiring it again rather than by `Ctrl-Z`. `Give it back` covers the one case
+- **Undo, anywhere.** There is no undo stack in this application and no `Ctrl-Z`
+  handler — not on the timeline, not on the settings, and not on the graph. Every
+  edit is applied to the model and the model is what is drawn, so putting a cut
+  wire back means wiring it again and putting a split back means deleting one
+  half and trimming the other. The graph is where the absence is felt most,
+  because a wire is work in the way a slider position is not, which is the same
+  argument the project file below is made on. `Give it back` covers the one case
   where "again" is ambiguous — a pad handed to the derivation.
 - **A generated source in the viewer.** A `testsrc` or a `movie` renders and
   previews on its own card, and the *viewer* cannot show it for the same reason
@@ -2509,13 +2536,6 @@ Honest list of what does not work:
   whole range. Measuring one node's output means putting the filter at that
   node's point, which works, and there is no equivalent of the Graph stage's
   per-node preview for a *number*.
-- **Reading a URL that is far away.** A URL is an ordinary input now — typed in
-  on the Sources stage, opened through whichever of the thirty-six protocols it
-  names, with that protocol's own options beside the demuxer's. What has not
-  been looked at is what a *slow* one costs: `probe()` is synchronous on
-  purpose, so a URL that takes four seconds to answer takes the UI with it, and
-  nothing yet says "connecting" or offers to stop. A local file was never long
-  enough for that to matter.
 - **Reading a URL while it is slow, and writing to one while it fails.** A
   render goes to a URL now, with its protocol's own options beside the muxer's,
   and reports what it sent rather than a size. What is not built is either end
@@ -2614,18 +2634,17 @@ Honest list of what does not work:
   neither writes its log wherever it likes and pass 2 reads an empty one — the
   render says so, naming the encoder, because there is no capability to ask
   first.
-- **Subtitle streams.** The Write stage's list can hold video, audio and
-  attachments; a subtitle track is a kind it does not offer yet. The seam is
-  there — a stream says what *kind* it is and where its content comes from —
-  and what is missing is a source for one.
 - **A copy that follows the timeline.** A copied stream is one input's packets
   over a span, set on its own row in the input's own seconds. The clip you
   trimmed on the timeline is not that span and nothing connects the two, so
   cutting losslessly means reading the in-point off the keyframe strip rather
   than off the edit. It is the obvious next thing and it is not built.
-- **A copy of a stream that is not video or audio.** The stream list holds
-  those two and attachments; a copied subtitle track is the same gap the
-  encoded one is, one kind short.
+- **A copy of a stream that is neither picture, sound nor cues.** Video, audio
+  and subtitle streams are all copyable and attachments are their own kind of
+  row. What has no home is a `data` stream — timed metadata, a GoPro's telemetry
+  track, a camera's timecode — which `-map` carries and `-c copy` writes and
+  which nothing here will offer, because the probe does not report the kind and
+  the stream list has no row that could say what it is.
 - **Hardware filters that this build does not have.** `hwupload`, `hwdownload`
   and `hwupload_cuda` are here; `scale_cuda`, `overlay_cuda`, `scale_qsv` and
   the rest of the device families are not, because a vcpkg ffmpeg with

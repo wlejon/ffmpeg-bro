@@ -7,9 +7,31 @@
 // overlapping clips is actually mixed, and that the result is a file this
 // application can open again.
 //
-// Every assertion is content-independent — the pass/fail never depends on what
-// the media happens to show — with one exception, marked below, that needs the
-// source not to be a black screen with silence.
+// Nearly every assertion is content-independent — the pass/fail does not depend
+// on what the media happens to show — and the handful that are not need the
+// source to have a picture in it and, in places, a sound. They are:
+//
+//   - the brightest-pixel checks, which require the source not to be black at
+//     the instant sampled (`filledPeak`, `coveredPeak`, and the two halves of
+//     the `hstack`, each of which would read as a dropped input if the picture
+//     were black anyway);
+//   - the mixer's peak-RMS checks, which require the source to have audible
+//     sound. These test themselves first — `srcAudible` — and print a SKIP
+//     rather than failing, because "the mixer produced silence" and "the source
+//     was silent" are the two answers that must not be confused;
+//   - the burn-in comparison, which requires the cue fixtures to exist and is
+//     skipped by name when they do not.
+//
+// This is why the fixtures are *generated* with known content (a moving bar
+// over a gradient, a 440/660 Hz tone at -6 dBFS) rather than checked in: a
+// mostly-black source makes a picture check pass for the wrong reason, and a
+// digitally silent one turns the mixer check into a failure that reads as a
+// broken mixer. See tests/make_fixture.cpp.
+//
+// Two Windows notes for whoever moves this file: it needs `NOMINMAX` (windows.h
+// defines `min`/`max` as macros, which `std::max` will not survive) and it
+// `#undef`s `near` and `far`, which are empty macros left over from segmented
+// memory and which collide with ordinary local names here.
 //
 // Usage: ffmpeg-bro-exporttest <media-file> [<second-file>]
 
@@ -624,8 +646,9 @@ int main(int argc, char* argv[]) {
     const double filledPeak = brightestIn(px, kW, kH, 0, 0, kW / 2 - 8, kH);
     checkf(emptyHalf >= 0 && emptyHalf < 6.0,
            "the half with no clip on it is black (mean luma %.2f)", emptyHalf);
-    // The one content-dependent check in the file: a source that is entirely
-    // black at this instant would fail it, and the number printed says so.
+    // One of the file's few content-dependent checks (see the header): a source
+    // that is entirely black at this instant would fail it, and the number
+    // printed says so.
     checkf(filledPeak > 24.0,
            "the half with the clip on it has a picture (brightest %.0f)", filledPeak);
 

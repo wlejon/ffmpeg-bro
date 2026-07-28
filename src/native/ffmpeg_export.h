@@ -101,9 +101,11 @@ struct ExportBsf {
 /// two entries in it, synthesised by `outputStreams()` when nobody said
 /// otherwise.
 struct ExportStream {
-    /// "video", "audio" or "attachment". A subtitle stream is a later chunk's;
-    /// what it will need from here is a kind and a source, which is why this is
-    /// a string rather than an enum of the two things that exist today.
+    /// "video", "audio", "subtitle" or "attachment". A string and not an enum,
+    /// which is what let the fourth kind arrive without touching this struct:
+    /// a kind and a source were all subtitles needed from here, and `source`
+    /// grew one form (`decode:<input>:<stream>`) rather than the list growing
+    /// a parallel field.
     std::string kind = "video";
 
     /// Where this stream's content comes from — ffmpeg's `-map`, made explicit.
@@ -574,10 +576,14 @@ struct ExportStatus {
 
     /// This job runs until somebody stops it.
     ///
-    /// True for a recording with no `-t` — see ffmpeg_capture.h — and it is
-    /// what chunk 13's streaming output will set for the same reason. Anything
-    /// drawing a progress bar has to read it: a fraction of an unknown total is
-    /// zero, and a bar sitting at zero for ten minutes says the job is stuck.
+    /// True for a recording with no `-t` — see ffmpeg_capture.h — and true for
+    /// nothing else. A render to a URL is *not* open-ended: it walks a range it
+    /// knows the length of, and only the destination is a socket, so it sets a
+    /// real `framesTotal` like any other render. What a stream cannot say is how
+    /// big the result is, which is why `ui/export/progress.js` draws bytes sent
+    /// and a bitrate for one rather than reading this field. Anything drawing a
+    /// progress bar has to read it: a fraction of an unknown total is zero, and
+    /// a bar sitting at zero for ten minutes says the job is stuck.
     bool openEnded = false;
 
     double elapsedSec = 0.0;

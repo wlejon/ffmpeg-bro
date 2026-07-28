@@ -7,7 +7,7 @@
 // It is a device in exactly the way gdigrab is: registered by
 // `avdevice_register_all()`, opened by a forced `-f`, reporting no duration and
 // never ending. It is **not** the same mechanism as a source filter on the
-// Graph stage, which chunk 8 will add: `color` and `testsrc` as *filters* are
+// Graph stage, which this build also has: `color` and `testsrc` as *filters* are
 // nodes inside a filtergraph, and the lavfi *device* wraps a whole graph up as
 // a demuxer so libavformat can read it as an `-i`. Two different places in the
 // pipeline that spell things almost identically.

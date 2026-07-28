@@ -1,11 +1,26 @@
-// Drives the export dialog the way a person does, and then opens what came
-// out of it.
+// Drives the encode side the way a person does, and then opens what came out
+// of it.
 //
 // The native test (ffmpeg-bro-exporttest) proves the renderer: geometry,
 // opacity, mixing, cancellation. This proves the half above it — that the
-// dialog builds a spec matching the edit on screen, that the numbers in the
-// form reach the encoder, that progress arrives and finishes, and that the
-// result is a file this application can open.
+// stages build a spec matching the edit on screen, that the numbers in the form
+// reach the encoder, that progress arrives and finishes, and that the result is
+// a file this application can open.
+//
+// There is no export *dialog* and has not been for some time. What this drives
+// is the Encode and Write stages of the spine, which are siblings of Compose
+// under `#stages` and hide each other rather than unmounting — so the field
+// this file types a filename into is `#st-write [data-f="path"]`, reached by
+// stage and `data-f` name because nothing built at runtime carries an id.
+//
+// The last seven hundred lines are the **Graph stage**, and they are here
+// rather than in `ui_graph.js` on purpose: that suite is about the model, the
+// printer and the wiring gesture, all of which it can check with no media at
+// all, while these sections are about what a graph does to a *render* — a
+// filter inserted changing the picture that comes out, a value typed on a card
+// outranking the edit, a node previewed and played through the real renderer.
+// They need the file, the range and the export slot that the rest of this file
+// has already set up.
 //
 // The one thing it must never do is press "Choose…": a native save dialog
 // blocks the JS thread until it is dismissed, and there is nobody at a window

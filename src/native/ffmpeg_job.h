@@ -24,10 +24,13 @@
 //     return when a file cannot be opened at all. Without that, one failed
 //     render leaves the flag set and every job after it is refused.
 //
-// Nothing here knows what a job *is*. `ffmpeg_export.cpp` renders a timeline
-// and `ffmpeg_capture.cpp` records a device; chunk 13's streaming output will
-// be a third, and it wants exactly this shape — an open-ended job whose end is
-// somebody pressing stop.
+// Nothing here knows what a job *is*. `ffmpeg_export.cpp` renders a timeline and
+// `ffmpeg_capture.cpp` records a device, and those are the two. Streaming out was
+// expected to be a third of this shape and is not: a render to `srt://…` is the
+// ordinary export job with a URL where the path goes, walking a range whose length
+// it knows, and everything open-ended about it is the destination rather than the
+// job. So the slot has two occupants and the rules below are what both of them get
+// wrong in the same way if left to remember.
 #pragma once
 
 #include "ffmpeg_export.h"
