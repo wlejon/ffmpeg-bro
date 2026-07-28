@@ -68,7 +68,21 @@ export function outputColor(spec) {
     const want = spec.colorspace || 'auto';
     const wide = want === 'bt2020';
     const hd = want === 'bt709' || (want === 'auto' ? Math.round(spec.height) >= 720 : false);
-    const full = spec.colorRange === 'pc';
+    // **A `yuvj*` pixel format *is* the statement that the picture is full
+    // range** — that is the whole of what the J means — so the writer derives
+    // the range from it and not only from the control (`impliedFull` in
+    // `export_writer.cpp`, where a limited-range tag alongside one is what
+    // mjpeg refuses at `avcodec_open2`). Without the same term here the command
+    // printed `-color_range tv` and `out_range=tv` for a render that tags and
+    // converts to JPEG range: copy it and you get a different picture, which is
+    // the one thing this bar must never do.
+    //
+    // Only an explicit choice reaches it. Left on auto the writer takes
+    // `pickPixelFormat`, which prefers `yuv420p` wherever the encoder has it —
+    // and mjpeg does, so even picking image2 lands on the limited-range form
+    // unless somebody says otherwise.
+    const impliedFull = /^yuvj/.test(String(spec.pixelFormat || ''));
+    const full = impliedFull || spec.colorRange === 'pc';
     // `matrix` names the stream tag and `sws` names the same matrix to the
     // scale filter, which has a vocabulary of its own: the tag for
     // non-constant-luminance BT.2020 is `bt2020nc`, and swscale calls it

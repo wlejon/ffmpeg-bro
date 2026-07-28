@@ -283,6 +283,24 @@ console.log('\nthe output conversion');
     const px = filtergraph(spec({ pixelFormat: 'yuv422p10le' }));
     ok(px.chains[2].indexOf(',format=yuv422p10le[vout]') > 0,
        'a chosen pixel format is converted to inside the graph');
+
+    // **A `yuvj*` format *is* the statement that the picture is full range** —
+    // that is the whole of what the J means. The writer derives the range from
+    // it (`impliedFull` in export_writer.cpp, which is what mjpeg refuses to
+    // contradict at avcodec_open2) and this did not, so the render tagged and
+    // converted to JPEG range while the command said `out_range=tv` and
+    // `-color_range tv`. Copy that command and you get a different picture.
+    const j = filtergraph(spec({ pixelFormat: 'yuvj420p', colorRange: 'tv' }));
+    same(j.colour.range, 'pc', 'yuvj is full range whatever the Range control says');
+    ok(j.chains[2].indexOf('out_range=pc') > 0,
+       'so the conversion into the encoder’s colour converts to it');
+    ok(j.chains[2].indexOf(',format=yuvj420p[vout]') > 0, 'and names the format');
+
+    // The ordinary form is untouched: `yuv420p` is limited range unless the
+    // control says otherwise, which is the case every render that has never
+    // been near image2 is in.
+    same(filtergraph(spec({ pixelFormat: 'yuv420p', colorRange: 'tv' })).colour.range, 'tv',
+         'and the non-J form of the same format is not');
 }
 
 console.log('\nthe source conversion');
