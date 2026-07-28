@@ -24,7 +24,6 @@ import { streamsOf, keyOf } from './model.js';
 import { padsOf } from './filters.js';
 import { supportsTimeline } from './enable.js';
 import { deviceOfFilter, isCrossing, present } from '../hardware.js';
-import { inputs as documentInputs } from '../inputs.js';
 
 /// What to call a node in a sentence. A filter is its own name; the two ends
 /// are named the way their cards are, because that is what the person is
@@ -213,14 +212,16 @@ function memoryMap(g) {
     const arrivingAt = (n) => arrivingAll(n)[0] || 'memory';
 
     function resolve(n) {
-        if (n.kind === 'input') {
-            // A node's `input` is an index into the document's list, which is
-            // index-aligned with the spec's — so this is the same `-i` the
-            // render will open, and its `-hwaccel_output_format` is the only
-            // thing that decides where its pictures start out.
-            const src = documentInputs[n.input];
-            return src && src.hwaccelOutputFormat ? 'device' : 'memory';
-        }
+        // **Read off the node, not out of the document.** The derivation writes
+        // it there (`inputOnDevice` in derive.js) from the same `spec.inputs`
+        // the renderer is handed, so the graph and the render cannot disagree
+        // about where a picture starts out. This used to index the live
+        // `inputs` array from `ui/inputs.js`, which made a graph's answer
+        // depend on module state the graph was not derived from — and asked the
+        // question with one term missing, so an input carrying an output format
+        // with no `-hwaccel` in front of it answered "on a card" here and "in
+        // system memory" three hundred lines away.
+        if (n.kind === 'input') return n.onDevice ? 'device' : 'memory';
         // A sink produces nothing; what matters about it is what arrives.
         if (n.kind === 'sink') return arrivingAt(n);
         const filter = n.filter || '';

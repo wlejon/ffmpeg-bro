@@ -267,6 +267,27 @@ function inputInfo(spec, id) {
     return null;
 }
 
+/// Was this `-i` told to keep its pictures on the card?
+///
+/// **One place, because the answer is written onto every input node and read
+/// back by `check.js`.** It used to be asked twice with two different terms —
+/// here as `hwaccel && hwaccelOutputFormat`, and in `check.js` as
+/// `hwaccelOutputFormat` alone, off the *live* `inputs` list rather than off
+/// the spec. Both parts of that were wrong to have: the derivation is a pure
+/// function of its arguments, and a second reading of one fact is a
+/// disagreement waiting for the first input that carries an output format with
+/// no `-hwaccel` in front of it.
+///
+/// `-hwaccel_output_format` is meaningless without `-hwaccel`: it names the
+/// format the *device's* frames come back as, and there is no device without
+/// the first word. So both are required, which is what `sources.js` already
+/// enforces at the control (picking a device clears the format) and what
+/// `command.js` prints.
+function inputOnDevice(spec, index) {
+    const from = (spec.inputs || [])[index];
+    return !!(from && from.hwaccel && from.hwaccelOutputFormat);
+}
+
 /// Does this clip's `-i` have a soundtrack for the mix to read at all?
 ///
 /// **A muted clip and a clip of a file with no audio stream are two different
@@ -683,17 +704,16 @@ export function derive(spec, sources, opts = {}) {
         // different things: a graph numbers the pads it reads, in the order it
         // reads them, and the document numbers every input it holds whether or
         // not anything on the timeline is cut from it.
-        const input = g.add({ kind: 'input', index: i, path: clip.path,
-                              input: clip.input === undefined ? -1 : clip.input,
-                              anchor: `${key}/in`, from: w.srcIn,
-                              outs: [{ stream: 'v' }] });
-        inputs.set(key, input);
         // Whether this clip's `-i` was told to keep its pictures on the card.
         // Read off the spec's input list, which is what the render is handed,
         // so the graph and the render cannot disagree about where the picture
         // starts out.
-        const from = (spec.inputs || [])[clip.input];
-        const onDevice = !!(from && from.hwaccel && from.hwaccelOutputFormat);
+        const onDevice = inputOnDevice(spec, clip.input);
+        const input = g.add({ kind: 'input', index: i, path: clip.path,
+                              input: clip.input === undefined ? -1 : clip.input,
+                              anchor: `${key}/in`, from: w.srcIn, onDevice,
+                              outs: [{ stream: 'v' }] });
+        inputs.set(key, input);
         const tail = g.run(input, videoSteps(clip, w, src, key, off, onDevice), `v${i}`);
         // Two points per clip, and they are two different pictures: before the
         // scale a filter sees the source at its own size, in its own pixel
@@ -745,6 +765,11 @@ export function derive(spec, sources, opts = {}) {
             // `input` is which of the document's inputs that is.
             index: kept.length + graphInputs.length,
             input: info.index, path: info.path, title: info.name,
+            // The same question a clip's input node answers, asked of the same
+            // list: a file the graph reads on its own account can decode on a
+            // card too, and nothing downstream of it can know that from the
+            // path.
+            onDevice: inputOnDevice(spec, info.index),
             // Every stream the input turned out to have, because unlike a clip
             // there is nothing here to say which of them will be used — you
             // decide that by dragging a wire off one of the sockets. An `-i`

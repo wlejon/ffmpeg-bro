@@ -137,6 +137,13 @@ export function makeGraph(opts = {}) {
         // between a render and an hour.
         if (spec.from !== undefined) node.from = spec.from;
         if (spec.title) node.title = spec.title;
+        // Where this input's pictures start out: on a card, or in system
+        // memory. A fact about the `-i` — `-hwaccel_output_format` and nothing
+        // else decides it — and it is carried on the node because everything
+        // that asks about it is asking about the *graph*, and a graph that had
+        // to reach for the document's input list to answer would not be a pure
+        // function of the spec it was derived from.
+        if (spec.onDevice !== undefined) node.onDevice = !!spec.onDevice;
         nodes.push(node);
         return node;
     };
