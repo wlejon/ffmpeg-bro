@@ -52,6 +52,23 @@ int swsSpaceFor(AVColorSpace space, int height);
 /// that runs at the default.
 int scalerFlag(const std::string& name);
 
+/// Slack past the samples asked for, wherever libswresample writes into a
+/// buffer of ours.
+///
+/// The same mistake as `Rgba::kSwsSlack` below and for the same reason: a
+/// resampler emits a whole SIMD block at a time, so the last store of a run of
+/// samples goes past the count it was given. A `std::vector` sized to exactly
+/// the sample count is therefore too small however carefully the count was
+/// worked out, and `av_samples_alloc` would have added this padding.
+///
+/// It lives here rather than beside any one `swr_convert` because there are
+/// four of them — the graph's tail, the writer's per-stream resampler, the
+/// export reader and the capture loop — and three of the four were written by
+/// copying one of the others. One number, so a fifth cannot be written without
+/// it. (The playback backend in `ffmpeg_backend.cpp` has its own copy on
+/// purpose: it is the MIT-facing half and does not include the encode side.)
+constexpr size_t kSwrSlack = 256;
+
 // ── An RGBA picture, however it was stored on the way in ───────────────────
 
 struct Rgba {

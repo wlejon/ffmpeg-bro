@@ -843,7 +843,11 @@ bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) 
             o.aconv->format = o.enc->sample_fmt;
             o.aconv->sample_rate = o.enc->sample_rate;
             av_channel_layout_copy(&o.aconv->ch_layout, &o.enc->ch_layout);
-            o.aconv->nb_samples = maxOut + 64;
+            // Slack past what the resample can produce — see kSwrSlack in
+            // export_frame.h. It was a bare `+ 64` here, which is the same
+            // decision taken separately and is how a number like this comes to
+            // differ between two of the four places it is needed.
+            o.aconv->nb_samples = maxOut + static_cast<int>(kSwrSlack);
             if (av_frame_get_buffer(o.aconv, 0) < 0) return false;
         }
 

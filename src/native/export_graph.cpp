@@ -566,12 +566,7 @@ void GraphSource::takeSamples(const AVFrame* f) {
         delay + f->nb_samples, settings_.audioSampleRate, f->sample_rate, AV_ROUND_UP));
     if (maxOut <= 0) return;
 
-    // Slack past the samples asked for, for the reason Rgba::kSwsSlack exists:
-    // libswresample writes a whole SIMD block at a time and the last store of a
-    // run goes past the count it was given. A vector sized to exactly the
-    // sample count is the mistake, and it corrupts the heap far enough from the
-    // write to read as a bug in whatever ran next.
-    static constexpr size_t kSwrSlack = 64;
+    // Slack past the samples asked for — see kSwrSlack in export_frame.h.
     const size_t base = fifo_.size();
     fifo_.resize(base + static_cast<size_t>(maxOut) * channels + kSwrSlack);
     auto* dst = reinterpret_cast<uint8_t*>(fifo_.data() + base);
