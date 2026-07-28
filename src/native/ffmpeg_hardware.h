@@ -92,9 +92,6 @@ struct HwDevice {
 /// it, and probing is not free.
 const std::vector<HwDevice>& hwDevices();
 
-/// The entry for a type name, or null. Never creates anything.
-const HwDevice* hwDeviceNamed(const std::string& type);
-
 /// A reference to the shared device context for `type` (and `device`, which is
 /// `-hwaccel_device`: an index for CUDA, an adapter for D3D11, a path for VAAPI;
 /// empty is the default one).

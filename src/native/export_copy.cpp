@@ -314,7 +314,6 @@ void CopyStreams::fill(Reader& r) {
             r.haveEpoch = true;
             r.epochUs = static_cast<int64_t>(std::llround(stampOf(r.pending) * av_q2d(tb) *
                                                           AV_TIME_BASE));
-            if (!started_) { started_ = true; startedAt_ = at; }
         }
         r.havePending = true;
     }

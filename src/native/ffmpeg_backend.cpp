@@ -60,7 +60,18 @@ constexpr AVRational kNsTimeBase{1, 1000000000};
 /// and never showed it, while a 360-wide one corrupted the heap on the first
 /// frame — far enough from the write that it surfaced at process shutdown,
 /// which is where this cost two afternoons.
+///
+/// **Two names for one number, and the names are not decoration.** This file
+/// writes into both kinds of buffer, and there was one constant called
+/// `kSwsSlack` sizing the audio one — a scaler's name on a resampler's buffer,
+/// which is precisely the misreading that produced the corruption above. The
+/// value is the same because the block sizes are; whether it is *needed* is a
+/// separate fact per library, and a reader checking one of these sites has to
+/// be able to see which question it is looking at. (`export_frame.h` keeps the
+/// same pair for the encode side. It is not shared with this file on purpose:
+/// this is the MIT-facing half and does not include the encode headers.)
 constexpr size_t kSwsSlack = 256;
+constexpr size_t kSwrSlack = 256;
 
 TimeNs toNs(int64_t ts, AVRational tb) {
     if (ts == AV_NOPTS_VALUE) return AV_NOPTS_VALUE;
@@ -634,9 +645,9 @@ private:
         // written — so the buffer libswresample writes into is bigger than the
         // sample count while `samples.size()` stays honest about how many there
         // are. Shrinking a vector never reallocates, so the slack survives as
-        // spare capacity. See kSwsSlack.
+        // spare capacity. See kSwrSlack — this is libswresample, not libswscale.
         const size_t base = out.samples.size();
-        out.samples.resize(base + static_cast<size_t>(maxOut) * channels_ + kSwsSlack);
+        out.samples.resize(base + static_cast<size_t>(maxOut) * channels_ + kSwrSlack);
         auto* dst = reinterpret_cast<uint8_t*>(out.samples.data() + base);
         int written = swr_convert(swr_, &dst, maxOut,
                                   const_cast<const uint8_t**>(frame_->extended_data),

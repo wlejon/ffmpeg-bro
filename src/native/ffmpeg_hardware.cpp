@@ -146,12 +146,6 @@ const std::vector<HwDevice>& hwDevices() {
     return devices;
 }
 
-const HwDevice* hwDeviceNamed(const std::string& type) {
-    for (const auto& d : hwDevices())
-        if (d.name == type) return &d;
-    return nullptr;
-}
-
 AVHWDeviceType hwTypeNamed(const std::string& name) {
     if (name.empty()) return AV_HWDEVICE_TYPE_NONE;
     return av_hwdevice_find_type_by_name(name.c_str());

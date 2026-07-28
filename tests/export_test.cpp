@@ -2921,20 +2921,19 @@ int main(int argc, char* argv[]) {
         checkf(h.bytesWritten > 4096, "the run has bytes in it (%lld)",
                (long long)h.bytesWritten);
 
-        // **Counted against the playlist, not against a floor.** What this has
-        // to catch is `hls` rewriting its playlist on every segment: `>= 2`
-        // passes at forty, and forty is exactly what an `io_open` hook that did
-        // not treat a file opened twice as one file would report for four
-        // segments.
+        // **Counted against the playlist, exactly.** What this has to catch is
+        // `hls` rewriting its playlist on every segment: `>= 2` passes at forty,
+        // and forty is exactly what an `io_open` hook that did not treat a file
+        // opened twice as one file would report for four segments.
         //
-        // The upper bound is the segments plus one, not the segments, and the
-        // one is a fact about hlsenc worth knowing: **it writes the playlist
-        // through a temporary name and renames it**, so the file that *is*
-        // `path` — and would therefore not be counted — is opened as
-        // `out/hls.m3u8.tmp`, which is not. A build whose hlsenc writes the
-        // playlist in place answers with the segments alone, and both are
-        // right; what neither of them can be is a multiple of the segment
-        // count.
+        // It is the segments and not the segments plus one, and that one is a
+        // fact about hlsenc worth knowing: **it writes the playlist through a
+        // temporary name and renames it**, so the file that *is* `path` — and is
+        // therefore not a piece — reaches `io_open` as `out/hls.m3u8.tmp`, which
+        // is not `path` and used to be counted as an extra segment. `finish()`
+        // folds a working name onto the file it became by asking the filesystem
+        // which of them is still there, so a build whose hlsenc writes the
+        // playlist in place answers the same number with nothing to fold.
         {
             std::ifstream listIn(std::filesystem::path("out/hls.m3u8"));
             const std::string list((std::istreambuf_iterator<char>(listIn)),
@@ -2947,8 +2946,8 @@ int main(int argc, char* argv[]) {
                 ++named;
                 at = end + 3;
             }
-            checkf(named > 1 && h.piecesWritten >= named && h.piecesWritten <= named + 1,
-                   "each segment is counted once and the playlist at most once "
+            checkf(named > 1 && h.piecesWritten == named,
+                   "each segment is counted once and the playlist not at all "
                    "(%lld pieces for %d segments)",
                    (long long)h.piecesWritten, named);
         }

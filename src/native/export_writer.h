@@ -169,11 +169,23 @@ public:
     /// one, the pictures of an `image2` one, and the destinations of a `tee` —
     /// counted distinct, because a playlist rewritten on every segment is one
     /// file and not forty.
+    ///
+    /// **A working name the muxer renames onto the destination is not a piece.**
+    /// hlsenc writes its playlist to `out/hls.m3u8.tmp` and renames it, so the
+    /// file that *is* `path` reaches `io_open` under a name that is not, and the
+    /// exclusion above misses it — one segment too many for every hls render,
+    /// which the progress panel draws as a file that is not there. `finish()`
+    /// resolves it by *asking the filesystem* once, after everything is closed
+    /// and renamed (see `resolveRenames`), rather than by knowing which muxers
+    /// use which suffix. A build whose hlsenc writes the playlist in place needs
+    /// nothing resolved and answers the same number.
     int64_t piecesWritten() const;
 
     /// Everything that was opened, in the order it was opened, with what each
-    /// came to. For a caller that wants to say which files exist rather than
-    /// how many.
+    /// came to — resolved, so a piece names the file that exists rather than the
+    /// working name it was written under. For a caller that wants to say *which*
+    /// files a render produced rather than how many, which is the only way to
+    /// answer "is this count right" without re-deriving somebody's numbering.
     struct Piece {
         std::string url;
         int64_t bytes = 0;
@@ -190,16 +202,19 @@ public:
     /// some route that never reached `io_open`.
     static int64_t sizeOnDisk(const std::string& path, int64_t startNumber);
 
-    /// The rate the mixer should produce, which is the render's rather than any
-    /// one encoder's: every audio stream resamples from it to whatever it can
-    /// take, so two streams at different rates cost one mix and two resamplers.
-    int audioSampleRate() const { return hasAudio() ? settings_.audioSampleRate : 0; }
+    /// Whether anything in this file is fed by the mix.
+    ///
+    /// **Only mix-fed streams**, which is the whole point: a copied audio track
+    /// is packets out of a demuxer and nothing decodes a clip's sound to make
+    /// it, so counting one here would open every clip's audio reader on behalf
+    /// of a stream that will never ask for a sample. Mutation-tested, and worth
+    /// being exact about — dropping the `!copied` term costs a decode per clip
+    /// and changes nothing that is written, because `writeAudio` skips a copied
+    /// stream itself. It is a performance guard. The `outputStreams()` exception
+    /// beside it, which keeps a *copied* audio stream on a silent timeline, is
+    /// the correctness one: without that, "extract the soundtrack" writes a file
+    /// with no streams in it.
     bool hasAudio() const;
-
-    /// What went into the file, in the order the muxer numbered them — the
-    /// resolved list, not the one that was asked for. A stream the build could
-    /// not encode is not in it.
-    const std::vector<ExportStream>& streams() const { return described_; }
 
 private:
     /// Which output frames are made keyframes, whatever the GOP says.
@@ -267,7 +282,6 @@ private:
         std::FILE* statsLog = nullptr;  ///< pass 1, when the encoder does not keep its own
         std::string statsIn;            ///< pass 2, read back and pointed at by the context
         bool statsWritten = false;
-        bool ownStatsFile = false;      ///< the encoder has a `stats` option and was given one
 
         // audio: its own resampler and fifo, because the encoder it feeds has
         // its own sample format, rate and frame size and nothing says two
@@ -374,11 +388,16 @@ private:
     void noteOpened(const std::string& url, AVIOContext* pb, AVDictionary* leftover);
     void noteClosed(const std::string& url, int64_t sent);
 
+    /// Fold a working name onto the file it became. Run once, from `finish()`,
+    /// after every close and every rename the muxer was going to do — see
+    /// `piecesWritten()` for why hls needs it and why this asks the filesystem
+    /// instead of knowing about suffixes.
+    void resolveRenames();
+
     ExportSettings settings_;
     AVFormatContext* oc_ = nullptr;
     AVPacket* pkt_ = nullptr;
     std::vector<std::unique_ptr<Out>> outs_;
-    std::vector<ExportStream> described_;
     int64_t bytes_ = 0;
     bool headerWritten_ = false;
     bool finished_ = false;

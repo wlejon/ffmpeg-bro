@@ -149,17 +149,16 @@ public:
     /// the picture; see SourceVideo::open.
     bool open(const MediaInput& in, int outRate, int outChannels);
 
-    bool ok() const { return ok_; }
-
     void seekTo(double srcSeconds);
 
     /// Add `frames` samples of this clip, scaled by `gain`, into `dst`.
     /// Past the end of the file it adds nothing, which is silence.
+    ///
+    /// There is no `skip()` beside this and there does not need to be: a muted
+    /// clip is never given a `SourceAudio` at all (see `TimelineSource`), and
+    /// every clip that is given one has its own reader — so there is no second
+    /// clip in the same file whose position a skipped run would have to keep.
     void mixInto(float* dst, int frames, float gain);
-
-    /// Move past `frames` samples without mixing them — what a muted clip
-    /// needs so an unmuted one after it in the same file stays lined up.
-    void skip(int frames);
 
     /// The next frame as decoded, in the file's own sample format and rate,
     /// timestamped in `timeBase()` units from zero. See the note at the top of
@@ -197,7 +196,7 @@ private:
     double startOffset_ = 0.0;
     double limit_ = 0.0;
     double seekTarget_ = 0.0;
-    bool awaitingSeek_ = false, eof_ = false, drained_ = false, ok_ = false;
+    bool awaitingSeek_ = false, eof_ = false, drained_ = false;
 };
 
 } // namespace ffmpegbro

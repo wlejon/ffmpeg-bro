@@ -308,6 +308,5 @@ const char* logLevelName(int level) {
 }
 
 int logCapacity() { return static_cast<int>(kLogSlots); }
-int metaCapacity() { return static_cast<int>(kMetaSlots); }
 
 } // namespace ffmpegbro

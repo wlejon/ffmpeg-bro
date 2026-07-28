@@ -153,8 +153,12 @@ ReportDrain drainReport(uint64_t sinceLog, uint64_t sinceMeta, int max);
 /// libav's numbering and a table of it in the UI would be a copy to go stale.
 const char* logLevelName(int level);
 
-/// How many records each ring holds, for anything that wants to explain itself.
+/// How many messages the log ring holds. On the surface so that the test which
+/// floods it can assert the bound and the dropped count against the real number
+/// rather than against a copy of it — which is the whole of what an accessor to
+/// a compile-time constant is for. The meta ring is bounded the same way and had
+/// the same accessor; it went, because nothing asked and an accessor nobody
+/// calls is a claim that somebody does.
 int logCapacity();
-int metaCapacity();
 
 } // namespace ffmpegbro

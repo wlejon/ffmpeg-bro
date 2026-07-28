@@ -595,6 +595,49 @@ int64_t Writer::piecesWritten() const {
 
 std::vector<Writer::Piece> Writer::pieces() const { return wrote_; }
 
+// A muxer may write the file it was named with under a working name and rename
+// it into place. hlsenc does exactly that with its playlist — `out/hls.m3u8` is
+// opened as `out/hls.m3u8.tmp` — so the one URL `piecesWritten()` is supposed to
+// exclude arrives spelt differently and is counted as an extra segment.
+//
+// The answer is asked of the filesystem rather than written down, because a
+// suffix is a convention of one muxer and there is no call that reports it: the
+// working name is *gone* by the time everything has closed, and the destination
+// is *there* with nothing in the list claiming to have written it. Those two
+// facts together are what a rename is, and nothing else in this binary produces
+// them — a segment, a chunk, a picture and a tee slave are all still on disk.
+//
+// Local files only. A URL cannot be stat'd, and a protocol that renames is not a
+// thing that exists.
+void Writer::resolveRenames() {
+    if (settings_.path.empty()) return;
+    std::error_code ec;
+    if (!std::filesystem::exists(std::filesystem::path(localPathOf(settings_.path)), ec) || ec)
+        return;
+    for (const auto& p : wrote_) if (p.url == settings_.path) return;
+
+    // **Exactly one, or none.** A render that is missing several of the files it
+    // opened is not one rename — it is `hls_flags delete_segments` doing what it
+    // was asked, or somebody clearing the folder underneath the render — and
+    // guessing which of them became the destination would be worse than leaving
+    // the count one high. Ambiguity here reads as "no rename happened", which is
+    // the answer this was before.
+    Piece* missing = nullptr;
+    for (auto& p : wrote_) {
+        if (!p.file) continue;
+        if (std::filesystem::exists(std::filesystem::path(localPathOf(p.url)), ec) && !ec)
+            continue;
+        if (missing) return;
+        missing = &p;
+    }
+    if (!missing) return;
+
+    missing->url = settings_.path;
+    const auto size =
+        std::filesystem::file_size(std::filesystem::path(localPathOf(settings_.path)), ec);
+    if (!ec) missing->bytes = static_cast<int64_t>(size);
+}
+
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
                   CopyStreams* copies, SubtitleStreams* subs, AVBufferRef* hwFrames) {
     settings_ = s;
@@ -683,7 +726,6 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
         if (skipped) continue;
 
         if (!describeStream(*out, err)) return false;
-        described_.push_back(out->desc);
         outs_.push_back(std::move(out));
     }
 
@@ -943,6 +985,11 @@ bool Writer::finish(std::string* err) {
         av_opt_get_int(oc_->priv_data, "start_number", 0, &startNumber);
     close();
 
+    // After every close and therefore after every rename: a working name that
+    // became the destination stops being a piece here, before anything counts
+    // them or adds up their sizes.
+    resolveRenames();
+
     // How big it came out is asked of what was opened, not of avio_tell and not
     // of the path.
     //
@@ -1038,8 +1085,10 @@ void Writer::close() {
 
 bool Writer::openVideoStream(Out& o, std::string* err) {
     // `composite` is the canvas; `copy:0:1` was taken by the branch above.
-    // Anything else is a caller naming a source that does not exist.
-    if (o.desc.source != "composite" && !o.desc.source.empty()) {
+    // Anything else is a caller naming a source that does not exist. There is no
+    // empty case to allow for: `outputStreams()` resolves every default before
+    // anything gets here, which is what it exists to do.
+    if (o.desc.source != "composite") {
         *err = "a video stream cannot be fed from '" + o.desc.source +
                "' — it is the composite, or copy:<input>:<stream>";
         return false;
@@ -1087,9 +1136,18 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
             o.enc->sw_pix_fmt = pool->sw_format;
             o.enc->hw_frames_ctx = av_buffer_ref(hwFrames_);
             if (!o.enc->hw_frames_ctx) { *err = "out of memory"; return false; }
-            // The graph decided how big the picture is and it is already on the
-            // card; the render's own size was checked against the sink in
-            // `GraphSource::build`, so these are the same numbers said twice.
+            // **The pool's size, not the render's, and they are not always the
+            // same two numbers.** With `sizeFromGraph` off they agree, because
+            // `GraphSource::build` refuses a sink that disagrees with the
+            // settings. With it on, `build` *takes* the sink's answer through
+            // `max(16, n & ~1)` — a floor and a round down to even — so a graph
+            // whose last pad is 15 or 21 pixels wide leaves the render at 16 or
+            // 20 while the frames in the pool are still 15 or 21. Opening a
+            // hardware encoder for a size its surfaces are not is the kind of
+            // mismatch that surfaces as corrupt output rather than as an error,
+            // so these two lines are load-bearing and are not a restatement of
+            // anything. (An earlier comment here said they were, which is how a
+            // cleanup sweep comes to delete working code.)
             o.enc->width = pool->width;
             o.enc->height = pool->height;
             o.native = true;
@@ -1245,7 +1303,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
 }
 
 bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
-    if (o.desc.source != "mix" && !o.desc.source.empty()) {
+    if (o.desc.source != "mix") {
         *err = "an audio stream cannot be fed from '" + o.desc.source +
                "' — it is the mix, or copy:<input>:<stream>";
         return false;
@@ -1458,7 +1516,6 @@ bool Writer::setUpPasses(Out& o, const AVCodec* codec, std::string* err) {
         bool already = false;
         for (const auto& kv : o.desc.options) if (kv.key == "stats") already = true;
         if (!already) av_opt_set(o.enc->priv_data, "stats", log.c_str(), 0);
-        o.ownStatsFile = true;
         // The same check as below, and it belongs on both branches: x264 opens
         // its own log and fails with "Generic error in an external library",
         // which says nothing about a missing statistics file and nothing at all
@@ -1631,7 +1688,7 @@ bool Writer::openAttachment(Out& o, std::string* err) {
 //     drawn over.
 
 bool Writer::openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err) {
-    if (o.desc.source.empty() || !isDecodeSource(o.desc.source)) {
+    if (!isDecodeSource(o.desc.source)) {
         *err = "a subtitle stream is copied from an input (copy:<input>:<stream>) or "
                "decoded out of one (decode:<input>:<stream>) — there is no composed "
                "subtitle track for it to be made of";

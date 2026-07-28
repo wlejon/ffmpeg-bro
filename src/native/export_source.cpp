@@ -261,8 +261,7 @@ bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels) {
     av_channel_layout_default(&outLayout_, outChannels_);
     pkt_ = av_packet_alloc();
     frame_ = av_frame_alloc();
-    ok_ = pkt_ && frame_;
-    return ok_;
+    return pkt_ && frame_;
 }
 
 void SourceAudio::seekTo(double srcSeconds) {
@@ -297,18 +296,6 @@ void SourceAudio::mixInto(float* dst, int frames, float gain) {
         const int count = n * outChannels_;
         for (int i = 0; i < count; ++i) dst[done * outChannels_ + i] += src[i] * gain;
         head_ += static_cast<size_t>(count);
-        done += n;
-        compact();
-    }
-}
-
-void SourceAudio::skip(int frames) {
-    int done = 0;
-    while (done < frames) {
-        if (available() == 0 && !fill()) break;
-        const int n = std::min(frames - done, available());
-        if (n <= 0) break;
-        head_ += static_cast<size_t>(n) * outChannels_;
         done += n;
         compact();
     }

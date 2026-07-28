@@ -122,11 +122,6 @@ public:
 
     int64_t packets() const { return packets_; }
 
-    /// Where the copy actually began, on the input's clock: the keyframe the
-    /// seek landed on, which is at or before the in-point that was asked for.
-    /// Meaningful only once something has been read.
-    double startedAt() const { return startedAt_; }
-
 private:
     struct Tap {
         size_t desc = 0;        ///< index into the resolved stream list
@@ -164,8 +159,6 @@ private:
     size_t count_ = 0;
     double position_ = 0.0;
     double span_ = 0.0;
-    double startedAt_ = 0.0;
-    bool started_ = false;
     int64_t packets_ = 0;
 };
 
