@@ -450,6 +450,18 @@ function applyStructure(g, ov, stranded) {
         // spec's input list and the `-i` numbering are: it is a *file*, not a
         // filter, and a filter is all this loop knows how to make.
         if (rec.kind === 'input') continue;
+        // A named output, which is a sink of a person's own — one input pad,
+        // no outputs, and a name the chain feeding it will be printed with.
+        // Its pad is declared here rather than by `declarePads` below, which
+        // asks libavfilter and has nothing to ask about a sink; the stream on
+        // it is what the first wire brought, and an output nobody has wired
+        // yet declares a pad that takes either, because it has not been told.
+        if (rec.kind === 'sink') {
+            g.add({ id: rec.id, kind: 'sink', name: rec.name || '',
+                    stream: rec.stream || '', derived: false,
+                    ins: [{ stream: rec.stream || '' }] });
+            continue;
+        }
         g.add({ id: rec.id, filter: rec.filter, pos: rec.pos, params: rec.params,
                 derived: false });
     }
@@ -540,6 +552,109 @@ function outputColour(g, spec, colour) {
     return g.nodes.slice(before);
 }
 
+/// A named output's label goes on the node that produces it.
+///
+/// **The same mechanism the derivation's own sinks use, not a second one.**
+/// `out:v` is mapped as `[vout]` because the last `overlay` *carries* that
+/// label — a sink imposes nothing and reports what it finds, which is why with
+/// one audible clip the muxer maps that clip's own `[a0]`. So a pad somebody
+/// named is written onto whatever feeds it, and `moveLabelsToChainEnds` below
+/// then keeps it at the end of whichever run that node turns out to end.
+///
+/// A node that already carries a label keeps it: that is a pad being read twice
+/// — by the composite's sink and by an output — which `check.js` names, and
+/// overwriting the name would print a graph that maps a pad no chain produces
+/// on top of it.
+function labelUserOutputs(g) {
+    for (const n of g.nodes) {
+        if (n.kind !== 'sink' || !n.name) continue;
+        const e = g.inEdges(n)[0];
+        const src = e ? g.node(e.from) : null;
+        // An input node's pads are ffmpeg's — `[1:v]` is a demuxer's stream and
+        // cannot be given a name of its own. `check.js` says so; there is
+        // nothing to write here.
+        if (!src || src.kind !== 'filter') continue;
+        // A `split` writes two pads and one `label` would name neither of them
+        // honestly, so a fork's names are per pad. See `padOf` in print.js.
+        if (src.outs && src.outs.length > 1) {
+            if (!src.outLabels) src.outLabels = [];
+            const port = e.fromPort || 0;
+            if (!src.outLabels[port]) src.outLabels[port] = n.name;
+            continue;
+        }
+        if (src.label) continue;
+        src.label = n.name;
+    }
+}
+
+/// The two pads the renderer looks for by name, once there is more than one for
+/// it to choose between.
+///
+/// **Native's rule, mirrored rather than guessed at.** With one picture pad in a
+/// graph it is the composite whatever it is called — which is why a single
+/// audible clip's soundtrack has always been mapped as that clip's own `[a0]`
+/// and nothing minded. With several, the pad labelled `vout` is the composite
+/// and the one labelled `aout` is the mix, and a graph that labels neither is
+/// refused before the file is opened, listing the labels it does have.
+///
+/// So the moment somebody places an output of their own, the derivation's own
+/// pad has to say which one it is — and it may by then be some way from where
+/// the label started. A `split` between the composite and the sink is the
+/// ordinary case: `moveLabelsToChainEnds` stops at the fork, because a single
+/// label names neither of its pads, so `vout` is left mid-chain where nothing
+/// prints it and the composite comes out as an invented name.
+///
+/// Run last, after every other label has settled, and it takes the name off
+/// whatever was carrying it first: two chains ending in `[vout]` is "Label
+/// found twice".
+function nameTheRendersPads(g) {
+    for (const stream of ['v', 'a']) {
+        const named = g.nodes.some((n) => n.kind === 'sink' && n.name &&
+                                          (n.stream || 'v') === stream);
+        if (!named) continue;
+        const sink = g.byAnchor(stream === 'a' ? 'out:a' : 'out:v');
+        const e = sink ? g.inEdges(sink)[0] : null;
+        const src = e ? g.node(e.from) : null;
+        if (!src || src.kind !== 'filter') continue;
+        const want = stream === 'a' ? 'aout' : 'vout';
+        for (const n of g.nodes) {
+            if (n.label === want) n.label = null;
+            if (n.outLabels)
+                n.outLabels = n.outLabels.map((l) => (l === want ? null : l));
+        }
+        if (src.outs && src.outs.length > 1) {
+            if (!src.outLabels) src.outLabels = [];
+            src.outLabels[e.fromPort || 0] = want;
+        } else src.label = want;
+    }
+}
+
+/// A derived chain label that a person has since used as an output name.
+///
+/// The derivation hands out `base`, `v0`, `o0`, `a0`, `vout` and `aout` before
+/// it has ever seen the overlay, so an output called `v0` on a two-clip timeline
+/// would be two chains ending in the same label — which ffmpeg refuses with
+/// "Label found twice", about a graph it has already half parsed. The other way
+/// of avoiding that is to narrow what a person may type by how many clips are on
+/// the timeline, which is a rule nobody could hold. So the *derived* name moves
+/// instead: nothing outside this graph refers to it, and everything that refers
+/// to a person's name was written down by a person.
+function avoidUserLabels(g) {
+    const taken = new Set();
+    for (const n of g.nodes) if (n.kind === 'sink' && n.name) taken.add(n.name);
+    if (!taken.size) return;
+    const used = new Set();
+    for (const n of g.nodes) if (n.label) used.add(n.label);
+    let next = 0;
+    for (const n of g.nodes) {
+        if (!n.label || !taken.has(n.label)) continue;
+        let name;
+        do { name = `g${next++}`; } while (taken.has(name) || used.has(name));
+        used.add(name);
+        n.label = name;
+    }
+}
+
 /// A pad name belongs at the end of the run that produces it.
 ///
 /// Only chain-final nodes carry a label — that is `print.js`'s rule — and the
@@ -562,6 +677,10 @@ function moveLabelsToChainEnds(g) {
             const next = cons[0];
             if (next.kind !== 'filter' || g.producers(next).length !== 1) break;
             if (next.label) break;              // it already ends a chain of its own
+            // A fork writes several pads and a single label names none of them
+            // — its names are per pad (`outLabels`), so a label carried onto one
+            // would be a name the printer has nowhere to put.
+            if (next.outs && next.outs.length > 1) break;
             at = next;
         }
         if (at === node) continue;
@@ -898,6 +1017,11 @@ export function derive(spec, sources, opts = {}) {
     applyOverlay(g, points, opts.overlay, overrides);
     const stranded = [];
     applyStructure(g, opts.overlay, stranded);
+    // The names a person gave first, because the derivation's own are the ones
+    // that can move — then the outputs take theirs, on whatever ended up
+    // feeding them.
+    avoidUserLabels(g);
+    labelUserOutputs(g);
     // **The conversion into the encoder's colour goes on last, in front of the
     // sink, after everything a person did.**
     //
@@ -919,6 +1043,7 @@ export function derive(spec, sources, opts = {}) {
         declarePads(g);
     }
     moveLabelsToChainEnds(g);
+    nameTheRendersPads(g);
 
     // What is known to differ about *this* render, rather than a fixed
     // disclaimer. A note that is always the same is one nobody reads, and the

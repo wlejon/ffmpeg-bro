@@ -14,6 +14,15 @@
 // something.mp4`, with an output per stream it is read for — and a `sink` is a
 // pad the muxer maps.
 //
+// **There is more than one sink per stream, and there was always going to be.**
+// The derivation makes two — `out:v` and `out:a`, the composite and the mix —
+// and a person can place more, each carrying a `name`. A named one is the same
+// kind of node on purpose: the cards, the layout, the wires and the previews
+// already know what a sink is, and a third kind would have meant teaching every
+// one of them the same thing again. What the name buys is that the chain
+// feeding it is printed ending in `[that]`, so a stream on the Write stage can
+// say `pad:<that>` and be fed from the middle of a graph.
+//
 // **A node can have more than one output, and an edge says which it leaves
 // by.** That was written down as the thing this model could not do for as long
 // as an input node was one stream: a file's picture and its sound were two
@@ -121,6 +130,15 @@ export function makeGraph(opts = {}) {
         // What only one kind has. Copied rather than merged wholesale so a
         // stray field on a spec cannot quietly become part of the model.
         if (spec.stream) node.stream = spec.stream;
+        // What a sink is called, where somebody named it. Only an output of
+        // your own has one — the derivation's two ends are named by their
+        // anchors — and it is the pad label the chain feeding it is printed
+        // with, which is what `pad:<label>` on a stream row reads. Tested
+        // against `undefined` rather than for truth, because an output whose
+        // name has been cleared is a node with a problem and not a node
+        // without a name: dropping the field would turn it back into the
+        // render's own sink.
+        if (spec.name !== undefined) node.name = spec.name;
         if (spec.index !== undefined) node.index = spec.index;
         if (spec.path) node.path = spec.path;
         // Which of the document's inputs an input node is. Two numbers, because

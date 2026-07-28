@@ -35,6 +35,10 @@
 //
 // - `nodes` — a filter that is not on any wire. Placed on the canvas, wired
 //   afterwards, and identified by an id from the same counter the inserts use.
+//   An input the graph reads and a **named output** are in the same list and
+//   carry a `kind`: they are not filters, but they are the same kind of thing
+//   to this file — something a person placed, held by an id that survives the
+//   rebuild.
 // - `wires` — a connection somebody drew, as two **keys and two pad numbers**.
 //   A key is what `model.js`'s `keyOf` answers: a derived node's anchor, a user
 //   node's id. That is the only string that means the same thing before and
@@ -170,6 +174,53 @@ export function sourceInputs() {
     return state.nodes.filter((n) => n.kind === 'input').map((n) => n.input);
 }
 
+/// A named output pad — a place in the graph a stream on the Write stage can be
+/// fed from.
+///
+/// **It is a `sink`, and reusing that kind is the point.** The derivation's two
+/// ends are sinks already, so every card, wire, layout and preview on this stage
+/// knows what one is; a third kind of node would have meant teaching all of them
+/// the same thing again. What is different is the `name`, which becomes the pad
+/// label the chain feeding it is printed with — and `pad:<label>` on a stream row
+/// is what reads it.
+///
+/// **The stream comes from the first wire.** Placing a pad says nothing about
+/// whether it is a picture or a sound; wiring one says everything. Once it is
+/// set it stays, which is what makes a sound dropped into a picture output a
+/// mismatch the checker can name rather than a silent change of kind.
+export function addOutput(stream, name) {
+    const rec = { id: `u${++seq}`, kind: 'sink',
+                  name: name === undefined ? freeOutputName() : String(name),
+                  stream: stream === 'a' ? 'a' : stream === 'v' ? 'v' : '' };
+    state.nodes.push(rec);
+    changed('node');
+    return rec;
+}
+
+/// The outputs somebody has placed, in the order they were made.
+export function outputs() { return state.nodes.filter((n) => n.kind === 'sink'); }
+
+/// `out2`, `out3`… — the first one nothing is called.
+///
+/// Not `out1`: `vout` and `aout` are the derivation's own names for the
+/// composite and the mix, so the first output anybody adds is the second thing
+/// this render writes and saying so is cheaper than explaining it.
+export function freeOutputName() {
+    const taken = new Set(outputs().map((n) => n.name));
+    for (let i = 2; ; i++) if (!taken.has(`out${i}`)) return `out${i}`;
+}
+
+/// Rename one. The rows on the Write stage that are fed from it move with it —
+/// see `renamePad` in `export/pads.js`, which is where that half lives, because
+/// nothing in this file knows what a stream is.
+export function renameOutput(id, name) {
+    const rec = state.nodes.find((n) => n.id === id && n.kind === 'sink');
+    if (!rec || rec.name === String(name)) return false;
+    rec.name = String(name);
+    changed('node');
+    return true;
+}
+
 /// Take a node out, whichever kind it is — and every wire that touched it.
 ///
 /// Both kinds through one call because from the outside there is one gesture:
@@ -227,12 +278,22 @@ const padKey = (key, port) => `${key}#${port || 0}`;
 
 /// Join two pads. Replaces whatever was arriving at the destination — including
 /// a derived wire, which is how a filter gets *between* two derived nodes.
-export function wire(from, fromPort, to, port) {
+///
+/// `stream` is what the wire carries, and it is only ever used for one thing: a
+/// named output that has no kind yet takes the kind of the first thing wired
+/// into it. Optional because every other destination in this file already knows
+/// what its pads are — an `overlay` reads pictures whoever wires it — and
+/// passing it everywhere would be ceremony around the one case that needs it.
+export function wire(from, fromPort, to, port, stream) {
     if (!from || !to) return null;
     const rec = { id: `w${++seq}`, from, fromPort: fromPort || 0, to, port: port || 0 };
     for (let i = state.wires.length - 1; i >= 0; i--)
         if (state.wires[i].to === rec.to && state.wires[i].port === rec.port)
             state.wires.splice(i, 1);
+    if (stream === 'v' || stream === 'a') {
+        const out = state.nodes.find((n) => n.id === to && n.kind === 'sink');
+        if (out && !out.stream) out.stream = stream;
+    }
     // A pad being wired is a pad that is no longer cut. The two are the same
     // statement about the same place and holding both would make the order they
     // are applied in decide the answer.
@@ -493,6 +554,15 @@ function filterRec(n, withAnchor) {
     // removed input can be added again, and the node should come back with it.
     if (!withAnchor && n.kind === 'input')
         return n.input ? { id: String(n.id), kind: 'input', input: String(n.input) } : null;
+    // A named output has no filter name either, and unlike an input it *is*
+    // written back out: it names nothing outside this file — the label is its
+    // own — so restoring one cannot come to mean a different thing next run.
+    // A name that has been cleared is kept as the empty string it is, because
+    // an output with no name is a graph with a problem in it and dropping the
+    // field would quietly turn it into the render's own sink.
+    if (!withAnchor && n.kind === 'sink')
+        return { id: String(n.id), kind: 'sink', name: String(n.name || ''),
+                 stream: n.stream === 'a' ? 'a' : n.stream === 'v' ? 'v' : '' };
     if (!n.filter) return null;
     const rec = { id: String(n.id), filter: String(n.filter),
                   pos: Array.isArray(n.pos) ? n.pos.map(String) : [],

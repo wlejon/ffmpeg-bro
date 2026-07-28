@@ -7,6 +7,11 @@
 // a pad feeding two filters, a node with an empty input, a `split` whose second
 // output goes nowhere, two nodes feeding each other in a circle.
 //
+// And, since a person can place an output of their own, everything a *name*
+// has to be for a stream to be fed from it: present, spelt the way a
+// filtergraph spells a pad label, not one of the two the derivation reserves,
+// and not shared with another output.
+//
 // **The rule is refusal, not approximation.** It is the same rule the
 // derivation already follows and it is the whole value of printing a command:
 // a filtergraph is worth showing because it can be copied somewhere else and
@@ -34,8 +39,23 @@ export function nameOf(n) {
     // it is, because "input 3" is a number in a list nobody has in front of them
     // and "logo.png" is the thing they placed.
     if (n.kind === 'input') return n.title ? `${n.title} (input ${n.index})` : `input ${n.index}`;
-    if (n.kind === 'sink') return n.stream === 'a' ? 'audio out' : 'video out';
+    // A pad somebody named is called by its name, because that is what they
+    // will read on the Write stage and in the printed command. Only the
+    // derivation's own two are "the render".
+    if (n.kind === 'sink')
+        return isUserOutput(n) ? (n.name ? `output [${n.name}]` : 'an unnamed output')
+             : n.stream === 'a' ? 'audio out' : 'video out';
     return n.filter || 'a filter';
+}
+
+/// A sink a person placed, as against the derivation's own two.
+///
+/// Told apart by carrying a `name` at all — an empty one is an output somebody
+/// cleared the name of, which is a graph with a problem in it and not one of the
+/// render's own ends. Every hand-built sink in the tests predates the field and
+/// answers no, which is what keeps them reading as `video out`.
+export function isUserOutput(n) {
+    return !!n && n.kind === 'sink' && n.name !== undefined;
 }
 
 const ordinal = (i, of) => (of > 1 ? `input ${i + 1} of ${of}` : 'input');
@@ -79,11 +99,12 @@ export function problems(g, stranded = []) {
         const arriving = g.inEdges(n);
         for (let p = 0; p < ins; p++) {
             const at = arriving.filter((e) => (e.port || 0) === p);
-            if (!at.length)
-                say(n, n.kind === 'sink'
-                    ? `nothing is wired to ${nameOf(n)}, so the render has no ${
-                        n.stream === 'a' ? 'sound' : 'picture'} to write`
-                    : `${nameOf(n)} has nothing wired to its ${ordinal(p, ins)}`);
+            if (!at.length) {
+                const why = n.kind === 'sink'
+                    ? emptySink(g, n)
+                    : `${nameOf(n)} has nothing wired to its ${ordinal(p, ins)}`;
+                if (why) say(n, why);
+            }
             // Two wires into one pad is not a mix, it is a graph with no answer
             // to which one arrives — and nothing in this application can make
             // one, so it is here for a hand-edited overlay rather than for a
@@ -137,6 +158,8 @@ export function problems(g, stranded = []) {
         }
     }
 
+    outputProblems(g, say);
+
     for (const p of memoryProblems(g, streams)) out.push(p);
 
     for (const s of stranded) {
@@ -152,6 +175,78 @@ export function problems(g, stranded = []) {
                       `${nameOf(cycle[0])}`);
 
     return out;
+}
+
+/// A sink with nothing arriving at it, and the one case where that is not a
+/// complaint. Answers null for "nothing to say".
+///
+/// The derivation's sink *is* the render: nothing wired to it means nothing to
+/// write, and that is the sentence it has always had. Unless the picture leaves
+/// by a name instead — a stream fed from `pad:<label>` reads an output somebody
+/// placed, and a graph whose whole picture goes out that way has no use for the
+/// derivation's own pad. Native draws the same line: a graph with no `vout` is
+/// refused only where a stream actually asks for the composite.
+function emptySink(g, n) {
+    if (isUserOutput(n))
+        return `nothing is wired into ${nameOf(n)}, so no stream can be fed from it`;
+    const carried = g.nodes.some((x) => isUserOutput(x) && x.name &&
+                                        (x.stream || 'v') === (n.stream || 'v') &&
+                                        g.inEdges(x).length);
+    if (carried) return null;
+    return `nothing is wired to ${nameOf(n)}, so the render has no ${
+        n.stream === 'a' ? 'sound' : 'picture'} to write`;
+}
+
+/// What a named output has to be for a stream to be fed from it.
+///
+/// **The name is the identity**, so all of this is about the name. It becomes a
+/// pad label in a `-filter_complex` and a `pad:<label>` on the Write stage, and
+/// every rule below is a shape ffmpeg itself refuses — which is the entry
+/// requirement for everything in this file. The renderer refuses each of them
+/// too, before it opens a file, and says so in almost these words; said here
+/// because that is where the decision was taken.
+function outputProblems(g, say) {
+    const seen = new Map();
+    for (const n of g.nodes) {
+        if (!isUserOutput(n)) continue;
+        const name = String(n.name || '');
+        if (!name) {
+            say(n, 'this output has no name, so nothing can be mapped to it — a stream is ' +
+                   'fed from a pad by writing its label down, and there is nothing to write');
+            continue;
+        }
+        if (!/^[A-Za-z0-9_]+$/.test(name)) {
+            say(n, `“${name}” is not a pad label — a filtergraph names one with letters, ` +
+                   'digits and underscores, and reads anything else as the end of the name');
+            continue;
+        }
+        // `vout` and `aout` are what the derivation calls the composite and the
+        // mix, and the renderer decides which pad is which by exactly those two
+        // words when a graph ends in several. A second [vout] is not a clash of
+        // spellings, it is two answers to "which of these is the picture".
+        if (name === 'vout' || name === 'aout') {
+            say(n, `[${name}] is the derivation’s own name for the ${
+                name === 'vout' ? 'composite' : 'mix'}, so an output called that leaves ` +
+                'nothing to say which pad the render’s own picture and sound come out of ' +
+                '— call it something else');
+            continue;
+        }
+        if (seen.has(name))
+            say(n, `two outputs are called [${name}] — a pad is produced once, and ffmpeg ` +
+                   'refuses a graph where a label is used twice');
+        else seen.set(name, n);
+
+        // **An `-i`'s pad cannot be renamed.** `[1:v]` is a demuxer's stream and
+        // there is no chain to put a label on the end of, so the graph would
+        // print and run and the render would then be refused for a pad that is
+        // not there. One filter in between is all it takes.
+        const e = g.inEdges(n)[0];
+        const src = e ? g.node(e.from) : null;
+        if (src && src.kind === 'input')
+            say(n, `${nameOf(n)} is fed straight from ${nameOf(src)}, and an -i’s pad cannot ` +
+                   'be given a name of its own — put a filter between them (null, or format) ' +
+                   'so that there is a chain to label');
+    }
 }
 
 /// **`trim`, `setpts` and their kind want neither memory nor a card**, and that

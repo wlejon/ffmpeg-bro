@@ -972,6 +972,149 @@ console.log('\na file the graph reads that no clip is cut from');
     overlay.clear();
 }
 
+// ── a pad of your own ──────────────────────────────────────────────────────
+//
+// One render, two pictures. The graph has always ended in the derivation's own
+// two sinks — the composite and the mix — so a file could hold one picture and
+// one soundtrack however many pads there were half way along. A named output is
+// the other end of `ExportStream::source`'s `pad:<label>`: a place a person
+// puts on the graph, wires anything into, and then feeds a stream from on the
+// Write stage.
+//
+// The whole of it is the *name*. It becomes the label the chain feeding it is
+// printed with, which is what makes the command bar's `-map "[left]"` and the
+// render one thing rather than two — so everything below is either about the
+// name reaching the printed graph or about the name being one ffmpeg will take.
+
+console.log('\na pad of your own');
+{
+    overlay.clear();
+    // The composite is already read by the render's own sink, so a second
+    // reader of that pad needs a `split` — which is exactly what ffmpeg needs
+    // and is why the fork is in the gesture rather than hidden behind it.
+    const fork = overlay.addNode('split');
+    const half = overlay.addNode('crop', { pos: ['iw/2', 'ih', '0', '0'] });
+    const rest = overlay.addNode('crop', { pos: ['iw/2', 'ih', 'iw/2', '0'] });
+    const out = overlay.addOutput('v', 'left');
+    overlay.wire('composite/overlay:7', 0, fork.id, 0);
+    overlay.wire(fork.id, 0, rest.id, 0);
+    overlay.wire(rest.id, 0, 'out:v', 0);
+    overlay.wire(fork.id, 1, half.id, 0);
+    overlay.wire(half.id, 0, out.id, 0);
+
+    const d = derive(oneClip(), null, { overlay: overlay.current() });
+    ok(d.ok, `a graph with an output of your own derives: ${d.reason || ''}`);
+    same(d.problems.length, 0, `and nothing is wrong with it: ${
+        d.problems.map((p) => p.reason).join(' | ')}`);
+
+    const chains = print(d.graph).chains;
+    ok(chains.some((c) => /crop=iw\/2:ih:0:0\[left\]$/.test(c)),
+       `the chain feeding it ends in the name you gave: ${chains.join(';')}`);
+    // A fork writes two pads and one label names neither of them: libavfilter
+    // refuses the whole graph over the pad nothing is connected to.
+    const forked = chains.find((c) => /split\[/.test(c)) || '';
+    ok(/split\[[^\]]+\]\[[^\]]+\]$/.test(forked),
+       `both halves of the split are named: ${forked}`);
+    // **With more than one picture pad, the composite has to say so by name.**
+    // That is the renderer's rule and it is mirrored rather than guessed at:
+    // one pad is the composite whatever it is called, several and the one
+    // labelled `vout` is. It can be some way from where the label started —
+    // `moveLabelsToChainEnds` stops at a fork, because one label names neither
+    // of a split's pads — so it is put back last, after everything else.
+    same(print(d.graph).video, '[vout]',
+         'and the render’s own picture says which of the two it is');
+
+    // The graph the *renderer* is handed is the one `pad:left` is resolved
+    // against, so the name has to be in that one too — it differs from the
+    // printed form by the colour conversion and by nothing else.
+    const run = globalThis.__ffmpegBro.renderGraph(oneClip(), null,
+                                                  { overlay: overlay.current() });
+    ok(run.ok && /\[left\]/.test(run.filterGraph),
+       `the renderer is handed it too: ${run.reason || run.filterGraph}`);
+
+    overlay.renameOutput(out.id, 'wide');
+    const after = print(derive(oneClip(), null, { overlay: overlay.current() }).graph).chains;
+    ok(after.some((c) => c.endsWith('[wide]')), `renaming it moves the printed label: ${
+        after.join(';')}`);
+    ok(!after.some((c) => c.endsWith('[left]')), 'and the old name is not printed anywhere');
+    overlay.renameOutput(out.id, 'left');
+
+    // Unlike an input node, an output survives a reload: it names nothing
+    // outside the overlay, so a restored one cannot come to mean a different
+    // thing next run.
+    overlay.restore();
+    same(overlay.outputs().length, 1, 'a named output comes back after a reload');
+    same(overlay.outputs()[0].name, 'left', 'called what it was called');
+    same(overlay.outputs()[0].stream, 'v',
+         'and on the stream the first wire into it decided');
+    same(overlay.wires().length, 5, 'with every wire that made it one');
+    overlay.clear();
+}
+
+console.log('\nwhat an output has to be called');
+{
+    // Each of these is a shape ffmpeg itself refuses, which is the entry
+    // requirement for everything `check.js` says — and the renderer refuses
+    // each of them again before it opens a file, in almost these words.
+    const reasons = () => derive(oneClip(), null, { overlay: overlay.current() })
+        .problems.map((p) => p.reason).join(' | ');
+
+    overlay.clear();
+    const a = overlay.addOutput('v', 'vout');
+    ok(/name for the composite/.test(reasons()),
+       `vout is the derivation’s own: ${reasons()}`);
+    overlay.renameOutput(a.id, 'left half');
+    ok(/is not a pad label/.test(reasons()),
+       `a space ends a pad label rather than being in one: ${reasons()}`);
+    overlay.renameOutput(a.id, '');
+    ok(/has no name/.test(reasons()), `and nothing is not a name: ${reasons()}`);
+
+    overlay.renameOutput(a.id, 'left');
+    const b = overlay.addOutput('v', 'left');
+    ok(/two outputs are called \[left\]/.test(reasons()),
+       `two of one name is a label used twice: ${reasons()}`);
+    overlay.removeInsert(b.id);
+    ok(!/two outputs/.test(reasons()), 'and one of them is enough');
+    ok(/nothing is wired into output \[left\]/.test(reasons()),
+       `an output with nothing on it says so: ${reasons()}`);
+
+    // `out2`, because `vout` and `aout` are already the first thing the render
+    // writes on each side.
+    same(overlay.freeOutputName(), 'out2', 'the next one is named for you');
+    overlay.clear();
+}
+
+console.log('\nthe picture leaving by a name instead');
+{
+    // The state a graph is in when *everything* it writes is mapped by name:
+    // the derivation's own video sink has nothing on it, and that is no longer
+    // a complaint. Native draws the same line — a graph with no [vout] is
+    // refused only where a stream actually asks for the composite.
+    overlay.clear();
+    const flip = overlay.addNode('hflip');
+    const out = overlay.addOutput('v', 'v0');
+    overlay.wire('composite/overlay:7', 0, flip.id, 0);
+    overlay.unwire('out:v', 0);
+    overlay.wire(flip.id, 0, out.id, 0);
+
+    const d = derive(oneClip(), null, { overlay: overlay.current() });
+    same(d.problems.length, 0, `an empty video out is not a complaint when a named ` +
+         `output carries the picture: ${d.problems.map((p) => p.reason).join(' | ')}`);
+    const p = print(d.graph);
+    same(p.video, null, 'and the render has no composite pad to map');
+
+    // **`v0` is also what the derivation calls a clip's own chain.** The
+    // derived name is what moves, because narrowing what a person may type by
+    // how many clips are on the timeline is a rule nobody could hold.
+    ok(p.chains.some((c) => c.endsWith('hflip[v0]')),
+       `your name is on the chain you put it on: ${p.chains.join(';')}`);
+    same(p.chains.filter((c) => c.endsWith('[v0]')).length, 1,
+         'and exactly one chain claims it — two would be “Label found twice”');
+    ok(p.chains.some((c) => /\[g\d+\]$/.test(c)),
+       `the derivation’s own label moved out of the way: ${p.chains.join(';')}`);
+    overlay.clear();
+}
+
 console.log('\na source node is not written to disk');
 {
     // There is still no project file, so the inputs themselves do not survive a
