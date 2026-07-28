@@ -784,7 +784,10 @@ bool Writer::writeVideo(const Rgba& canvas, int64_t index, std::string* err) {
     for (auto& out : outs_) {
         Out& o = *out;
         if (o.desc.kind != "video" || o.copied) continue;
-        if (av_frame_make_writable(o.vframe) < 0) return false;
+        if (av_frame_make_writable(o.vframe) < 0) {
+            *err = "cannot write to the encoder's frame";
+            return false;
+        }
 
         const uint8_t* src[4] = {canvas.data.data(), nullptr, nullptr, nullptr};
         const int srcStride[4] = {canvas.stride, 0, 0, 0};
@@ -837,7 +840,10 @@ bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) 
         const int maxOut = static_cast<int>(av_rescale_rnd(
             swr_get_delay(o.swr, o.enc->sample_rate) + frames,
             o.enc->sample_rate, settings_.audioSampleRate, AV_ROUND_UP));
-        if (av_frame_make_writable(o.aconv) < 0) return false;
+        if (av_frame_make_writable(o.aconv) < 0) {
+            *err = "cannot write to the resampler's frame";
+            return false;
+        }
         if (maxOut > o.aconv->nb_samples) {
             av_frame_unref(o.aconv);
             o.aconv->format = o.enc->sample_fmt;
@@ -848,7 +854,10 @@ bool Writer::writeAudio(const float* interleaved, int frames, std::string* err) 
             // decision taken separately and is how a number like this comes to
             // differ between two of the four places it is needed.
             o.aconv->nb_samples = maxOut + static_cast<int>(kSwrSlack);
-            if (av_frame_get_buffer(o.aconv, 0) < 0) return false;
+            if (av_frame_get_buffer(o.aconv, 0) < 0) {
+                *err = "out of memory resampling the sound";
+                return false;
+            }
         }
 
         const auto* in = reinterpret_cast<const uint8_t*>(interleaved);
@@ -990,23 +999,24 @@ int64_t Writer::bytesSoFar() const {
     return total;
 }
 
+Writer::Out::~Out() {
+    if (toEncoder) { sws_freeContext(toEncoder); toEncoder = nullptr; }
+    if (swr) swr_free(&swr);
+    if (fifo) { av_audio_fifo_free(fifo); fifo = nullptr; }
+    if (vframe) av_frame_free(&vframe);
+    if (aconv) av_frame_free(&aconv);
+    if (aframe) av_frame_free(&aframe);
+    if (bsf) av_bsf_free(&bsf);
+    if (bsfPkt) av_packet_free(&bsfPkt);
+    if (statsLog) { std::fclose(statsLog); statsLog = nullptr; }
+    // Detached before the context goes, because the buffer is this object's:
+    // `stats_in` is documented as caller-allocated and nothing should have to
+    // work out whether libavcodec would have freed it.
+    if (enc) { enc->stats_in = nullptr; avcodec_free_context(&enc); }
+    // `st` is the muxer's and goes with `oc_`.
+}
+
 void Writer::close() {
-    for (auto& out : outs_) {
-        Out& o = *out;
-        if (o.toEncoder) { sws_freeContext(o.toEncoder); o.toEncoder = nullptr; }
-        if (o.swr) swr_free(&o.swr);
-        if (o.fifo) { av_audio_fifo_free(o.fifo); o.fifo = nullptr; }
-        if (o.vframe) av_frame_free(&o.vframe);
-        if (o.aconv) av_frame_free(&o.aconv);
-        if (o.aframe) av_frame_free(&o.aframe);
-        if (o.bsf) av_bsf_free(&o.bsf);
-        if (o.bsfPkt) av_packet_free(&o.bsfPkt);
-        if (o.statsLog) { std::fclose(o.statsLog); o.statsLog = nullptr; }
-        // Detached before the context goes, because the buffer is this
-        // object's: `stats_in` is documented as caller-allocated and nothing
-        // should have to work out whether libavcodec would have freed it.
-        if (o.enc) { o.enc->stats_in = nullptr; avcodec_free_context(&o.enc); }
-    }
     outs_.clear();
     if (pkt_) av_packet_free(&pkt_);
     if (oc_) {
@@ -1196,7 +1206,11 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
         *err = std::string("cannot open the ") + codec->name + " encoder: " + avErr(rc);
         return false;
     }
-    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
+    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) {
+        *err = std::string("cannot describe the ") + codec->name +
+               " encoder to the muxer";
+        return false;
+    }
     o.st->time_base = o.enc->time_base;
     o.st->avg_frame_rate = fps;
     o.srcTimeBase = o.enc->time_base;
@@ -1267,7 +1281,11 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
         *err = std::string("cannot open the ") + codec->name + " encoder: " + avErr(rc);
         return false;
     }
-    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
+    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) {
+        *err = std::string("cannot describe the ") + codec->name +
+               " encoder to the muxer";
+        return false;
+    }
     o.st->time_base = o.enc->time_base;
     o.srcTimeBase = o.enc->time_base;
     if (!openBitstreamFilters(o, err)) return false;
@@ -1701,7 +1719,11 @@ bool Writer::openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err)
         *err = std::string("cannot open the ") + codec->name + " encoder: " + avErr(rc);
         return false;
     }
-    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) return false;
+    if (avcodec_parameters_from_context(o.st->codecpar, o.enc) < 0) {
+        *err = std::string("cannot describe the ") + codec->name +
+               " encoder to the muxer";
+        return false;
+    }
     o.st->time_base = o.enc->time_base;
     o.srcTimeBase = o.enc->time_base;
     // A megabyte, which is what ffmpeg's own muxer allocates for the same call:
@@ -1804,8 +1826,18 @@ bool Writer::drainFifo(Out& o, bool flushTail, std::string* err) {
     while (av_audio_fifo_size(o.fifo) >= o.frameSize ||
            (flushTail && av_audio_fifo_size(o.fifo) > 0)) {
         const int want = std::min(o.frameSize, av_audio_fifo_size(o.fifo));
-        if (av_frame_make_writable(o.aframe) < 0) return false;
-        if (av_audio_fifo_read(o.fifo, reinterpret_cast<void* const*>(o.aframe->data),
+        if (av_frame_make_writable(o.aframe) < 0) {
+            *err = "cannot write to the audio frame";
+            return false;
+        }
+        // `extended_data`, not `data`. `av_audio_fifo_read` writes one pointer
+        // per channel for a planar sample format and `AVFrame::data` is eight
+        // entries, so anything past 7.1 writes past the end of the array —
+        // which `writeAudio` above already gets right, so the file disagreed
+        // with itself. No encoder this build offers is reachable with more than
+        // eight channels today; whoever adds a surround picker would have found
+        // this the hard way.
+        if (av_audio_fifo_read(o.fifo, reinterpret_cast<void* const*>(o.aframe->extended_data),
                                want) < want) {
             *err = "audio buffer underrun";
             return false;

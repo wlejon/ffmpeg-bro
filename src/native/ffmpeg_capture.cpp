@@ -334,8 +334,15 @@ void runCapture(CaptureSettings s, std::shared_ptr<Device> dev) {
                 // one with nothing behind it to absorb the overrun.
                 samples.assign(static_cast<size_t>(out) * channels + kSwrSlack, 0.0f);
                 uint8_t* dst = reinterpret_cast<uint8_t*>(samples.data());
-                const int got = swr_convert(d.swr, &dst, out,
-                                            const_cast<const uint8_t**>(d.frame->data), have);
+                // `extended_data` rather than `data` for the reason
+                // `Writer::drainFifo` uses it: a planar format has one pointer
+                // per channel and `AVFrame::data` is eight of them, so a device
+                // handing back more than 7.1 planar would be read past the end
+                // of the array. Every other resampler in this binary already
+                // says `extended_data`; this was the one that did not.
+                const int got = swr_convert(
+                    d.swr, &dst, out,
+                    const_cast<const uint8_t**>(d.frame->extended_data), have);
                 if (got <= 0) continue;
 
                 int skip = 0;

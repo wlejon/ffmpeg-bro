@@ -29,6 +29,20 @@ extern "C" {
 #include <libavutil/log.h>
 }
 
+// NOMINMAX because windows.h's `min`/`max` macros eat every std::min in the
+// file below, with an error that says nothing about where they came from.
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
+// windef.h still defines `near` and `far` — sixteen-bit memory models, thirty
+// years on — and this file has a lambda called `near`.
+#undef near
+#undef far
+#endif
+
 #include <algorithm>
 #include <fstream>
 #include <chrono>
@@ -141,6 +155,22 @@ double brightestIn(const std::vector<uint8_t>& rgba, int w, int h,
     return best;
 }
 
+/// How much memory this process is holding, or 0 where nobody will say.
+///
+/// There is no way to ask libav how many contexts are open, and a leaked
+/// `AVCodecContext` is invisible to every other kind of check — so the one
+/// thing a test can do about it is watch the process. Zero means "not
+/// measurable here", and every caller treats that as a skip rather than as a
+/// pass, because a leak check that quietly stopped checking is worse than none.
+size_t residentBytes() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        return pmc.WorkingSetSize;
+#endif
+    return 0;
+}
+
 /// Run a render to completion and hand back how it went.
 ExportStatus render(const ExportSettings& s, const std::vector<ExportClip>& clips) {
     std::string err;
@@ -151,7 +181,17 @@ ExportStatus render(const ExportSettings& s, const std::vector<ExportClip>& clip
         return bad;
     }
     waitForExport();
-    return exportStatus();
+    const ExportStatus st = exportStatus();
+    // **A render that failed says why**, everywhere, and this is the one place
+    // that can hold the whole suite to it. Six paths in the writer used to
+    // `return false` without writing anything into `err`, and what a person got
+    // for one of those was a red bar with no sentence on it and an empty report
+    // drawer — `reportNote(AV_LOG_ERROR, "render", "")` commits nothing. Silent
+    // unless it is broken, because every render in this file goes through here
+    // and a PASS line per render would say nothing fifty times.
+    if (st.state == ExportStatus::State::Failed && st.error.empty())
+        check(false, "a failed render published a reason (this one published none)");
+    return st;
 }
 
 ExportSettings baseSettings(const std::string& out) {
@@ -1066,6 +1106,42 @@ int main(int argc, char* argv[]) {
             b = render(bad3, clipsA);
             checkf(b.state == ExportStatus::State::Failed,
                    "and a fourcc that is not four characters (%s)", b.error.c_str());
+
+            // **A refusal has to give back what it had already opened.** This
+            // one is refused in `describeStream`, which runs *after* the
+            // encoder is open — so by the time the tag is looked at there is a
+            // live libx264 context, a scaler, a frame and possibly a chain of
+            // bitstream filters, and the stream they belong to had not yet been
+            // put in the list `close()` walks. Every retry leaked another one,
+            // and this is two clicks away: the fourcc is a field on the Write
+            // stage and a person who typed five characters will fix them and
+            // press Render again.
+            //
+            // The ceiling comes from measuring both sides rather than from
+            // taste. Thirty-two refusals over this fixture on the machine this
+            // was written on: **87.6 MB with the leak and 1.8 MB without it**,
+            // and the baseline is taken after one has already run so the
+            // allocator is warm. 12 MB sits an order of magnitude clear of
+            // both. What a leaked encoder costs is a fact about the machine —
+            // x264 sizes its frame pool by the core count — so the numbers are
+            // printed, and a machine whose encoder is a quarter the size of
+            // this one still lands well the wrong side of the line.
+            {
+                const size_t settled = residentBytes();
+                bool same = true;
+                for (int i = 0; i < 32 && same; ++i)
+                    same = render(bad3, clipsA).state == ExportStatus::State::Failed;
+                check(same, "the refusal is the same every time");
+                const size_t after = residentBytes();
+                const double grewMb = double(after > settled ? after - settled : 0) / 1048576.0;
+                if (!settled)
+                    std::printf("  SKIP  whether they leak — this platform will not "
+                                "say how much memory the process is holding\n");
+                else
+                    checkf(grewMb < 12.0,
+                           "and thirty-two more of them do not grow the process "
+                           "(%.1f MB on top of %.1f MB)", grewMb, settled / 1048576.0);
+            }
 
             ExportSettings bad4 = baseSettings("out/export-streams-bad.mkv");
             bad4.endTime = bad4.startTime + 0.3;

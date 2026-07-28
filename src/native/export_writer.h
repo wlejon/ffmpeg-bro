@@ -284,6 +284,22 @@ private:
         // one place libavcodec still works that way — so the buffer is the
         // stream's, allocated once, rather than a megabyte per cue.
         std::vector<uint8_t> subBuf;
+
+        /// Everything above that libav owns, given back.
+        ///
+        /// **It is a destructor rather than a step in `close()` because a
+        /// stream that fails to open never reaches the list `close()` walks.**
+        /// The refusals that matter here happen *after* `avcodec_open2` has
+        /// succeeded — a bitstream chain that will not build, a fourcc that is
+        /// not four characters — so what was dropped on the floor was an open
+        /// encoder, its scaler, its frames and, on the hardware path, a
+        /// reference pinning a device's whole surface pool. Every retry leaked
+        /// another, and retrying is the obvious thing to do with a field you
+        /// have just been told is wrong.
+        ~Out();
+        Out() = default;
+        Out(const Out&) = delete;
+        Out& operator=(const Out&) = delete;
     };
 
     void close();

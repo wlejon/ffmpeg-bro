@@ -442,6 +442,27 @@ a list. Four things about it are load-bearing:
   `ui/export/warnings.js` says so before the render; `codecTags()` is what it
   asks.
 
+**A stream that fails to open still has to give back what it opened**, and that
+is why `Out` has a destructor rather than a step in `close()`. `close()` walks
+`outs_`, and a stream is only put in that list once every part of opening it has
+succeeded — so the refusals that happen *after* `avcodec_open2`, which is a
+bitstream chain that will not build and a fourcc that is not four characters,
+dropped an open encoder, its scaler, its frames and on the hardware path a
+reference pinning a device's whole surface pool. Thirty-two goes at the same
+refused render grew the process by 88 MB; with the destructor it is under two.
+The general shape is worth keeping: **a resource is owned by the object that
+holds it, not by the sweep that runs when things went well**, and a half-built
+object is exactly the case a sweep does not see.
+
+**And a render that fails says why.** Six paths in the writer returned false
+without writing `*err` — three of them `avcodec_parameters_from_context` on
+ordinary open paths — and an empty reason is worse than a wrong one: `runPass`
+publishes the empty string, `reportNote(AV_LOG_ERROR, "render", "")` commits
+nothing because the channel drops empty text, and what arrives is a Failed
+render with a blank message and an empty report drawer. `tests/export_test.cpp`'s
+`render()` helper now holds the whole suite to it, silently, since every render
+in that file goes through it.
+
 **The packet path is a stream that is never made.** `export_copy.*` is the whole
 of it: a `CopyStreams` opens one demuxer per input — however many streams are
 taken from it, because that is what `-i` means — and pumps packets into the
