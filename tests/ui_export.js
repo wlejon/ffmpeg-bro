@@ -286,6 +286,51 @@ screenshot('out/export-01-dialog.png');
 console.log('\nthe controls produce ffmpeg options');
 const S = A.exporter.currentSettings();
 
+// **The timeline's rate and the output's are two questions sharing one
+// fallback**, and the fallback was written out at eight points of use in two
+// different answers — 25 at the ruler, the timecode and a new clip, 30 at the
+// spine, the rate menu and the spec. Nothing was ever visibly wrong, because
+// `project.fps` is seeded at 25 and every clip falls back to 25 so the `|| 30`
+// arms were unreachable. This is the check that says they cannot come apart if
+// it ever is: one moment reading as two timecodes is the failure, and it would
+// be a probe reporting no rate away.
+{
+    const keptProject = A.project.fps;
+    const keptSetting = S.fps;
+    const keptAt = A.transport.t;
+    A.project.fps = 0;
+    S.fps = 0;
+    A.setPlayhead(Math.min(1.32, A.project.clips[0].length - 0.05), true);
+    A.exporter.redraw();
+    pump(120);
+
+    const spec0 = A.exporter.buildSpec();
+    const menu = Array.from(qq('[data-f="fps"] option'))[0];
+    same(spec0.fps, 25, 'a timeline with no rate of its own renders at one number');
+    ok(menu && menu.textContent.indexOf('25.000') >= 0,
+       `and the rate menu names the same one (${menu ? menu.textContent : 'no menu'})`);
+
+    // The transport's timecode is the reader that used to answer 25 while the
+    // three above answered 30. The moment is chosen so the two families cannot
+    // both be right about it, which is asserted rather than assumed — a
+    // separator that happened to coincide would hide the whole thing.
+    const at = A.transport.t;
+    const frac = at - Math.floor(at);
+    const framesAt = (rate) => Math.min(Math.floor(frac * rate), Math.ceil(rate) - 1);
+    ok(framesAt(25) !== framesAt(30),
+       `the playhead is somewhere the two old answers differ (${at.toFixed(3)} s: ` +
+       `${framesAt(25)} at 25, ${framesAt(30)} at 30)`);
+    const shown = el('tc-current').textContent;
+    same(Number(shown.split(':')[3]), framesAt(spec0.fps),
+         `and the timecode counts frames in the same rate the render does (${shown})`);
+
+    A.project.fps = keptProject;
+    S.fps = keptSetting;
+    A.setPlayhead(keptAt, true);
+    A.exporter.redraw();
+    pump(40);
+}
+
 S.videoCodec = 'libx264';
 S.rate = 'quality';
 S.quality = 20;

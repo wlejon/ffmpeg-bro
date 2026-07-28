@@ -12,7 +12,7 @@
 // and was — a segment that moved to the advanced column quietly stopped doing
 // anything, because the code that wired it looked only in the left one.
 
-import { project } from '../project.js';
+import { project, projectFps } from '../project.js';
 import { el, div, span, put, select, segmented, show,
          row, head } from '../dom.js';
 import { basename } from '../format.js';
@@ -705,7 +705,7 @@ function videoRows(codec, info, cont) {
 
     rows.push(row('Frame rate', select(
         { 'data-f': 'fps', on: { change: (e) => { settings.fps = Number(e.target.value) || 0; hooks.changed(); } } },
-        [{ id: 0, label: `Project (${(project.fps || 30).toFixed(3)})` },
+        [{ id: 0, label: `Project (${projectFps().toFixed(3)})` },
          ...[23.976, 24, 25, 29.97, 30, 50, 59.94, 60, 120].map((f) => ({ id: f, label: String(f) }))],
         settings.fps)));
 

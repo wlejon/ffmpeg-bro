@@ -25,6 +25,24 @@ export const project = {
     layout: 'stack',
 };
 
+/// The rate the *timeline* runs at, which is not the rate the render comes out
+/// at.
+///
+/// **Two genuinely different questions**, and they are deliberately not merged:
+/// `outputFps()` in `ui/export/state.js` is what the encoder is asked for, and
+/// this is what the ruler steps by, what a timecode counts frames in and what
+/// the spine's Compose card states. A render at 60 fps off a 25 fps timeline is
+/// an ordinary thing to ask for.
+///
+/// One home each, because the fallback was written out at eight points of use
+/// and had drifted into two answers — 25 at the ruler, the timecode and a new
+/// clip, 30 at the spine, the rate menu and the spec. Nothing was ever visibly
+/// wrong, and that is worth writing down rather than leaving as a fix: this
+/// object is seeded at 25 and `makeClip` falls back to 25, so `project.fps` is
+/// never zero and the `|| 30` arms were unreachable. What the one home buys is
+/// that they cannot come apart if it ever is.
+export function projectFps() { return project.fps || 25; }
+
 const listeners = [];
 
 /// Subscribe to any change to the model. Coarse on purpose: the redraws it

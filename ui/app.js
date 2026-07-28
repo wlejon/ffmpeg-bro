@@ -7,7 +7,7 @@
 // frame-accurate, why seeking is instant, and why several clips can sit on one
 // timeline without any of them being transcoded first.
 
-import { project, makeClip, addClip, removeClip, duration, clipsAt,
+import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
          nextClipAfter, sourceTime, resolveOverlaps, onChange, changed, select,
          selectMany, selectFollow, isSelected, splitClip, trackCount,
          applyInput, clipsOf } from './project.js';
@@ -911,8 +911,8 @@ function syncUI() {
     const d = duration();
 
     setIcon(btnPlay, transport.playing ? 'pause' : 'play');
-    tcCurrent.textContent = timecode(t, project.fps);
-    tcDuration.textContent = timecode(d, project.fps);
+    tcCurrent.textContent = timecode(t, projectFps());
+    tcDuration.textContent = timecode(d, projectFps());
 
     const f = d > 0 ? Math.max(0, Math.min(1, t / d)) : 0;
     const pct = (f * 100).toFixed(3) + '%';
@@ -1097,7 +1097,7 @@ function stageState(id) {
     if (id === 'compose') {
         if (!clips.length) return ['empty', ''];
         const v = trackCount();
-        return [`${project.width}×${project.height} · ${(project.fps || 30).toFixed(0)}p`,
+        return [`${project.width}×${project.height} · ${projectFps().toFixed(0)}p`,
                 `${v} V · ${clips.length} clip${clips.length === 1 ? '' : 's'} · ` +
                 clock(duration())];
     }

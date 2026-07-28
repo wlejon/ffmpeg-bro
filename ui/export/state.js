@@ -12,7 +12,7 @@
 // once. Six copies of a fallback chain is six chances for the summary, the
 // command, the warnings and the spec to describe different renders.
 
-import { project } from '../project.js';
+import { project, projectFps } from '../project.js';
 import { muxerInfo, extOf } from './capabilities.js';
 
 export const PREVIEW_LENGTHS = [1, 2, 3, 5, 10];
@@ -189,10 +189,15 @@ export function activeAudioCodec() {
     return settings.audioCodec || (muxerInfo(settings.container) || {}).audioCodec || '';
 }
 
-/// The rate the render runs at: what was asked for, or the project's, or the
-/// fallback every other part of this app also falls back to.
+/// The rate the render runs at: what was asked for, or the timeline's.
+///
+/// **Not the same question as `projectFps()`**, and the two are deliberately
+/// not merged: this is what the encoder is asked for and that is what the ruler
+/// steps by. A render at 60 fps off a 25 fps timeline is an ordinary thing to
+/// want. What they share is the fallback, which now has one home rather than
+/// eight points of use that had drifted into two answers.
 export function outputFps() {
-    return settings.fps || project.fps || 30;
+    return settings.fps || projectFps();
 }
 
 /// What a file written by the chosen muxer should be called. A reader for the

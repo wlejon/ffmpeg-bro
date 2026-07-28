@@ -10,7 +10,7 @@
 // The video lanes are built from the model rather than written in the markup,
 // because how many there are is a property of the edit.
 
-import { project, duration, moveClip, resolveOverlaps, changed, trackCount,
+import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
          isSelected, select, trimClip } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { el, put } from './dom.js';
@@ -45,7 +45,7 @@ function total() { return Math.max(duration(), 1); }
 /// Deepest useful zoom: a handful of frames across the lane. Past that the
 /// filmstrip is one picture and the ruler is noise.
 function minSpan() {
-    const fps = project.fps || 25;
+    const fps = projectFps();
     return Math.max(0.02, 4 / fps);
 }
 
