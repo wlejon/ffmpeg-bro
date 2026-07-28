@@ -1544,6 +1544,16 @@ about them:
   grows a path of its own.
 - `timeline.js` — ruler, dynamic V-lanes, one A1 waveform lane. Everything is drawn from
   the *visible window*, not the whole file, which is what makes zoom meaningful.
+  **A drag can rebuild the lanes underneath itself**, and that is not an edge case: the
+  spare top lane is what a clip is dragged into to restack it, and crossing into it is
+  what changes the track count and drops and rebuilds every row. Two things follow.
+  `tracked()` keeps **one** pair of `document` listeners for the whole timeline with the
+  live gesture in a module variable — a pair per call accumulated a set per rebuild,
+  firing dead handlers on every pointer move for the rest of the session, and the obvious
+  disposer-per-row fix would have ended the drag that removed the row. And the drag
+  measures `laneOf(entry.track)` on every event rather than the element it began on: a
+  detached element reports `left: 0`, so the clip jumped sideways by the track-head
+  gutter the instant it crossed and snapped to the wrong neighbours thereafter.
 - `analysis.js` + `analyze-worker.js` — filmstrip and waveform via `bro.media` (see
   `../bro/docs/video-api.js`). Both are full-file decodes, so they run in one worker with
   one queue and the lanes fill in behind a responsive UI.
@@ -1574,7 +1584,20 @@ about them:
   Consequences: anything in the frame loop that measures a panel has to ignore a
   measurement of zero (most of the window is `display:none` at any moment), and
   `shell.goTo` is the only thing that switches — `export.js` offers `prepare()` and
-  `canLeave()` and has no opinion about what is on screen. **`prepare()` runs for both
+  `canLeave()` and has no opinion about what is on screen.
+
+  **A zero here means "never laid out", not "hidden", and that is worth knowing
+  before writing a guard against one.** Measured: a `display:none` element that has
+  been through layout once keeps its box — `#viewer` is 1630 px wide from the
+  Sources stage, because `#st-compose` is the stage the application opens on — and
+  an element in a stage that has *never* been shown reports 0×0. So the reachable
+  case is the first visit to a panel, and it is reachable: going straight to Write
+  without ever having been on Encode drew the range strip against nothing, which
+  is what `paintStrip()` now waits out and `refitStrip()` asks again for. A guard
+  on `viewer.layout()` or on the A/B stage's fit would be guarding a state neither
+  can be in, and there is no point writing one.
+
+  **`prepare()` runs for both
   Encode and Write, so the half of it that reads the edit is gated on arriving from
   outside** (`arrive()`): stepping between the two stages is one visit, and re-running
   it moved the preview's sample point back to the playhead on the way back from setting
@@ -1657,7 +1680,13 @@ about them:
   sized to their own boxes: the clipped one's parent is the wipe window, and fitting to it
   would compare a picture against a squashed copy of itself. Because they are placed in
   pixels they do not follow a stage that resizes, which it now does — `chasePreview()`
-  refits when the measured stage changes.
+  refits when the measured stage changes. **And the stage is rebuilt only when what it
+  is showing changes**, keyed on the two paths, the mode and whether there is anything
+  to show: those two `<video>` elements are the decoders, `put()` throws them away, and
+  `prepare()` draws everything for Encode *and* for Write — so without it, walking over
+  to set a filename and back restarted both files from frame 0. Same rule
+  `drawPreviewStats()` follows on the measurement path. A busy stage is a progress bar
+  with a percentage on it and is redrawn every frame, which is what a null key says.
   **The muxer picker lives in `form.js`'s `outputRows()`, drawn into `#ex-dest` on the
   Write stage**, with the muxer's own option table in `#ex-format-opts` beside it — the
   same relationship the encoder's advanced column has to the settings form, and the same
@@ -2048,6 +2077,17 @@ about them:
   - **A lock that agrees has overridden nothing.** It is still a lock; it just
     has nothing to report yet, and marking the control anyway would badge every
     field anyone had ever touched.
+  - **A node that goes takes everything keyed by its id with it**, through one
+    `forget()`: the insert points that hung off its own pads, the card's width
+    and where it was dropped. Three places lose a node — `removeInsert`,
+    `retain` dropping a source whose input has been taken off the Sources stage,
+    and `restore` dropping an input node it will not put back — and each of them
+    used to remember a different subset of that. It is not merely a blob that
+    grows: `pins` and `sizes` are keyed by the id, the counter starts at one on
+    every run, and the ids dropped on read were not counted into it, so the next
+    filter spliced in arrived at a width and a position nobody gave it. A `u<n>`
+    key naming no record is dropped on read for the same reason — nothing else
+    in that file is shaped like one, every anchor carrying a `/` or a `:`.
 
   A split copies a clip's inserts and locks to both halves (`cloneClip`, called
   from `splitAtPlayhead`) — a cut should not change how either half looks — and
@@ -2380,6 +2420,20 @@ about them:
   `posNames`, which the derivation records because ffmpeg's option tables carry
   aliases as separate entries and the n-th option is not the n-th positional
   argument.
+
+  **Everything the panel keeps between draws is held by name**, because this
+  column is rebuilt whole on every derivation and a derivation is not only
+  something you asked for — a node preview finishing rebuilds the stage too. So
+  a node is a key, a wire is a key and a pad number, and **an insert point is an
+  id that is re-resolved against the derivation that has just run**: it is the
+  one kind of selection that can stop existing while it is open, and held as an
+  object the palette went on offering filters for a wire that was not there,
+  recording inserts against an anchor `applyOverlay` then skipped without a
+  word. It says the wire has gone instead. The field being typed into is kept
+  the same way — `card.js`'s `noteFocus`/`restoreFocus` one column over, keyed
+  on whichever `data-*` attribute the control was built with, standing down when
+  an edit has already recorded an intent. Values commit on `change`, so what is
+  half typed is not in the model and a rebuild from the model eats it.
 
   Cards are absolutely positioned divs over a `<canvas>` that draws only the
   wires — the pairing `timeline.js` already uses. Drawing the nodes into the

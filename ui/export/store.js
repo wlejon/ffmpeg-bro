@@ -69,6 +69,17 @@ export function restore() {
     }
     if (settings.videoCodec && !encoderInfo(settings.videoCodec)) settings.videoCodec = '';
     if (settings.audioCodec && !audioInfo(settings.audioCodec)) settings.audioCodec = '';
+    // The bags, shape-checked for the same reason the container and the codecs
+    // above are: what is in localStorage was written by some earlier version of
+    // this application and is not a promise. A `metadata` that comes back
+    // `null` reaches `Object.keys()` on the Write stage and takes the whole
+    // stage down at boot, where nothing on the screen says which key did it.
+    // Nothing writes those shapes today; this is the repair, not a report of
+    // one.
+    for (const k of ['metadata', 'extraVideo', 'extraAudio', 'extraFormat'])
+        if (!settings[k] || typeof settings[k] !== 'object' || Array.isArray(settings[k]))
+            settings[k] = {};
+    if (!Array.isArray(settings.destinations)) settings.destinations = [];
     // A stored blob outlives the shape it was stored in, and a stream row with
     // a kind this build cannot write would reach render.start and be refused
     // there — on the far side of a stage where nothing looks wrong.
