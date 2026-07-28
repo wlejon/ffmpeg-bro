@@ -13,7 +13,7 @@
 //
 // **The second thing this file holds is the cost, in a sentence, where the
 // choice is made.** ffmpeg-bro's culture is to measure, and the measurement
-// (tests/hardware_test.cpp, numbers in README) says something that most
+// (tests/hardware_test.cpp; the tables are in docs/manual.md) says something that most
 // software with a "use hardware acceleration" checkbox does not say: on this
 // hardware a hardware *decode* is a loss, several times over, and the readback
 // everybody blames is 3–4% of it. The win is entirely the encoder. A control
@@ -150,14 +150,14 @@ export function deviceForRender(graphText, inputList) {
 /// control that is about to be used.
 ///
 /// **This is the whole reason the module has an opinion.** The measurement is
-/// in README and it is unambiguous: decoding on the card is slower here than
+/// in docs/manual.md and it is unambiguous: decoding on the card is slower here than
 /// libavcodec threaded across every core, and it is slower whether or not the
 /// picture comes back down. A checkbox that said nothing would be read as an
 /// optimisation.
 export const decodeCost =
     'Measured slower here than the CPU — libavcodec decodes threaded across ' +
     'every core, and one NVDEC stream pulled a frame at a time is several ' +
-    'times that. The readback is not the reason; the decode is. See README.';
+    'times that. The readback is not the reason; the decode is.';
 
 /// And what it will do with a hardware encode, which is the opposite answer.
 export const encodeCost =

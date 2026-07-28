@@ -156,8 +156,8 @@ export function inPointNote(row) {
 /// name with the row still on the screen to be flipped to `convert`.
 ///
 /// `span` is the in/out point every row is cut at, and every caller passes null.
-/// It is the seam for a copy that follows the timeline, which README lists as
-/// not built: the renderer takes `copyFrom`/`copyTo` per row and nothing here
+/// It is the seam for a copy that follows the timeline, which is not built
+/// yet: the renderer takes `copyFrom`/`copyTo` per row and nothing here
 /// yet knows how to turn a trimmed clip into them.
 export function rewrapRows(inputIndex, newId, span) {
     const input = inputs[inputIndex];

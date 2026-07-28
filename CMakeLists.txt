@@ -25,8 +25,8 @@ add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────
 #
-# Linking these is what makes this binary GPL. See README.md — it is the
-# reason this application lives outside bro's MIT tree.
+# Linking these is what makes this binary GPL, and the reason this
+# application lives outside bro's MIT tree.
 find_package(FFMPEG REQUIRED)
 
 # The backend + its JS surface, as a library so the app and its tests share
@@ -39,6 +39,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_bindings.cpp
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_capture.cpp
+    src/native/capture_graph.cpp
     src/native/ffmpeg_export.cpp
     src/native/ffmpeg_hardware.cpp
     src/native/ffmpeg_input.cpp

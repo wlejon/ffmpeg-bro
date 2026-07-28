@@ -3677,7 +3677,7 @@ int main(int argc, char* argv[]) {
         const std::filesystem::path ass = fixtures / "cues.ass";
         // **A skip, not a failure.** Every suite here runs standalone against
         // any real file — that is what the standalone command lines in
-        // CLAUDE.md and README are for — and a real file is not sitting beside
+        // CLAUDE.md and docs/manual.md are for — and a real file is not sitting beside
         // a `cues.srt` this repository generated. Under `ctest` the fixtures
         // are always there and the whole section runs; pointed at somebody's
         // footage it says what it is not doing rather than failing at it.
