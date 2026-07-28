@@ -396,7 +396,13 @@ bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openE
 // destinations of a `tee`. Counted as libavformat opens them, through
 // `AVFormatContext::io_open`, so it needs to know nothing about how any muxer
 // numbers its files — and a file opened twice is one file, so a playlist
-// rewritten every segment is not counted forty times.
+// rewritten every segment is not counted forty times. Nor is a *working name*
+// the muxer renames onto the destination: hlsenc writes its playlist through
+// `out/hls.m3u8.tmp`, so the one file that is not a piece arrives spelt
+// differently. That is resolved by asking the filesystem which of the names
+// still exists once everything is closed, rather than by knowing about
+// suffixes — the ordinary pieces are all still on disk and the working name is
+// not.
 bro.ffmpeg.render.cancel()
 
 // A render that is more than one render. Two things in ffmpeg need a second

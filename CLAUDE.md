@@ -882,6 +882,18 @@ things about how that is handled are load-bearing:
   sent for a URL** — the io_close hook stats a local path after the close (which is the
   only correct answer for an mp4 that `+faststart` rewrote) and takes `avio_tell` for
   anything else.
+  **A working name a muxer renames onto the destination is not a piece**, and one muxer
+  makes that a real case: hlsenc writes its playlist through `out/hls.m3u8.tmp` and
+  renames it, so the one URL the exclusion is *for* reaches `io_open` spelt differently
+  and was counted as an extra segment. `Writer::resolveRenames()` folds it back in
+  `finish()`, after every close and therefore after every rename, by asking the
+  filesystem rather than knowing which muxers use which suffix: a local piece that is
+  gone, where `path` is there and nothing in the list claims to have written it, is the
+  pair of facts a rename leaves behind, and a segment, a chunk, a picture and a tee
+  slave are all still on disk. Exactly one missing, or none — several missing is
+  `hls_flags delete_segments` doing what it was asked, and guessing would be worse than
+  leaving the count one high. `Writer::pieces()` is how a caller answers "which files",
+  which is the only way to check a count without re-deriving somebody's numbering.
 - **`formatOptions` is one bag and two objects, split in `open()`.** At the reading end
   libavformat hands a demuxer's leftovers down to AVIO, and the Sources stage says so.
   Writing cannot work that way because the order is reversed — `avio_open2` runs *before*
