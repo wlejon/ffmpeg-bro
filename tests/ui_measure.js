@@ -231,6 +231,53 @@ if (crop.ok && crop.verb) {
     ok(!!crop.reason && crop.reason.length > 20, 'and the reason is a sentence');
 }
 
+// ── and stops being offered when it stops being true ───────────────────────
+//
+// A finding is about the render it was measured during. Move a clip and the
+// numbers stay on the screen describing an edit that no longer exists — four
+// plausible rectangles about a picture nobody is looking at any more. This
+// file's own rule is that a measurement acted on when it should not be is
+// worse than one that could not be acted on at all, because it looks like it
+// worked, so the offer goes and the sentence stays.
+
+console.log('\na finding stops being offered when the edit moves under it');
+{
+    // The section above applied a crop and then took it off again, and applying
+    // one is itself a change to the graph — so the drawer is redrawn here to
+    // read the state as it now is rather than as it was mid-experiment. That
+    // the apply marked its own measurement stale is the mechanism working:
+    // a `cropdetect` result applied is a graph with a `crop` in it, and the
+    // bars it found are no longer there to find.
+    A.exporter.redraw();
+    report.draw();
+    pump(120);
+    ok(!q('.rep-stale'), 'nothing is marked stale while the edit is the one that was measured');
+
+    const clip = A.project.clips[0];
+    const wasStart = clip.start;
+    clip.start = wasStart + 1.5;
+    A.exporter.redraw();
+    report.draw();
+    pump(120);
+
+    ok(!!q('.rep-stale'), 'moving a clip marks the report as measured before the last edit');
+    ok(!q('[data-apply="cropdetect"]'),
+       'and the offer to act on it is withdrawn rather than left looking current');
+    const said = Array.from(qq('.rep-find-no')).map((n) => n.textContent).join(' | ');
+    ok(/edit has changed/.test(said),
+       `with the reason on the card (${said.slice(0, 120)})`);
+    ok(!!q('.rep-find-raw'),
+       'while the line it was read out of stays, because it is still true of that render');
+
+    // Put it back: the same edit is the same subject, and a marker that did not
+    // clear would be one nobody could ever act on.
+    clip.start = wasStart;
+    A.exporter.redraw();
+    report.draw();
+    pump(120);
+    ok(!q('.rep-stale'), 'and putting the clip back makes it current again');
+}
+
 // ── a refusal, rather than a silent rewrite ────────────────────────────────
 //
 // Every one of these is a pure reading of what the channel holds, so the

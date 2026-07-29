@@ -1075,6 +1075,12 @@ report.initReport({
     // export workspace owns the spec and the one job slot, so it is asked
     // rather than a second spec being built here.
     measureNow: () => exporter.startMeasurement(),
+    // What the edit *is*, right now, in the one form a render's own subject was
+    // recorded in. Asked of the export workspace for the reason `measureNow` is
+    // — it owns the spec — and asked at draw time rather than pushed on every
+    // change, because the drawer is shut most of the time and nothing should be
+    // rebuilding a spec behind it.
+    subject: () => exporter.currentSubject(),
     // A filter put on the graph, or a value applied to one, is a change to the
     // edit in exactly the way dragging a clip is: the graph redraws, the
     // command bar reprints, and the spine re-counts.

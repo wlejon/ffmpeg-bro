@@ -27,7 +27,9 @@ import { bytes, clock } from './format.js';
 import { settings, preview, currentJob, setJob, onJobChange, isRendering,
          activeVideoCodec, activeAudioCodec, outputFps } from './export/state.js';
 import { videoOptions } from './export/options.js';
-import { buildSpec, previewSpec, range, defaultPath, specSources } from './export/spec.js';
+import { buildSpec, previewSpec, range, defaultPath, specSources,
+         renderSubject } from './export/spec.js';
+import { noteRender } from './report.js';
 import { intents, activeIntent, applyIntent, clampToEncoder } from './export/presets.js';
 import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
@@ -263,6 +265,11 @@ function launch(spec, kind) {
     let job = 0;
     try {
         job = Number(bro.ffmpeg.render.start(spec)) || 0;
+        // What this render is of, taken now — see `renderSubject()`. It has to
+        // be recorded at the start and not when the first message arrives: the
+        // channel says which render spoke and never what it was shown, and a
+        // subject read later is a subject read after the edit could have moved.
+        noteRender(job, renderSubject(spec));
         setJob(kind);
         lastPoll = bro.ffmpeg.render.poll();
     } catch (e) {
@@ -317,7 +324,11 @@ export function startMeasurement() {
     spec.passes = [];
     spec.faststart = false;
     try {
-        bro.ffmpeg.render.start(spec);
+        // The subject is taken from the spec *before* the output was stripped
+        // off it, which is the same object either way: `renderSubject()` reads
+        // only what the filters were shown, and none of the six lines above
+        // touches that half.
+        noteRender(Number(bro.ffmpeg.render.start(spec)) || 0, renderSubject(spec));
     } catch (e) {
         return String(e.message || e);
     }
@@ -337,7 +348,7 @@ function begin() {
     remember();
 
     try {
-        bro.ffmpeg.render.start(spec);
+        noteRender(Number(bro.ffmpeg.render.start(spec)) || 0, renderSubject(spec));
     } catch (e) {
         put(el_.progress, () => div('ex-failed', String(e.message || e)));
         showPanel('progress');
@@ -423,6 +434,11 @@ export function lastStatus() { return lastPoll; }
 
 /// For tests: the settings block, and what the encoder is being told.
 export function currentSettings() { return settings; }
+
+/// The edit as a render's own subject would record it — what the Report drawer
+/// compares against to know whether what it is showing still describes what is
+/// on screen. One place builds a spec, so one place answers this.
+export function currentSubject() { return renderSubject(buildSpec()); }
 
 /// The list this application writes when nobody has said otherwise — one video
 /// stream from the composite and one audio stream from the mix. On the surface

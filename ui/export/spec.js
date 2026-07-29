@@ -399,6 +399,56 @@ export function currentGraph() {
     return cache.graph;
 }
 
+/// What a render was *of* — the pictures and samples that went through it — as
+/// one string that can be compared with a later one.
+///
+/// **The subject of a measurement, and the reason it can go stale.** A filter
+/// that answers a question answers it about a particular render: `cropdetect`
+/// found those black bars in the picture it was shown, and `ebur128` measured
+/// the mix it was handed. Move a clip afterwards and the numbers stay on the
+/// screen describing an edit that no longer exists, which is the one failure
+/// this application's whole argument is against — a number that looks like it
+/// worked.
+///
+/// **Derived from the spec rather than from a list of what counts as an edit.**
+/// A hand-written list of fields would have to be extended by whoever adds the
+/// next kind of edit, and the failure of forgetting is silent: a measurement
+/// that goes on looking current. So this reads the spec, which is already the
+/// one description everything downstream agrees on. Between the two paths that
+/// covers everything either of them sees — `filterGraph` is the printed chain,
+/// so on the libavfilter path the trims, the scales and the overlays are all in
+/// that one string, and on the compositor path `clips` carries the same facts.
+///
+/// **What is deliberately left out is the output.** The container, the codecs,
+/// the bitrate, the stream list and the file's name change how the result is
+/// written and not what the filters were shown, so folding them in would mark
+/// an hour-old loudness measurement stale because somebody typed a title. The
+/// exception people will reach for is `psnr`/`ssim` in the A/B comparison,
+/// which genuinely is about an encoder — and it is not measured through this
+/// path at all: it renders both halves itself and reports them together.
+/// **Two fields and not one string**, because "what changed" decides the
+/// sentence. The A/B comparison and the node previews render the same edit over
+/// a two-second window of it, so a single blob would come back different the
+/// moment one ran and report "the edit has changed" about an edit nobody
+/// touched. The window is a real difference — a `cropdetect` from two seconds
+/// in the middle is not a measurement of the whole range, and offering it as
+/// one is the failure this exists to stop — so it is kept and named separately
+/// rather than dropped to make the comparison quiet.
+export function renderSubject(spec) {
+    const s = spec || currentSpec();
+    return {
+        edit: JSON.stringify({
+            inputs: s.inputs,
+            clips: s.clips,
+            graph: s.filterGraph || '',
+            graphInputs: s.filterInputs || null,
+            width: s.width, height: s.height, fps: s.fps,
+        }),
+        from: s.start,
+        to: s.end,
+    };
+}
+
 /// A render that is about the *picture*, not about the output file: the A/B
 /// comparison on the Encode stage, and the node previews on the Graph stage.
 ///

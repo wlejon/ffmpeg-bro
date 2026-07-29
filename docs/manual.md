@@ -1662,6 +1662,33 @@ normalising to a number that is going to change is worse than not normalising.
 A picture that reaches every edge of the frame is offered no crop and says why,
 which is an answer rather than a missing button.
 
+**And a finding is refused once it stops describing what is on screen.** A
+measurement is about the render it was taken during: move a clip, wire a filter,
+change the canvas, and four plausible numbers go on sitting there about a
+picture nobody is looking at any more, which is the same failure as a
+`cropdetect` that had not settled and is harder to notice. So each render
+records what it was *of* — the inputs, the clips, the printed filter chain, the
+canvas and the range — and the drawer compares. When they differ the bar says
+`measured before the last edit`, the offer is withdrawn, and the sentence takes
+its place; the raw line it was read out of stays, because it is still true about
+the render it came from. `Measure now` is one press away.
+
+What counts as a difference is **derived from the spec rather than listed**. A
+hand-written list of fields would have to be extended by whoever adds the next
+kind of edit and the failure of forgetting is silent — a finding that goes on
+looking current. What is deliberately outside it is the *output*: the container,
+the codecs, the bitrate and the file's name change how a result is written and
+not what the filters were shown, so typing a title does not invalidate an hour's
+loudness measurement. Applying a `cropdetect` result marks its own measurement
+stale, which is not a quirk: the graph now has a `crop` in it and the bars it
+found are no longer there to find.
+
+A window that moved is told apart from an edit that moved, and said differently.
+The A/B comparison and the node previews render two seconds out of the middle of
+the range, which is what they are for — so their findings are reported as being
+about *part of it*, naming both spans, rather than as somebody having changed
+something.
+
 ### What the settings cost, as a number
 
 The A/B stage renders the same seconds twice, at the chosen settings and
@@ -2291,10 +2318,11 @@ Honest list of what does not work:
   passes *are* reachable, by a different route: `ebur128` measures and the
   Report drawer offers `loudnorm` told what it found, which is one render and a
   decision rather than two renders.
-- **A measurement that follows the edit.** What a filter found is about the
-  render it was measured during. Move a clip and the numbers stay, describing an
-  edit that no longer exists — nothing marks them stale, and the only thing that
-  says so is the timestamp on the render they came from.
+- **A measurement that re-runs itself.** A finding that has stopped describing
+  the edit now says so and stops being offered, but nothing measures again on
+  its own — `Measure now` is a press. Doing it automatically would mean deciding
+  when a render is cheap enough to spend without being asked, which is a
+  question about somebody's machine and not about this code.
 - **Measuring part of a graph.** `Measure now` runs the whole graph over the
   whole range. Measuring one node's output means putting the filter at that
   node's point, which works, and there is no equivalent of the Graph stage's

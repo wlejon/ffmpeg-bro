@@ -69,6 +69,12 @@ const state = {
     // When each render started talking, so a message can be timed against its
     // own render rather than against how long the application has been open.
     jobStart: new Map(),
+    // What each render was *of*, taken at the moment it started — see
+    // `renderSubject()`. A finding is about the pictures its render was shown,
+    // so this is what says whether it still describes the edit on screen.
+    // Keyed by job for the reason `jobStart` is: several renders' findings are
+    // in the channel at once and only one of them is the current subject.
+    jobSubject: new Map(),
 };
 
 let refs = {};
@@ -228,6 +234,7 @@ export function clearReport() {
     state.messages.length = 0;
     state.series.clear();
     state.jobStart.clear();
+    state.jobSubject.clear();
     state.dropped.log = state.dropped.meta = state.dropped.points = 0;
     state.lastJob = 0;
     draw();
@@ -239,6 +246,55 @@ export function clearReport() {
 /// anything. Zero means nothing has rendered and the channel is only carrying
 /// what probing and playback had to say.
 function subject() { return state.job || state.lastJob; }
+
+/// What a render was of, recorded at the moment it started.
+///
+/// **At start rather than when its first message arrives**, which is the same
+/// distinction the job number itself needs: the channel says which render spoke
+/// and nothing in it says what that render was looking at, and a subject taken
+/// from the edit when a record turns up would be taken after somebody could
+/// already have moved a clip.
+export function noteRender(job, what) {
+    if (!job) return;
+    state.jobSubject.set(job, what);
+    // The bound the other maps have, for the reason they have it: a session
+    // that renders four hundred previews should not grow a map per render.
+    if (state.jobSubject.size > 64) {
+        const oldest = state.jobSubject.keys().next().value;
+        state.jobSubject.delete(oldest);
+    }
+}
+
+/// Does what is on screen still describe the edit on screen?
+///
+/// Three answers and they are not two: `''` is "yes", a sentence is "no", and
+/// `''` is *also* what an unknown subject gives — a render this did not see
+/// start, or a channel carrying nothing but playback chatter. Guessing "stale"
+/// from an absence would put a warning on every finding after a reload, which
+/// teaches people to ignore the warning.
+///
+/// **The sentence names what actually differs**, because the two differences
+/// are not the same problem and only one of them is surprising. An edit that
+/// moved makes the numbers describe a render that no longer exists. A window
+/// that moved is the A/B comparison and the node previews doing what they are
+/// for — measuring two seconds out of the middle — and the honest thing to say
+/// about their findings is that they are about those two seconds, not that
+/// somebody changed something.
+function stale() {
+    const job = subject();
+    if (!job || !hooks.subject) return '';
+    const was = state.jobSubject.get(job);
+    if (!was) return '';
+    const now = hooks.subject();
+    if (was.edit !== now.edit)
+        return 'the edit has changed since this was measured, so these numbers are about a ' +
+               'render that no longer exists';
+    if (Math.abs(was.from - now.from) > 0.001 || Math.abs(was.to - now.to) > 0.001)
+        return `this was measured over ${was.from.toFixed(2)}–${was.to.toFixed(2)} s and the ` +
+               `render is now ${now.from.toFixed(2)}–${now.to.toFixed(2)} s, so these numbers ` +
+               'are about part of it';
+    return '';
+}
 
 function visibleMessages() {
     const job = subject();
@@ -293,8 +349,13 @@ export function draw() {
     if (!refs.head) return;
     dirty = false;
     const [text, n] = headline();
+    // On the bar rather than only inside the drawer: the drawer is shut most of
+    // the time, and "these numbers are about a render that no longer exists" is
+    // exactly the thing somebody has to know *before* going looking for them.
+    const old = stale();
     put(refs.head, () => [
         span(text, 'rep-say'),
+        old ? span('measured before the last edit', 'rep-stale') : null,
         state.dropped.log || state.dropped.meta
             ? span(`${state.dropped.log + state.dropped.meta} dropped`, 'dim rep-dropped')
             : null,
@@ -398,14 +459,30 @@ function findingCard(f) {
         // failure, so it is said in the same voice rather than as a warning.
         body.push(div('dim rep-find-no', f.reason));
     } else if (f.verb) {
-        body.push(el('button', {
-            cls: 'tiny primary', 'data-apply': f.id, title: f.verb.hint,
-            text: f.verb.label,
-            on: { click: () => { f.verb.apply(hooks); if (hooks.changed) hooks.changed(); draw(); } },
-        }));
-        body.push(span(f.verb.hint, 'dim rep-find-hint'));
+        // **A stale measurement is refused, not labelled.** This file's own
+        // rule is that a measurement acted on when it should not be is worse
+        // than one that could not be acted on at all, because it looks like it
+        // worked — and a `cropdetect` rectangle from before a clip was replaced
+        // is exactly that: four plausible numbers about a picture nobody is
+        // looking at any more. So the button goes and the sentence stays, with
+        // the raw line still on the card, because what it found is still true
+        // about the render it found it in. Measuring again is one press.
+        const old = stale();
+        if (old) body.push(div('rep-find-no', `${old} — measure again to act on it`));
+        else {
+            body.push(el('button', {
+                cls: 'tiny primary', 'data-apply': f.id, title: f.verb.hint,
+                text: f.verb.label,
+                on: { click: () => {
+                    f.verb.apply(hooks);
+                    if (hooks.changed) hooks.changed();
+                    draw();
+                } },
+            }));
+            body.push(span(f.verb.hint, 'dim rep-find-hint'));
+        }
     }
-    return div('rep-find' + (f.ok ? '' : ' rep-find-refused'),
+    return div('rep-find' + (f.ok && !stale() ? '' : ' rep-find-refused'),
                [head, ...body]);
 }
 

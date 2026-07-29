@@ -1561,6 +1561,17 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
 .rep.warn .rep-toggle { color: var(--accent); }
 .rep.bad  .rep-toggle { color: var(--bad); }
 .rep-dropped { font-size: var(--fs-xs); }
+/* Beside the headline rather than colouring it: the bar's colour already means
+   "this render had warnings", and a measurement being about an earlier edit is
+   a different claim that must not be read as that one. */
+.rep-stale {
+    font-size: var(--fs-xs);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0 4px;
+    white-space: nowrap;
+}
 
 .rep-body {
     border-top: 1px solid var(--line);
