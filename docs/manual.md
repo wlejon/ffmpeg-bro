@@ -147,6 +147,34 @@ what it sees: each input as `in0`, `in1`, … and whatever the graph makes as `v
 Every picture on the stage is a pad of that one session, and three pictures of two
 cameras costs two opens.
 
+**And what the sound is doing, which is the half of a composition that cannot be
+seen.** Every input with sound gets a meter, named `in0:a` the way ffmpeg names that
+stream, and so does the graph's mix if it has one. Whether a level is right is the one
+thing about a take that cannot be fixed afterwards — a badly framed picture is still a
+picture; sound recorded ten decibels into the limiter is gone — so it is the reading
+worth having before you commit, and until now the sound of a session was drained and
+dropped, which left a capture with a microphone in it saying nothing at all about the
+microphone.
+
+Three readings, because they are three questions. The **bar** is what it is doing now,
+falling about 20 dB a second so a transient is readable rather than a flicker. The
+**mark** is what it just did, falling five times slower. The **number** is the loudest
+it has been since you last cleared it, which is the one somebody setting a gain wants
+and the only one of the three that is a measurement rather than a drawing. The **over**
+light latches when a pad has gone past full scale; clicking it forgets both latches at
+once, because they are the same question at two resolutions.
+
+It is drawn on the same scale as A1 — see [The timeline](#the-timeline)
+— from -60 dBFS to +6, with a line where full scale is. Somebody looking at one and
+then the other is comparing them, and two scales disagreeing by a decibel would make
+that comparison a quiet lie.
+
+**This is not monitoring, and that distinction is why it exists.** Nothing here makes
+a sound. Playing the mix asks questions this does not — whose speakers, and what
+happens when the microphone can hear them — and none of them has to be answered to say
+how loud something is. A sound pad publishes a level and no frames, so there is
+nothing to point a `<video>` at even if one wanted to.
+
 A recording still opens its own devices, and the session is torn down first. That is
 deliberate rather than a limitation: "there is no camera called that" is a refusal
 that belongs to the call that asked for the recording, and a recording that inherited
@@ -2241,6 +2269,21 @@ The session behind it is asked directly too — three pads over two `-i`s, two o
 devices — which is the assertion that one open per device is what is actually
 happening rather than what is intended.
 
+The **meters** are checked against arithmetic rather than against a file. `aevalsrc`
+puts the amplitude in the expression, so a sine at 0.5 must read exactly `-6.0` dBFS
+on the number, put its bar at the RMS — which for a sine is peak over root two — and
+its mark 3 dB above that; halving it must read `-12.0`, because a halving is 6.02 dB
+wherever on the scale it lands. The bar is sampled at its *ceiling* over a moment
+rather than once, since it falls between blocks of sound on purpose and one sample of
+a falling bar has a tick count in it — and it is bounded tightly above and loosely
+below, which is the shape of that claim: a falling bar can never be higher than the
+level it was last driven to, so anything over is a real disagreement, while under it
+can only mean the sample landed on a tick that had not heard anything yet. Then 1.5,
+which is a source past full scale:
+the light latches, the bar changes colour, the number goes above zero rather than
+pinning to it, one click forgets both latches, and both fill again from what is
+actually arriving.
+
 Then the states either side of a graph that works. Widening the `hstack` to three
 inputs leaves a pad nothing arrives at, and that is a *refusal* — the button goes
 dead, the stage names the empty pad in the Graph stage's own words, and the command
@@ -2512,12 +2555,13 @@ Honest list of what does not work:
   watched and recorded. Live *through* the edit — a camera composited with a
   title and streamed out — is a different thing again and needs the render loop
   to run on the wall clock.
-- **Hearing a recording before you commit to it.** The composition is shown; the
-  mix is not. The graph's sound pads are drained like every other, but nothing
-  is played from them, because that is *monitoring* and monitoring asks
-  questions a preview does not — whose speakers, and what happens when the
-  microphone can hear them. The levels a session is running at are therefore
-  not visible either, which is the part worth having first.
+- **Hearing a recording before you commit to it.** The levels are now shown —
+  see [Capture](#capture) — and hearing it is still not. Nothing on this stage
+  makes a sound, because that is *monitoring* and monitoring asks questions a
+  meter does not: whose speakers, and what happens when the microphone can hear
+  them. A sound pad publishes a level and no frames, so playing one would mean
+  the tap carrying audio as well, an output device chosen somewhere, and an
+  answer to feedback — three decisions, none of which the meter needed.
 - **More than one file out of one recording.** A recording writes one muxer, so it
   maps one picture and one sound. The graph can end in half a dozen pads and the
   Write stage can feed a stream from each of them, but that is a render's stream

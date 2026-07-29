@@ -14,6 +14,7 @@ import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trac
          isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
          hasPicture } from './project.js';
 import { rulerLabel, clock } from './format.js';
+import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
@@ -297,47 +298,6 @@ function columnsOf(clip, w) {
     };
     return { l, r, n, p, bucketAt };
 }
-
-/// The scale A1 is drawn on: **decibels relative to full scale**, floor to
-/// ceiling.
-///
-/// Amplitude is the wrong scale to judge sound by eye, and it was the scale
-/// here. Hearing is roughly logarithmic, so a linear lane spends half its
-/// height on the top 6 dB and crushes everything from a quiet dialogue line
-/// down to silence into the last few pixels — where all of the decisions
-/// actually are. On this scale a halving of amplitude is the same distance
-/// wherever it happens.
-///
-/// **The ceiling is above 0 dBFS on purpose.** The envelope is a sum, so a mix
-/// can exceed full scale, and that is the single most useful thing A1 can tell
-/// anybody. Clamping at 1.0 drew an over as exactly full height — identical to
-/// a peak that just touches, and therefore invisible. `DB_CEIL` of +6 gives an
-/// over somewhere to go and puts the 0 dBFS line about a tenth of the way down
-/// from the top, which is where a meter puts it.
-///
-/// The floor is -60 rather than lower because below it there is nothing to
-/// judge: a bucket at -70 dBFS and one at -90 are both "silent" to the person
-/// looking, and drawing the difference would spend a third of the lane on it.
-export const DB_FLOOR = -60;
-export const DB_CEIL = 6;
-
-/// Amplitude → how far off the centre line to draw it, as a fraction of half
-/// the lane. 0 at the floor and below, 1 at the ceiling and above.
-///
-/// Exported because the drawing cannot be checked and this can: the values a
-/// test pins are the ones the eye is being asked to read off.
-export function dbHeight(amp) {
-    const a = Math.abs(amp);
-    if (!(a > 0)) return 0;
-    const db = 20 * Math.log10(a);
-    if (db <= DB_FLOOR) return 0;
-    if (db >= DB_CEIL) return 1;
-    return (db - DB_FLOOR) / (DB_CEIL - DB_FLOOR);
-}
-
-/// Where full scale falls on that lane — the height the clipping line is drawn
-/// at, and the height a column has to beat to be over.
-export const ZERO_DBFS = dbHeight(1);
 
 /// The mix, one column of the lane at a time.
 ///

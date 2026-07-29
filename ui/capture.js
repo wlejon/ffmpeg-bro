@@ -126,6 +126,7 @@
 
 import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename, shellArg } from './format.js';
+import { dbHeight, dbLabel, ZERO_DBFS } from './levels.js';
 import { optionColumn } from './opttable.js';
 import { qualityRange } from './export/capabilities.js';
 import { schemeOf, protocolLinked } from './export/destination.js';
@@ -699,6 +700,12 @@ function openSession() {
 function closeSession() {
     if (session.id) { try { bro.ffmpeg.live.close(session.id); } catch (e) { /* gone */ } }
     session = { id: 0, pads: [], key: '' };
+    // The meters belong to the session that was running: a bar left standing at
+    // -12 while nothing is open is a reading of a device that has been given
+    // back. `syncMeters` rebuilds from the next session's pads.
+    meterKey = '';
+    meters.clear();
+    if (refs.meters) put(refs.meters, () => []);
 }
 
 /// The pads the session is publishing, re-asked each time because a pad's size
@@ -790,6 +797,149 @@ function syncComposite() {
 
 let composite = null;
 let compKey = '';
+
+// ── the levels ─────────────────────────────────────────────────────────────
+//
+// **The half of a composition that cannot be seen.** The picture a session
+// makes has been on this stage since the graph's pad was published; its sound
+// was drained and dropped, so a capture with a microphone in it said nothing at
+// all about the microphone. Whether a level is right is the one question about
+// a take that cannot be answered afterwards — a picture that was framed badly
+// is a picture, sound recorded ten decibels into the limiter is gone — so it is
+// the reading worth having before you commit and it is what these are.
+//
+// **This is not monitoring, and the distinction is the reason it could be
+// built.** Playing the mix asks questions this does not: whose speakers, and
+// what happens when the microphone can hear them. Nothing here makes a sound.
+// Sound pads publish a level and no frames — see `LivePadTap` — so there is
+// nothing to point a `<video>` at even if one wanted to.
+//
+// Drawn on the same scale as A1, from `levels.js`, because somebody looking at
+// one and then the other is comparing them.
+
+/// What each meter is showing, between readings: the falling bar, the held
+/// peak, the loudest it has been, and whether it has been over — the last two
+/// since the latches were cleared rather than since the session opened.
+///
+/// Held here rather than read off the DOM, because a decay is a value with a
+/// history and `style.width` is a rounded string.
+const meters = new Map();
+
+/// How fast the bar falls, per tick, as a multiplier on amplitude — which is a
+/// *fixed number of decibels* per tick, since the scale is logarithmic, and is
+/// what makes the fall look even. About 20 dB a second at sixty ticks, which is
+/// the rate a peak-programme meter falls at and slow enough to read a transient
+/// off rather than watch it flicker.
+const FALL = 0.962;
+
+/// And the peak mark, held five times as long. A peak that fell with the bar
+/// would tell you nothing the bar did not; one that never fell would be a
+/// high-water mark for the whole session, which is what the over light is for.
+const PEAK_FALL = 0.992;
+
+/// One row per sound pad, then written by `tickMeters` and never rebuilt.
+///
+/// Rebuilt only when the *pads* change — a session reopening, a wire moved on
+/// the Graph stage. Redrawing a meter's markup sixty times a second to move a
+/// bar would be rebuilding a panel to change a number in it.
+function syncMeters() {
+    if (!refs.meters) return;
+    const pads = padsNow().filter((p) => p.sound);
+    const key = pads.map((p) => p.name).join('|');
+    if (key === meterKey) return;
+    meterKey = key;
+    meters.clear();
+    if (!pads.length) { put(refs.meters, () => []); return; }
+
+    put(refs.meters, () => [
+        div('cap-comp-head dim', 'What the sound is doing'),
+        ...pads.map((p) => {
+            const bar = div('cap-m-bar');
+            const peak = div('cap-m-peak');
+            const read = span('', 'cap-m-read mono');
+            const over = el('div', {
+                cls: 'cap-m-over', text: 'over', 'data-f': `over-${p.name}`,
+                title: 'Lit when this pad has gone past full scale. Click to forget ' +
+                       'it, and the loudest-so-far reading beside it with it.',
+                on: { click: clearHolds },
+            });
+            meters.set(p.name, { bar, peak, read, over,
+                                 level: 0, held: 0, top: 0, clipped: false });
+            return div('cap-m-row', [
+                // `aout` is what the graph calls its mix and what `-map` names,
+                // so it is what the row is called: a friendlier word here would
+                // be a second name for the pad the command bar prints.
+                span(p.name, 'cap-m-name mono'),
+                div('cap-m-track', [
+                    bar, peak,
+                    // Full scale, at the fraction `levels.js` puts it — the one
+                    // mark on the meter that does not depend on the session.
+                    el('div', { cls: 'cap-m-zero',
+                                style: { left: `${(ZERO_DBFS * 100).toFixed(2)}%` } }),
+                ]),
+                read, over,
+            ]);
+        }),
+    ]);
+}
+
+let meterKey = '';
+
+/// Read every level once and move every bar. **Once**, because the read clears
+/// what it read — see `liveLevels` — and a second caller would halve this one's
+/// window and draw a meter that disagreed with it.
+function tickMeters() {
+    if (!meters.size || !session.id) return;
+    let levels = [];
+    try { levels = bro.ffmpeg.live.levels(session.id); } catch (e) { return; }
+    const seen = new Map();
+    for (const l of levels) seen.set(l.name, l);
+
+    for (const [name, m] of meters) {
+        const l = seen.get(name);
+        // **Nothing heard is not silence.** A device that has stopped
+        // delivering would otherwise read as one delivering quiet, so the bar
+        // falls from where it was rather than being driven to zero: what you
+        // see is a meter going still, which is what has happened.
+        const now = l && l.heard ? l.rms : 0;
+        const hit = l && l.heard ? l.peak : 0;
+        m.level = Math.max(now, m.level * FALL);
+        m.held = Math.max(hit, m.held * PEAK_FALL);
+        if (hit > m.top) m.top = hit;
+        if (hit > 1) m.clipped = true;
+
+        m.bar.style.width = `${(dbHeight(m.level) * 100).toFixed(2)}%`;
+        m.peak.style.left = `${(dbHeight(m.held) * 100).toFixed(2)}%`;
+        m.peak.classList.toggle('hidden', m.held <= 0);
+        m.bar.classList.toggle('cap-m-hot', m.held > 1);
+        m.over.classList.toggle('on', m.clipped);
+        // **The number is the high-water mark, not the falling mark.** Three
+        // readings and three questions: the bar is what it is doing, the mark
+        // is what it just did, and this is the loudest it has been since you
+        // last cleared it — which is the one a person setting a gain wants,
+        // and the only one of the three that is a *measurement* rather than a
+        // drawing. Put on the decaying hold instead it read -6.2 for a source
+        // that was exactly -6.02, because a decay sampled at an arbitrary
+        // moment is a number with a tick count in it.
+        m.read.textContent = dbLabel(m.top);
+    }
+}
+
+/// Forget both latches: the over light and the high-water number beside it.
+///
+/// One gesture for the two because they answer the same question at different
+/// resolutions — "has this been too loud, and how loud" — and clearing one
+/// without the other would leave a reading nobody could place. A latch that
+/// could not be cleared is a light on for the rest of the session after one
+/// accident, which stops being a reading of anything.
+function clearHolds() {
+    for (const m of meters.values()) {
+        m.clipped = false;
+        m.top = 0;
+        m.over.classList.remove('on');
+        m.read.textContent = dbLabel(0);
+    }
+}
 
 /// Let one card's device go.
 ///
@@ -960,6 +1110,9 @@ export function tick() {
         // frame loop that keeps the previews playing, asking a question that
         // costs a lookup and answers itself once.
         if (session.id && !compKey) syncComposite();
+        // The sound pads arrive with the graph's, and for the same reason.
+        syncMeters();
+        tickMeters();
         fitPreviews();
         return;
     }

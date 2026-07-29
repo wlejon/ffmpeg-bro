@@ -562,6 +562,126 @@ console.log('\nreleasing one');
     pump(100);
 }
 
+// ── the levels a session is running at ─────────────────────────────────────
+//
+// The picture a session makes has been on this stage since its pad was
+// published; its sound was drained and dropped, so a capture with a microphone
+// in it said nothing at all about the microphone. Whether a level is right is
+// the one thing about a take that cannot be fixed afterwards.
+//
+// **The vehicle is `aevalsrc`, for the reason `testsrc` is the vehicle above**:
+// the amplitude is written into the expression, so what the meter should read
+// is arithmetic rather than a property of a file. A sine's RMS is its peak over
+// root two, and both numbers are asserted, because the two halves of a meter
+// are measured differently and a meter that showed peak twice would look right.
+console.log('\nwhat the sound is doing');
+{
+    const source = q('[data-f="capsource"]');
+    const wasPath = CI()[0].path;
+    const sine = (amp) => `aevalsrc=${amp}*sin(1000*2*PI*t):s=48000`;
+    const setSource = (v) => {
+        source.value = v;
+        source.dispatchEvent(new Event('change'));
+        pump(400);
+    };
+    const readOf = () => text('.cap-m-read');
+    const dbOf = () => parseFloat(readOf());
+
+    setSource(sine(0.5));
+    ok(waitFor('the meter to read', () => /^-\d/.test(readOf()), 12000),
+       `a sound pad gets a meter, and it reads (${readOf()} dBFS)`);
+    same(text('.cap-m-name'), 'in0:a',
+         'named the way ffmpeg names that stream — 0:a is the sound of input 0, and it ' +
+         'cannot be confused with in0, which is the picture');
+
+    // -6.02 dBFS. The tolerance is a hundredth of a decibel and not a decibel:
+    // the number is the loudest it has been rather than a falling mark sampled
+    // at whatever moment this ran, so it is a measurement and can be checked
+    // like one — and by what it says, since it is shown to a tenth and a
+    // tolerance around a rounded number is a tolerance around the rounding.
+    same(readOf(), '-6.0',
+         'an amplitude of 0.5 reads -6.0 dBFS, which is exactly half of full scale');
+
+    // **The ceiling of the bar over a moment, not one sample of it.** The bar
+    // falls between readings on purpose — that is what makes a transient
+    // readable rather than a flicker — so one sample of it is the true level
+    // minus however many ticks have passed since the last block of sound
+    // arrived. Its ceiling is the level.
+    const highest = (read) => {
+        let top = 0;
+        for (let i = 0; i < 40; i++) { pump(20); top = Math.max(top, read()); }
+        return top;
+    };
+    // **Bounded on one side tightly and on the other loosely, because that is
+    // the shape of the claim.** A falling bar can never be *above* the level it
+    // was last driven to, so anything over is a real disagreement; below it can
+    // only mean the sample landed on a tick that had heard no sound yet, and a
+    // block of sound is about as long as a tick. Two ticks of fall is 0.7 dB,
+    // which is a fifth of the gap between the two things being told apart.
+    const atMost = (got, want, what) =>
+        ok(got <= want + 0.05 && got > want - 1.1,
+           `${what} — ${got.toFixed(1)}% against ${want.toFixed(1)}%`);
+    const bar = () => parseFloat(q('.cap-m-bar').style.width);
+    const peak = () => parseFloat(q('.cap-m-peak').style.left);
+    // The body is the RMS and the mark is the peak, and for a sine they differ
+    // by exactly 3.01 dB. A meter drawing the same number twice would put them
+    // on top of each other.
+    const { dbHeight } = A.levels;
+    const body = highest(bar), mark = highest(peak);
+    atMost(body, dbHeight(0.5 / Math.SQRT2) * 100,
+           'the bar is the RMS, which for a sine is the peak over root two');
+    atMost(mark, dbHeight(0.5) * 100, 'and the mark is the peak, 3 dB above it');
+    ok(mark > body, 'so the mark stands clear of the bar rather than sitting on it — the ' +
+                    'two halves of a meter are measured differently, and one drawn twice ' +
+                    'would look right');
+
+    // Half again. Editing the source is a *new session* — the device is
+    // reopened — and the reading starts from nothing, which is right: a
+    // high-water mark belongs to the take it was measured in.
+    const loud = dbOf();
+    const wasBar = bar();
+    setSource(sine(0.25));
+    ok(waitFor('the meter to follow', () => bar() < wasBar - 3, 12000),
+       `the bar follows the device (${wasBar.toFixed(1)}% → ${bar().toFixed(1)}%)`);
+    same(readOf(), '-12.0',
+         `halving the amplitude reads ${(loud - dbOf()).toFixed(1)} dB down — the same ` +
+         'distance a halving is anywhere on this scale');
+
+    // Over. `aevalsrc` will hand out 1.5 quite happily, which is a mix that has
+    // gone past what any encoder can write — the one reading a meter exists to
+    // catch, and the one a scale that stopped at full scale could not show.
+    ok(!q('.cap-m-over.on'), 'nothing has clipped yet');
+    setSource(sine(1.5));
+    ok(waitFor('the over light', () => !!q('.cap-m-over.on'), 12000),
+       'a pad that goes past full scale says so');
+    ok(!!q('.cap-m-bar.cap-m-hot'), 'and the bar is drawn in its own colour while it is over');
+    ok(dbOf() > 0, `with the reading above zero rather than pinned to it (${readOf()})`);
+
+    // And both latches can be cleared, because one that could not would be a
+    // light on for the rest of the session after one accident. Cleared while
+    // the source is still over, so what is asserted is that the mechanism
+    // resets and starts measuring again rather than that it went quiet.
+    ok(!!q('.cap-m-over.on') && dbOf() > 0, 'both latches are set');
+    q('.cap-m-over').click();
+    ok(!q('.cap-m-over.on'), 'one click forgets both at once');
+    pump(500);
+    ok(!!q('.cap-m-over.on') && readOf() === '+3.5',
+       `and they fill again from what is actually arriving (${readOf()} dBFS, which is ` +
+       'what an amplitude of 1.5 is)');
+
+    // A session reading is a fact about that session. Reopening the device —
+    // which is what editing the source does — starts again rather than
+    // carrying a mark measured through different settings.
+    setSource(sine(0.25));
+    ok(waitFor('the new session to read', () => /^-1\d/.test(readOf()), 12000),
+       `a new session is a new reading rather than the last one's high-water mark ` +
+       `(${readOf()} dBFS)`);
+    ok(!q('.cap-m-over.on'), 'and the over light starts clear with it');
+
+    setSource(wasPath);
+    pump(300);
+}
+
 console.log('\na live input cannot be laid on a timeline');
 {
     const input = A.inputs.addInput({ path: 'testsrc=size=320x240:rate=25', format: 'lavfi' });

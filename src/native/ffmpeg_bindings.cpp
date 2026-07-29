@@ -969,10 +969,33 @@ JSValue js_livePads(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
         JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, p.device));
         JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, p.width));
         JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, p.height));
+        // A sound pad publishes no frames, so there is nothing for a `<video>`
+        // to open — see `LivePadTap`. What it has is a level, and that is asked
+        // for by `live.levels` because asking clears it.
+        JS_SetPropertyStr(ctx, o, "sound", JS_NewBool(ctx, p.sound));
         // The src an element takes, made here rather than spelled out in the
         // UI: the token's shape is this binary's and a second place that knew
         // it would be a second place to change.
-        setStr(ctx, o, "src", "/@live/" + std::to_string(id) + "/" + p.name);
+        if (!p.sound) setStr(ctx, o, "src", "/@live/" + std::to_string(id) + "/" + p.name);
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+/// What each sound pad has been doing since the last call. **Clears as it
+/// reads** — see `liveLevels` — so this is called once a frame by the meter and
+/// by nothing else.
+JSValue js_liveLevels(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    int64_t id = 0;
+    if (argc >= 1) JS_ToInt64(ctx, &id, argv[0]);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& l : liveLevels(static_cast<uint64_t>(id))) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", l.name);
+        JS_SetPropertyStr(ctx, o, "heard", JS_NewBool(ctx, l.heard));
+        JS_SetPropertyStr(ctx, o, "peak", JS_NewFloat64(ctx, l.peak));
+        JS_SetPropertyStr(ctx, o, "rms", JS_NewFloat64(ctx, l.rms));
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;
@@ -1743,6 +1766,7 @@ void installFfmpegBindings(JSContext* ctx) {
     JSValue live = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, live, "open", JS_NewCFunction(ctx, js_liveOpen, "open", 1));
     JS_SetPropertyStr(ctx, live, "pads", JS_NewCFunction(ctx, js_livePads, "pads", 1));
+    JS_SetPropertyStr(ctx, live, "levels", JS_NewCFunction(ctx, js_liveLevels, "levels", 1));
     JS_SetPropertyStr(ctx, live, "close", JS_NewCFunction(ctx, js_liveClose, "close", 1));
     JS_SetPropertyStr(ctx, ns, "live", live);
 

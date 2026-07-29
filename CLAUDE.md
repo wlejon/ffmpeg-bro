@@ -142,7 +142,10 @@ reading with the writer taken off the end: it publishes pads into a `LiveTap`
 slot — the point of one is to be running while nothing is — and a recording
 closes every session before opening its own devices. Frames reach the element
 as `wrapped_avframe` through the `Wrapped` payload in `ffmpeg_backend.cpp`,
-which is the same mechanism that makes a `-f lavfi` input playable.
+which is the same mechanism that makes a `-f lavfi` input playable. A **sound**
+pad holds a level instead of a frame — `live.levels()` reads and clears it, so
+there is exactly one caller — because a meter needs no answer to the questions
+monitoring asks. The scale both it and A1 are drawn on is `ui/levels.js`.
 
 ## Conventions that are load-bearing
 

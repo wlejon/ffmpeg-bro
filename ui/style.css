@@ -1120,6 +1120,65 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     margin-bottom: 4px;
 }
 
+/* The levels a session is running at. One row per sound pad: what it is called,
+   the bar, the held peak as a number, and a light that latches when it has been
+   over. Laid out as a grid rather than a flex row so that the bars of two pads
+   line up with each other — a meter you have to compare across a ragged left
+   edge is a meter you read wrong. */
+.cap-meters { flex-shrink: 0; }
+.cap-m-row {
+    display: grid;
+    grid-template-columns: 46px 1fr 52px 30px;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+.cap-m-name { font-size: 10.5px; color: var(--dim); }
+.cap-m-track {
+    position: relative;
+    height: 12px;
+    background: #0b0d11;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    overflow: hidden;
+}
+/* Left to right rather than bottom to top: the stage is a column of wide
+   panels, and a vertical meter here would be twelve pixels of information in a
+   box the width of the picture above it. */
+.cap-m-bar {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 0;
+    background: var(--good, #7ed6a0);
+}
+.cap-m-bar.cap-m-hot { background: #ff7a5c; }
+.cap-m-peak {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: #e8eef6;
+}
+.cap-m-zero {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: rgba(255, 140, 66, 0.55);
+}
+.cap-m-read { font-size: 10.5px; color: var(--dim); text-align: right; }
+/* Off is not hidden: an empty column would move the reading beside it the first
+   time anything clipped, and a control that jumps as it fires is one nobody
+   trusts. */
+.cap-m-over {
+    font-size: 9.5px;
+    text-align: center;
+    border-radius: 2px;
+    padding: 1px 0;
+    color: #4a5160;
+    border: 1px solid transparent;
+}
+.cap-m-over.on { color: #0b0d11; background: #ff7a5c; }
+
 /* What the Graph stage says this recording is, as **one line**.
 
    This was a headed panel with a paragraph in it, and the paragraph was on

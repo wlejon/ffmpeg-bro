@@ -57,6 +57,11 @@
                      in here is a live session's reader: putting over it would
                      re-open the session on every keystroke. -->
                 <div id="cap-comp" class="cap-comp"></div>
+                <!-- What the sound is doing, which is the half of a
+                     composition that cannot be seen. Its own element for the
+                     same reason #cap-comp is one: it is written by the frame
+                     loop, and the panel below is redrawn on every keystroke. -->
+                <div id="cap-meters" class="cap-meters"></div>
                 <!-- What says how several inputs combine. Not optional once
                      there are two of them — the engine refuses rather than
                      guessing at a composition. -->

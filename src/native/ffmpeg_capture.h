@@ -280,10 +280,33 @@ struct LiveSettings {
 /// composition does not. A device with no picture therefore has no pad here,
 /// which the card already knows from its probe.
 struct LivePad {
-    std::string name;      ///< `in0`, `vout`, or whatever the graph called it
+    std::string name;      ///< `in0`, `vout`, `aout`, or whatever the graph called it
     bool device = false;   ///< an `in<N>`: one input, before the graph
     int width = 0;         ///< once the graph has settled; zero before that
     int height = 0;
+
+    /// A pad carrying sound rather than pictures. It publishes no frames — see
+    /// `LivePadTap` — so there is nothing to point a `<video>` at; what it has
+    /// is a level, asked for separately by `liveLevels`.
+    bool sound = false;
+};
+
+/// What one sound pad has been doing since this was last asked.
+///
+/// **Separate from `LivePad` because reading it clears it.** Listing the pads
+/// is an idempotent question that whatever is looking for a pad by name asks
+/// several times a frame; taking a level is a *consuming* read, and the two
+/// folded together would mean the first look of each frame got the reading and
+/// the rest got nothing.
+struct LiveLevel {
+    std::string name;
+    /// False where no sound arrived in the window at all — which is not the
+    /// same as silence, and is why it is said rather than answered with a zero.
+    /// A device that has stopped delivering would otherwise read as one
+    /// delivering quiet.
+    bool heard = false;
+    float peak = 0.0f;   ///< loudest sample since the last read, 0…1 and beyond
+    float rms = 0.0f;    ///< and the RMS over the same stretch
 };
 
 /// Open a session and start reading. Zero with a reason when a device will not
@@ -298,6 +321,15 @@ uint64_t openLive(const LiveSettings& s, std::string* error);
 /// device has handed over a frame. The names are known immediately; the numbers
 /// arrive a moment later.
 std::vector<LivePad> livePads(uint64_t id);
+
+/// What each sound pad has been doing since the last call, and **the call
+/// clears it**. One reader, once a frame: a peak left standing would make a
+/// moment of clipping look permanent, and two readers would halve each other's
+/// windows and draw two meters that disagree.
+///
+/// Empty for a session with no sound in it, which is the ordinary case for a
+/// screen grab and is the meter simply not being there.
+std::vector<LiveLevel> liveLevels(uint64_t id);
 
 /// Give the devices back. Idempotent, and the destructor of everything the
 /// session holds; a session left open holds a camera.

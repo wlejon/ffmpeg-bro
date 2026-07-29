@@ -17,6 +17,7 @@ import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as timeline from './timeline.js';
+import * as levels from './levels.js';
 import * as exporter from './export.js';
 import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
 import { clock, timecode, basename, bytes } from './format.js';
@@ -122,6 +123,7 @@ capture.initCapture({
     cards: el('cap-cards'),
     add: el('cap-add'),
     comp: el('cap-comp'),
+    meters: el('cap-meters'),
     graph: el('cap-graph'),
     bar: el('cap-bar'),
     note: el('cap-note'),
@@ -1197,7 +1199,7 @@ globalThis.__ffmpegBro = {
     activeClip: () => viewer.activeClip(),
     activeClips: () => viewer.activeClips(),
     setPlayhead, play, pause, step,
-    timeline, viewer,
+    timeline, viewer, levels,
     setCropMode, cropMode: () => cropMode,
     splitAtPlayhead, splitAt, setLayout, select, selectMany,
     // The three edits that are about a cut rather than a clip. On the surface

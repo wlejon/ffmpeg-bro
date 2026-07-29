@@ -21,13 +21,23 @@
 // stop. So `take` blocks on a condition variable until a frame arrives or the
 // wait runs out, exactly as `av_read_frame` on a camera blocks, and a preview
 // that has genuinely stopped is reported as an end rather than as a stall.
+//
+// **A sound pad keeps a level and not a queue.** Playing a session's mix is
+// monitoring, and monitoring asks questions a preview does not — whose
+// speakers, and what happens when the microphone can hear them. What can be
+// answered without asking any of them is *how loud is it*, which is the reading
+// somebody wants before a take rather than after it. So a sound pad holds two
+// numbers instead of a frame, and they are accumulated rather than replaced:
+// see `heard`.
 #pragma once
 
 extern "C" {
 #include <libavutil/frame.h>
 }
 
+#include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -95,6 +105,53 @@ public:
         return copy;
     }
 
+    /// One block of sound went through this pad, already measured.
+    ///
+    /// **Accumulated, not replaced — and this is the opposite rule to `put`.**
+    /// A picture the reader missed had its moment and it has gone; a peak it
+    /// missed is the one thing a meter exists to catch. Sound arrives in blocks
+    /// of about a thousand samples and the UI looks sixty times a second, so
+    /// several blocks pass between readings and the loudest of them is the
+    /// answer. Power is summed over samples so that the RMS covers the same
+    /// stretch the peak does, rather than being the last block's alone.
+    ///
+    /// A pad that has only ever been given sound reports itself as sound: what
+    /// a pad carries is a fact about the graph, and asking libavfilter for it
+    /// again here would be a second answer to a question the drain has already
+    /// answered by which of the two it called.
+    void heard(float peak, double power, int samples) {
+        std::lock_guard<std::mutex> lock(m_);
+        sound_ = true;
+        if (peak > peak_) peak_ = peak;
+        power_ += power;
+        samples_ += samples;
+        // `seq_` is deliberately untouched: it exists to tell a picture reader
+        // there is a frame it has not had, and a sound pad has no such reader.
+        // Bumping it would be inert — `take` needs `latest_` too — and inert is
+        // the worst kind of wrong to leave in a counter two things share.
+    }
+
+    /// The loudest sample and the RMS since this was last asked, and **the ask
+    /// clears them**: a meter reads what has happened since it last looked, and
+    /// a peak left standing would make a moment of clipping look permanent.
+    ///
+    /// False where no sound has been through since — which is not the same as
+    /// silence, and is why the caller is told rather than handed a zero. A
+    /// device that has stopped delivering would otherwise read as one delivering
+    /// quiet.
+    bool level(float* peak, float* rms) {
+        std::lock_guard<std::mutex> lock(m_);
+        if (samples_ <= 0) return false;
+        *peak = peak_;
+        *rms = static_cast<float>(std::sqrt(power_ / static_cast<double>(samples_)));
+        peak_ = 0.0f;
+        power_ = 0.0;
+        samples_ = 0;
+        return true;
+    }
+
+    bool isSound() const { std::lock_guard<std::mutex> lock(m_); return sound_; }
+
     bool ended() const { std::lock_guard<std::mutex> lock(m_); return ended_; }
     /// What this pad turned out to be, once a frame has been through it.
     void size(int* w, int* h) const {
@@ -114,6 +171,10 @@ private:
     bool ended_ = false;
     int width_ = 0;
     int height_ = 0;
+    bool sound_ = false;
+    float peak_ = 0.0f;
+    double power_ = 0.0;   ///< sum of sample², over `samples_` samples
+    int64_t samples_ = 0;
 };
 
 /// Every pad of one session.

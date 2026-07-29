@@ -444,9 +444,18 @@ bro.ffmpeg.live.open({ sources: [{ path: 'desktop', format: 'gdigrab' },
 //   on this thread, for the reason `record.start` does.
 
 bro.ffmpeg.live.pads(7)
-// → [{ name: 'in0',  device: true,  width: 2560, height: 1440, src: '/@live/7/in0' },
-//    { name: 'in1',  device: true,  width: 1920, height: 1080, src: '/@live/7/in1' },
-//    { name: 'vout', device: false, width: 2560, height: 1440, src: '/@live/7/vout' }]
+// → [{ name: 'in0',   device: true,  sound: false, width: 2560, height: 1440,
+//      src: '/@live/7/in0' },
+//    { name: 'in1',   device: true,  sound: false, width: 1920, height: 1080,
+//      src: '/@live/7/in1' },
+//    { name: 'in1:a', device: true,  sound: true },
+//    { name: 'vout',  device: false, sound: false, width: 2560, height: 1440,
+//      src: '/@live/7/vout' },
+//    { name: 'aout',  device: false, sound: true }]
+
+bro.ffmpeg.live.levels(7)
+// → [{ name: 'in1:a', heard: true, peak: 0.51, rms: 0.19 },
+//    { name: 'aout',  heard: true, peak: 0.63, rms: 0.24 }]
 
 bro.ffmpeg.live.close(7)     // and `live.close()` with no id closes every one
 
@@ -459,8 +468,25 @@ bro.ffmpeg.live.close(7)     // and `live.close()` with no id closes every one
 // One pad per input that has a picture — `in<N>`, the device exactly as it
 // arrived, numbered as the graph numbers it — plus one per pad the graph
 // produces, under the graph's own name, with the composite called `vout`.
-// **Pictures only.** The graph's sound pads are drained like every other, but
-// playing one would be *monitoring*, which asks its own questions.
+//
+// **A sound pad has no `src`, because it publishes a level and not frames.**
+// One per input that has sound, named `in<N>:a` the way ffmpeg names that
+// stream, plus one per sound pad the graph produces, with the mix called
+// `aout`. Playing one would be *monitoring*, which asks questions a preview
+// does not — whose speakers, and what happens when the microphone can hear
+// them — and none of that has to be answered to say how loud something is.
+//
+// `levels` is where the numbers are, and **the call clears them**: `peak` and
+// `rms` cover the stretch since the last call, scaled so that full scale is
+// 1.0, mono across the channels. So there is exactly one caller, once a
+// frame. Two would halve each other's windows and draw two meters that
+// disagree, and a peak left standing would make a moment of clipping look
+// permanent. `heard: false` means nothing arrived in that window at all, which
+// is a device that has stopped rather than one delivering silence — said,
+// because a zero cannot tell them apart.
+//
+// A peak above 1.0 is not an error and not clamped: a mix is a sum, sums exceed
+// full scale, and that is the reading a meter exists for.
 //
 // `pads` is asked rather than returned by `open` because a pad's size is not
 // known until libavfilter has configured the graph, and it cannot configure

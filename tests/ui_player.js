@@ -757,7 +757,10 @@ console.log('\none waveform, not one per clip');
     // it can exceed full scale. Two claims: that a halving is a fixed distance
     // wherever it happens (which is what makes the scale worth changing to),
     // and that a column past 1.0 is marked (which is what the scale is *for*).
-    const { dbHeight, ZERO_DBFS, DB_FLOOR, DB_CEIL } = A.timeline;
+    // From `levels.js`, which is where the scale lives because the Capture
+    // stage's meter is drawn on the same one — two scales that disagreed by a
+    // decibel would make comparing them a quiet lie.
+    const { dbHeight, ZERO_DBFS, DB_FLOOR, DB_CEIL } = A.levels;
     const six = 20 * Math.log10(2) / (DB_CEIL - DB_FLOOR);
     ok(dbHeight(0) === 0 && dbHeight(0.001) === 0,
        'silence and the floor are both on the centre line');

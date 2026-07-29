@@ -1147,6 +1147,65 @@ std::mutex liveLock;
 std::vector<std::shared_ptr<LiveRun>> liveRuns;
 uint64_t liveSeq = 0;
 
+/// How loud one block of sound is: the loudest sample in it, and the sum of
+/// sample² so several blocks can be averaged over the stretch they cover.
+///
+/// **Read in whatever format libavfilter settled on, rather than converted
+/// first.** A live session takes its frames unconverted — the pictures go
+/// straight to a decoder that would only have to undo an RGBA pass — and
+/// resampling a thousand samples to float purely so they could be measured
+/// would be a conversion done for the meter and nothing else. So the five
+/// packed formats and their planar twins are read in place, each scaled to the
+/// [-1, 1] a level is quoted in.
+///
+/// Returns how many samples were measured, across all channels: a mono
+/// summary, which is the same reading the timeline's own waveform is drawn from
+/// and the same one a person means by "how loud is it". Zero for a format
+/// nothing here reads, which leaves the meter dark rather than reading
+/// nonsense off a pointer cast the wrong way.
+static int measureSound(const AVFrame* f, float* peak, double* power) {
+    if (!f || f->nb_samples <= 0) return 0;
+    const AVSampleFormat packed = av_get_packed_sample_fmt(
+        static_cast<AVSampleFormat>(f->format));
+    const bool planar = av_sample_fmt_is_planar(static_cast<AVSampleFormat>(f->format));
+    const int ch = std::max(1, f->ch_layout.nb_channels);
+    const int planes = planar ? ch : 1;
+    const int per = planar ? f->nb_samples : f->nb_samples * ch;
+
+    double hi = 0.0, sum = 0.0;
+    int64_t counted = 0;
+    for (int p = 0; p < planes; p++) {
+        const uint8_t* data = f->extended_data ? f->extended_data[p] : nullptr;
+        if (!data) continue;
+        for (int i = 0; i < per; i++) {
+            double v;
+            switch (packed) {
+                // Unsigned, centred on 128 — the one format whose silence is
+                // not zero.
+                case AV_SAMPLE_FMT_U8:
+                    v = (static_cast<int>(data[i]) - 128) / 128.0; break;
+                case AV_SAMPLE_FMT_S16:
+                    v = reinterpret_cast<const int16_t*>(data)[i] / 32768.0; break;
+                case AV_SAMPLE_FMT_S32:
+                    v = reinterpret_cast<const int32_t*>(data)[i] / 2147483648.0; break;
+                case AV_SAMPLE_FMT_FLT:
+                    v = reinterpret_cast<const float*>(data)[i]; break;
+                case AV_SAMPLE_FMT_DBL:
+                    v = reinterpret_cast<const double*>(data)[i]; break;
+                default: return 0;
+            }
+            const double a = v < 0 ? -v : v;
+            if (a > hi) hi = a;
+            sum += v * v;
+            ++counted;
+        }
+    }
+    if (counted <= 0) return 0;
+    *peak = static_cast<float>(hi);
+    *power = sum;
+    return static_cast<int>(counted);
+}
+
 /// One session: read every device, sample at the tick, publish what there is.
 void runLive(LiveRun& run) {
     const auto began = Clock::now();
@@ -1237,9 +1296,23 @@ void runLive(LiveRun& run) {
 
             // Sound reaches the graph — a composition whose sound decides
             // something about its picture is an ordinary graph, and `sidechain`
-            // filters exist — but nothing is published from it. See `LivePad`.
+            // filters exist. **Its level is published here**, on a pad of its
+            // own, and that is the meter that matters most: "is the microphone
+            // clipping" is a question about the device, before anything the
+            // graph does to it, and it has an answer whether or not there is a
+            // graph at all. The mix's own level is taken off the sink below.
+            //
+            // `in<N>:a` is ffmpeg's own way of naming that stream — `0:a` is
+            // the sound of input 0 — and it cannot be confused with `in<N>`,
+            // which is the picture and is a `<video>` src.
             for (auto& block : sound) {
                 AVFrame* f = block.first;
+                float peak = 0.0f;
+                double power = 0.0;
+                const int n = measureSound(f, &peak, &power);
+                if (n > 0)
+                    run.tap->ensure("in" + std::to_string(i) + ":a", true)
+                        ->heard(peak, power, n);
                 const int aFeed = graph && run.devs[i]->hasAudio()
                                       ? graph->feedFor(run.devs[i]->index, true) : -1;
                 const int sr = f->sample_rate > 0 ? f->sample_rate
@@ -1255,7 +1328,24 @@ void runLive(LiveRun& run) {
 
         if (graph && graph->ready()) {
             graph->drain([&run](const CaptureGraph::Taken& t) {
-                if (t.audio || !t.raw) return true;
+                if (!t.raw) return true;
+                // **Sound is measured here and published as a level.** It used
+                // to be dropped on this line, which left a session with a
+                // microphone in it saying nothing at all about the microphone —
+                // and the levels are the reading somebody wants *before* a take
+                // rather than the recording afterwards. Playing the mix is a
+                // different thing again and is not this.
+                if (t.audio) {
+                    float peak = 0.0f;
+                    double power = 0.0;
+                    const int n = measureSound(t.raw, &peak, &power);
+                    if (n > 0) {
+                        const std::string name =
+                            t.label.empty() || t.primary ? "aout" : t.label;
+                        run.tap->ensure(name, false)->heard(peak, power, n);
+                    }
+                    return true;
+                }
                 // The composite is the pad nobody had to name, and `vout` is
                 // what it is called everywhere else in this application —
                 // `resolvePads` maps it, `graph/record.js` writes it. A pad
@@ -1553,7 +1643,29 @@ std::vector<LivePad> livePads(uint64_t id) {
         pad.name = p->name();
         pad.device = p->isDevice();
         p->size(&pad.width, &pad.height);
+        // What it carries, but **not** what it is doing: reading a level clears
+        // it, and this call is made several times a frame by whatever is
+        // looking for a pad by name. See `liveLevels`.
+        pad.sound = p->isSound();
         out.push_back(std::move(pad));
+    }
+    return out;
+}
+
+std::vector<LiveLevel> liveLevels(uint64_t id) {
+    std::shared_ptr<LiveRun> run;
+    {
+        std::lock_guard<std::mutex> lock(liveLock);
+        for (const auto& r : liveRuns) if (r->id == id) { run = r; break; }
+    }
+    std::vector<LiveLevel> out;
+    if (!run) return out;
+    for (const auto& p : run->tap->all()) {
+        if (!p->isSound()) continue;
+        LiveLevel l;
+        l.name = p->name();
+        l.heard = p->level(&l.peak, &l.rms);
+        out.push_back(std::move(l));
     }
     return out;
 }
