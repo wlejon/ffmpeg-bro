@@ -50,7 +50,7 @@ import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
          timelineSpan } from './copy.js';
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
-         defaultSubtitleSource } from './subtitles.js';
+         defaultSubtitleSource, cuesFor, cueWindow, cueWindowNote } from './subtitles.js';
 import { isPad, padChoices } from './pads.js';
 import { wires as overlayWires } from '../graph/overlay.js';
 
@@ -827,11 +827,12 @@ function detailRows(s, tail) {
 // only a sentence answers "and what does that mean".
 
 function copyRows(s, restate) {
-    // **A subtitle stream has no keyframes to snap to.** Every cue stands on
-    // its own — it is a moment with text on it, not a frame that depends on
-    // the one before — so the window is two numbers and there is nothing to
-    // draw a strip of. Saying that is better than an empty strip, which reads
-    // as a file whose keyframes could not be found.
+    // **A subtitle stream has no keyframes**, and for a while that was taken to
+    // mean there was nothing to draw a window against. Every cue does stand on
+    // its own — a moment with text on it, not a frame that depends on the one
+    // before — but where those moments *are* is exactly what the two numbers
+    // have to be read against, and a copy and a conversion cut differently out
+    // of the same pair. So the cues are on screen, as the places they are.
     if (s.kind === 'subtitle') {
         if (!readsInput(s)) return [];
         const input = readInput(s);
@@ -840,12 +841,11 @@ function copyRows(s, restate) {
             row('From', [subNum(s, 'copyFrom', restate),
                          span('seconds into the file', 'dim')]),
             row('To', [subNum(s, 'copyTo', restate), span('0 is the end of it', 'dim')]),
+            ...cueRows(s, restate),
             div('ex-note dim',
                 'The start is also the output’s zero: a subtitle file written against a ' +
                 'whole programme, read from ten seconds in, comes out ten seconds earlier ' +
-                'than it went in. Every cue stands on its own, so unlike a copied picture ' +
-                'this can begin anywhere.' +
-                (input ? ` Read out of ${input.name}.` : '')),
+                'than it went in.' + (input ? ` Read out of ${input.name}.` : '')),
         ];
     }
     if (!isCopy(s)) return [];
@@ -976,7 +976,9 @@ function followRow(s, restate) {
 }
 
 /// One of a subtitle row's two window numbers. The same control the copy rows
-/// use, without the strip: there is nothing to snap to.
+/// use, and now with the same redraw: the cues below are drawn against this
+/// number, so a window typed rather than clicked has to repaint them or the
+/// marks go on describing the previous one.
 function subNum(s, key, restate) {
     return el('input', {
         cls: 'num', 'data-f': `copy-${key}`, type: 'number', min: 0, step: 0.1,
@@ -986,8 +988,104 @@ function subNum(s, key, restate) {
             // `restate` ends in `hooks.restated()` already; saying it twice ran
             // the whole warnings pass twice on every keystroke.
             restate();
+            drawStreams();
         } },
     });
+}
+
+/// The cues, and what this row's window does to them.
+///
+/// The subtitle answer to the keyframe strip, and drawn as a **list** rather
+/// than as a strip on purpose: a cue is a span with a length worth reading, the
+/// count is small enough to write out, and the useful question is which of them
+/// survive the window rather than where they sit proportionally. Each is a
+/// button, because moving the in-point onto a cue is the fix for nearly
+/// everything this section has to report.
+function cueRows(s, restate) {
+    const list = cuesFor(s);
+    if (!list)
+        return [div('ex-note dim',
+                    'Where this track’s cues are could not be read, so what the window does ' +
+                    'to them cannot be said here — the render still cuts it the same way.')];
+    if (!list.cues.length)
+        return [div('ex-note dim', 'This track has no cues in it.')];
+
+    const w = cueWindow(s, list);
+    const shown = nearestCues(list.cues, w);
+    const kept = new Set(w.kept);
+    const first = w.kept.length ? w.kept[0] : null;
+    const time = (t) => `${t.toFixed(2)}`;
+
+    const marks = shown.map((c) => el('button', {
+        cls: 'ex-cue' + (c === first ? ' on' : '') + (kept.has(c) ? '' : ' out'),
+        'data-cue': c.start.toFixed(3),
+        text: c.end > c.start + 1e-6 ? `${time(c.start)}–${time(c.end)}` : time(c.start),
+        title: kept.has(c)
+            ? (c === first ? 'The output starts on this cue' : 'Inside the window')
+            : 'Outside the window — start here to take it in',
+        on: { click: () => { s.copyFrom = c.start; restate(); drawStreams(); } },
+    }));
+
+    const out = [row('Cues', div('ex-cues', marks))];
+    out.push(div('ex-copy-note' + (w.slip > 0.001 || (w.converting && w.onScreen) ? ' warn' : ' dim'),
+                 cueWindowNote(s, list)));
+
+    if (w.converting && w.onScreen)
+        out.push(div('ex-add', el('button', {
+            cls: 'tiny', text: `Start at ${time(w.onScreen.start)} s`, 'data-f': 'cue-snap',
+            title: 'Open the window on the cue that is on screen at the in-point, which a ' +
+                   'conversion would otherwise drop',
+            on: { click: () => { s.copyFrom = w.onScreen.start; restate(); drawStreams(); } },
+        })));
+    else if (!w.converting && w.slip > 0.001)
+        out.push(div('ex-add', el('button', {
+            cls: 'tiny', text: `Snap to ${time(w.zero)} s`, 'data-f': 'cue-snap',
+            title: 'Move the in-point to the cue the copy would start on anyway',
+            on: { click: () => { s.copyFrom = w.zero; restate(); drawStreams(); } },
+        })));
+
+    const total = list.cues.length;
+    out.push(div('ex-note dim',
+        `${total} cue${total === 1 ? '' : 's'}` +
+        `${list.complete ? '' : ' at least — the list was cut short, so there are more'}, ` +
+        'read off the packets rather than decoded, which is why this can say when a ' +
+        'picture track is on screen as readily as a text one. ' +
+        (shown.length < total
+            ? `${shown.length} of them are drawn, the ones the window’s ends fall among. `
+            : '') +
+        `This window keeps ${w.kept.length === total ? 'all of them' : w.kept.length}.`));
+
+    // mp4 fills the gaps between its cues with samples of its own, so a count
+    // of packets is not a count of lines. Said where it is true rather than
+    // filtered out, because on the packet path those samples are cues: the copy
+    // carries them and one of them can be what the window opens on.
+    const st = readStream(s);
+    if (st && st.codec === 'mov_text')
+        out.push(div('ex-note dim',
+            'An mp4 writes an empty sample between one cue and the next, so some of these ' +
+            'are the gaps rather than the lines.'));
+    return out;
+}
+
+/// At most sixteen cues: the ones the window's two ends fall among.
+///
+/// A whole feature-length track is several hundred, and a panel of several
+/// hundred buttons is not a list anybody reads. Cut by *nearness to the two
+/// edges* rather than by taking the first sixteen, because the decision this
+/// section exists for is always at an edge — and the count above says how many
+/// were left out, since a list that quietly stops is one somebody would read
+/// the end of as the end of the track.
+function nearestCues(cues, w) {
+    const CAP = 16;
+    if (cues.length <= CAP) return cues;
+    const end = w.to > 0 ? w.to : cues[cues.length - 1].start;
+    const near = (edge) => cues
+        .map((c, i) => ({ i, d: Math.abs(c.start - edge) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, CAP / 2)
+        .map((x) => x.i);
+    const want = new Set(near(w.from).concat(near(end)));
+    return Array.from(want).sort((a, b) => a - b).map((i) => cues[i]);
 }
 
 /// The input's clock with a mark per keyframe, and the in-point against them.

@@ -4005,6 +4005,100 @@ int main(int argc, char* argv[]) {
                 checkf(before.size() == after.size() && !after.empty() &&
                            before.front().text == after.front().text,
                        "with the same cues (%zu → %zu)", before.size(), after.size());
+                // **And at the times they had.** A copy took its input's zero
+                // from the first packet it read, which for a picture is the
+                // start of the file and for a track of cues is the first thing
+                // anybody says — so carrying an untrimmed subtitle track moved
+                // every cue a second early here, and by a minute in a
+                // programme where nobody speaks for a minute. Against a picture
+                // that is encoded rather than copied, and so has no say in this
+                // input's epoch, that is a desync out of the most ordinary
+                // render there is: keep the video, keep the subtitles.
+                checkf(!before.empty() && !after.empty() &&
+                           std::fabs(before.front().from - after.front().from) < 0.05,
+                       "and at the times they had, not rebased onto the first cue "
+                       "(%.2f → %.2f)", before.empty() ? -1.0 : before.front().from,
+                       after.empty() ? -1.0 : after.front().from);
+            }
+
+            // ── where the cues are, without decoding one ────────────────────
+            //
+            // The packet path's own answer, which is what a Write stage draws a
+            // window against. Checked against times that were typed into
+            // `make_fixture.cpp` rather than read out of anything, so a
+            // conversion of the file cannot make this pass.
+            {
+                MediaInput sub;
+                sub.path = srt.string();
+                CueTimes ct;
+                std::string cerr;
+                const bool got = cueTimesOf(sub, -1, 0, 0, 0, &ct, &cerr);
+                checkf(got && ct.cues.size() == 3,
+                       "the cues are read off the packets, no decoder opened (%zu, %s)",
+                       ct.cues.size(), got ? (ct.complete ? "complete" : "cut short")
+                                           : cerr.c_str());
+                if (ct.cues.size() == 3) {
+                    checkf(std::fabs(ct.cues[1].start - 4.0) < 0.01 &&
+                               std::fabs(ct.cues[1].end - 5.5) < 0.01,
+                           "with the times the fixture was written with (%.2f → %.2f)",
+                           ct.cues[1].start, ct.cues[1].end);
+                    checkf(ct.cues[1].bytes > ct.cues[0].bytes,
+                           "and the payload's size, which is how an empty sample is told "
+                           "from a line (%d against %d)", ct.cues[1].bytes, ct.cues[0].bytes);
+                }
+                // A window bounds what is listed. It is deliberately *not* what
+                // a copy would take — see below — and the difference is the
+                // whole reason the UI asks for the track and not for a window.
+                CueTimes win;
+                // Filled before it is reported: the order the arguments of a
+                // variadic call are evaluated in is unspecified, so a size read
+                // in the message alongside the call that fills it printed the
+                // empty list this had before it ran.
+                const bool gotWin = cueTimesOf(sub, -1, 4.5, 0, 0, &win, &cerr);
+                checkf(gotWin && win.cues.size() == 1,
+                       "a window lists the cues inside it (%zu from 4.5 s)", win.cues.size());
+                CueTimes none;
+                MediaInput noSubs;
+                noSubs.path = first;
+                check(!cueTimesOf(noSubs, -1, 0, 0, 0, &none, &cerr),
+                      "and a file with no subtitle stream is refused rather than answered "
+                      "with an empty list");
+            }
+
+            // **A copied subtitle window starts at the cue, not at the moment.**
+            // This is the keyframe story in subtitle vocabulary and it took a
+            // render to establish: the copy seeks backward, so a track asked to
+            // begin at 4.5 s begins at the cue that was on screen then — and
+            // that cue's stamp, not 4.5, is what the output's zero becomes. A
+            // *conversion* of the same two numbers drops it and zeroes at 4.5
+            // exactly, which is a different file out of the same window and is
+            // why the Write stage says which of the two a row is doing.
+            if (std::filesystem::exists(outMkv)) {
+                const std::string outMid = "out/export-subs-copy-mid.mkv";
+                ExportSettings cs;
+                cs.path = outMid;
+                cs.format = "matroska";
+                cs.faststart = false;
+                cs.inputs = {MediaInput{}};
+                cs.inputs[0].path = outMkv;
+                ExportStream cst;
+                cst.kind = "subtitle";
+                cst.source = "copy:0:" +
+                             std::to_string(streamIndexOf(outMkv, AVMEDIA_TYPE_SUBTITLE));
+                cst.copyFrom = 4.5;
+                cs.streams = {cst};
+                st = render(cs, {});
+                checkf(st.state == ExportStatus::State::Done,
+                       "a copied subtitle track cut at 4.5 s renders (%s)",
+                       st.error.empty() ? "no error" : st.error.c_str());
+                const auto mid = cuesOf(outMid);
+                checkf(mid.size() == 2,
+                       "keeping the cue that was on screen at 4.5 s as well as the one "
+                       "after it (%zu cues)", mid.size());
+                if (mid.size() == 2)
+                    checkf(std::fabs(mid[0].from) < 0.05,
+                           "and that cue, not the moment asked for, is the output's zero "
+                           "(%.2f s)", mid[0].from);
             }
 
             // ── burned in ──────────────────────────────────────────────────

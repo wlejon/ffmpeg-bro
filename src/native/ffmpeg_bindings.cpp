@@ -1321,6 +1321,66 @@ JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
     return out;
 }
 
+/// bro.ffmpeg.cueTimes(path | input, { stream, from, to, max }) — when a
+/// subtitle track's cues are on screen.
+///
+/// The same shape of query as `keyframes` above and for the same reason: a
+/// window is typed into two fields on the Write stage, and what that window
+/// does to the cues is a fact about the input which nothing should have to
+/// render to find out.
+///
+/// **Times, not text**, which the name says so that nothing is disappointed by
+/// it: this reads packets and never opens a decoder, so it answers for a
+/// `dvdsub` track exactly as it answers for an `.srt` — and when a picture
+/// track is on screen is the only thing about it anybody can say. What a cue
+/// *says* is a different question with a different cost.
+JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "cueTimes(path) requires a path or an input");
+
+    MediaInput in;
+    JSValueConst opts = argc >= 2 ? argv[1] : JS_UNDEFINED;
+    if (JS_IsObject(argv[0])) {
+        in = inputFromJs(ctx, argv[0]);
+    } else {
+        const char* path = JS_ToCString(ctx, argv[0]);
+        if (!path) return JS_EXCEPTION;
+        in.path = path;
+        JS_FreeCString(ctx, path);
+    }
+    int stream = -1;
+    double from = 0, to = 0;
+    int max = 0;
+    if (JS_IsObject(opts)) {
+        stream = static_cast<int>(numProp(ctx, opts, "stream", -1));
+        from = numProp(ctx, opts, "from", 0);
+        to = numProp(ctx, opts, "to", 0);
+        max = static_cast<int>(numProp(ctx, opts, "max", 0));
+    }
+
+    CueTimes list;
+    std::string err;
+    if (!cueTimesOf(in, stream, from, to, max, &list, &err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "stream", JS_NewInt32(ctx, list.stream));
+    JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
+    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
+    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const Cue& c : list.cues) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, c.start));
+        JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, c.end));
+        JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt32(ctx, c.bytes));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    JS_SetPropertyStr(ctx, out, "cues", arr);
+    return out;
+}
+
 /// bro.ffmpeg.deviceSources(name) — what one capture device can see now.
 ///
 /// The one query in this file that talks to hardware, which is why it is a
@@ -1835,6 +1895,8 @@ void installFfmpegBindings(JSContext* ctx) {
     // somebody takes rather than one they discover.
     JS_SetPropertyStr(ctx, ns, "keyframes",
                       JS_NewCFunction(ctx, js_keyframes, "keyframes", 2));
+    JS_SetPropertyStr(ctx, ns, "cueTimes",
+                      JS_NewCFunction(ctx, js_cueTimes, "cueTimes", 2));
     JS_SetPropertyStr(ctx, ns, "codecTags",
                       JS_NewCFunction(ctx, js_codecTags, "codecTags", 2));
     JS_SetPropertyStr(ctx, ns, "guessCodec",

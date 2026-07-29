@@ -23,11 +23,15 @@
 //     (`-ss` after the `-i`) with `-c copy` reads the file from the beginning
 //     and then drops packets, which is slower and starts the file on a frame
 //     nothing can decode.
-//   - **The first packet decides the file's zero**, and it is one zero per
-//     input rather than one per stream. Two streams copied out of one file keep
-//     the offset between them that they had, which is the whole of A/V sync; a
-//     zero taken per stream would silently move a soundtrack by however far the
-//     video's first keyframe was from the audio's first packet.
+//   - **The in-point decides the file's zero, and the first packet only moves
+//     it earlier** — one zero per input rather than one per stream. Two streams
+//     copied out of one file keep the offset between them that they had, which
+//     is the whole of A/V sync; a zero taken per stream would silently move a
+//     soundtrack by however far the video's first keyframe was from the audio's
+//     first packet. The packet has to be able to move it because the seek lands
+//     at or before what was asked for; it must not move it *later*, which is
+//     what taking it alone did to a subtitle track whose first packet is its
+//     first cue a minute in.
 //   - **Timestamps are rescaled and never invented.** A packet arrives in its
 //     input stream's time base and leaves in the output stream's, which is what
 //     `Writer::writePacket` already did for an encoder's packets — a copied
@@ -83,6 +87,63 @@ struct KeyframeList {
 
 bool keyframesOf(const MediaInput& in, int stream, double from, double to, int max,
                  KeyframeList* out, std::string* err);
+
+/// Where a subtitle track's cues are, on the input's own clock.
+///
+/// The packet path's answer to `keyframesOf` above, and the same kind of fact:
+/// something about the *input* that a decision on the Write stage has to be
+/// taken against, read without opening anything that decodes. **A subtitle
+/// packet is a cue** — one moment with a payload on it, timed by the demuxer —
+/// so when the words are on screen is knowable without knowing what they are.
+///
+/// Not decoded, and that is the point rather than an economy. A `dvdsub` track
+/// cannot become text and cannot be burned in; *when* it is on screen is the
+/// one thing anybody can say about it, and an answer that needed a decoder
+/// would have nothing to say about half the subtitle tracks there are.
+///
+/// `from` and `to` bound what is **listed**, and not what a copy would take.
+/// A copy seeks backward and then carries the cue that was on screen when it
+/// was asked to start — so a caller asking what a window costs asks for the
+/// whole track and compares, and a window here that meant the copy's would hide
+/// the one cue the comparison is about.
+///
+/// There is no index shortcut, unlike the keyframes: an index answers "which
+/// packets are keyframes" and every subtitle packet is one, so what is wanted
+/// here is the packets themselves. That costs a read of the file up to `to` —
+/// every other stream discarded in the demuxer, so a 1080p sibling costs only
+/// its bytes — which is why `from`/`to` are worth passing and why `complete`
+/// exists.
+///
+/// `Cue::end` is `start` plus the packet's duration and **equals `start` where
+/// the container did not record one**. An `.srt`, Matroska and `mov_text` all
+/// carry it; a format that puts the end inside the payload — a `dvdsub`
+/// bitmap's stop-display command — does not. Equal ends mean "the packets do
+/// not say", which is a different answer from "no time at all".
+///
+/// `Cue::bytes` is the payload's size, and it is carried for one case: mp4's
+/// `mov_text` writes a sample *between* the cues as well as on them — an empty
+/// one, two bytes of zero length — so an mp4's subtitle track has packets where
+/// nothing is on screen and a count of packets is not a count of lines.
+///
+/// The epoch is `streamZero`'s, which is the one a *copy* is measured against,
+/// because this is the packet path. `cueEpoch` in export_subtitle.cpp is the
+/// conversion's, and the two differ only where a container genuinely starts
+/// late (mpegts); its doc comment is where that difference is written down.
+struct Cue {
+    double start = 0.0;
+    double end = 0.0;   ///< == start when the packets do not time the end
+    int bytes = 0;
+};
+
+struct CueTimes {
+    int stream = -1;
+    bool complete = false;
+    double from = 0.0, to = 0.0;
+    std::vector<Cue> cues;  ///< seconds on the input's clock, in the order read
+};
+
+bool cueTimesOf(const MediaInput& in, int stream, double from, double to, int max,
+                CueTimes* out, std::string* err);
 
 /// Every copied stream of one render, and the demuxers they read.
 ///

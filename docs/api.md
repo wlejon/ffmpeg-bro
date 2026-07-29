@@ -216,6 +216,29 @@ bro.ffmpeg.keyframes(path | input, { stream, from, to, max })
 // by the scan not reaching `to`: a list of keyframes that quietly stops is a
 // list somebody would snap to the wrong end of.
 
+// When a subtitle track's cues are on screen. The same shape of query as the
+// keyframes and for the same reason: a window is typed into two fields on the
+// Write stage, and what it does to the cues is a fact about the input which
+// nothing should have to render to discover.
+bro.ffmpeg.cueTimes(path | input, { stream, from, to, max })
+// → { stream, complete, from, to,
+//     cues: [{ start: 1, end: 2, bytes: 9 }, …] }
+// **Times, not text.** This reads packets and never opens a decoder, so it
+// answers for a `dvdsub` track exactly as it answers for an `.srt` — and when
+// a picture of text is on screen is the only thing anybody can say about one.
+// `end` equals `start` where the container did not record a duration, which
+// means "the packets do not say" and not "no time at all". `bytes` is the
+// payload's size, and it is there because mp4's `mov_text` writes an empty
+// sample *between* the cues as well as on them: a count of packets is not a
+// count of lines.
+//
+// `from`/`to` bound what is **listed** and not what a copy would take — a copy
+// seeks backward and carries the cue that was on screen when it was asked to
+// start, so a caller working that out asks for the whole track and compares.
+// There is no index shortcut: an index answers which packets are keyframes and
+// every subtitle packet is one, so this reads the file up to `to` with every
+// other stream discarded in the demuxer.
+
 // The encoder libavformat itself would reach for, given a muxer and a
 // filename — `av_guess_codec`, which is what the `ffmpeg` CLI uses. It matters
 // for one muxer: **`image2`'s extension names a codec, not a container**, so
@@ -696,10 +719,16 @@ streams: [
   //                mov_text in an mp4, ass in a Matroska file, webvtt in a
   //                sidecar with nothing else in it
   //
-  // `copyFrom`/`copyTo` mean here what they mean on a copy: the span read out
-  // of the input, on the input's own clock, with `copyFrom` also being the
-  // output's zero. Unlike a copied picture there are no keyframes to land on —
-  // every cue stands on its own — so a subtitle window can begin anywhere.
+  // `copyFrom`/`copyTo` are the span read out of the input, on the input's own
+  // clock — and **the two ways of reading cut differently out of the same two
+  // numbers**, which is the one thing about them worth knowing. A `decode:`
+  // row keeps a cue by where it *begins*, so a cue that was on screen at
+  // `copyFrom` but started before it is dropped, and `copyFrom` is the output's
+  // zero exactly. A `copy:` row is packets from a backward seek: it begins on
+  // the cue at or before `copyFrom` — still on screen at that moment or long
+  // finished — and *that cue's* stamp is the output's zero. Which is the
+  // keyframe story in subtitle vocabulary. `bro.ffmpeg.cueTimes` is what a
+  // caller draws either against.
   //
   // **Pictures of text are refused rather than converted.** `dvdsub` and
   // `hdmv_pgs_subtitle` carry bitmaps; the pairing is refused by name before

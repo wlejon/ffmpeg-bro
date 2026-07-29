@@ -26,6 +26,11 @@
 // programme-wide cue file are burned in at two different points because they
 // are on two different clocks — see `burnAnchor`.
 //
+// And under that again is **when the cues are**, which is what a row's window
+// has to be read against: two numbers cut a track differently depending on
+// which of the two ways above the row reads it, and until `cueWindow` there was
+// nowhere that said so.
+//
 // What is written here rather than anywhere else is the **escaping**, because
 // it is a trap with a very poor error message. A filtergraph separates a
 // filter's arguments with `:` and separates filters with `,`, so a Windows path
@@ -41,7 +46,7 @@
 // would be a second escaping, and two escapings are how a printed command comes
 // to differ from the render it claims to describe.
 
-import { inputs } from '../inputs.js';
+import { inputs, asInput } from '../inputs.js';
 import { muxerInfo } from './capabilities.js';
 
 /// Every subtitle encoder this build links. Discovered rather than named — see
@@ -241,6 +246,135 @@ export function burnParams(path, ordinal = 0) {
 /// libavfilter's message, and the settle with "these filters leave the picture
 /// on the graphics card", which the clip wears as its `fx` badge.
 export const burnAnchor = (clipId) => `clip:${clipId}/after-decode`;
+
+// ── where the cues are ─────────────────────────────────────────────────────
+//
+// A subtitle row's window is two numbers typed into two fields, and until this
+// existed nothing said what those two numbers *did*. A copied picture has the
+// keyframe strip for exactly that question; a track of cues had a sentence
+// saying there was nothing to snap to, which turned out to be true of one of
+// the two ways a row reads a track and false of the other.
+//
+// **The two ways cut differently, out of the same two numbers.**
+//
+//   - A **conversion** decodes and writes again, and keeps a cue when the cue
+//     *starts* inside the window. The output's zero is the in-point exactly, so
+//     a cue that was on screen at the in-point but began before it is dropped.
+//   - A **copy** is packets, and packets are taken from a backward seek: the
+//     reading begins at the cue at or before the in-point — on screen at that
+//     moment or long finished — and *that cue's* stamp becomes the output's
+//     zero. Which is the keyframe story in subtitle vocabulary, and the reason
+//     this file stopped saying a copy can begin anywhere.
+//
+// Both were established by rendering rather than by reading the renderer: see
+// the copied-subtitle-window checks in `tests/export_test.cpp`.
+
+const cueCache = new Map();
+
+/// Where the cues of the track a row reads are, or null.
+///
+/// `bro.ffmpeg.cueTimes` reads packets and never opens a decoder, so this
+/// answers for a `dvdsub` track as readily as for an `.srt` — when a picture of
+/// text is on screen being the one thing anybody can say about it.
+///
+/// Cached against the input's opening key and the stream, like the keyframes
+/// and for the same reason: the stream list is rebuilt on every keystroke in a
+/// language field, and this one costs a read of the file.
+///
+/// `max` is 500 rather than the native default's 4000. A list this long is
+/// already past what the panel shows, `complete` says when it was cut short,
+/// and the cost of asking for more is a longer read of a file for cues nothing
+/// would draw.
+export function cuesFor(row) {
+    const at = readsInput(row);
+    if (!at) return null;
+    const input = inputs[at.input];
+    if (!input || !input.path) return null;
+    const key = `${input.key}#${at.stream}`;
+    if (!cueCache.has(key)) {
+        try {
+            cueCache.set(key, bro.ffmpeg.cueTimes(asInput(input),
+                                                  { stream: at.stream, max: 500 }));
+        } catch (e) {
+            cueCache.set(key, null);
+        }
+    }
+    return cueCache.get(key);
+}
+
+/// The cue a copy starting at `t` would begin on: the last one at or before it.
+///
+/// At or *before*, and never mind whether it is still on screen — the seek is
+/// backward and takes whole packets, so a window opening in the silence after a
+/// cue still carries that cue. Null when nothing starts before `t`, which is a
+/// different answer from the first cue and must stay one.
+export function cueAtOrBefore(list, t) {
+    if (!list || !list.cues || !list.cues.length) return null;
+    let best = null;
+    for (const c of list.cues) {
+        if (c.start <= t + 1e-6) best = c;
+        else break;
+    }
+    return best;
+}
+
+/// What a row's window does to the track it reads.
+///
+/// One function because three things ask — the list's marks, the sentence under
+/// it and the button that fixes it — and the rule differs between a copy and a
+/// conversion in a way that must not be stated twice.
+///
+/// `zero` is where the output's clock starts, which is the number a person is
+/// really asking about: a cue at 4 s in a window opening at 4.5 s comes out at
+/// 0 through a copy and does not come out at all through a conversion.
+export function cueWindow(row, list) {
+    const from = Math.max(0, Number(row.copyFrom) || 0);
+    const to = Number(row.copyTo) || 0;
+    const converting = isDecode(row);
+    const cues = (list && list.cues) || [];
+    const head = converting ? null : cueAtOrBefore(list, from);
+    // The cue the window opens in the middle of, if there is one: it began
+    // before the in-point and had not finished at it. A copy carries it, a
+    // conversion loses it, and it is the only cue either of them argues about.
+    const onScreen = cues.find((c) => c.start < from - 1e-6 && c.end > from + 1e-6) || null;
+    // Nothing before the in-point means nothing to begin on, and then the copy
+    // begins where it was asked to — which is the renderer's rule as well as
+    // this one: the packet moves the zero earlier and never later.
+    const zero = converting ? from : (head ? head.start : from);
+    const kept = cues.filter((c) => c.start >= zero - 1e-6 &&
+                                    (to <= 0 || c.start <= to + 1e-6));
+    return { from, to, converting, cues, kept, zero, head, onScreen,
+             slip: converting ? 0 : from - zero };
+}
+
+/// What the window costs, as a sentence, or '' when it costs nothing.
+///
+/// The same job `inPointNote` does for a copied picture, and the same rule: the
+/// unacceptable version is not the one that starts somewhere unexpected, it is
+/// the one where nobody was told.
+export function cueWindowNote(row, list) {
+    if (!list || !list.cues.length) return '';
+    const w = cueWindow(row, list);
+    const s = (t) => `${t.toFixed(2)} s`;
+    if (w.converting) {
+        if (!w.onScreen)
+            return `every cue that starts at or after ${s(w.from)} is written, from ` +
+                   `${s(w.from)} as the output’s zero`;
+        return `the cue running ${s(w.onScreen.start)} → ${s(w.onScreen.end)} is on screen ` +
+               `at ${s(w.from)} but starts before it, so a conversion drops it — a cue is ` +
+               `kept by where it begins. The output’s zero is ${s(w.from)} exactly.`;
+    }
+    if (!w.head)
+        return `nothing in the track starts before ${s(w.from)}, so the copy begins there ` +
+               `and ${s(w.from)} is the output’s zero`;
+    if (w.slip < 0.001)
+        return `${s(w.from)} is a cue, so the copy starts exactly there`;
+    const why = w.onScreen ? 'is on screen there'
+                           : 'had already finished, and a copy takes whole packets from a ' +
+                             'backward seek';
+    return `the cue at ${s(w.zero)} ${why}, so a copy asked for ${s(w.from)} begins on it — ` +
+           `and that cue, not ${s(w.from)}, is where the output’s clock starts`;
+}
 
 // There was an `isSubtitlePath(path)` here, over a list of extensions built by
 // asking libavformat which muxers declare a subtitle codec and neither a video

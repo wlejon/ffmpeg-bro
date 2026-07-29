@@ -162,6 +162,75 @@ bool keyframesOf(const MediaInput& in, int stream, double from, double to, int m
     return true;
 }
 
+// ── Where the cues are ─────────────────────────────────────────────────────
+
+bool cueTimesOf(const MediaInput& in, int stream, double from, double to, int max,
+                CueTimes* out, std::string* err) {
+    AVFormatContext* fmt = nullptr;
+    if (!openInput(&fmt, in, err)) return false;
+
+    if (stream < 0) stream = av_find_best_stream(fmt, AVMEDIA_TYPE_SUBTITLE, -1, -1, nullptr, 0);
+    if (stream < 0 || static_cast<unsigned>(stream) >= fmt->nb_streams ||
+        fmt->streams[stream]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE) {
+        // Named as the wrong kind rather than as an absence when the caller
+        // asked for a particular stream: "stream 1 is audio" is actionable and
+        // "no cues" is a file somebody goes looking through.
+        *err = in.path + (stream >= 0 && static_cast<unsigned>(stream) < fmt->nb_streams
+                              ? " stream " + std::to_string(stream) + " is not subtitles"
+                              : " has no subtitle stream to read cues from");
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    AVStream* st = fmt->streams[stream];
+    const double epoch = streamZero(st, in);
+    const double limit = inputLimit(in);
+    if (max <= 0) max = 4000;
+    if (to <= 0.0 || (limit > 0.0 && to > limit)) to = limit;
+
+    out->stream = stream;
+    out->from = from;
+    out->to = to;
+
+    for (unsigned i = 0; i < fmt->nb_streams; ++i)
+        fmt->streams[i]->discard = (static_cast<int>(i) == stream) ? AVDISCARD_DEFAULT
+                                                                   : AVDISCARD_ALL;
+    // Seeked backward and on the subtitle stream itself, which are the two
+    // decisions every seek in this file makes — but note what `from` means
+    // here: it bounds what is *listed*, not what a copy would take. A copy
+    // seeks backward too and then carries the cue that was on screen at its
+    // in-point, so a caller working that difference out asks for the whole
+    // track and compares. Making this window mean the copy's would hide the
+    // one cue the comparison is about.
+    if (from > 0.0)
+        av_seek_frame(fmt, stream, seekTarget(st, in, from), AVSEEK_FLAG_BACKWARD);
+
+    AVPacket* pkt = av_packet_alloc();
+    if (!pkt) { *err = "out of memory"; avformat_close_input(&fmt); return false; }
+    for (;;) {
+        av_packet_unref(pkt);
+        if (av_read_frame(fmt, pkt) < 0) { out->complete = true; break; }
+        if (pkt->stream_index != stream || !haveStamp(pkt)) continue;
+        const double t = stampOf(pkt) * av_q2d(st->time_base) - epoch;
+        if (to > 0.0 && t > to + 1e-6) { out->complete = true; break; }
+        if (t < from - 1e-6) continue;
+        Cue c;
+        c.start = t;
+        c.end = pkt->duration > 0 ? t + pkt->duration * av_q2d(st->time_base) : t;
+        c.bytes = pkt->size;
+        out->cues.push_back(c);
+        if (static_cast<int>(out->cues.size()) >= max) break;
+    }
+    av_packet_free(&pkt);
+    avformat_close_input(&fmt);
+    // Left in the order they were read rather than sorted, which is the one
+    // place this differs from `keyframesOf` on purpose: cues are presentation
+    // times and do not reorder, so a list that arrived out of order is a fact
+    // about the file — an overlapping pair in an ASS track, layered on
+    // purpose — and sorting it would hide the only evidence of it.
+    return true;
+}
+
 // ── The copied streams of one render ───────────────────────────────────────
 
 CopyStreams::Reader::~Reader() {
@@ -305,15 +374,34 @@ void CopyStreams::fill(Reader& r) {
             continue;
         }
 
-        // The first packet out of this input decides its zero, for every stream
-        // taken from it. One zero per input rather than one per stream is the
-        // whole of A/V sync across a copy: taken per stream, a soundtrack would
-        // move by however far the picture's first keyframe was from it.
+        // **Where the copy was asked to begin is this input's zero, and the
+        // first packet only ever moves it earlier.** One zero per input rather
+        // than one per stream is the whole of A/V sync across a copy: taken per
+        // stream, a soundtrack would move by however far the picture's first
+        // keyframe was from it.
+        //
+        // The first packet alone is not that zero, and the difference is
+        // invisible on a picture and glaring on a track of cues. A seek lands
+        // at or before the in-point, so the packet it finds *is* the zero and
+        // has to be — a keyframe found at 4.0 for a cut asked at 4.2 must come
+        // out at zero rather than at −0.2. But `streamOrigin` says a stream
+        // begins where its index or its `start_time` says, and a subtitle track
+        // has neither: its first *packet* is its first cue, a minute into the
+        // programme if that is where somebody speaks. Taken as the zero, an
+        // untrimmed copy of that track came out a minute early — against a
+        // picture that is encoded rather than copied, and so has no say in this
+        // input's epoch at all. Which is the ordinary shape of "re-encode the
+        // video, keep the subtitles".
+        //
+        // So: the moment asked for, in the same container terms the packet is
+        // in, and the packet where it is earlier.
         if (!r.haveEpoch) {
             const AVRational tb = r.fmt->streams[r.pending->stream_index]->time_base;
+            const Tap* t = r.pendingTaps.front();
+            const double raw = stampOf(r.pending) * av_q2d(tb);
+            const double asked = t->from + t->zero;
             r.haveEpoch = true;
-            r.epochUs = static_cast<int64_t>(std::llround(stampOf(r.pending) * av_q2d(tb) *
-                                                          AV_TIME_BASE));
+            r.epochUs = static_cast<int64_t>(std::llround(std::min(raw, asked) * AV_TIME_BASE));
         }
         r.havePending = true;
     }

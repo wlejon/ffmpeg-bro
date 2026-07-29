@@ -46,7 +46,8 @@ import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
 import * as command from './command.js';
 import * as report from './report.js';
 import { previewSpec, specSources } from './export/spec.js';
-import { subtitleOrdinal, burnParams, burnAnchor, canBurn } from './export/subtitles.js';
+import { subtitleOrdinal, burnParams, burnAnchor, canBurn,
+         cuesFor, cueWindow } from './export/subtitles.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -1281,7 +1282,10 @@ globalThis.__ffmpegBro = {
     // reason `parseEnable` is: `si=` counts subtitle streams rather than
     // streams, which is a rule about shapes of file no fixture here has, and
     // the way to check a counting rule is to count something.
-    subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn },
+    // `cueWindow` is here on the same argument again: which cues a window keeps
+    // differs between a copy and a conversion, and the way to check a rule
+    // about which is to hand it rows of both kinds and count what survives.
+    subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn, cuesFor, cueWindow },
     exporter, capture,
     filtergraph, renderGraph, shell, command, report,
     // The graph beneath filtergraph(): tests written against the model itself

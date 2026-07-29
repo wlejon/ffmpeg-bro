@@ -243,6 +243,89 @@ A.exporter.currentSettings().container = before;
 A.exporter.redraw();
 pump(60);
 
+// ── what the window does to the cues ───────────────────────────────────────
+//
+// Two numbers on the row cut the track, and they cut it **differently
+// depending on how the row reads it**: a conversion keeps a cue by where it
+// begins, and a copy takes whole packets from a backward seek, so the cue that
+// was on screen at the in-point comes too and its stamp — not the in-point —
+// becomes the output's zero. The fixture's cues are at 1–2, 4–5.5 and 7–8, so
+// an in-point of 4.5 is inside the second one and the two ways disagree about
+// it. That disagreement is the whole section.
+
+console.log('\nwhere the cues are');
+const cueList = bro.ffmpeg.cueTimes(cues);
+ok(cueList.cues.length === 3,
+   `libavformat reports the cues off the packets, no decoder opened (${cueList.cues.length})`);
+ok(Math.abs(cueList.cues[1].start - 4) < 0.01 && Math.abs(cueList.cues[1].end - 5.5) < 0.01,
+   `each with the span it is on screen for (${cueList.cues[1].start}–${cueList.cues[1].end})`);
+
+// The detail panel is where the window lives, and the row was left open by the
+// picker above; opened here rather than assumed, because which row is open is
+// state this suite has been moving around.
+if (!q(`[data-stream="${srow.id}"] .ex-cue`)) {
+    click(q(`[data-stream="${srow.id}"] [data-f="detail"]`));
+    pump(60);
+}
+const drawn = qq(`[data-stream="${srow.id}"] .ex-cue`);
+same(drawn.length, 3, 'the row draws one entry per cue');
+ok(drawn[1].textContent.indexOf('4.00') >= 0 && drawn[1].textContent.indexOf('5.50') >= 0,
+   `written as the span it covers rather than as a mark (${drawn[1].textContent})`);
+
+type(q(`[data-stream="${srow.id}"] [data-f="copy-copyFrom"]`), '4.5');
+pump(60);
+
+// A conversion: the cue on screen at 4.5 began at 4.0, so it is dropped.
+const conv = A.subtitles.cueWindow(srow, cueList);
+same(conv.kept.length, 1,
+     'a conversion opening at 4.5 s keeps only the cue that starts after it');
+same(conv.zero, 4.5, 'and the output’s zero is the moment asked for, exactly');
+const convNote = q(`[data-stream="${srow.id}"] .ex-copy-note`).textContent;
+ok(convNote.indexOf('drops it') >= 0,
+   `the row says the cue is lost rather than leaving it to the file (${convNote.slice(0, 60)}…)`);
+const snap = q(`[data-stream="${srow.id}"] [data-f="cue-snap"]`);
+ok(!!snap && snap.textContent.indexOf('4.00') >= 0,
+   `and offers the cue’s own start as the fix (${snap && snap.textContent})`);
+click(snap);
+pump(60);
+same(srow.copyFrom, 4, 'pressing it opens the window on that cue');
+same(A.subtitles.cueWindow(srow, cueList).kept.length, 2, 'which takes it back in');
+
+// The same two numbers, carried instead of converted. Nothing about the file
+// changed; what the window means did.
+choose(q(`[data-stream="${srow.id}"] [data-f="stream-source"]`), 'copy:1:0');
+pump(60);
+if (!q(`[data-stream="${srow.id}"] .ex-cue`)) {
+    click(q(`[data-stream="${srow.id}"] [data-f="detail"]`));
+    pump(60);
+}
+type(q(`[data-stream="${srow.id}"] [data-f="copy-copyFrom"]`), '4.5');
+pump(60);
+const copyWin = A.subtitles.cueWindow(srow, cueList);
+same(copyWin.kept.length, 2,
+     'a copy opening at 4.5 s keeps the cue that was on screen there as well');
+same(copyWin.zero, 4, 'because the copy begins on that cue, which becomes the output’s zero');
+const copyNote = q(`[data-stream="${srow.id}"] .ex-copy-note`).textContent;
+ok(copyNote.indexOf('4.00') >= 0 && copyNote.indexOf('clock starts') >= 0,
+   `and the row says where the clock really starts (${copyNote.slice(0, 60)}…)`);
+ok(Array.from(qq(`[data-stream="${srow.id}"] .ex-cue`))
+        .filter((n) => n.className.indexOf('on') >= 0).length === 1,
+   'one entry is marked as the one the output starts on');
+
+// A window that opens *after* a cue has finished still carries it, which is
+// the part of the packet path that surprises people: the seek is backward and
+// takes whole packets, so 6 s — silence between two cues — still begins on the
+// one at 4 s.
+type(q(`[data-stream="${srow.id}"] [data-f="copy-copyFrom"]`), '6');
+pump(60);
+same(A.subtitles.cueWindow(srow, cueList).zero, 4,
+     'and a window opening in the silence after a cue still begins on it');
+
+choose(q(`[data-stream="${srow.id}"] [data-f="stream-source"]`), 'decode:1:0');
+srow.copyFrom = 0;
+A.exporter.redraw();
+pump(60);
+
 // ── the honesty ────────────────────────────────────────────────────────────
 
 console.log('\nwhat cannot be shown');

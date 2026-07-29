@@ -1554,6 +1554,27 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
     height: 18px;
     background: var(--accent);
 }
+/* Where the cues are. A list rather than a strip, because a cue is a span with
+   a length worth reading and the useful question is which of them the window
+   keeps — so each is written out with its times and each is a place to move the
+   in-point to. Dimmed is outside the window; the accent is the one the output's
+   clock starts on. */
+.ex-cues { display: flex; flex-wrap: wrap; gap: 3px; }
+.ex-cue {
+    font-family: Consolas, monospace;
+    font-size: var(--fs-xs);
+    min-width: 0;
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+}
+.ex-cue:hover { border-color: var(--text); }
+.ex-cue.out { color: var(--dim); border-style: dashed; }
+.ex-cue.on { color: var(--accent); border-color: var(--accent); }
+
 .ex-copy-note { font-size: var(--fs-sm); line-height: 1.5; padding: 3px 0; }
 .ex-copy-note.warn { color: var(--accent); }
 .cmd-note {

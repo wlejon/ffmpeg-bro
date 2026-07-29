@@ -1636,6 +1636,44 @@ because libavfilter's subtitles filter is libass and libass reads characters.
 Which family a codec is in is libavcodec's own `AV_CODEC_PROP_TEXT_SUB`, and
 `probe()` reports it per track as `textSub`.
 
+**The window is two numbers, and the two ways of reading cut differently out of
+them.** `From` and `To` are seconds into the file, the same pair a copied
+picture has — and where a picture has keyframes, a track of cues has the cues
+themselves, drawn as a list under the fields with each one written as the span
+it is on screen for. Dimmed is outside the window; the one the output's clock
+starts on is picked out; clicking any of them opens the window there.
+
+The two rules the list is drawn against are not the same rule:
+
+| | |
+|---|---|
+| **convert** | a cue is kept by where it **begins**, so one that was on screen at the in-point but started before it is dropped. `From` is the output's zero, exactly |
+| **carry** | packets, from a backward seek: the copy begins on the cue at or before `From` — still on screen at that moment or long finished — and **that cue's** stamp is the output's zero |
+
+Which is the keyframe story in subtitle vocabulary, and it is why this used to
+say a subtitle window can begin anywhere. It can, if the row converts. Set a
+copied row's `From` to 4.5 s over cues at 1–2, 4–5.5 and 7–8 and the file that
+comes out has two cues in it, the first at zero, because 4 s is where the
+packets start; the same two numbers through a conversion write one cue and zero
+the file half a second later. So the row says which of the two it is doing —
+
+> the cue at 4.00 s is on screen there, so a copy asked for 4.50 s begins on it
+> — and that cue, not 4.50 s, is where the output's clock starts
+
+with `Snap to 4.00 s` beside it, or `Start at 4.00 s` on a conversion, where
+the same press means "take that cue back in" rather than "say what will happen
+anyway".
+
+Where the cues are is read off the **packets** — `bro.ffmpeg.cueTimes`, which
+never opens a decoder — so the list is drawn for a `dvdsub` track exactly as it
+is for an `.srt`. When a picture of text is on screen is the one thing anybody
+can say about one. Two things the list states rather than tidies away: an mp4
+writes an empty sample between one cue and the next, so some entries in a
+`mov_text` track are the gaps rather than the lines; and a track long enough to
+be worth cutting has more cues than a panel can show, so sixteen are drawn —
+the ones the window's two ends fall among — with the count saying how many
+there are in total.
+
 ### Burning them in
 
 Two buttons, because there are two clocks a set of cues can be on and they are
@@ -1751,6 +1789,18 @@ afterwards. It leaves the container alone, which is the whole of the remaining
 decision and is taken on its own control a foot away; a subtitle track the new
 container will not hold is refused by name, with the row still there to be
 switched from carrying it to converting it.
+
+**Where a copy begins is where it was asked to begin, and the packet it finds
+only ever moves that earlier.** The seek lands at or before the in-point, so a
+keyframe found at 4.00 s for a cut asked at 4.20 s is what the file starts on —
+that has to be, or the output would start at −0.20 s. What it must not do is
+move the zero *later*, which is what taking the first packet alone did to a
+carried subtitle track: a stream's start is its index's or its `start_time`'s,
+and a track of cues has neither, so its first packet is its first line — a
+minute in, if that is where somebody speaks. An untrimmed copy of that track
+came out a minute early against a picture that was encoded rather than copied,
+and so had no say in the input's zero. Which is the most ordinary render there
+is: keep the video, keep the subtitles.
 
 **A copy can only start at a keyframe**, and that is the one cost worth knowing
 about the whole packet path. Open a copied row and the keyframes are drawn on
@@ -2445,6 +2495,14 @@ made as a file, because two subtitle tracks in one container is not a fact any
 fixture here exists for; the end-to-end half runs against the mp4 the same test
 rendered a page earlier.
 
+The window is driven twice over the same two numbers, once with the row
+carrying and once with it converting, because the two keep different cues: at
+an in-point of 4.5 s a conversion keeps one of the fixture's three and zeroes
+the output at 4.5, and a copy keeps two and zeroes it at 4. Both claims are
+made against a rendered file in the export suite as well as against the panel
+here, since which cues survive a window is exactly the sort of thing a UI can
+be confidently wrong about on its own.
+
 The fixture generator writes `cues.srt` and `cues.ass` beside the video, with
 the cues placed so that a burn-in is **measurable**: a second of picture with
 nothing over it, a second with a line over it, a second with nothing again. The
@@ -2854,12 +2912,15 @@ Honest list of what does not work:
   expressible — the packets are pictures and `overlay` draws pictures — but
   nothing here reads an input for its subtitle pad, so there is no wire to draw.
   Both refusals name the reason rather than failing at the first cue.
-- **A subtitle stream on the packet path's terms.** A copied subtitle track is
-  the whole track: `copyFrom`/`copyTo` cut the *span* read out of it, which is
-  what the renderer does, but nothing on the Write stage draws that against the
-  cues the way the keyframe strip draws a copied picture. There is nothing to
-  snap to, so a strip would be decoration; a list of where the cues are would
-  not be, and it is not built.
+- **What a cue says, anywhere on the Write stage.** Where the cues are is drawn
+  now — see [A track beside the picture](#a-track-beside-the-picture) — and it
+  is times and nothing else, because it is read off the packets. So a window
+  can be placed against the cue it lands in without the line it is cutting into
+  being readable, which is the half of the question a person actually has when
+  they are deciding where a programme starts. The words are a decoder per
+  track, kept alive while the panel is open, and for `dvdsub` they are a
+  picture with no text in it at all — so it is a second query with a second
+  cost rather than a column this one forgot to fill in.
 - **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
   `<video>` drives its clock from decoded pictures, so a file with exactly one
   has nothing to advance through, and the element shows the frame and reports
