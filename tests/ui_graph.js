@@ -2095,6 +2095,79 @@ if (!media) {
         pump(160);
     }
 
+    // ── a generator whose numbers have drifted ─────────────────────────────
+    //
+    // A source is placed carrying the render's size and rate, so the ordinary
+    // case simply agrees. Change the output size afterwards and it does not
+    // chase — and until this existed the first anybody heard of it was the
+    // render being refused, which is being told about a decision in the wrong
+    // place and twenty minutes late.
+    //
+    // What is asserted is that it *states* the disagreement rather than
+    // predicting a failure: whether a particular generator's size reaches the
+    // output depends on what is wired after it, and a `color` feeding an
+    // overlay as a badge is meant to be its own size.
+    console.log('\na generator carrying numbers the render has moved on from');
+    {
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+
+        const S = A.exporter.currentSettings();
+        const wasW = S.width, wasH = S.height;
+        const spec = A.exporter.buildSpec();
+        const placed = `${spec.width}x${spec.height}`;
+        const gen = overlay.addNode('testsrc', { params: { size: placed, rate: '25' } });
+        A.graph.draw();
+        pump(200);
+
+        const select = () => {
+            const card = document.querySelector(`#gr-nodes [data-key="${gen.id}"]`);
+            card.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+            pump(200);
+        };
+        select();
+        ok(!document.querySelector('#gr-panel .gp-drift'),
+           'a generator placed at the render’s size says nothing, because there is nothing ' +
+           'to say');
+
+        // The render moves and the node does not. Set explicitly rather than
+        // doubled: `settings.width` is 0 by default, meaning "whatever the
+        // project canvas is", and doubling nothing is nothing.
+        S.width = spec.width * 2; S.height = spec.height * 2;
+        A.exporter.redraw();
+        A.graph.draw();
+        pump(200);
+        select();
+
+        const drift = document.querySelector('#gr-panel .gp-drift');
+        ok(!!drift, 'changing the output size says so on the node, before any render');
+        const moved = `${spec.width * 2}x${spec.height * 2}`;
+        ok(drift.textContent.indexOf(placed) >= 0 &&
+           drift.textContent.indexOf(moved) >= 0,
+           `naming both numbers rather than one (${drift.textContent.slice(0, 150)})`);
+        ok(/depends on what is wired after it/.test(drift.textContent),
+           'and saying it is a disagreement rather than a certainty — a generator feeding ' +
+           'an overlay is meant to be its own size');
+
+        const match = document.querySelector('#gr-panel [data-f="match-render"]');
+        ok(!!match, 'with the offer to bring it up to date');
+        match.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(240);
+        const after = overlay.nodes().find((n) => n.id === gen.id);
+        same(after.params.size, moved,
+             'one press writes what placing it today would have written');
+        select();
+        ok(!document.querySelector('#gr-panel .gp-drift'),
+           'and the node stops saying anything, because it now agrees');
+
+        S.width = wasW; S.height = wasH;
+        A.exporter.redraw();
+        overlay.clear();
+        A.graph.draw();
+        pump(200);
+    }
+
     // ── the When strip ─────────────────────────────────────────────────────
     //
     // The claim being checked is that the strip and the `enable` text are one

@@ -2259,6 +2259,16 @@ select.gn-f { text-align: left; }
     background: rgba(255, 107, 107, 0.08);
     border-radius: 3px;
 }
+/* A statement of fact, not a refusal. Everything else in `.gp-problem` is
+   something ffmpeg will reject; a generator whose numbers have drifted may be
+   perfectly fine — it depends on what is wired after it — so it is drawn in the
+   accent that means "look at this" rather than the red that means "this fails".
+   Sharing the box keeps them in one place to look; sharing the colour would
+   make the red mean two things. */
+.gp-problem.gp-drift {
+    color: var(--accent);
+    background: rgba(255, 176, 89, 0.10);
+}
 .gr-bad { color: var(--bad); }
 /* A socket that names its own stream wins over the card's, because an input node
    is not on one stream: a file's picture and its sound leave the same card, and

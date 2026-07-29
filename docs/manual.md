@@ -646,8 +646,25 @@ pad you were trying to fill.
 A generator arrives carrying **the size and the frame rate the render is**, read
 out of the filter's own option table. That is not decoration: a graph whose last
 pad is a different size from the render is refused rather than quietly rescaled,
-so filling it in at the moment of placing means the ordinary case simply agrees
-and changing it afterwards is a decision you get told about.
+so filling it in at the moment of placing means the ordinary case simply agrees.
+
+It does not chase them afterwards, and **the node says so where the numbers
+are**. Change the output size and the generator's column carries both — *this
+`testsrc` was placed carrying the render's numbers and they have changed since:
+size 640x360, and the render is 1280x720* — with `Match the render` beside it,
+which writes what placing it today would have written. That is one press and not
+a binding, for the reason `Follow the clip` on a copied stream is one: a value
+that silently rewrote itself would stop being the value you typed.
+
+**It states the disagreement rather than predicting a failure**, and the
+difference is the point. Whether a particular generator's size reaches the
+output depends on what is wired after it — a `color` feeding an `overlay` as a
+badge is *meant* to be its own size, and a `scale` in between settles it either
+way — so the note says what the two numbers are and where each came from, which
+cannot be wrong, and leaves the refusal at render time to be the authority on
+what the graph actually does. It is drawn in the accent rather than the red the
+rest of the node's problems use, because everything else in that box is
+something ffmpeg will reject and this may be perfectly fine.
 
 **A generator has no length.** It goes on producing for as long as it is asked
 to, so with clips on the timeline the render's range is what stops it, and with
@@ -2306,10 +2323,13 @@ Honest list of what does not work:
   playing in an ordinary `<video>` — and what it does not have is the other
   half: a session is pushed by devices on the wall clock, and a timeline is
   pulled by a playhead that can be dragged.
-- **A generator that follows the render.** A source is placed carrying the
-  render's size and rate, and it does not chase them: change the output size
-  afterwards and the graph is refused with both numbers rather than rescaled.
-  Refusing is the right half of that; noticing before the render is not done.
+- **A generator that follows the render on its own.** A source now says when
+  its numbers and the render's have drifted apart, and `Match the render` brings
+  it up to date in one press — but nothing does it unasked, because a `color`
+  feeding an `overlay` as a badge is *meant* to be its own size and there is no
+  way to tell those apart from the node alone. Deciding it would mean tracing
+  what each generator reaches and what resizes it on the way, which is a real
+  piece of work and not a missing line.
 - **A project file.** What you insert, lock, place and wire is remembered in
   `localStorage`, which is per machine rather than per edit. It was the first
   thing that made a document format worth having and is now most of the reason —

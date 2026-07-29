@@ -342,6 +342,7 @@ function nodePanel(node) {
     out.push(...padRows(node));
 
     const options = optionsOf(node.filter);
+    out.push(...driftRows(node, options));
     out.push(...positionalRows(node, options));
     // **`enable` is written by a control and edited as text, and they are the
     // same mechanism** — the strip parses the expression and prints one back,
@@ -712,6 +713,63 @@ function inputRow(pad, input) {
     }, [span(input.name, 'gp-fname mono'),
         span(streams.map((s) => (s === 'a' ? 'sound' : 'picture')).join(' · '), 'gp-badge'),
         span(input.path, 'dim')]);
+}
+
+/// A generator still carrying the numbers the render had when it was placed.
+///
+/// **The other half of a refusal.** `sourceDefaults` fills a `testsrc`'s size
+/// and rate in from the render at the moment it is placed, so the ordinary case
+/// simply agrees; change the output size afterwards and the two disagree, and
+/// the render is refused with both numbers. Refusing is right — a writer opened
+/// for one size being handed another is a scaler quietly resizing every frame —
+/// but being told at render time about a decision taken twenty minutes earlier
+/// is being told in the wrong place.
+///
+/// **It states the disagreement rather than predicting a failure.** Whether a
+/// particular generator's size actually reaches the output depends on what is
+/// wired downstream of it — a `color` feeding an `overlay` as a badge is
+/// legitimately a different size from the render, and a `scale` in between
+/// settles it either way. So this says what the two numbers are and where each
+/// came from, which cannot be wrong, and leaves the refusal at render time to
+/// be the authority on what the graph does.
+///
+/// The button is the "follows the render" half: one press writes what
+/// `sourceDefaults` would have written today. It is a press and not a binding
+/// for the reason `Follow the clip` is — a value that silently rewrote itself
+/// would stop being the value somebody typed.
+function driftRows(node, options) {
+    if (!node || node.kind !== 'filter' || !isSource(node.filter)) return [];
+    const want = sourceDefaults(node.filter);
+    const keys = Object.keys(want);
+    if (!keys.length) return [];
+
+    // Only what was actually set: a generator left on its own default is not a
+    // generator carrying a stale number, it is one nobody has told anything.
+    const drifted = keys.filter((k) => node.params[k] !== undefined &&
+                                       String(node.params[k]) !== String(want[k]));
+    if (!drifted.length) return [];
+
+    const label = { size: 'size', rate: 'frame rate', sample_rate: 'sample rate' };
+    const said = drifted.map((k) => `${label[k] || k} ${node.params[k]}, and the render is ` +
+                                    `${want[k]}`).join('; ');
+    return [
+        div('gp-problems', div('gp-problem gp-drift',
+            `This ${node.filter} was placed carrying the render's numbers and they have ` +
+            `changed since: ${said}. Whether that matters depends on what is wired after ` +
+            `it — a generator feeding an overlay is meant to be its own size — but a graph ` +
+            `whose last pad is not the render's size is refused when it runs.`)),
+        div('gp-actions', el('button', {
+            cls: 'tiny', text: 'Match the render', 'data-f': 'match-render',
+            title: drifted.map((k) => `${k}=${want[k]}`).join(' '),
+            on: { click: () => {
+                noteEdit();
+                const params = {};
+                for (const k of drifted) params[k] = want[k];
+                overlay.edit(node, { params });
+                changed();
+            } },
+        })),
+    ];
 }
 
 /// What the render already knows, written into a generator as it is placed.
