@@ -429,6 +429,44 @@ bro.ffmpeg.record.start({ sources: [{ path: 'desktop', format: 'gdigrab' },
 // oscillators and a repeated block of samples is audible where a repeated
 // picture is not. See ffmpeg_capture.h for why each of those is what it is.
 
+// **`also` is the other files this one recording writes, all at once.** Each
+// entry is a whole output spec — the same shape the recording's own output is,
+// read by the same reader — so it names its muxer, its encoders, its options
+// and its `streams`. A stream fed from `pad:<label>` is `-map [label]`: that is
+// how a second file says which of the graph's ends it is of.
+bro.ffmpeg.record.start({ sources: [{ path: 'video=Cam A', format: 'dshow' },
+                                    { path: 'video=Cam B', format: 'dshow' }],
+                          filterGraph: '[0:v][1:v]hstack[vout];' +
+                                       '[vout]split[x][y];[y]crop=iw/2:ih:0:0[left]',
+                          path: 'out/both.mkv', format: 'matroska',
+                          also: [{ path: 'out/left.mkv', format: 'matroska',
+                                   streams: [{ kind: 'video', source: 'pad:left' }] }] })
+
+// This is what `-f tee` is *not*: tee writes one encode to several places, and
+// two files off two pads are two encodes of two different pictures. It is also
+// what a render's `passes` cannot be here — a render writes two sizes by
+// walking its range twice, and a recording has no second walk, so its files are
+// several muxers open beside each other on the end of one pass.
+//
+// Session-wide and not per file: the devices, the graph, `-t`, the sample rate
+// and the channel count, and the **rate** — placing a frame is turning the
+// moment it arrived into an output frame number, and two files answering that
+// differently would disagree about when the recording started. `fps` on an
+// `also` entry is not read. Per file: `path`, `format`, the encoders and their
+// options, `streams`, and `width`/`height` — a file that names a size keeps it
+// (the writer's scaler takes the difference), and one that names none takes the
+// pad's. An absent `also` is the recording that writes one file, which is every
+// caller that has never heard of the field.
+//
+// Refused, with the path named: **two files aimed at one path**. One muxer per
+// file, and two writing to one interleave into something no player reads.
+//
+// `piecesWritten` still means what it means for a render — what a muxer opened
+// *beyond* the file it was named with, the segments of a `segment` run, the
+// slaves of a `tee` — so two files asked for by name report zero. `bytes` is
+// the sum of all of them; `framesDone` is the first file's, because a counter
+// that jumped between two files' clocks would be about neither.
+
 // `source.t` is `-t`: how long to record for, and **zero means until stopped**.
 // It stays per input with a `sources` list, and **the shortest of them is the
 // session's** — an input that has run out has nothing further to offer the

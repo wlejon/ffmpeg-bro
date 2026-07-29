@@ -1314,6 +1314,144 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── several files, one reading ─────────────────────────────────────────
+    //
+    // The section above is the other answer to "two outputs" and the two are
+    // constantly mistaken for each other: `tee` writes *one* encode to several
+    // places, and this writes several encodes off one reading of the devices.
+    // So what is asserted here is exactly what `tee` cannot do — two files that
+    // are different pictures, and two files at different sizes — and it is
+    // asserted by *reading them back*, because a size check alone passes for a
+    // second copy of the master and the whole point is that it is not one.
+    std::printf("\nSeveral files out of one recording\n");
+    if (!avcodec_find_encoder_by_name("libx264")) {
+        std::printf("  SKIP  no libx264 in this build\n");
+    } else {
+        const std::string whole = dir + "/capture-two-whole.mp4";
+        const std::string part = dir + "/capture-two-part.mp4";
+        std::filesystem::remove(whole);
+        std::filesystem::remove(part);
+
+        // `split` because a pad is read once: the graph shows the whole picture
+        // at [vout] and the top-left quarter of it at [corner], and no scale
+        // anywhere — the sizes below are the pads' own.
+        CaptureSettings c = recording(lavfi("testsrc=size=320x240:rate=25", 1.0), whole,
+                                      "[0:v]split=2[a][b];[a]null[vout];"
+                                      "[b]crop=160:120:0:0[corner]");
+        c.output.includeAudio = false;
+        c.output.faststart = false;
+
+        ExportSettings second = c.output;
+        second.path = part;
+        second.streams.clear();
+        ExportStream v;
+        v.kind = "video";
+        v.source = "pad:corner";
+        v.codec = "libx264";
+        second.streams.push_back(v);
+        c.outputs = {c.output, second};
+
+        std::string err;
+        if (!startCapture(c, &err)) {
+            checkf(false, "a recording of two files starts: %s", err.c_str());
+        } else {
+            const ExportStatus st = waitForJob(30.0);
+            checkf(st.state == ExportStatus::State::Done, "it finishes%s%s",
+                   st.error.empty() ? "" : ": ", st.error.c_str());
+            // Zero, and that is the right answer: `piecesWritten` is what a
+            // muxer opened *beyond* the file it was named with — the segments
+            // of a `segment` run, the slaves of a `tee` — and two files asked
+            // for by name are not a number anybody had to discover. It is the
+            // section above that has two here.
+            checkf(st.piecesWritten == 0,
+                   "and neither muxer wrote anything but the file it was named with (%lld)",
+                   static_cast<long long>(st.piecesWritten));
+
+            const Opened a = openResult(whole);
+            const Opened b = openResult(part);
+            check(a.ok && b.ok, "both of them open");
+            checkf(a.width == 320 && a.height == 240,
+                   "the first is the composite pad's size (%dx%d)", a.width, a.height);
+            checkf(b.width == 160 && b.height == 120,
+                   "and the second is its own pad's (%dx%d)", b.width, b.height);
+            check(a.indexed && b.indexed, "and both trailers went down");
+
+            // **The one check `tee` would fail.** A crop of the top-left of
+            // `testsrc` is not the average of the whole of it, so two files
+            // that were one encode written twice read the same here and two
+            // files off two pads do not.
+            const Mean full = meanOf(whole, 0, 2);
+            const Mean corner = meanOf(part, 0, 2);
+            check(full.ok && corner.ok, "and both have a picture in them to read");
+            checkf(away(full, corner) > 8.0,
+                   "the second file is the other pad, not a copy of the first "
+                   "(%.0f,%.0f,%.0f against %.0f,%.0f,%.0f)",
+                   full.r, full.g, full.b, corner.r, corner.g, corner.b);
+        }
+    }
+
+    // ── the proxy: one pad, two sizes ──────────────────────────────────────
+    //
+    // The other reason for a second file, and the one that has no graph in it
+    // at all: the same picture, encoded again smaller. A size named on the file
+    // has to survive the composite pad settling, which is the one thing
+    // `Output::sizeAsked` exists for — without it the pad's size lands on every
+    // file and the proxy comes out the master's size.
+    std::printf("\nA proxy beside the master\n");
+    if (!avcodec_find_encoder_by_name("libx264")) {
+        std::printf("  SKIP  no libx264 in this build\n");
+    } else {
+        const std::string master = dir + "/capture-master.mp4";
+        const std::string proxy = dir + "/capture-proxy.mp4";
+        std::filesystem::remove(master);
+        std::filesystem::remove(proxy);
+
+        CaptureSettings c = recording(lavfi("testsrc=size=320x240:rate=25", 1.0), master, "");
+        c.output.includeAudio = false;
+        c.output.faststart = false;
+
+        ExportSettings small = c.output;
+        small.path = proxy;
+        small.width = 160;
+        small.height = 120;
+        c.outputs = {c.output, small};
+
+        std::string err;
+        if (!startCapture(c, &err)) {
+            checkf(false, "a recording with a proxy starts: %s", err.c_str());
+        } else {
+            const ExportStatus st = waitForJob(30.0);
+            checkf(st.state == ExportStatus::State::Done, "it finishes%s%s",
+                   st.error.empty() ? "" : ": ", st.error.c_str());
+            const Opened a = openResult(master);
+            const Opened b = openResult(proxy);
+            check(a.ok && b.ok, "both of them open");
+            checkf(a.width == 320 && a.height == 240,
+                   "the master is the device's own size (%dx%d)", a.width, a.height);
+            checkf(b.width == 160 && b.height == 120,
+                   "and the proxy is the size it asked for (%dx%d)", b.width, b.height);
+
+            // Same picture, half the size: the means agree where the section
+            // above's disagree, which is what says these two checks are testing
+            // two different things rather than the same one twice.
+            const Mean big = meanOf(master, 0, 2);
+            const Mean lil = meanOf(proxy, 0, 2);
+            check(big.ok && lil.ok, "and both have a picture to read");
+            checkf(away(big, lil) < 8.0, "and it is the same picture (%.0f apart)",
+                   away(big, lil));
+        }
+
+        // Two files at one path is one file written twice, and the muxers
+        // interleave into something no player reads. Refused by the call that
+        // asked, while the path that was wrong is still on screen.
+        CaptureSettings same = c;
+        same.outputs = {c.output, c.output};
+        std::string why;
+        check(!startCapture(same, &why), "two files at one path is refused");
+        checkf(why.find(master) != std::string::npos, "and the refusal names it: %s",
+               why.c_str());
+    }
+
     // ── what this machine actually has ─────────────────────────────────────
     //
     // Whatever the answer is, it is asserted, and there are three of them

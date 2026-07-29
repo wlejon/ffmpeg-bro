@@ -875,6 +875,50 @@ JSValue js_recordStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     c.output.height = static_cast<int>(numProp(ctx, spec, "height", 0));
     c.output.fps = numProp(ctx, spec, "fps", 0);
 
+    // **`also` is the other files, and each of them is a whole output spec.**
+    // Read through `outputFromJs` — the same reader `render.start` uses and the
+    // same one the recording's own output went through two lines up — so a
+    // second file names its muxer, its encoders, its options and its `streams`
+    // exactly as the first does, and an unknown key is the same error in both.
+    // What it is *not* given is a graph: the graph belongs to the session and
+    // one file cannot have another, so `filterGraph` on an `also` entry is
+    // simply never read. See `CaptureSettings::outputs`.
+    JSValue also = JS_GetPropertyStr(ctx, spec, "also");
+    if (JS_IsArray(also)) {
+        c.outputs.push_back(c.output);
+        const uint32_t len = arrayLength(ctx, also);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, also, i);
+            if (!JS_IsObject(item)) {
+                JS_FreeValue(ctx, item);
+                JS_FreeValue(ctx, also);
+                return JS_ThrowTypeError(
+                    ctx, "record.start(spec).also[%u] is not a file to write", i);
+            }
+            ExportSettings out;
+            const bool ok = outputFromJs(ctx, item, &out, &bad);
+            if (ok) {
+                out.width = static_cast<int>(numProp(ctx, item, "width", 0));
+                out.height = static_cast<int>(numProp(ctx, item, "height", 0));
+                // Zero, and not read from the entry: **the rate is the
+                // recording's**. Placing a frame is turning the moment it
+                // arrived into an output frame number, and two files answering
+                // that differently would be two files disagreeing about when
+                // the recording started. A file that wants another rate puts
+                // `fps=` in the graph and maps that pad.
+                out.fps = 0.0;
+                c.outputs.push_back(std::move(out));
+            }
+            JS_FreeValue(ctx, item);
+            if (!ok) {
+                JS_FreeValue(ctx, also);
+                return JS_ThrowTypeError(ctx, "record.start(spec).also[%u]: %s", i,
+                                         bad.c_str());
+            }
+        }
+    }
+    JS_FreeValue(ctx, also);
+
     // `sources` is the list and `source` is the one-input spelling of it, read
     // the way `CaptureSettings` reads them: a list wins, and an absent list is
     // `{source}`. Two spellings rather than one because every caller that has

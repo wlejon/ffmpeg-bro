@@ -166,7 +166,24 @@ export const capture = {
     /// not silently point the recording somewhere else.
     videoPad: '',
     audioPad: '',
+    /// The other files this recording writes, in the order they were added.
+    ///
+    /// **One reading of the devices, several muxers on the end of it.** Each is
+    /// `{ id, path, format, videoPad, audioPad }` — a destination and which ends
+    /// of the graph it gets — because those are the two things that make it a
+    /// second file rather than a second copy. Everything else is the
+    /// recording's: the devices, the graph, `-t`, and the rate, since placing a
+    /// frame is turning the moment it arrived into an output frame number.
+    ///
+    /// **Not a size**, which is the one thing a render's version row has and
+    /// this does not: on this stage the picture's size is its pad's, and a
+    /// second size is a `scale` in the graph with an output of its own. That is
+    /// where a composition is described, and a size field here would be a
+    /// second place to describe one.
+    also: [],
 };
+
+let nextAlso = 1;
 
 /// Which card the left column and the option column are editing.
 ///
@@ -244,10 +261,15 @@ export function initCapture(nodes, h) {
 /// state getting tidied, not the state being checked.
 function forgetLostPads() {
     const pads = recordPads(overlayState());
-    if (capture.videoPad && !pads.v.some((p) => p.id === capture.videoPad))
-        capture.videoPad = '';
-    if (capture.audioPad && !pads.a.some((p) => p.id === capture.audioPad))
-        capture.audioPad = '';
+    const gone = (stream, id) => id && !pads[stream].some((p) => p.id === id);
+    if (gone('v', capture.videoPad)) capture.videoPad = '';
+    if (gone('a', capture.audioPad)) capture.audioPad = '';
+    // Every file, and for the same reason: a row pointed at an output somebody
+    // deleted drops back to the derivation's own end rather than refusing.
+    for (const f of capture.also) {
+        if (gone('v', f.videoPad)) f.videoPad = '';
+        if (gone('a', f.audioPad)) f.audioPad = '';
+    }
 }
 
 function defaultPath() {
@@ -338,8 +360,24 @@ export function asInputs() {
 /// on another stage and a copy here would be a copy that goes stale the moment
 /// a wire moves.
 export function graphOf() {
-    return recordGraph(capture.inputs, overlayState(),
-                       { v: capture.videoPad, a: capture.audioPad });
+    return recordGraph(capture.inputs, overlayState(), filePicks());
+}
+
+/// The files this recording writes, as `recordGraph` wants them: the recording
+/// itself first, then every row of the Also-write list that has somewhere to go.
+///
+/// A row nobody has typed a path into yet is skipped, which is the rule
+/// `activeVersions()` follows on the Write stage and for the same reason: a row
+/// being filled in is the normal state of a list being filled in, and a
+/// half-typed one must not make the Record button go dead.
+function filePicks() {
+    return [{ v: capture.videoPad, a: capture.audioPad }]
+        .concat(alsoFiles().map((f) => ({ v: f.videoPad, a: f.audioPad })));
+}
+
+/// The rows of the Also-write list this recording would actually write.
+export function alsoFiles() {
+    return capture.also.filter((f) => f.path);
 }
 
 /// Is this recording ready to start? There has to be at least one device, each
@@ -355,7 +393,19 @@ export function ready() {
     const g = graphOf();
     if (g && !g.ok) return false;
     if (all.length > 1 && !g) return false;
-    return true;
+    return !clashingPath();
+}
+
+/// A path two of this recording's files are both aimed at, or empty.
+///
+/// Two muxers on one file interleave into something no player reads, and the
+/// engine refuses it by name — this is the same refusal made in time to stop
+/// the press, which is the rule every other check on this stage follows.
+export function clashingPath() {
+    const seen = [capture.path].concat(alsoFiles().map((f) => f.path));
+    for (let i = 1; i < seen.length; ++i)
+        if (seen[i] && seen.indexOf(seen[i]) < i) return seen[i];
+    return '';
 }
 
 /// The encoder this recording will actually go through, and what it takes.
@@ -1022,12 +1072,51 @@ export function summary() {
 
 // ── recording ──────────────────────────────────────────────────────────────
 
+/// The `also` half of the recording's spec: one output object per extra file.
+///
+/// `g` is `graphOf()`, whose `files` array is parallel to `filePicks()` — entry
+/// zero is the recording itself and the rest are these rows in order. The
+/// labels come from there rather than from the row, because what a pad is
+/// *called* is `recordGraph`'s answer: it imposes `vout`/`aout` on the first
+/// file's ends and settles the collisions among the rest, and a second
+/// implementation of that here would be a second answer to it.
+///
+/// **With no graph there is nothing to map**, and a row is a second encode of
+/// the device straight through — which is a proxy, and worth having: the
+/// stream list is left off and the engine writes the composite into it exactly
+/// as it does into the first file.
+function alsoSpecs(g) {
+    const rows = alsoFiles();
+    const enc = effectiveVideo();
+    return rows.map((f, i) => {
+        const out = { path: f.path, format: f.format };
+        if (enc && enc.crf) out.crf = capture.quality;
+        if (enc && enc.preset) out.preset = 'veryfast';
+        if (capture.videoCodec) out.videoCodec = capture.videoCodec;
+        if (capture.audioCodec) out.audioCodec = capture.audioCodec;
+        const pads = g && g.ok && g.files ? g.files[i + 1] : null;
+        if (!pads) return out;
+        // No `codec` on the rows: an empty one is the output's, which is what
+        // the two lines above already set, and naming it twice would be two
+        // places for it to be changed.
+        out.streams = [];
+        if (pads.video) out.streams.push({ kind: 'video', source: `pad:${pads.video}` });
+        if (pads.audio) out.streams.push({ kind: 'audio', source: `pad:${pads.audio}` });
+        return out;
+    });
+}
+
 export function startRecording() {
     if (recording) return;
     if (!ready()) {
         const g = graphOf();
+        const clash = clashingPath();
         if (hooks.flash)
             hooks.flash(g && !g.ok ? `The graph will not run: ${g.reason}`
+                : clash
+                    ? `Two of this recording’s files are both ${basename(clash)} — one ` +
+                      'muxer per file, and two writing to one interleave into something ' +
+                      'no player reads.'
                 : capture.inputs.length > 1
                     ? 'Several inputs need a filter graph — it is what says how they ' +
                       'combine. Build one on the Graph stage: the devices are in its ' +
@@ -1061,6 +1150,15 @@ export function startRecording() {
        enc && enc.preset ? { preset: 'veryfast' } : {},
        capture.videoCodec ? { videoCodec: capture.videoCodec } : {},
        capture.audioCodec ? { audioCodec: capture.audioCodec } : {});
+
+    // **The other files, each mapping the pads it named.** They are not given
+    // the graph — there is one, and it belongs to the session — and they are
+    // not given a size, because a picture's size here is its pad's. What they
+    // do carry is a stream list, which is the only way a second file can say
+    // which of the graph's ends it is of: `pad:<label>` is `-map [label]`, and
+    // `g.files[n]` is what the labels turned out to be. See ffmpeg_capture.h.
+    const also = alsoSpecs(g);
+    if (also.length) spec.also = also;
 
     try {
         bro.ffmpeg.record.start(spec);
@@ -1476,8 +1574,110 @@ function drawSettings() {
                   'the graph. Set it on a card.'
                 : 'No input has a Stop after set',
         })));
+        rows.push(...alsoRows());
         return rows;
     });
+}
+
+/// The Also-write list: the other files this one reading of the devices writes.
+///
+/// **The third answer to "two outputs", and the one only a capture has.** The
+/// Write stage has the other two and says how they differ: `tee` is one encode
+/// to several places, a version is several encodes of one edit run one after
+/// another. A recording cannot run anything twice — what it was reading has
+/// happened — so its several encodes are several muxers open at once on the end
+/// of one pass, which is why this is a list here rather than the Write stage's.
+///
+/// A row is a path, a container and which ends of the graph it gets. Not a
+/// size: on this stage a picture's size is its pad's, and another size is a
+/// `scale` on the Graph stage with an output of its own — which this row can
+/// then be pointed at.
+///
+/// Collapsed to a heading until there is one, like the Write stage's list, and
+/// costing nothing to have open: a row somebody is still typing a path into is
+/// simply not part of the recording yet.
+function alsoRows() {
+    const pads = recordPads(overlayState());
+    const list = capture.also;
+    const rows = [head(`${list.length ? '▾' : '▸'} Also write · ${list.length}`, {
+        cls: 'section-head ex-toggle', 'data-f': 'capalso',
+        // The list is its own disclosure, as the Write stage's is: empty it is
+        // one line, and pressing it is how the first row arrives.
+        on: { click: () => { if (!list.length) addAlso(); } },
+    })];
+
+    if (!list.length) {
+        rows.push(row('', el('span', { cls: 'dim', text:
+            'One encode to several places is the tee muxer, above. This is the other one, ' +
+            'and only a recording has it: a second muxer open beside the first, of another ' +
+            'end of the same graph. The cameras into one file, a cropped copy into the ' +
+            'next — one reading of the devices, because there is no second one to have.' })));
+        return rows;
+    }
+
+    list.forEach((f, i) => {
+        const path = el('input', {
+            cls: 'wide', 'data-f': `capalso-path-${i}`, type: 'text', value: f.path,
+            placeholder: 'where this one goes',
+            on: { change: () => { f.path = path.value.trim(); redraw(); } },
+        });
+        const muxers = (bro.ffmpeg.muxers || []).filter((m) => m.ext && !m.noFile);
+        const format = el('select', {
+            cls: 'wide', 'data-f': `capalso-format-${i}`,
+            on: { change: (e) => { f.format = e.target.value; redraw(); } },
+        }, muxers.map((m) => el('option', {
+            value: m.name, text: `${m.label || m.name} (.${m.ext})`,
+            selected: m.name === f.format,
+        })));
+        // **Drawn whatever the graph has, unlike the recording's own pickers**
+        // — those appear only where there is a choice, because with one end
+        // they would be a statement dressed as a question. Here the statement
+        // is the point: a file left on the same end as the recording is a
+        // second encode of the same picture, and a row that did not say so
+        // would be a copy nobody could see they had asked for.
+        const pick = (stream) => el('select', {
+            cls: 'wide', 'data-f': `capalso-${stream}pad-${i}`,
+            title: 'Which end of the graph this file gets. Another one is what makes it a ' +
+                   'different file rather than a second copy of the same picture.',
+            on: { change: (e) => {
+                if (stream === 'v') f.videoPad = e.target.value;
+                else f.audioPad = e.target.value;
+                redraw();
+            } },
+        }, pads[stream].map((p) => el('option', {
+            value: p.id, text: p.label,
+            selected: p.id === (stream === 'v' ? f.videoPad : f.audioPad),
+        })));
+
+        rows.push(head(`File ${i + 2}`, { cls: 'section-head' }));
+        rows.push(row('Picture from', pick('v')));
+        rows.push(row('Sound from', pick('a')));
+        rows.push(row('-f', format));
+        rows.push(row('To', path));
+        rows.push(row('', div('btns', [el('button', {
+            cls: 'tiny', 'data-f': `capalso-drop-${i}`, text: 'Remove',
+            on: { click: () => { capture.also.splice(i, 1); redraw(); } },
+        })])));
+    });
+
+    rows.push(row('', div('btns', [el('button', {
+        cls: 'tiny', 'data-f': 'capalso-add', text: '+ File', on: { click: addAlso },
+    })])));
+    rows.push(row('', el('span', { cls: 'dim', text:
+        'The encoders, the quality and the devices are the recording’s — what a file of ' +
+        'its own has is a container, somewhere to go, and which ends of the graph it ' +
+        'takes. The size is the pad’s: another size is a scale on the Graph stage with ' +
+        'an output to point at.' })));
+    return rows;
+}
+
+/// A file pre-filled with the recording's own container, and pointed at the
+/// same ends it is: a row arrives meaning something, and what makes it a
+/// second *file* rather than a second copy is the one thing left to say.
+function addAlso() {
+    capture.also.push({ id: nextAlso++, path: '', format: capture.format,
+                        videoPad: capture.videoPad, audioPad: capture.audioPad });
+    redraw();
 }
 
 function redraw() {
@@ -1660,6 +1860,10 @@ function blocker() {
     // twice on one screen is the habit this whole stage was rewritten out of.
     if (g && !g.ok) return 'Graph won’t run';
     if (all.length > 1 && !g) return 'Needs a graph';
+    // Two muxers at one path interleave into something no player reads, and the
+    // engine refuses it by name. Short here for the reason above; the sentence
+    // is on the press.
+    if (clashingPath()) return 'Two files, one path';
     return '';
 }
 
@@ -1976,12 +2180,36 @@ export function commandParts() {
         for (const label of [graph.video, graph.audio])
             if (label) out.push('-map', `[${label}]`);
     }
-    if (capture.videoCodec) out.push('-c:v', capture.videoCodec);
-    if (capture.audioCodec) out.push('-c:a', capture.audioCodec);
-    if (enc && enc.crf && capture.quality) out.push('-crf', String(capture.quality));
-    if (enc && enc.preset) out.push('-preset', 'veryfast');
+    // Everything a file is encoded with, which is the same for all of them: a
+    // second file is another muxer and another set of pads, not another set of
+    // encode settings — see `capture.also`.
+    const encoded = () => {
+        const bits = [];
+        if (capture.videoCodec) bits.push('-c:v', capture.videoCodec);
+        if (capture.audioCodec) bits.push('-c:a', capture.audioCodec);
+        if (enc && enc.crf && capture.quality) bits.push('-crf', String(capture.quality));
+        if (enc && enc.preset) bits.push('-preset', 'veryfast');
+        return bits;
+    };
+    out.push(...encoded());
     if (capture.format) out.push('-f', capture.format);
     out.push(shellArg(capture.path || 'capture.mkv'));
+
+    // **Several files is several outputs on one command line**, which is what
+    // ffmpeg has always been able to do and this application could not say
+    // until now. Each carries its own `-map` because the first output's is the
+    // graph's default and the rest have to name the pad they are of — which is
+    // exactly what the spec sends, so the bar and the recording cannot
+    // disagree about which end goes where.
+    const files = graph && graph.ok && graph.files ? graph.files : [];
+    alsoFiles().forEach((f, i) => {
+        const pads = files[i + 1];
+        if (pads) for (const label of [pads.video, pads.audio])
+            if (label) out.push('-map', `[${label}]`);
+        out.push(...encoded());
+        if (f.format) out.push('-f', f.format);
+        out.push(shellArg(f.path));
+    });
 
     return { pre: ['ffmpeg'], inputs, out };
 }

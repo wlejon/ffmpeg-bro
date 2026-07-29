@@ -51,6 +51,19 @@
 // all — the node feeding it is relabelled on the way out. `subgraph.js` does
 // exactly this for a preview and for the same reason: the pad a caller has to
 // map cannot be whatever happened to be at the end.
+//
+// **A recording writes several files, so `pads` is a list.** One reading of the
+// devices, one graph, and a muxer per file on the end of it — the cameras into
+// one and a cropped copy into another is two `-map`s of two pads, which is what
+// `-f tee` is not. Nothing about the walk changes: the ends are every sink any
+// file names, and what each file gets back is the label of the pad it picked.
+//
+// **One label per sink and not per file**, because two files can name the same
+// one — a master and a smaller copy of the same picture — and labelling a chain
+// twice is "Label found twice", about a graph ffmpeg has already half parsed.
+// Only file 0's ends get `vout`/`aout`; anything else keeps the name it has on
+// the Graph stage, and a second file pointed at the derivation's own end (which
+// has no name) gets one made from its position in the list.
 
 import { derive } from './derive.js';
 import { print } from './print.js';
@@ -141,9 +154,15 @@ function chosen(g, stream, pick) {
 /// null where the recording writes nothing of that kind.
 ///
 /// `ids` is the recording's inputs in `-i` order, which is `capture.inputs`.
-/// `overlay` is the user's layer and `pads` is `{ v, a }` of overlay sink ids,
-/// both passed in for the reason `derive()` takes its overlay that way: a pure
-/// function of its arguments is one a test can hand literals to.
+/// `overlay` is the user's layer and `pads` is the files this recording writes,
+/// as `{ v, a }` of overlay sink ids — a list of them, or one on its own for
+/// the recording that writes one file. Both passed in for the reason `derive()`
+/// takes its overlay that way: a pure function of its arguments is one a test
+/// can hand literals to.
+///
+/// `files` comes back beside `video`/`audio`, which stay what they were: file
+/// zero's two pads, because that is the answer every caller wanted before there
+/// was more than one file and it is still the answer they want.
 export function recordGraph(ids, overlay, pads) {
     const seeds = seedRecords(overlay, ids || []);
     if (!seeds.length) return null;
@@ -167,16 +186,24 @@ export function recordGraph(ids, overlay, pads) {
     const seedNodes = seeds.map((rec) => g.node(rec.id)).filter(Boolean);
     if (!seedNodes.length) return null;
 
-    const picked = { v: (pads && pads.v) || '', a: (pads && pads.a) || '' };
-    const at = { v: chosen(g, 'v', picked.v), a: chosen(g, 'a', picked.a) };
-    for (const stream of ['v', 'a'])
-        if (at[stream] === undefined)
-            return { ok: false, reason: 'the output this recording writes is not on the ' +
-                                        'Graph stage any more — pick another' };
+    const wanted = (Array.isArray(pads) ? pads : [pads || {}])
+        .map((p) => ({ v: (p && p.v) || '', a: (p && p.a) || '' }));
+    if (!wanted.length) wanted.push({ v: '', a: '' });
+    const at = wanted.map((p) => ({ v: chosen(g, 'v', p.v), a: chosen(g, 'a', p.a) }));
+    for (const f of at)
+        for (const stream of ['v', 'a'])
+            if (f[stream] === undefined)
+                return { ok: false, reason: 'the output this recording writes is not on the ' +
+                                            'Graph stage any more — pick another' };
 
     // Up from the sinks, so a `testsrc` two filters above an `overlay` comes
-    // with it and an output nobody named here is never reached.
-    const ends = [at.v, at.a].filter(Boolean);
+    // with it and an output nobody named here is never reached. **Every file's**
+    // — a second file is a second thing to keep, and a branch that only it reads
+    // is exactly as much a part of this recording as the first file's.
+    const ends = [];
+    for (const f of at)
+        for (const sink of [f.v, f.a])
+            if (sink && ends.indexOf(sink) < 0) ends.push(sink);
     const keep = ancestors(g, ends);
 
     // Nothing this recording opens reaches what it writes. Two ways to be in
@@ -184,9 +211,9 @@ export function recordGraph(ids, overlay, pads) {
     // ends it is a graph nobody finished wiring, and with an output of one's
     // own it is very likely the wrong output.
     if (!seedNodes.some((n) => keep.has(n.id))) {
-        const named = picked.v || picked.a;
+        const named = wanted.some((p) => p.v || p.a);
         if (named)
-            return { ok: false, reason: `${sinkName(at.v || at.a)} is fed by something other ` +
+            return { ok: false, reason: `${sinkName(ends[0])} is fed by something other ` +
                                         'than these devices, so a recording of them would ' +
                                         'write a file nothing they see reaches' };
         const outs = g.nodes.filter((n) => n.kind === 'sink' && n.name).length;
@@ -218,48 +245,92 @@ export function recordGraph(ids, overlay, pads) {
 
     const view = pruned(g, keep, numberOf);
 
-    // The two pads the writer maps, relabelled to the names `resolvePads`
-    // knows. Cleared off everything else first, for the reason
-    // `nameTheRendersPads` clears them: two chains ending in `[vout]` is "Label
-    // found twice", about a graph ffmpeg has already half parsed.
-    const extra = [];
-    for (const stream of ['v', 'a']) {
-        const sink = at[stream];
-        const label = stream === 'v' ? 'vout' : 'aout';
-        for (const n of view.nodes) {
-            if (n.label === label) n.label = null;
-            if (n.outLabels) n.outLabels = n.outLabels.map((l) => (l === label ? null : l));
+    // **What each pad is going to be called.** One name per sink whatever the
+    // number of files reading it, worked out before anything is written so that
+    // the clearing below knows every name it has to make room for.
+    const label = new Map();        // sink node id → the label its chain gets
+    for (let i = 0; i < at.length; ++i)
+        for (const stream of ['v', 'a']) {
+            const sink = at[i][stream];
+            if (!sink || label.has(sink.id)) continue;
+            const imposed = stream === 'v' ? 'vout' : 'aout';
+            const used = (name) => {
+                for (const v of label.values()) if (v === name) return true;
+                return false;
+            };
+            // File zero's ends are `vout` and `aout` because that is what
+            // `resolvePads` maps with nothing said. Every other file names its
+            // pad, and the name it names is the one on the Graph stage — so a
+            // person reading the printed command sees the output they wired.
+            let own = i === 0 ? imposed : (sink.name || `${imposed}${i}`);
+            // A name two things want is one thing named wrong. Counted up
+            // rather than refused: the collision is between what somebody wrote
+            // on the Graph stage and what this file has to be called, and
+            // neither of those is a mistake to report.
+            for (let n = i; used(own); ++n) own = `${imposed}${n + 1}`;
+            label.set(sink.id, own);
         }
-        if (!sink) continue;
-        const e = view.inEdges(sink)[0];
-        const src = e ? view.node(e.from) : null;
-        if (!src) { at[stream] = null; continue; }
-        const port = e.fromPort || 0;
-        // A device wired straight to a sink is a stream with no filter on it,
-        // and there is no chain for a label to go on the end of. `null`/`anull`
-        // is the chain that says "this pad, unchanged" — the same one a
-        // single-microphone preset used to write, and needed for the same
-        // reason: with a graph in play every stream reaches a pad or the engine
-        // refuses.
-        if (src.kind === 'input') {
-            const out = (src.outs || [])[port];
-            extra.push(`[${src.index}:${(out && out.stream) || stream}]` +
-                       `${stream === 'v' ? 'null' : 'anull'}[${label}]`);
-        } else if (src.outs && src.outs.length > 1) {
-            // A `split` writes two pads and one `label` would name neither of
-            // them honestly, so a fork's names are per pad. See `padOf`.
-            if (!src.outLabels) src.outLabels = [];
-            src.outLabels[port] = label;
-        } else src.label = label;
-    }
 
-    if (!at.v && !at.a)
-        return { ok: false, reason: 'the graph reads the devices but nothing arrives at ' +
-                                    'video out or sound out' };
+    // Relabelled to the names the writer maps, cleared off everything else
+    // first, for the reason `nameTheRendersPads` clears them: two chains ending
+    // in `[vout]` is "Label found twice", about a graph ffmpeg has already half
+    // parsed.
+    const extra = [];
+    const ours = new Set(label.values());
+    for (const n of view.nodes) {
+        if (ours.has(n.label)) n.label = null;
+        if (n.outLabels) n.outLabels = n.outLabels.map((l) => (ours.has(l) ? null : l));
+    }
+    for (let i = 0; i < at.length; ++i)
+        for (const stream of ['v', 'a']) {
+            const sink = at[i][stream];
+            if (!sink) continue;
+            const name = label.get(sink.id);
+            const e = view.inEdges(sink)[0];
+            const src = e ? view.node(e.from) : null;
+            // An end nothing is wired into writes nothing, and the file simply
+            // has no stream of that kind. Dropped rather than refused: a
+            // recording of a screen grab has no sound out wired and never had.
+            if (!src) { at[i][stream] = null; continue; }
+            const port = e.fromPort || 0;
+            // A device wired straight to a sink is a stream with no filter on
+            // it, and there is no chain for a label to go on the end of.
+            // `null`/`anull` is the chain that says "this pad, unchanged" — the
+            // same one a single-microphone preset used to write, and needed for
+            // the same reason: with a graph in play every stream reaches a pad
+            // or the engine refuses.
+            if (src.kind === 'input') {
+                const out = (src.outs || [])[port];
+                // Once per sink, not once per file reading it: the chain is the
+                // pad, and printing it twice is the same "Label found twice".
+                if (extra.every((c) => c.indexOf(`[${name}]`) < 0))
+                    extra.push(`[${src.index}:${(out && out.stream) || stream}]` +
+                               `${stream === 'v' ? 'null' : 'anull'}[${name}]`);
+            } else if (src.outs && src.outs.length > 1) {
+                // A `split` writes two pads and one `label` would name neither
+                // of them honestly, so a fork's names are per pad. See `padOf`.
+                if (!src.outLabels) src.outLabels = [];
+                src.outLabels[port] = name;
+            } else src.label = name;
+        }
+
+    const files = at.map((f) => ({
+        video: f.v ? label.get(f.v.id) : null,
+        audio: f.a ? label.get(f.a.id) : null,
+    }));
+    // A file that maps neither a picture nor a sound is a file of nothing, and
+    // for file zero that is the whole recording. Named by position, because
+    // with several of them "the recording writes nothing" would not say which.
+    for (let i = 0; i < files.length; ++i)
+        if (!files[i].video && !files[i].audio)
+            return { ok: false, reason: i === 0
+                ? 'the graph reads the devices but nothing arrives at video out or sound out'
+                : `file ${i + 1} of this recording maps nothing — the output it writes has ` +
+                  'nothing wired into it' };
 
     const { chains } = print(view);
     return { ok: true, filterGraph: chains.concat(extra).join(';'),
-             video: at.v ? 'vout' : null, audio: at.a ? 'aout' : null, graph: view };
+             video: files[0].video, audio: files[0].audio, files, graph: view };
 }
 
 /// The ends this recording could write, for the picker on the Capture stage.

@@ -100,6 +100,18 @@
 // they go together, which is also why every stream of every input has to reach
 // it once there is more than one.
 //
+// **A recording writes as many files as it was given, all at once.** One
+// session, one reading of the devices, one graph — and a `Writer` per file on
+// the end of it, each mapping the pads it names and encoding them its own way.
+// That is what a render cannot do the same way round: a render writes two sizes
+// by walking its range twice (`ExportPass`), and a recording has no second walk
+// because what it was reading has happened. It is also what `-f tee` is not —
+// `tee` writes one encode to several places, and the cameras to one file with a
+// cropped copy in another is two encodes of two different pictures.
+//
+// The devices, the graph and `-t` belong to the session; the muxer, the
+// encoders and the stream list belong to each file. See `CaptureSettings::outputs`.
+//
 // **Stop is the normal end of a recording, not the exceptional one.** Every
 // rule about a cancelled render still writing its trailer matters more here,
 // not less: a render that loses its index has lost a file you can make again,
@@ -185,6 +197,37 @@ struct CaptureSettings {
     /// mapped with `pad:<label>` the same way. `filterInputs` is the one field
     /// of this struct a recording refuses — see the note at the top.
     ExportSettings output;
+
+    /// Every file this recording writes, in the order they were asked for.
+    ///
+    /// **Empty is not "no output" — it is `{output}`**, which is the rule
+    /// `sources` follows one field up and for the same reason: a caller that
+    /// never heard of this field asks for exactly what it always asked for.
+    /// Given a list, `output` is the first entry of it and nothing reads the
+    /// field.
+    ///
+    /// **They are written at once, not one after another.** That is the whole
+    /// difference between this and `ExportPass`, which is how a *render* comes
+    /// to write two sizes: a render can walk its range twice because the range
+    /// is still there the second time, and a recording cannot, because what it
+    /// was reading has happened. So a second file here is a second `Writer`
+    /// open beside the first, fed from the same devices and the same graph on
+    /// the same pass — and the cost of it is a second encode running against
+    /// the same CPU as the capture, which is the trade the person asking for it
+    /// is making.
+    ///
+    /// **What differs between them is what they map and how they encode it.**
+    /// The devices are the session's, the graph is the session's, and `-t` is
+    /// the session's — one reading of one moment. Each file names its own
+    /// muxer, its own encoders and its own `streams`, and a stream fed from
+    /// `pad:<label>` is how a file says which of the graph's ends it is of. A
+    /// file that names no size takes the pad's, exactly as one file always has.
+    ///
+    /// Only `[0]`'s frame count is the recording's — `framesDone`, the `-t`
+    /// percentage — because a counter that jumped between two files' clocks
+    /// would be a counter about neither. What is summed is what was written:
+    /// bytes and pieces are of the recording, not of any one file in it.
+    std::vector<ExportSettings> outputs;
 
     /// Zero rather than `ExportSettings`' 1920×1080 at 30, because for a
     /// recording those are not sensible defaults — they are a scale and a rate

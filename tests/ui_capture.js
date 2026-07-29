@@ -482,6 +482,128 @@ console.log('\na recording can write an output of its own');
     ok(cap.graphOf().ok, 'wired back to video out, it runs as before');
 }
 
+console.log('\nmore than one file out of one recording');
+{
+    // The third answer to "two outputs", and the one only a recording has:
+    // `tee` writes one encode to several places, a version writes several
+    // encodes of one edit *one after another*, and a recording cannot run
+    // anything twice — what it was reading has happened. So its several
+    // encodes are several muxers open at once on the end of one pass.
+    const ov = A.graph.overlay;
+    const stack = ov.nodes().find((n) => n.filter === 'hstack');
+
+    // A branch of its own, ending somewhere of its own: the whole composition
+    // into the first file, the left half of it into the second. The `split` is
+    // not a detail of the test — a pad can be read once, and the fork being in
+    // the gesture rather than hidden behind it is the Graph stage's rule.
+    const fork = ov.addNode('split');
+    const half = ov.addNode('crop', { pos: ['iw/2', 'ih', '0', '0'] });
+    const own = ov.addOutput('v', 'left');
+    ov.unwire('out:v', 0);
+    ov.wire(stack.id, 0, fork.id, 0);
+    ov.wire(fork.id, 0, 'out:v', 0);
+    ov.wire(fork.id, 1, half.id, 0);
+    ov.wire(half.id, 0, own.id, 0);
+    pump(200);
+
+    same(qa('[data-f^="capalso-path"]').length, 0, 'the Also-write list starts empty');
+    q('[data-f="capalso"]').click();
+    pump(200);
+    const path = q('[data-f="capalso-path-0"]');
+    ok(!!path, 'pressing the heading opens the first row');
+    same(cap.alsoFiles().length, 0,
+         'a row with nowhere to go is not part of the recording yet');
+
+    path.value = `${bro.appDir}/../out/ui-capture-also.mkv`;
+    path.dispatchEvent(new Event('change'));
+    pump(150);
+    same(cap.alsoFiles().length, 1, 'given a path, it is');
+
+    // Left on the recording's own end it is a second encode of the same
+    // picture, which is a real thing to want and not what this is about.
+    const g0 = cap.graphOf();
+    same(g0.files.length, 2, 'the graph is asked about two files now');
+    same(g0.files[1].video, 'vout', 'and by default the second is of the same pad');
+
+    const vpad = q('[data-f="capalso-vpad-0"]');
+    ok(!!vpad, 'the row picks which end it gets');
+    vpad.value = own.id;
+    vpad.dispatchEvent(new Event('change'));
+    pump(200);
+
+    const g = cap.graphOf();
+    ok(g && g.ok, 'pointed at the other output, the recording still runs');
+    same(g.files.length, 2, 'two files');
+    same(g.files[0].video, 'vout', 'the first takes the pad the writer maps by default');
+    same(g.files[1].video, own.name,
+         `and the second keeps the name it has on the Graph stage (${g.files[1].video})`);
+    ok(g.filterGraph.indexOf('[vout]') >= 0 && g.filterGraph.indexOf(`[${own.name}]`) >= 0,
+       `both labels are in the one graph: ${g.filterGraph}`);
+    ok(g.filterGraph.indexOf('crop=') >= 0,
+       'and the branch only the second file reads is in it — every file’s ends are kept');
+
+    // One command line, two outputs, and the second names the pad it is of.
+    // That is what the spec sends, so the bar and the recording cannot
+    // disagree about which end goes where.
+    const line = text('#cmd-line');
+    ok(line.indexOf('-map [vout]') >= 0 && line.indexOf(`-map [${own.name}]`) >= 0,
+       `the command bar maps both (${line})`);
+    ok(line.indexOf('ui-capture-also.mkv') > line.indexOf('-map [vout]'),
+       'with the second file after the first, which is what several outputs is');
+
+    // Two muxers at one path interleave into something no player reads, and
+    // the engine refuses it by name — this is the same refusal made in time.
+    const was = path.value;
+    path.value = q('[data-f="cappath"]').value;
+    path.dispatchEvent(new Event('change'));
+    pump(150);
+    ok(!!cap.clashingPath(), 'two files at one path is caught before the press');
+    ok(!cap.ready() && q('[data-f="caprecord"]').disabled,
+       'and the button says so rather than failing at the open');
+    path.value = was;
+    path.dispatchEvent(new Event('change'));
+    pump(150);
+    ok(cap.ready(), 'moved apart again, it is ready');
+
+    // And now record both of them, because two files is a claim about what is
+    // on the disk afterwards and nothing short of reading them says it.
+    const first = `${bro.appDir}/../out/ui-capture-two.mkv`;
+    const field = q('[data-f="cappath"]');
+    field.value = first;
+    field.dispatchEvent(new Event('change'));
+    const seconds = qa('[data-f="capseconds"]');
+    for (const s of seconds) { s.value = '2'; s.dispatchEvent(new Event('change')); }
+    pump(200);
+
+    q('[data-f="caprecord"]').click();
+    pump(150);
+    ok(waitFor('the recording to end', () => !cap.isRecording(), 40000),
+       'a recording of two files ends on its own');
+
+    const a = bro.ffmpeg.probe(first);
+    const b = bro.ffmpeg.probe(was);
+    ok(a.video && b.video, 'both files are there with a picture in them');
+    ok(b.video.width * 2 === a.video.width,
+       `and the second is the other pad — half the width of the first (${
+           a.video.width} and ${b.video.width})`);
+    screenshot('out/ui-capture-also.png');
+
+    // Put the stage back the way the rest of this file expects it.
+    q('[data-f="capalso-drop-0"]').click();
+    pump(150);
+    same(cap.capture.also.length, 0, 'removing the row takes the file with it');
+    ov.removeInsert(own.id);
+    ov.removeInsert(half.id);
+    ov.removeInsert(fork.id);
+    ov.wire(stack.id, 0, 'out:v', 0);
+    for (const s of qa('[data-f="capseconds"]')) {
+        s.value = '';
+        s.dispatchEvent(new Event('change'));
+    }
+    pump(200);
+    ok(cap.graphOf().ok, 'and the graph is what it was');
+}
+
 console.log('\nrecording a session of two devices');
 {
     // Paced, for the reason capture_test.cpp paces its sessions: a lavfi input

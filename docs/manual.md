@@ -248,6 +248,59 @@ and that is the label the writer maps. Delete the output and the recording drops
 to video out — the panel says what it is mapped as now, which is the whole of what
 changed.
 
+### More than one file out of one recording
+
+**Also write** is a list under the recording's own settings, and each row is another
+file this same reading of the devices produces: the cameras into one, a cropped copy
+into the next. A row is somewhere to go, a container, and which ends of the graph it
+takes — nothing else, because everything else is the recording's.
+
+This is the **third** answer to "two outputs" and only a recording has it. The Write
+stage has the other two and they are worth telling apart:
+
+| | |
+|---|---|
+| `-f tee` | one encode, several places — same packets, different wrappers |
+| Also write, on the Write stage | several encodes of one edit, run one after another |
+| Also write, here | several encodes of one *moment*, running at once |
+
+The middle one is why this exists. A render writes a 1080p master and a 720p proxy by
+walking its range twice, because the range is still there the second time. **A
+recording has no second walk** — what it was reading has happened — so its several
+encodes are several muxers open beside each other on the end of one pass. The cost is
+what it is: two encodes running against the same CPU as a live capture, which is the
+one job in this application with a real-time deadline.
+
+**Which ends** is the whole of what makes a row a different file rather than a copy.
+Left on the recording's own pad it is a second encode of the same picture, which is a
+real thing to want — the same take in a smaller container, or a mezzanine beside a
+delivery — and pointed at an output of your own it is a different picture entirely.
+The pickers are drawn on every row for that reason, unlike the recording's own, which
+appear only when the graph offers a choice.
+
+**No size field**, which is the one thing a render's version row has and this does not.
+On this stage a picture's size is its pad's, and another size is a `scale` on the Graph
+stage with an output to point at — that is where a composition is described, and a
+second place to describe one is a second thing to keep in step. (`record.start` does
+take `width`/`height` per file, for a caller with no graph at all; see
+[api.md](api.md).)
+
+Everything else is the recording's and deliberately not per file: the devices, the
+graph, `-t`, the encoders and the quality. So is the **rate** — placing a frame is
+turning the moment it arrived into an output frame number, and two files answering that
+differently would be two files disagreeing about when the recording started.
+
+Two files aimed at one path is refused before the press, and again by the engine: one
+muxer per file, and two writing to one interleave into something no player reads.
+
+The command bar prints it as what it is — several outputs on one line, each naming the
+pad it is of:
+
+```
+ffmpeg -f dshow -i video=Cam -filter_complex "[0:v]split[vout][x0];[x0]crop=…[left]" \
+  -map [vout] -f matroska take1.mkv  -map [left] -f matroska take1-left.mkv
+```
+
 All of that is **one line** on the Capture stage — `Filters: none`, or `2 inputs →
 [vout]`, or `will not run — …` — with the button that opens the Graph stage on the end
 of it, and the chains that will run listed under it when there are any. It is the same
@@ -1363,6 +1416,9 @@ twice the CPU, two genuinely different bitstreams.
 | `-f tee` | one encode, several places — same packets, different wrappers |
 | Also write | several encodes, one edit — different sizes, different files |
 
+A recording has a third answer, because it cannot run anything twice: see
+[More than one file out of one recording](#more-than-one-file-out-of-one-recording).
+
 **A version is a size and somewhere to put it, and nothing else.** Not a second
 Write stage: the muxer, the codec, the rate control, the stream list and the
 range are the render's, because what makes a proxy a proxy is that it is *the
@@ -2273,6 +2329,18 @@ mixed by it do, that a session of picture and sound together lines up, and that
 the refusals fire — several inputs with no graph, and a device that produces
 nothing failing the job naming itself rather than waiting for ever.
 
+**Several files out of one recording** is asserted by reading them back, because a
+size check alone passes for a second copy of the master and the whole claim is that
+it is not one. `capturetest` records one graph — `split`, one branch cropped — into
+two files and checks that the second is 160×120 where the first is 320×240 *and* that
+their mean colours differ, which a `tee` of the same encode could not do; then it
+records a proxy beside a master with no graph at all, where the two means agree and
+only the size differs, which is the other reason for a second file. `ui_capture.js`
+does the same through the stage: a `split` and a `crop` wired on the Graph stage, an
+Also-write row pointed at the output of its own, the command bar asserted to map both
+pads on one line, the clash of two files at one path caught before the press, and
+then the recording run — the second file half the width of the first, off the disk.
+
 `ui_player.js` drops real files on the real UI, plays them, scrubs, steps to the
 last picture in the file, zooms the timeline, moves and deletes a clip, scales
 and crops the picture, works the controls, and screenshots the viewer into
@@ -2668,12 +2736,6 @@ Honest list of what does not work:
   them. A sound pad publishes a level and no frames, so playing one would mean
   the tap carrying audio as well, an output device chosen somewhere, and an
   answer to feedback — three decisions, none of which the meter needed.
-- **More than one file out of one recording.** A recording writes one muxer, so it
-  maps one picture and one sound. The graph can end in half a dozen pads and the
-  Write stage can feed a stream from each of them, but that is a render's stream
-  list and a recording has none — recording the cameras to one file while a
-  cropped copy goes to another means running the session twice. `-f tee` in the
-  destination field is the near answer and it writes the *same* encode to both.
 - **A file beside a device on the same graph.** A capture's graph is fed by its
   devices and by nothing else, at both ends of the seam: the walk that builds it
   refuses a file input by name, and `filterInputs` — which says which *file*
@@ -2687,7 +2749,9 @@ Honest list of what does not work:
   same capture works — it is `-f tee` and the same `Writer` — but the argument
   is typed into the path field there rather than built from a list. The Write
   stage has the editor, and a second copy of the escaping would be a second
-  answer to it.
+  answer to it. **Also write** is a list on that stage and is not this: it is
+  several encodes running at once, one muxer each, and every row of it has a
+  path field of its own that a tee argument can be typed into.
 - **Variable frame rate out.** `-fps_mode` has one honest value here and the
   command says it: `cfr`. Both render paths walk the range forward at the output
   rate and stamp each frame with its number — the compositor because it samples
