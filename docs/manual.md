@@ -2083,6 +2083,15 @@ rotated one, and a track full of bytes is not a track something can still find b
 name. Nothing is checked in and nothing depends on what a file you happened to have
 lying around contains.
 
+A UI suite is given one more thing before it starts: **no leftovers**. `localStorage`
+is written beside the application, so `ui/.storage.json` outlives the run that wrote
+it — which is what makes remembered settings work and what makes a suite unrepeatable,
+since every reader in `ui/` is written to sanitise a blob left by an older version of
+this code and a suite that finds one is not testing the input it states. `ctest`
+removes the file first, as a fixture of the same kind as the media. Running a suite by
+hand does not, so delete it yourself if a result surprises you — a failure caused this
+way names whatever the leftover state confused, not the file that confused it.
+
 Each suite also runs standalone against any real file, which is how to check behaviour
 against footage the fixtures do not resemble:
 

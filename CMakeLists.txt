@@ -195,6 +195,18 @@ set(FIXTURE_DATA "${FIXTURE_DIR}/telemetry.mp4")
 add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
 set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
 
+# The other thing a UI suite needs before it starts is *nothing left over*.
+# localStorage is written beside the app, so `ui/.storage.json` outlives the run
+# that made it — by design for the application, and a hazard for a test, because
+# every reader in `ui/` sanitises a blob written by an earlier version of this
+# code and a suite that finds one is exercising a different input than the one
+# it states. It has already cost a false failure: a run that left a node behind
+# put the overlay's id counter past where the next suite expected to find it,
+# and the failure named the id policy rather than the leftover file.
+add_test(NAME clean-storage COMMAND "${CMAKE_COMMAND}" -E rm -f
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/.storage.json")
+set_tests_properties(clean-storage PROPERTIES FIXTURES_SETUP storage)
+
 # The plain arguments are files to put through the whole walk; the two named
 # ones are the fixtures whose *point* is a single fact, so the fact is asserted
 # by name rather than guessed at from a filename.
@@ -263,9 +275,13 @@ add_test(NAME ui-measure COMMAND ffmpeg-bro-headless
 add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_subtitles.js"
          -- "${FIXTURE_DIR}")
-set_tests_properties(decode export capabilities inputs sequences hardware ui-player ui-sources ui-hardware
-                     ui-export ui-sequence ui-report ui-measure ui-subtitles PROPERTIES
+set_tests_properties(decode export capabilities inputs sequences hardware PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
+# The same, plus clean storage — the split is that a native test never loads
+# `ui/`, so the blob beside the app is nothing to do with it.
+set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
+                     ui-measure ui-subtitles PROPERTIES
+                     FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
 # translation into a filter graph is a pure function of it. ui-graph is the
@@ -278,7 +294,7 @@ add_test(NAME ui-filtergraph COMMAND ffmpeg-bro-headless
 # source directory.
 add_test(NAME ui-capture COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_capture.js")
-set_tests_properties(ui-capture PROPERTIES TIMEOUT 600
+set_tests_properties(ui-capture PROPERTIES FIXTURES_REQUIRED storage TIMEOUT 600
                      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # ui-graph is mostly the model, which needs nothing, but the wiring gesture is
 # a gesture: sockets have to be somewhere before a wire can be dragged between
@@ -288,8 +304,8 @@ set_tests_properties(ui-capture PROPERTIES TIMEOUT 600
 add_test(NAME ui-graph COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_graph.js"
          -- "${FIXTURE_A}")
-set_tests_properties(ui-filtergraph PROPERTIES TIMEOUT 300)
-set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED media TIMEOUT 300)
+set_tests_properties(ui-filtergraph PROPERTIES FIXTURES_REQUIRED storage TIMEOUT 300)
+set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 300)
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.

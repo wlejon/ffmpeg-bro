@@ -1172,8 +1172,14 @@ console.log('\nwhat a node that is gone takes with it');
         wires: [], cuts: [], locks: {}, sizes: {}, pins: {},
     }));
     overlay.restore();
-    same(overlay.addNode('hflip').id, 'u9001',
-         'the id of a node dropped on read is still taken out of circulation');
+    // Asserted as the property and not as the literal `u9001`: the counter is
+    // one per process, so the literal also asserts that nothing earlier in this
+    // run — another suite's storage, another restore in this file — has already
+    // pushed it past 9000. That is a fact about the run, not about the policy,
+    // and it is exactly the way this check has failed while being right.
+    const after = overlay.addNode('hflip').id;
+    ok(/^u\d+$/.test(after) && Number(after.slice(1)) > 9000,
+       `the id of a node dropped on read is still taken out of circulation — ${after}`);
 
     // ...and the blob this application has in fact been writing: the node was
     // dropped by an earlier run and the state remembered without it, leaving a
