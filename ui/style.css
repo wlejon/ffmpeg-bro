@@ -2584,6 +2584,14 @@ select.when-op { height: 22px; font-size: 11px; }
    it. The select is given a basis rather than a share: left to flex it collapsed
    to nothing beside two number fields and the word "between" was three pixels
    of "b". */
+/* Where a press would put an edge, under the actions rather than beside them:
+   it changes sixty times a second and a line that reflows the buttons above it
+   every frame is a line nobody can read. */
+.when-at { font-size: 10.5px; margin: 1px 0 2px; min-height: 13px; }
+/* Narrower than an ordinary tiny button — it sits between two number fields and
+   the fields are what has to stay readable. */
+.when-here { padding: 0 4px !important; font-size: 12px; line-height: 1; }
+.when-here:disabled { opacity: 0.35; }
 .when-edit { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
 .when-i { flex: 0 0 auto; width: 10px; font-size: 10.5px; color: var(--dim); }
 .when-edit select.when-op { flex: 0 0 78px; width: 78px; min-width: 0; }

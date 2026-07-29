@@ -2362,6 +2362,88 @@ if (!media) {
                 pump(160);
                 A.setPlayhead(spec.start);
                 pump(120);
+
+                // ── placing an edge from the playhead ──────────────────────
+                //
+                // The mark says where you are; these say "put it there". The
+                // claim worth checking is that the two agree — a button that
+                // wrote a second the mark is not drawn at would be the stage
+                // contradicting itself — so what is asserted is the *stored
+                // expression* against the same mapping the mark is moved by.
+                const length = spec.end - spec.start;
+                const target = length * 0.8;
+                const at = () => document.querySelector('#gr-panel [data-f="when-at"]')
+                                         .textContent;
+                A.setPlayhead(spec.start + target);
+                pump(120);
+
+                ok(/t=/.test(at()),
+                   `the column says which moment a press would use: “${at()}”`);
+                ok(at().indexOf(target.toFixed(2)) >= 0,
+                   'and it is the second the playhead is standing at');
+
+                const grip = (edge) =>
+                    document.querySelector(`#gr-panel [data-here="0:${edge}"]`);
+                ok(!!grip('from') && !!grip('to'),
+                   'a span with two ends has a button for each of them — which end you ' +
+                   'mean is the whole of the question');
+                ok(!grip('to').disabled, 'offered while the playhead is on this clock');
+
+                grip('to').dispatchEvent(new MouseEvent('click', { bubbles: true,
+                                                                   button: 0 }));
+                pump(200);
+                const moved = A.graph.parseEnable(enableOf()).spans[0];
+                ok(Math.abs(moved.to - target) < 0.02,
+                   `pressing ⇥ takes the far edge to the playhead — ${
+                       moved.to} against ${target.toFixed(2)}`);
+                ok(moved.from === 0.5,
+                   'and leaves the near one where it was — the button names an edge, it ' +
+                   'does not move the span');
+
+                // Where there is no mapping there is no offer. Same route as
+                // the hidden mark above, and the two must agree: an edge placed
+                // from a playhead the strip will not draw would be a number
+                // arrived at from nowhere.
+                S.rangeIn = spec.start + length * 0.5;
+                A.graph.draw();
+                pump(160);
+                A.setPlayhead(spec.start);
+                pump(120);
+                ok(head().classList.contains('hidden') && grip('to').disabled,
+                   'a playhead the strip will not draw cannot place an edge either');
+                ok(/not|outside/.test(at()),
+                   `and the column says so rather than going blank: “${at()}”`);
+                const held = enableOf();
+                grip('to').dispatchEvent(new MouseEvent('click', { bubbles: true,
+                                                                   button: 0 }));
+                pump(160);
+                ok(enableOf() === held, 'and a press on it writes nothing');
+
+                S.rangeIn = wasIn; S.rangeOut = wasOut;
+                A.graph.draw();
+                pump(160);
+                A.setPlayhead(spec.start + target);
+                pump(160);
+
+                // `On from here` — a span that comes on where you are looking
+                // and stays on. It runs to the end of the ruler because that is
+                // the half a single press cannot know.
+                document.querySelector('#gr-panel [data-f="addhere"]')
+                    .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+                pump(200);
+                const spans = A.graph.parseEnable(enableOf()).spans;
+                ok(spans.length === 2, 'On from here adds a span rather than moving one');
+                ok(spans[1].op === 'gt' && spans[1].to === null &&
+                   Math.abs(spans[1].from - target) < 0.02,
+                   `which comes on at the playhead and stays on: ${enableOf()}`);
+
+                // Back to the one span the rest of this section is written for.
+                const field2 = document.querySelector('#gr-panel [data-f="enable"]');
+                field2.value = "'between(t,0.5,1.5)'";
+                field2.dispatchEvent(new Event('change', { bubbles: true }));
+                pump(200);
+                A.setPlayhead(spec.start);
+                pump(120);
             }
 
             document.querySelector('#gr-panel [data-f="always"]')

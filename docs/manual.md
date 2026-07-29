@@ -956,6 +956,22 @@ cards' playback readout follows.
 Playing the node (▶, above) still answers the other half: the readout over the
 picture says `on` or `off` as the playhead crosses the boundary.
 
+**And it can place an edge, not just report one.** `⇤` and `⇥` beside a span's
+numbers take that end to where the playhead is standing, and `On from here` adds
+a span that comes on there and stays on — which is the whole of what a single
+press can know, since where it should go off again is a second decision. One
+button per end rather than one per span: which end you mean is the entire
+question, and a `between` whose far edge jumped when you meant the near one is
+worse than no button at all. The line under them says which second a press would
+use, in both the ruler's timecode and the `t=` the field will hold.
+
+They go through the same mapping the mark does — one function, so a button
+cannot place an edge at a second the mark is not drawn at — and therefore
+through the same refusal: where the playhead is off this node's clock the mark
+is hidden, the buttons go dim, and the line says which of the two reasons it is.
+A press on a dim one writes nothing rather than reaching for the nearest
+plausible number.
+
 ### Locks
 
 Every value on a derived node can be typed into, and **typing into one locks
@@ -2411,12 +2427,13 @@ Honest list of what does not work:
   surfaces them: no control writes one, no strip draws one, and the `eval` option
   is an entry in the table like any other. That is the shape of a real
   keyframe editor and it is not built.
-- **A span you can drag from the timeline.** The playhead is on the When strip
-  now and moves with it, so where a span falls can be *seen* — but the strip is
-  still not the timeline: a span's ends are dragged on the strip, and there is
-  no gesture that sets one from where the playhead is standing. The two clocks
-  are already reconciled for the mark, so what is missing is a button rather
-  than a mechanism.
+- **A span dragged *on* the timeline.** The playhead is on the When strip and
+  can place either end of a span — see [When it is on](#when-it-is-on)
+  — so the two clocks are reconciled in both directions now. What is still not
+  built is the other reading of it: a span drawn as a region on the timeline
+  itself, where the shot it is meant to cover is. That is a lane, not a button,
+  and it would have to hold spans belonging to several nodes at once and say
+  which is which.
 - **Two-pass filters.** The mechanism is there — a render is a list of passes,
   each the render with overrides, run in one job through one slot — and the two
   filters that need it are `vidstabdetect`/`vidstabtransform`, which this build

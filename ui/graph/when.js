@@ -27,6 +27,14 @@
 // `after decode` point — sees the source file's own timestamps, and a strip
 // labelled 0…range there would be a lie about which seconds are being named. So
 // the ruler is worked out from the graph rather than assumed.
+//
+// **And the playhead can place an edge, on either clock.** `⇤`/`⇥` on a span
+// and `On from here` set a moment from where the playhead is standing, mapped
+// the same way the mark on the strip is mapped — one function, `playheadOn`,
+// because a button that placed an edge somewhere other than where the mark is
+// drawn would be this stage contradicting itself in the most literal way it
+// could. Where there is no mapping there is no offer: the buttons go dim and
+// the line under them says why.
 
 import { el, div, span, put, head, row, select } from '../dom.js';
 import { project, sourceTime } from '../project.js';
@@ -137,23 +145,68 @@ export function whenRows(node, g, commit) {
         return out;
     }
 
-    out.push(strip(parsed.spans, clk, commit));
-    parsed.spans.forEach((s, i) => out.push(spanRow(parsed.spans, s, i, clk, commit)));
-    out.push(div('gp-actions', [
-        el('button', {
-            cls: 'tiny', text: parsed.spans.length ? 'Another span' : 'On for a span',
-            'data-f': 'addspan',
-            on: { click: () => commit(printEnable(
-                parsed.spans.concat([nextSpan(parsed.spans, clk.length)]))) },
-        }),
-        parsed.spans.length ? el('button', {
-            cls: 'tiny', text: 'Always on', 'data-f': 'always',
-            on: { click: () => commit('') },
-        }) : null,
+    // The strip, its spans and the actions under **one** element carrying the
+    // clock, because `chaseWhen()` drives all three: the mark, the moment the
+    // `here` buttons name, and whether they are offered at all. Split across
+    // siblings they would have to agree by being recomputed twice.
+    out.push(el('div', { cls: 'when-section', ...clockAttrs(clk) }, [
+        strip(parsed.spans, clk, commit),
+        ...parsed.spans.map((s, i) => spanRow(parsed.spans, s, i, clk, commit)),
+        div('gp-actions', [
+            el('button', {
+                cls: 'tiny', text: parsed.spans.length ? 'Another span' : 'On for a span',
+                'data-f': 'addspan',
+                on: { click: () => commit(printEnable(
+                    parsed.spans.concat([nextSpan(parsed.spans, clk.length)]))) },
+            }),
+            // A span placed where you are looking rather than where the last
+            // one left off. It runs to the end of the ruler because that is the
+            // half a press cannot know — "on from here" is a complete thought
+            // and "on from here to somewhere arbitrary" is not.
+            el('button', {
+                cls: 'tiny', text: 'On from here', 'data-f': 'addhere', 'data-here': 'add',
+                title: 'Add a span that comes on where the playhead is standing',
+                on: { click: () => {
+                    const at = playheadOn(clk, transport.t);
+                    if (!onRuler(clk, at)) return;
+                    commit(printEnable(parsed.spans.concat([
+                        { op: 'gt', from: round(at), to: null }])));
+                } },
+            }),
+            parsed.spans.length ? el('button', {
+                cls: 'tiny', text: 'Always on', 'data-f': 'always',
+                on: { click: () => commit('') },
+            }) : null,
+        ]),
+        // Written by `chaseWhen()`, so it says which second a press would place
+        // an edge at while the playhead is moving rather than which second it
+        // was at when the column was last built.
+        div('when-at dim', el('span', { 'data-f': 'when-at', text: '' })),
     ]));
     out.push(...rawRow(value, commit));
     return out;
 }
+
+/// The clock, on an element, for `chaseWhen()` to read back.
+///
+/// Worked out by walking the graph for a `setpts`, which is a question about
+/// the *shape* of the graph: it cannot change without the column being rebuilt
+/// anyway, so it travels on the element rather than being recomputed sixty
+/// times a second.
+function clockAttrs(clk) {
+    return {
+        'data-clock': clk.base,
+        'data-clock-start': String(clk.start),
+        'data-clock-at': String(clk.at),
+        'data-clock-length': String(clk.length),
+        'data-clock-path': clk.path || '',
+    };
+}
+
+/// Two decimal places. An edge is a number somebody will read back off the
+/// field and off the printed `-filter_complex`, and the playhead carries a
+/// float that says 2.4000000000000004 in both.
+const round = (v) => Math.round(v * 100) / 100;
 
 /// The expression itself, editable. Under the strip rather than instead of it:
 /// the strip is how you find the span and this is how you say something the
@@ -199,11 +252,38 @@ function spanRow(spans, s, i, clk, commit) {
     // `between 1 and 3` read across — four controls — and the value box is
     // about a third of the column: the numbers came out eleven pixels wide,
     // which is a field you can see and cannot read.
+    // Set this edge to where the playhead is standing. **Disabled rather than
+    // absent** when the playhead is off this node's clock: it is the same
+    // control either way, and a button that came and went as the playhead
+    // crossed a clip boundary would move everything beside it while somebody
+    // was reaching for it.
+    //
+    // Per edge, not per span, because which end you mean is the whole of the
+    // question — a single button would have to guess, and a `between` whose far
+    // edge jumped when you meant the near one is worse than no button.
+    const here = (which) => el('button', {
+        cls: 'tiny when-here', text: which === 'from' ? '⇤' : '⇥',
+        'data-f': `here${i}:${which}`, 'data-here': `${i}:${which}`,
+        title: which === 'from' ? 'Come on where the playhead is standing'
+                                : 'Go off where the playhead is standing',
+        on: { click: () => {
+            const t = playheadOn(clk, transport.t);
+            if (!onRuler(clk, t)) return;
+            // Through `moveEdge`, which is what a drag on the strip goes
+            // through: it keeps a span's ends in order and on the ruler, and a
+            // second answer to that would be a second set of rules for the
+            // same span depending on how it was placed.
+            commit(printEnable(moveEdge(spans, i, which, round(t), clk.length)));
+        } },
+    });
+
     return div('when-edit', [
         span(String(i + 1), 'when-i'),
         kind,
         s.from !== null ? number('from') : null,
+        s.from !== null ? here('from') : null,
         s.to !== null ? number('to') : null,
+        s.to !== null ? here('to') : null,
         el('button', {
             cls: 'tiny', text: '×', title: 'Take this span off',
             'data-f': `dropspan${i}`,
@@ -303,10 +383,6 @@ function strip(spans, clk, commit) {
 
     return el('div', {
         cls: 'when-strip' + (spans.length ? '' : ' when-always'),
-        'data-clock': clk.base,
-        'data-clock-start': String(clk.start),
-        'data-clock-length': String(clk.length),
-        'data-clock-path': clk.path || '',
     }, [
         track,
         div('when-ruler', marks),
@@ -333,6 +409,38 @@ function strip(spans, clk, commit) {
 /// whose file has no clip under the playhead has no answer — the render is not
 /// touching that file at this instant — and a mark parked at an edge would be a
 /// statement that it is.
+/// Where the playhead is standing, in the seconds *this node's* `enable`
+/// expression is written in — or `null` when there is no answer.
+///
+/// The one home for that mapping. It is asked twice a frame apart for two
+/// different reasons — the strip's mark is moved by `chaseWhen()` sixty times a
+/// second, and `Comes on here` reads it once on a press — and a button that
+/// placed an edge somewhere other than where the mark is drawn would be the
+/// stage contradicting itself in the most literal way available to it.
+///
+/// `null` where the mapping is not known: a source-clock node whose file has no
+/// clip under the playhead is not being touched by the render at this instant,
+/// and there is no moment in its own timecode to name.
+export function playheadOn(clk, t) {
+    if (!clk || clk.length <= 0) return null;
+    if (clk.base !== 'source') return t - exportRange().start;
+    // The clip of that file the playhead is actually inside. Several clips of
+    // one input are the ordinary case, so it is the one under the playhead
+    // rather than the first one found.
+    for (const c of project.clips) {
+        if (c.path !== clk.path) continue;
+        if (t < c.start || t >= c.start + c.length) continue;
+        return sourceTime(c, t) - clk.start;
+    }
+    return null;
+}
+
+/// Whether a moment is on the ruler at all — `playheadOn` can answer with a
+/// number that is simply off the end, which is not somewhere an edge can go.
+function onRuler(clk, at) {
+    return at !== null && at >= 0 && at <= clk.length;
+}
+
 export function chaseWhen() {
     // By the clock they carry rather than by class, so the column's strip and
     // the one line on a card are one thing to this: both draw the same spans
@@ -340,36 +448,39 @@ export function chaseWhen() {
     // stage disagreeing with itself.
     const strips = document.querySelectorAll('[data-clock]');
     if (!strips.length) return;
-    const r = exportRange();
     const t = transport.t;
 
     for (const strip of strips) {
         const headEl = strip.querySelector('[data-f="when-head"]');
         if (!headEl) continue;
-        const base = strip.getAttribute('data-clock');
-        const start = Number(strip.getAttribute('data-clock-start')) || 0;
-        const length = Number(strip.getAttribute('data-clock-length')) || 0;
+        const clk = {
+            base: strip.getAttribute('data-clock'),
+            start: Number(strip.getAttribute('data-clock-start')) || 0,
+            at: Number(strip.getAttribute('data-clock-at')) || 0,
+            length: Number(strip.getAttribute('data-clock-length')) || 0,
+            path: strip.getAttribute('data-clock-path') || '',
+        };
 
-        let on = null;
-        if (base === 'source') {
-            const path = strip.getAttribute('data-clock-path') || '';
-            // The clip of that file the playhead is actually inside. Several
-            // clips of one input are the ordinary case, so it is the one under
-            // the playhead rather than the first one found.
-            for (const c of project.clips) {
-                if (c.path !== path) continue;
-                if (t < c.start || t >= c.start + c.length) continue;
-                on = sourceTime(c, t) - start;
-                break;
-            }
-        } else {
-            on = t - r.start;
-        }
+        const on = playheadOn(clk, t);
+        const reachable = onRuler(clk, on);
+        headEl.classList.toggle('hidden', !reachable);
+        if (reachable) headEl.style.left = `${(on / clk.length) * 100}%`;
 
-        const frac = on === null || length <= 0 ? -1 : on / length;
-        const off = frac < 0 || frac > 1;
-        headEl.classList.toggle('hidden', off);
-        if (!off) headEl.style.left = `${frac * 100}%`;
+        // The offers to place an edge there, under the same clock and moving
+        // with the same mark: they are only truthful while there is a moment
+        // for them to name, and the label is that moment so a press is never a
+        // guess about which second it means.
+        const note = strip.querySelector('[data-f="when-at"]');
+        if (note) note.textContent = reachable
+            // Both numbers: the timecode is what the ruler above is labelled
+            // in, and the bare second is what goes in the field and into the
+            // printed expression.
+            ? `⇤ ⇥ place an edge at ${timecode(clk.at + on)} — t=${on.toFixed(2)}`
+            : clk.base === 'source'
+                ? 'the playhead is not over a clip of this file, so there is no moment ' +
+                  'here to place an edge at'
+                : 'the playhead is outside the render’s range';
+        for (const b of strip.querySelectorAll('[data-here]')) b.disabled = !reachable;
     }
 }
 
@@ -449,10 +560,7 @@ export function whenBar(node, g) {
     // attributes off would be a layout change to carry data.
     return el('div', {
         cls: 'gn-when' + (parsed.ok ? '' : ' gn-when-raw'),
-        'data-clock': clk.base,
-        'data-clock-start': String(clk.start),
-        'data-clock-length': String(clk.length),
-        'data-clock-path': clk.path || '',
+        ...clockAttrs(clk),
     }, [
         track,
         span(parsed.ok ? enableText(value) : 'a time expression', 'gn-when-text'),
