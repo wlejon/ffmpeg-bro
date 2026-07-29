@@ -2856,6 +2856,50 @@ if (!media) {
     pump(300);
     ok(clip.video.src.indexOf('/@fx/') === 0, 'a second filter is still one chain');
 
+    // **What is actually being played**, which no picture on this screen shows.
+    // A chain that ran the right filter over the wrong pixel format, or at the
+    // wrong moment, decodes to exactly the same size and wears the same absence
+    // of a badge as one that is right.
+    const startWas = clip.start;
+    const inWas = clip.inPoint;
+    clip.start = 12;        // laid down twelve seconds into the edit…
+    clip.inPoint = 3;       // …from three seconds into the file
+    overlay.clear();
+    overlay.insert(anchor, 'negate');
+    pump(400);
+    const view = A.graph.playback.viewFor(clip.id);
+    ok(!!view && !!view.video, 'a filtered clip says what it asked to be played');
+    same(view.shift, 9, 'and what its chain does to the clock: laid at 12, cut in at 3');
+    ok(view.video.indexOf('setpts=PTS+9/TB') === 0,
+       `the clock change leads the chain, where the derivation puts it: ${view.video}`);
+    ok(/,negate$/.test(view.video),
+       'the filter somebody placed after the scale is last, where they placed it');
+    // The conversions are the difference between inverting red, green and blue
+    // and inverting luma and chroma — the same filter, two pictures.
+    ok(view.video.indexOf('format=rgba') > 0,
+       'the derivation\'s conversion to RGBA is in the chain, so the filter sees the ' +
+       'pixels the render shows it');
+    ok(view.video.indexOf('scale=iw:ih') > 0,
+       'and its scale, at the picture\'s own size, for the colour arguments on it');
+    ok(view.video.indexOf('trim') < 0 && view.video.indexOf('colorchannelmixer') < 0,
+       'while the trim and the opacity, which the viewer already does, are not run twice');
+
+    // The other insert point is on the other side of that `setpts`, and so is
+    // the render: a filter after the decode sees the file's own timestamps.
+    // Same clip, same filter, one point along.
+    overlay.clear();
+    overlay.insert(`clip:${clip.id}/after-decode`, 'negate');
+    pump(400);
+    const early = A.graph.playback.viewFor(clip.id);
+    ok(!!early && early.video.indexOf('negate') === 0,
+       `a filter put in after the decode runs before the clock changes: ${early && early.video}`);
+    ok(early.video.indexOf('setpts=PTS+9/TB') > 0,
+       'with the clock change still below it');
+    same(early.shift, 9, 'and the view still takes the whole of it back off at the end');
+
+    clip.start = startWas;
+    clip.inPoint = inWas;
+
     overlay.clear();
     pump(300);
     same(clip.video.src, clip.src,

@@ -103,6 +103,7 @@ struct Played {
     bool opened = false;
     int width = 0, height = 0;
     double meanY = -1;   ///< the first picture at or after `at`, 0..255
+    double at = -1;      ///< when that picture said it was, in seconds
     double peak = -1;    ///< the largest sample seen, or -1 for a file with no sound
     int frames = 0;
     int rotation = -1;   ///< what the track tells bro to turn the picture by
@@ -157,6 +158,7 @@ Played play(const std::string& src, double at) {
                 }
                 if (n) {
                     out.meanY = sum / double(n);
+                    out.at = double(vf.pts) / 1e9;
                     out.width = static_cast<int>(vf.width);
                     out.height = static_cast<int>(vf.height);
                 }
@@ -475,10 +477,11 @@ int main(int argc, char* argv[]) {
         // **`enable=` names a moment on the render's clock and playback runs on
         // the file's.** A clip half an hour into a recording would otherwise
         // switch its filter on half an hour late, which is the sort of wrong
-        // that looks like the filter not working. `shift` is the difference,
-        // and the only way to see it from outside is to hold everything else
-        // still and move it: the same filter, the same frame of the same file,
-        // on and off.
+        // that looks like the filter not working. The chain says so itself, with
+        // a `setpts` where the render's graph has one, and `shift` is how much
+        // of that to take back off at the end — so the only way to see it from
+        // outside is to hold everything else still and move it: the same filter,
+        // the same frame of the same file, on and off.
         const Played plain = play(file, 0);
         PlaybackView v;
         v.input = of(file);
@@ -492,11 +495,30 @@ int main(int argc, char* argv[]) {
 
         // Twenty seconds along the timeline: the file's first frame is now the
         // render's twentieth second, which is inside the span.
+        v.video = "setpts=PTS+20/TB,negate=enable='gt(t,10)'";
         v.shift = 20.0;
         const Played after = play(defineView("fx-5", v), 0);
         checkf(after.meanY >= 0 && std::fabs(after.meanY - (255.0 - plain.meanY)) < 6.0,
                "and moved twenty seconds along the render's clock, the same frame is "
                "inside it (%.1f, against %.1f expected)", after.meanY, 255.0 - plain.meanY);
+        // And it is still the *first* frame: `shift` took the twenty seconds
+        // back off, so the element's playhead never learned about them. Without
+        // that half, `play(..., 0)` would be answered by a frame stamped 20s and
+        // everything the viewer does with a clock would be out by the clip's
+        // position on the timeline.
+        checkf(after.at >= 0 && after.at < 0.2,
+               "and comes back on the stream's own clock, not the render's (%.3fs)",
+               after.at);
+
+        // A filter *in front of* that `setpts` sees the file's timestamps —
+        // which is what the render shows one inserted after the decode, because
+        // the derivation's `setpts` is below that insert point and above the
+        // other. Same span, same shift, and now nothing happens to the frame.
+        v.video = "negate=enable='gt(t,10)',setpts=PTS+20/TB";
+        const Played ahead = play(defineView("fx-5", v), 0);
+        checkf(ahead.meanY >= 0 && std::fabs(ahead.meanY - plain.meanY) < 1.0,
+               "a filter in front of the setpts is on the file's clock, where the render "
+               "puts it (%.1f against %.1f)", ahead.meanY, plain.meanY);
         forgetView("fx-5");
     }
 

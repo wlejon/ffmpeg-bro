@@ -154,6 +154,16 @@ export function makeGraph(opts = {}) {
         // start of the file, which for a clip an hour in is the difference
         // between a render and an hour.
         if (spec.from !== undefined) node.from = spec.from;
+        // How many seconds this filter moves the clock forward — the derived
+        // `setpts` and the `adelay` beneath it, and nothing else. Not printed
+        // either: the expression the node carries is what a command line says,
+        // and this is what that expression *comes to*, for the one reader that
+        // has to reproduce the same map without being able to evaluate it
+        // (`ui/graph/playback.js`, which runs a chain over frames the viewer is
+        // already sitting in the middle of). Carried here rather than worked
+        // out again from the clip, so the number and the filter that applies it
+        // cannot drift apart.
+        if (spec.moves !== undefined) node.moves = spec.moves;
         if (spec.title) node.title = spec.title;
         // Where this input's pictures start out: on a card, or in system
         // memory. A fact about the `-i` — `-hwaccel_output_format` and nothing

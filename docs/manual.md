@@ -1129,10 +1129,15 @@ blue, and the same filter handed the decoder's yuv420p would invert luma and
 chroma, so `format` is kept and `scale` is kept at the picture's own size with
 its colour arguments untouched.
 
-`enable=` comes on where it will come on in the render. Playback runs on the
-file's own timestamps and a span is written on the render's clock, so the view
-carries the difference between them — the same mapping the When strip's mark
-uses, which is why the mark and the picture agree.
+`enable=` comes on where it will come on in the render — and *where* in the
+chain decides which clock that is, because the derivation's own `setpts` sits
+between the two points a filter can be inserted at. A filter put in **after the
+decode** sees the file's own timestamps; one put in **after the scale** sees the
+moment the edit puts that frame at. That is what the render does, so the
+playback chain carries the same `setpts`, written as the constant it comes to,
+and the view takes the whole of it back off at the end so the playhead is still
+counting the file. A clip laid down twelve seconds into the edit from three
+seconds into its file plays `setpts=PTS+9/TB` in the middle of its chain.
 
 Two things it will not show, and both keep the `fx` badge rather than drawing
 something nearly right:

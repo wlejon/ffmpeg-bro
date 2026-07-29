@@ -318,6 +318,13 @@ onChange((what) => {
     // `moved` that ends the drag is what puts it right. A clip whose filters are
     // a frame out of date for the length of a drag is a trade nobody notices,
     // and one that stalls under the cursor is a trade everybody does.
+    //
+    // This is also the one place that knows a drag is a drag, which is why
+    // `defineSettled`'s "same chains, no work" rule stops short of it: moving a
+    // clip moves the constant inside the `setpts` its chain carries, so every
+    // mouse move is a chain nothing has settled before. Deciding that here costs
+    // one settle per gesture; deciding it in there would mean the native half
+    // knowing which parts of a chain are allowed to differ.
     if (what !== 'move') refreshPlayback();
 });
 
@@ -1278,6 +1285,10 @@ globalThis.__ffmpegBro = {
              placement: graphPlacement,
              outranked: outrankedControls, preview: graphPreview, previewGraph,
              measureGraph, measureTo, current: currentGraph,
+             // What the viewer was last asked to play, per clip. The chain's
+             // order and its clock are the two things that have to agree with
+             // the render exactly, and a screenshot shows neither.
+             playback: graphPlayback,
              // `enable=` as a set of spans and as the text it is. Pure, and on
              // the surface for the same reason the model is: the control and
              // the expression are one mechanism, and the only way to check that

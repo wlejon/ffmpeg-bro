@@ -28,14 +28,17 @@
 //
 // Three decisions worth knowing before changing anything here.
 //
-// **The filters see the render's clock, not the file's.** `enable=` names a
-// moment on the timeline — `between(t,5,10)` is five seconds into the *edit* —
-// and a clip half an hour into a recording would otherwise switch its filter on
-// half an hour late. So `PlaybackView::shift` moves each frame onto the output
-// clock on the way in and takes it back off on the way out. It is a number and
-// not two `setpts` filters because the chain that runs has to be the chain that
-// was asked for: a chain with something of ours spliced into it is a chain whose
-// libavfilter error messages name filters nobody wrote.
+// **The chain is free to move the clock, and what leaves is on the stream's.**
+// `enable=` names a moment on the timeline — `between(t,5,10)` is five seconds
+// into the *edit* — so a chain built for a clip half an hour into a recording
+// has a `setpts` in it putting the filters after that point onto the edit's
+// clock, exactly where the render's own graph has one. What comes back out has
+// to be on the stream's clock again or the element's playhead is nonsense, and
+// libavfilter will not say what a chain did between the two. So the caller,
+// which wrote the `setpts`, states the same number as `PlaybackView::shift` and
+// this takes it off at the sink. Nothing is added at the source: a filter in
+// front of that `setpts` is meant to see the file's timestamps, because in the
+// render it does.
 //
 // **Rotation moves into the graph**, because that is where the render puts it.
 // A display matrix is metadata, and `GraphSource` inserts `transpose` between
@@ -94,10 +97,11 @@ struct PlaybackView {
     /// The same for the sound, in `-af` syntax.
     std::string audio;
 
-    /// Seconds to add to a frame's clock before the filters see it, and to take
-    /// off again afterwards. Where a clip sits on the timeline minus where it
-    /// is cut from — see the note at the top about `enable=`. Zero is the file's
-    /// own clock, which is right for anything with no time in it.
+    /// Seconds the chains move the clock forward, taken back off at the sink so
+    /// what reaches the element is on the stream's clock again — see the note at
+    /// the top. This does not *cause* the move: a `setpts` somewhere in `video`
+    /// (and an `asetpts` in `audio`) does, and this says how much of it to undo.
+    /// Zero for a chain that leaves timestamps alone, which is most of them.
     double shift = 0.0;
 };
 
@@ -158,17 +162,18 @@ bool settleView(const PlaybackView& v, ViewFacts* facts, std::string* err);
 /// Settle a view and register it under `id`, in one call — and **settle it only
 /// when the answer could have changed**.
 ///
-/// What a chain produces is decided by the input and by the chains. `shift` is
-/// a clock, and moving a filter's idea of what time it is cannot change the
-/// size of the picture coming out of it — a `crop` whose `enable=` is off still
-/// negotiated the cropped size when the graph was configured. So a view
-/// re-registered under the same id with the same input and the same chains
-/// keeps the facts it already had and opens nothing.
+/// What a chain produces is decided by the input and by the chains, and by
+/// nothing else. `shift` is arithmetic done to the frames on their way out, so
+/// a view re-registered under the same id with the same input and the same
+/// chains keeps the facts it already had and opens nothing.
 ///
-/// That is not an optimisation for its own sake: a clip dragged along the
-/// timeline changes its `shift` on every mouse move, and settling opens the
-/// file and decodes a frame. The rule is stated here, once, rather than left
-/// for each caller to guess at.
+/// That is not an optimisation for its own sake — settling opens the file and
+/// decodes a frame — and it is worth knowing what it does *not* cover: a clip
+/// dragged along the timeline moves the `setpts` its chain carries, and a moved
+/// `setpts` is a different chain by this rule even though it cannot produce a
+/// different picture. The caller is the right place to decide that, and
+/// `ui/app.js` does: the viewer is left a gesture out of date and put right when
+/// the mouse comes up, once, rather than settling under the cursor.
 ///
 /// `*token` is the src to hand a `<video>`. False with `*err` set leaves the id
 /// registered as whatever it was.
@@ -206,13 +211,15 @@ public:
     ///
     /// `rotation` is the display matrix in degrees; it becomes `transpose`
     /// filters in front of the chain and is the caller's cue to report none.
-    /// `shift` is seconds added to the stream's own timestamps before the
-    /// filters see them and taken off again after — the caller composes it out
-    /// of where the clip sits on the timeline and where the input's zero is,
-    /// because both of those are the caller's arithmetic and neither is this
-    /// class's business. See `PlaybackView::shift`.
+    ///
+    /// `zero` is where this input's own start sits — the container's start time,
+    /// `-ss`, `-itsoffset` — taken off on the way in so the chain begins on the
+    /// clock everything outside counts in. `shift` is `PlaybackView::shift`,
+    /// put back on the way out. Two numbers rather than one because they are
+    /// applied at opposite ends and only one of them is a fact about the file.
     bool open(AVFormatContext* fmt, int streamIndex, const MediaInput& in,
-              const std::string& chain, int rotation, double shift, std::string* err);
+              const std::string& chain, int rotation, double zero, double shift,
+              std::string* err);
 
     /// Which stream of the container this filters. `settleFilter` needs it to
     /// know which packets are for it.
@@ -256,6 +263,9 @@ private:
     /// and the packet that got that answer has to be offered again afterwards —
     /// dropped instead, it is a picture missing from the middle of a chain.
     bool drain(std::string* err);
+    /// Seconds, in the stream's own time base. Both clock corrections go
+    /// through it so neither can round differently from the other.
+    int64_t ticks(double seconds) const;
 
     AVCodecContext* dec_ = nullptr;
     AVFilterGraph* graph_ = nullptr;
@@ -268,6 +278,7 @@ private:
 
     std::string chain_;
     int rotation_ = 0;
+    double zero_ = 0.0;
     double shift_ = 0.0;
     bool audio_ = false;
     int index_ = -1;

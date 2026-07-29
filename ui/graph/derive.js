@@ -179,8 +179,22 @@ function videoSteps(clip, w, src, key, off, onDevice) {
     steps.push(
         { filter: 'trim', anchor: `${key}/trim`,
           params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
+        // **This is where a clip stops being on the file's clock and starts
+        // being on the render's**, which is why `moves` is stated here and
+        // nowhere else. Everything above this node sees the timestamps the file
+        // has and everything below sees the moment the edit puts them at, and
+        // the two insert points a person can reach are one on each side of it.
+        //
+        // `moves` is what the expression comes to rather than a term in it:
+        // `STARTPTS` is the first frame the render reads, which is `srcIn`,
+        // because the `trim` above has already thrown away everything earlier.
+        // A render always starts at that frame and can write the map relative
+        // to it; the viewer can be sitting anywhere in the file, so the same map
+        // has to be written as the constant it amounts to. `ui/graph/playback.js`
+        // is what reads it.
         { filter: 'setpts', anchor: `${key}/setpts`, posNames: ['expr'],
-          pos: [`PTS-STARTPTS+${n(w.offset + off, 6)}/TB`] });
+          pos: [`PTS-STARTPTS+${n(w.offset + off, 6)}/TB`],
+          moves: w.offset + off - w.srcIn });
     if (keepW < 1 || keepH < 1)
         steps.push({ filter: 'crop', anchor: `${key}/crop`,
                      posNames: ['w', 'h', 'x', 'y'],
@@ -225,15 +239,22 @@ function audioSteps(clip, w, key, off) {
     const steps = [
         { filter: 'atrim', anchor: `${key}/atrim`,
           params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
+        // The sound's half of the clock, and it is in two filters where the
+        // picture's is in one — see `moves` on the `setpts` above. This node
+        // carries the range's origin; the `adelay` below carries where the clip
+        // sits in it, because that part of the offset is silence rather than
+        // arithmetic.
         { filter: 'asetpts', anchor: `${key}/asetpts`, posNames: ['expr'],
-          pos: [off ? `PTS-STARTPTS+${n(off, 6)}/TB` : 'PTS-STARTPTS'] },
+          pos: [off ? `PTS-STARTPTS+${n(off, 6)}/TB` : 'PTS-STARTPTS'],
+          moves: off - w.srcIn },
     ];
     if (clip.volume !== 1)
         steps.push({ filter: 'volume', anchor: `${key}/volume`,
                      posNames: ['volume'], pos: [n(clip.volume)] });
     if (w.offset > 0.0005)
         steps.push({ filter: 'adelay', anchor: `${key}/adelay`, posNames: ['delays'],
-                     pos: [px(w.offset * 1000)], params: { all: '1' } });
+                     pos: [px(w.offset * 1000)], params: { all: '1' },
+                     moves: w.offset });
     return steps;
 }
 
@@ -908,17 +929,13 @@ export function derive(spec, sources, opts = {}) {
         // so the graph and the render cannot disagree about where the picture
         // starts out.
         const onDevice = inputOnDevice(spec, clip.input);
-        // `from` and `at` are this clip's two clocks: where its frames are read
-        // from in the file, and where they land on the render's. The renderer
-        // needs the first (it is `ExportGraphInput::from`, the seek); the
-        // *viewer* needs both, because the difference between them is what puts
-        // a filter's `enable=` on the render's clock while playback is running
-        // on the file's — see ui/graph/playback.js. Written here because this is
-        // where the window is worked out, and a second place that subtracted
-        // them would be a second answer to what time it is.
+        // `from` is the earliest source time anything downstream asks for, which
+        // is the renderer's seek (`ExportGraphInput::from`). Where those frames
+        // *land* is not here: it is the `setpts` below, which is the node that
+        // moves them, and it says so in `moves`.
         const input = g.add({ kind: 'input', index: i, path: clip.path,
                               input: clip.input === undefined ? -1 : clip.input,
-                              anchor: `${key}/in`, from: w.srcIn, at: w.offset + off,
+                              anchor: `${key}/in`, from: w.srcIn,
                               onDevice, outs: [] });
         inputs.set(key, input);
         // **A pad is added when something reads it**, which is the rule the

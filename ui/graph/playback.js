@@ -27,13 +27,18 @@
 // rectangle, the opacity style, the playhead. Running them again in the chain
 // would be the picture laid out twice.
 //
-// **The filters see the render's clock.** `enable=` names a moment on the
-// render — `between(t,5,10)` is five seconds into what will be written — and a
-// clip half an hour into a recording plays back on the file's own timestamps.
-// So a view carries the difference, which is where the clip's frames land minus
-// where they are read from, and the graph states both on its input node. It is
-// the same mapping `when.js`'s `playheadOn` does for the strip, which is why
-// the mark on the strip and the picture on the screen agree.
+// **The clock changes where the render changes it.** `enable=` names a moment
+// on the render — `between(t,5,10)` is five seconds into what will be written —
+// and a clip half an hour into a recording plays back on the file's own
+// timestamps. But the two places a filter can be put are on opposite sides of
+// the node that reconciles those: the derivation's `setpts` sits between them,
+// so in the *render* a filter inserted after the decode sees the file's clock
+// and one inserted after the scale sees the edit's. Moving the whole chain onto
+// the edit's clock would therefore be right for one insert point and wrong for
+// the other. So the walk below keeps that `setpts`, written as the constant it
+// comes to (`moves`, stated by `derive.js` on the node itself), and a view's
+// `shift` is only how much of it to take back off at the end — the element's
+// clock is the file's, whatever the filters in between did to it.
 //
 // **A chain that cannot be shown honestly is not shown.** Two cases, and both
 // keep the badge rather than drawing something nearly right:
@@ -48,7 +53,7 @@
 //     playback is one stream through one chain, and half of a graph shown as
 //     though it were the whole of it is worse than the badge.
 
-import { derive, controlOf } from './derive.js';
+import { derive } from './derive.js';
 import { filterArgs } from './print.js';
 
 /// `spec()` — the whole timeline as a render spec, with `origin` set to where
@@ -69,6 +74,19 @@ const state = new Map();
 export function srcFor(id) {
     const s = state.get(id);
     return (s && s.src) || '';
+}
+
+/// What was last asked for on this clip's behalf — `{ input, video, audio,
+/// shift }` — or null for a clip playing its input plainly.
+///
+/// A read accessor and nothing else, and it exists because the two things that
+/// have to agree with the render exactly are the chain's *order* and its clock,
+/// and neither is visible in a picture: a viewer showing the right pixels a
+/// minute late is indistinguishable from one showing them on time until
+/// somebody seeks. `tests/ui_graph.js` reads it.
+export function viewFor(id) {
+    const s = state.get(id);
+    return (s && s.ask) || null;
 }
 
 /// Why this clip's filters are not on the screen, for a clip that has some and
@@ -97,13 +115,29 @@ function headOf(g, id) {
     return g.nodes.find((n) => n.kind === 'input' && n.anchor === `clip:${id}/in`) || null;
 }
 
-/// What a *derived* node contributes to a playback chain.
+/// What the derivation called a step: `clip:3/format` → `format`.
 ///
-/// **Geometry, timing and level are the viewer's; what the pixels mean is the
-/// chain's.** The crop window, the placement rectangle, the opacity style and
-/// the playhead are all things the program monitor already does, so `trim`,
-/// `setpts`, `crop`, `scale`'s size and `colorchannelmixer` are dropped — kept,
-/// they would be the picture laid out twice.
+/// The anchor and not `controlOf`, which answers a different question — *which
+/// box on the properties panel wrote this* — and has an entry only for the four
+/// nodes a control owns. Asking it about `format` gets a null, and a walk that
+/// took the null for "nothing to contribute" dropped every conversion below
+/// while the comment said they were kept.
+function stepOf(anchor) {
+    const m = /\/([a-z]+)$/.exec(String(anchor || ''));
+    return m ? m[1] : '';
+}
+
+/// Seconds, as a filter argument. Six places, which is a microsecond and two
+/// orders of magnitude finer than a frame.
+const secs = (x) => String(Number(Number(x).toFixed(6)));
+
+/// What a *derived* node contributes to a playback chain, on one stream.
+///
+/// **Geometry and level are the viewer's; the clock and what the pixels mean
+/// are the chain's.** The crop window, the placement rectangle and the opacity
+/// style are things the program monitor already does, so `trim`, `crop`,
+/// `scale`'s size and `colorchannelmixer` are dropped — kept, they would be the
+/// picture laid out twice.
 ///
 /// The conversions are not like that, and leaving them out is how a filter
 /// comes to look different here from in the render: a `negate` spliced in after
@@ -114,28 +148,42 @@ function headOf(g, id) {
 /// size** — `iw`/`ih`, with its colour arguments untouched, because the matrix
 /// and range it converts through are the render's answer to a question playback
 /// asks in exactly the same words.
-function derivedStep(node) {
-    const control = controlOf(node.anchor);
-    if (control === 'format' || control === 'hwformat' || control === 'hwdownload')
+///
+/// The clock is kept for the reason at the top of this file, and kept *as a
+/// filter* rather than as the view's `shift`, because where it happens is the
+/// whole of what it means. What goes in is a constant and not the derivation's
+/// own `PTS-STARTPTS+x/TB`: playback is sitting wherever the playhead is, so
+/// there is no first frame for `STARTPTS` to be. The `adelay` on the sound is
+/// the same number arriving as silence, and silence is exactly what the viewer
+/// must not add — a clip that starts a minute in would take a minute to make a
+/// sound — so it contributes its clock and nothing else.
+function derivedStep(node, stream) {
+    if (Number(node.moves))
+        return `${stream === 'a' ? 'asetpts' : 'setpts'}=PTS+${secs(node.moves)}/TB`;
+    const step = stepOf(node.anchor);
+    if (step === 'format' || step === 'hwformat' || step === 'hwdownload')
         return filterArgs(node);
-    if (control === 'scale')
+    if (step === 'scale')
         return filterArgs({ filter: 'scale', pos: ['iw', 'ih'], params: node.params || {} });
     return '';
 }
 
 /// One clip's user filters on one stream, as `-vf`/`-af` text.
 ///
-/// Returns `{ ok: true, text }` or `{ ok: false, reason }`. Walking rather than
-/// filtering, because the answer is an *order* and only the wires know it.
+/// Returns `{ ok: true, text, shift }` or `{ ok: false, reason }` — `shift`
+/// being how far the text moves the clock, so the caller can say what to take
+/// back off at the end. Walking rather than filtering, because the answer is an
+/// *order* and only the wires know it.
 function chainOf(g, id, stream) {
     const key = `clip:${id}/`;
     const head = headOf(g, id);
-    if (!head) return { ok: true, text: '' };
+    if (!head) return { ok: true, text: '', shift: 0 };
     const port = (head.outs || []).findIndex((o) => o.stream === stream);
-    if (port < 0) return { ok: true, text: '' };   // this clip is not read for that
+    if (port < 0) return { ok: true, text: '', shift: 0 };   // not read for that
 
     const parts = [];
     let user = 0;
+    let shift = 0;
     let edges = g.outEdges(head).filter((e) => (e.fromPort || 0) === port);
     for (;;) {
         // A pad read twice is a fork, and a fork is not a chain. Said before
@@ -144,7 +192,7 @@ function chainOf(g, id, stream) {
         if (edges.length !== 1)
             return user
                 ? { ok: false, reason: 'these filters fork, and playback runs one chain' }
-                : { ok: true, text: '' };
+                : { ok: true, text: '', shift: 0 };
         const node = g.node(edges[0].to);
         if (!node) break;
         // Out of this clip: the compositor's `overlay`, the mix, or the sink.
@@ -155,8 +203,9 @@ function chainOf(g, id, stream) {
             return { ok: false,
                      reason: 'these filters read more than one pad, and playback plays one clip' };
         if (node.derived) {
-            const step = derivedStep(node);
+            const step = derivedStep(node, stream);
             if (step) parts.push(step);
+            shift += Number(node.moves) || 0;
         } else {
             parts.push(filterArgs(node));
             user++;
@@ -166,7 +215,8 @@ function chainOf(g, id, stream) {
     // The conversions on their own are not worth a view: without a filter of
     // somebody's in the chain, what comes out is the picture the element was
     // already playing, decoded twice.
-    return { ok: true, text: user ? parts.join(',') : '' };
+    return user ? { ok: true, text: parts.join(','), shift }
+                : { ok: true, text: '', shift: 0 };
 }
 
 /// What to ask for, for one clip — or what to say instead.
@@ -184,9 +234,12 @@ function askFor(g, spec, clip) {
     const input = head && head.input >= 0 && spec.inputs ? spec.inputs[head.input] : null;
     if (!input) return { why: 'this clip has no input for playback to open' };
 
-    // Where its frames land, less where they are read from. See the note at the
-    // top: this is the whole of what puts `enable=` on the render's clock.
-    const shift = (Number(head.at) || 0) - (Number(head.from) || 0);
+    // What the chain did to the clock, to be undone on the way out. The
+    // picture's run and the sound's arrive at the same number by different
+    // filters — one `setpts` against an `asetpts` and an `adelay` — so either
+    // answers for both, to within the half-millisecond below which the
+    // derivation writes no `adelay` at all.
+    const shift = v.text ? v.shift : a.shift;
     return { input, video: v.text, audio: a.text, shift,
              key: JSON.stringify([input, v.text, a.text, shift]) };
 }
@@ -252,7 +305,7 @@ export function refresh() {
         // Both mean this element is playing something that is no longer what
         // was asked for.
         if (src !== had.src || src) moved.push(clip.id);
-        state.set(clip.id, { key, src, why });
+        state.set(clip.id, { key, src, why, ask: ask.key ? ask : null });
     }
 
     // Clips that have gone. The token goes with them: a view holds an input

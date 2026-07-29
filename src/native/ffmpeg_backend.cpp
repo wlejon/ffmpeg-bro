@@ -731,12 +731,14 @@ private:
             f->trackId = static_cast<uint32_t>(index) + 1;
             f->kind = audio ? TrackKind::Audio : TrackKind::Video;
             f->timeBase = fmt_->streams[index]->time_base;
-            // Where this clip sits on the timeline, less where the input's own
-            // zero is — the two halves of "what moment is this, as the render
-            // counts moments". See `PlaybackView::shift`.
-            const double shift = view.shift - startOffsetNs_ / 1e9;
+            // The two clock corrections, kept apart because they happen at
+            // opposite ends of the chain: this input's own zero comes off every
+            // frame going in, so the filters start on the clock the rest of this
+            // class counts in, and whatever the chain's own `setpts` then did
+            // comes off on the way out. See `PlaybackView::shift`.
             if (!f->filter->open(fmt_, index, in, chain,
-                                 audio ? 0 : rotationOf(fmt_->streams[index]), shift, err))
+                                 audio ? 0 : rotationOf(fmt_->streams[index]),
+                                 startOffsetNs_ / 1e9, view.shift, err))
                 return false;
             if (!settleFilter(fmt_, *f->filter, err)) return false;
             filtered_.push_back(std::move(f));

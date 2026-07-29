@@ -272,10 +272,12 @@ bro.ffmpeg.views.define("clip-7", {
     video: "eq=contrast=1.4,hue=s=0",   // `-vf` syntax. Empty leaves the stream
     audio: "volume=0.5",                // alone — and *undecoded*, so a filter
                                         // on the sound costs no video decode.
-    shift: 12.5,   // seconds added to a frame's clock before the filters see it
-                   // and taken off again after. `enable=` names a moment on the
-                   // render's clock and playback runs on the file's; this is the
-                   // difference. Zero is the file's own clock.
+    shift: 12.5,   // seconds the chains move the clock forward, taken back off
+                   // at the end so what reaches the element is on the stream's
+                   // clock again. This does not cause the move — a `setpts` in
+                   // `video` (an `asetpts` in `audio`) does, and this says how
+                   // much of it to undo, because libavfilter will not say.
+                   // Zero for a chain that leaves timestamps alone.
 })
 // → { src: "/@fx/clip-7",
 //     video, width, height,        // what the chain produces
@@ -289,8 +291,11 @@ bro.ffmpeg.views.define("clip-7", {
 // not parse **throws**, with libav's own sentence, which is a message worth
 // having the moment a filter argument is typed rather than at the end of a
 // render. Re-registering the same id with the same input and the same chains
-// opens nothing: `shift` is a clock and a clock cannot change what a chain
-// produces, which is what makes calling this on every frame of a drag free.
+// opens nothing: `shift` is arithmetic on the way out and cannot change what a
+// chain produces. A *changed* chain does settle again, including one that
+// changed only in the constant inside its `setpts`, so a caller that moves
+// clips is the one that decides when to ask — this one asks when the mouse
+// comes up rather than under the cursor.
 //
 // Rotation goes *into* the chain — a display matrix is metadata and `crop=iw/2`
 // means one thing on a portrait picture and another on the landscape frames the

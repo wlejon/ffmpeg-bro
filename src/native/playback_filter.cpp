@@ -127,8 +127,14 @@ int StreamFilter::channels() const {
     return layout_ ? layout_->nb_channels : 0;
 }
 
+int64_t StreamFilter::ticks(double seconds) const {
+    if (seconds == 0.0) return 0;
+    return av_rescale_q(static_cast<int64_t>(llround(seconds * 1e9)),
+                        AVRational{1, 1000000000}, AVRational{tbNum_, tbDen_});
+}
+
 bool StreamFilter::open(AVFormatContext* fmt, int streamIndex, const MediaInput& in,
-                        const std::string& chain, int rotation, double shift,
+                        const std::string& chain, int rotation, double zero, double shift,
                         std::string* err) {
     if (!fmt || streamIndex < 0 || streamIndex >= static_cast<int>(fmt->nb_streams)) {
         if (err) *err = "no such stream to filter";
@@ -139,6 +145,7 @@ bool StreamFilter::open(AVFormatContext* fmt, int streamIndex, const MediaInput&
     index_ = streamIndex;
     chain_ = chain;
     rotation_ = audio_ ? 0 : rotation;
+    zero_ = zero;
     shift_ = shift;
     tbNum_ = st->time_base.num;
     tbDen_ = st->time_base.den;
@@ -354,12 +361,11 @@ bool StreamFilter::drain(std::string* err) {
         int rc = avcodec_receive_frame(dec_, frame_);
         if (rc < 0) break;
         if (!graph_ && !build(frame_, err)) return false;
-        // The render's clock, so `enable=` names the moment the timeline means.
-        // Applied here and taken off in `take`, which between them are the
-        // whole of `PlaybackView::shift`.
-        if (frame_->pts != AV_NOPTS_VALUE && shift_ != 0.0)
-            frame_->pts += av_rescale_q(static_cast<int64_t>(llround(shift_ * 1e9)),
-                                        AVRational{1, 1000000000}, AVRational{tbNum_, tbDen_});
+        // The clock everything outside this class counts in: the file's, less
+        // wherever this input says its own zero is. What the chain then does to
+        // it is the chain's business, and `take` undoes exactly that much.
+        if (frame_->pts != AV_NOPTS_VALUE && zero_ != 0.0)
+            frame_->pts -= ticks(zero_);
         // KEEP_REF: `frame_` is this object's scratch and is unreferenced at the
         // top of the next turn round this loop.
         rc = av_buffersrc_add_frame_flags(src_, frame_, AV_BUFFERSRC_FLAG_KEEP_REF);
@@ -381,12 +387,12 @@ AVFrame* StreamFilter::take() {
     }
     // Back onto the stream's own clock, and onto the stream's own time base
     // with it: a chain with an `fps` in it renumbers, and the caller stamps
-    // packets from this.
+    // packets from this. Both halves of the journey out come off here — what
+    // the chain moved, and this input's own zero — because the caller reads
+    // these frames with the arithmetic it reads packets with.
     if (f->pts != AV_NOPTS_VALUE) {
         f->pts = av_rescale_q(f->pts, AVRational{outNum_, outDen_}, AVRational{tbNum_, tbDen_});
-        if (shift_ != 0.0)
-            f->pts -= av_rescale_q(static_cast<int64_t>(llround(shift_ * 1e9)),
-                                   AVRational{1, 1000000000}, AVRational{tbNum_, tbDen_});
+        f->pts += ticks(zero_) - ticks(shift_);
     }
     return f;
 }
@@ -452,9 +458,9 @@ bool settleView(const PlaybackView& v, ViewFacts* facts, std::string* err) {
 
         StreamFilter f;
         const int rotation = audio ? 0 : rotationOf(fmt->streams[index]);
-        // Zero: a settle asks what the chain *produces*, and the clock it
-        // produces it on has no bearing on that.
-        ok = f.open(fmt, index, v.input, chain, rotation, 0.0, err) &&
+        // Zero for both: a settle asks what the chain *produces*, and the clock
+        // it produces it on has no bearing on that.
+        ok = f.open(fmt, index, v.input, chain, rotation, 0.0, 0.0, err) &&
              settleFilter(fmt, f, err);
         if (!ok) break;
         // Back to the top, so the next stream's settle reads the whole file
