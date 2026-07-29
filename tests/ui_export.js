@@ -2020,6 +2020,89 @@ console.log('\na stream copied rather than encoded');
     ok(text.indexOf('-c:v copy') > 0 && text.indexOf('-c:a copy') > 0,
        `the command copies both (${text})`);
 
+    // ── the span, taken off the edit ───────────────────────────────────────
+    //
+    // A copy conflicts with everything else on the timeline and each conflict
+    // is refused above. The span is the one thing that does *not* conflict:
+    // a clip's in-point and a copy's `copyFrom` are the same moment on the
+    // same clock — `-ss` before an `-i` decides where the input's zero is, and
+    // a clip is cut out of what is left — so the numbers go across unchanged.
+    // Until this existed they had to be read off the strip and typed.
+    {
+        const clip = A.project.clips[0];
+        const wasIn = clip.inPoint, wasLen = clip.length, wasStart = clip.start;
+        clip.inPoint = 1.5;
+        clip.length = 3;
+        // Explicit, so the assertion holds whether or not other sections have
+        // left a second clip of this input on the timeline: with several, the
+        // selected one is the only honest answer.
+        A.selectMany([clip]);
+        A.exporter.redraw();
+        pump(80);
+
+        const follow = q('#ex-streams [data-f="copy-follow"]');
+        ok(!!follow, 'a copied row offers to take the span off the clip');
+        ok(/1\.50/.test(follow.textContent) && /4\.50/.test(follow.textContent),
+           `naming both numbers before it is pressed (${follow.textContent.trim()})`);
+
+        follow.click();
+        pump(80);
+        const followed = A.exporter.buildSpec().streams[0];
+        ok(Math.abs(followed.copyFrom - 1.5) < 0.001 &&
+           Math.abs(followed.copyTo - 4.5) < 0.001,
+           `and the row carries the clip's own in and out points ` +
+           `(${followed.copyFrom} → ${followed.copyTo})`);
+
+        // A shortcut leaves ordinary values behind and no hidden mode: moving
+        // the clip afterwards must not move the row, because a `copyFrom` that
+        // silently re-followed would stop meaning what it says.
+        clip.inPoint = 2.5;
+        A.exporter.redraw();
+        pump(60);
+        same(A.exporter.buildSpec().streams[0].copyFrom, 1.5,
+             'and it does not follow again on its own — what it wrote is a number, not a link');
+        clip.inPoint = 1.5;
+
+        // The same decision as one press, which is what `Cut` is: a rewrap
+        // with the edit's span on every row rather than none.
+        A.exporter.redraw();
+        pump(60);
+        const cut = q('#ex-streams [data-cut]');
+        ok(!!cut, 'and the shortcut beside Rewrap offers the whole thing as a cut');
+        cut.click();
+        pump(80);
+        const cutSpec = A.exporter.buildSpec();
+        ok(cutSpec.streams.length >= 1 &&
+           cutSpec.streams.every((s) => Math.abs(s.copyFrom - 1.5) < 0.001 &&
+                                        Math.abs(s.copyTo - 4.5) < 0.001),
+           `every stream cut at the same pair of times (${cutSpec.streams.map(
+               (s) => `${s.copyFrom}→${s.copyTo}`).join(' ')})`);
+
+        // The file, because "the spec is right" is not the claim. What comes
+        // out is a keyframe-aligned cut: at or *before* 1.5 s, never after, so
+        // it is at least the three seconds asked for and nothing like the ten
+        // the input is.
+        const outCut = bro.appDir + '/../out/lossless-cut.mp4';
+        f('path').value = outCut;
+        f('path').dispatchEvent(new Event('change', { bubbles: true }));
+        pump(80);
+        el('ex-go').click();
+        pump(60);
+        waitFor('the lossless cut', () => {
+            const st = A.exporter.lastStatus();
+            return st && st.state !== 'running';
+        }, 120000);
+        const doneCut = A.exporter.lastStatus();
+        same(doneCut.state, 'done', `it renders (${doneCut.error || 'no error'})`);
+        const backCut = bro.ffmpeg.probe(outCut);
+        ok(backCut.format.duration >= 2.9 && backCut.format.duration < 6,
+           `and what came out is the cut and not the file (${
+               backCut.format.duration.toFixed(2)}s from a ${
+               clip.media.toFixed(2)}s input)`);
+
+        clip.inPoint = wasIn; clip.length = wasLen; clip.start = wasStart;
+    }
+
     // Back to a render, so everything after this is the file it always was.
     A.exporter.currentSettings().streams = A.exporter.defaultStreams();
     A.exporter.currentSettings().audio = true;

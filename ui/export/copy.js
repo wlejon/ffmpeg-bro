@@ -19,6 +19,7 @@
 //     stream list is rebuilt on every keystroke in a language field.
 
 import { inputs, asInput } from '../inputs.js';
+import { project } from '../project.js';
 
 /// `copy:0:1` → `{ input: 0, stream: 1 }`, or null for a composed source.
 export function parseCopy(source) {
@@ -79,6 +80,60 @@ export function copiedStream(row) {
 export function copiedInput(row) {
     const at = parseCopy(row && row.source);
     return at ? inputs[at.input] || null : null;
+}
+
+// ── The span the timeline already describes ────────────────────────────────
+//
+// A copied stream is one input's packets over a span, on the input's own clock.
+// A clip's in-point is a moment picked out of that same clock — `-ss` before an
+// `-i` rewrites where the input's zero is, and *then* a clip is cut out of what
+// is left — so the two numbers are directly comparable and there is no
+// arithmetic here beyond an addition. That was worth checking rather than
+// assuming: a half-second of drift between them would be an invisible wrong
+// cut, and `inputSeekTarget` in `ffmpeg_input.h` is the one place the input's
+// window is applied to both.
+//
+// **What is offered is a number to take, not a binding to keep.** Following the
+// clip live would be a second source of truth for `copyFrom`: the row would
+// stop meaning what it says the moment somebody trimmed on another stage, and
+// there would be a hidden mode to be in or out of. So this is the same rule the
+// rewrap shortcut is written on — press it and ordinary values are left behind,
+// visible, and changeable a field at a time.
+
+/// The span the timeline cuts out of one input, in that input's own seconds.
+///
+/// `{ span, reason }` and never a bare null, because *why not* is the useful
+/// half: "select which of these three clips" is a thing somebody can act on and
+/// a missing button is not.
+///
+/// Which clip, when there are several: the selected one. There is no honest
+/// alternative — the first by time is a guess, and the union of them is not a
+/// span a copy can take, since a copy is one continuous run of packets and two
+/// clips of one input are exactly the case where it is not.
+export function timelineSpan(inputIndex) {
+    const input = inputs[inputIndex];
+    if (!input) return { span: null, reason: '' };
+    const cut = project.clips.filter((c) => c.input === input);
+    if (!cut.length)
+        return { span: null, reason: 'nothing on the timeline is cut from this input' };
+
+    let clip = cut.length === 1 ? cut[0] : null;
+    if (!clip) {
+        const picked = project.selection.filter((c) => c.input === input);
+        if (picked.length === 1) clip = picked[0];
+    }
+    if (!clip)
+        return { span: null,
+                 reason: `${cut.length} clips are cut from this input — select the one to ` +
+                         'follow, because a copy is one continuous run of packets and not ' +
+                         'the two of them joined' };
+
+    const from = Math.max(0, clip.inPoint);
+    const to = from + Math.max(0, clip.length);
+    // A clip nobody has trimmed describes the whole input, so taking its span
+    // would write two numbers that mean what "all of it" already meant.
+    const whole = from < 0.001 && (!clip.media || to >= clip.media - 0.001);
+    return { span: { from, to, clip, whole }, reason: '' };
 }
 
 // ── Where a copy can start ─────────────────────────────────────────────────
@@ -169,10 +224,17 @@ export function inPointNote(row) {
 /// it into — so a container that will not hold it leaves a row to be deleted
 /// rather than changed, which is the honest pair of choices.
 ///
-/// `span` is the in/out point every row is cut at, and every caller passes null.
-/// It is the seam for a copy that follows the timeline, which is not built
-/// yet: the renderer takes `copyFrom`/`copyTo` per row and nothing here
-/// yet knows how to turn a trimmed clip into them.
+/// `span` is the in/out point every row is cut at — `timelineSpan()`'s answer,
+/// or null for the whole file. That is the difference between `Rewrap` and
+/// `Cut`: the same rows over the same streams, with the edit's own numbers on
+/// them or without.
+///
+/// **Every row gets the same span, and that is a claim rather than a
+/// convenience.** A file's streams share one clock, so a picture cut at 4 s and
+/// a soundtrack cut at 4.2 s is a rewrap that drifts; the renderer takes one
+/// zero per *input* for the same reason, which is what keeps A/V sync through a
+/// copy at all. The keyframe each stream actually lands on still differs, and
+/// that is the cost the strip on the row exists to show.
 export function rewrapRows(inputIndex, newId, span) {
     const input = inputs[inputIndex];
     if (!input || !input.probe) return [];

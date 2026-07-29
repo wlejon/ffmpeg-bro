@@ -1395,7 +1395,10 @@ nothing is decoded:
 
 `Rewrap <file>` under the list is the short way to all five: it fills the list
 with one copied row per stream of that input — picture, sound, cues and data
-alike.
+alike. `Cut <file>` beside it is the same thing with the **edit's own span** on
+every row, and appears where the timeline says something a whole-file rewrap
+does not: a clip nobody has trimmed describes the same file, so a second button
+for it would be two names for one operation.
 **It is a shortcut and not a mode** — what it leaves behind is ordinary rows
 with ordinary sources, so everything it decided is on the screen and can be
 changed or undone a row at a time. Nothing on this stage behaves differently
@@ -1412,7 +1415,18 @@ there, or type a time and read what it costs —
 > the nearest keyframe at or before 4.20 s is 4.00 s — a copy can only start on
 > one, so 0.20 s more than you asked for will be at the front of the file
 
-with `Snap` beside it. Where they are is asked of the demuxer's own index,
+with `Snap` beside it. **`Follow the clip`** is beside those: the span you
+trimmed on the timeline, taken across as the two numbers it already is. A
+clip's in-point and a copy's `From` are the same moment on the same clock —
+`-ss` before an `-i` decides where the input's zero is and a clip is cut out of
+what is left — so nothing is converted and nothing is approximated. It is a
+press and not a binding, for the reason `Rewrap` is a shortcut and not a mode:
+what it leaves behind is two ordinary numbers that go on saying what they say
+when the clip moves again. With several clips of one input it asks which, since
+a copy is one continuous run of packets and two clips are exactly the case
+where it is not.
+
+Where the keyframes are is asked of the demuxer's own index,
 which is instant for mp4 and Matroska; a container without one is read, and
 the panel says which of the two happened and whether the list was cut short.
 Every packet of a sound stream stands on its own, so a copied soundtrack starts
@@ -2393,11 +2407,14 @@ Honest list of what does not work:
   neither writes its log wherever it likes and pass 2 reads an empty one — the
   render says so, naming the encoder, because there is no capability to ask
   first.
-- **A copy that follows the timeline.** A copied stream is one input's packets
-  over a span, set on its own row in the input's own seconds. The clip you
-  trimmed on the timeline is not that span and nothing connects the two, so
-  cutting losslessly means reading the in-point off the keyframe strip rather
-  than off the edit. It is the obvious next thing and it is not built.
+- **A copy that keeps following the timeline.** `Follow the clip` and `Cut
+  <file>` take the span off the edit — see [Copying instead of
+  encoding](#copying-instead-of-encoding) — and what they leave behind is two
+  ordinary numbers. Trim the clip afterwards and the row does not move: a
+  binding would be a second source of truth for `copyFrom` and a hidden mode to
+  be in or out of, so the connection is a press rather than a link. Whether
+  that is the wrong trade is a real question and it has not been tested on
+  anybody yet.
 - **Anything a data stream carries, read.** A `gpmd` telemetry track is now
   carried through — see [Copying instead of
   encoding](#copying-instead-of-encoding) — and carrying is the whole of it.

@@ -46,7 +46,8 @@ import { videoEncoders, audioEncoders, muxerInfo, dispositions,
 import { videoOptions, audioOptions } from './options.js';
 import { optionColumn } from '../opttable.js';
 import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
-         keyframesFor, keyframeAtOrBefore, inPointNote, rewrapRows } from './copy.js';
+         keyframesFor, keyframeAtOrBefore, inPointNote, rewrapRows,
+         timelineSpan } from './copy.js';
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
          defaultSubtitleSource } from './subtitles.js';
@@ -408,15 +409,33 @@ function rewrapRow() {
                                         i.probe.streams.some((s) => s.kind === 'video' ||
                                                                     s.kind === 'audio'));
     if (!usable.length) return [];
-    return [
-        head('Copy it instead'),
-        div('ex-add', usable.map((input) => el('button', {
+    const buttons = [];
+    for (const input of usable) {
+        const index = inputs.indexOf(input);
+        buttons.push(el('button', {
             cls: 'tiny', text: `Rewrap ${input.name}`,
             'data-rewrap': input.id,
             title: 'Every stream of this input, copied — no decode, no encode, ' +
                    'the same bytes in a different container',
-            on: { click: () => rewrap(inputs.indexOf(input)) },
-        }))),
+            on: { click: () => rewrap(index, null) },
+        }));
+        // **The lossless cut, which is a rewrap with the edit's span on it.**
+        // Offered only where the timeline says something a whole-file rewrap
+        // does not: a clip nobody has trimmed describes the same file, so a
+        // second button beside the first would be two names for one operation.
+        const sp = timelineSpan(index).span;
+        if (sp && !sp.whole)
+            buttons.push(el('button', {
+                cls: 'tiny', text: `Cut ${input.name}`,
+                'data-cut': input.id,
+                title: `Every stream of this input, copied over the span the clip on the ` +
+                       `timeline takes — ${sp.from.toFixed(2)} to ${sp.to.toFixed(2)} s`,
+                on: { click: () => rewrap(index, sp) },
+            }));
+    }
+    return [
+        head('Copy it instead'),
+        div('ex-add', buttons),
         div('ex-note dim',
             'A copied stream is the packets that are already in the file: instant, ' +
             'lossless, and untouched by anything on the Compose or Graph stages. ' +
@@ -424,8 +443,8 @@ function rewrapRow() {
     ];
 }
 
-function rewrap(index) {
-    const rows = rewrapRows(index, newId, null);
+function rewrap(index, span) {
+    const rows = rewrapRows(index, newId, span);
     if (!rows.length) return;
     settings.streams = rows;
     // **The container is deliberately left alone.** Which muxer to write is the
@@ -864,6 +883,7 @@ function copyRows(s, restate) {
         head('What is copied'),
         row('From', [num('copyFrom', '0'), span('seconds into the input', 'dim')]),
         row('To', [num('copyTo', '0'), span('0 is the end of it', 'dim')]),
+        ...followRow(s, restate),
     ];
 
     if (isData) {
@@ -909,6 +929,50 @@ function copyRows(s, restate) {
         `${list.complete ? '' : ' — and the list was cut short, so there are more'}. ` +
         'A copy is packets, so it can only begin on one of them.'));
     return out;
+}
+
+/// `Follow the clip`, which is how a lossless cut stops being read off a strip
+/// and typed in by hand.
+///
+/// **The one thing on this stage that connects a copy to the edit.** Everything
+/// else about a copied row is deliberately unreachable from the timeline — a
+/// crop, a filter and a second clip are all refused rather than approximated,
+/// because none of them can reach packets that are never decoded. The *span*
+/// is the exception and always was: trimming a clip and copying a span are the
+/// same decision said twice, on the same clock, and until this existed the
+/// second one had to be typed from the first.
+///
+/// It stays a button rather than a binding for the reason the rewrap shortcut
+/// is not a mode: what it leaves behind is two ordinary numbers, on the screen,
+/// changeable one at a time — and a row that silently re-followed a clip
+/// somebody trimmed on another stage would be a `copyFrom` that no longer says
+/// what it means.
+function followRow(s, restate) {
+    const at = parseCopy(s.source);
+    if (!at) return [];
+    const { span: sp, reason } = timelineSpan(at.input);
+    if (!sp) return reason ? [div('ex-note dim', `The clip’s own span is not offered: ${reason}.`)]
+                           : [];
+    // Nothing to take: a clip nobody has trimmed is the whole input, which is
+    // what the two zeroes on the row already say.
+    if (sp.whole) return [];
+    const already = Math.abs((Number(s.copyFrom) || 0) - sp.from) < 0.001 &&
+                    Math.abs((Number(s.copyTo) || 0) - sp.to) < 0.001;
+    if (already)
+        return [div('ex-note dim',
+                    'This is the span the clip on the timeline takes out of the input.')];
+    return [div('ex-add', el('button', {
+        cls: 'tiny', 'data-f': 'copy-follow',
+        text: `Follow the clip (${sp.from.toFixed(2)} → ${sp.to.toFixed(2)} s)`,
+        title: 'Take the in and out points from the clip on the timeline — the same clock, ' +
+               'so the numbers go across unchanged',
+        on: { click: () => {
+            s.copyFrom = sp.from;
+            s.copyTo = sp.to;
+            restate();
+            drawStreams();
+        } },
+    }))];
 }
 
 /// One of a subtitle row's two window numbers. The same control the copy rows
