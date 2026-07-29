@@ -149,6 +149,24 @@ AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 - `ui/filtergraph.js` — the one-call facade over both; `command.js` does not know
   a graph exists.
 
+### The JS surface
+
+`bro.ffmpeg` is `bindings_*.cpp`, one file per part of ffmpeg's model — probe,
+render, capture, capabilities, playback, sequences — each owning its calls, the
+helpers that build its answers, and the paragraph saying why the calls are
+shaped that way; `bindings_install.h` lists them and `ffmpeg_bindings.cpp` is
+the assembly. Two are shared and neither may be duplicated: `bindings_value.h`
+(reading one property off a plain object — deliberately *not* qjsbind's
+`get_prop_*`, for the two reasons its header names) and `bindings_spec.h` (the
+render spec, read once for the render, the recording and the preview).
+
+Registration is qjsbind through `Table` (`bindings_table.h`), which is qjsbind's
+`Namespace` with a parent parameter because this surface is two levels down. A
+call taking a name or an id is a typed lambda; a call reading a whole spec keeps
+QuickJS's own signature. **Register lambda expressions only** — qjsbind keys its
+function storage on the closure type, so a function pointer, or one lambda
+reused for several registrations, silently gives them all the last one.
+
 ### The native encode side
 
 `export_timeline.h` defines the seam: a `FrameSource` answers "what does the

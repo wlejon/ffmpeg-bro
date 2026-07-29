@@ -34,9 +34,21 @@ find_package(FFMPEG REQUIRED)
 # what the sources are, how a frame is composited, what the file is written
 # with — changes for different reasons, and two-pass, stream copy and the
 # hardware paths each need one of them to change without touching the others.
+# The `bindings_*` half is split along the same seam for the same reason: one
+# file per part of ffmpeg's own model, each owning the calls, the helpers that
+# build their answers and the prose saying why they are shaped that way. See
+# src/native/bindings_install.h.
 add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
     src/native/ffmpeg_bindings.cpp
+    src/native/bindings_value.cpp
+    src/native/bindings_spec.cpp
+    src/native/bindings_probe.cpp
+    src/native/bindings_render.cpp
+    src/native/bindings_capture.cpp
+    src/native/bindings_capabilities.cpp
+    src/native/bindings_playback.cpp
+    src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_capture.cpp
     src/native/capture_graph.cpp
@@ -61,7 +73,7 @@ target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
     PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS}
 )
-target_link_libraries(ffmpeg-bro-core PRIVATE bro_video qjs ${FFMPEG_LIBRARIES})
+target_link_libraries(ffmpeg-bro-core PRIVATE bro_video qjs qjsbind ${FFMPEG_LIBRARIES})
 target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 
 add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
