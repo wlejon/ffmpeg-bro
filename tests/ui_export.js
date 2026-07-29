@@ -34,13 +34,17 @@
 // which is a different file from one whose soundtrack is quiet, and is the only
 // thing that separates "the mix" from "a mix nothing feeds". The third is its
 // mirror, with **no video stream in it at all**, which is the only thing that
-// separates the composite from a composite nothing feeds. The last two sections
-// are one each and are skipped without them.
+// separates the composite from a composite nothing feeds. The fourth carries a
+// **data stream** — telemetry, timecode, timed metadata — which is the opposite
+// question again: a stream this application had no row for rather than one it
+// wrongly assumed. The last three sections are one each and are skipped
+// without them.
 
 const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
 const media = args[0];
 const videoOnly = args[1] || '';
 const soundOnly = args[2] || '';
+const dataFile = args[3] || '';
 assert(media, 'pass a media file: ... tests/ui_export.js -- <file>');
 
 function pump(ms) {
@@ -3418,6 +3422,129 @@ if (soundOnly) {
     ok(!back4.video, 'and no video stream, which is what every screen said');
 } else {
     console.log('\n(no sound-only file given — the pictureless-timeline section is skipped)');
+}
+
+// ── a stream that is neither picture, sound nor cues ───────────────────────
+//
+// The other direction from the two sections above. Those are about a file
+// *missing* a stream this application takes for granted; this is about one
+// carrying a stream it had no row for at all — an action camera's telemetry, a
+// camera's timecode, timed metadata. `-map` carries it and `-c copy` writes it,
+// and the stream list simply dropped every kind outside the four it drew.
+//
+// **The fourcc is the whole assertion.** Nothing decodes a data stream, so
+// `gpmd`, `tmcd` and `mebx` all probe as `bin_data`: a copy that writes the
+// track and loses its tag produces a file that passes every check about length,
+// timing and stream count while being useless to the one application it was
+// carried for. So the check at the end is the name, out of the file.
+
+if (dataFile) {
+    console.log('\na data stream carried through');
+    A.shell.goTo('compose');
+    pump(80);
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    for (const i of A.inputs.inputs.slice()) A.inputs.removeInput(i);
+    pump(120);
+
+    dropFiles(400, 300, [dataFile]);
+    waitFor('the telemetry file to load', () => A.project.clips.length > 0);
+    pump(200);
+
+    const input = A.inputs.inputs[0];
+    const dataStreams = (input.probe.streams || []).filter((s) => s.kind === 'data');
+    same(dataStreams.length, 1, 'the probe reports the data stream');
+    const tag = dataStreams[0].tag;
+    same(tag, 'gpmd', `and reports its fourcc, which is all that identifies it (${tag})`);
+    same(dataStreams[0].codec, 'bin_data',
+         'while the codec name says nothing — every data stream is bin_data');
+
+    A.shell.goTo('write');
+    pump(150);
+
+    const add = q('#ex-streams [data-add="data"]');
+    ok(!!add, 'the stage offers to carry it');
+    add.click();
+    pump(120);
+
+    const dataRow = q('#ex-streams [data-kind="data"]');
+    ok(!!dataRow, 'and a row appears for it');
+    ok(dataRow.textContent.indexOf('D1') >= 0,
+       'labelled D1, which is the letter ffmpeg numbers data streams by');
+    ok(dataRow.textContent.indexOf(tag) >= 0,
+       `and stating the fourcc rather than the codec (${dataRow.textContent.trim()})`);
+    ok(!q('.ex-stream-codec', dataRow),
+       'with no encoder menu, because there is no encoder for one');
+    ok(!q('.ex-kf', dataRow),
+       'and no keyframe strip — every sample of a data stream stands on its own');
+
+    const dspec = A.exporter.buildSpec();
+    const drow = (dspec.streams || []).find((s) => s.kind === 'data');
+    ok(!!drow, 'the spec carries it');
+    same(drow.source, `copy:0:${dataStreams[0].index}`,
+         `as a copy naming the input stream (${drow ? drow.source : 'nothing'})`);
+    same(drow.codec, '', 'with no codec on it');
+
+    A.command.draw();
+    const dline = A.command.currentCommand();
+    ok(dline.indexOf('-c:d copy') >= 0, `the command prints -c:d copy (${dline})`);
+    ok(dline.indexOf(`-map 0:${dataStreams[0].index}`) >= 0,
+       'and a -map naming the input stream');
+    // ffmpeg's automatic selection never picks a data stream, so `-dn` beside
+    // `-vn`/`-an`/`-sn` would read as this application turning something off
+    // when in fact nothing was ever going to be on.
+    ok(dline.indexOf(' -dn') < 0, 'and no -dn, which would say the opposite of what happens');
+
+    // The render, and then the name out of the file — which is the only check
+    // here that a dropped tag would fail.
+    const SD = A.exporter.currentSettings();
+    SD.rangeIn = 0; SD.rangeOut = 3;
+    const outData = bro.appDir + '/../out/data-stream.mp4';
+    f('path').value = outData;
+    f('path').dispatchEvent(new Event('change', { bubbles: true }));
+    pump(80);
+    el('ex-go').click();
+    pump(60);
+    waitFor('the render with a data stream', () => {
+        const s = A.exporter.lastStatus();
+        return s && s.state !== 'running';
+    }, 120000);
+    const doneD = A.exporter.lastStatus();
+    same(doneD.state, 'done', `it renders (${doneD.error || 'no error'})`);
+
+    const backD = bro.ffmpeg.probe(outData);
+    const wroteData = (backD.streams || []).filter((s) => s.kind === 'data');
+    same(wroteData.length, 1, 'and what came out has the data stream in it');
+    same(wroteData[0].tag, tag,
+         `still carrying its fourcc (${wroteData[0] ? wroteData[0].tag : 'none'}) — a copy ` +
+         'that lost it would write a track nothing can identify');
+
+    // A container that will not hold one. Refused rather than written without
+    // it, and the refusal names the row: libav's own answer here is EINVAL,
+    // which is the same integer as a dozen other things.
+    SD.container = 'matroska';
+    const outMkv = bro.appDir + '/../out/data-stream.mkv';
+    A.exporter.redraw();
+    pump(60);
+    f('path').value = outMkv;
+    f('path').dispatchEvent(new Event('change', { bubbles: true }));
+    pump(80);
+    el('ex-go').click();
+    pump(60);
+    waitFor('the Matroska attempt', () => {
+        const s = A.exporter.lastStatus();
+        return s && s.state !== 'running';
+    }, 120000);
+    const mkv = A.exporter.lastStatus();
+    same(mkv.state, 'failed', 'Matroska holds no data stream, so the render is refused');
+    ok((mkv.error || '').indexOf('data') >= 0,
+       `and the refusal says which row to take off (${mkv.error || 'nothing said'})`);
+
+    SD.container = 'mp4';
+    A.exporter.redraw();
+    pump(60);
+} else {
+    console.log('\n(no file with a data stream given — that section is skipped)');
 }
 
 // ── what is carried between runs ───────────────────────────────────────────

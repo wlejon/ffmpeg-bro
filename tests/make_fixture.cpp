@@ -23,14 +23,17 @@
 //     that is a property of the names rather than of the pixels. They are
 //     written by the same `Writer` through the `image2` muxer, which makes
 //     them the check that the picture side of it works at all.
-//   - **Two of them are about a stream the others take for granted.**
+//   - **Three of them are about a stream the others take for granted.**
 //     `rotated.mp4` is stored sideways and carries a display matrix saying so,
 //     which is the only thing that separates a portrait clip laid out upright
 //     from one laid out on its side; `sound.m4a` has no video stream in it at
 //     all, which is the mirror of `silent.mp4` and the only thing that
-//     separates a clip from a clip with a picture in it. Neither can be faked
-//     with content: a picture that happens to be tall is not a rotated one, and
-//     a picture that happens to be black is not an absent one.
+//     separates a clip from a clip with a picture in it; `telemetry.mp4` has a
+//     `gpmd` data track, which is a stream that is neither picture, sound nor
+//     cues and is carried by its fourcc alone. None can be faked with content:
+//     a picture that happens to be tall is not a rotated one, a picture that
+//     happens to be black is not an absent one, and a track full of bytes is
+//     not a track something can still identify.
 //   - **The two files differ in every way a render cares about**: size, aspect,
 //     frame rate and duration. A test that passes only because both inputs are
 //     1080p25 is a test that has not been run. This one is not decoration: the
@@ -56,6 +59,7 @@ extern "C" {
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -348,6 +352,137 @@ bool writeRotated(const std::filesystem::path& src, const std::filesystem::path&
     return true;
 }
 
+/// A clip with a **timed data track** beside its picture — an action camera's
+/// telemetry, in the shape a real one has.
+///
+/// The fourth fixture that is about a stream the others take for granted, and
+/// it cannot be faked either. A data stream is not a codec anything decodes: it
+/// is packets whose meaning belongs to whatever reads them, identified by their
+/// fourcc and nothing else. Every one of them — `gpmd`, `tmcd`, `mebx` — probes
+/// as the same `bin_data`, so `gpmd` is written here deliberately: a copy that
+/// drops the tag still produces a file with a data track in it, of the right
+/// length, at the right times, that the reader it was carried for no longer
+/// recognises. That is the failure worth having a fixture for, and the only
+/// thing that catches it is a name.
+///
+/// The payload is not GoPro's format and does not pretend to be — nothing in
+/// this repo parses it, and a fixture that imitated the real thing would be
+/// claiming a capability that does not exist. What is real is the *shape*: a
+/// sample per second, on the video's clock, in a stream the muxer numbers.
+bool writeTelemetry(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    AVFormatContext* in = nullptr;
+    int rc = avformat_open_input(&in, src.string().c_str(), nullptr, nullptr);
+    if (rc < 0 || avformat_find_stream_info(in, nullptr) < 0) {
+        std::fprintf(stderr, "%s: cannot reopen (%s)\n", src.string().c_str(),
+                     avErr(rc).c_str());
+        if (in) avformat_close_input(&in);
+        return false;
+    }
+
+    AVFormatContext* oc = nullptr;
+    if (avformat_alloc_output_context2(&oc, nullptr, nullptr, dst.string().c_str()) < 0 || !oc) {
+        std::fprintf(stderr, "%s: no muxer\n", dst.string().c_str());
+        avformat_close_input(&in);
+        return false;
+    }
+
+    std::vector<int> mapping(in->nb_streams, -1);
+    for (unsigned i = 0; i < in->nb_streams; ++i) {
+        AVStream* is = in->streams[i];
+        AVStream* os = avformat_new_stream(oc, nullptr);
+        if (!os || avcodec_parameters_copy(os->codecpar, is->codecpar) < 0) {
+            std::fprintf(stderr, "%s: cannot copy stream %u\n", dst.string().c_str(), i);
+            avformat_close_input(&in);
+            avformat_free_context(oc);
+            return false;
+        }
+        os->codecpar->codec_tag = 0;
+        os->time_base = is->time_base;
+        mapping[i] = os->index;
+    }
+
+    // The data track, last, so its index is not 0 or 1 — a copy that quietly
+    // took "the first stream" would pass against a file where the interesting
+    // one happened to be first.
+    AVStream* data = avformat_new_stream(oc, nullptr);
+    if (!data) {
+        std::fprintf(stderr, "%s: cannot add the data stream\n", dst.string().c_str());
+        avformat_close_input(&in);
+        avformat_free_context(oc);
+        return false;
+    }
+    data->codecpar->codec_type = AVMEDIA_TYPE_DATA;
+    data->codecpar->codec_id = AV_CODEC_ID_BIN_DATA;
+    data->codecpar->codec_tag = MKTAG('g', 'p', 'm', 'd');
+    data->time_base = AVRational{1, 1000};
+
+    if (!(oc->oformat->flags & AVFMT_NOFILE) &&
+        (rc = avio_open(&oc->pb, dst.string().c_str(), AVIO_FLAG_WRITE)) < 0) {
+        std::fprintf(stderr, "%s: %s\n", dst.string().c_str(), avErr(rc).c_str());
+        avformat_close_input(&in);
+        avformat_free_context(oc);
+        return false;
+    }
+    if ((rc = avformat_write_header(oc, nullptr)) < 0) {
+        std::fprintf(stderr, "%s: %s\n", dst.string().c_str(), avErr(rc).c_str());
+        avformat_close_input(&in);
+        if (oc->pb) avio_closep(&oc->pb);
+        avformat_free_context(oc);
+        return false;
+    }
+
+    // A sample per second for the length of the clip, interleaved with the
+    // picture by the muxer. `av_interleaved_write_frame` needs them offered as
+    // they come due, so they are pushed ahead of each video packet that has
+    // passed the next whole second rather than all at the front.
+    const double seconds = in->duration > 0 ? double(in->duration) / AV_TIME_BASE : 10.0;
+    const int samples = std::max(1, static_cast<int>(seconds));
+    int written = 0;
+    auto pushData = [&](double upTo) {
+        while (written < samples && double(written) <= upTo) {
+            char payload[32];
+            const int n = std::snprintf(payload, sizeof(payload), "DVNMsample %02d", written);
+            AVPacket* dp = av_packet_alloc();
+            av_new_packet(dp, n);
+            std::memcpy(dp->data, payload, static_cast<size_t>(n));
+            dp->stream_index = data->index;
+            dp->pts = dp->dts = int64_t(written) * 1000;
+            dp->duration = 1000;
+            dp->flags |= AV_PKT_FLAG_KEY;
+            dp->pos = -1;
+            av_interleaved_write_frame(oc, dp);
+            av_packet_free(&dp);
+            ++written;
+        }
+    };
+
+    AVPacket* pkt = av_packet_alloc();
+    while (av_read_frame(in, pkt) >= 0) {
+        const int to = mapping[pkt->stream_index];
+        if (to >= 0) {
+            const AVRational tb = in->streams[pkt->stream_index]->time_base;
+            if (in->streams[pkt->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                pushData(double(pkt->pts) * tb.num / tb.den);
+            av_packet_rescale_ts(pkt, tb, oc->streams[to]->time_base);
+            pkt->stream_index = to;
+            pkt->pos = -1;
+            if (av_interleaved_write_frame(oc, pkt) < 0) break;
+        }
+        av_packet_unref(pkt);
+    }
+    pushData(double(samples));
+    av_packet_free(&pkt);
+    av_write_trailer(oc);
+    const int64_t bytes = oc->pb ? avio_size(oc->pb) : 0;
+    if (oc->pb) avio_closep(&oc->pb);
+    avformat_close_input(&in);
+    avformat_free_context(oc);
+
+    std::printf("  %s  gpmd data track, %d samples  %lld bytes\n",
+                dst.filename().string().c_str(), written, static_cast<long long>(bytes));
+    return true;
+}
+
 /// A run of stills, written the way this application writes one: the `image2`
 /// muxer, a frame-number pattern for a path, and `-start_number` said out loud
 /// rather than left to a default nobody can see.
@@ -512,6 +647,7 @@ int main(int argc, char* argv[]) {
     // the functions themselves for why neither can be faked with content.
     if (!writeSoundOnly(dir / "sound.m4a", 6.0, 330.0)) return 1;
     if (!writeRotated(dir / "landscape.mp4", dir / "rotated.mp4", 90)) return 1;
+    if (!writeTelemetry(dir / "landscape.mp4", dir / "telemetry.mp4")) return 1;
 
     // Stills, in the arrangement a sequence scan has to make sense of: a
     // padded run, a file beside it that is not part of one, and an unpadded

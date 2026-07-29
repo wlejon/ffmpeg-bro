@@ -71,6 +71,7 @@ JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
     setStr(ctx, o, "kind", s.kind);
     setStr(ctx, o, "codec", s.codec);
     setStr(ctx, o, "codecLong", s.codecLong);
+    setStr(ctx, o, "tag", s.tag);
     setStr(ctx, o, "profile", s.profile);
     JS_SetPropertyStr(ctx, o, "bitRate", JS_NewInt64(ctx, s.bitRate));
     JS_SetPropertyStr(ctx, o, "duration", JS_NewFloat64(ctx, s.duration));
@@ -382,13 +383,13 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
             st.kind = strProp(ctx, item, "kind", "");
             // Checked here as well as in the writer, because this is where the
             // index of the offending entry is still in hand: "streams[3] is a
-            // 'data'" says where to look and "there is no such thing as a
-            // 'data' output stream" does not.
+            // 'chapter'" says where to look and "there is no such thing as a
+            // 'chapter' output stream" does not.
             if (st.kind != "video" && st.kind != "audio" && st.kind != "attachment" &&
-                st.kind != "subtitle") {
+                st.kind != "subtitle" && st.kind != "data") {
                 *err = where + " is a '" + st.kind +
-                       "', and this build writes video, audio, subtitle and attachment "
-                       "streams";
+                       "', and this build writes video, audio, subtitle, data and "
+                       "attachment streams";
                 ok = false;
             } else {
                 st.source = strProp(ctx, item, "source", "");
@@ -440,6 +441,20 @@ bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>*
                     *err = where + " is a subtitle stream fed from '" + st.source +
                            "', and a subtitle stream comes from copy:<input>:<stream> or "
                            "decode:<input>:<stream>";
+                    ok = false;
+                } else if (st.kind == "data" && !isCopySource(st.source)) {
+                    // **A data stream is only ever a copy**, and unlike the
+                    // subtitle rule above that is not a gap waiting to be
+                    // filled. Timed metadata, a camera's timecode track, a
+                    // GoPro's telemetry — nothing in this binary composes any
+                    // of it, and there is no `decode:` half either, because
+                    // there is nothing to decode one *into*. What the bytes
+                    // mean is the reading application's business, which is
+                    // exactly why carrying them through is worth doing and
+                    // interpreting them is not.
+                    *err = where + " is a data stream fed from '" + st.source +
+                           "', and a data stream can only be copied — nothing here makes "
+                           "one, so it comes from copy:<input>:<stream>";
                     ok = false;
                 } else {
                     out->push_back(std::move(st));

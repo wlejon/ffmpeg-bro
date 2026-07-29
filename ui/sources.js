@@ -1149,9 +1149,18 @@ function fileRows(p) {
 /// colour tag is on the line itself and the pixel format beside it, while the
 /// profile and the language are in the tooltip.
 function streamLine(s) {
-    const kind = s.kind === 'video' ? 'V' : s.kind === 'audio' ? 'A' : 'S';
+    const kind = s.kind === 'video' ? 'V' : s.kind === 'audio' ? 'A'
+               : s.kind === 'data' ? 'D' : 'S';
     const bits = [];
     const more = [s.codecLong || s.codec];
+    // **On the line for a data stream and in the tooltip for the others**,
+    // which is this readout's own rule about where a fact goes. A telemetry
+    // track has nothing else to say — no size, no rate, no layout — and every
+    // one of them is called `bin_data`, so without the fourcc a file with two
+    // shows the same line twice. For a picture it is supporting detail that
+    // matters in one argument only: an mp4 tagged `hvc1` plays on an Apple
+    // device and the same HEVC tagged `hev1` does not.
+    if (s.tag) (s.kind === 'data' ? bits : more).push(s.tag);
     if (s.kind === 'video') {
         bits.push(`${s.width}×${s.height}` +
                   (s.rotation ? ` → ${s.displayWidth}×${s.displayHeight}` : ''));

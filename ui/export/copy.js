@@ -49,7 +49,14 @@ export function copyChoices(kind) {
                 input: i,
                 stream: s.index,
                 id: copySource(i, s.index),
-                label: `${input.name} · ${s.index}: ${s.codec}` +
+                // **A data stream is named by its fourcc, not by its codec.**
+                // Telemetry, timecode and timed metadata all probe as
+                // `bin_data`, so a file carrying two of them would offer the
+                // same entry twice and there would be no way to say which was
+                // meant. The tag is what the reading application looks for and
+                // it is what this offers.
+                label: `${input.name} · ${s.index}: ` +
+                       (s.kind === 'data' ? (s.tag || s.codec) : s.codec) +
                        (s.kind === 'video' && s.width
                             ? ` ${s.width}×${s.height}`
                             : s.kind === 'audio' && s.channels
@@ -155,6 +162,13 @@ export function inPointNote(row) {
 /// already there, and a container that will not hold that codec is refused by
 /// name with the row still on the screen to be flipped to `convert`.
 ///
+/// **And so is a data track**, on the same argument and with more force: a
+/// GoPro's telemetry is the one stream in the file nothing can reconstruct, and
+/// a rewrap is exactly the operation somebody performs expecting to lose
+/// nothing. It has no `convert` to be flipped to — there is nothing to decode
+/// it into — so a container that will not hold it leaves a row to be deleted
+/// rather than changed, which is the honest pair of choices.
+///
 /// `span` is the in/out point every row is cut at, and every caller passes null.
 /// It is the seam for a copy that follows the timeline, which is not built
 /// yet: the renderer takes `copyFrom`/`copyTo` per row and nothing here
@@ -164,7 +178,8 @@ export function rewrapRows(inputIndex, newId, span) {
     if (!input || !input.probe) return [];
     const rows = [];
     for (const s of input.probe.streams) {
-        if (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'subtitle') continue;
+        if (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'subtitle' &&
+            s.kind !== 'data') continue;
         rows.push({
             id: newId(),
             kind: s.kind,

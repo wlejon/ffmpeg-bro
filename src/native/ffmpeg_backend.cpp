@@ -1160,6 +1160,10 @@ ProbeResult probeMedia(const MediaInput& in) {
             default:                    s.kind = "data"; break;
         }
         s.codec = avcodec_get_name(par->codec_id);
+        if (par->codec_tag) {
+            char fourcc[AV_FOURCC_MAX_STRING_SIZE] = {0};
+            s.tag = av_fourcc_make_string(fourcc, par->codec_tag);
+        }
         if (const AVCodecDescriptor* d = avcodec_descriptor_get(par->codec_id))
             s.codecLong = d->long_name ? d->long_name : "";
         if (const char* p = avcodec_profile_name(par->codec_id, par->profile))

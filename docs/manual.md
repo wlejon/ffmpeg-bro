@@ -1382,7 +1382,7 @@ them. An ASS row with no attachment beside it says so.
 
 ### Copying instead of encoding
 
-Four things become possible and each of them is instant and lossless, because
+Five things become possible and each of them is instant and lossless, because
 nothing is decoded:
 
 | | |
@@ -1391,9 +1391,11 @@ nothing is decoded:
 | **Lossless cut** | a span of one input, byte for byte |
 | **Replace the audio** | copy the picture, take the sound from the edit or from elsewhere |
 | **Extract** | one stream on its own |
+| **Carry a data track** | telemetry, timecode, timed metadata — the one kind that can *only* be copied |
 
-`Rewrap <file>` under the list is the short way to all four: it fills the list
-with one copied row per stream of that input — picture, sound and cues alike.
+`Rewrap <file>` under the list is the short way to all five: it fills the list
+with one copied row per stream of that input — picture, sound, cues and data
+alike.
 **It is a shortcut and not a mode** — what it leaves behind is ordinary rows
 with ordinary sources, so everything it decided is on the screen and can be
 changed or undone a row at a time. Nothing on this stage behaves differently
@@ -1415,6 +1417,28 @@ which is instant for mp4 and Matroska; a container without one is read, and
 the panel says which of the two happened and whether the list was cut short.
 Every packet of a sound stream stands on its own, so a copied soundtrack starts
 exactly where it is asked to and says so instead of drawing a strip.
+
+**A data stream is a row like any other, and it is the one kind that has no
+other way to be.** `+ Data` appears when one of the open inputs has such a
+stream — an action camera's telemetry, a camera's timecode, timed metadata that
+`-map` carries and `-c copy` writes. Nothing here makes one, converts one or
+reads one: what the samples mean belongs to whatever the track was written for,
+which is exactly why carrying them through untouched is worth doing and
+interpreting them is not. So the row has no encoder menu, no bitstream chain
+and no keyframe strip — every sample stands on its own — and the only decision
+on it is the span.
+
+What it is named by is the **fourcc**, not the codec. `gpmd`, `tmcd` and `mebx`
+all decode to nothing and all probe as `bin_data`, so the codec name cannot
+tell one from another and a file with two of them would offer the same entry
+twice; the Sources stage puts the tag on the line for the same reason. The tag
+travels into the output with the packets, taken from the input rather than
+looked up — a muxer's tag tables are picture, sound and cues, so there is
+nothing to check `gpmd` against, and a copy that dropped it would write a track
+of the right length at the right times that nothing can identify. Whether the
+output container holds a data track at all is the muxer's own answer and
+arrives from `avformat_write_header`: mp4, mov and MPEG-TS carry one, Matroska
+refuses one and the render says so naming the row.
 
 **A copy conflicts with the edit, and every conflict is named rather than
 ignored.** This matters more here than anywhere else on the stage: a render
@@ -1859,14 +1883,17 @@ cmake --build build --config Release && ctest --test-dir build -C Release
 gradient and a tone at a known level, differing in size, aspect, frame rate and length,
 and a third with **no audio stream in it at all**, which is not the same file as one
 whose soundtrack is quiet and is the only thing that separates "the mix" from "a mix
-nothing feeds" — and runs every suite against them. Two more are each about a stream
+nothing feeds" — and runs every suite against them. Three more are each about a stream
 the rest take for granted: one with **no video stream in it at all**, the mirror of
 the silent one and the only thing separating the composite from a composite nothing
-feeds, and one whose pictures carry a **display matrix**, which is the only thing
-separating a clip laid out upright from one laid out on its side. Neither can be
-faked with content: a picture that happens to be black is not an absent one and a
-picture that happens to be tall is not a rotated one. Nothing is checked in and
-nothing depends on what a file you happened to have lying around contains.
+feeds; one whose pictures carry a **display matrix**, which is the only thing
+separating a clip laid out upright from one laid out on its side; and one with a
+**`gpmd` data track**, which is a stream that is neither picture, sound nor cues and
+is identified by its fourcc alone. None can be faked with content: a picture that
+happens to be black is not an absent one, a picture that happens to be tall is not a
+rotated one, and a track full of bytes is not a track something can still find by
+name. Nothing is checked in and nothing depends on what a file you happened to have
+lying around contains.
 
 Each suite also runs standalone against any real file, which is how to check behaviour
 against footage the fixtures do not resemble:
@@ -1883,7 +1910,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sequence.js -- <fixture-dir>
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only>] [<sound-only>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only>] [<sound-only>] [<with-data-stream>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
@@ -2371,18 +2398,13 @@ Honest list of what does not work:
   trimmed on the timeline is not that span and nothing connects the two, so
   cutting losslessly means reading the in-point off the keyframe strip rather
   than off the edit. It is the obvious next thing and it is not built.
-- **A copy of a stream that is neither picture, sound nor cues.** Video, audio
-  and subtitle streams are all copyable and attachments are their own kind of
-  row. What has no home is a `data` stream — timed metadata, a GoPro's telemetry
-  track, a camera's timecode — which `-map` carries and `-c copy` writes and
-  which nothing here will offer. The probe *does* report it: `kind` is
-  `"data"` for anything that is not one of the other three, and has been since
-  the summary was written. What is missing is everything past that — the stream
-  list drops any kind outside the four it draws, `buildSpec()` never emits one,
-  the spec reader refuses it by name (`streams[3] is a 'data'`), and the writer
-  has no branch that maps a stream it will not encode. A copied data stream
-  needs none of the encode machinery, which is what makes this smaller than the
-  reason it used to be filed under.
+- **Anything a data stream carries, read.** A `gpmd` telemetry track is now
+  carried through — see [Copying instead of
+  encoding](#copying-instead-of-encoding) — and carrying is the whole of it.
+  Nothing parses one, so a GoPro's speed and GPS cannot be plotted beside the
+  waveform, drawn over the picture or used to cut on. That is a parser per
+  format rather than a gap in the render path, and the fourcc the row is named
+  by is exactly what such a parser would dispatch on.
 - **Hardware filters that this build does not have.** `hwupload`, `hwdownload`
   and `hwupload_cuda` are here; `scale_cuda`, `overlay_cuda`, `scale_qsv` and
   the rest of the device families are not, because a vcpkg ffmpeg with

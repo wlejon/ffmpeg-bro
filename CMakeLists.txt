@@ -186,6 +186,11 @@ set(FIXTURE_SOUND "${FIXTURE_DIR}/sound.m4a")
 # phone writes. Nothing here can be told from the pixels: it is a display matrix
 # on the stream, and it is the only thing saying a 640x360 file is shown 360x640.
 set(FIXTURE_ROTATED "${FIXTURE_DIR}/rotated.mp4")
+# A stream that is neither picture, sound nor cues: a `gpmd` telemetry track
+# beside an ordinary clip. Nothing decodes one, so the fourcc is its whole
+# identity — a copy that drops the tag still writes a data track of the right
+# length at the right times that the reader it was carried for cannot find.
+set(FIXTURE_DATA "${FIXTURE_DIR}/telemetry.mp4")
 
 add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
 set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
@@ -226,10 +231,12 @@ add_test(NAME ui-hardware COMMAND ffmpeg-bro-headless
          -- "${FIXTURE_A}")
 # The second file has no audio stream in it and the third has no video stream,
 # which are the two halves of the same question: what does this application
-# write for a file that is missing one of the streams it takes for granted.
+# write for a file that is missing one of the streams it takes for granted. The
+# fourth is the other direction — a file with a stream this application had no
+# row for at all.
 add_test(NAME ui-export COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_export.js"
-         -- "${FIXTURE_A}" "${FIXTURE_SILENT}" "${FIXTURE_SOUND}")
+         -- "${FIXTURE_A}" "${FIXTURE_SILENT}" "${FIXTURE_SOUND}" "${FIXTURE_DATA}")
 # Inputs that are assembled, from the drop that groups them to the Write stage
 # that says what a run of files will be called. Takes the fixture *directory*
 # rather than one file, because what it is about is a folder of frames.

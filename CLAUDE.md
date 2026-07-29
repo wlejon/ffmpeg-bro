@@ -43,7 +43,9 @@ Test media is **generated, never checked in**: `tests/make_fixture.cpp` writes
 `build/fixtures/` as a CTest `FIXTURES_SETUP`, so `-R` on any suite pulls the
 generator in automatically. Each fixture exists for one fact that cannot be
 faked with content — `silent.mp4` has *no audio stream* (not a quiet one),
-`sound.m4a` has *no video stream*, `rotated.mp4` carries a display matrix.
+`sound.m4a` has *no video stream*, `rotated.mp4` carries a display matrix,
+`telemetry.mp4` carries a `gpmd` data track — a stream identified by its fourcc
+alone, since every data stream probes as `bin_data`.
 Every suite also runs against any real file, and skips the sections whose
 fixture is absent rather than failing; keep that property when adding tests.
 

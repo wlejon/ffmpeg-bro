@@ -25,6 +25,18 @@ struct StreamSummary {
     std::string kind;        // "video" | "audio" | "subtitle" | "data"
     std::string codec;       // short name, e.g. "h264"
     std::string codecLong;
+    // The container's own fourcc, e.g. "avc1", "hvc1", "gpmd". Empty where the
+    // container does not tag its streams at all, which Matroska does not.
+    //
+    // **For a data stream this is the whole identity of the track.** Telemetry,
+    // timecode and timed metadata all decode to nothing and all probe as
+    // `bin_data`, so the codec name cannot tell a GoPro's `gpmd` from a
+    // camera's `tmcd` and a file with two of them would show one name twice.
+    // It is reported for every kind rather than only that one because it is
+    // the same fact everywhere and it answers a real question about the other
+    // three as well — an mp4 tagged `hvc1` plays on an Apple device and the
+    // same HEVC tagged `hev1` does not.
+    std::string tag;
     std::string profile;
     int64_t bitRate = 0;
     // This stream's own duration, which is routinely NOT the container's. A

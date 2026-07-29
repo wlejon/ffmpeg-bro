@@ -730,6 +730,15 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
             if (!openAttachment(*out, err)) return false;
         } else if (desc.kind == "subtitle") {
             if (!openSubtitleStream(*out, subs, err)) return false;
+        } else if (desc.kind == "data") {
+            // Reachable only past the copy branch above, so this is a data
+            // stream nothing feeds. There is no encoder to open for one and no
+            // canvas it could be made from: a data stream is packets whose
+            // meaning belongs to whatever reads them, and the only honest thing
+            // this can do with one is carry it.
+            *err = "a data stream is packets nothing here can make — feed it from an "
+                   "input with copy:<input>:<stream>, or take the row off the list";
+            return false;
         } else {
             *err = "there is no such thing as a '" + desc.kind + "' output stream";
             return false;
@@ -822,7 +831,25 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
         return false;
     }
     av_dict_free(&opts);
-    if (rc < 0) { *err = std::string("cannot write header: ") + avErr(rc); return false; }
+    if (rc < 0) {
+        *err = std::string("cannot write header: ") + avErr(rc);
+        // **The one refusal this can name, because nothing upstream can.**
+        // Whether a container holds a data track is not a question libav
+        // answers before the fact — see `openCopyStream` — so the muxer saying
+        // no arrives here as `EINVAL`, which is the same integer as a dozen
+        // other things. A data stream on the list is the one of those with a
+        // fix somebody can act on, and matroskaenc's own message ("Only audio,
+        // video, and subtitles are supported for Matroska") is in the log
+        // beside this rather than in the error a person actually reads.
+        for (const auto& out : outs_)
+            if (out->desc.kind == "data") {
+                *err += " — the " + std::string(oc_->oformat->name) + " muxer may hold no " +
+                        "data stream, which '" + out->desc.source + "' is: mp4, mov and " +
+                        "MPEG-TS carry one and Matroska does not";
+                break;
+            }
+        return false;
+    }
 
     // The other half of the bag, checked now that something has actually been
     // opened. A segmenter opens its first file during `write_header`, so by
@@ -1515,6 +1542,7 @@ bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
     const AVMediaType want = o.desc.kind == "video" ? AVMEDIA_TYPE_VIDEO
                            : o.desc.kind == "audio" ? AVMEDIA_TYPE_AUDIO
                            : o.desc.kind == "subtitle" ? AVMEDIA_TYPE_SUBTITLE
+                           : o.desc.kind == "data" ? AVMEDIA_TYPE_DATA
                                                     : AVMEDIA_TYPE_UNKNOWN;
     if (src->codecpar->codec_type != want) {
         const char* got = av_get_media_type_string(src->codecpar->codec_type);
@@ -1544,9 +1572,19 @@ bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
     // heard of and `write_header` refuses the file with a message about invalid
     // data. This is the same test ffmpeg's own stream copy makes, and an
     // explicit `-tag:v` still wins because `describeStream` runs afterwards.
-    if (src->codecpar->codec_tag && oc_->oformat->codec_tag &&
-        av_codec_get_id(oc_->oformat->codec_tag, src->codecpar->codec_tag) ==
-            src->codecpar->codec_id)
+    //
+    // **A data stream is the exception, and it is the fourcc that makes it
+    // one.** `gpmd`, `tmcd`, `mebx` all decode to the same `bin_data` — the
+    // tag is the entire identity of the track, and the muxer's tag tables are
+    // video, audio and subtitle, so the test above can only ever answer no for
+    // one. Dropped, the track still writes and arrives as an anonymous blob
+    // that the reader it was carried for no longer recognises, which is a
+    // worse outcome than either carrying it or refusing.
+    const bool isData = src->codecpar->codec_type == AVMEDIA_TYPE_DATA;
+    if (src->codecpar->codec_tag &&
+        (isData || (oc_->oformat->codec_tag &&
+                    av_codec_get_id(oc_->oformat->codec_tag, src->codecpar->codec_tag) ==
+                        src->codecpar->codec_id)))
         o.st->codecpar->codec_tag = src->codecpar->codec_tag;
 
     o.st->time_base = src->time_base;
@@ -1564,8 +1602,23 @@ bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
     // not been taught to answer returns AVERROR_PATCHWELCOME, and reading that
     // shrug as a refusal is how a picker comes to insist MPEG-TS will not hold
     // H.264. Only an actual no stops the render.
-    const int holds = avformat_query_codec(oc_->oformat, o.st->codecpar->codec_id,
-                                           FF_COMPLIANCE_NORMAL);
+    //
+    // **A data stream is not asked, because the question has no honest form.**
+    // `avformat_query_codec` answers out of the muxer's own callback where it
+    // has one and out of its codec_tag tables otherwise, and those tables are
+    // video, audio and subtitle — so `bin_data` comes back a flat no from mp4,
+    // mov and MPEG-TS, which are exactly the containers telemetry lives in.
+    // The two cases cannot be told apart from out here: `query_codec` left
+    // libavformat's public struct, so "the muxer said no" and "nobody asked
+    // the muxer" are the same integer.
+    //
+    // So this does what ffmpeg's own stream copy does and leaves `write_header`
+    // as the authority. It is a real one — matroskaenc refuses a data track by
+    // name — and the `write_header` failure path in `open()` above names the
+    // row, because what reaches it from libav is only `EINVAL`.
+    const int holds = isData ? 1
+                             : avformat_query_codec(oc_->oformat, o.st->codecpar->codec_id,
+                                                    FF_COMPLIANCE_NORMAL);
     if (holds == 0) {
         const AVCodecDescriptor* d = avcodec_descriptor_get(o.st->codecpar->codec_id);
         *err = std::string("the ") + oc_->oformat->name + " muxer will not hold " +

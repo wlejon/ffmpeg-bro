@@ -62,9 +62,15 @@ bro.ffmpeg.probe({ path, format, options, decoderOptions,
 // one frame — so `-t` is the whole of how long they are, and with no `-t` the
 // duration comes back **zero**, meaning nobody knows.
 // → { path, format: {name, longName, duration, bitRate, size},
-//     streams: [{index, kind, codec, codecLong, profile, bitRate, language,
+//     streams: [{index, kind, codec, codecLong, tag, profile, bitRate, language,
 //                title, default,
 //                duration,
+//                // `tag` is the container's own fourcc — "avc1", "hvc1",
+//                // "gpmd" — and is empty where the container tags nothing,
+//                // which Matroska does not. For a `data` stream it is the
+//                // whole identity of the track: telemetry, timecode and timed
+//                // metadata all decode to nothing and all report `bin_data`,
+//                // so the codec name cannot tell one from another.
 //                // video: width, height, displayWidth, displayHeight, fps,
 //                //        pixFmt, sampleAspect, rotation,
 //                //        colorSpace, colorRange, colorPrimaries, colorTransfer
@@ -510,7 +516,8 @@ Given, it is authoritative:
 
 ```js
 streams: [
-  { kind: "video",                  // "video" | "audio" | "subtitle" | "attachment"
+  { kind: "video",                  // "video" | "audio" | "subtitle" | "data"
+                                    //   | "attachment"
     source: "composite",            // where the content comes from: "composite"
                                     // (the canvas), "mix" (the whole
                                     // soundtrack), or "copy:0:1" — an input and
@@ -574,12 +581,32 @@ streams: [
   // first cue is true and unusable.
   { kind: "subtitle", source: "decode:1:0", codec: "mov_text", language: "eng",
     disposition: "+default" },
+  // A data stream — timed metadata, a camera's timecode, an action camera's
+  // telemetry. **The one kind that can only ever be copied**, and unlike the
+  // subtitle rule above that is not a gap: nothing here composes one and there
+  // is no `decode:` half, because there is nothing to decode it into. What the
+  // packets mean belongs to whatever reads them, which is exactly why carrying
+  // them through is worth doing and interpreting them is not.
+  //
+  // `codec`, the option bag and the bitstream chain have nothing to configure,
+  // for the reason they have nothing to configure on any copy. `copyFrom`/
+  // `copyTo` mean what they mean elsewhere, and — as with cues — there are no
+  // keyframes to land on, because every sample stands on its own.
+  //
+  // Its fourcc travels with it, taken from the input rather than looked up: a
+  // muxer's tag tables are video, audio and subtitle, so there is nothing to
+  // validate `gpmd` against and dropping it would write a track of the right
+  // length at the right times that nothing can identify. **Whether the output
+  // container holds one at all is the muxer's own answer**, arriving from
+  // `avformat_write_header` — mp4, mov and MPEG-TS carry a data track and
+  // Matroska refuses one.
+  { kind: "data", source: "copy:0:3" },
   { kind: "attachment", path: "…/font.ttf", mimeType: "font/ttf" },
 ]
 chapters: [{ start: 0, end: 12.5, title: "Opening" }, ...]
 ```
 
-A malformed entry is a `TypeError` naming it — `streams[2] is a 'data'` —
+A malformed entry is a `TypeError` naming it — `streams[2] is a 'chapter'` —
 never a stream quietly missing from the file. An unknown disposition, a fourcc
 that is not four characters and an attachment that is not there all stop the
 render rather than being dropped: the whole value of writing down what is in

@@ -88,7 +88,7 @@ export function normalizeStreams() {
     const clean = [];
     for (const s of list) {
         if (!s || (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'attachment' &&
-                   s.kind !== 'subtitle')) continue;
+                   s.kind !== 'subtitle' && s.kind !== 'data')) continue;
         s.id = newId();
         s.source = s.source || (s.kind === 'video' ? 'composite'
                               : s.kind === 'audio' ? 'mix' : '');
@@ -115,9 +115,16 @@ export function normalizeStreams() {
         // nothing looks wrong, so it comes back as the composed source it would
         // have been.
         const at = parseCopy(s.source);
-        if (s.kind !== 'subtitle' && at &&
-            (!inputs[at.input] || !(inputs[at.input].probe || {}).streams))
+        const goneCopy = at && (!inputs[at.input] || !(inputs[at.input].probe || {}).streams);
+        // A data row has no composed source to come back as — nothing here
+        // makes one — so a row whose input has gone is dropped outright, the
+        // way a subtitle row with no track left to read is. Turned into "the
+        // mix" it would be a soundtrack somebody never asked for.
+        if (s.kind === 'data') {
+            if (goneCopy || !at) continue;
+        } else if (s.kind !== 'subtitle' && goneCopy) {
             s.source = s.kind === 'video' ? 'composite' : 'mix';
+        }
         s.copyFrom = Number(s.copyFrom) || 0;
         s.copyTo = Number(s.copyTo) || 0;
         if (!s.metadata || typeof s.metadata !== 'object') s.metadata = {};
@@ -144,7 +151,9 @@ export function ordinalOf(list, i) {
     return n;
 }
 
-const KIND_LETTER = { video: 'V', audio: 'A', subtitle: 'S', attachment: 'T' };
+// `D` is ffmpeg's own letter for a data stream — `-c:d`, `-map 0:d:0` — which
+// is the point of using these letters at all rather than words.
+const KIND_LETTER = { video: 'V', audio: 'A', subtitle: 'S', attachment: 'T', data: 'D' };
 
 export function labelOf(list, i) {
     return `${KIND_LETTER[list[i].kind] || '?'}${ordinalOf(list, i) + 1}`;
@@ -176,6 +185,13 @@ export function addStream(kind) {
     // one — see `addButton`, which says so rather than offering a row that
     // cannot be filled in.
     if (kind === 'subtitle') s.source = defaultSubtitleSource(settings.container);
+    // A data row is a copy and nothing else, so it arrives pointing at the
+    // first data stream there is — for the same reason a subtitle row does,
+    // and offered at all only where there is one.
+    if (kind === 'data') {
+        const first = copyChoices('data')[0];
+        s.source = first ? first.id : '';
+    }
     settings.streams.push(s);
     openDetail = s.id;
     syncAudioFlag();
@@ -311,6 +327,10 @@ export function streamSpecs(over = {}) {
         // pathless attachment is: `warnings()` says so where a refusal from
         // the renderer would only say it about a form nobody can see.
         if (s.kind === 'subtitle' && !readsInput(s)) continue;
+        // The same for a data row somebody added and has not pointed anywhere:
+        // `render.start` refuses one by name, and a refusal about a row nobody
+        // can see is a refusal about the form rather than about the file.
+        if (s.kind === 'data' && !isCopy(s)) continue;
         const copying = isCopy(s);
         const codec = copying ? '' : codecOf(s);
         const meta = Object.assign({}, s.metadata);
@@ -362,6 +382,7 @@ export function drawStreams() {
             addButton('Video', 'video'),
             addButton('Audio', 'audio'),
             ...subtitleAdd(),
+            ...dataAdd(),
             addButton('Attachment', 'attachment'),
         ]),
         ...rewrapRow(),
@@ -439,6 +460,27 @@ function subtitleAdd() {
                       'can be carried through or converted here.')];
 }
 
+/// `+ Data`, offered only when there is a data stream to copy.
+///
+/// **Silence is the wrong answer here and a permanent button is too.** Unlike a
+/// subtitle track there is no second reason it might be missing — a data stream
+/// cannot be made, converted or encoded, so the only question is whether one of
+/// the open inputs has one. Most files do not, and a button that adds a row
+/// with nowhere to point would be offering a stream that cannot exist; a stage
+/// with no mention of it at all reads as an application that throws telemetry
+/// away, which is what it used to do and no longer does.
+function dataAdd() {
+    if (copyChoices('data').length) return [addButton('Data', 'data')];
+    // Said only where somebody has opened something, so an empty stage is not
+    // lectured about a stream kind it has no file to have one of.
+    if (!inputs.some((i) => i && i.probe)) return [];
+    return [div('ex-note dim',
+                'None of the open inputs has a data stream — timed metadata, a camera’s ' +
+                'timecode, an action camera’s telemetry — so there is none to carry ' +
+                'through. One cannot be made here: a data stream is packets whose meaning ' +
+                'belongs to whatever reads them.')];
+}
+
 function addButton(label, kind) {
     return el('button', {
         cls: 'tiny', text: `+ ${label}`, 'data-add': kind,
@@ -446,7 +488,9 @@ function addButton(label, kind) {
             ? 'A file that travels inside the output — a font, a cover image'
             : kind === 'subtitle'
                 ? 'A subtitle track in the output, carried through or converted'
-                : `Another ${kind} stream in the output`,
+                : kind === 'data'
+                    ? 'A timed data track carried straight through — telemetry, timecode'
+                    : `Another ${kind} stream in the output`,
         on: { click: () => { addStream(kind); hooks.changed(); } },
     });
 }
@@ -504,6 +548,14 @@ function says(s) {
     // Drawing it with the other two would put "the composite" in a menu where
     // it means nothing.
     if (s.kind === 'subtitle') return saysSubtitle(s);
+
+    // **A data row has one answer and it is not a choice between kinds.**
+    // There is no composed data stream and no encoder for one, so the sentence
+    // is "which track" and then a statement: the fourcc, because that is the
+    // whole identity of the stream and `bin_data` is what all of them are
+    // called. Drawing the codec menu disabled beside it would say a choice was
+    // being withheld, and there is none to withhold.
+    if (s.kind === 'data') return saysData(s);
 
     // Three answers, not two: made from the edit, made by the graph and taken
     // off a pad somebody named, or copied straight out of an input. The middle
@@ -609,6 +661,28 @@ function saysSubtitle(s) {
         select({ cls: 'ex-stream-codec', 'data-f': 'stream-codec',
                  on: { change: (e) => { s.codec = e.target.value; hooks.changed(); } } },
                options, s.codec || ''),
+    ];
+}
+
+/// A data row: which track, carried as it is.
+///
+/// The fourcc is stated rather than the codec name for the reason `copyChoices`
+/// offers it — `gpmd`, `tmcd` and `mebx` are all `bin_data`, and the tag is
+/// what the application this track is being carried for looks for.
+function saysData(s) {
+    const choices = copyChoices('data');
+    const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
+                            title: 'Which data track is carried through',
+                            on: { change: (e) => { setSource(s, e.target.value); } } },
+                          choices.length ? choices.map((c) => ({ id: c.id, label: c.label }))
+                                         : [{ id: '', label: 'no data stream is open' }],
+                          s.source || '');
+    // The picker already names the tag, so the statement beside it says what
+    // happens to the track rather than repeating what it is.
+    return [
+        picker,
+        span('·', 'dim'),
+        span('carried through untouched', 'ex-stream-copied'),
     ];
 }
 
@@ -757,9 +831,14 @@ function copyRows(s, restate) {
     }
     if (!isCopy(s)) return [];
 
-    const list = keyframesFor(s);
     const stream = copiedStream(s);
     const input = copiedInput(s);
+    // **A data stream is not asked where its keyframes are.** Every sample
+    // stands on its own — there is no prediction in a track nothing decodes —
+    // so the answer is always "all of them" and asking costs a scan of the file
+    // for a strip that would say nothing.
+    const isData = !!stream && stream.kind === 'data';
+    const list = isData ? null : keyframesFor(s);
     // `lengthOf`, not a copy of it minus a term: an input's length is its video
     // stream's own duration where there is one and the container's otherwise,
     // and a container that reports none where the stream does gave the keyframe
@@ -786,6 +865,15 @@ function copyRows(s, restate) {
         row('From', [num('copyFrom', '0'), span('seconds into the input', 'dim')]),
         row('To', [num('copyTo', '0'), span('0 is the end of it', 'dim')]),
     ];
+
+    if (isData) {
+        out.push(div('ex-note dim',
+            'Every sample of a data stream stands on its own, so this starts exactly where ' +
+            'it is asked to. What the samples mean is the reading application’s business — ' +
+            'they are carried through untouched and nothing here interprets them, which is ' +
+            'why the span is the only thing there is to decide.'));
+        return out;
+    }
 
     if (stream && stream.kind === 'audio') {
         out.push(div('ex-note dim',
@@ -891,6 +979,12 @@ function bsfsFor(codec) {
 
 function bsfRows(s, restate) {
     if (s.kind === 'attachment') return [];
+    // Nor a data stream. A bitstream filter reworks a *codec's* packets —
+    // every one of them declares which codecs it applies to — and a track
+    // nothing decodes has none for a filter to be written against. The list
+    // would come back empty, which reads as "none are installed" rather than
+    // as "the question does not apply here".
+    if (s.kind === 'data') return [];
     if (!s.bsf) s.bsf = [];
 
     const changed = () => { restate(); drawStreams(); };

@@ -271,6 +271,7 @@ export function parts() {
     const nVideo = streams.filter((s) => s.kind === 'video').length;
     const nAudio = streams.filter((s) => s.kind === 'audio').length;
     const nSub = streams.filter((s) => s.kind === 'subtitle').length;
+    const nData = streams.filter((s) => s.kind === 'data').length;
 
     // Whether anything maps the graph at all. A rewrap maps input pads and
     // nothing else, so printing a `-filter_complex` beside it would be printing
@@ -282,6 +283,13 @@ export function parts() {
     // says nothing about subtitles lets ffmpeg's own stream selection put one
     // in, and an mp4 built from a source that had a text track would come out
     // with a track this render did not write.
+    //
+    // **There is deliberately no `-dn` beside them.** ffmpeg's automatic
+    // selection picks one video, one audio and one subtitle stream and never a
+    // data one, so a render with no data row is already a file with no data
+    // track in it. Printed anyway it would read as this application turning
+    // something off, which is the opposite of what happens: a telemetry track
+    // is carried only because a row on the list says to.
     const noSubs = nSub === 0;
 
     // The output half, once per pass.
@@ -329,7 +337,7 @@ export function parts() {
                     (!g.ok || !g.audio)))
         out.push('-an');
 
-    let vi = 0, ai = 0, ti = 0, si = 0;
+    let vi = 0, ai = 0, ti = 0, si = 0, di = 0;
     for (const s of streams) {
         // A subtitle stream, either way it is read. `-c:s copy` carries the
         // packets and `-c:s mov_text` decodes and writes them again, and the
@@ -351,11 +359,15 @@ export function parts() {
         // from the render.
         const at = parseCopy(s.source);
         if (at) {
-            const kind = s.kind === 'audio' ? 'a' : 'v';
-            const idx = kind === 'a' ? ai++ : vi++;
-            out.push(`-c:${sel(kind, idx, kind === 'a' ? nAudio : nVideo)}`, 'copy');
-            bsfArgs(out, s, kind, idx, kind === 'a' ? nAudio : nVideo);
-            describe(out, s, kind, idx, kind === 'a' ? nAudio : nVideo);
+            // `d` is a stream specifier like any other, and a data stream is
+            // the one kind that can only ever appear here: there is no encoder
+            // to print an alternative branch for.
+            const kind = s.kind === 'audio' ? 'a' : s.kind === 'data' ? 'd' : 'v';
+            const n = kind === 'a' ? nAudio : kind === 'd' ? nData : nVideo;
+            const idx = kind === 'a' ? ai++ : kind === 'd' ? di++ : vi++;
+            out.push(`-c:${sel(kind, idx, n)}`, 'copy');
+            bsfArgs(out, s, kind, idx, n);
+            describe(out, s, kind, idx, n);
             continue;
         }
         if (s.kind === 'attachment') {
