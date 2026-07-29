@@ -206,6 +206,30 @@ export function removeInput(input) {
     return true;
 }
 
+/// Put the list into a given order, by id.
+///
+/// **The one thing allowed to reorder it**, and the exception is narrow enough
+/// to state: the order *is* the `-i` number, so nothing may reorder this list
+/// under a spec built from it — but a document is not built from it, it is what
+/// the list is being made to agree with. Opening one reconciles rather than
+/// rebuilds (see ui/document.js), so an input the document lists second and this
+/// run happens to hold first would otherwise come back as a different `-i` from
+/// the one the document's own graph was written against.
+///
+/// Ids the list does not have are ignored and inputs the order does not name
+/// keep their relative places at the end, so a partial answer cannot lose one.
+export function orderInputs(ids) {
+    const rank = new Map();
+    (ids || []).forEach((id, i) => { if (!rank.has(String(id))) rank.set(String(id), i); });
+    const at = (input) => (rank.has(input.id) ? rank.get(input.id) : rank.size + inputs.indexOf(input));
+    const sorted = inputs.slice().sort((a, b) => at(a) - at(b));
+    if (sorted.every((input, i) => inputs[i] === input)) return false;
+    inputs.length = 0;
+    for (const input of sorted) inputs.push(input);
+    changed('inputs');
+    return true;
+}
+
 /// Where this input sits in the list, which is the number `-i` gives it.
 export function indexOf(input) { return inputs.indexOf(input); }
 

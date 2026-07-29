@@ -12,6 +12,7 @@ file, and opened again.
 | `Ctrl`+`S` | save (`Ctrl`+`Shift`+`S` to save somewhere else) |
 | `Ctrl`+`O` | open one |
 | `Ctrl`+`N` | start again |
+| `Ctrl`+`Z` | undo (`Ctrl`+`Shift`+`Z` or `Ctrl`+`Y` to redo) |
 
 The name is in the top bar, with a dot beside it while there is something
 unsaved. A document named on the command line opens as one:
@@ -84,6 +85,44 @@ Nothing is lost: the file on disk still describes them. Fix the path and open it
 again. Laying such a clip out anyway would mean a rectangle of an unknown size
 over an unknown length, which is a picture of an edit rather than the edit.
 
+## Undo
+
+Undo is the same object put to a second use. A step of history is a snapshot,
+and going back one is opening it — so there is no separate model of "what
+changed", no list of inverse operations, and nothing that can describe a state
+the application could not be in.
+
+Three rules decide what a step is.
+
+**A gesture is one step, not a hundred.** A clip dragged along the timeline
+reports every mouse position and one *moved* at the end; the positions are
+ignored and the end is the step, and what it goes back to is where the drag
+started. A slider has no such pair — the properties panel reports every pixel —
+so changes of the same kind arriving within half a second of each other fold
+into the step the run began with. Without that rule, one drag of a crop handle is
+forty presses of `Ctrl`+`Z`.
+
+**A change that changed nothing is not a step.** States are compared, so a
+redraw, a tidy-up or an edit that came back to where it started never becomes a
+step that appears to do nothing when it is undone.
+
+**Undo does not reach the Encode and Write stages.** They are a form: the control
+you just changed is in front of you with its old value one keystroke away, and a
+`Ctrl`+`Z` pressed on the timeline that silently reverted a codec three stages
+away would be worse than no undo at all.
+
+Two things it deliberately does not disturb. Opening a document starts the
+history again, because undoing across an Open would land in the middle of
+somebody else's edit. And an undo leaves the playhead and the timeline's zoom
+exactly where they are — putting a crop back while you are looking at a shot two
+minutes in should leave you looking at that shot.
+
+Applying a state **reconciles** rather than rebuilds: an input the state
+describes exactly as it already is costs nothing, and a clip of one keeps the
+`<video>` it already has. That is not a refinement, it is what makes undo usable
+— tearing down every decoder to put a crop back would take a second and blank
+the picture.
+
 ## What it is not
 
 It is not a container for media. Nothing is copied, embedded or cached; a
@@ -95,6 +134,6 @@ playhead was standing, what the analysis worker had got round to and which stage
 you were on are all the running application rather than the edit, and none of
 them is written.
 
-And there is still **no undo** — see [Not yet](not-yet.md). The object this is
-built on is what makes one straightforward, because a stack of undo states is a
-list of exactly what gets written to a file here, but the stack is not built.
+And it is not a version history. Undo is a stack held while the application is
+running; closing it and opening the file again is the file, not the last hundred
+things you did to it.

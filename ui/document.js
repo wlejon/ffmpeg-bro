@@ -56,8 +56,8 @@
 // are meaningless carried into the next edit and exactly right carried inside
 // this one, which is the whole distinction between a habit and a document.
 
-import { project, makeClip, placeClip, useClipId, defaultTransform,
-         changed, select } from './project.js';
+import { project, makeClip, placeClip, removeClip, sortClips, useClipId,
+         defaultTransform, applyInput, changed } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as overlay from './graph/overlay.js';
 import { settings } from './export/state.js';
@@ -129,27 +129,50 @@ export function snapshot() {
 /// throwing: a document with one missing file is a document you still want the
 /// rest of, and the caller is the thing that can say so on screen.
 ///
+/// **A replacement, done by reconciling.** What comes out is the document and
+/// nothing else — anything not in it goes — but what happens to get there is a
+/// comparison rather than a rebuild: an input the document names with the same
+/// id and the same opening is left alone, and a clip of it keeps the `<video>`
+/// it already has. That is not an optimisation, it is what makes an *undo*
+/// possible at all: this is the call `ui/history.js` makes on every `Ctrl-Z`,
+/// and one that tore down every decoder and re-probed every file would take a
+/// second and blank the picture for the sake of putting a crop back.
+///
+/// The order is inputs, then clips, then the inputs nobody wants — so that no
+/// input is ever taken away while something is still decoding it.
+///
 /// **A clip whose input would not open is not laid out**, and it is not dropped
 /// from anything except this session — the file on disk still has it. Fix the
 /// path and open it again. Laying it out anyway would mean a clip with no
 /// probe, which is a rectangle of an unknown size over an unknown length.
 export function open(doc) {
     const d = doc && typeof doc === 'object' ? doc : {};
-    clear();
 
+    // ── the inputs it names ──
     const seen = new Set();
-    for (const saved of list(d.inputs)) {
-        const spec = readInput(saved, seen);
-        if (spec) inputsModel.addInput(spec);
+    const specs = list(d.inputs).map((s) => readInput(s, seen)).filter(Boolean);
+    // The ones whose *opening* changed — a different path, demuxer, option or
+    // window — because a clip of one is decoding a file that has just stopped
+    // being the file it was, and its element has to be rebuilt. An input the
+    // document describes exactly as it already is answers false here and costs
+    // nothing: no reprobe, no re-registration, no reload.
+    const reopened = new Set();
+    for (const spec of specs) {
+        const have = spec.id ? inputsModel.byId(spec.id) : null;
+        if (!have) inputsModel.addInput(spec);
+        else if (inputsModel.updateInput(have, spec)) reopened.add(have);
     }
+    for (const input of reopened) applyInput(input);
 
+    // ── the clips it names ──
     const skipped = [];
-    const made = [];
     const usedIds = new Set();
+    const plan = [];
     for (const saved of list(d.clips)) {
-        const input = inputsModel.byId(String((saved && saved.input) || ''));
+        if (!saved || typeof saved !== 'object') continue;
+        const input = inputsModel.byId(String(saved.input || ''));
         if (!input) {
-            skipped.push({ name: String((saved && saved.input) || '?'),
+            skipped.push({ name: String(saved.input || '?'),
                            why: 'names an input this document does not describe' });
             continue;
         }
@@ -157,42 +180,87 @@ export function open(doc) {
             skipped.push({ name: input.name, why: input.error || 'could not be opened' });
             continue;
         }
-        const clip = makeClip(input);
-        // The saved id, unless this document hands the same one out twice — in
-        // which case the counter's is used and the anchors pinned to it simply
-        // do not apply, which is a state the overlay is already built to be in.
-        const id = Math.round(Number(saved.id));
-        if (Number.isFinite(id) && id > 0 && !usedIds.has(id)) {
-            clip.id = id;
-            useClipId(id);
-        }
-        usedIds.add(clip.id);
-        clip.track = clamp(Math.round(num(saved.track)), 0, 7);
-        clip.start = Math.max(0, num(saved.start));
-        clip.inPoint = clamp(num(saved.inPoint), 0, clip.media);
-        // What the file actually has, which is not what the document says it
-        // had: an input reopened through a different demuxer, or one whose file
-        // has been re-encoded since, is a shorter file than the trim was made
-        // against. Same clamp `applyInput()` applies for the same reason.
-        clip.length = clamp(num(saved.length, clip.media - clip.inPoint),
-                            0, Math.max(0, clip.media - clip.inPoint));
-        clip.xform = readTransform(saved.xform);
-        clip.volume = clamp(num(saved.volume, 1), 0, 4);
-        clip.muted = !!saved.muted;
-        placeClip(clip);
-        if (hooks.attach) hooks.attach(clip);
-        made.push(clip);
+        // A document that hands the same clip id out twice gets a fresh one for
+        // the second, whose anchors then simply do not apply — a state the
+        // overlay is already built to be in.
+        const n = Math.round(Number(saved.id));
+        const id = Number.isFinite(n) && n > 0 && !usedIds.has(n) ? n : 0;
+        if (id) usedIds.add(id);
+        plan.push({ saved, input, id });
     }
 
+    for (const clip of project.clips.slice())
+        if (!usedIds.has(clip.id)) dropClip(clip);
+
+    const made = [];
+    for (const p of plan) {
+        let clip = p.id ? project.clips.find((c) => c.id === p.id) : null;
+        // The same id over a different file is not the same clip. Rebuilt rather
+        // than re-pointed, because the element *is* the decoder and re-pointing
+        // one is what `reloadInput` exists to avoid getting wrong.
+        if (clip && clip.input !== p.input) { dropClip(clip); clip = null; }
+        let element = !clip || reopened.has(p.input);
+        if (!clip) {
+            clip = makeClip(p.input);
+            if (p.id) { clip.id = p.id; useClipId(p.id); }
+            placeClip(clip);
+        } else if (element) {
+            if (hooks.detach) hooks.detach(clip);
+        }
+        writeClip(clip, p.saved);
+        if (element && hooks.attach) hooks.attach(clip);
+        made.push(clip);
+    }
+    sortClips();
+
+    // ── and the inputs it does not ──
+    //
+    // Last, now that nothing is cut from them. An input with no clip is an
+    // ordinary state on the Sources stage, but not one a document can leave
+    // behind: it would be an `-i` this edit never mentioned.
+    const wanted = new Set(specs.map((s) => s.id).filter(Boolean));
+    for (const input of inputsModel.inputs.slice())
+        if (!wanted.has(input.id)) inputsModel.removeInput(input);
+    inputsModel.orderInputs(specs.map((s) => s.id));
+
     readCanvas(d.canvas, made);
-    // Last, and that ordering is load-bearing. Removing an input fires the
-    // model's change channel, which is where `retain()` drops everything pinned
-    // to a clip that is no longer open — so an overlay adopted before the clips
-    // exist would be stripped by the emptying of the timeline that preceded it.
+    // The overlay after the clips, and that ordering is load-bearing. Removing
+    // an input fires the model's change channel, which is where `retain()` drops
+    // everything pinned to a clip that is no longer open — so an overlay adopted
+    // first would be stripped by the tidying that followed it.
     overlay.adopt(d.graph);
+    // **Only when the document has any.** A history state deliberately carries
+    // no `output` — undo is about the edit, not about a form — and an absent key
+    // has to leave the Encode and Write stages exactly as they are rather than
+    // reset them to a default nobody chose.
     store.adopt(d.output, store.DOCUMENT_KEYS);
     changed('document');
     return { clips: made, skipped };
+}
+
+/// Everything a document says about one clip, written over it.
+///
+/// Separate from making one because the point of the reconcile is that most
+/// clips are *not* made: on an undo of a crop this is the whole of the work, and
+/// the element it is drawn by never learns anything happened.
+function writeClip(clip, saved) {
+    clip.track = clamp(Math.round(num(saved.track)), 0, 7);
+    clip.start = Math.max(0, num(saved.start));
+    clip.inPoint = clamp(num(saved.inPoint), 0, clip.media);
+    // What the file actually has, which is not what the document says it had:
+    // an input reopened through a different demuxer, or one whose file has been
+    // re-encoded since, is a shorter file than the trim was made against. Same
+    // clamp `applyInput()` applies for the same reason.
+    clip.length = clamp(num(saved.length, clip.media - clip.inPoint),
+                        0, Math.max(0, clip.media - clip.inPoint));
+    clip.xform = readTransform(saved.xform);
+    clip.volume = clamp(num(saved.volume, 1), 0, 4);
+    clip.muted = !!saved.muted;
+}
+
+function dropClip(clip) {
+    if (hooks.detach) hooks.detach(clip);
+    removeClip(clip);
 }
 
 /// An empty edit: no clips, no inputs, no graph, and the output settings left
@@ -208,20 +276,6 @@ export function reset() {
     open({ output: { chapters: [], rangeIn: 0, rangeOut: 0, path: '' } });
     currentPath = '';
     modified = false;
-}
-
-/// Take the timeline apart: every `<video>` detached, every clip gone, every
-/// input forgotten by the native side.
-///
-/// The inputs are removed rather than left in place even when the incoming
-/// document names the same paths, because an input carries a registration in
-/// the host (`bro.ffmpeg.inputs.define`) keyed by its id, and two documents' ids
-/// mean different files.
-function clear() {
-    for (const clip of project.clips.slice()) if (hooks.detach) hooks.detach(clip);
-    project.clips.length = 0;
-    select(null);
-    for (const input of inputsModel.inputs.slice()) inputsModel.removeInput(input);
 }
 
 // ── reading what was written ───────────────────────────────────────────────

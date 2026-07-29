@@ -441,6 +441,11 @@ document brings the inputs back with it. A graph restored from the workspace
 drops those nodes on purpose: the ids would name whichever file happened to be
 third that run.
 
+`Ctrl`+`Z` reaches all of it, and this is the stage the absence was felt most
+on — a wire is work in the way a slider position is not. A node placed, a wire
+drawn, a pad cut and a value locked are each a step; see
+[Undo](document.md#undo).
+
 ## What changes when there is one
 
 A render with a filter of your own in it goes through **libavfilter** instead of

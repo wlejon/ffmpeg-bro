@@ -225,6 +225,16 @@ export function placeClip(clip) {
     return clip;
 }
 
+/// Put the list back in order after something outside this file has written
+/// `track` or `start` straight onto a clip.
+///
+/// Everything in here that moves a clip sorts afterwards, and that is the rule —
+/// `clipsAt()` relies on paint order and says so. The document reader is the one
+/// caller that writes those fields in bulk, across clips it did not make, and
+/// sorting once at the end of that is cheaper and clearer than routing a
+/// hundred fields through `moveClip`.
+export function sortClips() { sort(); }
+
 /// Note that an id has been handed out, so this counter never issues it again.
 ///
 /// A clip's id is written down outside this file — `clip:7/after-scale` is how

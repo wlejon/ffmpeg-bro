@@ -26,4 +26,5 @@
 | `Ctrl`+`S` | save the document (`Ctrl`+`Shift`+`S` to save it somewhere else) |
 | `Ctrl`+`O` | open a document |
 | `Ctrl`+`N` | start a new one |
+| `Ctrl`+`Z` | undo (`Ctrl`+`Shift`+`Z` or `Ctrl`+`Y` to redo) |
 | `Delete` | remove the selection |

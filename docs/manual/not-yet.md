@@ -17,19 +17,15 @@ Honest list of what does not work:
   and that is the only way to move through it: there is no scrub bar, no way
   back, and nothing to jump with. Somewhere else to start from means moving the
   playhead and pressing `At playhead`.
-- **Undo, anywhere.** There is no undo stack in this application and no `Ctrl-Z`
-  handler — not on the timeline, not on the settings, and not on the graph. Every
-  edit is applied to the model and the model is what is drawn, so putting a cut
-  wire back means wiring it again and putting a split back means deleting one
-  half and trimming the other. The graph is where the absence is felt most,
-  because a wire is work in the way a slider position is not. `Give it back`
-  covers the one case where "again" is ambiguous — a pad handed to the
-  derivation. **What is now in place is the hard half**: `snapshot()` in
-  `ui/document.js` produces the whole edit as one value and `open()` puts one
-  back, which is what a stack would hold and what popping one would do — see
-  [The document](document.md). What is missing is the stack, the two keys, and a
-  rule for which changes are worth a step of their own, since a drag arrives as
-  a hundred.
+- **Undo on the Encode and Write stages.** `Ctrl-Z` covers the edit — the
+  clips, the inputs, the canvas and the graph — and stops at the form; see
+  [Undo](document.md#undo) for why, which is that a control you just changed is
+  in front of you with its old value one keystroke away, and that a `Ctrl-Z`
+  pressed on the timeline which silently reverted a codec three stages away
+  would be worse than none. Whether that is the right line is a real question
+  and it has not been tested on anybody. What would have to come first is a
+  single "the settings changed" channel: the encode side has three change hooks
+  meaning three different things, and none of them is that.
 - **A generated source in the viewer.** A `testsrc` or a `movie` renders and
   previews on its own card, and the *viewer* cannot show it — no longer because
   there is no filtergraph in the playback path (there is one now, per clip), but

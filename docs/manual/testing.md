@@ -188,6 +188,15 @@ edited to something that is not there opens *short*, with the input carrying
 libav's message and the clips of it named as left out, and a file that is not
 JSON at all is refused by name rather than by a stack trace.
 
+The undo half of the same suite drives the three rules that decide what a step
+is, in the change channel's own vocabulary rather than through a synthesised
+drag: twenty `move` events and one `moved` are one step, three `edit`s inside
+half a second are one and three either side of the gap are two, and a change that
+changed nothing is none. The assertion worth naming is the cheap-looking one —
+that a clip is still being decoded by the same element after an undo — because
+that is the whole reason `open()` reconciles instead of rebuilding, and nothing
+else in the suite would notice if it stopped.
+
 `captest` is what this build can write, read, reach and capture, and it prints
 as much as it asserts: how many muxers, which of them write pictures, which
 protocols are in and out, what capture devices the machine has. The numbers

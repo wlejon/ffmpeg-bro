@@ -96,9 +96,15 @@ measurement of zero, because most of the window is `display:none` at any moment.
 
 `ui/document.js` `snapshot()` produces one plain JS object describing the whole
 *edit* — inputs, clips, canvas, graph overlay, output settings — and `open()`
-puts one back. A `.fbro` file is that object stringified; an undo stack would be
-a list of them. Write the file format first and you get a serialiser, which can
+puts one back. A `.fbro` file is that object stringified; an undo stack is a
+list of them. Write the file format first and you get a serialiser, which can
 only ever do one of those.
+
+`ui/history.js` is the second consumer: a step of undo is a snapshot minus its
+`output` key, held as JSON text so that comparing two states is `===` and
+parsing one out is inherently a fresh object. `open()` **reconciles** rather than
+rebuilds for its sake — an input described exactly as it already is costs
+nothing, and a clip of one keeps its `<video>`.
 
 **Ids are part of it, and that is the load-bearing part.** A clip's id and an
 input's id are names other files write down — `clip:7/after-scale` is a graph

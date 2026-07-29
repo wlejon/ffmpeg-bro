@@ -314,5 +314,138 @@ pump(80);
 ok(!doc.isModified(), 'Save writes to where it came from without asking');
 ok(fs.existsSync(path), 'and the file is still there');
 
+// ── undo ───────────────────────────────────────────────────────────────────
+//
+// The second thing the object is for. A step of history is a snapshot minus its
+// `output`, so what is checked here is not "does JSON round-trip" — that is
+// settled above — but the three rules that decide what a *step* is, and the one
+// property that makes undo usable at all: applying a state reconciles rather
+// than rebuilds, so a `Ctrl-Z` over a crop does not tear down every decoder.
+
+const H = A.history;
+
+doc.reset();
+A.documentOpened({ clips: [], skipped: [] });
+A.open(media);
+waitFor('a clip to undo', () => A.project.clips.length === 1);
+pump(200);
+const only = A.project.clips[0];
+const element = only.video;
+// Somewhere that is not zero, so that "it went back" is a fact rather than the
+// clip having been there all along.
+only.start = 3;
+A.changed('edit');
+pump(60);
+H.reset();
+ok(!H.canUndo() && !H.canRedo(), 'a history just reset has nowhere to go either way');
+
+const wasStart = only.start;
+
+// A drag: `move` per mouse position, one `moved` at the end. One step, and the
+// state it goes back to is the one from before the first `move`.
+for (let i = 1; i <= 20; i++) { only.start = wasStart + i * 0.1; A.changed('move'); }
+A.changed('moved');
+pump(60);
+same(H.depth(), 1, 'a drag of twenty positions is one step');
+ok(doc.isModified(), 'and the document says so');
+
+ok(A.stepHistory(true), 'undo goes back');
+pump(80);
+ok(near(A.project.clips[0].start, wasStart),
+   `to where the drag started (${A.project.clips[0].start} → ${wasStart})`);
+ok(!H.canUndo() && H.canRedo(), 'with nothing behind it and one thing ahead');
+
+// The property the whole reconcile exists for.
+same(A.project.clips[0].video, element,
+     'and the clip is still being decoded by the element it always was');
+
+ok(A.stepHistory(false), 'redo goes forward again');
+pump(80);
+ok(near(A.project.clips[0].start, wasStart + 2), 'to where the drag ended');
+
+// A change that changed nothing is not a step. `retain()` fires on every model
+// change and usually has nothing to drop, which is exactly this case.
+const depthWas = H.depth();
+A.changed('edit');
+A.changed('retain');
+pump(40);
+same(H.depth(), depthWas, 'a change that changed nothing is not a step');
+
+// Two of a kind in quick succession are one — a slider reports every pixel.
+A.project.clips[0].xform.zoom = 1.2; A.changed('edit');
+A.project.clips[0].xform.zoom = 1.4; A.changed('edit');
+A.project.clips[0].xform.zoom = 1.6; A.changed('edit');
+pump(40);
+same(H.depth(), depthWas + 1, 'three of a kind inside half a second are one step');
+A.stepHistory(true);
+pump(60);
+ok(near(A.project.clips[0].xform.zoom, 1),
+   `and undoing it goes back past all three (${A.project.clips[0].xform.zoom})`);
+
+// ...and apart, they are not. The gap is the rule, so the test has to wait it
+// out rather than assert around it.
+A.project.clips[0].xform.opacity = 0.8; A.changed('edit');
+pump(700);
+A.project.clips[0].xform.opacity = 0.6; A.changed('edit');
+pump(40);
+A.stepHistory(true);
+pump(60);
+ok(near(A.project.clips[0].xform.opacity, 0.8),
+   `a change after the gap is its own step (${A.project.clips[0].xform.opacity})`);
+
+// A new edit throws the redo away, which is what makes a history a tree nobody
+// has to think about.
+ok(H.canRedo(), 'there is something to redo');
+A.setLayout('grid');
+pump(60);
+ok(!H.canRedo(), 'and an edit made instead of redoing throws it away');
+A.setLayout('stack');
+pump(60);
+
+// Structure, not only fields.
+const before2 = A.project.clips.length;
+A.setPlayhead(A.project.clips[0].start + A.project.clips[0].length / 2);
+A.splitAtPlayhead();
+pump(120);
+same(A.project.clips.length, before2 + 1, 'a split is two clips');
+A.stepHistory(true);
+pump(120);
+same(A.project.clips.length, before2, 'and undoing it is one again');
+ok(A.project.clips[0].video === element,
+   'still decoded by the same element, because the half that survived never moved');
+
+// The graph is on its own change channel and is in the document, so it is in
+// the history — which is the case the absence was felt most in.
+A.graph.overlay.clear();
+pump(60);
+const marks = H.depth();
+A.graph.overlay.insert(`clip:${A.project.clips[0].id}/after-scale`, 'hflip');
+pump(60);
+same(H.depth(), marks + 1, 'a filter inserted on the graph is a step');
+A.stepHistory(true);
+pump(80);
+same(A.graph.overlay.inserts().length, 0, 'and undoing it takes the filter off');
+A.stepHistory(false);
+pump(80);
+same(A.graph.overlay.inserts().length, 1, 'and redoing it puts it back');
+
+// What undo is deliberately not about.
+A.exporter.currentSettings().quality = 33;
+A.setLayout('grid');
+pump(60);
+A.stepHistory(true);
+pump(60);
+same(A.exporter.currentSettings().quality, 33,
+     'undo leaves the Encode stage alone — a history state carries no output');
+same(A.project.layout, 'stack', 'while undoing the edit that was made beside it');
+
+// And an Open is not a step: undoing across one would land in the middle of
+// somebody else's edit.
+doc.save(path);
+doc.load(path);
+A.documentOpened({ clips: [], skipped: [] });
+pump(120);
+ok(!H.canUndo() && !H.canRedo(), 'opening a document starts the history again');
+
 fs.unlinkSync(path);
 console.log(`\n${checks} checks passed`);

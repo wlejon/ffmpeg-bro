@@ -8,6 +8,7 @@
 // timeline without any of them being transcoded first.
 
 import * as doc from './document.js';
+import * as history from './history.js';
 import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
@@ -297,7 +298,7 @@ onChange((what) => {
     // its way in and would otherwise mark a file unsaved the instant it was
     // opened.
     if (what !== 'selection' && what !== 'analysis' && what !== 'document')
-        { doc.touch(); drawDocument(); }
+        { doc.touch(); history.record(what); drawDocument(); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
         // The selection ring lives on the picture, so a change of selection is
@@ -370,7 +371,7 @@ function refreshPlayback() {
 // brought with it, so it is the one change on this channel that does not make
 // the document unsaved.
 graphOverlay.onChange((what) => {
-    if (what !== 'adopt') { doc.touch(); drawDocument(); }
+    if (what !== 'adopt') { doc.touch(); history.record(what); drawDocument(); }
     refreshPlayback();
 });
 
@@ -389,28 +390,38 @@ doc.initDocument({
 
 const docName = el('doc-name');
 
-/// Put the screen back after the model has been replaced wholesale.
+/// Put the screen back after the model has been replaced under it.
 ///
-/// Everything a drop does, in one call, because a document arrives as every
-/// clip at once: elements are attached by the hook above, and this is the half
-/// that is about the *window* — the picture laid out, the ruler fitted to a
-/// timeline of a new length, the playhead at the top of it.
-function documentOpened(result) {
+/// The half that is true of an undo as well as of an Open: the picture laid out
+/// against a canvas that may be a different size, the crop handles over whatever
+/// is selected now, the levels re-applied, and the encode side redrawn — because
+/// it reads `settings` when it is drawn rather than on the model's change
+/// channel, and `Ctrl-Z` works from the Write stage.
+function documentApplied() {
     dropzone.classList.toggle('hidden', project.clips.length > 0);
     setControlsEnabled(project.clips.length > 0);
     viewer.layout();
-    timeline.fitView();
-    setPlayhead(0);
     showProperties();
     updateCropUI();
     applyAudioAll();
-    // The encode side reads `settings` when it is drawn and not on the model's
-    // change channel, so a document opened *from* the Write stage — which
-    // Ctrl-O can be, because the document keys are above the per-stage handlers
-    // — would otherwise leave a form describing the settings of an edit that is
-    // no longer here. A no-op when the stage is not up.
     exporter.redraw();
     drawDocument();
+}
+
+/// And the half that is only true of an Open.
+///
+/// The two are separated by what an undo must *not* do. Fitting the ruler and
+/// sending the playhead home is right for a document that has just arrived and
+/// wrong for a step backwards inside the one in hand: undoing a crop while
+/// looking at a shot two minutes in must leave you looking at that shot, at that
+/// zoom. Same reason the history is reset here and not there.
+function documentOpened(result) {
+    timeline.fitView();
+    setPlayhead(0);
+    documentApplied();
+    // A different edit, so there is nothing behind it worth going back to: an
+    // undo across an Open would land in the middle of somebody else's document.
+    history.reset();
     // What could not be laid out, named. A document with a file that has moved
     // is a document you still want the rest of — see `open()` — and the one
     // thing that must not happen is it opening short and saying nothing.
@@ -474,10 +485,37 @@ function newDocument() {
     return true;
 }
 
+/// One step back, and the screen put right afterwards.
+///
+/// Refused out loud rather than silently, because `Ctrl-Z` doing nothing is
+/// indistinguishable from `Ctrl-Z` not being wired up — and this application had
+/// no undo at all until now, so that is the reading somebody arrives with.
+function stepHistory(back) {
+    if (back ? history.undo() : history.redo()) {
+        documentApplied();
+        timeline.draw();
+        return true;
+    }
+    flash(back ? 'Nothing to undo' : 'Nothing to redo');
+    return false;
+}
+
+const btnUndo = el('doc-undo');
+const btnRedo = el('doc-redo');
+
+function drawHistory() {
+    if (btnUndo) btnUndo.disabled = !history.canUndo();
+    if (btnRedo) btnRedo.disabled = !history.canRedo();
+}
+history.onChange(drawHistory);
+
 el('doc-open').addEventListener('click', openDocument);
 el('doc-save').addEventListener('click', () => saveDocument(false));
 el('doc-new').addEventListener('click', newDocument);
+btnUndo.addEventListener('click', () => stepHistory(true));
+btnRedo.addEventListener('click', () => stepHistory(false));
 drawDocument();
+drawHistory();
 
 // A file named on the command line, handed over by the host binding. A document
 // too: the same argument opens one, because "open this" is one act and which
@@ -491,6 +529,13 @@ if (bro.ffmpeg.openOnStart) {
         open(start);
     }
 }
+
+// Everything above is where this edit started, so it is where the history
+// starts. After `openOnStart`, because a file named on the command line is what
+// you opened the application to look at rather than the first thing you did to
+// it — an undo that took the picture away again would be answering a question
+// nobody asked.
+history.reset();
 
 // ── opening ────────────────────────────────────────────────────────────────
 
@@ -979,6 +1024,19 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         return;
     }
+    // Undo from every stage, and the Graph stage is the one it is most wanted
+    // on — a wire is work in the way a slider position is not. Both spellings of
+    // redo, because both are somebody's muscle memory.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        stepHistory(!e.shiftKey);
+        e.preventDefault();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        stepHistory(false);
+        e.preventDefault();
+        return;
+    }
     // The report is under every stage, so it is reachable from every stage —
     // including the two that otherwise take the keyboard for themselves, which
     // are the two a render is started and watched from.
@@ -1421,6 +1479,16 @@ globalThis.__ffmpegBro = {
     // because SDL's pickers block the JS thread waiting for a person — so the
     // half that can be checked is the half either side of them.
     doc, documentOpened,
+    // Undo, and the press that drives it. `history` is the model half and
+    // `stepHistory` is that plus putting the screen back, which is the half a
+    // test of "does the picture follow" has to go through.
+    history, stepHistory,
+    // The model's change channel. On the surface because the history's rule
+    // about what counts as one step is stated in its vocabulary — a `move` is a
+    // drag in flight and a `moved` is the end of one — and the only way to check
+    // a rule about kinds is to send kinds, rather than to synthesise a drag and
+    // hope it produced the pair.
+    changed,
     // What a drop of files amounts to, and the three inputs whose content is
     // assembled rather than opened. Exposed because the grouping is the most
     // used path into them and a test of it should not have to go through a

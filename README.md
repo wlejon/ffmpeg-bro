@@ -84,6 +84,7 @@ tested, and a scriptable media tool in its own right).
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
 | `Delete` | remove the selection |
 | `Ctrl`+`S` `Ctrl`+`O` `Ctrl`+`N` | save, open and start a document |
+| `Ctrl`+`Z` | undo (`Ctrl`+`Shift`+`Z` redoes) |
 
 ## Documentation
 
@@ -109,7 +110,6 @@ file; the manual's [Testing](docs/manual/testing.md) part has the full list.
 The short version — the manual's [Not yet](docs/manual/not-yet.md) part is the
 honest, complete list:
 
-- No undo, anywhere.
 - Playback shows a clip's own filters, and not a filter over the whole picture,
   a soft subtitle track or a generated source with no clip behind it — those
   appear in node previews and the export preview, which are real renders. A clip
@@ -119,6 +119,8 @@ honest, complete list:
   filmstrip still shows its frames on their side.
 - A document holds the edit and not the session: which clip was selected, where
   the playhead was and how far the timeline was zoomed are not written.
+- Undo covers the edit and stops at the Encode and Write stages, which are a
+  form.
 
 ## License
 
