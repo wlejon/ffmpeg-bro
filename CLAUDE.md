@@ -65,10 +65,12 @@ Three layers:
 - **`docs/`** — manual.md (every stage, plus an honest "Not yet") and api.md
   (the `bro.ffmpeg` host surface). README stays short; the depth lives here.
 
-The UI is **not a browser**. The DOM is bro's subset, and the gaps matter —
-e.g. `Document.addEventListener` exists but `Document.dispatchEvent` does not,
-so tests dispatch key events on `<body>` and let them bubble. Check what the
-engine actually implements before reaching for a web API.
+The UI is **not a browser**. The DOM is bro's subset, and the gaps matter, so
+check what the engine actually implements before reaching for a web API — and
+check it against *this* bro rather than against this file, because the subset
+grows. `Document.dispatchEvent` was the standing example of a gap here until
+bro grew it; the tests that dispatch key events on `<body>` and let them bubble
+are written that way for that reason and are simply no longer forced to be.
 `bro.media` is installed in worker realms, which is what `ui/analyze-worker.js`
 uses for full-file peak and filmstrip decodes off the UI thread.
 
