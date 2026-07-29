@@ -11,7 +11,8 @@
 // because how many there are is a property of the edit.
 
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
-         isSelected, select, trimClip, hasPicture } from './project.js';
+         isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
+         hasPicture } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { el, put } from './dom.js';
 
@@ -118,6 +119,25 @@ function clipAtX(x, track) {
     for (const c of project.clips)
         if ((track === undefined || c.track === track) &&
             t >= c.start && t <= c.start + c.length) return c;
+    return null;
+}
+
+/// The clip butted against this one's given end, or null.
+///
+/// **What makes a cut a cut.** Two clips laid end to end share an x, and the
+/// boundary between them is one thing with two names — the left one's out-point
+/// *is* the right one's in-point. Roll is the edit that moves both, so it needs
+/// the other half, and "is there one" is also what tells a cut apart from the
+/// loose end of a clip with nothing after it. A gap of any size is not a cut:
+/// there are two boundaries there and moving them together would be moving a
+/// clip, which is what dragging its body already does.
+function buttedAt(clip, edge) {
+    const at = edge === 'start' ? clip.start : clip.start + clip.length;
+    for (const c of project.clips) {
+        if (c === clip || c.track !== clip.track) continue;
+        const other = edge === 'start' ? c.start + c.length : c.start;
+        if (Math.abs(other - at) < 1e-6) return c;
+    }
     return null;
 }
 
@@ -571,9 +591,29 @@ function wireVideoLane(entry) {
             onSeek(xToTime(x), true);
             if (grab) select(grab.clip, (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'set');
             else if (!(e.ctrlKey || e.metaKey || e.shiftKey)) select(null);
+            // **Alt turns each of the three targets into its cut-relative
+            // edit**, which is the pairing that makes one modifier enough:
+            // an end ripples, a shared cut rolls, a body slips. Alt rather than
+            // ctrl/meta/shift because those three already mean "add to the
+            // selection" on this very press.
+            //
+            // A cut and an end are genuinely different targets rather than the
+            // same one read two ways — at a butt join the left clip's out-point
+            // and the right clip's in-point are one boundary — so which of the
+            // two is under the pointer is asked, not assumed.
+            const other = grab && grab.what !== 'move' && e.altKey
+                ? buttedAt(grab.clip, grab.what) : null;
             drag = grab ? {
                 clip: grab.clip, what: grab.what,
+                // The edit this press is, decided once. Read per move it would
+                // change under a hand that let go of Alt half way through a
+                // drag, which is a gesture turning into a different gesture
+                // while it is being made.
+                edit: !e.altKey ? 'plain' : other ? 'roll'
+                    : grab.what === 'move' ? 'slip' : 'ripple',
+                other,
                 grabTime: xToTime(x), origin: grab.clip.start,
+                originIn: grab.clip.inPoint,
                 originTrack: grab.clip.track, moved: false,
             } : null;
         },
@@ -584,7 +624,25 @@ function wireVideoLane(entry) {
             const delta = t - drag.grabTime;
             if (!drag.moved && Math.abs(delta) * (laneWidth() / view.span) < 3) return;
             drag.moved = true;
-            if (drag.what === 'move') {
+            if (drag.edit === 'slip') {
+                // Measured from where the press was rather than accumulated per
+                // move: `slipClip` clamps at the ends of the footage, so adding
+                // each step would let a drag that ran past the end come back a
+                // different distance from the one it went out.
+                //
+                // Negated because the gesture pushes the film under the window:
+                // dragging right shows earlier footage. Not snapped — there is
+                // nothing on the timeline to snap to, since nothing about the
+                // arrangement moves.
+                drag.clip.inPoint = drag.originIn;
+                slipClip(drag.clip, -delta);
+            } else if (drag.edit === 'roll') {
+                const left = drag.what === 'start' ? drag.other : drag.clip;
+                const right = drag.what === 'start' ? drag.clip : drag.other;
+                rollCut(left, right, snapTime(t, drag.clip));
+            } else if (drag.edit === 'ripple') {
+                rippleTrim(drag.clip, drag.what, snapTime(t, drag.clip));
+            } else if (drag.what === 'move') {
                 const track = laneAtY(e.clientY);
                 moveClip(drag.clip, snapStart(drag.clip, drag.origin + delta, playheadTime()),
                          track === null ? drag.originTrack : track);
@@ -595,7 +653,13 @@ function wireVideoLane(entry) {
         },
         () => {
             if (drag && drag.moved) {
-                if (drag.what === 'move') resolveOverlaps(drag.clip);
+                // Only a plain move can leave two clips over each other. A
+                // ripple keeps the order it started with, a roll moves one
+                // boundary between two clips that were already butted, and a
+                // slip moves nothing on the timeline at all — so resolving
+                // overlaps after any of them would be re-laying-out an
+                // arrangement nobody disturbed.
+                if (drag.edit === 'plain' && drag.what === 'move') resolveOverlaps(drag.clip);
                 changed('moved');
             }
             // Always release, even after an edit: the press paused playback to

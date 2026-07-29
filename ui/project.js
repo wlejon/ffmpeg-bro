@@ -413,3 +413,117 @@ export function trimClip(clip, edge, t) {
     }
     sort();
 }
+
+// ── ripple, roll and slip ──────────────────────────────────────────────────
+//
+// The three edits that are about a *cut* rather than about a clip, and none of
+// them needed anything added to the model: a clip already knows its in-point
+// separately from where it sits, which is the whole of what they are arithmetic
+// on. What was missing was the arithmetic and a gesture to reach it.
+//
+// They are three because they answer three different questions, and the thing
+// they hold constant is what tells them apart:
+//
+//   - **Ripple** holds the *content* and moves everything after. Trim a clip
+//     and the gap closes rather than being left as a hole to notice later.
+//   - **Roll** holds the *total* and moves the boundary. The programme is the
+//     same length afterwards; the cut is somewhere else in it.
+//   - **Slip** holds the *window* and moves the content inside it. The clip
+//     stays exactly where it is and starts somewhere else in the file.
+//
+// Each is written against `trimClip`'s own limits rather than beside them: the
+// wall a trim stops at is the neighbour, the head of the file and one frame, and
+// a second copy of those rules is a second answer to where an edit can go.
+
+/// Trim, and take everything after it along.
+///
+/// **The gap is the point.** An ordinary trim leaves a hole where the footage
+/// was, which is right when the clips after are placed against a soundtrack and
+/// wrong when the programme is a sequence — and only the person editing knows
+/// which. So this is the second gesture rather than the new behaviour of the
+/// first.
+///
+/// Everything later *on the same track* moves. Not every track: a title on V2
+/// over a shot on V1 is placed against that shot, and rippling one track under
+/// another silently moves it off. Multi-track ripple is a decision about which
+/// tracks are locked together, and there is nothing here that says.
+export function rippleTrim(clip, edge, t) {
+    const wasStart = clip.start;
+    const wasEnd = clip.start + clip.length;
+    trimClip(clip, edge, t);
+    // What the trim actually did, which is not what it was asked for: the
+    // neighbour, the head of the file and the one-frame floor all clamp it.
+    const delta = edge === 'start' ? clip.start - wasStart
+                                   : (clip.start + clip.length) - wasEnd;
+    if (Math.abs(delta) < 1e-9) return;
+
+    // Trimming the head moves the head, so the clip itself comes back to where
+    // it was and the shift lands on everything after it — otherwise a ripple at
+    // the head would leave the clip somewhere it was not dragged to.
+    const from = edge === 'start' ? wasStart : wasEnd;
+    if (edge === 'start') clip.start = wasStart;
+    for (const c of project.clips) {
+        if (c === clip || c.track !== clip.track) continue;
+        if (c.start >= from - 1e-6) c.start = Math.max(0, c.start + delta);
+    }
+    sort();
+}
+
+/// Move the cut between two butted clips, leaving the programme the same length.
+///
+/// One boundary, two clips: the left one's out-point and the right one's
+/// in-point are the same moment, and rolling moves both. Which is why it is a
+/// gesture on *the cut* rather than on an edge — at a butt join the two edges
+/// are the same x, and "the end of the left clip" and "the start of the right
+/// clip" are two names for one thing.
+///
+/// Both sides have to have the footage. Rolling right needs frames after the
+/// left clip's out-point and rolling left needs frames before the right clip's
+/// in-point, and the limit is whichever runs out first — reported by doing
+/// less, not by refusing, because a drag that stops moving says where the wall
+/// is more clearly than a drag that does nothing.
+export function rollCut(left, right, t) {
+    if (!left || !right || left.track !== right.track) return;
+    const minL = 1 / Math.max(1, left.fps);
+    const minR = 1 / Math.max(1, right.fps);
+    const cut = left.start + left.length;
+
+    // How far the cut may travel each way, out of the four things that stop it:
+    // footage left in the left clip's file, footage left before the right
+    // clip's in-point, and one frame of each clip surviving.
+    const laterMost = Math.min(left.media - left.inPoint - left.length,
+                               right.length - minR);
+    const earlierMost = Math.min(right.inPoint, left.length - minL);
+    const want = Math.max(cut - earlierMost, Math.min(cut + laterMost, t));
+    const delta = want - cut;
+    if (Math.abs(delta) < 1e-9) return;
+
+    left.length += delta;
+    right.start += delta;
+    right.inPoint += delta;
+    right.length -= delta;
+    sort();
+}
+
+/// Move the content inside a clip without moving the clip.
+///
+/// The one edit that changes nothing about the arrangement: `start`, `length`
+/// and every clip around it are untouched, and what changes is which seconds of
+/// the file are shown in that window. It is how a shot is re-framed in time —
+/// the action happens a second later than the cut allows for, so the window
+/// stays and the footage slides under it.
+///
+/// `delta` is in the file's seconds and is what the pointer moved, negated:
+/// dragging *right* shows *earlier* footage, because the gesture is pushing the
+/// film under the window rather than moving the window over the film. That is
+/// the convention every editor uses and the sign is worth stating, because both
+/// readings are defensible and only one of them matches what a hand expects.
+///
+/// Clamped to what the file has: a clip cannot start before the first frame or
+/// run past the last, so a slip that would do either stops at the end of the
+/// footage rather than shortening the clip. Shortening would be a slip that
+/// silently became a trim.
+export function slipClip(clip, delta) {
+    const want = clip.inPoint + delta;
+    clip.inPoint = Math.max(0, Math.min(clip.media - clip.length, want));
+}

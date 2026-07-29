@@ -10,7 +10,8 @@
 import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
-         applyInput, clipsOf, hasPicture } from './project.js';
+         applyInput, clipsOf, hasPicture,
+         rippleTrim, rollCut, slipClip } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
@@ -1199,6 +1200,11 @@ globalThis.__ffmpegBro = {
     timeline, viewer,
     setCropMode, cropMode: () => cropMode,
     splitAtPlayhead, splitAt, setLayout, select, selectMany,
+    // The three edits that are about a cut rather than a clip. On the surface
+    // because they are pure model arithmetic — what each one holds constant is
+    // the whole of what it is — and a test that had to synthesise an Alt-drag
+    // to reach one would be testing the gesture rather than the edit.
+    rippleTrim, rollCut, slipClip,
     showProperties, pending,
     exporter, capture,
     filtergraph, renderGraph, shell, command, report,

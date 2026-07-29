@@ -533,6 +533,148 @@ console.log('\nsplit and trim');
     ok(A.project.clips.length === before, 'back to where we started');
 }
 
+// ── the three edits that are about a cut ───────────────────────────────────
+//
+// Ripple, roll and slip needed nothing added to the model: a clip already knows
+// its in-point separately from where it sits, which is the whole of what they
+// are arithmetic on. What tells them apart is what each holds constant —
+// ripple holds the content and moves everything after, roll holds the total and
+// moves the boundary, slip holds the window and moves the content inside it —
+// so that is what is asserted, one invariant each.
+//
+// Driven through the model rather than through three synthesised Alt-drags: the
+// arithmetic is the claim, and one gesture at the end is enough to show it is
+// reachable.
+
+console.log('\nripple, roll and slip');
+{
+    const whole = clip.length;
+    A.select(clip);
+    A.setPlayhead(clip.start + whole * 0.4);
+    pump(120);
+    A.splitAtPlayhead();
+    pump(120);
+    const two = A.project.clips.slice().sort((a, b) => a.start - b.start);
+    const left = two[0], right = two[1];
+    ok(two.length === 2 && Math.abs(right.start - (left.start + left.length)) < 0.001,
+       'two clips, butted, which is what a cut is');
+
+    // ── slip ───────────────────────────────────────────────────────────────
+    // Nothing about the arrangement moves; a different second of the file is in
+    // the same window.
+    {
+        const was = { start: right.start, length: right.length, inPoint: right.inPoint };
+        // Backwards, because the right half of a split already runs to the last
+        // frame of the file: there is nothing after it to slip *into*, which is
+        // the clamp asserted two checks below rather than a direction to pick
+        // by accident.
+        A.slipClip(right, -0.5);
+        ok(right.start === was.start && right.length === was.length,
+           'slipping moves neither where the clip sits nor how long it is');
+        ok(Math.abs(right.inPoint - (was.inPoint - 0.5)) < 0.001,
+           `only which part of the file is in it (${was.inPoint.toFixed(2)} → ` +
+           `${right.inPoint.toFixed(2)}s)`);
+
+        // Clamped at the end of the footage, and it stops rather than getting
+        // shorter — a slip that shortened a clip would be a trim wearing the
+        // wrong name.
+        A.slipClip(right, 9999);
+        ok(Math.abs(right.length - was.length) < 0.001,
+           'a slip past the end of the file stops rather than shortening the clip');
+        ok(right.inPoint + right.length <= right.media + 0.001,
+           `and stays inside it (${right.inPoint.toFixed(2)} + ${
+               right.length.toFixed(2)} ≤ ${right.media.toFixed(2)}s)`);
+        A.slipClip(right, -9999);
+        ok(right.inPoint === 0, 'and the other way stops at the first frame');
+        right.inPoint = was.inPoint;
+    }
+
+    // ── roll ───────────────────────────────────────────────────────────────
+    // The programme is the same length afterwards; the cut is somewhere else
+    // in it. Both halves change, which is why it is a gesture on the cut.
+    {
+        const total = () => (right.start + right.length) - left.start;
+        const wasTotal = total();
+        const wasCut = left.start + left.length;
+        const wasRightIn = right.inPoint;
+        A.rollCut(left, right, wasCut + 0.5);
+        ok(Math.abs(total() - wasTotal) < 0.001,
+           `rolling leaves the programme exactly as long (${total().toFixed(3)}s)`);
+        ok(Math.abs((left.start + left.length) - (wasCut + 0.5)) < 0.001,
+           'with the cut where it was dragged to');
+        ok(Math.abs(right.start - (left.start + left.length)) < 0.001,
+           'and the two still butted, because one boundary moved and not two');
+        ok(Math.abs(right.inPoint - (wasRightIn + 0.5)) < 0.001,
+           `the right half starting later in the file (${wasRightIn.toFixed(2)} → ` +
+           `${right.inPoint.toFixed(2)}s), which is what makes it a roll and not a trim`);
+        A.rollCut(left, right, wasCut);
+        ok(Math.abs((left.start + left.length) - wasCut) < 0.001, 'and it rolls back');
+    }
+
+    // ── ripple ─────────────────────────────────────────────────────────────
+    // The gap closes. That is the whole difference from the trim above, which
+    // deliberately leaves one.
+    {
+        const wasRightStart = right.start;
+        const wasLeftLen = left.length;
+        const wasTotal = (right.start + right.length) - left.start;
+        A.rippleTrim(left, 'end', left.start + left.length - 0.5);
+        const shortened = wasLeftLen - left.length;
+        ok(shortened > 0.4, `rippling the left clip's tail shortens it (${
+            shortened.toFixed(2)}s off)`);
+        ok(Math.abs(right.start - (wasRightStart - shortened)) < 0.001,
+           'and the clip after it comes back by exactly that much, so no gap is left');
+        ok(Math.abs(right.start - (left.start + left.length)) < 0.001,
+           'the two still butted');
+        ok(Math.abs(((right.start + right.length) - left.start) - wasTotal) > 0.4,
+           'and the programme is shorter, which is the point of a ripple');
+    }
+
+    // The gesture reaches it. One drag, with Alt held, on the tail of the left
+    // clip — everything above is the arithmetic and this is that it is wired.
+    {
+        A.timeline.fitView();
+        A.timeline.draw();
+        pump(60);
+        const lane = rectOf(v1().lane);
+        const y = lane.top + lane.height / 2;
+        const edgeX = lane.left + A.timeline.timeToX(left.start + left.length);
+        const wasRightStart = right.start;
+        const to = edgeX - Math.max(14, lane.width * 0.04);
+        // Dispatched rather than driven through the harness's `mouseDown`,
+        // which takes a button and a window and has nowhere to put a modifier.
+        // The press goes to the lane and the rest to the document, because that
+        // is where `tracked()` listens — losing the pointer off the element
+        // mid-drag is normal and losing the drag when it does is not.
+        const send = (type, px, target) => (target || document).dispatchEvent(
+            new MouseEvent(type, { bubbles: true, button: 0, altKey: true,
+                                   clientX: Math.round(px), clientY: Math.round(y) }));
+        send('mousedown', edgeX, v1().lane);
+        send('mousemove', edgeX - 8);
+        send('mousemove', to);
+        send('mouseup', to);
+        pump(80);
+        ok(right.start < wasRightStart - 0.01,
+           `Alt-dragging a clip's end ripples rather than leaving a gap (${
+               wasRightStart.toFixed(2)} → ${right.start.toFixed(2)}s)`);
+        ok(Math.abs(right.start - (left.start + left.length)) < 0.02,
+           'the clip after it still butted against the new out-point');
+    }
+
+    // Back to one clip, so everything after this is the timeline it was.
+    A.select(right);
+    A.removeSelection();
+    pump(60);
+    left.start = 0;
+    left.length = whole;
+    left.inPoint = 0;
+    A.timeline.fitView();
+    A.select(left, 'auto');
+    A.setPlayhead(0);
+    pump(60);
+    ok(A.project.clips.length === 1, 'back to one clip, where we started');
+}
+
 // ── stacked tracks, opacity and selecting several clips ────────────────────
 
 console.log('\ntracks');

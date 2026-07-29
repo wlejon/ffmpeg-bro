@@ -464,6 +464,35 @@ the head, so the pictures under the part you kept do not slide sideways, and a
 trim stops at its neighbours rather than growing over them. The two grips
 appear on the selected clip.
 
+**Hold `Alt`** and each of those three targets becomes the edit that is about
+the *cut* rather than about the clip. One modifier is enough because the target
+already says which of the three you mean, and they hold three different things
+constant:
+
+| | | |
+|---|---|---|
+| `Alt` + a clip's **end** | **ripple** | holds the content, moves everything after — the gap closes instead of being left as a hole |
+| `Alt` + a **cut** between two butted clips | **roll** | holds the total, moves the boundary — the programme is the same length and the cut is somewhere else in it |
+| `Alt` + a clip's **body** | **slip** | holds the window, moves the content inside it — the clip stays put and starts somewhere else in the file |
+
+**A cut is a different target from an end**, which is what makes that table
+unambiguous rather than clever: two clips laid end to end share an x, and the
+left one's out-point *is* the right one's in-point, so there is one boundary
+there with two names. A clip with a gap after it has a loose end and no cut, and
+`Alt` on it ripples.
+
+Slip drags the film under the window, so dragging **right shows earlier
+footage** — the convention every editor uses, and worth stating because both
+readings are defensible. It stops at the ends of the footage rather than
+shortening the clip, since a slip that got shorter would be a trim wearing the
+wrong name. Roll stops when either side runs out of frames, by doing less rather
+than by refusing: a drag that stops moving says where the wall is more clearly
+than a drag that does nothing.
+
+Ripple moves everything later **on the same track**. Not every track: a title on
+V2 is placed against the shot under it, and rippling one track beneath another
+would silently move it off.
+
 **Split** (`S`, or the button) cuts every selected clip the playhead is inside —
 one keypress through a whole stack, or through exactly the one you picked. Both
 halves point at the same file, so a split costs nothing but a second `<video>`,
@@ -2515,10 +2544,12 @@ Honest list of what does not work:
 - **Speed on a render.** `J`/`K`/`L` and the speed selector are transport
   controls, not part of the edit, so a clip exports at its own rate whatever
   the viewer was last playing at.
-- **Ripple, roll and slip.** Trimming leaves a gap rather than closing it up,
-  and there is no gesture that moves a cut without moving the pictures either
-  side of it. Nothing here needs new machinery — a clip already knows its
-  in-point separately from where it sits.
+- **A ripple that crosses tracks.** Alt-dragging ripples the track it is on and
+  no other, which is right for a title on V2 placed against a shot on V1 and
+  wrong for a programme cut across a stack. Which tracks move together is a
+  decision about locking them, and there is nothing here that says — so the
+  safe half is built and the other half needs a control before it can mean
+  anything.
 - **One waveform for the whole timeline.** A1 draws every clip, so clips that
   overlap in time draw over each other rather than mixing. With tracks stacked
   it is the top one you see.
