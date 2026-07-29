@@ -29,6 +29,8 @@
 // the ruler is worked out from the graph rather than assumed.
 
 import { el, div, span, put, head, row, select } from '../dom.js';
+import { project, sourceTime } from '../project.js';
+import { transport } from '../transport.js';
 import { range as exportRange } from '../export/spec.js';
 import { supportsTimeline, parseEnable, printEnable, drawnSpan,
          moveEdge, nextSpan, enableText } from './enable.js';
@@ -288,11 +290,87 @@ function strip(spans, clk, commit) {
         text: timecode(clk.at + clk.length * f),
     }));
 
-    return div('when-strip' + (spans.length ? '' : ' when-always'), [
+    // Where the playhead is, on this node's clock. Built here and *moved* by
+    // `chaseWhen()` — the strip is in the properties column, and redrawing that
+    // sixty times a second would rebuild every control in it under whatever
+    // hand was on one. Same rule the node cards' playback readout follows.
+    //
+    // The clock travels on the element rather than being recomputed per frame:
+    // working it out means walking the graph for a `setpts`, which is a
+    // question about the shape of the graph and cannot change without the
+    // column being rebuilt anyway.
+    track.appendChild(el('div', { cls: 'when-head hidden', 'data-f': 'when-head' }));
+
+    return el('div', {
+        cls: 'when-strip' + (spans.length ? '' : ' when-always'),
+        'data-clock': clk.base,
+        'data-clock-start': String(clk.start),
+        'data-clock-length': String(clk.length),
+        'data-clock-path': clk.path || '',
+    }, [
         track,
         div('when-ruler', marks),
         spans.length ? null : div('when-hint dim', 'always on'),
     ]);
+}
+
+/// Move every strip's playhead to where the playhead now is.
+///
+/// **Called from the frame loop, and it writes one style per strip.** Judging
+/// where a span lands used to mean playing the node and reading `on`/`off` off
+/// the card, which answers "is it on *now*" and never "does it cover the shot".
+/// A mark on the strip answers the second, which is the question somebody
+/// actually has.
+///
+/// Two clocks, and the second one is why this is not a division. A node
+/// downstream of the derivation's `setpts` is on the render's clock, so the
+/// playhead maps by subtracting where the range starts. A node spliced in
+/// *before* it — at a clip's `after decode` point — sees the source file's own
+/// timestamps, and the honest mapping there goes through the clip that is under
+/// the playhead: `sourceTime` is the one place that arithmetic lives.
+///
+/// **Where the mapping is not known, nothing is drawn.** A source-clock node
+/// whose file has no clip under the playhead has no answer — the render is not
+/// touching that file at this instant — and a mark parked at an edge would be a
+/// statement that it is.
+export function chaseWhen() {
+    // By the clock they carry rather than by class, so the column's strip and
+    // the one line on a card are one thing to this: both draw the same spans
+    // against the same seconds, and a head on only one of them would be the
+    // stage disagreeing with itself.
+    const strips = document.querySelectorAll('[data-clock]');
+    if (!strips.length) return;
+    const r = exportRange();
+    const t = transport.t;
+
+    for (const strip of strips) {
+        const headEl = strip.querySelector('[data-f="when-head"]');
+        if (!headEl) continue;
+        const base = strip.getAttribute('data-clock');
+        const start = Number(strip.getAttribute('data-clock-start')) || 0;
+        const length = Number(strip.getAttribute('data-clock-length')) || 0;
+
+        let on = null;
+        if (base === 'source') {
+            const path = strip.getAttribute('data-clock-path') || '';
+            // The clip of that file the playhead is actually inside. Several
+            // clips of one input are the ordinary case, so it is the one under
+            // the playhead rather than the first one found.
+            for (const c of project.clips) {
+                if (c.path !== path) continue;
+                if (t < c.start || t >= c.start + c.length) continue;
+                on = sourceTime(c, t) - start;
+                break;
+            }
+        } else {
+            on = t - r.start;
+        }
+
+        const frac = on === null || length <= 0 ? -1 : on / length;
+        const off = frac < 0 || frac > 1;
+        headEl.classList.toggle('hidden', off);
+        if (!off) headEl.style.left = `${frac * 100}%`;
+    }
 }
 
 /// One drawn span, with a handle at each end that exists only where there is an
@@ -359,8 +437,23 @@ export function whenBar(node, g) {
                          `${(((d.b - d.a) / clk.length) * 100).toFixed(2)}%`);
         })
         : null);
+    // The playhead, moved by `chaseWhen()` like the column's. On the card as
+    // well as in the column because the card is where several nodes are on
+    // screen at once: "does this blur cover the shot" is asked of one span, and
+    // "which of these is on right now" is asked of all of them, and only the
+    // card can answer the second.
+    track.appendChild(el('div', { cls: 'when-head hidden', 'data-f': 'when-head' }));
 
-    return div('gn-when' + (parsed.ok ? '' : ' gn-when-raw'), [
+    // The clock on the row rather than on a wrapper: `.gn-when` lays its track
+    // and its text out as a flex pair, and a box in between to hang three
+    // attributes off would be a layout change to carry data.
+    return el('div', {
+        cls: 'gn-when' + (parsed.ok ? '' : ' gn-when-raw'),
+        'data-clock': clk.base,
+        'data-clock-start': String(clk.start),
+        'data-clock-length': String(clk.length),
+        'data-clock-path': clk.path || '',
+    }, [
         track,
         span(parsed.ok ? enableText(value) : 'a time expression', 'gn-when-text'),
     ]);

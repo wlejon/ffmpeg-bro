@@ -2222,6 +2222,75 @@ if (!media) {
             pump(200);
             same(document.querySelectorAll('#gr-panel .when-span').length, 1,
                  'typing a span by hand draws it — the field and the strip are one thing');
+
+            // ── the playhead on the strip ──────────────────────────────────
+            //
+            // A number in a field does not answer "is this the right span" and
+            // neither does a shape on its own: the question is where the span
+            // falls against the moment you are looking at. Playing the node
+            // answers "is it on *now*"; a mark on the strip answers the one
+            // somebody actually has.
+            //
+            // Moved in place from the frame loop rather than redrawn — the
+            // strip is in the properties column, and rebuilding that at sixty
+            // frames a second would replace every control in it under whatever
+            // hand was on one — so what is asserted is that the style moved and
+            // that the column was not rebuilt.
+            {
+                const spec = A.exporter.buildSpec();
+                const head = () =>
+                    document.querySelector('#gr-panel .when-strip [data-f="when-head"]');
+                ok(!!head(), 'the strip carries a playhead');
+
+                const fracOf = () => parseFloat(head().style.left);
+                A.setPlayhead(spec.start + (spec.end - spec.start) * 0.25);
+                pump(120);
+                const quarter = fracOf();
+                ok(!head().classList.contains('hidden'),
+                   'which is shown while the playhead is inside the range');
+                ok(Math.abs(quarter - 25) < 2,
+                   `a quarter of the way through the range puts it a quarter along (${
+                       quarter.toFixed(1)}%)`);
+
+                A.setPlayhead(spec.start + (spec.end - spec.start) * 0.75);
+                pump(120);
+                ok(Math.abs(fracOf() - 75) < 2,
+                   `and moving the playhead moves it (${fracOf().toFixed(1)}%)`);
+                // The identity that makes it worth having: the mark and the
+                // span are on one clock, so "is the filter on here" is read off
+                // the picture rather than worked out from two numbers.
+                const spanEl = document.querySelector('#gr-panel .when-span');
+                const left = parseFloat(spanEl.style.left);
+                const w = parseFloat(spanEl.style.width);
+                const on = fracOf() >= left && fracOf() <= left + w;
+                same(on, A.graph.isOnAt(A.graph.parseEnable("'between(t,0.5,1.5)'").spans,
+                                        (spec.end - spec.start) * 0.75),
+                     'and whether it is over a span agrees with the expression itself');
+
+                // Outside the range there is no answer, and a mark parked at an
+                // edge would be a statement that there is. Reached by narrowing
+                // the range rather than by seeking past the end of the
+                // timeline: the playhead is clamped to the project's duration,
+                // so a seek past it lands exactly *on* the last moment, which
+                // is inside the range and correctly drawn at 100%.
+                const S = A.exporter.currentSettings();
+                const wasIn = S.rangeIn, wasOut = S.rangeOut;
+                S.rangeIn = spec.start + (spec.end - spec.start) * 0.5;
+                A.graph.draw();
+                pump(160);
+                A.setPlayhead(spec.start);
+                pump(120);
+                ok(head().classList.contains('hidden'),
+                   'a playhead outside the render’s range is hidden rather than pinned to ' +
+                   'an edge — outside it there is nothing for the strip to say');
+
+                S.rangeIn = wasIn; S.rangeOut = wasOut;
+                A.graph.draw();
+                pump(160);
+                A.setPlayhead(spec.start);
+                pump(120);
+            }
+
             document.querySelector('#gr-panel [data-f="always"]')
                 .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
             pump(200);

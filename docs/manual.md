@@ -863,8 +863,30 @@ clock the whole graph runs on, because every derived chain begins
 `after decode` point, sees the source file's own timestamps instead, and the
 strip says so and rules itself in the source's seconds.
 
-Playing the node (▶, above) is how you judge it: the readout over the picture
-says `on` or `off` as the playhead crosses the boundary.
+**The playhead is on the strip, and on the card's line too.** It moves as you
+scrub, in the same accent the timeline's own is drawn in, because the two are
+the same moment and reading them as different things is the confusion the mark
+removes. That is what turns a shape into an answer: playing the node tells you
+whether the filter is on *now*, and only a mark against the span tells you
+whether it covers the shot. The card carries one as well, since that is where
+several nodes are on screen at once and "which of these is on here" is a
+question about all of them.
+
+Outside the range it is **hidden rather than pinned to an edge** — past the end
+of what is being rendered there is nothing for the strip to say, and a mark
+parked at 100% would be saying there is. On a node that reads the file before
+the edit's clock is applied the mark goes through the clip under the playhead,
+which is the only honest mapping between the two clocks; where no clip of that
+file is under the playhead the render is not touching it at that instant, and
+again nothing is drawn.
+
+It is moved in place from the frame loop rather than redrawn. The strip lives in
+the properties column, and rebuilding that sixty times a second would replace
+every control in it under whatever hand was on one — the same rule the node
+cards' playback readout follows.
+
+Playing the node (▶, above) still answers the other half: the readout over the
+picture says `on` or `off` as the playhead crosses the boundary.
 
 ### Locks
 
@@ -2305,10 +2327,12 @@ Honest list of what does not work:
   surfaces them: no control writes one, no strip draws one, and the `eval` option
   is an entry in the table like any other. That is the shape of a real
   keyframe editor and it is not built.
-- **A span you can see while you scrub.** The When strip is drawn against the
-  render's range and is not the timeline: the playhead is not on it, and moving
-  the playhead does not move anything on it. Judging where a span lands is done
-  by playing the node, where the readout says `on` or `off`.
+- **A span you can drag from the timeline.** The playhead is on the When strip
+  now and moves with it, so where a span falls can be *seen* — but the strip is
+  still not the timeline: a span's ends are dragged on the strip, and there is
+  no gesture that sets one from where the playhead is standing. The two clocks
+  are already reconciled for the mark, so what is missing is a button rather
+  than a mechanism.
 - **Two-pass filters.** The mechanism is there — a render is a list of passes,
   each the render with overrides, run in one job through one slot — and the two
   filters that need it are `vidstabdetect`/`vidstabtransform`, which this build

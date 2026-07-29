@@ -51,6 +51,7 @@ import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import * as overlay from './overlay.js';
 import * as panel from './panel.js';
 import * as preview from './preview.js';
+import { chaseWhen } from './when.js';
 
 /// **`Fit` never crosses the level-of-detail threshold**, and that is what stops
 /// the one loop this design can have: the cards are measured at one detail, the
@@ -867,6 +868,10 @@ function shapeOf(g) {
 export function tickGraph() {
     preview.tick();
     playFrame();
+    // One style write per strip, for the reason `playFrame` writes the clock
+    // readout in place: redrawing the properties column would rebuild every
+    // control in it, sixty times a second, under whatever hand was on one.
+    chaseWhen();
 }
 
 /// Drive the node that is playing.

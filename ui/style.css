@@ -2517,6 +2517,19 @@ select.gn-f { text-align: left; }
 .when-edge-a { left: -4px; }
 .when-edge-b { right: -4px; }
 .when-edge:hover { background: var(--good, #7ed6a0); }
+/* The playhead, in the accent the timeline's own is: the two are the same
+   moment and reading them as two different things is the confusion this exists
+   to remove. `pointer-events: none` so it can lie over a span without taking
+   the drag that moves one. */
+.when-head {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--accent);
+    pointer-events: none;
+}
 .when-ruler { position: relative; height: 13px; }
 .when-tick {
     position: absolute;
