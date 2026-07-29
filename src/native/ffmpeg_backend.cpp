@@ -34,12 +34,14 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ffmpegbro {
@@ -283,11 +285,26 @@ public:
         if (!parse(src, &id, &name)) return false;
         auto tap = liveTapFor(id);
         if (!tap) return false;
-        pad_ = tap->pad(name);
-        if (!pad_) return false;
         // Held as well as the pad, so that closing the session while this is
         // playing leaves a tap that says "ended" rather than a freed one.
         tap_ = tap;
+
+        // **Waited for, not merely looked up.** A session's device pads exist
+        // the instant it opens, but the graph's do not: their names are the
+        // graph's and libavfilter cannot configure until a camera has handed
+        // over a frame. An element pointed at `vout` a moment too early would
+        // otherwise fail for good — bro opens a source once — which would make
+        // this API's correctness a matter of the caller's timing.
+        for (int waited = 0; !pad_ && waited < kPadWaitMs; waited += kSliceMs) {
+            pad_ = tap->pad(name);
+            if (!pad_)
+                std::this_thread::sleep_for(std::chrono::milliseconds(kSliceMs));
+        }
+        if (!pad_) {
+            LOG_WARN("ffmpeg: live session %llu publishes no pad called %s",
+                     static_cast<unsigned long long>(id), name.c_str());
+            return false;
+        }
 
         // **Described from a real frame**, because a track has to say how big
         // it is and a pad does not know until the graph has configured and the
@@ -369,6 +386,12 @@ public:
 
 private:
     static constexpr int kSliceMs = 100;
+    /// How long a pad that is not there yet is waited for. Shorter than the
+    /// frame wait below and deliberately so: this is `open`, which is called on
+    /// whichever thread set the `src`, and a *name* that never appears is a
+    /// mistake rather than a slow camera. The caller that has just listed the
+    /// pads never spends any of it.
+    static constexpr int kPadWaitMs = 1500;
     static constexpr int kOpenWaitMs = 4000;
     static constexpr int kReadWaitMs = 4000;
 
