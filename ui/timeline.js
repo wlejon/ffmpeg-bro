@@ -279,45 +279,136 @@ function drawVideoLane(track, canvas) {
     }
 }
 
+/// Which columns of the lane a clip covers, and how to read its peaks there.
+///
+/// One helper because three passes ask the same two questions, and a second
+/// copy of the bucket arithmetic would be a second answer to which sample of
+/// the file is under a pixel.
+function columnsOf(clip, w) {
+    const p = clip.peaks;
+    const l = Math.max(0, Math.floor(timeToX(clip.start)));
+    const r = Math.min(w, Math.ceil(timeToX(clip.start + clip.length)));
+    if (r <= l || !p || !p.buckets || !p.duration) return null;
+    const n = p.buckets;
+    const bucketAt = (x) => {
+        const t = clip.inPoint + (xToTime(x) - clip.start);
+        const b = Math.floor((t / p.duration) * n);
+        return b < 0 ? 0 : b >= n ? n - 1 : b;
+    };
+    return { l, r, n, p, bucketAt };
+}
+
+/// The mix, one column of the lane at a time.
+///
+/// Separated from the drawing because it is the *claim*: two clips that overlap
+/// in time are one sound at that moment, and what a reader is judging off A1 is
+/// what the render will make of it. A canvas can be checked by eye and not by a
+/// test; this can be checked by both.
+///
+/// `rms` is already rooted, `lo`/`hi` are the summed envelope, and `quiet` is
+/// what is deliberately outside the sum — see `drawAudioLane` for why each is
+/// combined the way it is.
+export function mixColumns(w) {
+    const power = new Float32Array(w);      // sum of (rms*gain)^2 while accumulating
+    const lo = new Float32Array(w), hi = new Float32Array(w);
+    const quiet = [];
+    let mixed = false;
+
+    for (const clip of project.clips) {
+        const col = columnsOf(clip, w);
+        if (!col) continue;
+        if (clip.muted || clip.volume < 0.02) { quiet.push(col); continue; }
+        mixed = true;
+        const g = clip.volume;
+        const { l, r, n, p, bucketAt } = col;
+        for (let x = l; x < r; x++) {
+            const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
+            let m = 0, a = 0, b2 = 0;
+            for (let b = b0; b < b1 && b < n; b++) {
+                if (p.rms[b] > m) m = p.rms[b];
+                if (p.min[b] < a) a = p.min[b];
+                if (p.max[b] > b2) b2 = p.max[b];
+            }
+            power[x] += (m * g) * (m * g);
+            lo[x] += a * g;
+            hi[x] += b2 * g;
+        }
+    }
+    for (let x = 0; x < w; x++) power[x] = Math.sqrt(power[x]);
+    return { rms: power, lo, hi, quiet, mixed };
+}
+
+/// A1: where the clips are, and **one waveform for the whole timeline**.
+///
+/// **It draws the mix, not the clips one after another.** Every clip used to be
+/// painted in turn, so two that overlapped in time drew over each other and
+/// what you saw was whichever happened to be last in the list — which is not
+/// what the render makes of that moment, and that moment is exactly what
+/// somebody is looking at A1 to judge. The renderer sums the clips; so does
+/// this.
+///
+/// Summed the way a mix is summed, and the two halves are not the same sum:
+///
+///   - **The envelope adds.** Two sounds at once reach the sum of their peaks
+///     when they peak together, and that is what clipping is — so the outline
+///     is the honest bound of what the mix can hit.
+///   - **The body is a root-sum-of-squares.** Adding RMS would draw a mix half
+///     as loud again as it is: power adds, amplitude does not, and two
+///     uncorrelated sounds at -6 dB make one at -3 rather than one at 0. That
+///     is an estimate — perfectly correlated material really does add — and it
+///     is the estimate every meter makes.
+///
+/// **A muted clip is drawn on its own, dimmed, and is not in the sum.** It is
+/// still there and simply not being heard, so hiding it would make it hard to
+/// find again; folding it in would draw sound the render will not write. Which
+/// of the two a shape is is said by its colour.
 function drawAudioLane() {
     const c = laneContext(wave);
     if (!c) return;
     const { ctx, w, h } = c;
     const mid = h / 2;
 
+    // Where the clips are, first, so the mix is drawn over their boxes rather
+    // than under the next one's.
     for (const clip of project.clips) {
-        const x0 = timeToX(clip.start);
-        const x1 = timeToX(clip.start + clip.length);
-        const l = Math.max(0, Math.floor(x0)), r = Math.min(w, Math.ceil(x1));
+        const l = Math.max(0, Math.floor(timeToX(clip.start)));
+        const r = Math.min(w, Math.ceil(timeToX(clip.start + clip.length)));
         if (r <= l) continue;
-        const selected = isSelected(clip);
         const p = clip.peaks;
-
-        ctx.fillStyle = p ? (selected ? '#24422f' : '#1d3227') : '#20242c';
+        ctx.fillStyle = p ? (isSelected(clip) ? '#24422f' : '#1d3227') : '#20242c';
         ctx.fillRect(l, 0, r - l, h);
-
-        if (!p || !p.buckets || !p.duration) {
-            if (clip.ready && r - l > 60) {
-                ctx.font = '10px Consolas, monospace';
-                ctx.fillStyle = '#8a92a0';
-                ctx.fillText(clip.probe.audio ? 'reading…' : 'no audio track', l + 6, mid + 3);
-            }
-            continue;
+        if ((!p || !p.buckets || !p.duration) && clip.ready && r - l > 60) {
+            ctx.font = '10px Consolas, monospace';
+            ctx.fillStyle = '#8a92a0';
+            ctx.fillText(clip.probe.audio ? 'reading…' : 'no audio track', l + 6, mid + 3);
         }
+    }
 
-        const n = p.buckets;
-        const bucketAt = (x) => {
-            const t = clip.inPoint + (xToTime(x) - clip.start);
-            const b = Math.floor((t / p.duration) * n);
-            return b < 0 ? 0 : b >= n ? n - 1 : b;
-        };
+    const { rms, lo, hi, quiet, mixed } = mixColumns(w);
 
-        // A muted clip still draws, dimmed: it is still there, it just is not
-        // in the mix, and hiding it would make it hard to find again.
-        const quiet = clip.muted || clip.volume < 0.02;
+    if (mixed) {
         // The RMS body first, then the peak envelope over it: the body is what
         // the sound feels like, the envelope is what it actually reaches.
-        ctx.fillStyle = quiet ? 'rgba(126, 214, 160, 0.12)' : 'rgba(126, 214, 160, 0.35)';
+        ctx.fillStyle = 'rgba(126, 214, 160, 0.35)';
+        for (let x = 0; x < w; x++) {
+            if (!rms[x]) continue;
+            const y = Math.min(mid, rms[x] * mid * 1.6);
+            ctx.fillRect(x, mid - y, 1, y * 2);
+        }
+        ctx.fillStyle = 'rgba(126, 214, 160, 0.9)';
+        for (let x = 0; x < w; x++) {
+            if (!hi[x] && !lo[x]) continue;
+            const top = mid - Math.min(mid, hi[x] * mid);
+            const bot = mid + Math.min(mid, -lo[x] * mid);
+            ctx.fillRect(x, top, 1, Math.max(1, bot - top));
+        }
+    }
+
+    // What is not in it, in its own colour and one clip at a time — there is no
+    // mix for it to be part of, so there is nothing to sum.
+    for (const col of quiet) {
+        const { l, r, n, p, bucketAt } = col;
+        ctx.fillStyle = 'rgba(126, 214, 160, 0.12)';
         for (let x = l; x < r; x++) {
             const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
             let m = 0;
@@ -325,19 +416,27 @@ function drawAudioLane() {
             const y = Math.min(mid, m * mid * 1.6);
             ctx.fillRect(x, mid - y, 1, y * 2);
         }
-        ctx.fillStyle = quiet ? 'rgba(126, 214, 160, 0.3)' : 'rgba(126, 214, 160, 0.9)';
+        ctx.fillStyle = 'rgba(126, 214, 160, 0.3)';
         for (let x = l; x < r; x++) {
             const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
-            let lo = 0, hi = 0;
+            let a = 0, b2 = 0;
             for (let b = b0; b < b1 && b < n; b++) {
-                if (p.min[b] < lo) lo = p.min[b];
-                if (p.max[b] > hi) hi = p.max[b];
+                if (p.min[b] < a) a = p.min[b];
+                if (p.max[b] > b2) b2 = p.max[b];
             }
-            const top = mid - Math.min(mid, hi * mid);
-            const bot = mid + Math.min(mid, -lo * mid);
+            const top = mid - Math.min(mid, b2 * mid);
+            const bot = mid + Math.min(mid, -a * mid);
             ctx.fillRect(x, top, 1, Math.max(1, bot - top));
         }
+    }
 
+    // The outlines last, so a clip's extent stays readable over the waveform
+    // rather than being buried under the next clip's body.
+    for (const clip of project.clips) {
+        const l = Math.max(0, Math.floor(timeToX(clip.start)));
+        const r = Math.min(w, Math.ceil(timeToX(clip.start + clip.length)));
+        if (r <= l || !clip.peaks) continue;
+        const selected = isSelected(clip);
         ctx.strokeStyle = selected ? '#ff8c42' : '#35604a';
         ctx.lineWidth = selected ? 2 : 1;
         ctx.strokeRect(l + 0.5, 0.5, Math.max(1, r - l - 1), h - 1);

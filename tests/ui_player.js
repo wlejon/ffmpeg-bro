@@ -675,6 +675,100 @@ console.log('\nripple, roll and slip');
     ok(A.project.clips.length === 1, 'back to one clip, where we started');
 }
 
+// ── one waveform for the whole timeline ────────────────────────────────────
+//
+// A1 used to paint each clip in turn, so two that overlapped in time drew over
+// each other and what you saw was whichever came last in the list — which is
+// not what the render makes of that moment, and that moment is the one somebody
+// is looking at A1 to judge.
+//
+// The peaks here are hand-made, the way `ui_filtergraph.js` hand-makes specs:
+// the claim is arithmetic on two known numbers, and a fixture that happened to
+// contain the right sound would prove it only by luck. What is asserted is the
+// pair of sums — the envelope adds, the body is a root-sum-of-squares — and
+// that a muted clip is outside both.
+
+console.log('\none waveform, not one per clip');
+{
+    const first = A.project.clips[0];
+    A.select(first);
+    A.setPlayhead(first.start + first.length * 0.4);
+    pump(120);
+    A.splitAtPlayhead();
+    pump(120);
+    const pair = A.project.clips.slice().sort((a, b) => a.start - b.start);
+    const a = pair[0], b = pair[1];
+
+    // Laid over each other on two tracks, covering exactly the same seconds:
+    // overlapping in time is the whole case, and tracks are how it is reached.
+    b.track = 1;
+    b.start = a.start;
+    b.length = a.length;
+    b.inPoint = a.inPoint;
+
+    // A flat -6 dBFS tone in both, so what comes out is checkable by hand.
+    const flat = (v) => ({
+        buckets: 8, duration: a.length,
+        min: new Array(8).fill(-v), max: new Array(8).fill(v),
+        rms: new Array(8).fill(v),
+    });
+    a.peaks = flat(0.5);
+    b.peaks = flat(0.5);
+    a.volume = 1; b.volume = 1;
+    a.muted = false; b.muted = false;
+
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(60);
+    const w = A.timeline.laneWidthPx();
+    const at = Math.round(A.timeline.timeToX(a.start + a.length * 0.5));
+
+    const both = A.timeline.mixColumns(w);
+    ok(both.mixed && !both.quiet.length, 'both clips are in the mix');
+    ok(Math.abs(both.hi[at] - 1.0) < 0.02,
+       `the envelope adds — two at 0.5 reach ${both.hi[at].toFixed(3)}, which is what ` +
+       'clipping is');
+    ok(Math.abs(both.lo[at] + 1.0) < 0.02,
+       `and downwards too (${both.lo[at].toFixed(3)})`);
+    ok(Math.abs(both.rms[at] - Math.SQRT1_2) < 0.02,
+       `the body is a root-sum-of-squares — two at 0.5 make ${both.rms[at].toFixed(3)}, ` +
+       'not 1.0, because power adds and amplitude does not');
+
+    // One clip alone, for the comparison that says the sum happened at all.
+    b.muted = true;
+    const one = A.timeline.mixColumns(w);
+    ok(one.quiet.length === 1, 'a muted clip is outside the mix');
+    ok(Math.abs(one.hi[at] - 0.5) < 0.02,
+       `so the envelope is one clip's again (${one.hi[at].toFixed(3)})`);
+    ok(one.hi[at] < both.hi[at] - 0.2,
+       'which is lower than the two of them together — the overlap was summed, not ' +
+       'painted over');
+
+    // Volume is part of the mix, because the mixer applies it before summing.
+    b.muted = false;
+    b.volume = 0.5;
+    const quieter = A.timeline.mixColumns(w);
+    ok(Math.abs(quieter.hi[at] - 0.75) < 0.02,
+       `a clip at half volume contributes half (${quieter.hi[at].toFixed(3)})`);
+
+    // Back to one clip, so everything after this is the timeline it was.
+    const whole = a.length + b.length;
+    A.select(b);
+    A.removeSelection();
+    pump(60);
+    a.track = 0;
+    a.start = 0;
+    a.length = whole;
+    a.inPoint = 0;
+    a.peaks = null;
+    a.volume = 1;
+    A.timeline.fitView();
+    A.select(a, 'auto');
+    A.setPlayhead(0);
+    pump(60);
+    ok(A.project.clips.length === 1, 'back to one clip');
+}
+
 // ── stacked tracks, opacity and selecting several clips ────────────────────
 
 console.log('\ntracks');

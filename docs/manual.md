@@ -434,7 +434,17 @@ suite stacks them:
   thing they are drawn on — a strip is a finished image with nothing left
   downstream to turn it.
 - **A1** the waveform — peak envelope over an RMS body, so you can see where
-  the sound is before you hear it.
+  the sound is before you hear it. **One waveform, not one per clip**: two
+  clips that overlap in time are one sound at that moment, and A1 draws what
+  the render will make of it rather than whichever of them was painted last.
+  The two halves are summed the way a mix is summed and not the same way as
+  each other — the envelope *adds*, because two sounds at once reach the sum of
+  their peaks and that is what clipping is, while the body is a
+  root-sum-of-squares, because power adds and amplitude does not: two
+  uncorrelated sounds at -6 dB make one at -3 rather than one at 0. A **muted**
+  clip is drawn on its own, dimmed, and is outside the sum — it is still there
+  and simply not being heard, so hiding it would make it hard to find again and
+  folding it in would draw sound the render will not write.
 
 Both come from `bro.media` (see bro's `docs/video-api.js`), which decodes the
 whole file through the same backend registry `<video>` plays through. Both are
@@ -2550,9 +2560,11 @@ Honest list of what does not work:
   decision about locking them, and there is nothing here that says — so the
   safe half is built and the other half needs a control before it can mean
   anything.
-- **One waveform for the whole timeline.** A1 draws every clip, so clips that
-  overlap in time draw over each other rather than mixing. With tracks stacked
-  it is the top one you see.
+- **A waveform in dB, with a line where clipping is.** A1 draws the mix now, so
+  two clips at once are one shape — but the scale is linear amplitude, which is
+  the wrong scale for judging loudness by eye, and nothing marks 0 dBFS. The
+  envelope already reaches the sum, so the information is there and only the
+  drawing of it is not.
 - **Finding things by sound.** Reviewing wildlife footage, the birds are
   audible long before anything is visible; nothing yet marks where a call
   happens so you can jump between them. bro has the parts — `bro.sense` for
