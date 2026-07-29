@@ -219,6 +219,74 @@ console.log('\na sequence plays like any other clip');
     pump(80);
 }
 
+// ── a sequence with a soundtrack ───────────────────────────────────────────
+//
+// Asserted end to end, through a real render, because the claim is precisely
+// that there is no arrangement here to inspect: a run of frames is a clip with
+// no sound, a sound-only file is a clip with no pictures, and the only thing
+// that says they go together is a file with both streams in it coming out the
+// other end. This was on the "Not yet" list, as two inputs the Write stage
+// could say and nothing joined up. It was wrong — nothing has to join them up,
+// which is why the check is here rather than a feature being somewhere.
+
+console.log('\na sequence takes a soundtrack from another clip');
+{
+    clearAll();
+    const soundOnly = `${fixtures}/sound.m4a`;
+    const probed = bro.ffmpeg.probe(soundOnly);
+    const haveSound = !!probed && !probed.error &&
+                      (probed.streams || []).some((s) => s.kind === 'audio');
+    if (!haveSound) {
+        console.log('  (no sound-only file beside the frames — this section is skipped)');
+    } else {
+        const seq = A.assemble.openables([frames])
+                     .find((it) => it.kind === 'sequence' && /shot_/.test(it.seq.pattern));
+        const input = A.inputs.addInput(Object.assign({}, seq.spec, {
+            options: { framerate: '6', start_number: String(seq.seq.start) },
+        }));
+        A.openInput(input);
+        pump(300);
+        A.openBatch([soundOnly]);
+        pump(500);
+
+        eq(A.project.clips.length, 2, 'the frames and the sound are two clips');
+
+        // Under, not after. A drop appends, and a soundtrack is the one thing
+        // that has to be at the same time as the pictures rather than next to
+        // them — which is a track, and is the whole of the arrangement.
+        const sc = A.project.clips.find((c) => /sound\.m4a$/.test(c.input.path));
+        ok(!!sc, 'and the sound-only file is one of them');
+        sc.track = 1;
+        sc.start = 0;
+        sc.length = 2;
+        A.resolveOverlaps(sc);
+        pump(200);
+
+        const spec = A.exporter.buildSpec();
+        spec.path = `${outDir}/uiseqsound.mp4`;
+        ok(spec.audio, 'the render claims a soundtrack');
+        eq(spec.clips.length, 2, 'and carries both clips into it');
+
+        let started = '';
+        try { bro.ffmpeg.render.start(spec); } catch (e) { started = String(e); }
+        ok(!started, `the renderer accepted it (${started || 'accepted'})`);
+        if (!started) {
+            waitFor('the sequence render', () => bro.ffmpeg.render.poll().state !== 'running',
+                    60000);
+            const st = bro.ffmpeg.render.poll();
+            ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+            if (st.state === 'done') {
+                const out = bro.ffmpeg.probe(spec.path);
+                const kinds = (out.streams || []).map((s) => s.kind).sort().join(',');
+                eq(kinds, 'audio,video', 'and the file has the pictures and the sound in it');
+                ok(Math.abs(out.format.duration - 2) < 0.3,
+                   `as long as the frames are (${out.format.duration.toFixed(2)} s)`);
+            }
+        }
+    }
+    clearAll();
+}
+
 // ── writing a run of files ─────────────────────────────────────────────────
 
 console.log('\nthe Write stage says what will be on disk');

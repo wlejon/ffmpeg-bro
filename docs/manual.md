@@ -417,6 +417,15 @@ number** (`-start_number`) is set out loud too, because `image2` looks for the f
 five numbers from zero and then gives up — a run beginning at 1000 is unopenable
 without it, and one beginning at 1 opens only by accident.
 
+**A sequence takes a soundtrack from the ordinary place**, which is another clip. A run
+of frames is a clip with pictures and no sound; a file with sound and no video is a clip
+with sound and no pictures; lay the second under the first and the render is the two of
+them, because that is what a track stack is for. There is nothing here about sequences:
+the composite is made of whichever clips have pictures and the mix of whichever have
+sound, neither knows what the other is, and a run of numbered frames is only a clip that
+answers one of those two questions. It is worth saying out loud because a sequence feels
+like the kind of input that would need an arrangement of its own, and it does not.
+
 **Named by** is `-pattern_type`, and the `pattern` half is offered where the build has
 it. This one does not: globbing is a compile-time feature of libavformat, reported as
 "Function not implemented" from `read_header` and from nowhere else, so it is asked by
@@ -2554,9 +2563,6 @@ Honest list of what does not work:
 - **`pattern_type=glob` on this build.** Globbing is compiled into libavformat or
   it is not, and this build's is not. The control says so instead of offering a
   pattern type that fails at open.
-- **A sound sequence.** An image sequence is pictures. Giving a run of frames a
-  separate soundtrack means two inputs and a `-map` per stream, which the Write
-  stage can say and nothing yet joins up.
 - **A live device on the timeline.** A device never ends, so nothing can be cut
   from it: there is no length for a clip to have and no seeking back to a
   moment that has gone. Forcing `-f dshow` on the Sources stage describes one
