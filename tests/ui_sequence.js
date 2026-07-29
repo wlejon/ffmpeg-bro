@@ -445,9 +445,15 @@ console.log('\nseveral files as one -i, and which concat that is');
 
     document.getElementById('src-join').click();
     pump(120);
-    const note = document.querySelector('#src-list .src-join-note');
-    ok(!!note, 'the join panel opens with what it is doing stated first');
-    ok(note.textContent.indexOf('before') > 0 && note.textContent.indexOf('timeline') > 0,
+    // Which of the three concats this is, said where it is offered — on the
+    // panel's own heading rather than as the four lines of prose above the
+    // ticks it used to be. The words still have to be there: three different
+    // things in this application are called concat and they are three different
+    // renders.
+    const note = document.querySelector('#src-list .section-head');
+    ok(!!note && note.textContent.indexOf('end to end') >= 0,
+       'the join panel opens saying what it is doing');
+    ok(note.title.indexOf('before') > 0 && note.title.indexOf('timeline') > 0,
        'saying that it reads the files before decoding, and where to go if that is wrong');
 
     const ticks = Array.from(document.querySelectorAll('#src-list [data-join]'));

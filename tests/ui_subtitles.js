@@ -177,7 +177,7 @@ ok(codecs.indexOf('subrip') < 0,
 // way an input is used without a clip being cut from it.
 A.shell.goTo('sources');
 pump(60);
-ok(el('src-list').textContent.indexOf('written into the output') >= 0,
+ok(el('src-list').textContent.indexOf('written') >= 0,
    'and the Sources card stops calling it unused');
 A.shell.goTo('write');
 pump(60);

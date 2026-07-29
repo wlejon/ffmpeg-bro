@@ -107,7 +107,8 @@ ok(Math.abs(clip.length - p.video.duration) < 0.01,
 // The Sources stage is the input editor now, and it is drawn into three
 // columns rather than one scroll. A drop makes an input; the detail column is
 // what that input turned out to contain.
-ok(el('src-detail').textContent.indexOf('Container') >= 0, 'the Sources stage read the input');
+ok(el('src-detail').textContent.indexOf('What came back') >= 0,
+   'the Sources stage read the input');
 ok(el('chips').textContent.length > 0, `chips: ${el('chips').textContent.replace(/\s+/g, ' ').trim()}`);
 ok(el('tc-duration').textContent !== '00:00:00:00',
    `duration timecode ${el('tc-duration').textContent}`);
@@ -382,7 +383,7 @@ if (second) {
         ok(list.indexOf(base(media)) >= 0 && list.indexOf(base(second)) >= 0,
            'both inputs are listed, whichever clip is selected');
         ok(A.inputs.inputs.length === 2, `two files dropped, two inputs (${A.inputs.inputs.length})`);
-        ok(el('src-detail').textContent.indexOf('Container') >= 0,
+        ok(el('src-detail').textContent.indexOf('What came back') >= 0,
            'and the one selected reads out what it contains');
     }
 

@@ -713,7 +713,15 @@ body.fs #cropbox { display: none; }
    column, which is where it used to be and where it was scrolled past every
    time — and now three columns rather than one scroll, because an input is
    something you *set* and not only something you read: the list, what this one
-   is, and the demuxer's own option table beside it. */
+   is, and the demuxer's own option table beside it.
+
+   **The middle column is labels, values and one primary button**, and getting
+   there was the same rework the Capture stage went through. It used to be
+   three hundred words of prose with the controls scattered among them: every
+   field carried the paragraph that justified it, `Use on the timeline` sat
+   mid-column at ordinary button weight, and the file's own streams — six rows
+   each — were below all of it. The sentences are `title`s on the controls they
+   are about now, and the argument is in docs/manual.md. */
 .src-bar {
     display: flex;
     align-items: center;
@@ -722,7 +730,6 @@ body.fs #cropbox { display: none; }
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
 }
-.src-bar .section-head { padding: 0; white-space: nowrap; }
 .src-bar input { flex: 1; min-width: 0; }
 
 .src-main {
@@ -739,12 +746,137 @@ body.fs #cropbox { display: none; }
     padding: 6px 0 16px;
     border-right: 1px solid var(--line);
 }
+/* The input, and the act pinned under it. */
+.src-mid {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
 .src-detail {
     flex: 1;
     min-width: 0;
     overflow-y: auto;
     min-height: 0;
     padding: 4px 12px 20px;
+}
+
+/* Nothing to select and nothing loaded, said as a state rather than as a
+   paragraph of dim text at the top of an otherwise blank column. */
+.src-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 24px 12px;
+    padding: 28px 12px;
+    border: 2px dashed var(--line);
+    border-radius: 6px;
+    text-align: center;
+}
+/* The column's own heading is a filename, which is the one heading in this
+   application that must not be set in caps. */
+.src-title {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: var(--fs-base);
+    font-weight: 600;
+}
+.src-empty-title { font-size: var(--fs-md); color: var(--text); }
+.src-empty-note { font-size: var(--fs-base); }
+
+/* One line stating something this stage cannot change, with the door to
+   whatever can. A device, a file of cues: each used to be answered with two
+   paragraphs, and a paragraph is not a door. Same shape as `.cap-strip`, for
+   the same reason. */
+.src-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 6px 12px;
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--panel);
+    font-size: var(--fs-sm);
+}
+.src-strip-k {
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-size: var(--fs-xs);
+    flex-shrink: 0;
+}
+.src-strip-v { flex: 1; min-width: 0; }
+
+/* What came back: one line for the container and one for each stream. */
+.src-file {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 12px 2px;
+    font-size: var(--fs-sm);
+}
+.src-file-name { font-size: var(--fs-base); font-weight: 600; }
+.src-stream {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 12px;
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+}
+.src-stream:hover { background: #1b1e25; }
+/* Which stream, in the terms the graph names one: `V0` is `[n:v]`'s first
+   video. Fixed width so a file with ten streams reads as a column. */
+.src-stream-n {
+    flex-shrink: 0;
+    width: 22px;
+    color: var(--accent);
+    font-family: Consolas, monospace;
+    font-size: var(--fs-xs);
+}
+.src-stream-what { flex: 1; min-width: 0; word-break: break-word; }
+
+/* The act. Pinned under the column for the reason the Record button is: this
+   is what the stage is for, and `tiny primary` was never a primary button —
+   the stylesheet only ever defined `.icon.primary`, so the one control that
+   matters here has been drawn at the weight of `Re-probe` since it was
+   written. */
+.src-foot {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+}
+.src-foot .spacer { flex: 1; }
+.src-foot:empty { display: none; }
+button.src-go {
+    height: 30px;
+    font-size: var(--fs-base);
+    font-weight: 600;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a1206;
+}
+button.src-go:hover:not(:disabled) { background: #ffa063; }
+button.src-go:disabled { background: var(--panel-hi); border-color: var(--line); color: var(--dim); }
+/* Why the button is dead, next to the button. */
+.src-why { color: var(--accent); font-size: var(--fs-sm); }
+/* The `subtitles=` argument, which is long and is not the point of its row. */
+.src-filter {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
 }
 
 /* One input in the list. The whole row is the target: an input is picked, not
@@ -757,6 +889,11 @@ body.fs #cropbox { display: none; }
 .src-row:hover { background: #1b1e25; }
 .src-row.on { background: #1e222b; border-left-color: var(--accent); }
 .src-row.bad .src-used { color: var(--bad); }
+/* What is being done with it, in the fewest words that are still true —
+   `unused`, `2 clips`, `recording`, `in the graph`. The long form is the
+   tooltip, because a card that has to explain itself is a card in a list of
+   twenty saying four different sentences. */
+.src-used { font-size: var(--fs-sm); flex-shrink: 0; }
 .src-head { display: flex; align-items: baseline; gap: 8px; }
 .src-name { font-size: 13px; font-weight: 600; }
 /* The path is what -i is handed, and the only thing telling two files with the
@@ -795,11 +932,6 @@ body.fs #cropbox { display: none; }
     word-break: break-word;
 }
 .src-missing { color: var(--bad); }
-
-/* Joining files into one -i. The note comes first and is not decoration: three
-   different things in this application are called concat, and which one this
-   is has to be said where it is offered. */
-.src-join-note { padding: 4px 0 8px; line-height: 1.4; }
 
 /* ── Capture ─────────────────────────────────────────────────────────────
    A device, what it can see, and the recording it becomes. Three columns, in

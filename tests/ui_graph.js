@@ -2075,9 +2075,9 @@ if (!media) {
         A.drawSources();
         pump(120);
         const card = document.querySelector(`#src-list [data-input="${inputId}"] .src-used`);
-        ok(card && /read by the graph/.test(card.textContent),
+        ok(card && /in the graph/.test(card.textContent),
            `the Sources card says the graph reads it: ${card ? card.textContent : 'no card'}`);
-        const remove = document.querySelector('#src-detail [data-f="srcremove"]');
+        const remove = document.querySelector('#src-foot [data-f="srcremove"]');
         ok(remove && remove.disabled,
            'and it cannot be removed out from under the node that names it');
 

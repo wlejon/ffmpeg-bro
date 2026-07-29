@@ -92,8 +92,22 @@ ok(A.project.clips.length === 0, 'and no clip — an input is not a clip');
 ok(!!input.probe, 'it was probed the moment it was added');
 ok(el('src-list').textContent.indexOf('unused') >= 0,
    'the list says it is unused rather than hiding it');
-ok(el('src-detail').textContent.indexOf('Container') >= 0,
+ok(el('src-detail').textContent.indexOf('What came back') >= 0,
    'and the panel reads out what it contains');
+// One line per stream, not six rows: the codec, and what that kind of stream is
+// described by. The rest — profile, language, pixel aspect — is on the line's
+// tooltip, because this readout is the one most often looked at on the stage
+// and it used to be forty rows on an ordinary camera file.
+{
+    const lines = qq('.src-stream');
+    ok(lines.length === input.probe.streams.length,
+       `one line per stream, ${lines.length} of them`);
+    const v = Array.from(lines).find((n) => n.textContent.indexOf('V0') === 0);
+    ok(!!v && v.textContent.indexOf(input.probe.video.codec) >= 0,
+       `the video line names its codec: ${v && v.textContent.replace(/\s+/g, ' ').trim()}`);
+    ok(v.title.indexOf(input.probe.video.codecLong || input.probe.video.codec) >= 0,
+       'and the long name is the tooltip rather than a row of its own');
+}
 
 // The spine states the stage, and what it states is the inputs — not the files
 // on the timeline, which is what it counted before there were inputs.
@@ -202,8 +216,12 @@ same(input.to, 3, '-to is what it stops at');
 const windowed = A.inputs.lengthOf(input);
 ok(Math.abs(windowed - 2) < 0.1,
    `so the input is two seconds long, not ${whole.toFixed(2)} (${windowed.toFixed(2)})`);
-ok(el('src-detail').textContent.indexOf('in-point') >= 0,
-   'and the panel says an input seek is not a clip’s in-point, where the two meet');
+// The sentence this stage exists to make sayable, on the field it is about
+// rather than as a paragraph under it: a stage states, a manual explains.
+ok(f('srcss').title.indexOf('in-point') >= 0,
+   'and the field itself says an input seek is not a clip’s in-point');
+ok(f('srcss').title.indexOf('-ss') >= 0,
+   'along with the flag it writes, which is no longer the label');
 
 // ── used on the timeline ───────────────────────────────────────────────────
 

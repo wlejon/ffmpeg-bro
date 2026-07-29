@@ -275,34 +275,55 @@ Three columns, in the order the questions come.
 
 **The list.** Every input, numbered the way `-i` numbers them, each saying where it
 comes from, what has been set on it in ffmpeg's own words (`-f matroska -probesize
-5000000 -ss 12`) and whether anything is cut from it. **Unused is a normal state and
-says so** rather than being hidden or collected — opening a file to see what is in it
-is a thing people do.
+5000000 -ss 12`) and what is being done with it — `unused`, `2 clips`, `recording`,
+`in the graph`, `written`. **Unused is a normal state and says so** rather than being
+hidden or collected: opening a file to see what is in it is a thing people do.
 
 **The input.** What it is:
 
-- **Path or URL.** Anything a protocol this build links can reach — `https`, `srt`,
-  `rtmp`, `udp`, `tcp`, thirty-six of them — and the panel says which protocol a URL
-  names and whether it is one of them, because a URL naming a protocol that is absent
-  otherwise fails at open with a message about a filename.
-- **Demuxer.** What it probed as, and a search over all three hundred and fifty to
-  force another. Searched rather than listed for the reason the muxer picker and the
-  filter palette are: there is no list of the good ones anywhere. `Probe it` hands the
-  choice back to libavformat.
-- **Window** — `-ss`, `-to`, `-itsoffset`, `-stream_loop`, named as ffmpeg names them
-  because that is
-  what they are and the command bar prints them a foot below. **An input seek is not a
-  clip's in-point**, and this is where the difference is legible: `-ss` moves the
-  input's zero, so the input becomes shorter and a clip is cut from what is left.
-  Trimming a clip picks a moment out of an input; `-ss` decides what the input is.
-  `-itsoffset` delays it, which is how a camera and a separately recorded soundtrack
-  are lined up. `-stream_loop` is the other half of the same question — how much of
-  this input there is — and `-1` is forever, which has no length at all.
-- **What came back** — container, duration, size, bitrate, and then every stream:
-  codec, profile, dimensions, frame rate, pixel format, colour tags, sample rate,
-  channel layout. Straight out of `probe()`, run **with the options in force**, so it
-  is the answer to "what did the thing I just set do" rather than a description of the
-  file as libavformat's defaults see it.
+- **From.** A path, or anything a protocol this build links can reach — `https`,
+  `srt`, `rtmp`, `udp`, `tcp`, thirty-six of them. A URL gets an **Over** row naming
+  its protocol and saying whether it is one of them, because a URL naming a protocol
+  that is absent otherwise fails at open with a message about a filename.
+- **Read as** — the demuxer. What it probed as, `Change…` for a search over all three
+  hundred and fifty, and `Auto` to hand the choice back to libavformat. Searched
+  rather than listed for the reason the muxer picker and the filter palette are:
+  there is no list of the good ones anywhere.
+- **Window** — **Start at**, **Stop at**, **Delay by**, **Repeat**. **An input seek
+  is not a clip's in-point**, and this is where the difference is legible: `-ss`
+  moves the input's zero, so the input becomes shorter and a clip is cut from what is
+  left. Trimming a clip picks a moment out of an input; Start at decides what the
+  input is. Delay by (`-itsoffset`) shifts every timestamp, which is how a camera and
+  a separately recorded soundtrack are lined up. Repeat (`-stream_loop`) is the other
+  half of the same question — how much of this input there is — and `-1` is forever,
+  which has no length at all, so a looping input is as long as Stop at says and no
+  longer.
+- **What came back** — the container on one line, then **one line per stream**:
+  `V0  h264  1920×1080 · 29.97 fps · yuv420p · bt709`. Everything else the probe
+  reported — profile, language, pixel aspect, colour range, per-stream duration — is
+  on that line's tooltip. Straight out of `probe()`, run **with the options in
+  force**, so it is the answer to "what did the thing I just set do" rather than a
+  description of the file as libavformat's defaults see it.
+
+**And under the column, the act.** `Use on the timeline`, pinned, with the reason
+beside it where it is dead — `A device has no end`, `One picture, no time at all`,
+`Never ends — set Stop at`, `Nothing to play`, `Will not open`. Those five mirror
+`openInput()` exactly, so the button is never alive and then refusing. `Re-probe` and
+`Remove` sit at the other end of the same bar; `Remove` says who is holding the input
+instead of going dead silently.
+
+**The stage states; this manual explains.** It did not always. `-ss`, `-to`,
+`-itsoffset`, `-stream_loop`, `-hwaccel`, `-framerate` and `-start_number` were the
+*labels* of the fields, each with the paragraph that justified it underneath — three
+hundred words with the controls scattered through them, `Use on the timeline` at the
+weight of an ordinary button somewhere in the middle, and the file's own streams (six
+rows each, forty rows on a camera file) below all of it. What is on screen now is a
+label, a value and a door; the sentence that was load-bearing is the tooltip of the
+control it is about, and the ffmpeg spelling with it. The exact line is a foot below
+in the command bar, which is the honest place for it. What stayed in ffmpeg's own
+words is the `-i` **number** on a list card, because the graph genuinely calls an
+input `[1:v]`, and the one-line summary under it, because "what is set on this input"
+is precisely a list of flags.
 
 **The options.** The demuxer's own table, out of its `AVClass` and libavformat's
 generic one, in the column the encoder's advanced options and the muxer's already use
@@ -362,30 +383,31 @@ So a logo sitting beside three hundred frames stays a file of its own, and a fol
 holding two sequences is two inputs.
 
 **A sequence has no frame rate.** Twelve pictures are twelve pictures; nothing on disk
-says how long each is on screen. `-framerate` is what decides, it is an *input option*,
-and the same files are one second or two depending only on it. `-start_number` is set
-out loud too, because `image2` looks for the first five numbers from zero and then
-gives up — a run beginning at 1000 is unopenable without it, and one beginning at 1
-opens only by accident.
+says how long each is on screen. **Rate** (`-framerate`) is what decides, it is an
+*input option*, and the same files are one second or two depending only on it. **First
+number** (`-start_number`) is set out loud too, because `image2` looks for the first
+five numbers from zero and then gives up — a run beginning at 1000 is unopenable
+without it, and one beginning at 1 opens only by accident.
 
-`-pattern_type glob` is offered where the build has it. This one does not: globbing is
-a compile-time feature of libavformat, reported as "Function not implemented" from
-`read_header` and from nowhere else, so it is asked by trying and the control says so
-rather than failing at open.
+**Named by** is `-pattern_type`, and the `pattern` half is offered where the build has
+it. This one does not: globbing is a compile-time feature of libavformat, reported as
+"Function not implemented" from `read_header` and from nowhere else, so it is asked by
+trying and the control is shown disabled with the reason rather than failing at open.
 
 **A still is a decision about how long it is.** A single picture is no time at all —
 libavformat says so, and bro's `<video>` agrees, because it drives its clock from
 decoded pictures and one picture is nothing to advance through. So a still is opened
 as `-loop 1` with a `-t`: the loop makes the input go on producing the same picture,
-and the `-t` is the only thing that can say how long it lasts. Five seconds to begin
-with, on the input, in ffmpeg's own words, where the command bar prints it and the
-Sources stage changes it. Take the loop away and the input has no length; the
-application says so and will not lay it out, rather than putting a clip of nothing on
-the timeline.
+and the `-t` is the only thing that can say how long it lasts. Both are **Hold for**,
+which is one field because they are one decision, and the command bar prints the pair
+of them in front of the `-i`. Take the loop away and the input has no length; the
+application says so — on the pinned bar, where the act it refuses is — rather than
+putting a clip of nothing on the timeline.
 
 **Several files as one input.** `Join…` writes a list file and adds it as
 `-f concat -safe 0`. **Three things here are called concat and they are not each
-other**, so the panel says which this is before it offers to do it:
+other**, so the panel is headed `Read end to end` and its tooltip says which this is
+before it offers to do it:
 
 | | |
 |---|---|
@@ -1729,8 +1751,8 @@ decode's wall clock; the decode itself is what is slow, because NVDEC is a
 throughput engine being asked for one frame at a time while libavcodec has
 thirty-two threads and frame-level parallelism. It is offered anyway — a laptop
 with four cores and a QSV block has different numbers, and it is the only way to
-feed a hardware filter graph without an upload — but the control says this where
-somebody is about to use it.
+feed a hardware filter graph without an upload — but the **Decode on** picker carries
+the measurement, so it is said on the control somebody is about to use.
 
 The encoder is the opposite answer. The same 1.6 s of output, rendered three
 ways at the source's own size:

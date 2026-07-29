@@ -144,14 +144,17 @@ same(offered.slice(1).join(','), canDecode.join(','),
 
 // The sentence. This is the assertion the whole chunk's honesty rests on: the
 // measurement says a hardware decode is slower here, and a control that offered
-// it silently would read as an optimisation.
-const detail = el('src-detail').textContent;
+// it silently would read as an optimisation. It is on the control itself rather
+// than in a paragraph under it — a stage states, a manual explains — so what is
+// asserted is that the picker carries it, not that the column contains a
+// sentence somewhere.
+const cost = q('[data-f="srchw"]').title;
 if (canDecode.length)
-    ok(detail.indexOf('Measured slower here than the CPU') >= 0,
-       'and the measured cost is stated beside it, not in a manual');
+    ok(cost.indexOf('Measured slower here than the CPU') >= 0,
+       'and the measured cost is stated on the picker itself, not in a manual');
 else
-    ok(detail.indexOf('on a device') >= 0,
-       'and with nothing able to decode it the panel says so rather than showing an empty menu');
+    ok(cost.indexOf('on a device') >= 0,
+       'and with nothing able to decode it the picker says so rather than offering an empty menu');
 
 if (canDecode.length) {
     const device = canDecode[0];

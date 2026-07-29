@@ -85,9 +85,9 @@
              own option table beside it — the same column the encoder's and the
              muxer's options get, from the same component. -->
         <div class="src-bar">
-            <span class="section-head">Add an input</span>
             <input id="src-path" class="wide" type="text"
-                   placeholder="a file path, or a URL &mdash; https://, srt://, udp://, rtmp://">
+                   placeholder="a file path, or a URL"
+                   title="Anything a protocol this build links can reach &mdash; https://, srt://, udp://, rtmp://, tcp://">
             <button id="src-add" class="tiny primary">Add</button>
             <!-- Several files as one `-i`, through the concat demuxer. Beside
                  Add because it makes an input in the same way, and never in a
@@ -95,11 +95,21 @@
                  filter, and two clips laid end to end on the timeline — are
                  different renders, and the one being offered has to say which
                  it is where it is offered. -->
-            <button id="src-join" class="tiny">Join…</button>
+            <button id="src-join" class="tiny"
+                    title="Read several files one after another as one -i, through the concat demuxer">Join…</button>
         </div>
         <div class="src-main">
             <div id="src-list" class="src-list"></div>
-            <div id="src-detail" class="src-detail"></div>
+            <!-- The input, and under it the act. Pinned rather than laid out
+                 among the rows for the reason the Record button is: `Use on the
+                 timeline` is what this stage is for, and it used to sit between
+                 the window fields and the stream readout at the weight of an
+                 ordinary control, scrolled past on any file with three streams
+                 in it. -->
+            <div class="src-mid">
+                <div id="src-detail" class="src-detail"></div>
+                <div id="src-foot" class="src-foot"></div>
+            </div>
             <div id="src-options" class="ex-col ex-right"></div>
         </div>
     </section>

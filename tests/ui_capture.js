@@ -582,9 +582,14 @@ console.log('\na live input cannot be laid on a timeline');
     // `-f dshow` by hand is a legitimate thing to do.
     q(`[data-input="${input.id}"]`).click();
     pump(150);
-    ok(text('#src-detail').indexOf('A device never ends') >= 0,
+    ok(text('#src-detail').indexOf('never ends') >= 0,
        'the Sources stage says what a device is rather than showing a file that will not open');
-    ok(text('#src-detail').indexOf('Capture stage') >= 0, 'and where to go instead');
+    // Where to go instead is a door rather than a sentence naming a stage, for
+    // the reason the Capture stage's graph strip carries one: telling somebody
+    // to go somewhere is worse than taking them.
+    ok(!!q('#src-detail [data-f="srcgocapture"]'), 'and offers the way there');
+    ok(q('#src-foot [data-f="srcuse"]').disabled,
+       'and the act is dead, with the reason beside it: ' + text('#src-foot'));
     A.inputs.removeInput(input);
     A.shell.goTo('capture');
     pump(150);

@@ -14,13 +14,47 @@
 //
 // Two things it is careful about, both of them the point of the stage:
 //
-//   - **An input seek is not a clip's in-point**, and the panel says so where
-//     the two are next to each other. `-ss` decides what the input *is*: its
-//     zero moves, its duration shrinks, and the clips cut from it are measured
-//     from there. Trimming a clip picks a moment out of an input.
+//   - **An input seek is not a clip's in-point.** `-ss` decides what the input
+//     *is*: its zero moves, its duration shrinks, and the clips cut from it are
+//     measured from there. Trimming a clip picks a moment out of an input.
 //   - **The probe is the answer to what the options just did.** It is re-run
 //     with the options in force, so the stream list under them is the file as
 //     this input opens it and not as libavformat's defaults see it.
+//
+// ── What this stage says, and what it stopped saying ───────────────────────
+//
+// Both of those used to be **paragraphs on the screen**, and so did nine more:
+// what a device is, what a sequence's frame rate means, which of the three
+// concats this one is, where a decoder option reaches, why hardware decoding is
+// usually slower here. Every one true, and together they were the stage — three
+// hundred words with the controls scattered through them, the primary action
+// (`Use on the timeline`) sitting mid-column at the weight of an ordinary
+// button, and the file's own streams pushed off the bottom by the prose
+// explaining the fields above them.
+//
+// The rule is the Capture stage's, arrived at the same way: **a stage states, a
+// manual explains.** What is on screen is a label, a value, and a door to
+// whatever would change it. A sentence that was load-bearing is a `title` on
+// the control it is about — where somebody looking at the control will find it
+// — and the argument lives in docs/manual.md and in these headers.
+//
+// The vocabulary went with it. `-ss`, `-to`, `-itsoffset`, `-stream_loop`,
+// `-hwaccel`, `-framerate` and `-start_number` were the *labels* of the fields,
+// which is a UI legible only to somebody who did not need it. They are **Start
+// at**, **Stop at**, **Delay by**, **Repeat**, **Decode on**, **Rate** and
+// **First number** now, each carrying its ffmpeg spelling in its tooltip — and
+// the exact line is a foot below in the command bar, which is the honest place
+// for it. What stayed in ffmpeg's own words is the `-i` **number** on a list
+// card, because the graph genuinely calls an input `[1:v]`, and the one-line
+// `summary()` under it, because "what is set on this input" is precisely a list
+// of flags and any translation of it would be a second answer.
+//
+// What it turned out to contain went from six rows a stream to **one line a
+// stream** — `V0  h264  1920×1080 · 29.97 fps · yuv420p · bt709` — with the
+// profile, the language, the colour range and the pixel aspect in its tooltip.
+// The rows were not wrong; a file with two video tracks and five soundtracks
+// was forty rows of them, and nothing in this stage is read as often as "what
+// is in this file".
 
 import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
@@ -140,8 +174,10 @@ function drawList() {
     put(refs.list, () => {
         if (!inputs.length)
             return [
-                div('dim pad', 'No inputs. Add a path or a URL above, or drop a file ' +
-                               'on the timeline.'),
+                div('src-empty', [
+                    div('src-empty-title', 'No inputs'),
+                    div('src-empty-note dim', 'Type a path above, or drop a file.'),
+                ]),
                 ...graphFileRows(),
             ];
         if (joinOpen) return joinRows();
@@ -158,7 +194,10 @@ function drawList() {
             // What is *set* on it, in ffmpeg's own words. An input carrying
             // nothing says nothing rather than saying "default", which would be
             // a row of noise on every card in the ordinary case.
-            node.querySelector('.src-set').textContent = summary(input);
+            const set = node.querySelector('.src-set');
+            set.textContent = summary(input);
+            set.title = 'What is set on this input, in ffmpeg’s own words — ' +
+                        'everything the command bar prints in front of its -i';
             // A file of cues is never cut into a clip and is used all the same
             // — by a stream row on the Write stage, or by a `subtitles=` node
             // burning it into the picture. Both are counted, because "unused"
@@ -174,12 +213,21 @@ function drawList() {
             // guessed from `kindOf`, because a `-f dshow` forced here by hand
             // is a device nothing is recording and should say so.
             const recorded = capture.inputs.indexOf(input.id) >= 0;
-            node.querySelector('.src-used').textContent =
+            const use = node.querySelector('.src-used');
+            use.textContent =
                 input.error ? 'unreadable'
                 : [used ? `${used} clip${used === 1 ? '' : 's'}` : '',
-                   recorded ? 'activated for a recording' : '',
-                   written ? 'written into the output' : '',
-                   inGraph ? 'read by the graph' : ''].filter(Boolean).join(' · ') || 'unused';
+                   recorded ? 'recording' : '',
+                   written ? 'written' : '',
+                   inGraph ? 'in the graph' : ''].filter(Boolean).join(' · ') || 'unused';
+            use.title =
+                input.error ? input.error
+                : [used ? `${used} clip${used === 1 ? ' is' : 's are'} cut from it` : '',
+                   recorded ? 'activated for a recording on the Capture stage' : '',
+                   written ? 'a stream row on the Write stage reads it' : '',
+                   inGraph ? 'a node on the Graph stage reads it' : '']
+                    .filter(Boolean).join('\n') ||
+                  'nothing is cut from it — which is an ordinary state';
             node.addEventListener('click', () => {
                 chosenId = input.id;
                 demuxerOpen = false;
@@ -221,11 +269,12 @@ function graphFileRows() {
     const nodes = graph.nodes().filter((n) => n.filter === 'movie' || n.filter === 'amovie');
     if (!nodes.length) return [];
     return [
-        head('Opened by the graph'),
-        div('src-join-note dim',
-            'A movie filter opens its file inside libavfilter, so nothing above reaches it: ' +
-            'no forced demuxer, no -probesize, no window, no probe. Added as an input it ' +
-            'gets all of them, and the graph can read it as [n:v] instead.'),
+        head('Opened by the graph', {
+            title: 'A movie filter opens its file inside libavfilter, so nothing on this ' +
+                   'stage reaches it: no forced demuxer, no -probesize, no window, no probe. ' +
+                   'Added as an input it gets all of them, and the graph can read it as ' +
+                   '[n:v] instead.',
+        }),
         ...nodes.map((n) => {
             const named = (n.params && n.params.filename) || (n.pos && n.pos[0]) || '';
             const path = unescapePath(named);
@@ -233,7 +282,7 @@ function graphFileRows() {
                 span(n.filter, 'mono'),
                 span(path || 'no file named yet', path ? 'dim' : 'src-missing'),
                 path ? el('button', {
-                    cls: 'tiny', 'data-f': 'srcadopt', text: 'Add as an input',
+                    cls: 'tiny', 'data-f': 'srcadopt', text: 'Add',
                     title: 'Open it as an -i, with a demuxer, options and a window',
                     on: { click: () => {
                         const made = addInput(typedSpec(path));
@@ -263,11 +312,18 @@ function joinRows() {
         candidates.filter((i) => joining.has(i.id)).map((i) => i.path);
 
     const rows = [
-        div('src-join-note dim',
-            'The concat demuxer reads these files one after another as a single -i, before ' +
-            'anything is decoded — so they have to be encoded compatibly. To join clips ' +
-            'that are not, lay them end to end on the timeline instead; that is an edit ' +
-            'and goes through the compositor.'),
+        // Three different things in this application are called concat and they
+        // are three different renders. Which one this is has to be sayable
+        // where it is offered — as a tooltip on the heading rather than the
+        // four lines of prose it was, because the panel is a list of ticks and
+        // a paragraph above them is the thing nobody reads.
+        head('Read end to end', {
+            title: 'The concat demuxer reads these files one after another as a single -i, ' +
+                   'before anything is decoded — so they have to be encoded compatibly.\n\n' +
+                   'The concat filter joins decoded streams inside the graph and does not ' +
+                   'care what they were.\n\nTwo clips laid end to end on the timeline is ' +
+                   'neither: that is an edit, and it goes through the compositor.',
+        }),
         ...candidates.map((input) => el('button', {
             cls: 'src-demuxer tiny' + (joining.has(input.id) ? ' on' : ''),
             'data-join': input.id,
@@ -284,11 +340,12 @@ function joinRows() {
     ];
 
     if (!candidates.length)
-        rows.push(div('dim pad', 'Nothing to join yet — add two files above.'));
+        rows.push(div('dim pad', 'Add two files first.'));
 
     rows.push(div('src-actions', [
         el('button', {
-            cls: 'tiny primary', 'data-f': 'srcjoingo', text: 'Join as one -i',
+            cls: 'tiny primary', 'data-f': 'srcjoingo', text: 'Join',
+            title: 'Write a concat list and add it as one input',
             disabled: chosenPaths().length < 2,
             on: { click: () => {
                 const made = addInput(concatSpec(chosenPaths()));
@@ -313,24 +370,31 @@ function joinRows() {
 function drawDetail() {
     const input = chosen();
     show(refs.options, !!input);
+    // Nothing at all, rather than a second empty state: `chosen()` falls back to
+    // the first input, so this is reachable only when the list is empty — and
+    // the list is already saying so, in the column that owns the question.
     if (!input) {
-        put(refs.detail, () => div('dim pad',
-            'Nothing selected. An input is one `-i`: a file or a URL, a demuxer, ' +
-            'its options and the part of it you want.'));
+        put(refs.detail, () => []);
         put(refs.options, () => []);
+        put(refs.foot, () => []);
         return;
     }
 
     put(refs.detail, () => [
-        head(input.name),
+        // The filename as it is written, not shouted: `.section-head` sets its
+        // text in caps, which is right for `WINDOW` and wrong for
+        // `MY_HOLIDAY_CLIP_FINAL_2.MP4`.
+        head(input.name, { cls: 'section-head src-title', title: input.path }),
         ...whereRows(input),
         ...demuxerRows(input),
         ...assemblyRows(input),
         ...decodeRows(input),
         ...windowRows(input),
-        ...actionRows(input),
         ...contentRows(input),
     ]);
+
+    // The act, pinned under the column rather than laid out among the rows.
+    put(refs.foot, () => footRows(input));
 
     // The demuxer's own option table, beside the input rather than under it,
     // for the reason the encoder's and the muxer's are: mp4's demuxer has
@@ -339,26 +403,50 @@ function drawDetail() {
     put(refs.options, () => optionRows(input));
 }
 
+/// One line stating a fact this stage cannot change, with the door to whatever
+/// can. The Capture stage's `.cap-strip` in the Sources vocabulary, and it
+/// exists for the same reason: the two inputs that are not a clip and never
+/// will be — a device, a file of cues — were each answered with two paragraphs
+/// naming the stage to go to, and a paragraph is not a door.
+function strip(key, text, why, door) {
+    return div('src-strip', [
+        span(key, 'src-strip-k'),
+        el('span', { cls: 'src-strip-v dim', text, title: why || '' }),
+        door || null,
+    ]);
+}
+
+const doorTo = (label, stage, why) => el('button', {
+    cls: 'tiny', 'data-f': `srcgo${stage}`, text: label, title: why,
+    on: { click: () => goTo(stage) },
+});
+
 /// Where it comes from, and what is answering for that.
 function whereRows(input) {
     const path = el('input', {
         cls: 'wide', 'data-f': 'srcpath', type: 'text', value: input.path,
+        title: 'What -i is handed, exactly as written',
         on: { change: () => change(input, { path: path.value.trim() }) },
     });
-    const rows = [row('Path or URL', path)];
+    const rows = [row('From', path)];
 
     const scheme = schemeOf(input.path);
     const protocols = (bro.ffmpeg.protocols && bro.ffmpeg.protocols.input) || [];
+    // Only for a URL. "Protocol: file" under every path on the machine is a row
+    // that has never once been the answer to anything.
     if (scheme) {
         // A URL naming a protocol this build does not have fails at open with a
         // message about a filename, which is the least helpful place to find
         // out. Every protocol here is one `avio_enum_protocols` reported.
         const known = protocols.indexOf(scheme) >= 0;
-        rows.push(row('Protocol', span(
-            known ? `${scheme} · linked in` : `${scheme} · not in this build`,
-            known ? 'mono' : 'mono src-missing')));
-    } else if (input.path) {
-        rows.push(row('Protocol', span('file', 'mono dim')));
+        rows.push(row('Over', el('span', {
+            cls: known ? 'mono' : 'mono src-missing',
+            text: known ? scheme : `${scheme} — not in this build`,
+            title: known
+                ? `libavformat links ${scheme}, one of ${protocols.length} input protocols`
+                : `This build has no ${scheme} protocol, so the open fails with a message ` +
+                  'about a filename',
+        })));
     }
     return rows;
 }
@@ -366,22 +454,27 @@ function whereRows(input) {
 /// What it probed as, and what it can be forced to.
 function demuxerRows(input) {
     const probed = input.probe ? input.probe.format.name : '';
-    const rows = [row('Demuxer', div('src-demux', [
-        span(input.format ? `-f ${input.format}` : (probed || 'not read yet'),
-             input.format ? 'mono' : 'mono dim'),
+    const rows = [row('Read as', div('src-demux', [
+        el('span', {
+            cls: input.format ? 'mono' : 'mono dim',
+            text: input.format || probed || 'not read yet',
+            title: input.format
+                ? `-f ${input.format} — forced, so libavformat is not asked`
+                : 'Probed: libavformat worked it out from the file itself',
+        }),
         el('button', {
             cls: 'tiny', 'data-f': 'demuxpick',
-            text: demuxerOpen ? 'Close' : 'Force…',
+            text: demuxerOpen ? 'Close' : 'Change…',
+            title: `Force one of the ${(bro.ffmpeg.demuxers || []).length} demuxers this ` +
+                   'build has, which is what -f means in front of an -i',
             on: { click: () => { demuxerOpen = !demuxerOpen; drawSources(); } },
         }),
         input.format && el('button', {
-            cls: 'tiny', 'data-f': 'demuxprobe', text: 'Probe it',
+            cls: 'tiny', 'data-f': 'demuxprobe', text: 'Auto',
+            title: 'Hand the choice back to libavformat',
             on: { click: () => change(input, { format: '' }) },
         }),
     ]))];
-
-    if (!input.format && probed)
-        rows.push(row('', span('probed — libavformat worked it out from the file', 'dim')));
 
     if (demuxerOpen) rows.push(demuxerPicker(input));
     return rows;
@@ -419,7 +512,7 @@ function demuxerPicker(input) {
 
     const search = el('input', {
         cls: 'wide', 'data-f': 'demuxsearch', type: 'text', value: demuxerSearch,
-        placeholder: `name, description or extension — ${(bro.ffmpeg.demuxers || []).length} of them`,
+        placeholder: `name, description or extension`,
         on: { input: () => { demuxerSearch = search.value; draw(); } },
     });
     draw();
@@ -446,6 +539,10 @@ function optionField(input, key, opts = {}) {
         cls: opts.wide ? 'wide' : 'num', 'data-f': opts.name || key, type: 'text',
         value: input.options[key] !== undefined ? String(input.options[key]) : '',
         placeholder: opts.hint || '',
+        // The ffmpeg name of the key, and what it decides, on the control it is
+        // about — the row is labelled in words now, and the word is not the
+        // spelling the command bar prints.
+        title: opts.title || `-${key}`,
         on: { change: () => {
             const next = Object.assign({}, input.options);
             const v = field.value.trim();
@@ -485,30 +582,32 @@ function subtitleRows(input) {
         .map((s) => `${s.index}: ${s.codec}${s.language ? ` (${s.language})` : ''}`);
     return [
         head('Subtitles'),
-        div('src-note dim',
-            'A file of cues. It is an ordinary -i — the demuxer, its options and -ss all ' +
-            'reach it — but there is no picture to lay out and no sound to mix, so nothing ' +
-            'is cut from it on the timeline.'),
         row('Tracks', span(cues.join(' · ') || 'none libavformat could read', 'mono')),
-        div('src-note dim',
-            'Two things can be done with it, and each belongs where the decision is taken. ' +
-            'Add a subtitle stream on the Write stage and it travels beside the picture as ' +
-            'a track a player can turn off — carried through as it is, or converted into ' +
-            'what the container holds. Or burn it into the picture with a subtitles filter ' +
-            'on the Graph stage, which makes it part of the image and works in any ' +
-            'container.'),
-        row('As a filter', span(`subtitles=${filterPath(input.path)}`, 'mono')),
-        div('src-actions', el('button', {
-            cls: 'tiny', 'data-f': 'srcburn', text: 'Burn it into the picture',
-            title: 'Put a subtitles filter on the whole canvas, after compositing',
-            on: { click: () => burnIn(input) },
-        })),
-        div('src-note dim',
-            'That places an ordinary node on the graph, at the point where the whole canvas ' +
-            'is — nothing private, nothing this stage keeps to itself. The colon in a drive ' +
-            'letter is escaped and the path is quoted because a filtergraph separates a ' +
-            'filter’s arguments with colons and its filters with commas, which is a trap ' +
-            'whose error message names half a path and never mentions the colon.'),
+        // The two homes, as two doors rather than as the two paragraphs that
+        // named them. Each is a decision taken somewhere else, and telling
+        // somebody to go there is worse than taking them.
+        strip('Cues', 'no picture and no sound — nothing to lay out',
+              'A file of cues is an ordinary -i: the demuxer, its options and Start at all ' +
+              'reach it. What it cannot be is a clip.\n\n' +
+              'Two things can be done with it. A subtitle stream on the Write stage travels ' +
+              'beside the picture as a track a player can turn off. A subtitles filter on ' +
+              'the Graph stage burns it into the image, which works in any container.',
+              doorTo('Write', 'write', 'Carry it as a track the player can turn off')),
+        row('Burn in', div('src-demux', [
+            el('span', {
+                cls: 'mono dim src-filter', text: `subtitles=${filterPath(input.path)}`,
+                title: 'The colon in a drive letter is escaped and the path quoted because ' +
+                       'a filtergraph separates a filter’s arguments with colons and its ' +
+                       'filters with commas',
+            }),
+            el('button', {
+                cls: 'tiny', 'data-f': 'srcburn', text: 'Place it',
+                title: 'Put an ordinary subtitles node on the graph, on the whole canvas ' +
+                       'after compositing — movable, configurable and deletable there like ' +
+                       'any other',
+                on: { click: () => burnIn(input) },
+            }),
+        ])),
     ];
 }
 
@@ -544,15 +643,13 @@ function burnIn(input) {
 /// to go instead.
 function deviceRows(input) {
     return [
-        head('Device'),
-        row('Demuxer', span(`-f ${input.format} · libavdevice`, 'mono')),
-        row('', span(
-            'A device never ends, so nothing can be cut from it: there is no length for a ' +
-            'clip to have and no way to seek back to a moment that has already gone. That is ' +
-            'not a gap in this stage — it is what a live input is.', 'dim')),
-        row('', span(
-            'The Capture stage is where one is watched and recorded. What it writes is a ' +
-            'file, and a file is an input like any other.', 'src-missing')),
+        strip('Live', 'never ends, so nothing can be cut from it',
+              'A device has no length for a clip to have and no way to seek back to a ' +
+              'moment that has already gone. That is not a gap in this stage — it is what ' +
+              'a live input is.\n\n' +
+              'The Capture stage is where one is watched and recorded. What it writes is a ' +
+              'file, and a file is an input like any other.',
+              doorTo('Capture', 'capture', 'Watch it, and record it into a file')),
     ];
 }
 
@@ -562,38 +659,42 @@ function sequenceRows(input) {
     const rows = [head('Image sequence')];
 
     if (seq && seq.count) {
-        rows.push(row('Frames', span(
-            `${seq.count} on disk, ${seq.start}…${seq.end}`, 'mono')));
+        rows.push(row('Frames', span(`${seq.count} · ${seq.start}…${seq.end}`, 'mono')));
         // A gap is reported and never closed. image2 stops at the first
         // missing number, so a run of three hundred with twelve absent is not
         // three hundred frames — and a length nothing will render is worse
-        // than a number that looks short.
+        // than a number that looks short. Stays on the screen rather than
+        // going into a tooltip: it is a refusal, not an explanation.
         if (seq.missing)
-            rows.push(row('', span(
-                `${seq.missing} number${seq.missing === 1 ? ' is' : 's are'} missing between ` +
-                `${seq.start} and ${seq.end} — image2 stops at the first gap, so this ` +
-                'sequence ends there', 'src-missing')));
+            rows.push(row('', el('span', {
+                cls: 'src-missing',
+                text: `${seq.missing} missing — the sequence ends at the first gap`,
+                title: `${seq.missing} number${seq.missing === 1 ? ' is' : 's are'} missing ` +
+                       `between ${seq.start} and ${seq.end}. image2 stops at the first gap, ` +
+                       'so this input is shorter than the files on disk.',
+            })));
     }
 
     // **The rate of a sequence is an input option, not a property of the
     // files.** Twelve pictures are twelve pictures; how long each is on screen
     // is a decision, and the same files are one second or two depending only
-    // on this. It is the single most important sentence on this stage.
-    rows.push(row('-framerate', optionField(input, 'framerate', {
-        name: 'seqfps', hint: String(SEQUENCE_FPS),
-    })));
-    rows.push(row('', span(
-        'A sequence has no frame rate of its own — nothing on disk says how long each ' +
-        'picture is on screen. This is what decides it, and it is an input option: the ' +
-        'same files are one second or two depending only on what is here.', 'dim')));
+    // on this — which is the sentence this stage most has to be able to say.
+    rows.push(row('Rate', [
+        optionField(input, 'framerate', {
+            name: 'seqfps', hint: String(SEQUENCE_FPS),
+            title: '-framerate — a sequence has no frame rate of its own; nothing on disk ' +
+                   'says how long each picture is on screen. The same files are one second ' +
+                   'or two depending only on this.',
+        }),
+        span('fps', 'dim'),
+    ]));
 
-    rows.push(row('-start_number', optionField(input, 'start_number', {
+    rows.push(row('First number', optionField(input, 'start_number', {
         name: 'seqstart', hint: '0',
+        title: '-start_number — which number the run begins at. image2 looks for the first ' +
+               'five from zero and then gives up, so a run beginning at 1000 is unopenable ' +
+               'without it, and one beginning at 1 opens only by accident.',
     })));
-    rows.push(row('', span(
-        'Which number the run begins at. image2 looks for the first five numbers from ' +
-        'zero and then gives up, so a run beginning at 1000 is unopenable without it — ' +
-        'and one beginning at 1 opens only by accident.', 'dim')));
 
     // `pattern_type` is the demuxer's own option and its values are the
     // demuxer's own; whether `glob` *works* is a compile-time fact about this
@@ -601,22 +702,22 @@ function sequenceRows(input) {
     // by trying. Offering it where it cannot work would be offering something
     // that fails at open with a sentence about a file.
     const pattern = input.options.pattern_type || 'sequence';
-    rows.push(row('-pattern_type', div('src-demux', [
+    rows.push(row('Named by', div('src-demux', [
         segmented('src-pattern', [
-            { v: 'sequence', l: 'sequence', title: 'A number in the name — %04d' },
-            { v: 'glob', l: 'glob', disabled: !bro.ffmpeg.globPatterns,
-              title: bro.ffmpeg.globPatterns ? 'A shell pattern — frame*.png'
-                                             : 'This build has no globbing' },
+            { v: 'sequence', l: 'number', title: 'pattern_type sequence — a number in the ' +
+                                                 'name, %04d' },
+            { v: 'glob', l: 'pattern', disabled: !bro.ffmpeg.globPatterns,
+              title: bro.ffmpeg.globPatterns
+                  ? 'pattern_type glob — a shell pattern, frame*.png'
+                  : 'This build of libavformat was compiled without globbing, so ' +
+                    'pattern_type=glob is refused at open. Numbered patterns are ' +
+                    'unaffected.' },
         ], pattern, (id) => {
             const next = Object.assign({}, input.options);
             if (id === 'sequence') delete next.pattern_type; else next.pattern_type = id;
             change(input, { options: next });
         }),
     ])));
-    if (!bro.ffmpeg.globPatterns)
-        rows.push(row('', span(
-            'This build of libavformat was compiled without globbing, so pattern_type=glob ' +
-            'is refused at open. Numbered patterns are unaffected.', 'dim')));
     return rows;
 }
 
@@ -626,7 +727,11 @@ function stillRows(input) {
     const seconds = el('input', {
         cls: 'num', 'data-f': 'stillhold', type: 'text',
         value: input.to ? String(input.to) : '',
-        placeholder: 'seconds',
+        placeholder: '0',
+        title: '-loop 1 with a -t. A still has no duration of its own — it is a decision, ' +
+               'not a fact. The loop makes the input go on producing the same picture and ' +
+               'this is the only thing that can say how long it lasts; either without the ' +
+               'other is a clip that cannot be laid out.',
         on: { change: () => {
             // The hold is `-loop 1` and `-t` together, so setting one sets
             // both: a `-t` on an input that does not loop is a window on one
@@ -640,19 +745,17 @@ function stillRows(input) {
 
     return [
         head('Still'),
-        row('Hold for', seconds),
-        row('', span(
-            'A still has no duration of its own — it is a decision, not a fact. -loop 1 ' +
-            'makes the input go on producing the same picture forever and -t is the only ' +
-            'thing that can say how long it is; either without the other is a clip that ' +
-            'cannot be laid out.', 'dim')),
-        row('-framerate', optionField(input, 'framerate', {
-            name: 'stillfps', hint: String(SEQUENCE_FPS),
-        })),
-        held ? null : row('', span(
-            'Not looping: this input is one picture and no time at all. bro’s <video> ' +
-            'drives its clock from decoded pictures, so there is nothing here for it to ' +
-            'advance through — set a hold above.', 'src-missing')),
+        row('Hold for', [seconds, span('s', 'dim')]),
+        row('Rate', [
+            optionField(input, 'framerate', {
+                name: 'stillfps', hint: String(SEQUENCE_FPS),
+                title: '-framerate — how many times a second the held picture is produced',
+            }),
+            span('fps', 'dim'),
+        ]),
+        // Not looping is a refusal and it is `blocked()`'s to make: the bar
+        // under this column states it, and it is pinned, so a second copy here
+        // is the same sentence twice in one glance.
     ].filter(Boolean);
 }
 
@@ -660,22 +763,23 @@ function stillRows(input) {
 function concatRows(input) {
     const parts = input.parts || [];
     return [
-        head('Concat list'),
-        row('Files', span(String(parts.length || '—'), 'mono')),
+        // The distinction this application exists to make legible, on the
+        // heading because all three are reachable from here and they are three
+        // different renders.
+        head('Read end to end', {
+            title: 'The concat demuxer reads these files as one input, before any decoding, ' +
+                   'and wants them encoded compatibly.\n\nThe concat filter joins decoded ' +
+                   'streams inside the graph and does not care what they were.\n\nTwo clips ' +
+                   'laid end to end on the timeline is neither — that is an edit, and it ' +
+                   'goes through the compositor.',
+        }),
         ...parts.map((p, i) => row(String(i), span(p, 'mono dim'))),
-        row('List', span(input.path, 'mono dim')),
-        // The distinction this application exists to make legible. All three
-        // are reachable from here and they are three different renders.
-        row('', span(
-            'The concat *demuxer* reads these files as one input, before any decoding, ' +
-            'and wants them encoded compatibly. The concat *filter* joins decoded streams ' +
-            'inside the graph and does not care what they were. Two clips laid end to end ' +
-            'on the timeline is neither — that is an edit, and it goes through the ' +
-            'compositor.', 'dim')),
-        row('', span(
-            'Each entry carries its own duration, because without one the demuxer reports ' +
-            'no length at all until something has read to the end of the last file.',
-            'dim')),
+        row('List', el('span', {
+            cls: 'mono dim', text: input.path,
+            title: 'Each entry carries its own duration, because without one the demuxer ' +
+                   'reports no length at all until something has read to the end of the ' +
+                   'last file.',
+        })),
     ];
 }
 
@@ -697,6 +801,12 @@ function concatRows(input) {
 /// laptop with four cores and a QSV block has different ones — and because it is
 /// the only way to feed a hardware filter graph without an upload.
 function decodeRows(input) {
+    // Nothing to say about an input with no pictures in it. `-hwaccel`
+    // configures a video decoder, so "Decode on: CPU" over a file of cues or a
+    // soundtrack is a control that has never once been the answer to anything.
+    // Asked of the probe, so an input that has not been read yet still gets it.
+    if (input.probe && !input.probe.video) return [];
+
     const codec = input.probe && input.probe.video && input.probe.video.codec;
     const usable = devicesFor(input);
     const rows = [head('Decoding')];
@@ -708,6 +818,13 @@ function decodeRows(input) {
         .concat(usable.map((d) => ({ id: d.name, label: d.name })));
     const picker = select({
         'data-f': 'srchw',
+        // The cost, measured, on the control that offers it. Every application
+        // with a "hardware acceleration" switch reads as offering an
+        // optimisation, and on this machine it is several times slower.
+        title: usable.length
+            ? `-hwaccel. ${decodeCost}`
+            : codec ? `-hwaccel. Nothing on this machine decodes ${codec} on a device.`
+                    : '-hwaccel. Nothing on this machine has a decoder for this input.',
         on: { change: () => change(input, {
             hwaccel: picker.value,
             // The output format goes with the device that named it. Left
@@ -717,23 +834,17 @@ function decodeRows(input) {
             hwaccelOutputFormat: '',
         }) },
     }, choices, input.hwaccel || '');
-    rows.push(row('-hwaccel', picker));
-
-    if (!usable.length)
-        rows.push(row('', span(
-            codec ? `Nothing on this machine decodes ${codec} on a device.`
-                  : 'Nothing on this machine has a decoder for this input.', 'dim')));
-    else
-        rows.push(row('', span(decodeCost, 'dim')));
+    rows.push(row('Decode on', picker));
 
     if (input.hwaccel) {
         const dev = deviceNamed(input.hwaccel);
         const which = el('input', {
             cls: 'num', 'data-f': 'srchwdev', type: 'text', value: input.hwaccelDevice || '',
-            placeholder: 'the default one',
+            placeholder: 'the default',
+            title: '-hwaccel_device — which of them, where there is more than one',
             on: { change: () => change(input, { hwaccelDevice: which.value.trim() }) },
         });
-        rows.push(row('-hwaccel_device', which));
+        rows.push(row('Which one', which));
         // The second decision, and the one that decides whether a render can
         // keep the picture on the card at all. Off, every frame comes down as
         // it is decoded, which is what the compositor, a software filter and
@@ -744,75 +855,108 @@ function decodeRows(input) {
         // "the default with a thing switched on": bringing the picture down and
         // leaving it up are two different renders, and the second one is what
         // the value of `-hwaccel_output_format` literally is.
-        rows.push(row('-hwaccel_output_format', segmented('srchwkeep', [
-            { v: '', l: 'bring them down' },
-            { v: dev ? dev.pixelFormat : '', l: `leave them on the card` },
+        rows.push(row('Pictures', segmented('srchwkeep', [
+            { v: '', l: 'bring down',
+              title: 'Every frame comes down as it is decoded, which is what the ' +
+                     'compositor, a software filter and the viewer all need' },
+            { v: dev ? dev.pixelFormat : '', l: 'keep on the card',
+              title: `-hwaccel_output_format. Only ${input.hwaccel}'s own filters, or an ` +
+                     'hwdownload, can read them — the compositor and the viewer cannot, so ' +
+                     'a clip on the timeline goes black. It is what lets a render reach a ' +
+                     'hardware encoder without a copy.' },
         ], input.hwaccelOutputFormat || '',
             (v) => change(input, { hwaccelOutputFormat: v }))));
-        rows.push(row('', span(
-            'Leave the pictures on the card. Only ' +
-            `${input.hwaccel}'s own filters, or an hwdownload, can read them — the ` +
-            'compositor and the viewer cannot, so a clip on the timeline goes black. ' +
-            'It is what lets a render reach a hardware encoder without a copy.',
-            'dim')));
     }
     return rows;
 }
 
 function windowRows(input) {
-    const number = (name, key, value, hint) => {
+    // A field, its unit, and the ffmpeg name of the key it writes. The unit is
+    // beside the box rather than in the label because the label is now a word
+    // — "Start at 1" is a number of nothing in particular, and every one of
+    // these used to be labelled with the flag that said what it was.
+    const number = (name, key, value, hint, why, unit) => {
         const field = el('input', {
             cls: 'num', 'data-f': name, type: 'text', value: value ? String(value) : '',
-            placeholder: hint,
+            placeholder: hint, title: why,
             on: { change: () => change(input, { [key]: Number(field.value) || 0 }) },
         });
-        return field;
+        return [field, span(unit || 's', 'dim')];
     };
 
     const len = lengthOf(input);
     return [
-        head('Window'),
-        // Named as ffmpeg names them, because that is what they are and the
-        // command bar prints them a foot below this.
-        row('-ss', number('srcss', 'ss', input.ss, 'start of the file')),
-        row('-to', number('srcto', 'to', input.to, 'end of the file')),
-        row('-itsoffset', number('srcoffset', 'itsoffset', input.itsoffset, '0')),
-        // The sentence this stage exists to make sayable. A clip's in-point and
-        // an input's `-ss` are both "start later" and they are not the same
-        // decision: one picks a moment out of an input, the other decides what
-        // the input is.
-        row('', span('An input seek is not a clip’s in-point: -ss moves this input’s zero, ' +
-                     'so it is what a clip is cut *from*. -itsoffset delays it, which is how ' +
-                     'a camera and a separate recorder are lined up.', 'dim')),
+        head('Window', { title: 'Which part of this input there is. Everything here is ' +
+                                'settled while the file is being opened, and the command ' +
+                                'bar prints all of it in front of the -i.' }),
+        // The sentence this stage exists to make sayable, on the field it is
+        // about. A clip's in-point and an input's `-ss` are both "start later"
+        // and they are not the same decision: one picks a moment out of an
+        // input, the other decides what the input is.
+        row('Start at', number('srcss', 'ss', input.ss, '0',
+            '-ss. An input seek is not a clip’s in-point: this moves the input’s zero, so ' +
+            'it is what a clip is cut *from*. Trimming a clip picks a moment out of an ' +
+            'input; this decides what the input is.')),
+        row('Stop at', number('srcto', 'to', input.to, 'the end',
+            '-to. Where the input stops, on its own clock.')),
+        row('Delay by', number('srcoffset', 'itsoffset', input.itsoffset, '0',
+            '-itsoffset. Shifts every timestamp, which is how a camera and a separately ' +
+            'recorded soundtrack are lined up.')),
         // `-stream_loop` is the one thing here libavformat has never heard of:
         // ffmpeg's own CLI implements it by seeking the input back to the
         // start and shifting every timestamp forward, and so does this
         // binary's `InputLoop`. It belongs beside the window because it is the
         // other half of the same question — how much of this input there is.
-        row('-stream_loop', number('srcloop', 'streamLoop', input.streamLoop, '0')),
-        row('', span('How many more times to read this input after the first. -1 is forever, ' +
-                     'and forever has no length — so an input that loops is as long as -to ' +
-                     'says and no longer.', 'dim')),
-        len ? row('Length', span(
-            `${clock(len)} of input` + (endless(input) ? ' — because -to says so' : ''),
-            'mono')) : null,
-        !len && endless(input) ? row('', span(
-            'This input never ends and nothing says how long it is, so there is nothing to ' +
-            'lay out. Set -to above.', 'src-missing')) : null,
+        row('Repeat', number('srcloop', 'streamLoop', input.streamLoop, '0',
+            '-stream_loop. How many more times to read this input after the first. -1 is ' +
+            'forever, and forever has no length — so an input that loops is as long as ' +
+            'Stop at says and no longer.', '× more')),
+        len ? row('Length', el('span', {
+            cls: 'mono', text: clock(len),
+            title: endless(input) ? 'This input never ends — Stop at is what gives it a length'
+                                  : 'What is left after the window',
+        })) : null,
+        // An input with no length is `blocked()`'s to refuse, in the bar under
+        // this column — which is pinned, and says the same words. It was said
+        // here as well, and two copies of one sentence in one glance is what
+        // this rework was about.
     ].filter(Boolean);
 }
 
-function actionRows(input) {
+/// The act, and where it cannot be performed the reason it cannot.
+///
+/// **`blocked()` mirrors `openInput()` in app.js exactly**, which is the rule
+/// the Capture stage's record bar follows for the same reason: a button that is
+/// alive and then refuses is a button that has told you nothing, and a button
+/// that is dead for a reason the model does not hold is worse. Both sides state
+/// the same three ways an input can have no length, in the same order.
+function blocked(input) {
+    if (input.error || !input.probe) return 'Will not open';
+    const p = input.probe;
+    if (!p.video && !p.audio) return 'Nothing to play';
+    if (lengthOf(input) <= 0)
+        return kindOf(input) === 'device' ? 'A device has no end'
+             : endless(input) ? 'Never ends — set Stop at'
+             : 'One picture, no time at all';
+    return '';
+}
+
+function footRows(input) {
     const used = hooks.clipsOf ? hooks.clipsOf(input) : [];
     const inGraph = graphReads().has(input.id);
-    return [row('', div('src-actions', [
+    const why = blocked(input);
+    return [
         el('button', {
-            cls: 'tiny primary', 'data-f': 'srcuse', text: 'Use on the timeline',
-            disabled: !input.probe,
+            cls: 'src-go', 'data-f': 'srcuse', text: 'Use on the timeline',
+            disabled: !!why,
+            title: why || 'Cut a clip of the whole window and lay it on the timeline',
             on: { click: () => { if (hooks.use) hooks.use(input); } },
         }),
+        why ? el('span', { cls: 'src-why', text: why, title: whyAt(input, why) }) : null,
+        div('spacer'),
         el('button', {
             cls: 'tiny', 'data-f': 'srcreopen', text: 'Re-probe',
+            title: 'Open it again with exactly what it says now',
             on: { click: () => { reprobe(input); reopened(input); } },
         }),
         el('button', {
@@ -831,7 +975,19 @@ function actionRows(input) {
                 drawSources();
             } },
         }),
-    ]))];
+    ];
+}
+
+/// What to do about it, for the four things `blocked()` can say.
+function whyAt(input, why) {
+    if (why === 'Will not open') return input.error || 'Nothing came back from the probe';
+    if (why === 'Nothing to play')
+        return 'No picture to lay out and no sound to mix. A file of cues travels as a ' +
+               'stream on the Write stage, or is burned in by a filter on the Graph stage.';
+    if (why === 'A device has no end')
+        return 'A clip is an in-point and a length, and a live input has neither. Record it ' +
+               'on the Capture stage, and the recording is a file.';
+    return why;
 }
 
 /// The demuxer's options, and the protocol's when the path is a URL.
@@ -847,12 +1003,13 @@ function optionRows(input) {
         out.push(...optionColumn({
             name: 'demuxoptsearch',
             title: `${demuxer} options · ${all.length}`,
-            note: 'What this demuxer takes beyond its defaults, out of its own option table ' +
-                  'and libavformat’s generic one. An unknown key stops the open rather than ' +
-                  'being ignored.',
+            // No prose above the search box, for the reason the Capture stage's
+            // column has none: what it said is what the empty-search line
+            // already says, and three of these columns stacked was a screen of
+            // paragraphs with the tables underneath them.
             options: all,
             bag: input.options,
-            hint: 'Anything set here is passed straight to the demuxer.',
+            hint: 'An unknown key stops the open rather than being ignored.',
             onChange: () => { reprobe(input); reopened(input); },
         }));
     }
@@ -874,12 +1031,9 @@ function optionRows(input) {
         out.push(...optionColumn({
             name: `decoptsearch-${codec}`,
             title: `${codec} decoder options · ${all.length}`,
-            note: 'What the decoder reading this input takes — `skip_frame`, ' +
-                  '`skip_loop_filter`, `thread_type`, `lowres`. These reach playback and ' +
-                  'the render alike, because both open this input’s decoders the same way.',
             options: all,
             bag: input.decoderOptions,
-            hint: 'Anything set here is passed straight to the decoder.',
+            hint: 'These reach playback and the render alike.',
             // Through `reprobe` even though the probe itself will say the same
             // thing: what it also does is re-register the input for playback,
             // and the token is the only route an option has into the `<video>`
@@ -895,12 +1049,9 @@ function optionRows(input) {
             out.push(...optionColumn({
                 name: 'protooptsearch',
                 title: `${scheme} options · ${all.length}`,
-                note: 'The protocol’s own — timeouts, certificates, buffer sizes. They travel ' +
-                      'in the same bag as the demuxer’s, which is what libavformat does with ' +
-                      'what it does not recognise.',
                 options: all,
                 bag: input.options,
-                hint: 'Anything set here is passed straight to the protocol.',
+                hint: 'Timeouts, certificates, buffer sizes.',
                 onChange: () => { reprobe(input); reopened(input); },
             }));
     }
@@ -954,56 +1105,83 @@ function reopened(input) {
 
 function contentRows(input) {
     if (input.error)
-        return [head('What came back'),
-                div('src-error', input.error),
-                div('dim', 'The demuxer, the options and the window above are what this ' +
-                           'input is opened with. Change one and it is tried again.')];
+        return [
+            head('Refused', {
+                title: 'The demuxer, the options and the window above are what this input ' +
+                       'is opened with. Change one and it is tried again.',
+            }),
+            div('src-error', input.error),
+        ];
     if (!input.probe) return [];
     return fileRows(input.probe);
 }
 
+/// What came back, in as many lines as there are streams plus one.
+///
+/// It was six rows a stream and six for the container — forty rows for an
+/// ordinary camera file with two soundtracks, and the readout most often looked
+/// at on this stage was the one you had to scroll for. Nothing is dropped: what
+/// is not on the line is on the line's tooltip, which is where a pixel aspect
+/// ratio of 1.0000 belongs.
 function fileRows(p) {
     return [
-        head('Container'),
-        row('Format', p.format.longName || p.format.name),
-        row('Name', span(p.format.name, 'mono')),
-        row('Duration', clock(p.format.duration)),
-        row('Size', bytes(p.format.size)),
-        row('Bitrate', p.format.bitRate ? kbps(p.format.bitRate) : '—'),
-        row('Streams', String(p.streams.length)),
-        ...p.streams.map(streamRows),
+        head('What came back', { title: 'Probed with the options above in force, so this ' +
+                                        'is the file as this input opens it' }),
+        div('src-file', [
+            el('span', { cls: 'mono src-file-name', text: p.format.name,
+                         title: p.format.longName || p.format.name }),
+            // Each fact only where there is one. A device reports no duration
+            // and no size, and `00:00:00 · —` beside a screen grabber reads as
+            // a broken file rather than as a live input.
+            span([p.format.duration ? clock(p.format.duration) : '',
+                  p.format.size ? bytes(p.format.size) : '',
+                  p.format.bitRate ? kbps(p.format.bitRate) : ''].filter(Boolean).join(' · '),
+                 'dim'),
+        ]),
+        ...p.streams.map(streamLine),
     ];
 }
 
-/// One stream, in the terms that stream is described in. Kept verbatim from
-/// probe(): "Untagged" and "BT.601" are different facts, and this is the screen
-/// where the difference is the point.
-function streamRows(s) {
-    const rows = [
-        head(`${s.kind} #${s.index}` + (s.language ? ` · ${s.language}` : '')),
-        row('Codec', s.codecLong || s.codec),
-        s.profile && row('Profile', s.profile),
-        s.duration && row('Duration', s.duration.toFixed(3) + ' s'),
-    ];
+/// One stream, on one line, in the terms that stream is described in.
+///
+/// Kept verbatim from `probe()`: "untagged" and "bt601" are different facts,
+/// and this is the screen where the difference is the point — which is why the
+/// colour tag is on the line itself and the pixel format beside it, while the
+/// profile and the language are in the tooltip.
+function streamLine(s) {
+    const kind = s.kind === 'video' ? 'V' : s.kind === 'audio' ? 'A' : 'S';
+    const bits = [];
+    const more = [s.codecLong || s.codec];
     if (s.kind === 'video') {
-        rows.push(row('Size', `${s.width}×${s.height}` +
-            (s.rotation ? ` → ${s.displayWidth}×${s.displayHeight} (${s.rotation}°)` : '')));
-        rows.push(row('Frame rate', s.fps ? s.fps.toFixed(3) + ' fps' : '—'));
-        rows.push(row('Pixels', s.pixFmt || '—'));
-        if (s.sampleAspect && Math.abs(s.sampleAspect - 1) > 0.001)
-            rows.push(row('Pixel AR', s.sampleAspect.toFixed(4)));
+        bits.push(`${s.width}×${s.height}` +
+                  (s.rotation ? ` → ${s.displayWidth}×${s.displayHeight}` : ''));
+        if (s.fps) bits.push(`${s.fps.toFixed(2)} fps`);
+        if (s.pixFmt) bits.push(s.pixFmt);
         // What the render has to convert out of, and the reason the filtergraph
         // can be written faithfully at all — worth 13 dB, and invisible
         // everywhere else in the application.
-        if (s.colorSpace || s.colorRange)
-            rows.push(row('Colour', [s.colorSpace || 'untagged',
-                                     s.colorRange || 'range untagged'].join(' · ')));
+        if (s.colorSpace || s.colorRange) {
+            bits.push(s.colorSpace || 'untagged');
+            more.push(`colour ${s.colorSpace || 'untagged'} · ` +
+                      `${s.colorRange || 'range untagged'}`);
+        }
+        if (s.rotation) more.push(`rotated ${s.rotation}°`);
+        if (s.sampleAspect && Math.abs(s.sampleAspect - 1) > 0.001)
+            more.push(`pixel aspect ${s.sampleAspect.toFixed(4)}`);
     } else if (s.kind === 'audio') {
-        rows.push(row('Rate', s.sampleRate + ' Hz'));
-        rows.push(row('Channels', `${s.channels} (${s.channelLayout || 'unknown'})`));
-        rows.push(row('Samples', s.sampleFmt || '—'));
+        bits.push(`${s.sampleRate} Hz`);
+        bits.push(s.channelLayout || `${s.channels} ch`);
+        if (s.sampleFmt) more.push(`samples ${s.sampleFmt}`);
     }
-    if (s.bitRate) rows.push(row('Bitrate', kbps(s.bitRate)));
-    if (s.title) rows.push(row('Title', s.title));
-    return rows;
+    if (s.bitRate) bits.push(kbps(s.bitRate));
+    if (s.profile) more.push(`profile ${s.profile}`);
+    if (s.language) more.push(s.language);
+    if (s.title) more.push(s.title);
+    if (s.duration) more.push(`${s.duration.toFixed(3)} s`);
+
+    return el('div', { cls: 'src-stream', title: more.join('\n') }, [
+        span(`${kind}${s.index}`, 'src-stream-n'),
+        span(s.codec, 'mono'),
+        span(bits.join(' · '), 'src-stream-what dim'),
+    ]);
 }

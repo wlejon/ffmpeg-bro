@@ -89,6 +89,7 @@ viewer.initViewer({ stage, viewer: viewerEl });
 initSources({
     list: el('src-list'),
     detail: el('src-detail'),
+    foot: el('src-foot'),
     options: el('src-options'),
     add: el('src-add'),
     addPath: el('src-path'),
