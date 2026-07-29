@@ -1426,10 +1426,6 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
     border-left: 1px solid var(--line);
 }
 .ex-verdict .section-head { padding-left: 0; padding-right: 0; }
-/* Two versions aimed at one path. Not a `dim` note: it is the one thing on the
-   Also-write list that costs a whole encode and throws it away, so it reads in
-   the colour the warnings list uses rather than in the colour of an aside. */
-.ex-clash { color: var(--accent); }
 .ex-warnings { padding: 6px 0; }
 .ex-warnings .warn { color: var(--accent); font-size: var(--fs-base); line-height: 1.7; }
 .ex-verdict .ex-foot { border: 0; background: none; padding: 8px 0 0; justify-content: flex-end; }
