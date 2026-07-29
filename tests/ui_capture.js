@@ -375,6 +375,71 @@ console.log('\nthe command two inputs come to');
        'and what the muxer takes is named, because the graph labelled it');
 }
 
+console.log('\na recording can write an output of its own');
+{
+    // The reason this exists: video out is where a *render* of the timeline
+    // ends too, and one pad cannot be both the timeline's composite and the
+    // cameras'. So the cameras get an output to themselves and the recording
+    // is pointed at it — which is `-map`, and nothing about the composition.
+    const ov = A.graph.overlay;
+    const stack = ov.nodes().find((n) => n.filter === 'hstack');
+    same(qa('[data-f="capvpad"]').length, 0,
+         'with no outputs of its own the graph offers no choice, so there is no picker');
+
+    const own = ov.addOutput('v');
+    ov.unwire('out:v', 0);
+    ov.wire(stack.id, 0, own.id, 0);
+    pump(200);
+
+    const picker = q('[data-f="capvpad"]');
+    ok(!!picker, 'placing one puts the choice on the stage');
+    same(picker.options.length, 2, 'video out, and the output that was placed');
+
+    // Until it is picked, the recording still writes video out — which nothing
+    // reaches now, and it says so rather than quietly following the wire.
+    const before = cap.graphOf();
+    ok(before && !before.ok, 'the recording still writes video out, which is now unfed');
+    ok(/outputs of its own/.test(before.reason),
+       `and the refusal points at the choice: ${before.reason}`);
+
+    picker.value = own.id;
+    picker.dispatchEvent(new Event('change'));
+    pump(200);
+    same(cap.capture.videoPad, own.id, 'picked, the recording writes that end instead');
+
+    const g = cap.graphOf();
+    ok(g && g.ok, 'and it runs');
+    ok(g.filterGraph.indexOf('hstack=inputs=2') >= 0, 'the same graph the Graph stage holds');
+    // Relabelled, not renamed on the stage: a recording is its own invocation
+    // with its own muxer, and `resolvePads` maps [vout].
+    ok(g.filterGraph.indexOf('[vout]') >= 0,
+       'ending in the label the writer maps rather than in the name it has on the stage');
+    same(g.filterGraph.indexOf(`[${own.name}]`), -1, 'so [out2] is nowhere in what runs');
+    same(g.video, 'vout', 'which is what the spec maps');
+    ok(cap.ready(), 'and the button is live');
+
+    // The whole point of the choice, stated where a person would see it: with
+    // the cameras off video out, the *render* has its composite back. Before
+    // this, wiring them there said the render's picture was the cameras and the
+    // spine said so — a true complaint, and one there was no way to answer.
+    const spine = q('#spine [data-stage="graph"]').textContent;
+    same(spine.indexOf('nothing reads'), -1,
+         `and the render has video out to itself again — the spine no longer complains: ${
+             spine.replace(/\s+/g, ' ').trim()}`);
+    screenshot('out/ui-capture-pad.png');
+
+    // Deleting it out from under the recording is an ordinary gesture on the
+    // other stage, and nothing there knows this one was pointed at it.
+    ov.removeInsert(own.id);
+    pump(200);
+    same(cap.capture.videoPad, '', 'deleting it drops the recording back to video out');
+    same(qa('[data-f="capvpad"]').length, 0, 'and the choice goes with it');
+
+    ov.wire(stack.id, 0, 'out:v', 0);
+    pump(200);
+    ok(cap.graphOf().ok, 'wired back to video out, it runs as before');
+}
+
 console.log('\nrecording a session of two devices');
 {
     // Paced, for the reason capture_test.cpp paces its sessions: a lavfi input

@@ -134,38 +134,49 @@ list, and placing it there gives a node that can be wired, checked against
 libavfilter's own pad lists and previewed at any point. Keeping the field as well
 would have meant two descriptions of one recording and no rule about which wins.
 
-**A recording runs the part of the graph its devices feed.** Not a graph of its own —
-there is one document and one editor for it — and not the whole graph either, since
-most of what is on that stage is usually about the timeline. So the walk starts at
-the input nodes that are this recording's `-i`s, takes everything downstream, and
-takes back whatever else feeds those nodes. Three consequences:
+**A recording writes the pads it names, and runs the part of the graph that produces
+them.** That is ffmpeg's own rule — an invocation maps some labels and libavfilter
+runs whatever those labels need — so the walk starts at the sinks the recording writes
+and goes *up*. Not a graph of its own, since there is one document and one editor for
+it; not the whole graph either, since most of what is on that stage is usually about
+the timeline. Three consequences:
 
 - A **generator** comes with it and a **file** does not. A `testsrc` overlaid on a
   camera is fine — a filter with no inputs makes its own frames, and nothing has to
   pull one. A file is refused by name, because a recording's graph is *pushed*: a
   device frame goes in and whatever falls out of the sinks is what there is, and
   there is nobody to ask a file for its next frame.
-- A **named output** is not the recording's. `out2` is a pad a stream on the Write
-  stage asks for, and a recording writes its own file with its own muxer, so those
-  branches are left out rather than refused — one graph can feed a render and a
-  recording without either being an error.
+- The **ends it did not name** cost nothing to ignore. Walking upwards cannot reach a
+  sink, so a branch leaving by some other output is simply not in the recording —
+  which is why the walk runs this way round. One graph feeds a render and a recording
+  without either being an error.
 - The pads are **renumbered**. The graph numbers `-i`s in the order nodes were
   placed; a recording numbers them in the order its cards are in, because that order
   is the one the engine opens the devices in.
+
+**Which pads?** By default video out and sound out, because that is where a person
+wires something when the graph has only one end. But those two are also where a
+*render* of the timeline ends, and one pad cannot be both the timeline's composite and
+the cameras' — wiring two cameras into video out is not a statement about recordings,
+it is a statement about what this graph's picture is, and the composite is then
+feeding nothing. So place an output of your own on the Graph stage, wire the cameras
+to that, and pick it under **Picture from** on the Capture stage. The picker appears
+only once the graph has an output of its own; until then there is nothing to choose
+and a control with one option is a statement dressed as a question.
+
+That choice is a `-map` and nothing more. The composition is still described once, on
+the Graph stage, and the pad is remembered by identity rather than by name, so
+renaming an output moves the recording with it. Whatever it is called there, the chain
+comes out ending in `[vout]`: a recording is its own invocation with its own muxer,
+and that is the label the writer maps. Delete the output and the recording drops back
+to video out — the panel says what it is mapped as now, which is the whole of what
+changed.
 
 The Capture stage shows the chains that will run, one per line, and it is the same
 text the command bar prints from the same call. A graph that will not run says so
 there, in the words the Graph stage uses against the node it is about, and the Record
 button is dead until it does — and the command bar prints no `-filter_complex` at
 all, because a line that cannot be run is not one to offer for copying.
-
-**There is one video out, and a recording and a render both end at it.** Wiring two
-cameras into video out is not a statement about recordings, it is a statement about
-what this graph's picture is — so the render's composite is then feeding nothing, and
-the Graph stage says exactly that. It is a true complaint rather than a side effect
-to be suppressed: unwire it and the timeline has its output back. Giving a recording
-a pad of its own means the named outputs the Graph stage already has, which is in
-[Not yet](#not-yet) below.
 
 **A region is dragged, not typed.** Drag a box on an input's picture and it becomes
 `-offset_x`, `-offset_y` and `-video_size` — that input's own demuxer options, in the
@@ -606,6 +617,40 @@ that costs said plainly and an offer to make it an `-i` instead. Two things to
 know if you do: nothing on the Sources stage reaches it, and a path with a drive
 letter in it has to have its colon escaped (`C\:/logo.png`) because a colon
 separates filter arguments.
+
+### An end of your own
+
+`video out` and `sound out` are the derivation's two ends, and a render maps them
+because they are the render's picture and its soundtrack. A graph can have more ends
+than that. **Drag forwards out of an output pad** and the palette leads with *an
+output* — the forward analogue of dragging backwards for a file or a generator, and
+the one answer to "where does this go" that is not another filter. It lands wired and
+already named, and the name is editable the moment it arrives, because the panel is
+showing the node you just made. `out2`, `out3` — not `out1`, because `vout` and `aout`
+are the derivation's own names for the composite and the mix, so the first one anybody
+adds is the second thing this render writes.
+
+The name is the whole of it: it becomes the pad label the chain feeding it is printed
+with.
+
+What that buys is that something can ask for the pad by name. A stream on the Write
+stage is fed from `pad:<label>`, so a second video stream at a different crop is an
+`overlay` branch ending in an output of its own and a row that names it — and a
+recording writes one, which is above under [Capture](#capture). Rename it and
+everything reading it moves with it; the identity is the node, and the name is what
+ffmpeg reads.
+
+It is a pad label, so the rules are ffmpeg's and each is refused on the node: letters,
+digits and underscores only, because a filtergraph reads anything else as the end of
+the name; not `vout` or `aout`, which would leave nothing to say which pad the
+render's own picture comes out of; not the same name twice, which ffmpeg rejects as
+*Label found twice*; and not fed straight from an `-i`, because `[1:v]` is a demuxer's
+stream with no chain to put a label on the end of — one `null` in between is enough.
+
+**Video out may then be left empty.** Once an output of that kind is fed, a graph
+whose whole picture leaves by name is a legitimate graph and the stage stops asking
+for the composite's pad. The stream list on the Write stage is where it is decided
+what actually gets written.
 
 ### When it will not run
 
@@ -1919,6 +1964,16 @@ from the other direction. Clearing the graph is the third state and the commones
 `recordGraph` answers null, which is not a broken graph, and one device is written as
 it comes.
 
+Which pad the recording writes is followed through the whole gesture. With no output
+of its own the graph offers no choice and there is **no picker** at all; placing one
+and moving the `hstack` onto it puts a two-option picker on the stage, and until it is
+picked the recording still writes the now-unfed video out and says so — the refusal
+naming the choice rather than quietly following the wire. Picked, the same chain runs
+and comes out ending in `[vout]` with the name it has on the stage appearing **nowhere**
+in what runs, which is the relabelling asserted rather than assumed. Deleting the
+output from the Graph stage drops the recording back to video out and takes the picker
+with it, because nothing on that stage knows a recording was pointed at it.
+
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
 against specs written out by hand — including the edits it must refuse rather than
@@ -2185,14 +2240,12 @@ Honest list of what does not work:
   per-node preview is the shape of the answer and it is about the render's
   graph, not the recording's. So a picture-in-picture is judged by its numbers
   and then by playing back the take.
-- **A named output on a recording.** The Graph stage can place one and a stream
-  on the Write stage can be fed from it, but a recording writes one file with its
-  own muxer and no stream list of its own, so those branches are left out of the
-  walk rather than mapped. What a recording maps is video out and sound out —
-  which is also what a *render* maps, so a graph that ends a camera at video out
-  has said the render's picture is that camera. Both would be answered by the
-  same thing: a recording choosing which pad it takes, the way a stream on the
-  Write stage already does with `pad:<label>`.
+- **More than one file out of one recording.** A recording writes one muxer, so it
+  maps one picture and one sound. The graph can end in half a dozen pads and the
+  Write stage can feed a stream from each of them, but that is a render's stream
+  list and a recording has none — recording the cameras to one file while a
+  cropped copy goes to another means running the session twice. `-f tee` in the
+  destination field is the near answer and it writes the *same* encode to both.
 - **A file beside a device on the same graph.** A capture's graph is fed by its
   devices and by nothing else, at both ends of the seam: the walk that builds it
   refuses a file input by name, and `filterInputs` — which says which *file*

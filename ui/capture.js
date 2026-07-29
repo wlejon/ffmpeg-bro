@@ -102,7 +102,7 @@ import { schemeOf, protocolLinked } from './export/destination.js';
 import { changed as projectChanged } from './project.js';
 import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
          asInput as inputSpec } from './inputs.js';
-import { recordGraph } from './graph/record.js';
+import { recordGraph, recordPads } from './graph/record.js';
 import { current as overlayState, onChange as overlayChanged } from './graph/overlay.js';
 
 let refs = {};
@@ -125,6 +125,16 @@ export const capture = {
     videoCodec: '',         // empty asks the muxer for its default
     audioCodec: '',
     quality: 23,
+    /// Which end of the graph this recording writes, as an overlay sink id per
+    /// stream — empty being the derivation's own video out and sound out.
+    ///
+    /// **A pad and not a filtergraph**, which is the distinction that keeps
+    /// this stage out of the composition business: the graph says what the
+    /// picture *is*, and this says which of its ends this file gets. Held by id
+    /// rather than by name so that renaming an output on the Graph stage does
+    /// not silently point the recording somewhere else.
+    videoPad: '',
+    audioPad: '',
 };
 
 /// Which card the left column and the option column are editing.
@@ -181,9 +191,27 @@ export function initCapture(nodes, h) {
     // frame of that drag.
     overlayChanged((what) => {
         if (what === 'pin' || what === 'size') return;
+        forgetLostPads();
         drawCapture();
         if (hooks.changed) hooks.changed();
     });
+}
+
+/// An output this recording was writing that is not on the stage any more.
+///
+/// Deleting a node is an ordinary gesture on the Graph stage and nothing there
+/// knows a recording is pointed at one, so the pick is dropped back to the
+/// derivation's own end here. **Silently, and that is deliberate**: the panel
+/// redraws saying what it is mapped as now, which is the whole of what changed,
+/// and a message about it would be a message about a stage the person is not
+/// looking at. `recordGraph` still refuses a pick it cannot find — this is the
+/// state getting tidied, not the state being checked.
+function forgetLostPads() {
+    const pads = recordPads(overlayState());
+    if (capture.videoPad && !pads.v.some((p) => p.id === capture.videoPad))
+        capture.videoPad = '';
+    if (capture.audioPad && !pads.a.some((p) => p.id === capture.audioPad))
+        capture.audioPad = '';
 }
 
 function defaultPath() {
@@ -274,7 +302,8 @@ export function asInputs() {
 /// on another stage and a copy here would be a copy that goes stale the moment
 /// a wire moves.
 export function graphOf() {
-    return recordGraph(capture.inputs, overlayState());
+    return recordGraph(capture.inputs, overlayState(),
+                       { v: capture.videoPad, a: capture.audioPad });
 }
 
 /// Is this recording ready to start? There has to be at least one device, each
@@ -906,13 +935,18 @@ function drawGraph() {
                   'To crop a screen grab to one monitor, or to put a camera in the corner ' +
                   'of it, place it on the Graph stage: it is in the source list there like ' +
                   'any other -i.', 'dim')));
+            // No picker here even where the graph has ends of its own: nothing
+            // it holds reads these devices, so every one of them would be a
+            // choice that leads straight to a refusal.
             return out;
         }
+        const pads = padRows();
         if (!g.ok) {
             out.push(row('', span(`This will not run: ${g.reason}`, 'warn')));
             out.push(row('', span(
                 'The graph is edited on the Graph stage, which draws the same problem ' +
                 'against the node it is about.', 'dim')));
+            out.push(...pads);
             return out;
         }
 
@@ -926,8 +960,49 @@ function drawGraph() {
             `input${capture.inputs.length === 1 ? '' : 's'}, and mapped as ` +
             [g.video && `[${g.video}]`, g.audio && `[${g.audio}]`].filter(Boolean).join(' + ') +
             '.', 'dim')));
+        out.push(...pads);
         return out;
     });
+}
+
+/// Which end of the graph this recording writes — where there is a choice.
+///
+/// **Absent until the graph offers one**, which is the same rule the region
+/// fields and the CRF field follow: a control with one option is a statement
+/// dressed as a question. A graph whose only ends are the derivation's own is
+/// the ordinary case and the pickers would say nothing there.
+///
+/// The choice exists because video out is where a *render* ends too. One pad
+/// cannot be both the timeline's composite and the cameras' — wiring the
+/// cameras into it leaves the composite feeding nothing, which the Graph stage
+/// correctly complains about — so a recording that wants its own picture places
+/// an output of its own and writes that instead. It is `-map [out2]` and
+/// nothing more; the composition is still described once, on the Graph stage.
+function padRows() {
+    const pads = recordPads(overlayState());
+    if (pads.v.length < 2 && pads.a.length < 2) return [];
+    const pick = (stream) => {
+        const list = pads[stream];
+        const now = stream === 'v' ? capture.videoPad : capture.audioPad;
+        return el('select', {
+            cls: 'wide', 'data-f': stream === 'v' ? 'capvpad' : 'capapad',
+            on: { change: (e) => {
+                if (stream === 'v') capture.videoPad = e.target.value;
+                else capture.audioPad = e.target.value;
+                redraw();
+            } },
+        }, list.map((p) => el('option', {
+            value: p.id, text: p.label, selected: p.id === now,
+        })));
+    };
+    const rows = [];
+    if (pads.v.length > 1) rows.push(row('Picture from', pick('v')));
+    if (pads.a.length > 1) rows.push(row('Sound from', pick('a')));
+    rows.push(row('', span(
+        'This graph has outputs of its own. A recording writes one end of it, and video ' +
+        'out is where a render of the timeline ends as well — give the cameras an output ' +
+        'to themselves and the two stop competing for it.', 'dim')));
+    return rows;
 }
 
 // ── the file ───────────────────────────────────────────────────────────────

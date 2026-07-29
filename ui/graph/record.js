@@ -8,13 +8,21 @@
 // place to describe a composition is a second thing to keep in step with what
 // the engine will do.
 //
-// **A recording's graph is the part of the document's graph its devices feed.**
-// Not a graph of its own, because there is only one document and only one
-// editor for it; not the whole graph either, because most of what is on that
-// stage is about the timeline and a camera has nothing to do with it. So:
-// start at the input nodes that are this recording's `-i`s, take everything
-// downstream of them, take whatever else feeds those nodes, and that is the
-// recording. Everything the walk does not reach is somebody else's render.
+// **A recording writes the pads it names, and runs the part of the graph that
+// produces them.** That is the whole rule, and it is ffmpeg's: an invocation
+// maps some labels and libavfilter runs whatever those labels need. So the walk
+// starts at the sinks the recording writes and goes *up*, and everything it
+// does not reach is somebody else's render. Not a graph of its own, because
+// there is only one document and only one editor for it; not the whole graph
+// either, because most of what is on that stage is about the timeline and a
+// camera has nothing to do with it.
+//
+// **Which sinks?** By default the derivation's own two — video out and sound
+// out — because that is where a person wires something when the graph has only
+// one end. But those two are also where a *render* ends, and one pad cannot be
+// both the timeline's composite and the cameras', so a recording may instead
+// name an output somebody placed. `pads` is how it says which, and the rest of
+// this file does not care: a sink is a sink and the walk is the same.
 //
 // Three consequences worth stating, because each replaces a rule that used to
 // be written down twice:
@@ -25,11 +33,11 @@
 //     naming the file, because the push shape has nobody to ask for its next
 //     frame: see the top of `capture_graph.h`, where the same fact is stated
 //     from the other end.
-//   - **A named output is not the recording's.** `out2` is a pad a stream on
-//     the Write stage asks for by name, and a recording writes its own file
-//     with its own muxer. Those sinks are dropped from the walk rather than
-//     refused, so a graph that feeds both a render and a recording is an
-//     ordinary graph rather than an error.
+//   - **The unchosen ends are not walked into at all.** Walking up cannot reach
+//     a sink, so an output this recording did not name costs nothing to ignore
+//     and a graph that feeds both a render and a recording is an ordinary graph
+//     rather than an error. That is the whole reason the walk runs this way
+//     round rather than down from the devices.
 //   - **The pads are renumbered.** The derivation numbers `-i`s in the order
 //     the nodes were placed; a recording numbers them in the order its cards
 //     are in, because that order is `CaptureSettings::sources` and the two have
@@ -38,10 +46,11 @@
 //
 // **`vout` and `aout` are imposed, and that is the one thing here that is not
 // derived.** `resolvePads` maps those two labels and the engine has said so
-// since before there was a graph stage; a derived recording has no composite to
-// have named them, so the node feeding each sink is relabelled on the way out.
-// `subgraph.js` does exactly this for a preview and for the same reason — the
-// pad a caller has to map cannot be whatever happened to be at the end.
+// since before there was a graph stage; a recording is its own invocation with
+// its own muxer, so whatever the graph called the pad — `out2`, or nothing at
+// all — the node feeding it is relabelled on the way out. `subgraph.js` does
+// exactly this for a preview and for the same reason: the pad a caller has to
+// map cannot be whatever happened to be at the end.
 
 import { derive } from './derive.js';
 import { print } from './print.js';
@@ -53,13 +62,12 @@ function seedRecords(overlay, ids) {
         .filter((rec) => rec.kind === 'input' && ids.indexOf(rec.input) >= 0);
 }
 
-/// Everything reachable from `from`, following `step` — consumers for the walk
-/// down, producers for the walk back up.
-function closure(g, from, step) {
+/// Everything `from` depends on, following producers.
+function ancestors(g, from) {
     const seen = new Set(from.map((n) => n.id));
     const queue = from.slice();
     while (queue.length) {
-        for (const next of step(queue.shift()))
+        for (const next of g.producers(queue.shift()))
             if (next && !seen.has(next.id)) { seen.add(next.id); queue.push(next); }
     }
     return seen;
@@ -73,8 +81,14 @@ function closure(g, from, step) {
 /// copied: an input's `index` changes and a chain-final node is relabelled, and
 /// the graph both came out of is the one on the screen.
 function pruned(g, keep, numberOf) {
-    const nodes = g.nodes.filter((n) => keep.has(n.id)).map((n) =>
-        Object.assign({}, n, n.kind === 'input' ? { index: numberOf(n) } : null));
+    const nodes = g.nodes.filter((n) => keep.has(n.id)).map((n) => {
+        const copy = Object.assign({}, n, n.kind === 'input' ? { index: numberOf(n) } : null);
+        // Shallow-copied above, and this one is written to below. Left shared,
+        // relabelling a fork's pad would reach back into the derivation the
+        // caller still holds.
+        if (copy.outLabels) copy.outLabels = copy.outLabels.slice();
+        return copy;
+    });
     const edges = g.edges.filter((e) => keep.has(e.from) && keep.has(e.to));
     const view = { nodes, edges };
     const idOf = (n) => (typeof n === 'string' ? n : n && n.id);
@@ -90,14 +104,28 @@ function pruned(g, keep, numberOf) {
     return view;
 }
 
-/// The node the muxer would take this stream from, and the sink that says so.
-function feeding(view, stream) {
-    for (const n of view.nodes) {
-        if (n.kind !== 'sink' || n.name || n.stream !== stream) continue;
-        const e = view.inEdges(n)[0];
-        if (e) return { node: view.node(e.from), port: e.fromPort || 0 };
+/// What a sink is called on the screen, for a sentence about it.
+function sinkName(n) {
+    if (!n) return 'an output';
+    if (n.name) return `[${n.name}]`;
+    return (n.stream || 'v') === 'a' ? 'sound out' : 'video out';
+}
+
+/// The sink this recording writes for `stream`, or null when it writes none.
+///
+/// `pick` is an overlay node id, or empty for the derivation's own end. Looked
+/// up by id rather than by name so that renaming an output on the Graph stage
+/// moves the recording with it — the name is what ffmpeg reads, the id is what
+/// this application means. `undefined` back means the pick names nothing that
+/// could be written: an output that has been deleted, or one whose first wire
+/// has since made it the other kind of stream.
+function chosen(g, stream, pick) {
+    if (pick) {
+        const n = g.node(pick);
+        if (!n || n.kind !== 'sink') return undefined;
+        return !n.stream || n.stream === stream ? n : undefined;
     }
-    return null;
+    return g.byAnchor(stream === 'a' ? 'out:a' : 'out:v') || null;
 }
 
 /// The `-filter_complex` a recording of `ids` would run, or null when the graph
@@ -110,12 +138,13 @@ function feeding(view, stream) {
 /// recording and will not run; the Record button says so rather than starting a
 /// job that fails a moment later. `{ ok: true, filterGraph, video, audio }` is a
 /// graph, with `video`/`audio` naming the pads to map — `[vout]`, `[aout]`, or
-/// null where nothing arrives there.
+/// null where the recording writes nothing of that kind.
 ///
 /// `ids` is the recording's inputs in `-i` order, which is `capture.inputs`.
-/// `overlay` is the user's layer, passed in for the reason `derive()` takes it
-/// that way: a pure function of its arguments is one a test can hand literals to.
-export function recordGraph(ids, overlay) {
+/// `overlay` is the user's layer and `pads` is `{ v, a }` of overlay sink ids,
+/// both passed in for the reason `derive()` takes its overlay that way: a pure
+/// function of its arguments is one a test can hand literals to.
+export function recordGraph(ids, overlay, pads) {
     const seeds = seedRecords(overlay, ids || []);
     if (!seeds.length) return null;
 
@@ -138,14 +167,35 @@ export function recordGraph(ids, overlay) {
     const seedNodes = seeds.map((rec) => g.node(rec.id)).filter(Boolean);
     if (!seedNodes.length) return null;
 
-    // Down from the devices, then back up from everything that reached, so a
-    // `testsrc` two filters above an `overlay` comes with it. A named output is
-    // not walked into at all: it belongs to a stream on the Write stage, and
-    // following it would drag that whole branch into the recording.
-    const isOurs = (n) => !(n.kind === 'sink' && n.name);
-    const down = closure(g, seedNodes, (n) => g.consumers(n).filter(isOurs));
-    const reached = g.nodes.filter((n) => down.has(n.id));
-    const keep = closure(g, reached, (n) => g.producers(n));
+    const picked = { v: (pads && pads.v) || '', a: (pads && pads.a) || '' };
+    const at = { v: chosen(g, 'v', picked.v), a: chosen(g, 'a', picked.a) };
+    for (const stream of ['v', 'a'])
+        if (at[stream] === undefined)
+            return { ok: false, reason: 'the output this recording writes is not on the ' +
+                                        'Graph stage any more — pick another' };
+
+    // Up from the sinks, so a `testsrc` two filters above an `overlay` comes
+    // with it and an output nobody named here is never reached.
+    const ends = [at.v, at.a].filter(Boolean);
+    const keep = ancestors(g, ends);
+
+    // Nothing this recording opens reaches what it writes. Two ways to be in
+    // that state and they want different sentences: with the derivation's own
+    // ends it is a graph nobody finished wiring, and with an output of one's
+    // own it is very likely the wrong output.
+    if (!seedNodes.some((n) => keep.has(n.id))) {
+        const named = picked.v || picked.a;
+        if (named)
+            return { ok: false, reason: `${sinkName(at.v || at.a)} is fed by something other ` +
+                                        'than these devices, so a recording of them would ' +
+                                        'write a file nothing they see reaches' };
+        const outs = g.nodes.filter((n) => n.kind === 'sink' && n.name).length;
+        return { ok: false, reason: 'the graph reads the devices but nothing arrives at video ' +
+                                    'out or sound out' + (outs
+                                        ? ' — this graph has outputs of its own, and a ' +
+                                          'recording can write one of those instead'
+                                        : '') };
+    }
 
     // An `-i` that is not one of this recording's is a file, and a file cannot
     // be pushed. Named rather than summarised, because the fix is to take that
@@ -169,35 +219,66 @@ export function recordGraph(ids, overlay) {
     const view = pruned(g, keep, numberOf);
 
     // The two pads the writer maps, relabelled to the names `resolvePads`
-    // knows. Done before printing, because `print()` reads a node's label to
-    // decide what its chain ends with — and after pruning, because the node
-    // that ends a run in the recording is not always the one that ends it in
-    // the whole graph.
-    const at = { v: feeding(view, 'v'), a: feeding(view, 'a') };
+    // knows. Cleared off everything else first, for the reason
+    // `nameTheRendersPads` clears them: two chains ending in `[vout]` is "Label
+    // found twice", about a graph ffmpeg has already half parsed.
+    const extra = [];
+    for (const stream of ['v', 'a']) {
+        const sink = at[stream];
+        const label = stream === 'v' ? 'vout' : 'aout';
+        for (const n of view.nodes) {
+            if (n.label === label) n.label = null;
+            if (n.outLabels) n.outLabels = n.outLabels.map((l) => (l === label ? null : l));
+        }
+        if (!sink) continue;
+        const e = view.inEdges(sink)[0];
+        const src = e ? view.node(e.from) : null;
+        if (!src) { at[stream] = null; continue; }
+        const port = e.fromPort || 0;
+        // A device wired straight to a sink is a stream with no filter on it,
+        // and there is no chain for a label to go on the end of. `null`/`anull`
+        // is the chain that says "this pad, unchanged" — the same one a
+        // single-microphone preset used to write, and needed for the same
+        // reason: with a graph in play every stream reaches a pad or the engine
+        // refuses.
+        if (src.kind === 'input') {
+            const out = (src.outs || [])[port];
+            extra.push(`[${src.index}:${(out && out.stream) || stream}]` +
+                       `${stream === 'v' ? 'null' : 'anull'}[${label}]`);
+        } else if (src.outs && src.outs.length > 1) {
+            // A `split` writes two pads and one `label` would name neither of
+            // them honestly, so a fork's names are per pad. See `padOf`.
+            if (!src.outLabels) src.outLabels = [];
+            src.outLabels[port] = label;
+        } else src.label = label;
+    }
+
     if (!at.v && !at.a)
         return { ok: false, reason: 'the graph reads the devices but nothing arrives at ' +
                                     'video out or sound out' };
 
-    // A device wired straight to a sink is a stream with no filter on it, and
-    // there is no chain for a label to go on the end of. `null`/`anull` is the
-    // chain that says "this pad, unchanged" — the same one a single-microphone
-    // preset used to write, and needed for the same reason: with a graph in
-    // play every stream reaches a pad or the engine refuses.
-    const extra = [];
-    for (const stream of ['v', 'a']) {
-        const to = at[stream];
-        if (!to || !to.node) continue;
-        const label = stream === 'v' ? 'vout' : 'aout';
-        if (to.node.kind === 'input') {
-            const out = (to.node.outs || [])[to.port];
-            extra.push(`[${to.node.index}:${(out && out.stream) || stream}]` +
-                       `${stream === 'v' ? 'null' : 'anull'}[${label}]`);
-        } else {
-            to.node.label = label;
-        }
-    }
-
     const { chains } = print(view);
     return { ok: true, filterGraph: chains.concat(extra).join(';'),
              video: at.v ? 'vout' : null, audio: at.a ? 'aout' : null, graph: view };
+}
+
+/// The ends this recording could write, for the picker on the Capture stage.
+///
+/// `{ v: [{ id, label }], a: [...] }`, the derivation's own end first with an
+/// empty id. Answered here rather than read off the overlay by the caller
+/// because "which sinks could this recording write" is the same question
+/// `chosen()` asks, and two answers to it would be two things that can
+/// disagree.
+///
+/// An output nobody has wired yet is in neither list. Its stream is what the
+/// first wire brought and it has had none, so there is no honest side of the
+/// picker to put it on — and a recording of it would refuse anyway, for having
+/// nothing wired in.
+export function recordPads(overlay) {
+    const out = { v: [{ id: '', label: 'video out' }], a: [{ id: '', label: 'sound out' }] };
+    for (const n of ((overlay && overlay.nodes) || [])) {
+        if (n.kind !== 'sink' || !n.name || (n.stream !== 'v' && n.stream !== 'a')) continue;
+        out[n.stream].push({ id: n.id, label: `[${n.name}]` });
+    }
+    return out;
 }
