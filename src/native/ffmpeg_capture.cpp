@@ -8,6 +8,7 @@
 #include "export_frame.h"
 #include "export_writer.h"
 #include "ffmpeg_job.h"
+#include "live_tap.h"
 #include "ffmpeg_report.h"
 
 extern "C" {
@@ -793,9 +794,15 @@ struct Readers {
 /// that has genuinely hung delays this thread's own join and nothing else,
 /// which is the single-device loop's limitation now held per input — the check
 /// is between reads, exactly as it always was.
+/// `alsoStop` is the *other* reason to give up, and it is a parameter because
+/// there are two callers with different ones. A recording's readers stop when
+/// the job slot is stopping; a live session's have no job — the whole point of
+/// one is to be running while no job is — and would otherwise be torn down by
+/// somebody else's recording ending.
 void readDevice(Device& d, Hand& h, const std::atomic<bool>& quit,
-                const std::function<double()>& secondsSince) {
-    while (!quit.load(std::memory_order_relaxed) && !job::stopping()) {
+                const std::function<double()>& secondsSince,
+                const std::function<bool()>& alsoStop) {
+    while (!quit.load(std::memory_order_relaxed) && !(alsoStop && alsoStop())) {
         av_packet_unref(d.pkt);
         const int rc = av_read_frame(d.fmt, d.pkt);
         if (rc == AVERROR(EAGAIN)) continue;
@@ -926,7 +933,7 @@ void runSession(CaptureSettings& s, ExportStatus& st, const DeviceList& devs,
         Device* d = devs[i].get();
         Hand* h = readers.hands[i].get();
         readers.threads.emplace_back([d, h, &readers, &secondsSince] {
-            readDevice(*d, *h, readers.quit, secondsSince);
+            readDevice(*d, *h, readers.quit, secondsSince, [] { return job::stopping(); });
         });
     }
 
@@ -1106,6 +1113,168 @@ void runSession(CaptureSettings& s, ExportStatus& st, const DeviceList& devs,
     }
 }
 
+// ── Watching: the same reading, published instead of written ───────────────
+//
+// What this shares with the loop above is everything about *getting hold of* a
+// frame — `Device`, `openDevice`, `Hand`, `readDevice`, the sample-at-the-tick
+// rule and `CaptureGraph` — and that sharing is the point of it being here.
+// What it does not share is the loop itself, because the two answer different
+// questions. A recording places frames on an output timeline, owes every
+// interval a picture, and has `-t` to judge; a preview shows the newest thing
+// there is and owes nothing. Merging them would mean a writer that is
+// sometimes absent and a limit that is sometimes infinite, threaded through
+// every line — which is a worse fact to hold than two short loops with one
+// device reader underneath them.
+
+struct LiveRun {
+    uint64_t id = 0;
+    LiveSettings settings;
+    DeviceList devs;
+    std::shared_ptr<LiveTap> tap = std::make_shared<LiveTap>();
+    std::atomic<bool> quit{false};
+    std::thread thread;
+
+    /// Joined here rather than left to the thread, because everything the
+    /// thread touches is in this object. Same rule as `Readers`.
+    ~LiveRun() {
+        quit.store(true);
+        if (thread.joinable()) thread.join();
+        tap->finishAll();
+    }
+};
+
+std::mutex liveLock;
+std::vector<std::shared_ptr<LiveRun>> liveRuns;
+uint64_t liveSeq = 0;
+
+/// One session: read every device, sample at the tick, publish what there is.
+void runLive(LiveRun& run) {
+    const auto began = Clock::now();
+    const auto secondsSince = [&began] {
+        return std::chrono::duration<double>(Clock::now() - began).count();
+    };
+
+    const double tickRate = run.settings.fps > 0.0 ? run.settings.fps : 30.0;
+    const AVRational tickHz = av_d2q(tickRate, 1000000);
+    const AVRational tickTb = av_inv_q(tickHz);
+
+    // No graph is the ordinary case: with nothing composited there is nothing
+    // to show beyond the devices themselves, and building a pass-through graph
+    // to say so would be a filtergraph nobody asked for on every camera.
+    std::unique_ptr<CaptureGraph> graph;
+    if (!run.settings.filterGraph.empty()) {
+        graph = std::make_unique<CaptureGraph>(run.settings.filterGraph,
+                                               run.settings.audioSampleRate,
+                                               run.settings.audioChannels,
+                                               run.settings.scaler);
+        graph->setSession(tickHz);
+        // The frames go to a decoder, which would only have to undo an RGBA
+        // conversion done here. See `CaptureGraph::setConverted`.
+        graph->setConverted(false);
+        std::string err;
+        if (!graph->open(feedsOf(run.devs), &err)) {
+            // A graph that will not parse is not a reason to show nothing: the
+            // devices are open and their own pads are what a card wants. The
+            // Graph stage is already saying the same thing against the node it
+            // is about, so this is a line in the log and not a second refusal.
+            LOG_WARN("live: %s — showing the devices without it", err.c_str());
+            graph.reset();
+        }
+    }
+
+    Readers readers;
+    for (size_t i = 0; i < run.devs.size(); ++i) readers.hands.push_back(std::make_unique<Hand>());
+    for (size_t i = 0; i < run.devs.size(); ++i) {
+        Device* d = run.devs[i].get();
+        Hand* h = readers.hands[i].get();
+        readers.threads.emplace_back([d, h, &readers, &secondsSince] {
+            readDevice(*d, *h, readers.quit, secondsSince, nullptr);
+        });
+    }
+
+    std::vector<AVFrame*> held(run.devs.size(), nullptr);
+    std::string err;
+    int64_t tick = 0;
+    while (!run.quit.load(std::memory_order_relaxed)) {
+        std::this_thread::sleep_until(
+            began + std::chrono::duration_cast<Clock::duration>(
+                        std::chrono::duration<double>(double(tick) / tickRate)));
+        if (run.quit.load(std::memory_order_relaxed)) break;
+
+        bool anyLive = false;
+        for (size_t i = 0; i < run.devs.size(); ++i) {
+            Hand& h = *readers.hands[i];
+            AVFrame* fresh = nullptr;
+            std::deque<std::pair<AVFrame*, double>> sound;
+            {
+                std::lock_guard<std::mutex> lock(h.m);
+                fresh = h.latest;
+                h.latest = nullptr;
+                sound.swap(h.sound);
+                if (!h.ended) anyLive = true;
+            }
+            if (fresh) {
+                if (held[i]) av_frame_free(&held[i]);
+                held[i] = fresh;
+            }
+
+            // **Published before the graph, and stamped with the tick.** A card
+            // shows the device as it arrived; the timestamp is the session's,
+            // because an element's clock starts when it starts playing and a
+            // camera's own timestamps are whatever its driver felt like.
+            const double at = double(tick) / tickRate;
+            if (held[i]) {
+                if (auto pad = run.tap->pad("in" + std::to_string(i))) pad->put(held[i], at);
+                if (graph) {
+                    const int vFeed = graph->feedFor(run.devs[i]->index, false);
+                    if (vFeed >= 0) {
+                        held[i]->pts = tick;
+                        if (!graph->push(vFeed, held[i], tickTb, &err))
+                            LOG_WARN("live: %s", err.c_str());
+                    }
+                }
+            }
+
+            // Sound reaches the graph — a composition whose sound decides
+            // something about its picture is an ordinary graph, and `sidechain`
+            // filters exist — but nothing is published from it. See `LivePad`.
+            for (auto& block : sound) {
+                AVFrame* f = block.first;
+                const int aFeed = graph && run.devs[i]->hasAudio()
+                                      ? graph->feedFor(run.devs[i]->index, true) : -1;
+                const int sr = f->sample_rate > 0 ? f->sample_rate
+                                                  : run.settings.audioSampleRate;
+                if (aFeed >= 0 && f->nb_samples > 0 && sr > 0) {
+                    f->pts = std::llround(std::max(0.0, block.second) * sr);
+                    AVRational tb{1, sr};
+                    if (!graph->push(aFeed, f, tb, &err)) LOG_WARN("live: %s", err.c_str());
+                }
+                av_frame_free(&f);
+            }
+        }
+
+        if (graph && graph->ready()) {
+            graph->drain([&run](const CaptureGraph::Taken& t) {
+                if (t.audio || !t.raw) return true;
+                // The composite is the pad nobody had to name, and `vout` is
+                // what it is called everywhere else in this application —
+                // `resolvePads` maps it, `graph/record.js` writes it. A pad
+                // with a name of its own keeps it.
+                const std::string name = t.label.empty() || t.primary ? "vout" : t.label;
+                run.tap->ensure(name, false)->put(t.raw, t.at);
+                return true;
+            }, &err);
+        }
+
+        if (!anyLive) break;
+        tick++;
+    }
+
+    for (AVFrame*& f : held) if (f) av_frame_free(&f);
+    readers.stopAll();
+    run.tap->finishAll();
+}
+
 // ── The job ────────────────────────────────────────────────────────────────
 
 /// **Which of the two loops runs is the number of inputs**, and nothing else.
@@ -1219,6 +1388,15 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
     if (!number) return false;
     if (jobNumber) *jobNumber = number;
 
+    // **A recording opens its own devices, so anything watching gives them
+    // back first.** The Capture stage already tears its session down before
+    // asking for a recording; this is here so the rule holds whoever asked,
+    // because a DirectShow camera held by a preview is not a slow recording,
+    // it is one that fails at the open with nothing on screen to explain it.
+    // Enforced rather than assumed, for the reason the previews were torn down
+    // before the session existed.
+    closeAllLive();
+
     // Opened before the thread exists, so "there is no camera called that"
     // arrives as a refusal from this call rather than as a job that starts and
     // fails a moment later with the name that was wrong already off the screen.
@@ -1305,5 +1483,106 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
 }
 
 void stopCapture() { job::stop(); }
+
+// ── Sessions ───────────────────────────────────────────────────────────────
+
+uint64_t openLive(const LiveSettings& settings, std::string* error) {
+    if (settings.sources.empty()) {
+        if (error) *error = "no device to watch";
+        return 0;
+    }
+
+    // `openDevice` asks a `CaptureSettings` what sound it wants, because that
+    // is the question it has always been asked. Built here rather than
+    // widening its signature: a session and a recording want a device opened
+    // in exactly the same way, and that is worth keeping obvious.
+    CaptureSettings as;
+    as.output.includeAudio = settings.includeAudio;
+    as.output.audioSampleRate = settings.audioSampleRate;
+    as.output.audioChannels = settings.audioChannels;
+    as.output.scaler = settings.scaler;
+
+    auto run = std::make_shared<LiveRun>();
+    run->settings = settings;
+    for (size_t i = 0; i < settings.sources.size(); ++i) {
+        auto d = std::make_shared<Device>();
+        std::string why;
+        // **On this thread**, for the reason a recording opens its devices on
+        // the caller's: "there is no camera called that" belongs to the call
+        // that asked, while the name that was wrong is still on screen.
+        if (!openDevice(*d, settings.sources[i], static_cast<int>(i), as, &why)) {
+            if (error) *error = why;
+            return 0;
+        }
+        run->devs.push_back(std::move(d));
+    }
+
+    // **The device pads exist before the thread does.** A caller asks what a
+    // session publishes the instant `openLive` returns, and "one per input
+    // that has a picture" is knowable from the devices that were just opened —
+    // so making them on the session thread would be a race the caller could
+    // only lose by being quick. The *graph's* pads cannot be settled here: their
+    // names are the graph's and their sizes are not known until libavfilter has
+    // configured it, which needs a frame.
+    for (size_t i = 0; i < run->devs.size(); ++i)
+        if (run->devs[i]->hasVideo()) run->tap->ensure("in" + std::to_string(i), true);
+
+    {
+        std::lock_guard<std::mutex> lock(liveLock);
+        run->id = ++liveSeq;
+        liveRuns.push_back(run);
+    }
+    LiveRun* raw = run.get();
+    run->thread = std::thread([raw] { runLive(*raw); });
+    LOG_INFO("live: session %llu watching %zu device%s",
+             static_cast<unsigned long long>(run->id), run->devs.size(),
+             run->devs.size() == 1 ? "" : "s");
+    return run->id;
+}
+
+std::vector<LivePad> livePads(uint64_t id) {
+    std::shared_ptr<LiveRun> run;
+    {
+        std::lock_guard<std::mutex> lock(liveLock);
+        for (const auto& r : liveRuns) if (r->id == id) { run = r; break; }
+    }
+    std::vector<LivePad> out;
+    if (!run) return out;
+    for (const auto& p : run->tap->all()) {
+        LivePad pad;
+        pad.name = p->name();
+        pad.device = p->isDevice();
+        p->size(&pad.width, &pad.height);
+        out.push_back(std::move(pad));
+    }
+    return out;
+}
+
+void closeLive(uint64_t id) {
+    std::shared_ptr<LiveRun> run;
+    {
+        std::lock_guard<std::mutex> lock(liveLock);
+        for (auto it = liveRuns.begin(); it != liveRuns.end(); ++it)
+            if ((*it)->id == id) { run = *it; liveRuns.erase(it); break; }
+    }
+    // Dropped outside the lock: the destructor joins the session thread, and
+    // that thread's last act is to touch the tap. Holding `liveLock` across it
+    // would be holding a lock across a join for no reason.
+    if (run) LOG_INFO("live: session %llu closed", static_cast<unsigned long long>(id));
+}
+
+void closeAllLive() {
+    std::vector<std::shared_ptr<LiveRun>> going;
+    {
+        std::lock_guard<std::mutex> lock(liveLock);
+        going.swap(liveRuns);
+    }
+}
+
+std::shared_ptr<LiveTap> liveTapFor(uint64_t id) {
+    std::lock_guard<std::mutex> lock(liveLock);
+    for (const auto& r : liveRuns) if (r->id == id) return r->tap;
+    return nullptr;
+}
 
 } // namespace ffmpegbro

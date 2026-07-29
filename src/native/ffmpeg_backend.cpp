@@ -1,5 +1,8 @@
 #include "ffmpeg_backend.h"
 
+#include "ffmpeg_capture.h"
+#include "live_tap.h"
+
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
 // For `rotationOf` and `avErr`. This file is the MIT-facing half and used to
@@ -119,10 +122,6 @@ Codec toBroCodec(AVCodecID id) {
     return Codec::Other;
 }
 
-// Carried from the demuxer to the decoder through TrackInfo::backendPrivate.
-// AVCodecParameters is the whole point: flattening it into codecPrivate would
-// drop the extradata framing, pixel format and colour description that make an
-// H.264 or HEVC stream decodable at all.
 // ── A stream whose packets are already frames ──────────────────────────────
 //
 // `wrapped_avframe` is not a codec: it is libav's way of handing a decoded
@@ -168,12 +167,11 @@ struct Wrapped {
 /// Cloned rather than moved: the packet the demuxer handed over is unreferenced
 /// on the next read, and `av_frame_clone` is a new frame referencing the same
 /// buffers rather than a copy of any pixels.
-std::shared_ptr<std::vector<uint8_t>> wrapFrame(const AVPacket* pkt) {
-    if (!pkt->data || pkt->size != static_cast<int>(sizeof(AVFrame))) return nullptr;
-    AVFrame* clone = av_frame_clone(reinterpret_cast<const AVFrame*>(pkt->data));
-    if (!clone) return nullptr;
+/// A payload that owns `frame` — the reference is taken, not copied.
+std::shared_ptr<std::vector<uint8_t>> wrapOwnedFrame(AVFrame* frame) {
+    if (!frame) return nullptr;
     auto* holder = new std::vector<uint8_t>(sizeof(Wrapped));
-    Wrapped w{Wrapped::kMagic, clone};
+    Wrapped w{Wrapped::kMagic, frame};
     std::memcpy(holder->data(), &w, sizeof(w));
     return std::shared_ptr<std::vector<uint8_t>>(
         holder, [](std::vector<uint8_t>* v) {
@@ -184,6 +182,14 @@ std::shared_ptr<std::vector<uint8_t>> wrapFrame(const AVPacket* pkt) {
             }
             delete v;
         });
+}
+
+std::shared_ptr<std::vector<uint8_t>> wrapFrame(const AVPacket* pkt) {
+    if (!pkt->data || pkt->size != static_cast<int>(sizeof(AVFrame))) return nullptr;
+    // Cloned: the packet the demuxer handed over is unreferenced on the next
+    // read, and a clone is a new frame referencing the same buffers rather than
+    // a copy of any pixels.
+    return wrapOwnedFrame(av_frame_clone(reinterpret_cast<const AVFrame*>(pkt->data)));
 }
 
 /// The frame inside such a payload, still owned by it. Null for anything this
@@ -223,6 +229,157 @@ struct TrackPrivate {
 std::shared_ptr<TrackPrivate> privateOf(const TrackInfo& t) {
     return std::static_pointer_cast<TrackPrivate>(t.backendPrivate);
 }
+
+// ── A pad of a live session, as a media source ─────────────────────────────
+//
+// `<video src="/@live/7/vout">` plays what session 7's graph is making of its
+// devices, right now. It is the only source in this backend with no demuxer
+// behind it: what would be `av_read_frame` is a wait on a condition variable,
+// and what would be a compressed packet is a picture that was never compressed.
+//
+// **It reaches the element as `wrapped_avframe`**, which is not a trick — it is
+// the same thing lavfi does and the same thing this backend already carries for
+// it. A live pad and a lavfi device are the same shape of problem (frames that
+// were never bytes) and there is one answer to it in this file, which is why
+// there is no live decoder: `FFmpegVideoDecoder` unwraps this exactly as it
+// unwraps a `-f lavfi -i testsrc`.
+//
+// Three things about the clock, and each of them is what makes an element play
+// rather than stall:
+//
+//   - **The source's zero is its own first frame**, not the session's start. An
+//     element's clock begins when it begins, and a session that has been
+//     running for ten minutes would otherwise hand it timestamps ten minutes in
+//     the future and never show a picture.
+//   - **A frame is published one tick ahead.** bro pumps a source until it holds
+//     a picture whose time has *not yet come* — that is how it knows the one on
+//     screen is the right one — so a frame stamped exactly now would be
+//     consumed and pumped past, and the loop would ask again immediately.
+//   - **`readPacket` blocks, and must.** "Nothing yet" cannot be answered with
+//     false: bro reads that as the end of the stream and stops the element for
+//     good. So it waits, the way reading a camera waits, and answers false only
+//     when the session has genuinely finished.
+class LiveSource : public MediaSource {
+public:
+    /// `/@live/<id>/<pad>`. False for anything that is not one, which is how
+    /// the backend's `open` falls through to a path or an input token.
+    static bool parse(const std::string& src, uint64_t* id, std::string* pad) {
+        constexpr const char* kPrefix = "/@live/";
+        if (src.compare(0, std::strlen(kPrefix), kPrefix) != 0) return false;
+        const size_t at = src.find('/', std::strlen(kPrefix));
+        if (at == std::string::npos) return false;
+        const std::string num = src.substr(std::strlen(kPrefix),
+                                           at - std::strlen(kPrefix));
+        if (num.empty() || num.find_first_not_of("0123456789") != std::string::npos)
+            return false;
+        *id = std::strtoull(num.c_str(), nullptr, 10);
+        *pad = src.substr(at + 1);
+        return !pad->empty();
+    }
+
+    bool open(const std::string& src) {
+        uint64_t id = 0;
+        std::string name;
+        if (!parse(src, &id, &name)) return false;
+        auto tap = liveTapFor(id);
+        if (!tap) return false;
+        pad_ = tap->pad(name);
+        if (!pad_) return false;
+        // Held as well as the pad, so that closing the session while this is
+        // playing leaves a tap that says "ended" rather than a freed one.
+        tap_ = tap;
+
+        // **Described from a real frame**, because a track has to say how big
+        // it is and a pad does not know until the graph has configured and the
+        // camera has woken up. Bounded: a pad nothing ever reaches is a black
+        // element, not a hung one. Normally instant — the session is started
+        // before anything is pointed at it.
+        double at = 0.0;
+        AVFrame* first = nullptr;
+        for (int waited = 0; waited < kOpenWaitMs && !first; waited += kSliceMs) {
+            first = pad_->take(&seen_, &at, kSliceMs);
+            if (!first && pad_->ended()) break;
+        }
+        if (!first) {
+            LOG_WARN("ffmpeg: live pad %s produced no picture to open with", src.c_str());
+            return false;
+        }
+
+        TrackInfo t;
+        t.id = 1;
+        t.kind = TrackKind::Video;
+        t.codec = Codec::Other;
+        t.width = static_cast<uint32_t>(first->width);
+        t.height = static_cast<uint32_t>(first->height);
+        t.frameRate = 0.0;   // whatever the session ticks at; nothing here counts
+        t.durationNs = 0;    // live: there is no end to seek to
+
+        auto priv = std::make_shared<TrackPrivate>();
+        priv->par = avcodec_parameters_alloc();
+        if (!priv->par) { av_frame_free(&first); return false; }
+        priv->par->codec_type = AVMEDIA_TYPE_VIDEO;
+        priv->par->codec_id = AV_CODEC_ID_WRAPPED_AVFRAME;
+        priv->par->width = first->width;
+        priv->par->height = first->height;
+        priv->par->format = first->format;
+        priv->timeBase = AVRational{1, 1000000};
+        priv->wrapped = true;
+        t.backendPrivate = priv;
+        tracks_.push_back(std::move(t));
+
+        zero_ = at;
+        pending_ = first;
+        pendingAt_ = at;
+        return true;
+    }
+
+    const std::vector<TrackInfo>& tracks() const override { return tracks_; }
+
+    bool readPacket(MediaPacket& out) override {
+        if (!pad_) return false;
+        AVFrame* f = pending_;
+        double at = pendingAt_;
+        pending_ = nullptr;
+        for (int waited = 0; !f && waited < kReadWaitMs; waited += kSliceMs) {
+            f = pad_->take(&seen_, &at, kSliceMs);
+            // Ended *and* empty is the only false this returns. A session torn
+            // down mid-watch stops the element, which is what has happened.
+            if (!f && pad_->ended()) return false;
+        }
+        if (!f) return false;
+
+        // One tick of lead, so the picture stages rather than being consumed
+        // and pumped straight past. See the note at the top.
+        const double lead = 1.0 / 30.0;
+        const double secs = std::max(0.0, at - zero_) + lead;
+        out.trackId = 1;
+        out.codec = Codec::Other;
+        out.kind = TrackKind::Video;
+        out.keyframe = true;         // every one of them is
+        out.pts = static_cast<TimeNs>(llround(secs * 1e9));
+        out.duration = 0;
+        out.data = wrapOwnedFrame(f);   // takes the reference this holds
+        return out.data != nullptr;
+    }
+
+    // Live: there is nowhere to go but now.
+    bool seekTo(TimeNs) override { return false; }
+
+    ~LiveSource() override { if (pending_) av_frame_free(&pending_); }
+
+private:
+    static constexpr int kSliceMs = 100;
+    static constexpr int kOpenWaitMs = 4000;
+    static constexpr int kReadWaitMs = 4000;
+
+    std::shared_ptr<LiveTap> tap_;
+    std::shared_ptr<LivePadTap> pad_;
+    std::vector<TrackInfo> tracks_;
+    uint64_t seen_ = 0;
+    double zero_ = 0.0;
+    AVFrame* pending_ = nullptr;   ///< the frame `open` described the track with
+    double pendingAt_ = 0.0;
+};
 
 // ── MediaSource ────────────────────────────────────────────────────────────
 
@@ -896,6 +1053,16 @@ void registerFfmpegBackend() {
     // resolves anything that does not start with `/` or `x:` against the
     // document, which turns `https://…` into a path under ui/).
     backend.open = [](const std::string& path) -> std::unique_ptr<MediaSource> {
+        // A pad of a running session, which has no demuxer behind it at all.
+        // Tried first because the token is unambiguous and opening it is a
+        // lookup rather than an attempt.
+        uint64_t liveId = 0;
+        std::string livePad;
+        if (LiveSource::parse(path, &liveId, &livePad)) {
+            auto live = std::make_unique<LiveSource>();
+            if (!live->open(path)) return nullptr;
+            return live;
+        }
         MediaInput in;
         if (!resolveToken(path, &in)) in.path = path;
         auto src = std::make_unique<FFmpegSource>();

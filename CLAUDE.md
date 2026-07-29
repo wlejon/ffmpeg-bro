@@ -132,6 +132,14 @@ runs), `export_copy` (stream copy), `export_subtitle`, `export_compositor`,
 shared libav helpers). `ffmpeg_job.h` owns the single job slot shared by renders
 and recordings, and documents the ordering rules around terminal status.
 
+A **live session** (`LiveSettings` in `ffmpeg_capture.h`) is the same device
+reading with the writer taken off the end: it publishes pads into a `LiveTap`
+(`live_tap.h`) and `<video src="/@live/<id>/<pad>">` plays one. It holds no job
+slot — the point of one is to be running while nothing is — and a recording
+closes every session before opening its own devices. Frames reach the element
+as `wrapped_avframe` through the `Wrapped` payload in `ffmpeg_backend.cpp`,
+which is the same mechanism that makes a `-f lavfi` input playable.
+
 ## Conventions that are load-bearing
 
 - **Ask libav; never hardcode a list.** Muxers, demuxers, encoders, protocols,

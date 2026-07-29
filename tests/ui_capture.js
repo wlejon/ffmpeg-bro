@@ -345,8 +345,37 @@ console.log('\nthe recording’s graph is built on the Graph stage');
        'the stage shows what will run rather than a field to type it in');
     ok(!q('[data-f="capgraph"]'), 'there is no field: one description of one recording');
     ok(!q('[data-preset]'), 'and no presets — the Graph stage is where a composition is made');
-    // Two cards, a picture each, and the graph that joins them — the state the
-    // stage exists to let somebody judge before pressing record.
+    // **What the graph makes of them, playing** — the thing this stage could
+    // not show until there was a live session behind it. A card is one device;
+    // two of them side by side only existed in the file afterwards, and the
+    // honest advice was to judge a picture-in-picture by its numbers and then
+    // play back the take.
+    //
+    // Twice the width of one device is the assertion worth having, for the
+    // reason the recorded file's width is: nothing but the graph could have
+    // produced it, so a composite that quietly showed one camera would fail
+    // rather than pass with a plausible picture.
+    const one = q('[data-f="preview"]');
+    const comp = q('[data-f="composite"]');
+    ok(!!comp, 'the composition has a picture of its own, below the cards it is made of');
+    ok(waitFor('the composition to arrive', () => comp && comp.videoWidth > 0),
+       'which plays — the same CaptureGraph a recording runs, on the same graph text');
+    same(comp.videoWidth, one.videoWidth * 2,
+         `and it is both devices side by side (${comp.videoWidth}x${comp.videoHeight} from two ${
+             one.videoWidth}-wide)`);
+    ok(text('#cap-comp').indexOf('What the graph makes') >= 0, 'said above it, once');
+
+    // One open per device, which is what the session is for: three pictures
+    // on this stage — two cards and the composition — over two `-i`s.
+    same(qa('[data-f="preview"]').length, 2, 'a card each');
+    const pads = bro.ffmpeg.live.pads(cap.sessionId());
+    same(pads.length, 3, `and one session publishing three pads (${
+        pads.map((p) => p.name).join(' ')})`);
+    same(pads.filter((p) => p.device).length, 2, 'two of them the devices as they arrived');
+
+    // Two cards, a picture each, the composition beneath them, and the graph
+    // that joins them — the state the stage exists to let somebody judge
+    // before pressing record.
     screenshot('out/ui-capture-two.png');
 }
 

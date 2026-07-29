@@ -216,4 +216,94 @@ bool startCapture(const CaptureSettings& s, std::string* error,
 /// the trailer goes down, and the status reports Done.
 void stopCapture();
 
+// ── Watching, rather than writing ──────────────────────────────────────────
+//
+// **The same machine with the writer taken off the end.** A live session opens
+// the devices, reads them on a thread each, samples them at a tick and pushes
+// them through a `CaptureGraph` — every line of that is what a recording does,
+// and it is here rather than in a file of its own because it *is* that, and two
+// answers to "how is a device read" would be two things that can disagree about
+// which frame a stall holds.
+//
+// What it does instead of writing is **publish pads**. Each device appears as
+// `in0`, `in1`, … exactly as it arrived, and everything the graph produces
+// appears under the label the graph gave it — `vout`, `aout`, or a name
+// somebody wrote. A `<video src="/@live/<id>/vout">` therefore plays the
+// composition, which is the one thing the Capture stage could never show:
+// a card is one device, and what two of them make together only existed in the
+// file afterwards.
+//
+// **It owns the devices, and that is the point rather than a detail.** A
+// DirectShow camera can be opened once. Previews used to open one each, which
+// worked because nothing else wanted them and stopped working the moment the
+// composition wanted them too — so the session opens each device once and
+// every picture on the stage is a pad of it. That is also what makes a
+// preview of two cameras cost two opens rather than four.
+//
+// **A recording still opens its own.** It does not attach to a running session
+// and the session is torn down before one starts, because "there is no camera
+// called that" is a refusal that belongs to the call that asked for the
+// recording — see `startCapture` above — and a recording that inherited a
+// session would have nothing to refuse with. The cost is the moment between
+// the two opens, which is the moment the preview goes dark anyway.
+//
+// **No job slot.** A session is not a job: it writes nothing, it has no
+// progress, and the whole point is to be watching while deciding whether to
+// record. `ffmpeg_job.h`'s slot stays for the things that produce a file.
+
+/// What to watch: the devices, and the graph to run them through.
+///
+/// `filterGraph` means what it means everywhere else in this application, and
+/// an empty one is the ordinary case — with no graph each device is published
+/// as itself and there is no composition to show.
+struct LiveSettings {
+    std::vector<MediaInput> sources;
+    std::string filterGraph;
+    /// The tick the devices are sampled at, and the rate the pads produce.
+    /// Zero is 30, which is the rate a recording settles on when nothing says.
+    double fps = 0.0;
+    int audioSampleRate = 48000;
+    int audioChannels = 2;
+    bool includeAudio = true;
+    /// swscale's preference where a conversion is unavoidable. Same key as a
+    /// render's, because it is the same question.
+    std::string scaler;
+};
+
+/// One pad a session publishes.
+///
+/// **Pictures only, and that is a decision rather than a gap.** The graph's
+/// sound pads are drained like every other — libavfilter holds what nobody
+/// takes — but nothing is published from them, because playing them would be
+/// *monitoring*, and monitoring asks its own questions (whose speakers, and
+/// what happens when the microphone can hear them) that a preview of a
+/// composition does not. A device with no picture therefore has no pad here,
+/// which the card already knows from its probe.
+struct LivePad {
+    std::string name;      ///< `in0`, `vout`, or whatever the graph called it
+    bool device = false;   ///< an `in<N>`: one input, before the graph
+    int width = 0;         ///< once the graph has settled; zero before that
+    int height = 0;
+};
+
+/// Open a session and start reading. Zero with a reason when a device will not
+/// open — which, exactly as for a recording, is answered on *this* thread while
+/// the name that was wrong is still on screen.
+uint64_t openLive(const LiveSettings& s, std::string* error);
+
+/// What this session publishes. Empty for an id nothing is open under.
+///
+/// Asked rather than returned by `openLive` because the graph's pads have sizes
+/// only once libavfilter has configured it, and it cannot configure until a
+/// device has handed over a frame. The names are known immediately; the numbers
+/// arrive a moment later.
+std::vector<LivePad> livePads(uint64_t id);
+
+/// Give the devices back. Idempotent, and the destructor of everything the
+/// session holds; a session left open holds a camera.
+void closeLive(uint64_t id);
+
+/// Every session, for shutdown and for the moment before a recording starts.
+void closeAllLive();
+
 } // namespace ffmpegbro

@@ -423,6 +423,48 @@ bro.ffmpeg.record.start({ sources: [{ path: 'desktop', format: 'gdigrab' },
 // abandoned — the length was the open question and stopping answered it — and
 // the trailer goes down either way, so what is on disk opens.
 
+// ── Watching, without writing ──────────────────────────────────────────────
+//
+// A **session** reads the same devices through the same `CaptureGraph` and
+// writes nothing. It is not under `record` and not under `render`: it produces
+// no file, holds no job slot, and shares no status with either — the whole
+// point of one is to be running while nothing else is.
+bro.ffmpeg.live.open({ sources: [{ path: 'desktop', format: 'gdigrab' },
+                                 { path: 'video=Elgato Facecam', format: 'dshow' }],
+                       filterGraph: '[1:v]scale=480:-2[pip];' +
+                                    '[0:v][pip]overlay=W-w-32:H-h-32[vout]',
+                       fps: 30 })
+// → 7, the session's id. Throws with the device named when one will not open,
+//   on this thread, for the reason `record.start` does.
+
+bro.ffmpeg.live.pads(7)
+// → [{ name: 'in0',  device: true,  width: 2560, height: 1440, src: '/@live/7/in0' },
+//    { name: 'in1',  device: true,  width: 1920, height: 1080, src: '/@live/7/in1' },
+//    { name: 'vout', device: false, width: 2560, height: 1440, src: '/@live/7/vout' }]
+
+bro.ffmpeg.live.close(7)     // and `live.close()` with no id closes every one
+
+// **`src` is what a `<video>` takes**, and playing one is the whole API: the
+// engine's media backend resolves `/@live/<id>/<pad>` to a reader of that pad,
+// so a live composition is an element like any other and there is no second
+// path for pixels to arrive by. It is made here rather than spelled out by the
+// caller, because the token's shape is this binary's.
+//
+// One pad per input that has a picture — `in<N>`, the device exactly as it
+// arrived, numbered as the graph numbers it — plus one per pad the graph
+// produces, under the graph's own name, with the composite called `vout`.
+// **Pictures only.** The graph's sound pads are drained like every other, but
+// playing one would be *monitoring*, which asks its own questions.
+//
+// `pads` is asked rather than returned by `open` because a pad's size is not
+// known until libavfilter has configured the graph, and it cannot configure
+// until a device has handed over a frame. The device pads exist the instant
+// `open` returns; the graph's appear a moment later.
+//
+// **A recording opens its own devices**, so `record.start` closes every session
+// first. A DirectShow camera held by something watching is not a slow
+// recording, it is one that fails at the open.
+
 // What the render *said*. Given a cursor, poll also drains libav's log and
 // every value a filter measured, and hands back the cursor to carry forward.
 // Ask for nothing and you pay for nothing: a caller that only wants a

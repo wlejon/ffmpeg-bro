@@ -561,13 +561,20 @@ bool CaptureGraph::drain(const std::function<bool(const Taken&)>& emit, std::str
             t.audio = s.audio;
             t.primary = &s == (s.audio ? aprimary_ : vprimary_);
             t.at = frameTime(s.ctx, s.frame);
-            if (s.audio) {
-                t.frames = soundOf(s);
-                if (t.frames <= 0) continue;
-                t.samples = s.samples.data();
-            } else {
-                t.picture = pictureOf(s);
-                if (!t.picture) continue;
+            t.raw = s.frame;
+            // A consumer with its own idea of a pixel takes `raw` and does its
+            // own conversion — or, in the live case, hands the frame straight
+            // to a decoder that would have had to undo this one. See
+            // `setConverted`.
+            if (converted_) {
+                if (s.audio) {
+                    t.frames = soundOf(s);
+                    if (t.frames <= 0) continue;
+                    t.samples = s.samples.data();
+                } else {
+                    t.picture = pictureOf(s);
+                    if (!t.picture) continue;
+                }
             }
             if (!emit(t)) return false;
         }

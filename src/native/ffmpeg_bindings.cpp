@@ -900,6 +900,78 @@ JSValue js_recordStop(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
+// ── bro.ffmpeg.live ────────────────────────────────────────────────────────
+//
+// Watching without writing. `live.open(spec)` hands back an id, `live.pads(id)`
+// says what it is publishing, and a `<video src="/@live/<id>/<pad>">` plays one
+// of them. It is deliberately *not* part of `record`: a session produces no
+// file, takes no job slot, and its whole purpose is to be running while nothing
+// else is. See the note above `LiveSettings` in ffmpeg_capture.h.
+
+JSValue js_liveOpen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "live.open(spec) requires a spec object");
+    JSValueConst spec = argv[0];
+
+    LiveSettings s;
+    s.filterGraph = strProp(ctx, spec, "filterGraph", "");
+    s.fps = numProp(ctx, spec, "fps", 0);
+    s.audioSampleRate = static_cast<int>(numProp(ctx, spec, "audioSampleRate", 48000));
+    s.audioChannels = static_cast<int>(numProp(ctx, spec, "audioChannels", 2));
+    s.includeAudio = boolProp(ctx, spec, "includeAudio", true);
+    s.scaler = strProp(ctx, spec, "scaler", "");
+
+    JSValue list = JS_GetPropertyStr(ctx, spec, "sources");
+    if (JS_IsArray(list)) {
+        const uint32_t len = arrayLength(ctx, list);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, list, i);
+            if (JS_IsObject(item)) {
+                MediaInput in = inputFromJs(ctx, item);
+                if (!in.path.empty()) s.sources.push_back(std::move(in));
+            }
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, list);
+    if (s.sources.empty())
+        return JS_ThrowTypeError(ctx, "live.open(spec).sources needs at least one device");
+
+    std::string err;
+    const uint64_t id = openLive(s, &err);
+    if (!id) return JS_ThrowTypeError(ctx, "cannot watch: %s", err.c_str());
+    return JS_NewInt64(ctx, static_cast<int64_t>(id));
+}
+
+JSValue js_livePads(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    int64_t id = 0;
+    if (argc >= 1) JS_ToInt64(ctx, &id, argv[0]);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& p : livePads(static_cast<uint64_t>(id))) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", p.name);
+        JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, p.device));
+        JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, p.width));
+        JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, p.height));
+        // The src an element takes, made here rather than spelled out in the
+        // UI: the token's shape is this binary's and a second place that knew
+        // it would be a second place to change.
+        setStr(ctx, o, "src", "/@live/" + std::to_string(id) + "/" + p.name);
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+JSValue js_liveClose(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    int64_t id = 0;
+    if (argc >= 1 && JS_ToInt64(ctx, &id, argv[0]) == 0 && id > 0)
+        closeLive(static_cast<uint64_t>(id));
+    else
+        closeAllLive();
+    return JS_UNDEFINED;
+}
+
 JSValue stringsToJs(JSContext* ctx, const std::vector<std::string>& v) {
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
@@ -1648,6 +1720,17 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, record, "start", JS_NewCFunction(ctx, js_recordStart, "start", 1));
     JS_SetPropertyStr(ctx, record, "stop", JS_NewCFunction(ctx, js_recordStop, "stop", 0));
     JS_SetPropertyStr(ctx, ns, "record", record);
+
+    // Watching is *not* under `record`, and not under `render` either: a
+    // session writes nothing, holds no job slot and shares no status with
+    // either of them. What it shares with a recording is how a device is read,
+    // and that is in the C++ rather than in this surface.
+    JSValue live = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, live, "open", JS_NewCFunction(ctx, js_liveOpen, "open", 1));
+    JS_SetPropertyStr(ctx, live, "pads", JS_NewCFunction(ctx, js_livePads, "pads", 1));
+    JS_SetPropertyStr(ctx, live, "close", JS_NewCFunction(ctx, js_liveClose, "close", 1));
+    JS_SetPropertyStr(ctx, ns, "live", live);
+
     JS_SetPropertyStr(ctx, ns, "openOnStart",
                       g_initialMedia.empty()
                           ? JS_NULL

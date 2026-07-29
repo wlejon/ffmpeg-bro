@@ -193,6 +193,11 @@ export function initCapture(nodes, h) {
         if (what === 'pin' || what === 'size') return;
         forgetLostPads();
         drawCapture();
+        // **The session is reopened, not merely redrawn.** The graph is what a
+        // session runs, so a wire moved on the other stage changes what the
+        // composition *is* — and `syncPreviews` is where that is noticed,
+        // because `sessionKey()` has the graph text in it.
+        syncPreviews();
         if (hooks.changed) hooks.changed();
     });
 }
@@ -558,35 +563,114 @@ function drawCardRows(i) {
 
 // ── the previews ───────────────────────────────────────────────────────────
 
-/// Point every card's `<video>` at its device, opening and closing only what
-/// changed.
+// ── One session, and every picture on the stage is a pad of it ─────────────
+//
+// A card used to play its own `<video src="/@input/in5">`, which opened that
+// device a second time. That was fine while the cards were the only things
+// watching and stopped being fine the moment the *composition* wanted the same
+// cameras: a DirectShow device can be opened once, so two pictures of one
+// camera is not a slow path, it is an error.
+//
+// So `bro.ffmpeg.live` opens each device exactly once and publishes what it
+// sees — each input as `in0`, `in1`, … and whatever the graph makes as `vout`.
+// A card plays its own pad and the panel below plays the composition, and the
+// devices are open once however many pictures are on the screen.
+//
+// **The composition is the thing that could not be shown before.** A card is
+// one device; what two of them make together only existed in the file
+// afterwards, and "judge it by its numbers and then play back the take" was the
+// honest advice. It is the same `CaptureGraph` a recording runs, on the same
+// text the Graph stage built — see the note above `LiveSettings`.
+
+/// The open session: its id, its pads, and the key that says whether it still
+/// describes what is on the stage.
+let session = { id: 0, pads: [], key: '' };
+
+/// Everything that would make the session wrong if it changed: which devices,
+/// how each opens, and the graph they run through. Not the pad choice — that
+/// decides which end a *recording* writes and the session publishes all of them.
+function sessionKey() {
+    const g = graphOf();
+    return captureInputs().map((i) => i.key).join('|') + '::' +
+           (g && g.ok ? g.filterGraph : '');
+}
+
+/// Open the session this stage needs, or leave the one that already fits.
 ///
-/// **There is no registration here any more.** `ui/inputs.js` defines every
-/// input under its own id and hands back `input.src`, so a card plays the same
-/// token the Sources stage and the viewer would — one registration per `-i`
-/// rather than one per place it is shown. Keyed on `input.key`, which is that
-/// module's own answer to "would this open differently", so typing in the
-/// option column re-opens the device and moving the mouse does not.
+/// Refusals are quiet on purpose. A device that will not open is already said
+/// on its own card by the probe, and a graph that will not run is already said
+/// under **The graph**; a third sentence here would be the same news in a
+/// worse place. What happens instead is that there is no picture, which is
+/// what "it did not open" looks like.
+function openSession() {
+    const want = sessionKey();
+    if (session.id && session.key === want) return;
+    closeSession();
+    const live = captureInputs();
+    if (!live.length || live.some((i) => !i.path)) return;
+
+    const g = graphOf();
+    try {
+        session.id = bro.ffmpeg.live.open({
+            sources: live.map((i) => asInput(i)),
+            filterGraph: g && g.ok ? g.filterGraph : '',
+            fps: 30,
+        });
+        session.key = want;
+    } catch (e) {
+        session.id = 0;
+        session.key = want;   // do not retry every frame on a device that refuses
+    }
+}
+
+function closeSession() {
+    if (session.id) { try { bro.ffmpeg.live.close(session.id); } catch (e) { /* gone */ } }
+    session = { id: 0, pads: [], key: '' };
+}
+
+/// The pads the session is publishing, re-asked each time because a pad's size
+/// is not known until libavfilter has configured the graph — which is a moment
+/// after the session opened, not at it.
+function padsNow() {
+    if (!session.id) return [];
+    try { session.pads = bro.ffmpeg.live.pads(session.id); } catch (e) { session.pads = []; }
+    return session.pads;
+}
+
+function padNamed(name) {
+    for (const p of padsNow()) if (p.name === name) return p;
+    return null;
+}
+
+/// Which session is open, for a test that wants to ask the host directly. Zero
+/// where none is — no device, or one that would not open.
+export function sessionId() { return session.id; }
+
+/// Point every picture on the stage at its pad, opening and closing only what
+/// changed.
 function syncPreviews() {
     if (!refs.cards) return;
+    openSession();
     const all = captureInputs();
     for (let i = 0; i < cards.length; i++) syncPreview(cards[i], all[i], i);
-    // **The presets are drawn again here, and this order is the whole reason
-    // they work.** What a preset can write depends on which inputs have a
-    // picture and which have sound, and that is `probe()`'s answer — which
-    // `updateInput` has only just refreshed. Drawn only from `drawCapture()`,
-    // the buttons would be built against last edit's answer.
+    syncComposite();
+    // **Drawn again here, and this order is the whole reason it is right.**
+    // What the panel says about the graph depends on the probes, which
+    // `updateInput` has only just refreshed, and on the pads, which the session
+    // has only just published.
     drawGraph();
 }
 
 function syncPreview(c, input, i) {
     if (!c || !input) return;
-    if (input.key === c.key) return;
-    c.key = input.key;
+    const pad = padNamed(`in${i}`);
+    const key = `${input.key}#${pad ? pad.src : ''}`;
+    if (key === c.key) return;
+    c.key = key;
 
-    if (!input.path || pictureRefusal(input) || !input.src) {
+    if (!input.path || pictureRefusal(input) || !pad) {
         releasePreview(c);
-        c.key = input.key;
+        c.key = key;
         drawCardRows(i);
         return;
     }
@@ -597,10 +681,40 @@ function syncPreview(c, input, i) {
     }
     // Reused rather than rebuilt: `src = next` is a reload, and a preview that
     // blinked every time a checkbox moved would be unwatchable.
-    c.video.setAttribute('src', input.src);
+    c.video.setAttribute('src', pad.src);
     try { c.video.play(); } catch (e) { /* it starts on the next frame */ }
     drawCardRows(i);
 }
+
+/// The composition, playing — or nothing, where the graph does not make one.
+///
+/// Kept outside the panel that describes the graph because that panel is
+/// redrawn on every edit and this element is a reader of a live session: put
+/// over, it would tear the session's pad down and open it again on every
+/// keystroke in the options column.
+function syncComposite() {
+    if (!refs.comp) return;
+    const pad = padNamed('vout');
+    if (!pad) {
+        if (composite) {
+            if (composite.parentNode) composite.parentNode.removeChild(composite);
+            composite = null;
+        }
+        compKey = '';
+        put(refs.comp, () => []);
+        return;
+    }
+    if (pad.src === compKey) return;
+    compKey = pad.src;
+    put(refs.comp, () => [head('What the graph makes of them')]);
+    if (!composite) composite = el('video', { cls: 'cap-composite', 'data-f': 'composite' });
+    refs.comp.append(composite);
+    composite.setAttribute('src', pad.src);
+    try { composite.play(); } catch (e) { /* it starts on the next frame */ }
+}
+
+let composite = null;
+let compKey = '';
 
 /// Let one card's device go.
 ///
@@ -622,8 +736,23 @@ function releasePreview(c) {
     c.key = '';
 }
 
+/// Give every device back.
+///
+/// **The session goes with the elements, and that is the whole of it.** What
+/// held a camera used to be a card's `<video>`; what holds one now is the
+/// session behind every card, so releasing the elements alone would release
+/// nothing. Called before `record.start`, because a recording opens its own
+/// devices — see the note above `LiveSettings` — and on the way off the stage.
 export function stopPreviews() {
     for (const c of cards) releasePreview(c);
+    if (composite) {
+        try { composite.pause(); } catch (e) { /* already gone */ }
+        if (composite.parentNode) composite.parentNode.removeChild(composite);
+        composite = null;
+    }
+    compKey = '';
+    if (refs.comp) put(refs.comp, () => []);
+    closeSession();
 }
 
 /// Coming to the stage: take a picture of each device. Leaving it: give them
@@ -742,6 +871,16 @@ export function tick() {
             if (c.video && c.video.paused)
                 try { c.video.play(); } catch (e) { /* not ready yet */ }
         }
+        if (composite && composite.paused)
+            try { composite.play(); } catch (e) { /* not ready yet */ }
+        // **The graph's pad arrives late, and nothing else would notice.** A
+        // session's device pads exist the moment it opens; the composition's
+        // does not, because libavfilter cannot say how big a pad is until it
+        // has configured the graph and it cannot configure until a camera has
+        // handed over a frame. So this is where the picture appears — the same
+        // frame loop that keeps the previews playing, asking a question that
+        // costs a lookup and answers itself once.
+        if (session.id && !compKey) syncComposite();
         fitPreviews();
         return;
     }

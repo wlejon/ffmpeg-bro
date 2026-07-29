@@ -163,7 +163,25 @@ public:
         const Rgba* picture = nullptr;  ///< video: at the pad's own size
         const float* samples = nullptr; ///< audio: interleaved float
         int frames = 0;
+        /// What actually came off the buffersink, in whatever format the graph
+        /// settled on. Null is never the case; it is `picture`/`samples` that
+        /// are optional — see `setConverted`.
+        ///
+        /// **For a consumer that has its own idea of a pixel.** A recording
+        /// wants RGBA because that is the currency of the writer half; a live
+        /// preview hands the frame to a decoder that would only have to undo
+        /// the conversion, and at 1080p60 an unnecessary `sws_scale` each way
+        /// is most of a core. Valid for the length of the callback, like the
+        /// two above — `av_frame_ref` it to keep it.
+        const AVFrame* raw = nullptr;
     };
+
+    /// Should `drain` convert what it takes into `picture`/`samples`?
+    ///
+    /// True — the default — is the recording: RGBA and interleaved float are
+    /// what `Output` places and what the writer's encoders were opened for.
+    /// False leaves only `raw`, for a consumer that would convert it back.
+    void setConverted(bool on) { converted_ = on; }
 
     /// Empty every sink, handing each mapped pad's frames to `emit`. False when
     /// `emit` refused, which means the caller is stopping and already knows why;
@@ -283,6 +301,9 @@ private:
     bool videoDirect_ = false;
     bool audioDirect_ = false;
     bool configured_ = false;
+    /// See `setConverted`. True is the recording, which is what this class was
+    /// written for and therefore what it does when nobody says otherwise.
+    bool converted_ = true;
 };
 
 } // namespace ffmpegbro

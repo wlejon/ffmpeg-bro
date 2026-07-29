@@ -107,15 +107,30 @@ has run out has nothing further to offer the graph, so going on would be recordi
 the others over a picture held still.
 
 **A live preview per card, before you commit to a recording.** Each picture is an
-ordinary `<video>` playing that device through the same backend, the same decoder and
-the same renderer everything else in this application plays through. There is no
-preview-only path, for the reason the node previews have none: a preview that agreed
-with the recording most of the time would be worse than none, because it would be
-trusted. Two cameras are therefore two devices held open before a recording that will
-want them both, which is the cost of being able to see that the camera is pointed the
-right way *and* that the screen grab has the right monitor in it. What a card shows
-is that device and not the composition — the graph is not previewed here, for the
-same structural reason the viewer cannot show a filter.
+ordinary `<video>` through the same backend, the same decoder and the same renderer
+everything else in this application plays through. There is no preview-only path, for
+the reason the node previews have none: a preview that agreed with the recording most
+of the time would be worse than none, because it would be trusted.
+
+**And below them, what the graph makes of them — playing.** That is the same
+`CaptureGraph` a recording runs, on the same text the Graph stage built, so a
+picture-in-picture is something you look at rather than something you judge by its
+numbers and then discover in the take. It appears when the graph produces a picture
+and is absent when it does not; there is nothing to turn on.
+
+Behind all of it is **one open per device**. A card used to play the device itself,
+which opened it a second time — fine while the cards were the only things watching,
+and an error the moment the composition wanted the same cameras, because a DirectShow
+device can be opened once. So a *session* opens each device exactly once and publishes
+what it sees: each input as `in0`, `in1`, … and whatever the graph makes as `vout`.
+Every picture on the stage is a pad of that one session, and three pictures of two
+cameras costs two opens.
+
+A recording still opens its own devices, and the session is torn down first. That is
+deliberate rather than a limitation: "there is no camera called that" is a refusal
+that belongs to the call that asked for the recording, and a recording that inherited
+a running session would have nothing to refuse with. The cost is the moment between
+the two opens, which is the moment the pictures go dark anyway.
 
 **Every device this build can open plays here, `lavfi` included.** It did not always:
 lavfi is a whole filtergraph wrapped up as a demuxer, and what it hands over is
@@ -1974,6 +1989,14 @@ That last number is the assertion worth having: nothing but the graph could have
 produced it, so a session that quietly recorded one device would fail rather than
 pass with a plausible file.
 
+The **composition preview** is asserted the same way and before any file exists: the
+picture below the cards has to be exactly twice the width of the picture on one of
+them. Measured against the card rather than written down, because the two are made of
+the same devices and a constant would only say whether somebody had edited the test.
+The session behind it is asked directly too — three pads over two `-i`s, two of them
+devices — which is the assertion that one open per device is what is actually
+happening rather than what is intended.
+
 Then the states either side of a graph that works. Widening the `hstack` to three
 inputs leaves a pad nothing arrives at, and that is a *refusal* — the button goes
 dead, the stage names the empty pad in the Graph stage's own words, and the command
@@ -2136,10 +2159,14 @@ Honest list of what does not work:
   where "again" is ambiguous — a pad handed to the derivation.
 - **A generated source in the viewer.** A `testsrc` or a `movie` renders and
   previews on its own card, and the *viewer* cannot show it for the same reason
-  it cannot show a filter: playback is the engine decoding a file into a
-  `<video>` and there is no filtergraph anywhere in that path. A render with
+  it cannot show a filter: playback on the timeline is the engine decoding a
+  file into a `<video>`, and the filtergraph is not in that path. A render with
   nothing on the timeline is therefore something you watch on the Graph stage
-  and on the Encode stage's preview, not on the program monitor.
+  and on the Encode stage's preview, not on the program monitor. The Capture
+  stage's composition is the shape of the answer — a filtergraph's output
+  playing in an ordinary `<video>` — and what it does not have is the other
+  half: a session is pushed by devices on the wall clock, and a timeline is
+  pulled by a playhead that can be dragged.
 - **A generator that follows the render.** A source is placed carrying the
   render's size and rate, and it does not chase them: change the output size
   afterwards and the graph is refused with both numbers rather than rescaled.
@@ -2242,15 +2269,12 @@ Honest list of what does not work:
   watched and recorded. Live *through* the edit — a camera composited with a
   title and streamed out — is a different thing again and needs the render loop
   to run on the wall clock.
-- **Seeing the composition before you record it.** A session's cards show each
-  device — that is the whole point of them, and it is what tells you the camera
-  is pointed the right way — but *what the graph makes of them together* is not
-  drawn anywhere until the file exists. It is the same structural reason the
-  viewer cannot show a filter: a preview here is the engine decoding a device
-  into a `<video>` and there is no filtergraph in that path. The Graph stage's
-  per-node preview is the shape of the answer and it is about the render's
-  graph, not the recording's. So a picture-in-picture is judged by its numbers
-  and then by playing back the take.
+- **Hearing a recording before you commit to it.** The composition is shown; the
+  mix is not. The graph's sound pads are drained like every other, but nothing
+  is played from them, because that is *monitoring* and monitoring asks
+  questions a preview does not — whose speakers, and what happens when the
+  microphone can hear them. The levels a session is running at are therefore
+  not visible either, which is the part worth having first.
 - **More than one file out of one recording.** A recording writes one muxer, so it
   maps one picture and one sound. The graph can end in half a dozen pads and the
   Write stage can feed a stream from each of them, but that is a render's stream

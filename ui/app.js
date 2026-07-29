@@ -119,6 +119,7 @@ capture.initCapture({
     // fixed preview node would be one device's, and this stage reads several.
     cards: el('cap-cards'),
     add: el('cap-add'),
+    comp: el('cap-comp'),
     graph: el('cap-graph'),
     bar: el('cap-bar'),
     note: el('cap-note'),
