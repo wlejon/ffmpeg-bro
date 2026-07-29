@@ -54,15 +54,46 @@ let fresh = true;
 export const isFirstRun = () => fresh;
 export const noLongerFirstRun = () => { fresh = false; };
 
+/// Everything a **document** carries, which is the workspace's list plus the
+/// four things that only mean anything inside one edit.
+///
+/// The distinction is the one `REMEMBERED` is built on, read the other way
+/// round: a chapter, a render range and an output path all name something about
+/// *this* timeline, so carrying them into the next edit would put a mark
+/// somewhere that means nothing — and carrying them inside the document that
+/// timeline is in, is the whole point of there being a document. `width` and
+/// `height` join them because a render size is measured against a canvas, and
+/// the canvas is the document's.
+export const DOCUMENT_KEYS = REMEMBERED.concat(
+    ['chapters', 'rangeIn', 'rangeOut', 'path', 'width', 'height']);
+
 export function restore() {
     try {
         const saved = localStorage.getItem(SETTINGS_KEY);
         if (saved) {
-            const blob = JSON.parse(saved);
-            for (const k of REMEMBERED) if (blob[k] !== undefined) settings[k] = blob[k];
+            adopt(JSON.parse(saved), REMEMBERED);
             fresh = false;
+            return;
         }
     } catch (e) { /* first run, or a stored blob from an older shape */ }
+    sanitise();
+}
+
+/// Take a stored blob — from `localStorage`, or from a document — and become it.
+///
+/// The two callers differ in which keys they carry and in nothing else, which is
+/// why the sanitising below has one home: what a document says about the
+/// container it will write is no more trustworthy than what the workspace says,
+/// because both were written by a version of this code that is not the one
+/// reading them.
+export function adopt(blob, keys) {
+    const b = blob && typeof blob === 'object' ? blob : {};
+    for (const k of keys || REMEMBERED) if (b[k] !== undefined) settings[k] = b[k];
+    sanitise();
+}
+
+/// What is in `settings` now, made safe to use.
+function sanitise() {
     // The remembered container and codec may not exist in this build — and
     // `container` used to hold an *extension*, so a blob written before muxers
     // were asked for by name says "mkv", which libavformat has never heard of.
@@ -100,6 +131,25 @@ export function restore() {
             width: Math.max(0, Math.round(Number(v.width) || 0)),
             height: Math.max(0, Math.round(Number(v.height) || 0)),
         }));
+    // The four a document carries and the workspace does not. Nothing on this
+    // list was ever read from storage before there was a document, so this is
+    // where their reader is: a chapter reaches the muxer as a pair of times and
+    // a title, and one that came back as a string would be written into the
+    // container as `NaN`. `path` is left as whatever it says — a path that is
+    // not there is a render that fails and says where, which is the answer, not
+    // something to be repaired behind somebody's back.
+    settings.chapters = (Array.isArray(settings.chapters) ? settings.chapters : [])
+        .filter((c) => c && typeof c === 'object')
+        .map((c) => ({ start: Math.max(0, Number(c.start) || 0),
+                       end: Math.max(0, Number(c.end) || 0),
+                       title: String(c.title || '') }));
+    settings.path = String(settings.path || '');
+    for (const k of ['rangeIn', 'rangeOut'])
+        settings[k] = Math.max(0, Number(settings[k]) || 0);
+    // Pixels, so whole ones: a size reaches the encoder as an int and half a
+    // line is not a picture.
+    for (const k of ['width', 'height'])
+        settings[k] = Math.max(0, Math.round(Number(settings[k]) || 0));
     // A stored blob outlives the shape it was stored in, and a stream row with
     // a kind this build cannot write would reach render.start and be refused
     // there — on the far side of a stage where nothing looks wrong.

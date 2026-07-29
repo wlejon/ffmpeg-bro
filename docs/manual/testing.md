@@ -50,6 +50,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_report.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last two sections
@@ -166,6 +167,26 @@ export suite renders the same seconds with the filter and without it and
 compares them at both moments — 99 dB apart before the cue and 31 dB during it.
 Either half alone proves nothing, because a filter that did nothing passes the
 first and a filter that ruined every frame passes the second.
+
+`ui_document.js` is the whole edit through a file and back — see
+[The document](document.md). The shape is a round trip, and the step that makes
+it mean anything is the one in the middle: after saving, the suite starts a new
+document, opens a *different* file, and only then reads the saved one back. Skip
+that and every assertion below passes for free, because the model was never
+actually cleared.
+
+What it checks is mostly **identity**, which is why it takes two videos rather
+than one. A filter is inserted against `clip:<id>/after-scale` and a source node
+is placed naming the second input's id; after the round trip both have to point
+at the same shot and the same file, and one file cannot tell a renumbering from a
+correct answer. It also asserts the two negatives that the design turns on — that
+a clip in the file carries no probe and no name, because both are its input's
+answer, and that a snapshot does not change when the model does, because an undo
+stack is a list of them and one that shared its objects would be N copies of the
+present. The failure cases are driven too: a document whose input path has been
+edited to something that is not there opens *short*, with the input carrying
+libav's message and the clips of it named as left out, and a file that is not
+JSON at all is refused by name rather than by a stack trace.
 
 `captest` is what this build can write, read, reach and capture, and it prints
 as much as it asserts: how many muxers, which of them write pictures, which

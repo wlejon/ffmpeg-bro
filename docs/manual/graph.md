@@ -432,10 +432,14 @@ one wire and a copy of one would be a second producer arriving at a pad that
 already has one. A clip trimmed out of the rendered range takes its nodes and
 wires with it and brings them back; deleting the clip takes them for good.
 
-They are remembered in `localStorage` between runs — there is no project file
-yet, and this is now a good deal more than the first thing that makes one worth
-having. A hand-wired graph is work in the way a slider position is not, and it
-currently lives on one machine under one key for the whole application.
+They are remembered in two places, and the difference between them matters.
+`localStorage` holds the **workspace** — one key, one machine, whatever was last
+on the screen — and a [document](document.md) holds an **edit** somebody named
+and saved. Both read the same data; what they disagree about is a node naming
+one of your inputs, which only the document can bring back, because only the
+document brings the inputs back with it. A graph restored from the workspace
+drops those nodes on purpose: the ids would name whichever file happened to be
+third that run.
 
 ## What changes when there is one
 

@@ -23,4 +23,7 @@
 | `[` `]` | one step back / forward along the pipeline |
 | `Space` `←` `→` | on the Encode stage: play / pause and step the comparison |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
+| `Ctrl`+`S` | save the document (`Ctrl`+`Shift`+`S` to save it somewhere else) |
+| `Ctrl`+`O` | open a document |
+| `Ctrl`+`N` | start a new one |
 | `Delete` | remove the selection |

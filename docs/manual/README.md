@@ -15,6 +15,8 @@ no reader looking for the command bar would have gone.
 
 - **[How playback works](playback.md)** — what happens between the file and the
   screen, and why there is no proxy transcode
+- **[The document](document.md)** — the whole chain as one file, and the only
+  part here that is not a stage
 - **[Capture](capture.md)** — screens, cameras and microphones; what a live
   session is and what a recording is
 - **[Sources](sources.md)** — an input, its streams, and the demuxer options

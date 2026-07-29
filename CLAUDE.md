@@ -21,7 +21,7 @@ ctest --test-dir build -C Release
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
 `sequences`, `capture`, `hardware`, `ui-player`, `ui-sources`, `ui-hardware`,
 `ui-export`, `ui-sequence`, `ui-report`, `ui-measure`, `ui-subtitles`,
-`ui-capture`, `ui-filtergraph`, `ui-graph`):
+`ui-capture`, `ui-filtergraph`, `ui-graph`, `ui-document`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -64,9 +64,10 @@ Three layers:
   executables and by every test.
 - **`ui/`** — the application, plain ES modules + DOM, run by bro's QuickJS
   engine. `ui/bro.json` is the window manifest.
-- **`docs/`** — `manual/`, one file per stage plus an honest "Not yet"
-  ([the index](docs/manual/README.md) lists them), and api.md (the
-  `bro.ffmpeg` host surface). README stays short; the depth lives here.
+- **`docs/`** — `manual/`, one file per stage plus the document, the keyboard,
+  the testing guide and an honest "Not yet" ([the
+  index](docs/manual/README.md) lists them), and api.md (the `bro.ffmpeg` host
+  surface). README stays short; the depth lives here.
 
 The UI is **not a browser**. The DOM is bro's subset, and the gaps matter, so
 check what the engine actually implements before reaching for a web API — and
@@ -90,6 +91,23 @@ Stage views hide each other with `display:none` and are **never unmounted** —
 the viewer's `<video>` elements *are* the decoders. Consequence that keeps
 biting: anything in the frame loop that measures a panel must ignore a
 measurement of zero, because most of the window is `display:none` at any moment.
+
+### The document is the other seam
+
+`ui/document.js` `snapshot()` produces one plain JS object describing the whole
+*edit* — inputs, clips, canvas, graph overlay, output settings — and `open()`
+puts one back. A `.fbro` file is that object stringified; an undo stack would be
+a list of them. Write the file format first and you get a serialiser, which can
+only ever do one of those.
+
+**Ids are part of it, and that is the load-bearing part.** A clip's id and an
+input's id are names other files write down — `clip:7/after-scale` is a graph
+anchor, `in3` is a source node — so an open that renumbered would silently
+re-point a filter at a different shot. `useClipId`/`useInputId` are how the two
+counters are told what a document has already handed out. `ui/graph/overlay.js`
+has two reads for exactly this reason: `restore()` (localStorage, drops input
+nodes because the inputs are not coming back) and `adopt()` (a document, keeps
+them because they are).
 
 ### The spec is the seam
 
@@ -171,10 +189,12 @@ monitoring asks. The scale both it and A1 are drawn on is `ui/levels.js`.
   rule in filter vocabulary. If one changes, the other must. Same for
   `projectFps()` (timeline rate) vs `outputFps()` (encoder rate) — genuinely two
   questions, deliberately not merged.
-- **Persistence is a version-tolerant read.** There is no project file: export
-  settings and graph overlay live in `localStorage` (`ui/.storage.json`, gitignored).
-  What is there was written by an earlier version of this code and cannot be
-  trusted — every reader sanitises.
+- **Persistence is a version-tolerant read.** Two homes, two meanings: the
+  *workspace* is `localStorage` (`ui/.storage.json`, gitignored) holding export
+  settings and the graph overlay, and a *document* is `ui/document.js` holding
+  the whole edit as one file. What is in either was written by an earlier
+  version of this code and cannot be trusted — every reader sanitises, and
+  `store.adopt()` is deliberately the one sanitiser both paths go through.
 - **Comments say *why*, at the top of the file.** Every source file opens with a
   block explaining what it is and which decision it embodies, and exported
   functions carry `///` doc comments including the alternatives rejected and the

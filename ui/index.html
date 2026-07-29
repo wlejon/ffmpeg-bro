@@ -8,6 +8,19 @@
 <body>
     <header id="topbar">
         <span id="appname">ffmpeg&#8203;-bro</span>
+
+        <!-- The document: what this edit is called, and the three acts that
+             change the answer. Here rather than on a stage because it is the
+             one thing that is not about any stage — a document is the whole
+             chain, saved. The dot is the unsaved marker; see ui/document.js
+             on why it is deliberately quick to appear. -->
+        <span id="doc">
+            <button id="doc-open" class="tiny" title="Open a document (Ctrl-O)">Open</button>
+            <button id="doc-save" class="tiny" title="Save (Ctrl-S)">Save</button>
+            <button id="doc-new" class="tiny" title="Start again (Ctrl-N)">New</button>
+            <span id="doc-name" class="dim"></span>
+        </span>
+
         <span id="filename" class="dim">no media</span>
         <span id="chips"></span>
         <span class="spacer"></span>

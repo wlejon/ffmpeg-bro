@@ -82,12 +82,34 @@ function openingKey(i) {
     return JSON.stringify(asInput(i));
 }
 
+/// Note that an id has been handed out, so the counter never issues it again.
+///
+/// An input's id is written down outside this file — the graph overlay's source
+/// nodes name one, and so does every clip in a document — so restoring one has
+/// to keep the id rather than renumber and silently re-point a node at a
+/// different file. Told rather than set, for the reason `useClipId` in
+/// ui/project.js is: something may already have taken a number from this counter
+/// before the document arrives.
+export function useInputId(id) {
+    const m = /^in(\d+)$/.exec(String(id || ''));
+    if (m && Number(m[1]) >= nextId) nextId = Number(m[1]) + 1;
+}
+
 /// Add one. Probed and registered immediately — `probe()` is in-process, so the
 /// answer is here before anything has to be laid out, and the registration is
 /// what lets a `<video>` play it.
+///
+/// **`spec.id` is honoured when it is free**, which is how a document puts its
+/// inputs back under the nodes and clips that name them. Ignored when something
+/// already has it, because two inputs `byId` cannot tell apart is worse than a
+/// node that has lost its file: every clip of the second would be laid out
+/// against the first.
 export function addInput(spec) {
+    const wanted = String((spec && spec.id) || '');
+    const id = wanted && !byId(wanted) ? wanted : `in${nextId++}`;
+    useInputId(id);
     const input = {
-        id: `in${nextId++}`,
+        id,
         path: String(spec.path || '').trim(),
         format: spec.format || '',
         options: Object.assign({}, spec.options),

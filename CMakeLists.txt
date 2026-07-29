@@ -277,12 +277,20 @@ add_test(NAME ui-measure COMMAND ffmpeg-bro-headless
 add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_subtitles.js"
          -- "${FIXTURE_DIR}")
+# The whole edit as one object, round-tripped through a file. Takes two videos
+# because the fact that matters most is an *identity* one — a graph node names
+# `in3` and an anchor names `clip:7`, and both have to mean the same file and the
+# same shot after the document has been opened over the top of a different edit.
+# One file cannot tell a renumbering from a correct answer.
+add_test(NAME ui-document COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_document.js"
+         -- "${FIXTURE_A}" "${FIXTURE_B}")
 set_tests_properties(decode export capabilities inputs sequences hardware PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles PROPERTIES
+                     ui-measure ui-subtitles ui-document PROPERTIES
                      FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -312,5 +320,5 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-hardware ui-export
-                     ui-sequence ui-report ui-measure ui-subtitles
+                     ui-sequence ui-report ui-measure ui-subtitles ui-document
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

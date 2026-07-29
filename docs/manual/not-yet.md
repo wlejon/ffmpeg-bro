@@ -22,9 +22,14 @@ Honest list of what does not work:
   edit is applied to the model and the model is what is drawn, so putting a cut
   wire back means wiring it again and putting a split back means deleting one
   half and trimming the other. The graph is where the absence is felt most,
-  because a wire is work in the way a slider position is not, which is the same
-  argument the project file below is made on. `Give it back` covers the one case
-  where "again" is ambiguous — a pad handed to the derivation.
+  because a wire is work in the way a slider position is not. `Give it back`
+  covers the one case where "again" is ambiguous — a pad handed to the
+  derivation. **What is now in place is the hard half**: `snapshot()` in
+  `ui/document.js` produces the whole edit as one value and `open()` puts one
+  back, which is what a stack would hold and what popping one would do — see
+  [The document](document.md). What is missing is the stack, the two keys, and a
+  rule for which changes are worth a step of their own, since a drag arrives as
+  a hundred.
 - **A generated source in the viewer.** A `testsrc` or a `movie` renders and
   previews on its own card, and the *viewer* cannot show it — no longer because
   there is no filtergraph in the playback path (there is one now, per clip), but
@@ -44,13 +49,15 @@ Honest list of what does not work:
   way to tell those apart from the node alone. Deciding it would mean tracing
   what each generator reaches and what resizes it on the way, which is a real
   piece of work and not a missing line.
-- **A project file.** What you insert, lock, place and wire is remembered in
-  `localStorage`, which is per machine rather than per edit. It was the first
-  thing that made a document format worth having and is now most of the reason —
-  and a node naming one of your inputs is deliberately *not* written there,
-  because the inputs themselves do not survive a restart and their ids start
-  again from one, so a restored reference would name whichever file happened to
-  be third next time.
+- **A document that remembers where you were in it.** The edit is a file now —
+  see [The document](document.md) — and what a document holds is the *edit*: the
+  inputs, the clips, the canvas, the graph and the output settings, with the ids
+  that the graph's anchors and source nodes are written against. What it does not
+  hold is the session around it: which clip was selected, where the playhead was
+  standing, which stage you were on, how far the timeline was zoomed. Those are
+  the running application rather than the edit, and adding them would mean
+  deciding whether opening somebody else's document should move *your* playhead —
+  which is a question about what a document is for, not a missing field.
 - **Animating a value.** `enable` turns a filter on and off for a span and that
   is the whole of what it does — there is no interpolation anywhere in ffmpeg's
   timeline support, so a value cannot be ramped by it. What ffmpeg has instead is

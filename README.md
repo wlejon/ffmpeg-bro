@@ -83,12 +83,14 @@ tested, and a scriptable media tool in its own right).
 | `[` `]` | one step back / forward along the pipeline |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
 | `Delete` | remove the selection |
+| `Ctrl`+`S` `Ctrl`+`O` `Ctrl`+`N` | save, open and start a document |
 
 ## Documentation
 
 - **[The manual](docs/manual/README.md)** — one part per stage, in detail:
   playback, capture, inputs, the timeline, the graph, exporting, subtitles,
-  measurement, and an honest list of what does not work yet.
+  measurement, [the document](docs/manual/document.md) an edit is saved as,
+  and an honest list of what does not work yet.
 - **[The `bro.ffmpeg` API](docs/api.md)** — the JS surface that headless scripts
   and the test suites drive.
 
@@ -115,8 +117,8 @@ honest, complete list:
   forks) is badged `fx` rather than left looking broken.
 - A phone clip plays, lays out and exports the right way up, but the timeline's
   filmstrip still shows its frames on their side.
-- No project file — graph work persists per machine in local storage, not per
-  edit.
+- A document holds the edit and not the session: which clip was selected, where
+  the playhead was and how far the timeline was zoomed are not written.
 
 ## License
 

@@ -50,12 +50,14 @@
 //   while you wire something in between, and "there is no wire here" is not
 //   something the absence of data can say.
 //
-// **It is not a project file.** There is no project file yet; this is the first
-// thing that makes one worth having, and it is now a good deal more worth
-// having than it was — a hand-wired graph is work in a way that a slider
-// position is not, and it currently lives in localStorage on one machine under
-// one key for the whole application. Until then `retain()` is what keeps it
-// from accumulating forever.
+// **It is not itself the document, and it is now part of one.** This file holds
+// the live state and two persistences of it: `localStorage`, which is the
+// workspace — one key, one machine, whatever was last on the screen — and a
+// document, which is an edit somebody named and saved (`ui/document.js`).
+// `restore()` and `adopt()` are the two reads and they differ in exactly one
+// place, which is the whole reason the document was worth building: a node
+// naming an input can only come back if the inputs come back with it.
+// `retain()` is what keeps the workspace copy from accumulating forever.
 
 const KEY = 'ffmpeg-bro.graph';
 
@@ -571,76 +573,101 @@ function filterRec(n, withAnchor) {
     return rec;
 }
 
+/// What the workspace was left holding.
+export function restore() {
+    try {
+        const saved = localStorage.getItem(KEY);
+        if (saved) load(JSON.parse(saved), false);
+    } catch (e) { /* first run, or a blob from an older shape */ }
+}
+
+/// The same read, from a document rather than from `localStorage` — **and with
+/// the input nodes kept**.
+///
+/// That is the whole difference between the two callers and it is not a
+/// preference. A blob out of `localStorage` arrives beside a fresh input list
+/// whose ids start again from one, so a restored `in3` would name whichever file
+/// happened to be third this run. A document restores its own inputs, by their
+/// own ids, before it gets here — see `ui/document.js` — so `in3` means the file
+/// it meant when the document was written. Same data, two different answers to
+/// what an id refers to.
+///
+/// Announces itself, unlike `restore()`: this happens while the application is
+/// running and everything downstream of the graph has to be told. `restore()`
+/// runs before anything has asked for a graph at all, and would only be telling
+/// listeners about the state they are about to read anyway.
+export function adopt(blob) {
+    load(blob && typeof blob === 'object' ? blob : {}, true);
+    changed('adopt');
+}
+
+/// The read both of them are.
+///
 /// **A blob written before there were free nodes still loads**, and loads as
 /// exactly what it was: three keys it has never heard of come back empty, and an
 /// overlay of inserts and locks behaves the way it always did. The shape grew
 /// rather than changing, which is what makes that possible and is worth the
 /// restraint it cost — the alternative was a version number and a migration for
 /// work somebody had done and could not get back.
-export function restore() {
-    try {
-        const saved = localStorage.getItem(KEY);
-        if (!saved) return;
-        const blob = JSON.parse(saved);
-        const list = (v, withAnchor) => (Array.isArray(v) ? v : [])
-            .map((n) => filterRec(n, withAnchor)).filter(Boolean);
-        // **A node naming one of the document's inputs is not restored**, and
-        // that is not an oversight to be fixed by writing it out — there is
-        // still no project file, so the inputs themselves do not survive a
-        // restart and their ids are handed out from one again on every run. A
-        // restored `in3` would therefore name whichever file happened to be
-        // third next time, which is worse than losing the node: it is a graph
-        // that quietly reads a different file. This is the second thing that
-        // makes a project file worth having, and the first is on the line above.
-        const dropped = new Set();
-        const nodes = list(blob.nodes, false).filter((n) => {
-            if (n.kind !== 'input') return true;
-            dropped.add(n.id);
-            return false;
-        });
-        state = {
-            inserts: list(blob.inserts, true),
-            nodes,
-            wires: (Array.isArray(blob.wires) ? blob.wires : [])
-                .filter((w) => w && w.id && w.from && w.to &&
-                               !dropped.has(String(w.from)) && !dropped.has(String(w.to)))
-                .map((w) => ({ id: String(w.id), from: String(w.from),
-                               fromPort: Number(w.fromPort) || 0,
-                               to: String(w.to), port: Number(w.port) || 0 })),
-            cuts: (Array.isArray(blob.cuts) ? blob.cuts : []).map(String),
-            locks: (blob.locks && typeof blob.locks === 'object') ? blob.locks : {},
-            sizes: (blob.sizes && typeof blob.sizes === 'object') ? blob.sizes : {},
-            pins: (blob.pins && typeof blob.pins === 'object') ? blob.pins : {},
-        };
-        // Ids handed back to us must not be handed out again. Wires are counted
-        // out of the same sequence as nodes, so that no two things in this file
-        // can ever be told apart by their id alone and then turn out not to be
-        // — and **the ids just dropped count too**, because they are still
-        // written all over the blob even though the nodes are not coming back.
-        const ids = state.inserts.concat(state.nodes, state.wires).map((r) => r.id)
-                        .concat(Array.from(dropped));
-        for (const id of ids) {
-            const m = /^[uw](\d+)$/.exec(id);
-            if (m) seq = Math.max(seq, Number(m[1]));
-        }
-        // ...and what those nodes were arranged with goes with them. So does
-        // anything left over by an older version that dropped a node without
-        // it: a user node's id is `u<n>` and nothing else here is shaped like
-        // one — every anchor carries a `/` or a `:` — so a key of that shape
-        // naming no record is a node that is gone, and the blob on disk has
-        // been through this already.
-        for (const id of Array.from(dropped)) forget(id);
-        const known = new Set(state.inserts.concat(state.nodes).map((r) => r.id));
-        for (const bag of [state.sizes, state.pins])
-            for (const key of Object.keys(bag))
-                if (/^u\d+$/.test(key) && !known.has(key)) delete bag[key];
-    } catch (e) { /* first run, or a blob from an older shape */ }
+///
+/// `keepInputs` is the one thing the two callers disagree about; see `adopt`.
+function load(blob, keepInputs) {
+    const list = (v, withAnchor) => (Array.isArray(v) ? v : [])
+        .map((n) => filterRec(n, withAnchor)).filter(Boolean);
+    // **A node naming one of the document's inputs is dropped unless the caller
+    // is bringing those inputs with it.** A restored `in3` beside a fresh input
+    // list would name whichever file happened to be third this run, which is
+    // worse than losing the node: it is a graph that quietly reads a different
+    // file.
+    const dropped = new Set();
+    const nodes = list(blob.nodes, false).filter((n) => {
+        if (n.kind !== 'input' || keepInputs) return true;
+        dropped.add(n.id);
+        return false;
+    });
+    state = {
+        inserts: list(blob.inserts, true),
+        nodes,
+        wires: (Array.isArray(blob.wires) ? blob.wires : [])
+            .filter((w) => w && w.id && w.from && w.to &&
+                           !dropped.has(String(w.from)) && !dropped.has(String(w.to)))
+            .map((w) => ({ id: String(w.id), from: String(w.from),
+                           fromPort: Number(w.fromPort) || 0,
+                           to: String(w.to), port: Number(w.port) || 0 })),
+        cuts: (Array.isArray(blob.cuts) ? blob.cuts : []).map(String),
+        locks: (blob.locks && typeof blob.locks === 'object') ? blob.locks : {},
+        sizes: (blob.sizes && typeof blob.sizes === 'object') ? blob.sizes : {},
+        pins: (blob.pins && typeof blob.pins === 'object') ? blob.pins : {},
+    };
+    // Ids handed back to us must not be handed out again. Wires are counted
+    // out of the same sequence as nodes, so that no two things in this file
+    // can ever be told apart by their id alone and then turn out not to be
+    // — and **the ids just dropped count too**, because they are still
+    // written all over the blob even though the nodes are not coming back.
+    const ids = state.inserts.concat(state.nodes, state.wires).map((r) => r.id)
+                    .concat(Array.from(dropped));
+    for (const id of ids) {
+        const m = /^[uw](\d+)$/.exec(id);
+        if (m) seq = Math.max(seq, Number(m[1]));
+    }
+    // ...and what those nodes were arranged with goes with them. So does
+    // anything left over by an older version that dropped a node without
+    // it: a user node's id is `u<n>` and nothing else here is shaped like
+    // one — every anchor carries a `/` or a `:` — so a key of that shape
+    // naming no record is a node that is gone, and the blob on disk has
+    // been through this already.
+    for (const id of Array.from(dropped)) forget(id);
+    const known = new Set(state.inserts.concat(state.nodes).map((r) => r.id));
+    for (const bag of [state.sizes, state.pins])
+        for (const key of Object.keys(bag))
+            if (/^u\d+$/.test(key) && !known.has(key)) delete bag[key];
 }
 
-/// **The whole state, including the input nodes `restore()` will refuse to put
-/// back.** That looks like waste and is not: those records are the only surviving
-/// evidence of which ids were handed out, and `restore()` reads them for exactly
-/// that — it scans them into `seq` so a node made next run cannot be issued an id
+/// The workspace copy: **the whole state, including the input nodes `restore()`
+/// will refuse to put back.** That looks like waste and is not: those records
+/// are the only surviving evidence of which ids were handed out, and the read
+/// uses them for exactly that — it scans them into `seq` so a node made next run
+/// cannot be issued an id
 /// the blob still mentions, and it uses them to find the `pins` and `sizes` that
 /// belonged to them and delete those too. Write only what comes back and the
 /// reader loses the list it cleans up from. See the note beside the `dropped` set.

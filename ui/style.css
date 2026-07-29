@@ -64,6 +64,13 @@ body { display: flex; flex-direction: column; }
     color: var(--accent);
 }
 
+/* The document group. `#doc-name` carries the unsaved marker as a `::after`
+   rather than as a character in the text, so that the name a test reads is the
+   name and not the name plus a dot. */
+#doc { display: flex; align-items: center; gap: 4px; }
+#doc-name { max-width: 22ch; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#doc-name.modified::after { content: " •"; color: var(--accent); }
+
 #filename {
     max-width: 40%;
     overflow: hidden;

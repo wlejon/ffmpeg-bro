@@ -90,7 +90,12 @@ export function changed(what) {
 let nextId = 1;
 
 /// A clip's default geometry: the whole picture, fitted inside the canvas.
-function defaultTransform() {
+///
+/// Exported for the document reader, which merges what was written over the top
+/// of this rather than validating the shape field by field — one home for what a
+/// clip's geometry *is*, so a document written by a version with one more field
+/// in it does not come back through a second, shorter idea of the same object.
+export function defaultTransform() {
     return {
         fit: 'contain',                     // contain | cover | stretch | actual
         zoom: 1,
@@ -205,6 +210,34 @@ export function addClip(clip, atEnd = true) {
     }
     if (project.clips.length === 1) project.fps = clip.fps;
     return clip;
+}
+
+/// Put a clip back exactly where it says it is.
+///
+/// `addClip` has an opinion about *where* — the end of its track, or the top of
+/// it for a batch — because dropping a file is an act with one. Opening a
+/// document is not: the arrangement is the thing being restored, and a clip that
+/// arrived at the end of its track instead would be an edit nobody made. It
+/// seeds no canvas either, for the same reason: a document brought its own.
+export function placeClip(clip) {
+    project.clips.push(clip);
+    sort();
+    return clip;
+}
+
+/// Note that an id has been handed out, so this counter never issues it again.
+///
+/// A clip's id is written down outside this file — `clip:7/after-scale` is how
+/// the graph overlay pins a filter to one — so opening a document has to put the
+/// same ids back rather than renumber and quietly re-point every anchor at a
+/// different shot. Told rather than set, because a document is not the only
+/// thing handing ids out: a split has already taken one from this counter by the
+/// time a document is opened over the top, and "never this one again" is the
+/// only rule that is true whichever order they happen in. Same rule as `seq` in
+/// ui/graph/overlay.js, for the same reason.
+export function useClipId(id) {
+    const n = Number(id);
+    if (Number.isFinite(n) && n >= nextId) nextId = Math.floor(n) + 1;
 }
 
 export function removeClip(clip) {

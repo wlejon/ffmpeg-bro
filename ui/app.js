@@ -7,6 +7,7 @@
 // frame-accurate, why seeking is instant, and why several clips can sit on one
 // timeline without any of them being transcoded first.
 
+import * as doc from './document.js';
 import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
@@ -288,6 +289,15 @@ onChange((what) => {
     // else in this call would have noticed going away.
     graphOverlay.retain(project.clips.map((c) => c.id),
                         inputsModel.inputs.map((i) => i.id));
+    // The unsaved marker, for everything on this channel that is an *edit*.
+    // Three things here are not one, and each for its own reason: a `selection`
+    // is not in the document at all, an `analysis` is a waveform and a
+    // filmstrip arriving off the worker minutes after the edit that asked for
+    // them, and a `document` is the change a document *is* — it arrives here on
+    // its way in and would otherwise mark a file unsaved the instant it was
+    // opened.
+    if (what !== 'selection' && what !== 'analysis' && what !== 'document')
+        { doc.touch(); drawDocument(); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
         // The selection ring lives on the picture, so a change of selection is
@@ -355,10 +365,132 @@ function refreshPlayback() {
 // A filter inserted, edited or taken off. The overlay has its own channel
 // because a graph edit is not a change to the timeline, and this is the one
 // thing outside the Graph stage that has to hear about it.
-graphOverlay.onChange(() => refreshPlayback());
+// ...and the document, for the same reason: a wire drawn is work, and it is the
+// work the document exists to keep. `adopt` is the overlay a document just
+// brought with it, so it is the one change on this channel that does not make
+// the document unsaved.
+graphOverlay.onChange((what) => {
+    if (what !== 'adopt') { doc.touch(); drawDocument(); }
+    refreshPlayback();
+});
 
-// A file named on the command line, handed over by the host binding.
-if (bro.ffmpeg.openOnStart) open(bro.ffmpeg.openOnStart);
+// ── the document ───────────────────────────────────────────────────────────
+//
+// The whole edit, saved and opened again. `ui/document.js` holds the object and
+// the file; what is here is the three presses, the keys and everything that has
+// to be put right afterwards — which is the same list `openBatch` puts right,
+// because opening a document is opening files with the arrangement already
+// decided.
+
+doc.initDocument({
+    attach: (clip) => { viewer.attachClip(clip); analyzeClip(clip); },
+    detach: (clip) => viewer.detachClip(clip),
+});
+
+const docName = el('doc-name');
+
+/// Put the screen back after the model has been replaced wholesale.
+///
+/// Everything a drop does, in one call, because a document arrives as every
+/// clip at once: elements are attached by the hook above, and this is the half
+/// that is about the *window* — the picture laid out, the ruler fitted to a
+/// timeline of a new length, the playhead at the top of it.
+function documentOpened(result) {
+    dropzone.classList.toggle('hidden', project.clips.length > 0);
+    setControlsEnabled(project.clips.length > 0);
+    viewer.layout();
+    timeline.fitView();
+    setPlayhead(0);
+    showProperties();
+    updateCropUI();
+    applyAudioAll();
+    // The encode side reads `settings` when it is drawn and not on the model's
+    // change channel, so a document opened *from* the Write stage — which
+    // Ctrl-O can be, because the document keys are above the per-stage handlers
+    // — would otherwise leave a form describing the settings of an edit that is
+    // no longer here. A no-op when the stage is not up.
+    exporter.redraw();
+    drawDocument();
+    // What could not be laid out, named. A document with a file that has moved
+    // is a document you still want the rest of — see `open()` — and the one
+    // thing that must not happen is it opening short and saying nothing.
+    const lost = (result && result.skipped) || [];
+    if (lost.length)
+        flash(lost.length === 1
+                  ? `${lost[0].name}: ${lost[0].why}`
+                  : `${lost.length} clips left out — see the Sources stage`);
+    return result;
+}
+
+/// The name, and whether it has been touched since it was last written.
+function drawDocument() {
+    if (!docName) return;
+    docName.textContent = doc.documentName();
+    docName.classList.toggle('modified', doc.isModified());
+}
+
+/// Guarded the way the spine's doors are: a render or a recording holds the
+/// host's one job slot, and replacing the timeline under one would leave it
+/// rendering an edit that is no longer there. Returns true when it is safe.
+function documentReady() {
+    if (capture.isRecording()) { flash('A recording is running — stop it first'); return false; }
+    if (!exporter.canLeave()) { flash('A render is running — stop it first'); return false; }
+    return true;
+}
+
+function openDocument() {
+    if (!documentReady()) return null;
+    let result = null;
+    try {
+        result = doc.openDialog();
+    } catch (e) {
+        flash(String((e && e.message) || e));
+        return null;
+    }
+    if (!result) return null;
+    documentOpened(result);
+    flash(`Opened ${doc.documentName()}`);
+    return result;
+}
+
+function saveDocument(askWhere) {
+    try {
+        const path = askWhere ? doc.saveAs() : doc.saveHere();
+        if (!path) return '';
+        drawDocument();
+        flash(`Saved ${doc.documentName()}`);
+        return path;
+    } catch (e) {
+        flash(String((e && e.message) || e));
+        return '';
+    }
+}
+
+function newDocument() {
+    if (!documentReady()) return false;
+    doc.reset();
+    documentOpened({ clips: [], skipped: [] });
+    flash('New document');
+    return true;
+}
+
+el('doc-open').addEventListener('click', openDocument);
+el('doc-save').addEventListener('click', () => saveDocument(false));
+el('doc-new').addEventListener('click', newDocument);
+drawDocument();
+
+// A file named on the command line, handed over by the host binding. A document
+// too: the same argument opens one, because "open this" is one act and which
+// kind of file it is, is something the extension already says.
+if (bro.ffmpeg.openOnStart) {
+    const start = String(bro.ffmpeg.openOnStart);
+    if (start.toLowerCase().endsWith(`.${doc.EXTENSION}`)) {
+        try { documentOpened(doc.load(start)); }
+        catch (e) { flash(String((e && e.message) || e)); }
+    } else {
+        open(start);
+    }
+}
 
 // ── opening ────────────────────────────────────────────────────────────────
 
@@ -591,6 +723,12 @@ function setLayout(mode) {
     updateCropUI();
     showProperties();
     flash(mode === 'grid' ? 'Grid layout' : 'Stacked layout');
+    // A grid ignores every clip's placement and gives each an equal cell, so
+    // this is a change to what the render produces and not to how it is being
+    // looked at — which means the spine, the command bar and the document's
+    // unsaved marker are all downstream of it. It went without saying while
+    // nothing outside this file read `project.layout`; the compositor does.
+    changed('edit');
 }
 
 // ── transport ──────────────────────────────────────────────────────────────
@@ -819,6 +957,25 @@ document.addEventListener('keydown', (e) => {
     // follows it, rather than cycling a list of tabs.
     if (e.key === '[' || e.key === ']') {
         shell.step(e.key === ']' ? 1 : -1);
+        e.preventDefault();
+        return;
+    }
+    // The document, from every stage, for the reason the report is: it is not
+    // about any one of them. Above the per-stage handlers below so that Ctrl-S
+    // saves while the Graph stage has the keyboard, and it takes the modifier so
+    // that plain `s` goes on splitting a clip.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        saveDocument(e.shiftKey);
+        e.preventDefault();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
+        openDocument();
+        e.preventDefault();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'N')) {
+        newDocument();
         e.preventDefault();
         return;
     }
@@ -1259,6 +1416,11 @@ globalThis.__ffmpegBro = {
     // The `-i`s, which are the document now: a test that wants to know what
     // will be opened asks this rather than walking the timeline for paths.
     inputs: inputsModel,
+    // The edit as one object, plus the two presses that are not a dialog. A
+    // test drives `save`/`load` with a path rather than `saveAs`/`openDialog`,
+    // because SDL's pickers block the JS thread waiting for a person — so the
+    // half that can be checked is the half either side of them.
+    doc, documentOpened,
     // What a drop of files amounts to, and the three inputs whose content is
     // assembled rather than opened. Exposed because the grouping is the most
     // used path into them and a test of it should not have to go through a
