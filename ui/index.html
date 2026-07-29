@@ -29,9 +29,16 @@
          recording is written and then opened as an input, which is what
          "Add to the timeline" does. See ui/capture.js.
 
-         Three columns like Sources, in the order the questions come: which
-         device and what it can see, the inputs themselves with a live picture
-         each, and the demuxer's own option table beside them.
+         Three columns, in the order somebody actually works: what to capture
+         on the left, the pictures and the act of recording in the middle,
+         what comes out on the right.
+
+         **The middle column ends in the record bar and that is structural.**
+         It used to sit halfway down with the output form scrolled off beneath
+         it, so the primary action of the stage was a default-styled button in
+         the middle of a page of prose. Pictures take the room they are given,
+         the bar is pinned under them, and everything that is a *setting* is in
+         the right-hand column where the other stages keep theirs.
 
          The cards are built by capture.js and kept, not redrawn: the <video>
          in a card is the decoder, so putting over it would close a device and
@@ -41,6 +48,9 @@
             <div id="cap-list" class="cap-list"></div>
             <div class="cap-mid">
                 <div id="cap-cards" class="cap-cards"></div>
+                <!-- What to do when there are no cards, which is the state
+                     the stage opens in. An empty middle column saying nothing
+                     is the worst first screen a stage can have. -->
                 <div id="cap-add" class="cap-add"></div>
                 <!-- What the graph is making of them, playing. Outside
                      #cap-graph because that panel is redrawn and the <video>
@@ -53,9 +63,14 @@
                 <div id="cap-graph" class="cap-graph"></div>
                 <div id="cap-note" class="cap-note-area"></div>
                 <div id="cap-bar" class="cap-bar"></div>
-                <div id="cap-settings" class="cap-settings"></div>
             </div>
-            <div id="cap-options" class="ex-col ex-right"></div>
+            <!-- What comes out, then what the focused device is set to. One
+                 scrolling column and not two tabs: with nothing searched the
+                 option table is only the keys that are set, so both fit. -->
+            <div class="cap-right ex-col">
+                <div id="cap-settings"></div>
+                <div id="cap-options"></div>
+            </div>
         </div>
     </section>
 

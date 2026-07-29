@@ -126,6 +126,10 @@ capture.initCapture({
     options: el('cap-options'),
 }, {
     flash,
+    // The stage states what the graph says about this recording and offers the
+    // door rather than a paragraph naming it: a filter belongs to the Graph
+    // stage, and telling somebody to go there is worse than taking them.
+    goTo: (id) => shell.goTo(id),
     // A recording is a file, and the arrow from Capture to Sources is followed
     // by opening it: the fastest way to see what you just recorded is to be
     // standing on the edit with it in front of you.

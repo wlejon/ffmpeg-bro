@@ -802,10 +802,19 @@ body.fs #cropbox { display: none; }
 .src-join-note { padding: 4px 0 8px; line-height: 1.4; }
 
 /* ── Capture ─────────────────────────────────────────────────────────────
-   A device, what it can see, and the recording it becomes. Three columns like
-   Sources, except that the middle one is mostly a picture: the point of this
-   stage is that you can see the camera or the screen region before you commit
-   to recording it, so the preview gets the room and the fields sit under it. */
+   A device, what it can see, and the recording it becomes. Three columns, in
+   the order somebody works: what to capture, the pictures and the act, what
+   comes out.
+
+   **The middle column is pictures and one button, and everything else is a
+   column.** This stage was written as a page of explanation with the controls
+   embedded in it — nine paragraphs of prose, the Record button in the middle
+   of them at default weight, and the output filename scrolled off the bottom.
+   Every one of those sentences was true and the screen was unusable, because
+   a person standing here has three questions (is the picture right, where does
+   it go, start) and had to read an essay to find any of them. The prose moved
+   to docs/manual.md, which is where a paragraph belongs; what is left on the
+   stage is labels, values and one primary button. */
 .cap-main {
     flex: 1;
     display: flex;
@@ -813,11 +822,11 @@ body.fs #cropbox { display: none; }
     overflow: hidden;
 }
 .cap-list {
-    width: 300px;
+    width: 260px;
     flex-shrink: 0;
     overflow-y: auto;
     min-height: 0;
-    padding: 6px 8px 16px;
+    padding: 6px 0 16px;
     border-right: 1px solid var(--line);
 }
 .cap-mid {
@@ -826,44 +835,118 @@ body.fs #cropbox { display: none; }
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 8px 12px 16px;
+    padding: 8px 12px 0;
 }
-.cap-settings { flex: 1; overflow-y: auto; min-height: 0; }
+/* What comes out, and what the focused device is set to, in one scroll. */
+.cap-right {
+    width: 340px;
+    flex-shrink: 0;
+    padding: 4px 0 16px;
+    border-left: 1px solid var(--line);
+    background: #191c22;
+}
 
 /* One card per input, across. They share the room rather than each taking a
    fixed share of it: `flex: 1` with `min-width: 0` means one device gets the
    whole width and four get a quarter each, and the picture inside is fitted to
    whatever that came to. Wrapping is deliberately off — a card on a second row
-   is a device you cannot see while looking at the first. */
+   is a device you cannot see while looking at the first.
+
+   `flex: 1` and not a percentage: the pictures are what this stage is for, so
+   they get whatever the bar and the graph line leave rather than a fixed share
+   of the window with prose underneath. */
 .cap-cards {
-    flex-shrink: 0;
-    height: 46%;
-    min-height: 220px;
+    flex: 1;
+    min-height: 200px;
     display: flex;
     gap: 8px;
     align-items: stretch;
 }
+/* `.hidden` and `.cap-cards` are both one class, so the later rule wins and a
+   bare `.hidden` here would not hide anything — it would leave an empty strip
+   taking half the column above the empty state. `.ex-right.hidden` exists for
+   the same reason. */
+.cap-cards.hidden { display: none; }
 .cap-card {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
+    background: var(--panel);
     border: 1px solid var(--line);
-    border-top: 2px solid transparent;
-    padding: 4px 6px 6px;
+    border-radius: 4px;
     overflow: hidden;
 }
-/* Which card the device list and the option column are about. A border rather
-   than a background, because the card is mostly picture and tinting a live
-   preview would be tinting the thing you are judging. */
-.cap-card.on { border-top-color: var(--accent); }
-.cap-card-head { display: flex; align-items: center; gap: 6px; padding-bottom: 4px; }
-.cap-card-n { color: var(--accent); font-weight: 600; font-size: 11px; }
-.cap-card-dev { font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+/* Which card the device list and the option column are about. An outline
+   rather than a background, because the card is mostly picture and tinting a
+   live preview would be tinting the thing you are judging. */
+.cap-card.on { border-color: var(--accent-dim); }
+.cap-card.on .cap-card-head { background: #2a1f16; }
+.cap-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+/* The `-i` number, which is what the graph calls this input. Drawn as a badge
+   rather than as `[0]` in the text: it is an identifier, and a bracketed
+   number in a sentence reads as a footnote. */
+.cap-card-n {
+    flex-shrink: 0;
+    width: 17px;
+    height: 17px;
+    border-radius: 3px;
+    background: var(--accent-dim);
+    color: #ffdcc2;
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.cap-card-dev {
+    font-size: var(--fs-base);
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
 .cap-card-x { flex-shrink: 0; }
-.cap-card-rows { flex-shrink: 0; overflow: hidden; padding-top: 4px; }
-.cap-card-opts { font-size: 10px; }
+.cap-card-rows { flex-shrink: 0; overflow: hidden; padding: 4px 0 5px; }
+/* The card's rows are narrower than a column's, so the label gutter is too —
+   at 92px a card three across has no room left for the field itself. */
+.cap-card-rows .row { padding: 2px 8px; }
+.cap-card-rows .row .key { width: 62px; font-size: var(--fs-sm); }
+.cap-card-opts { font-size: var(--fs-xs); }
+/* What the graph will call this input's streams. Only drawn when there are
+   several, because with one there is nothing to tell apart. */
+.cap-card-pads { font-size: var(--fs-xs); }
+/* Nothing, or the empty state — and the empty state is the whole column, so
+   the slot grows only when it is holding one. A class rather than `:empty`,
+   which is one more thing to be sure of in this engine. */
 .cap-add { flex-shrink: 0; padding: 6px 0; }
+.cap-add.grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* The empty state: the whole middle column when nothing is activated. Centred
+   and large, because it is the first thing anybody sees on this stage and the
+   answer to "what now" is one sentence. */
+.cap-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 2px dashed var(--line);
+    border-radius: 6px;
+    padding: 24px;
+    text-align: center;
+}
+.cap-empty-title { font-size: var(--fs-md); color: var(--text); }
+.cap-empty-note { font-size: var(--fs-base); max-width: 380px; line-height: 1.5; }
 
 /* The live picture. Positioned, because the region marquee is dragged over it
    and a rectangle in page coordinates would follow the window instead of the
@@ -888,28 +971,64 @@ body.fs #cropbox { display: none; }
    what it is competing with for height is the cards it is made of and those
    are what tell you the camera is pointed the right way. */
 .cap-comp { flex-shrink: 0; }
+.cap-comp-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    padding: 5px 0 3px;
+}
 .cap-composite {
     display: block;
     max-width: 100%;
-    max-height: 200px;
+    max-height: 190px;
     background: #0b0d11;
     border: 1px solid var(--line);
-    margin-bottom: 6px;
+    border-radius: 3px;
+    margin-bottom: 4px;
 }
 
-/* What the Graph stage says this recording is. Read-only now — the textarea it
-   replaced is gone with the presets that wrote into it — but one chain per line
-   for the reason the field was a textarea and not an input: a semicolon is
-   where a filtergraph breaks, and reading one back as a single run is how a
-   misplaced bracket stays invisible. */
-.cap-graph { flex-shrink: 0; padding-bottom: 4px; }
+/* What the Graph stage says this recording is, as **one line**.
+
+   This was a headed panel with a paragraph in it, and the paragraph was on
+   screen permanently because "nothing in the graph reads this device" is the
+   ordinary state of a one-device recording — four lines of explanation of the
+   case where there is nothing to explain. The line states the answer and
+   carries the door to the stage that changes it; the explanation is in
+   docs/manual.md. */
+.cap-graph { flex-shrink: 0; }
+.cap-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--panel);
+    font-size: var(--fs-sm);
+    margin-bottom: 6px;
+}
 /* A graph that will not run is the one thing on this stage that must not read
    as an aside — it is why the Record button is dead. */
-.cap-graph .warn { color: var(--accent); }
+.cap-strip.bad { border-color: var(--accent-dim); background: #2a1f16; }
+.cap-strip.bad .warn { color: var(--accent); }
+.cap-strip-k {
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-size: var(--fs-xs);
+    flex-shrink: 0;
+}
+.cap-strip-v { flex: 1; min-width: 0; }
+/* One chain per line, for the reason the field this replaced was a textarea
+   and not an input: a semicolon is where a filtergraph breaks, and reading one
+   back as a single run is how a misplaced bracket stays invisible. */
+.cap-chains { padding: 0 0 6px 2px; }
 .cap-chain {
     display: block;
     font-family: Consolas, monospace;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     line-height: 1.5;
     word-break: break-all;
 }
@@ -927,22 +1046,65 @@ body.fs #cropbox { display: none; }
 }
 .cap-marquee.hidden { display: none; }
 
-.cap-note-area { min-height: 0; }
-.cap-note { padding: 4px 0; line-height: 1.4; }
-.cap-error { color: var(--bad); padding: 6px 0; line-height: 1.4; }
+.cap-note-area { min-height: 0; flex-shrink: 0; }
+.cap-note { padding: 4px 0; line-height: 1.4; font-size: var(--fs-sm); }
+.cap-error { color: var(--bad); padding: 4px 8px; line-height: 1.4; font-size: var(--fs-sm); }
 
-/* The record bar: the act, and the facts a recording can state honestly —
-   elapsed, frames, size. Deliberately no progress bar; see ui/capture.js. */
+/* The record bar: the act, where it is going, and the facts a recording can
+   state honestly — elapsed, frames, size. Deliberately no progress bar; see
+   ui/capture.js.
+
+   **Pinned to the bottom of the column, which is what makes it the act.** It
+   used to sit between the graph panel and the output form, at default button
+   weight, with a sentence of prose either side of it — so the one control the
+   stage exists for read as one more item in a list. */
 .cap-bar {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 10px;
-    flex-wrap: wrap;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--line);
-    margin-bottom: 6px;
+    padding: 8px 0 10px;
+    border-top: 1px solid var(--line);
 }
-.cap-elapsed { font-size: 15px; font-weight: 600; }
+.cap-bar .spacer { flex: 1; }
+button.cap-go {
+    height: 34px;
+    min-width: 104px;
+    font-size: var(--fs-md);
+    font-weight: 600;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a1206;
+    gap: 7px;
+}
+button.cap-go:hover:not(:disabled) { background: #ffa063; }
+button.cap-go:disabled { background: var(--panel-hi); border-color: var(--line); color: var(--dim); }
+/* The dot is the state: filled while stopped (press to start), square while
+   running (press to stop). Drawn rather than lettered so the button reads at a
+   glance from across a desk. */
+.cap-go-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #7a1a1a;
+    flex-shrink: 0;
+}
+button.cap-go:disabled .cap-go-dot { background: var(--dim); }
+.cap-go-dot.stop { border-radius: 1px; }
+/* Where it is going, beside the button that sends it there. The one fact
+   somebody must not have to scroll for. */
+.cap-dest { min-width: 0; overflow: hidden; }
+.cap-dest-name {
+    font-size: var(--fs-base);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cap-dest-what { font-size: var(--fs-sm); }
+.cap-elapsed { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Why the button is dead, next to the button. A refusal shown anywhere else on
+   the stage is a refusal somebody has to go looking for. */
+.cap-why { color: var(--accent); font-size: var(--fs-sm); text-align: right; }
 
 /* One device, and one thing a device can see: two lines each.
 
@@ -953,22 +1115,43 @@ body.fs #cropbox { display: none; }
    that is a row lays out correctly and carries its own click listener like
    everything else here. */
 .cap-device {
-    padding: 4px 8px;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 5px 12px;
     border-left: 3px solid transparent;
     cursor: pointer;
     line-height: 1.35;
 }
 .cap-device:hover { background: #1b1e25; }
 .cap-device.on { background: #1e222b; border-left-color: var(--accent); }
-.cap-device-name { font-size: 13px; font-weight: 600; }
-.cap-device-what { font-size: 11px; }
-#cap-settings input.wide, #cap-options input.wide,
+.cap-device-text { flex: 1; min-width: 0; }
+.cap-device-name { font-size: var(--fs-base); font-weight: 600; }
+.cap-device-what {
+    font-size: var(--fs-sm);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+/* How many `-i`s this device is currently. Absent at zero rather than showing
+   a `0`, which reads as a capability rather than as a count. */
+.cap-device-n {
+    flex-shrink: 0;
+    font-size: var(--fs-xs);
+    color: var(--accent);
+    border: 1px solid var(--accent-dim);
+    border-radius: 3px;
+    padding: 0 4px;
+}
+/* The affordance. A list of rows that each add an input should say so, and it
+   should not be a paragraph underneath telling you that clicking works. */
+.cap-device-add { flex-shrink: 0; color: var(--dim); font-size: var(--fs-md); }
+.cap-device:hover .cap-device-add { color: var(--accent); }
+.cap-list .cap-note { padding: 4px 12px; }
+.cap-list .btns { padding: 4px 12px 2px; }
+.cap-right input.wide, .cap-right select.wide,
 #cap-cards input.wide { width: 100%; box-sizing: border-box; }
-#cap-settings select.wide { width: 100%; box-sizing: border-box; }
-#cap-cards input[data-f="capseconds"] { width: 90px; }
-/* Long enough for the word it is placeholdered with: "until stopped" is the
-   whole of what an empty -t means and a field that clips it says "until stc". */
-#cap-settings input[data-f="capseconds"] { width: 110px; }
+#cap-cards input[data-f="capseconds"] { width: 100%; }
 
 /* The filenames a run of images will actually be written as. Shown because
    %04d is exactly the thing somebody gets wrong once and then never trusts

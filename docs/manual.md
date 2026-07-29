@@ -70,29 +70,49 @@ What is *not* possible is laying a device on the timeline, and that is not a gap
 clip is an in-point and a length, and a live input has neither. It is refused by name,
 with what to do instead.
 
-The stage is four questions:
+Three columns, in the order somebody works:
 
-- **Which device.** libavdevice's own list: on Windows `dshow`, `gdigrab`, `vfwcap`
-  and `lavfi`. On another platform it is a different list and nothing here changes.
-- **What it can see.** `avdevice_list_input_sources`, picked rather than typed —
-  a DirectShow name is an exact string with punctuation in it and nobody types one
-  correctly. A camera and a microphone chosen together are **one `-i`**
-  (`video=Cam:audio=Mic`), because that is what dshow means by it: one demuxer, one
-  file, two streams. A device with nothing to enumerate says so — gdigrab takes a
-  rectangle rather than a name — rather than showing an empty list, which reads as a
-  machine with no cameras in it.
-- **What it is set to.** The demuxer's whole option table, in the column the
-  encoder's and the muxer's options already use: `video_size`, `framerate`,
-  `draw_mouse`, `offset_x`, `audio_buffer_size`, `rtbufsize`. An unknown key stops
-  the open rather than being ignored.
-- **How they combine**, once there is more than one — which is the filter graph,
-  and is below.
+- **What to capture**, on the left. libavdevice's own list — on Windows `dshow`,
+  `gdigrab`, `vfwcap` and `lavfi`; on another platform a different list, with nothing
+  here changed — under the human name libav gives each one, with the `-f` spelling
+  beneath it. Clicking one adds it. Underneath is **what that device can see**:
+  `avdevice_list_input_sources`, picked rather than typed, because a DirectShow name
+  is an exact string with punctuation in it and nobody types one correctly. A camera
+  and a microphone chosen together are **one `-i`** (`video=Cam:audio=Mic`), because
+  that is what dshow means by it: one demuxer, one file, two streams. A device with
+  nothing to enumerate says so — gdigrab takes a rectangle rather than a name — rather
+  than showing an empty list, which reads as a machine with no cameras in it.
+- **The pictures and the act**, in the middle. A card per input with its live preview,
+  its **Source** and **Stop after**, and its region where it has one; under them, what
+  the graph makes of them; under that, the graph as one line; and at the bottom, the
+  **Record** button with the file it is about to write beside it and — where it is dead
+  — the reason it is dead.
+- **What comes out**, on the right: where it is saved, the container, the two codecs,
+  the quality, and how long it will be. Beneath that the focused device's **whole
+  option table**, in the column the encoder's and the muxer's options already use:
+  `video_size`, `framerate`, `draw_mouse`, `offset_x`, `audio_buffer_size`,
+  `rtbufsize`. An unknown key stops the open rather than being ignored.
+
+**The stage states; this manual explains.** It did not always. Every panel used to
+carry the paragraph that justified it — why a device is an input, why the graph is
+edited elsewhere, what a region is in ffmpeg's vocabulary, why there is no percentage
+— and all of it was true and the screen was unusable: the Record button sat in the
+middle of nine paragraphs at the weight of an ordinary control, and where the file
+was going had been pushed off the bottom of the same column. What is on screen now is
+a label, a value and a door to whatever would change it, with the sentence that was
+load-bearing attached as a tooltip to the control it is about. The vocabulary went
+the same way: the two fields on a card were *labelled* `-i` and `-t`, which is a
+control only somebody who did not need it could read. They are **Source** and **Stop
+after**, and `ffmpeg -f gdigrab -i desktop …` is printed exactly, and copyably, in the
+command bar along the bottom of the window. The one piece of ffmpeg left on a card is
+the `-i` **number** — a badge, `0`, `1` — because the graph genuinely calls them that.
 
 **Several devices are several `-i`s, and a card each.** Clicking a second device
 appends another input; the cards sit across the stage in the order that numbers them
-for the graph, so the first is `[0:v]`/`[0:a]` and the second `[1:…]`. Each card is a
-whole input — its `-i`, its `-t`, its own option bag — and clicking one is what points
-the device list and the option column at it, which the column's heading says. Because
+for the graph, so the first is badged `0` and reaches the graph as `[0:v]`/`[0:a]`, the
+second `1` and `[1:…]`. Each card is a whole input — its source, its window, its own
+option bag — and clicking one is what points the device list and the option column at
+it, which both of them say. Because
 a card is a document input, an option set on it anywhere is set on it everywhere: a
 `-probesize` typed on the Sources stage reaches the recording, and the command bar
 prints it in front of that `-i`.
@@ -101,10 +121,11 @@ Changing a card's device is releasing one and activating another, which is two c
 and is the honest spelling: a device and its option bag go together, and carrying
 `draw_mouse` over to a camera would be carrying a key that stops the open.
 
-`-t` belongs to an **input** rather than to the recording, exactly as it does on a
-command line, and **the shortest of them is when the session ends** — an input that
-has run out has nothing further to offer the graph, so going on would be recording
-the others over a picture held still.
+**Stop after** — `-t` — belongs to an **input** rather than to the recording, exactly
+as it does on a command line, which is why it is on a card and not in the output
+column; **the shortest of them is when the session ends**, and that is the *Length* the
+output column states. An input that has run out has nothing further to offer the graph,
+so going on would be recording the others over a picture held still.
 
 **A live preview per card, before you commit to a recording.** Each picture is an
 ordinary `<video>` through the same backend, the same decoder and the same renderer
@@ -199,16 +220,26 @@ and that is the label the writer maps. Delete the output and the recording drops
 to video out — the panel says what it is mapped as now, which is the whole of what
 changed.
 
-The Capture stage shows the chains that will run, one per line, and it is the same
-text the command bar prints from the same call. A graph that will not run says so
-there, in the words the Graph stage uses against the node it is about, and the Record
-button is dead until it does — and the command bar prints no `-filter_complex` at
-all, because a line that cannot be run is not one to offer for copying.
+All of that is **one line** on the Capture stage — `Filters: none`, or `2 inputs →
+[vout]`, or `will not run — …` — with the button that opens the Graph stage on the end
+of it, and the chains that will run listed under it when there are any. It is the same
+text the command bar prints from the same call. A graph that will not run says so in
+the words the Graph stage uses against the node it is about, the Record button is dead
+until it does and says so beside itself, and the command bar prints no
+`-filter_complex` at all, because a line that cannot be run is not one to offer for
+copying. The line is short because the ordinary answer is "none" and a permanent
+four-line explanation of the case where there is nothing to explain is what the
+commonest screen on this stage used to be.
 
-**A region is dragged, not typed.** Drag a box on an input's picture and it becomes
-`-offset_x`, `-offset_y` and `-video_size` — that input's own demuxer options, in the
-screen's own pixels, printed in the command a foot below. Which devices can be asked
-for a region is a question about their option table rather than a list of names here:
+**A region is dragged, not typed, and it lives on the card whose picture it is dragged
+on.** Drag a box on an input's picture and it becomes `-offset_x`, `-offset_y` and
+`-video_size` — that input's own demuxer options, in the screen's own pixels, printed
+in the command a foot below and set in the option table on the right like any other
+key. It belongs to an input the way its source does, which is why it is not a section
+in another column describing a rectangle you cannot see from there — with two screen
+grabbers activated, that section was about whichever card happened to be focused.
+Which devices can be asked for a region is a question about their option table rather
+than a list of names here:
 a device takes a rectangle when it has all three of those options, which a screen
 grabber does and a camera does not. The picture is fitted rather than stretched,
 because a squashed picture would be a squashed rectangle — and the rectangle is
@@ -217,9 +248,9 @@ left it, one pixel of a wide desktop shown small is thirty of screen, and a rect
 running off the edge is one libavdevice refuses at the open.
 
 **Recording says what it can say and no more.** Elapsed, frames written, bytes on
-disk — and, out loud, that there is no percentage: a fraction needs a total and a
-device has no end until you press stop. Give it a `-t` and it does have one, and then
-the percentage means something. `Stop` is the *normal* end of a recording rather than
+disk — and, out loud, that it *runs until you stop it*: a percentage needs a total and
+a device has no end until you press stop. Give an input a **Stop after** and it does
+have one, and then the percentage means something. `Stop` is the *normal* end of a recording rather than
 the exceptional one, so a stopped recording reports as **done**: nothing was
 abandoned, the length was the open question and stopping answered it. The trailer
 goes down either way, which matters more here than anywhere else — a render that lost

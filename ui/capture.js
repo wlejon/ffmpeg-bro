@@ -94,10 +94,40 @@
 // refusal here, worded as a fact about the seam rather than about the device.
 // The seam was the thing to fix: see `Wrapped` in `ffmpeg_backend.cpp`, where
 // such a frame now travels as itself.
+//
+// ── What this stage says, and what it stopped saying ───────────────────────
+//
+// Everything above is why the stage is shaped as it is, and for a while every
+// word of it was **on the screen**. Each panel carried the paragraph that
+// justified it: why a device is an input, why the graph is edited elsewhere,
+// what a region is in ffmpeg's vocabulary, why there is no percentage. Nine
+// paragraphs, all true, and the stage was unusable — the Record button sat in
+// the middle of them at the weight of an ordinary control, and the one fact
+// somebody needs before pressing it (where the file goes) was scrolled off the
+// bottom of the middle column.
+//
+// The rule now is: **a stage states, a manual explains.** What is on screen is
+// a label, a value, and a door to whatever would change it. Where a sentence
+// was load-bearing it is a `title` on the control it is about — attached to the
+// thing, where somebody looking at the thing will find it — and the argument
+// itself lives in docs/manual.md and in these headers.
+//
+// The vocabulary went the same way. `-i` and `-t` were the *labels* of the two
+// fields on a card, which is a UI that can only be read by somebody who did not
+// need it: the field is called **Source** and **Stop after** now, and the `-f
+// gdigrab -i desktop` spelling is a foot below in the command bar, exact and
+// copyable, which is the honest place for it. The one piece of ffmpeg on the
+// card that stayed is the `-i` **number** — `[0]`, `[1]` — because the graph
+// genuinely calls them that and hiding it would make the Graph stage
+// unreadable. It is drawn as a badge rather than written into a sentence.
+//
+// Three columns, in the order somebody works: what to capture, the pictures and
+// the act, what comes out.
 
 import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename, shellArg } from './format.js';
 import { optionColumn } from './opttable.js';
+import { qualityRange } from './export/capabilities.js';
 import { schemeOf, protocolLinked } from './export/destination.js';
 import { changed as projectChanged } from './project.js';
 import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
@@ -446,10 +476,29 @@ function syncCards() {
         c.root.className = 'cap-card' + (i === focus ? ' on' : '');
         drawCardRows(i);
     }
-    put(refs.add, () => all.length ? [span(
-        'Every activated device is an -i of this recording, numbered above in the order the ' +
-        'graph reads them. Click another device on the left to add one; it appears on the ' +
-        'Sources stage and in the graph’s source list at the same moment.', 'dim')] : []);
+
+    // **The empty state is the middle column, not a note under it.** Nothing
+    // activated is the state this stage opens in and the one somebody sees
+    // first, so it answers "what now" in one sentence at the size of a
+    // heading — rather than leaving an empty strip above a form about a file
+    // that has nothing going into it. Classes are toggled rather than leaning
+    // on `:empty`, which is one more thing to be sure of in this engine.
+    refs.cards.className = 'cap-cards' + (all.length ? '' : ' hidden');
+    if (refs.add) {
+        refs.add.className = 'cap-add' + (all.length ? '' : ' grow');
+        put(refs.add, () => all.length ? [] : [emptyState()]);
+    }
+}
+
+/// What to do when there is nothing to capture yet. Two fragments: a state and
+/// the gesture that leaves it.
+function emptyState() {
+    const n = devices().length;
+    return div('cap-empty', [
+        div('cap-empty-title', n ? 'Nothing to capture' : 'No capture devices'),
+        div('cap-empty-note dim', n ? 'Pick one on the left.'
+                                    : 'libavdevice registered none.'),
+    ]);
 }
 
 /// The DOM one card is, made once.
@@ -496,10 +545,8 @@ function pictureRefusal(input) {
     const p = input.probe;
     if (!p) return '';
     if (!p.video)
-        return p.audio
-            ? 'this device produces sound and no picture — there is nothing to show, ' +
-              'but it can still be recorded'
-            : 'this device produced neither pictures nor sound';
+        return p.audio ? 'Sound only — nothing to show, and it still records'
+                       : 'Neither picture nor sound came out';
     return '';
 }
 
@@ -511,12 +558,21 @@ function drawCardRows(i) {
 
     put(c.title, () => {
         const out = [
-            span(`[${i}]`, 'cap-card-n mono'),
-            span(`-f ${input.format}`, 'mono cap-card-dev'),
+            // The `-i` number, which is the one piece of ffmpeg vocabulary that
+            // had to stay on a card: the graph really does call this input
+            // `[0:v]`, and a badge is how an identifier is drawn.
+            el('span', {
+                cls: 'cap-card-n', text: String(i),
+                title: `Input ${i} — the graph reads it as [${i}:v] and [${i}:a]`,
+            }),
+            el('span', {
+                cls: 'cap-card-dev mono', text: input.format,
+                title: `Opened with -f ${input.format}`,
+            }),
         ];
         out.push(el('button', {
             cls: 'tiny cap-card-x', 'data-f': 'capremove', 'data-input': String(i),
-            text: '×', title: 'Release this device — it leaves the recording and the input list',
+            text: '×', title: 'Remove this device — it leaves the recording and the input list',
             on: { click: () => release(i) },
         }));
         return out;
@@ -526,7 +582,8 @@ function drawCardRows(i) {
         const source = el('input', {
             cls: 'wide', 'data-f': 'capsource', 'data-input': String(i), type: 'text',
             value: input.path,
-            placeholder: HINTS[input.format] || 'what this device is asked for after -i',
+            placeholder: HINTS[input.format] || 'what to capture',
+            title: 'What this device is asked for — the argument after -i',
             on: { change: () => change(input, { path: source.value.trim() }) },
         });
         // `-t` is the input's own window, which `ui/inputs.js` carries as an end
@@ -534,32 +591,48 @@ function drawCardRows(i) {
         // native reader takes either. Holding both here would be holding two
         // fields that can disagree.
         const seconds = el('input', {
-            cls: 'num', 'data-f': 'capseconds', 'data-input': String(i), type: 'text',
+            cls: 'wide', 'data-f': 'capseconds', 'data-input': String(i), type: 'text',
             value: input.to ? String(input.to) : '',
-            placeholder: 'until stopped',
+            placeholder: 'never',
+            title: 'Seconds to read this input for. Blank runs until you press Stop. ' +
+                   'It belongs to the input, as -t does on a command line, and the ' +
+                   'shortest of them ends the recording.',
             on: { change: () => change(input, { to: Number(seconds.value) || 0 }) },
         });
-        const out = [row('-i', source), row('-t', seconds)];
+        const out = [row('Source', source), row('Stop after', seconds)];
+
+        // The region, on the card whose picture it is dragged on. It used to be
+        // a headed section in another column describing a rectangle you could
+        // not see from there — and with two screen grabbers activated, one
+        // section for whichever card happened to be focused.
+        out.push(...regionRows(input));
 
         // What this input's option bag has in it. The bag is edited in the
         // column on the right, which shows one device at a time — so the card
         // is where you see that the *other* one has a region set on it without
         // having to click over to it and back.
-        const keys = Object.keys(input.options).filter((k) => input.options[k] !== '');
+        const keys = Object.keys(input.options)
+            .filter((k) => input.options[k] !== '' && !REGION_KEYS[k]);
         if (keys.length)
-            out.push(row('', span(
-                keys.map((k) => `-${k} ${input.options[k]}`).join('  '), 'dim mono cap-card-opts')));
+            out.push(row('Options', span(
+                keys.map((k) => `${k}=${input.options[k]}`).join('  '),
+                'dim mono cap-card-opts')));
 
         const why = pictureRefusal(input);
         if (why) out.push(div('cap-error', why));
         else if (!c.video) out.push(div('cap-note dim', 'No picture yet.'));
         if (several && !why)
             out.push(row('', span(
-                `reaches the graph as [${i}:v]` +
-                (input.probe && input.probe.audio ? ` and [${i}:a]` : ''), 'dim mono')));
+                `→ [${i}:v]` +
+                (input.probe && input.probe.audio ? ` [${i}:a]` : ''),
+                'dim mono cap-card-pads')));
         return out;
     });
 }
+
+/// The three options a region is, so the Options line does not repeat what the
+/// Region line above it already says in words.
+const REGION_KEYS = { offset_x: true, offset_y: true, video_size: true };
 
 // ── the previews ───────────────────────────────────────────────────────────
 
@@ -706,7 +779,9 @@ function syncComposite() {
     }
     if (pad.src === compKey) return;
     compKey = pad.src;
-    put(refs.comp, () => [head('What the graph makes of them')]);
+    // A caption and not a section head: it sits directly on the picture it
+    // names, and a bordered heading here read as the start of another panel.
+    put(refs.comp, () => [div('cap-comp-head dim', 'What the graph makes')]);
     if (!composite) composite = el('video', { cls: 'cap-composite', 'data-f': 'composite' });
     refs.comp.append(composite);
     composite.setAttribute('src', pad.src);
@@ -786,9 +861,13 @@ export function summary() {
                    : g.ok ? live.map((i) => i.format).join(' + ')
                           : g.reason];
     }
+    // The device and what it is pointed at, in the words the stage uses. It
+    // read `-f gdigrab` / `desktop · -t 5`, which put command-line spelling in
+    // the one place on screen that is meant to be scannable — and the command
+    // itself is printed in full along the bottom of every stage anyway.
     const bits = [live[0].path || 'nothing chosen'];
-    if (live[0].to) bits.push(`-t ${live[0].to}`);
-    return [`-f ${live[0].format}`, bits.join(' · ')];
+    if (live[0].to) bits.push(`${live[0].to}s`);
+    return [live[0].format, bits.join(' · ')];
 }
 
 // ── recording ──────────────────────────────────────────────────────────────
@@ -914,15 +993,23 @@ export function drawCapture() {
     put(refs.options, () => optionRows());
 }
 
+/// The left column: what this machine can capture, and what the focused one of
+/// them can see.
+///
+/// **libav's own human name is the label and the `-f` name is underneath it.**
+/// It was the other way round, and a column headed `dshow / gdigrab / lavfi /
+/// vfwcap` is a list only somebody who already knows the answer can read. Both
+/// strings come out of the registry — `long_name` and `name` — so nothing here
+/// is a table of nice names that a different build would fall off the end of.
 function drawDevices() {
     put(refs.list, () => {
         const all = devices();
         const active = captureInputs();
-        const out = [head(active.length > 1
-            ? `Devices · ${all.length} · editing [${focus}]`
-            : `Devices · ${all.length}`)];
-        if (!all.length)
-            return [div('dim pad', 'This build registered no capture devices.')];
+        const out = [head('Capture from')];
+        if (!all.length) {
+            out.push(div('cap-note dim', 'This build registered no capture devices.'));
+            return out;
+        }
         for (const d of all) {
             const using = active.filter((i) => i.format === d.name).length;
             // A div and not a `<button>`, for the reason `.src-row` on the
@@ -934,20 +1021,31 @@ function drawDevices() {
             out.push(el('div', {
                 cls: 'cap-device' + (using ? ' on' : ''),
                 'data-device': d.name,
-                title: 'Activate this device — it becomes an -i of this recording and an ' +
-                       'input the rest of the application can read',
+                title: `Add ${d.name} to this recording. It becomes an input the rest of ` +
+                       'the application can read — the Sources stage and the graph’s ' +
+                       'source list get it at the same moment.',
                 on: { click: () => activate(d.name) },
             }, [
-                div('cap-device-name mono', d.name +
-                    (using > 1 ? ` · ${using} activated` : using ? ' · activated' : '')),
-                div('cap-device-what dim', `${d.longName || ''} · ${d.kinds.join(' · ')}`),
+                div('cap-device-text', [
+                    div('cap-device-name', d.longName || d.name),
+                    div('cap-device-what dim mono', `${d.name} · ${d.kinds.join(' · ')}`),
+                ]),
+                using ? span(`${using}×`, 'cap-device-n') : null,
+                span('+', 'cap-device-add'),
             ]));
         }
         const inp = focused();
-        if (inp) out.push(...sourceRows(inp));
-        else out.push(div('cap-note dim',
-            'Click a device to activate it. Activating is what adds the -i — it appears here ' +
-            'as a card, on the Sources stage as an input, and in the graph’s source list.'));
+        if (inp) {
+            // Which card the sources below and the option column on the right
+            // are about. Only where there is a choice — with one card it is a
+            // sentence about the only thing on the screen.
+            if (active.length > 1)
+                out.push(el('div', {
+                    cls: 'cap-note dim', text: `Editing [${focus}]`,
+                    title: 'Click a card to point this column and the options at another input',
+                }));
+            out.push(...sourceRows(inp));
+        }
         return out;
     });
 }
@@ -969,23 +1067,27 @@ function sourceArg(s) {
 
 function sourceRows(inp) {
     const list = sourcesOf(inp.format);
-    const out = [head('What it can see')];
+    const out = [head(`What ${inp.format} can see`)];
 
     if (!list.ok) {
         // An answer, not a failure. gdigrab takes a rectangle rather than a
         // device name and says so; an empty list here would read as a machine
         // with no cameras in it.
-        out.push(div('cap-note dim', list.error ||
-            `${inp.format} does not list its sources.`));
+        out.push(el('div', {
+            cls: 'cap-note dim',
+            text: list.error || `${inp.format} does not list its sources.`,
+            title: 'It is named directly instead — libavdevice has no get_device_list for ' +
+                   'this demuxer, so there is nothing to enumerate. The field takes anything.',
+        }));
         if (HINTS[inp.format])
-            out.push(el('button', {
+            out.push(div('btns', [el('button', {
                 cls: 'tiny', 'data-f': 'caphint',
-                text: `Use ${HINTS[inp.format]}`,
+                text: `Use “${HINTS[inp.format]}”`,
                 title: 'A starting point out of ffmpeg’s documentation — libavdevice has no ' +
                        'call that returns it, so it is a hint and not a capability. The field ' +
                        'takes anything.',
                 on: { click: () => setSource(HINTS[inp.format], inp) },
-            }));
+            })]));
         return out;
     }
 
@@ -994,30 +1096,36 @@ function sourceRows(inp) {
         out.push(el('div', {
             cls: 'cap-device' + (arg === inp.path ? ' on' : ''),
             'data-source': s.description || s.name,
+            title: `Capture from ${s.description || s.name}`,
             on: { click: () => setSource(arg, inp) },
         }, [
-            div('cap-device-name', s.description || s.name),
-            div('cap-device-what dim mono', (s.mediaTypes || []).join(' · ') || 'unknown'),
+            div('cap-device-text', [
+                div('cap-device-name', s.description || s.name),
+                div('cap-device-what dim mono', (s.mediaTypes || []).join(' · ') || 'unknown'),
+            ]),
         ]));
     }
     if (!list.sources.length)
-        out.push(div('cap-note dim', 'Nothing plugged in that this device can see.'));
+        out.push(div('cap-note dim', 'Nothing plugged in.'));
 
     // Two of them at once is one `-i`, which is what a camera and a microphone
     // recorded together actually is — one demuxer, one seek, one file. That is
     // a different thing from two *devices*, which is two `-i`s and a card each.
     const audio = list.sources.filter((s) => (s.mediaTypes || []).indexOf('audio') >= 0);
     if (audio.length && inp.path.indexOf('video=') === 0)
-        out.push(div('cap-note dim',
-            'A camera and a microphone are one -i: video=… and audio=… joined with a colon. ' +
-            'Click a sound source to add it. A separate device is a separate input — click ' +
-            'it above.'));
+        out.push(el('div', {
+            cls: 'cap-note dim', text: 'Click a sound source to add a mic.',
+            title: 'A camera and a microphone are one -i — video=…:audio=… — which is what ' +
+                   'dshow means by it: one demuxer, one file, two streams. A separate ' +
+                   'device is a separate input.',
+        }));
 
-    out.push(el('button', {
+    out.push(div('btns', [el('button', {
         cls: 'tiny', 'data-f': 'caprescan', text: 'Rescan',
-        title: 'Ask the device again — this is the one query here that talks to hardware',
+        title: 'Ask the device again — this is the one query here that talks to hardware, ' +
+               'so it is asked once and cached until you press this',
         on: { click: () => { sourcesOf(inp.format, true); drawCapture(); } },
-    }));
+    })]));
     return out;
 }
 
@@ -1050,50 +1158,73 @@ function setSource(arg, inp) {
 /// decides whether to press Record, and "what will actually run" is the
 /// question they are asking. It is the same text the command bar prints, from
 /// the same call.
+///
+/// **One line, with the door on the end of it.** This was a headed panel and a
+/// paragraph, and the paragraph was permanent: "nothing in the graph reads this
+/// device" is the ordinary state of a one-device recording, so the commonest
+/// screen in the stage carried four lines explaining the case where there is
+/// nothing to explain. What a person needs here is the answer — none, this, or
+/// this is broken — and a way to go and change it. The argument is in
+/// docs/manual.md and in the header above.
 function drawGraph() {
     if (!refs.graph) return;
     put(refs.graph, () => {
         if (!capture.inputs.length) return [];
         const g = graphOf();
-        const out = [head('The graph')];
+        const n = capture.inputs.length;
+        const door = (text) => el('button', {
+            cls: 'tiny', 'data-f': 'capgraphstage', text,
+            title: 'Open the Graph stage. Every activated device is already in its source ' +
+                   'list, so placing one gives a node that can be wired, checked and ' +
+                   'previewed.',
+            on: { click: () => { if (hooks.goTo) hooks.goTo('graph'); } },
+        });
 
-        if (!g) {
-            out.push(row('', span(capture.inputs.length > 1
-                ? 'Nothing in the graph reads these devices, and with several of them that ' +
-                  'is not a recording: two pictures and nothing saying how they combine is ' +
-                  'refused rather than guessed at. Open the Graph stage — every activated ' +
-                  'device is in its source list — place them, and wire them to video out.'
-                : 'Nothing in the graph reads this device, so it is written as it comes. ' +
-                  'To crop a screen grab to one monitor, or to put a camera in the corner ' +
-                  'of it, place it on the Graph stage: it is in the source list there like ' +
-                  'any other -i.', 'dim')));
+        const strip = (cls, text, why, label) => div(`cap-strip${cls}`, [
+            span('Filters', 'cap-strip-k'),
+            el('span', { cls: `cap-strip-v${cls ? ' warn' : ' dim'}`, text, title: why }),
+            door(label),
+        ]);
+
+        if (!g)
             // No picker here even where the graph has ends of its own: nothing
             // it holds reads these devices, so every one of them would be a
             // choice that leads straight to a refusal.
-            return out;
-        }
-        const pads = padRows();
-        if (!g.ok) {
-            out.push(row('', span(`This will not run: ${g.reason}`, 'warn')));
-            out.push(row('', span(
-                'The graph is edited on the Graph stage, which draws the same problem ' +
-                'against the node it is about.', 'dim')));
-            out.push(...pads);
-            return out;
-        }
+            return n > 1
+                ? [strip(' bad', `${n} inputs, nothing joining them`,
+                         'Two pictures and nothing saying how they combine is refused ' +
+                         'rather than guessed at. Place them on the Graph stage and wire ' +
+                         'them to video out.', 'Build')]
+                : [strip('', 'none',
+                         'Nothing in the graph reads this device, so it is recorded exactly ' +
+                         'as it comes. To crop it, or to put a camera in the corner of it, ' +
+                         'place it on the Graph stage.', 'Add…')];
+        if (!g.ok)
+            return [strip(' bad', `will not run — ${g.reason}`,
+                          'The Graph stage draws the same problem against the node it is ' +
+                          'about.', 'Fix'),
+                    ...padRows()];
 
-        // One row per chain, because that is how a person reads a filtergraph —
+        // One line per chain, because that is how a person reads a filtergraph —
         // the semicolons are where it breaks and joining them into one line is
         // what makes a five-chain graph unreadable.
-        for (const chain of g.filterGraph.split(';'))
-            out.push(row('', span(chain, 'mono cap-chain')));
-        out.push(row('', span(
-            `Built on the Graph stage from ${capture.inputs.length} ` +
-            `input${capture.inputs.length === 1 ? '' : 's'}, and mapped as ` +
-            [g.video && `[${g.video}]`, g.audio && `[${g.audio}]`].filter(Boolean).join(' + ') +
-            '.', 'dim')));
-        out.push(...pads);
-        return out;
+        const chains = g.filterGraph.split(';');
+        return [
+            div('cap-strip', [
+                span('Filters', 'cap-strip-k'),
+                el('span', {
+                    cls: 'cap-strip-v',
+                    text: `${n} input${n === 1 ? '' : 's'} → ` +
+                          [g.video && `[${g.video}]`, g.audio && `[${g.audio}]`]
+                              .filter(Boolean).join(' + '),
+                    title: 'What the writer maps. The same text the command bar prints, from ' +
+                           'the same call.',
+                }),
+                door('Edit'),
+            ]),
+            div('cap-chains', chains.map((chain) => span(chain, 'mono dim cap-chain'))),
+            ...padRows(),
+        ];
     });
 }
 
@@ -1118,6 +1249,9 @@ function padRows() {
         const now = stream === 'v' ? capture.videoPad : capture.audioPad;
         return el('select', {
             cls: 'wide', 'data-f': stream === 'v' ? 'capvpad' : 'capapad',
+            title: 'Which end of the graph this file gets. Video out is where a render of ' +
+                   'the timeline ends too, so cameras wired there leave the composite ' +
+                   'feeding nothing — give them an output of their own and pick it here.',
             on: { change: (e) => {
                 if (stream === 'v') capture.videoPad = e.target.value;
                 else capture.audioPad = e.target.value;
@@ -1130,43 +1264,29 @@ function padRows() {
     const rows = [];
     if (pads.v.length > 1) rows.push(row('Picture from', pick('v')));
     if (pads.a.length > 1) rows.push(row('Sound from', pick('a')));
-    rows.push(row('', span(
-        'This graph has outputs of its own. A recording writes one end of it, and video ' +
-        'out is where a render of the timeline ends as well — give the cameras an output ' +
-        'to themselves and the two stop competing for it.', 'dim')));
     return rows;
 }
 
 // ── the file ───────────────────────────────────────────────────────────────
 
+/// The right column: what comes out.
+///
+/// **Always drawn, including with nothing activated.** It used to be replaced
+/// by a paragraph about what a device is, which put the one thing somebody
+/// might reasonably set in advance — where the file goes — behind activating a
+/// camera. The paragraph is now the middle column's empty state, where a
+/// person is already looking.
 function drawSettings() {
     put(refs.settings, () => {
-        if (!capture.inputs.length)
-            return [div('dim pad',
-                'Click a device on the left to activate it. A device is an input — ' +
-                '`-f gdigrab -i desktop` is an -i with a demuxer and that demuxer’s options, ' +
-                'exactly like a file — and what makes it different is that it never ends. ' +
-                'Activating one puts it in the same list every file is in.')];
-
         const path = el('input', {
             cls: 'wide', 'data-f': 'cappath', type: 'text', value: capture.path,
+            title: 'A path, or a URL, or a tee argument — a recording is a device into a ' +
+                   'muxer, so anything the Write stage can write to works here',
             on: { change: () => { capture.path = path.value.trim(); redraw(); } },
         });
 
-        const rows = [];
-        rows.push(...regionRows());
-
-        if (capture.inputs.length > 1)
-            rows.push(head('The inputs'),
-                      row('', span(
-                          `${capture.inputs.length} of them, numbered above in the order the ` +
-                          'graph reads them. -t belongs to an input rather than to the ' +
-                          'recording, and the shortest of them is when the session ends — an ' +
-                          'input that has run out has nothing further to offer the graph.',
-                          'dim')));
-
-        rows.push(head('The file'));
-        rows.push(row('Path', path));
+        const rows = [head('The recording')];
+        rows.push(row('Save to', path));
         rows.push(row('Container', muxerPicker()));
         // Where a recording goes is the same question the Write stage asks, and
         // the same answer: a recording is a device into a `Writer`, and a
@@ -1183,14 +1303,26 @@ function drawSettings() {
         // of, which is an error at both ends of this application, and a control
         // that quietly did nothing would be worse than its absence.
         const enc = effectiveVideo();
-        if (enc && enc.crf) rows.push(row('Quality', qualityField()));
-        else rows.push(row('Quality', span(
-            enc ? `${enc.label || enc.id} has no CRF — it is written at its own quality`
-                : 'the muxer’s default encoder decides', 'dim')));
-        rows.push(row('', span(
-            'A recording is its own pipeline: its devices, its graph, straight into the ' +
-            'encoder. The Encode stage describes the render of the timeline, which is a ' +
-            'different file, so the settings are not shared.', 'dim')));
+        if (enc && enc.crf) rows.push(row('Quality', qualityField(enc)));
+        else rows.push(row('Quality', el('span', {
+            cls: 'dim', text: enc ? 'fixed' : 'the container decides',
+            title: enc
+                ? `${enc.label || enc.id} has no CRF — it is written at its own quality, and ` +
+                  'handing it one would be an option the encoder has never heard of'
+                : 'Nothing is chosen, so the muxer reaches for its own default encoder',
+        })));
+
+        // When it stops, where that is a fact rather than a setting: `-t`
+        // belongs to an input and is set on its card, so this states what the
+        // inputs between them come to.
+        const ends = shortest();
+        rows.push(row('Length', el('span', {
+            cls: 'dim', text: ends ? clock(ends) : 'until you stop',
+            title: ends
+                ? 'The shortest input’s — one that has run out has nothing further to offer ' +
+                  'the graph. Set it on a card.'
+                : 'No input has a Stop after set',
+        })));
         return rows;
     });
 }
@@ -1215,13 +1347,15 @@ function destinationRows() {
     const scheme = schemeOf(capture.path);
     if (scheme) {
         const linked = protocolLinked(scheme);
-        rows.push(row('Protocol', span(
-            linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
-            linked ? 'mono' : 'mono src-missing')));
-        rows.push(row('', span(
-            'A recording pushed through a protocol has no size and no percentage, for the ' +
-            'same reason it has none without a -t: there is no file to measure. What it ' +
-            'reports is what it has sent.', 'dim')));
+        rows.push(row('Protocol', el('span', {
+            cls: linked ? 'mono' : 'mono src-missing',
+            text: linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
+            title: linked
+                ? 'Sent rather than written, so there is no size and no percentage — what ' +
+                  'it reports is what went out.'
+                : 'This build has no such protocol, so the open will fail with a message ' +
+                  'about a filename',
+        })));
     }
     if (capture.format === 'tee') {
         // Counted by hand rather than with a split, because the separator can
@@ -1232,17 +1366,18 @@ function destinationRows() {
             if (text[i] === '\\') { i++; continue; }
             if (text[i] === '|') n++;
         }
-        rows.push(row('', span(
-            `${n} destination${n === 1 ? '' : 's'} — recording and streaming the same ` +
-            'capture is one encode through tee, written [f=matroska]take1.mkv|' +
-            '[f=flv]rtmp://…  The Write stage has an editor for the argument; here it is ' +
-            'typed, because a second copy of the escaping would be a second answer to it.',
-            'dim')));
+        rows.push(row('Writes to', el('span', {
+            cls: 'dim', text: `${n} destination${n === 1 ? '' : 's'}`,
+            title: 'Recording and streaming at once is one encode through tee, written ' +
+                   '[f=matroska]take1.mkv|[f=flv]rtmp://…  The Write stage has an editor ' +
+                   'for the argument; here it is typed, because a second copy of the ' +
+                   'escaping would be a second answer to it.',
+        })));
     }
     return rows;
 }
 
-/// The region, when the focused input's demuxer has one.
+/// The region, on the card whose picture it is dragged on.
 ///
 /// **Picked rather than typed**, by dragging on that card's live picture —
 /// which is the only way it could be picked in this engine, and it turns out to
@@ -1250,31 +1385,41 @@ function destinationRows() {
 /// you. The numbers are shown as well as set, because `offset_x` is what the
 /// command bar prints and a rectangle nobody can read off is a rectangle nobody
 /// can reproduce.
-function regionRows() {
-    const inp = focused();
+///
+/// **On the card and not in a column**, which is where it was: a headed section
+/// in the right-hand column, describing a rectangle on a picture two columns
+/// away, and — with two screen grabbers activated — one section for whichever
+/// card happened to be focused. A region belongs to an input the way its source
+/// does.
+function regionRows(inp) {
     if (!inp || !takesRegion(inp.format)) return [];
     const o = inp.options;
     const set = o.video_size || o.offset_x || o.offset_y;
-    return [
-        head(capture.inputs.length > 1 ? `Region · input [${focus}]` : 'Region'),
-        row('Now', span(set
-            ? `${o.video_size || 'the whole screen'} at ${o.offset_x || 0},${o.offset_y || 0}`
-            : 'the whole screen', 'mono')),
-        row('', span(
-            'Drag a box on that input’s picture to capture part of the screen. It sets ' +
-            '-offset_x, -offset_y and -video_size, which are this demuxer’s own options and ' +
-            'are in the column on the right beside everything else it takes.', 'dim')),
-        set ? row('', el('button', {
-            cls: 'tiny', 'data-f': 'capwhole', text: 'The whole screen',
-            on: { click: () => {
-                const next = Object.assign({}, inp.options);
-                delete next.video_size;
-                delete next.offset_x;
-                delete next.offset_y;
-                change(inp, { options: next });
-            } },
-        })) : null,
-    ].filter(Boolean);
+    const reset = el('button', {
+        cls: 'tiny', 'data-f': 'capwhole', text: 'Reset',
+        title: 'Capture the whole screen again',
+        on: { click: () => {
+            const next = Object.assign({}, inp.options);
+            delete next.video_size;
+            delete next.offset_x;
+            delete next.offset_y;
+            change(inp, { options: next });
+        } },
+    });
+    // One row, because two — a value and a line under it saying how to change
+    // the value — is the shape this whole stage was made of.
+    return [row('Region', el('div', { cls: 'btns' }, [
+        el('span', {
+            cls: 'mono',
+            text: set
+                ? `${o.video_size || 'full'} at ${o.offset_x || 0},${o.offset_y || 0}`
+                : 'the whole screen',
+            title: 'This device’s own -offset_x, -offset_y and -video_size, in the screen’s ' +
+                   'pixels. They are in the option table on the right beside everything ' +
+                   'else it takes.',
+        }),
+        set ? reset : span('· Drag to crop', 'dim'),
+    ]))];
 }
 
 function muxerPicker() {
@@ -1313,16 +1458,74 @@ function codecPicker(audio) {
         }))));
 }
 
-function qualityField() {
-    const field = el('input', {
-        cls: 'num', 'data-f': 'capquality', type: 'text', value: String(capture.quality),
-        on: { change: () => { capture.quality = Number(field.value) || 23; redraw(); } },
+/// Constant quality, as the encoder's own range rather than a number to know.
+///
+/// It was a text box containing `23`, which is a control only somebody who
+/// already knows what CRF is can use — and knowing that it runs the *other* way
+/// from every other quality control in the world is exactly the thing a slider
+/// can show and a number cannot. The label under it is the encoder's ends
+/// named, and the value stays visible in `crf` spelling because that is what
+/// the command bar prints.
+///
+/// The range comes from `qualityRange()` — the Encode stage's, the same
+/// question of the same option table — so an encoder with a different scale
+/// gets its own ends and not x264's.
+function qualityField(enc) {
+    const q = qualityRange(enc.id);
+    const value = span(`crf ${capture.quality}`, 'mono');
+    const slider = el('input', {
+        'data-f': 'capquality', type: 'range', min: q.min, max: q.max,
+        value: String(capture.quality),
+        title: `Constant quality. ${q.min} is the best this encoder does and ${q.max} the ` +
+               'smallest file; it is -crf on the command line.',
+        // Not a full redraw: rebuilding the form under a dragging pointer loses
+        // the drag on the first move. The command bar is told, because it
+        // prints the number.
+        on: { input: () => {
+            capture.quality = Number(slider.value) || capture.quality;
+            value.textContent = `crf ${capture.quality}`;
+            if (hooks.changed) hooks.changed();
+        }, change: () => redraw() },
     });
-    return field;
+    return el('div', { cls: 'btns' }, [slider, value]);
 }
 
 // ── the record bar ─────────────────────────────────────────────────────────
 
+/// Why the Record button is dead, in one clause, or '' when it is live.
+///
+/// **The same conditions `ready()` checks, in the same order**, so that a
+/// disabled button always has a reason and a live one never shows one. It is
+/// one function and not two because the two drifting apart is a button that is
+/// dead with nothing next to it, which is the worst state a stage can be in.
+function blocker() {
+    const all = captureInputs();
+    if (!all.length) return 'Pick a device';
+    for (const i of all) if (!i.format || !i.path) return 'A source is empty';
+    const g = graphOf();
+    // Short, because the strip directly above already carries the reason —
+    // twice on one screen is the habit this whole stage was rewritten out of.
+    if (g && !g.ok) return 'Graph won’t run';
+    if (all.length > 1 && !g) return 'Needs a graph';
+    return '';
+}
+
+/// What the file will be, in the words the pickers on the right use.
+function destinationWhat() {
+    const m = (bro.ffmpeg.muxers || []).find((x) => x.name === capture.format);
+    const enc = effectiveVideo();
+    return [m ? (m.label || m.name) : capture.format, enc && (enc.label || enc.id)]
+        .filter(Boolean).join(' · ');
+}
+
+/// The act, and what a recording can honestly say about itself.
+///
+/// **The bottom of the middle column, at the weight of the thing it is.** The
+/// button used to be an ordinary-looking control in the middle of the page with
+/// prose either side, and the file it was about to write was scrolled off the
+/// bottom of the same column. Now the destination is beside the button that
+/// sends it there and the reason it is dead — where there is one — is beside it
+/// too, rather than in a panel somebody has to go and find.
 export function drawRecording() {
     if (!refs.bar) return;
     put(refs.bar, () => {
@@ -1330,9 +1533,10 @@ export function drawRecording() {
         if (recording) {
             const st = status || {};
             out.push(el('button', {
-                cls: 'primary', 'data-f': 'capstop', text: 'Stop',
+                cls: 'cap-go', 'data-f': 'capstop',
+                title: 'Stop recording and close the file',
                 on: { click: stopRecording },
-            }));
+            }, [div('cap-go-dot stop'), span('Stop')]));
             // **No percentage.** Elapsed, frames and size are facts; a fraction
             // of a total nobody knows is not one. With a `-t` on the device the
             // job does have a total and says so, and then the bar means
@@ -1341,33 +1545,45 @@ export function drawRecording() {
             out.push(span(clock(st.elapsed || 0), 'cap-elapsed mono'));
             out.push(span(`${st.frames || 0} frames`, 'dim mono'));
             out.push(span(bytes(st.bytes || 0), 'dim mono'));
-            out.push(span(st.openEnded
-                ? 'recording — there is no end until you stop it, so there is no percentage'
-                : `${Math.round((st.progress || 0) * 100)}% of ${clock(shortest())}`,
-                'dim'));
-        } else {
-            out.push(el('button', {
-                cls: 'primary', 'data-f': 'caprecord', text: 'Record',
-                disabled: !ready(),
-                on: { click: startRecording },
+            out.push(div('spacer'));
+            out.push(el('span', {
+                cls: 'dim',
+                text: st.openEnded
+                    ? 'runs until you stop it'
+                    : `${Math.round((st.progress || 0) * 100)}% of ${clock(shortest())}`,
+                title: st.openEnded
+                    ? 'No -t on any input, so nobody knows how long this will be — a ' +
+                      'percentage of an unknown total would be an invention.'
+                    : undefined,
             }));
-            const g = graphOf();
-            if (g && !g.ok)
-                out.push(span(`The graph will not run: ${g.reason}`, 'dim'));
-            else if (capture.inputs.length > 1 && !g)
-                out.push(span(
-                    'Two inputs and no graph: the graph is what says how they combine, so ' +
-                    'there is nowhere for [0:v] and [1:v] to meet. They are both in the ' +
-                    'Graph stage’s source list.', 'dim'));
+        } else {
+            const why = blocker();
+            out.push(el('button', {
+                cls: 'cap-go', 'data-f': 'caprecord', disabled: !!why,
+                title: why || `Record to ${capture.path}`,
+                on: { click: startRecording },
+            }, [div('cap-go-dot'), span('Record')]));
+            if (why) out.push(span(why, 'cap-why'));
+            else out.push(div('cap-dest', [
+                el('div', {
+                    cls: 'cap-dest-name mono', text: basename(capture.path) || 'unnamed',
+                    title: capture.path,
+                }),
+                div('cap-dest-what dim', destinationWhat()),
+            ]));
+            out.push(div('spacer'));
             if (lastFile) {
-                out.push(span(basename(lastFile), 'mono'));
+                out.push(el('span', {
+                    cls: 'mono', text: basename(lastFile),
+                    title: `Just recorded: ${lastFile}`,
+                }));
                 out.push(span(bytes(lastBytes), 'dim mono'));
                 out.push(el('button', {
-                    cls: 'tiny', 'data-f': 'capuse', text: 'Add to the timeline',
+                    cls: 'tiny', 'data-f': 'capuse', text: 'Add to timeline',
+                    title: 'Open what was just recorded as an input and lay it on the edit — ' +
+                           'the arrow from Capture to Sources, followed',
                     on: { click: () => { if (hooks.open) hooks.open(lastFile); } },
                 }));
-            } else if (capture.inputs.length) {
-                out.push(span('Nothing recorded yet.', 'dim'));
             }
         }
         return out;
@@ -1376,10 +1592,12 @@ export function drawRecording() {
     if (refs.note) {
         put(refs.note, () => {
             if (recording)
-                return [div('cap-note dim',
-                    'The devices are going to the recording rather than to a preview — a ' +
-                    'camera is exclusive, and a picture of one here would be the recording ' +
-                    'failing.')];
+                return [el('div', {
+                    cls: 'cap-note dim', text: 'Previews are dark while recording.',
+                    title: 'The devices are going to the recording rather than to a preview ' +
+                           '— a camera is exclusive, and a picture of one here would be the ' +
+                           'recording failing.',
+                })];
             return [];
         });
     }
@@ -1530,12 +1748,15 @@ function optionRows() {
         title: capture.inputs.length > 1
             ? `[${focus}] ${inp.format} options · ${all.length}`
             : `${inp.format} options · ${all.length}`,
-        note: 'What this device takes, out of its own option table and libavformat’s generic ' +
-              'one — the same column the encoder’s and the muxer’s options get. An unknown ' +
-              'key stops the open rather than being ignored.',
+        // No note. The column used to open with three sentences about where the
+        // table comes from and what an unknown key does — permanently on
+        // screen, above a search box, for a table most recordings never touch.
+        // The one consequence worth knowing rides on the hint line, which is
+        // only drawn while the list is empty anyway.
+        note: '',
         options: all,
         bag: inp.options,
-        hint: 'Anything set here is passed straight to the device.',
+        hint: 'An unknown key stops the open.',
         // The bag is edited in place, so the input has to be told to open
         // again with it — the same call the Sources stage makes after editing
         // a file's demuxer options, and for the same reason.

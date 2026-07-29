@@ -190,7 +190,7 @@ console.log('\na recording with no end');
 
     const bar = text('#cap-bar');
     console.log(`  ${bar}`);
-    ok(bar.indexOf('there is no end until you stop it') >= 0,
+    ok(bar.indexOf('runs until you stop it') >= 0,
        'and the bar says so in words rather than drawing a bar to nowhere');
     ok(bar.indexOf('frames') >= 0 && bar.indexOf('B') >= 0,
        'while stating what it can: elapsed, frames and size are facts');
@@ -277,7 +277,7 @@ console.log('\na second device is a second -i, not a second recording');
     same(qa('[data-card]').length, 2, 'and a card, so both devices are on screen at once');
     same(CI()[1].format, 'lavfi', 'the new input is the device that was clicked');
     same(CI()[0].format, 'lavfi', 'and the first one is untouched');
-    ok(text('#cap-list').indexOf('editing [1]') >= 0,
+    ok(text('#cap-list').indexOf('Editing [1]') >= 0,
        'the column says which input it is about, because there is now more than one');
 
     // The point of the collapse: it is the *document's* list that grew, so a
@@ -297,10 +297,15 @@ console.log('\ntwo inputs with no graph have nowhere to meet');
          'nothing in the graph reads these devices, which is not the same as a broken graph');
     ok(!cap.ready(), 'so the recording is not ready to start');
     ok(q('[data-f="caprecord"]').disabled, 'and the button says so rather than failing later');
-    ok(text('#cap-bar').indexOf('nowhere for [0:v] and [1:v] to meet') >= 0,
-       `with the reason, which is the engine's own: ${text('#cap-bar')}`);
-    ok(text('#cap-graph').indexOf('source list') >= 0,
-       'and the stage says where a graph is made, because there is no field here to make one in');
+    // The refusal is said **once**: short beside the dead button, and in full
+    // on the strip that is about the graph. It used to be a paragraph in both
+    // places, which is the habit this stage was rewritten out of.
+    ok(text('#cap-bar').indexOf('Needs a graph') >= 0,
+       `the button says why it is dead, beside itself: ${text('#cap-bar')}`);
+    ok(text('#cap-graph').indexOf('nothing joining them') >= 0,
+       `and the graph strip is where the reason is: ${text('#cap-graph')}`);
+    ok(!!q('#cap-graph [data-f="capgraphstage"]'),
+       'with the door to the stage that fixes it, rather than a sentence naming it');
     // The same refusal from the engine, in case the button ever stops asking.
     let threw = '';
     try {
@@ -609,13 +614,22 @@ console.log('\nthis machine’s own devices');
         // about the lavfi card still standing at [0].
         while (cap.capture.inputs.length) { q('[data-f="capremove"]').click(); pump(120); }
         same(qa('[data-card]').length, 0, 'no devices activated is an ordinary state');
-        ok(text('#cap-settings').indexOf('Click a device on the left') >= 0,
+        // The middle column answers "what now" where somebody is already
+        // looking, in two fragments. It used to be a paragraph about what a
+        // device is, in the column that should have been holding the output
+        // settings — so the one thing worth setting in advance was behind
+        // activating a camera.
+        ok(text('#cap-add').indexOf('Pick one on the left') >= 0,
            'and the stage says what to do rather than showing a form about nothing');
+        ok(text('#cap-settings').indexOf('Save to') >= 0,
+           'while the recording’s own settings stay where they are');
 
         q('[data-device="gdigrab"]').click();
         pump(2500);
         const shown = !!q('[data-f="preview"]');
-        const note = text('#cap-note');
+        // The refusal is on the card, which is the thing that has no picture —
+        // #cap-note is only written while a recording is running.
+        const note = text('#cap-cards');
         console.log(`  gdigrab: ${shown ? 'previewing' : `refused — ${note}`}`);
         ok(shown || note.length > 0,
            'opening the screen grabber either gives a picture or says why it did not');
@@ -623,8 +637,11 @@ console.log('\nthis machine’s own devices');
         if (shown) {
             ok(waitFor('the screen', () => q('[data-f="preview"]').videoWidth > 0),
                'and the picture is the screen, decoded through the ordinary <video> path');
-            ok(text('#cap-settings').indexOf('Drag a box on') >= 0,
-               'a region is picked rather than typed');
+            // On the card, beside the picture it is dragged on — not a headed
+            // section two columns away describing a rectangle you cannot see
+            // from there.
+            ok(text('#cap-cards').indexOf('Drag to crop') >= 0,
+               'a region is picked rather than typed, where it is picked');
 
             // The picture is fitted inside its panel rather than stretched to
             // it, because a region is dragged on it and a squashed picture
