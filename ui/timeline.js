@@ -298,6 +298,47 @@ function columnsOf(clip, w) {
     return { l, r, n, p, bucketAt };
 }
 
+/// The scale A1 is drawn on: **decibels relative to full scale**, floor to
+/// ceiling.
+///
+/// Amplitude is the wrong scale to judge sound by eye, and it was the scale
+/// here. Hearing is roughly logarithmic, so a linear lane spends half its
+/// height on the top 6 dB and crushes everything from a quiet dialogue line
+/// down to silence into the last few pixels — where all of the decisions
+/// actually are. On this scale a halving of amplitude is the same distance
+/// wherever it happens.
+///
+/// **The ceiling is above 0 dBFS on purpose.** The envelope is a sum, so a mix
+/// can exceed full scale, and that is the single most useful thing A1 can tell
+/// anybody. Clamping at 1.0 drew an over as exactly full height — identical to
+/// a peak that just touches, and therefore invisible. `DB_CEIL` of +6 gives an
+/// over somewhere to go and puts the 0 dBFS line about a tenth of the way down
+/// from the top, which is where a meter puts it.
+///
+/// The floor is -60 rather than lower because below it there is nothing to
+/// judge: a bucket at -70 dBFS and one at -90 are both "silent" to the person
+/// looking, and drawing the difference would spend a third of the lane on it.
+export const DB_FLOOR = -60;
+export const DB_CEIL = 6;
+
+/// Amplitude → how far off the centre line to draw it, as a fraction of half
+/// the lane. 0 at the floor and below, 1 at the ceiling and above.
+///
+/// Exported because the drawing cannot be checked and this can: the values a
+/// test pins are the ones the eye is being asked to read off.
+export function dbHeight(amp) {
+    const a = Math.abs(amp);
+    if (!(a > 0)) return 0;
+    const db = 20 * Math.log10(a);
+    if (db <= DB_FLOOR) return 0;
+    if (db >= DB_CEIL) return 1;
+    return (db - DB_FLOOR) / (DB_CEIL - DB_FLOOR);
+}
+
+/// Where full scale falls on that lane — the height the clipping line is drawn
+/// at, and the height a column has to beat to be over.
+export const ZERO_DBFS = dbHeight(1);
+
 /// The mix, one column of the lane at a time.
 ///
 /// Separated from the drawing because it is the *claim*: two clips that overlap
@@ -308,6 +349,11 @@ function columnsOf(clip, w) {
 /// `rms` is already rooted, `lo`/`hi` are the summed envelope, and `quiet` is
 /// what is deliberately outside the sum — see `drawAudioLane` for why each is
 /// combined the way it is.
+///
+/// `clipped` marks the columns where the envelope has gone past full scale.
+/// It is derived from `lo`/`hi` and could be recomputed by the caller; it is
+/// returned because it is the answer somebody is looking at A1 *for*, and a
+/// number a test can count is worth more than a colour it cannot.
 export function mixColumns(w) {
     const power = new Float32Array(w);      // sum of (rms*gain)^2 while accumulating
     const lo = new Float32Array(w), hi = new Float32Array(w);
@@ -334,8 +380,14 @@ export function mixColumns(w) {
             hi[x] += b2 * g;
         }
     }
-    for (let x = 0; x < w; x++) power[x] = Math.sqrt(power[x]);
-    return { rms: power, lo, hi, quiet, mixed };
+    const clipped = new Uint8Array(w);
+    for (let x = 0; x < w; x++) {
+        power[x] = Math.sqrt(power[x]);
+        // Either half on its own: a mix can go past full scale downwards
+        // without ever doing it upwards, and an encoder clips both.
+        if (hi[x] > 1 || lo[x] < -1) clipped[x] = 1;
+    }
+    return { rms: power, lo, hi, quiet, mixed, clipped };
 }
 
 /// A1: where the clips are, and **one waveform for the whole timeline**.
@@ -357,6 +409,11 @@ export function mixColumns(w) {
 ///     uncorrelated sounds at -6 dB make one at -3 rather than one at 0. That
 ///     is an estimate — perfectly correlated material really does add — and it
 ///     is the estimate every meter makes.
+///
+/// **Drawn in dB, with a line where clipping is** — see `dbHeight`. The sum is
+/// the reason the line is worth drawing: two clips that each peak just under
+/// full scale make a mix that does not, and until the lane had a scale that
+/// went above 1.0 that mix was drawn as exactly full height and looked fine.
 ///
 /// **A muted clip is drawn on its own, dimmed, and is not in the sum.** It is
 /// still there and simply not being heard, so hiding it would make it hard to
@@ -384,22 +441,26 @@ function drawAudioLane() {
         }
     }
 
-    const { rms, lo, hi, quiet, mixed } = mixColumns(w);
+    const { rms, lo, hi, quiet, mixed, clipped } = mixColumns(w);
 
     if (mixed) {
         // The RMS body first, then the peak envelope over it: the body is what
         // the sound feels like, the envelope is what it actually reaches.
         ctx.fillStyle = 'rgba(126, 214, 160, 0.35)';
         for (let x = 0; x < w; x++) {
-            if (!rms[x]) continue;
-            const y = Math.min(mid, rms[x] * mid * 1.6);
+            const y = dbHeight(rms[x]) * mid;
+            if (!y) continue;
             ctx.fillRect(x, mid - y, 1, y * 2);
         }
-        ctx.fillStyle = 'rgba(126, 214, 160, 0.9)';
         for (let x = 0; x < w; x++) {
-            if (!hi[x] && !lo[x]) continue;
-            const top = mid - Math.min(mid, hi[x] * mid);
-            const bot = mid + Math.min(mid, -lo[x] * mid);
+            const top = mid - dbHeight(hi[x]) * mid;
+            const bot = mid + dbHeight(lo[x]) * mid;
+            if (bot - top < 0.5) continue;
+            // A column that has gone over is drawn in its own colour rather
+            // than left to be inferred from where it ended up: the line says
+            // where full scale is, and this says which columns crossed it.
+            ctx.fillStyle = clipped[x] ? 'rgba(255, 122, 92, 0.95)'
+                                       : 'rgba(126, 214, 160, 0.9)';
             ctx.fillRect(x, top, 1, Math.max(1, bot - top));
         }
     }
@@ -413,7 +474,7 @@ function drawAudioLane() {
             const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
             let m = 0;
             for (let b = b0; b < b1 && b < n; b++) if (p.rms[b] > m) m = p.rms[b];
-            const y = Math.min(mid, m * mid * 1.6);
+            const y = dbHeight(m) * mid;
             ctx.fillRect(x, mid - y, 1, y * 2);
         }
         ctx.fillStyle = 'rgba(126, 214, 160, 0.3)';
@@ -424,10 +485,30 @@ function drawAudioLane() {
                 if (p.min[b] < a) a = p.min[b];
                 if (p.max[b] > b2) b2 = p.max[b];
             }
-            const top = mid - Math.min(mid, b2 * mid);
-            const bot = mid + Math.min(mid, -a * mid);
+            const top = mid - dbHeight(b2) * mid;
+            const bot = mid + dbHeight(a) * mid;
             ctx.fillRect(x, top, 1, Math.max(1, bot - top));
         }
+    }
+
+    // Full scale, across the whole lane and over everything drawn so far. It
+    // is the one number on this lane that does not depend on the edit, which
+    // is what makes the shape either side of it mean anything — dashed and
+    // dim, because it is a reference and not a reading.
+    if (h > 18) {
+        const y = ZERO_DBFS * mid;
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(255, 140, 66, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, mid - y + 0.5); ctx.lineTo(w, mid - y + 0.5);
+        ctx.moveTo(0, mid + y - 0.5); ctx.lineTo(w, mid + y - 0.5);
+        ctx.stroke();
+        ctx.restore();
+        ctx.font = '9px Consolas, monospace';
+        ctx.fillStyle = 'rgba(255, 140, 66, 0.65)';
+        ctx.fillText('0 dB', 3, mid - y - 2);
     }
 
     // The outlines last, so a clip's extent stays readable over the waveform

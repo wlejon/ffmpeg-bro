@@ -446,6 +446,18 @@ suite stacks them:
   and simply not being heard, so hiding it would make it hard to find again and
   folding it in would draw sound the render will not write.
 
+  The lane is drawn in **decibels**, from -60 dBFS at the centre line to +6 at
+  the top, with a dashed line across it where full scale is. Amplitude is the
+  wrong scale to judge sound by eye — a linear lane spends half its height on
+  the top 6 dB and crushes a quiet dialogue line into the last few pixels,
+  where the decisions are; on this one a halving is the same distance wherever
+  it happens. The ceiling is *above* full scale because the envelope is a sum
+  and a sum can exceed it: two clips that each peak just under 0 dBFS make a
+  mix that does not, and a lane that stopped at 1.0 drew that as exactly full
+  height and looked fine. Columns that go over are drawn in their own colour,
+  so an over is something you see rather than something you infer from a shape
+  that has run out of room.
+
 Both come from `bro.media` (see bro's `docs/video-api.js`), which decodes the
 whole file through the same backend registry `<video>` plays through. Both are
 full-file decodes, so ffmpeg-bro runs them in a Worker and the lanes fill in
@@ -2573,11 +2585,13 @@ Honest list of what does not work:
   decision about locking them, and there is nothing here that says — so the
   safe half is built and the other half needs a control before it can mean
   anything.
-- **A waveform in dB, with a line where clipping is.** A1 draws the mix now, so
-  two clips at once are one shape — but the scale is linear amplitude, which is
-  the wrong scale for judging loudness by eye, and nothing marks 0 dBFS. The
-  envelope already reaches the sum, so the information is there and only the
-  drawing of it is not.
+- **A meter, as opposed to a waveform.** A1 is drawn in dB with a line where
+  clipping is, so an over can be *found* on the timeline — but it is the
+  analysis's peaks, which is a bucket's worth of samples at a time and not a
+  true-peak reading, and it is per clip rather than per output channel. What is
+  not here is a level meter beside the viewer showing what is leaving *now*,
+  which is the same missing piece as monitoring a capture below and would be
+  the same mechanism.
 - **Finding things by sound.** Reviewing wildlife footage, the birds are
   audible long before anything is visible; nothing yet marks where a call
   happens so you can jump between them. bro has the parts — `bro.sense` for

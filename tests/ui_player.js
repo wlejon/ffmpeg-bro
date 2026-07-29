@@ -751,6 +751,49 @@ console.log('\none waveform, not one per clip');
     ok(Math.abs(quieter.hi[at] - 0.75) < 0.02,
        `a clip at half volume contributes half (${quieter.hi[at].toFixed(3)})`);
 
+    // ── the scale it is drawn on ──────────────────────────────────────────
+    //
+    // The lane is dB now, and the reason the sum above is worth having is that
+    // it can exceed full scale. Two claims: that a halving is a fixed distance
+    // wherever it happens (which is what makes the scale worth changing to),
+    // and that a column past 1.0 is marked (which is what the scale is *for*).
+    const { dbHeight, ZERO_DBFS, DB_FLOOR, DB_CEIL } = A.timeline;
+    const six = 20 * Math.log10(2) / (DB_CEIL - DB_FLOOR);
+    ok(dbHeight(0) === 0 && dbHeight(0.001) === 0,
+       'silence and the floor are both on the centre line');
+    ok(dbHeight(4) === 1 && dbHeight(1e6) === 1, 'and the ceiling is the top');
+    ok(Math.abs(dbHeight(1) - 60 / 66) < 1e-9,
+       `full scale is ${dbHeight(1).toFixed(4)} of the way up, leaving 6 dB of ` +
+       'headroom above it for a mix that goes over');
+    ok(ZERO_DBFS === dbHeight(1), 'which is where the clipping line is drawn');
+    ok(Math.abs((dbHeight(1) - dbHeight(0.5)) - six) < 1e-9 &&
+       Math.abs((dbHeight(0.5) - dbHeight(0.25)) - six) < 1e-9,
+       'a halving is the same distance wherever it happens — which linear ' +
+       'amplitude is exactly what does not do');
+    ok(dbHeight(-0.5) === dbHeight(0.5),
+       'and the trough is as far below the line as the peak is above it');
+
+    // At the boundary, and past it. Two at 0.5 sum to exactly full scale: that
+    // is not an over, and saying it was would cry wolf on every loud mix.
+    a.volume = 1; b.volume = 1;
+    const edge = A.timeline.mixColumns(w);
+    ok(Math.abs(edge.hi[at] - 1) < 1e-6 && !edge.clipped[at],
+       'a mix that reaches full scale exactly is not clipping');
+    a.peaks = flat(0.6);
+    const over = A.timeline.mixColumns(w);
+    ok(over.hi[at] > 1 && over.clipped[at] === 1,
+       `and one that goes past it is (${over.hi[at].toFixed(3)})`);
+    ok(dbHeight(over.hi[at]) > ZERO_DBFS,
+       'so it is drawn above the line rather than clamped onto it, which is ' +
+       'what made an over invisible before');
+    // Downwards on its own — asymmetric material really does exist, and an
+    // encoder clips both halves.
+    a.peaks = flat(0.5);
+    a.peaks.min = new Array(8).fill(-0.7);
+    const under = A.timeline.mixColumns(w);
+    ok(under.hi[at] <= 1 && under.lo[at] < -1 && under.clipped[at] === 1,
+       `a mix that only goes over downwards is still clipping (${under.lo[at].toFixed(3)})`);
+
     // Back to one clip, so everything after this is the timeline it was.
     const whole = a.length + b.length;
     A.select(b);
