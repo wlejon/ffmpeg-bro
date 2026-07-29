@@ -3,7 +3,8 @@
 The host bindings this binary adds to the JS environment — the surface that
 `ffmpeg-bro-headless` scripts, the test suites and the UI itself all drive.
 Everything here is asked of libav* rather than written down, so it grows with
-the build. For what the *application* does with it, see [the manual](manual.md).
+the build. For what the *application* does with it, see
+[the manual](manual/README.md).
 
 ```js
 bro.ffmpeg.available      // true — it's linked, not looked up on PATH

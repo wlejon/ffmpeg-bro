@@ -36,7 +36,7 @@ and renders relative to the working directory, which is why CMakeLists sets
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_export.js -- <file> [<video-only>] [<sound-only>]
 ```
 
-docs/manual.md's [Testing](docs/manual.md#testing) section lists every
+The manual's [Testing](docs/manual/testing.md) part lists every
 standalone invocation and what each suite is about.
 
 Test media is **generated, never checked in**: `tests/make_fixture.cpp` writes
@@ -64,8 +64,9 @@ Three layers:
   executables and by every test.
 - **`ui/`** — the application, plain ES modules + DOM, run by bro's QuickJS
   engine. `ui/bro.json` is the window manifest.
-- **`docs/`** — manual.md (every stage, plus an honest "Not yet") and api.md
-  (the `bro.ffmpeg` host surface). README stays short; the depth lives here.
+- **`docs/`** — `manual/`, one file per stage plus an honest "Not yet"
+  ([the index](docs/manual/README.md) lists them), and api.md (the
+  `bro.ffmpeg` host surface). README stays short; the depth lives here.
 
 The UI is **not a browser**. The DOM is bro's subset, and the gaps matter, so
 check what the engine actually implements before reaching for a web API — and
@@ -178,7 +179,8 @@ monitoring asks. The scale both it and A1 are drawn on is `ui/levels.js`.
   block explaining what it is and which decision it embodies, and exported
   functions carry `///` doc comments including the alternatives rejected and the
   numbers measured. Match that density; it is the repository's main documentation.
-- **Docs move with the code.** A change to behaviour updates docs/manual.md (and
-  docs/api.md for the `bro.ffmpeg` surface) in the same commit.
+- **Docs move with the code.** A change to behaviour updates the part of
+  `docs/manual/` that describes it (and docs/api.md for the `bro.ffmpeg`
+  surface) in the same commit.
 - Commit subjects are a sentence in the present tense stating the new behaviour
   — "A recording reads several live inputs at once", not "add multi-input capture".

@@ -86,9 +86,9 @@ tested, and a scriptable media tool in its own right).
 
 ## Documentation
 
-- **[The manual](docs/manual.md)** — every stage in detail: playback, capture,
-  inputs, the timeline, the graph, exporting, subtitles, measurement, and an
-  honest list of what does not work yet.
+- **[The manual](docs/manual/README.md)** — one part per stage, in detail:
+  playback, capture, inputs, the timeline, the graph, exporting, subtitles,
+  measurement, and an honest list of what does not work yet.
 - **[The `bro.ffmpeg` API](docs/api.md)** — the JS surface that headless scripts
   and the test suites drive.
 
@@ -100,11 +100,11 @@ cmake --build build --config Release && ctest --test-dir build -C Release
 
 `ctest` generates its own fixture media with known content and runs every suite —
 native and UI — against it. Each suite also runs standalone against any real
-file; the manual's [Testing](docs/manual.md#testing) section has the full list.
+file; the manual's [Testing](docs/manual/testing.md) part has the full list.
 
 ## Known limitations
 
-The short version — the manual's [Not yet](docs/manual.md#not-yet) section is the
+The short version — the manual's [Not yet](docs/manual/not-yet.md) part is the
 honest, complete list:
 
 - No undo, anywhere.

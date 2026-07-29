@@ -17,8 +17,8 @@
 //     about this machine is not a pass/fail — a build on a laptop with an
 //     integrated GPU would fail a threshold that a workstation passes, and the
 //     threshold would then be about the machine and not about the code. What
-//     the numbers are for is docs/manual.md, which names the machine they came
-//     from.
+//     the numbers are for is docs/manual/card.md, which names the machine
+//     they came from.
 //
 // The equivalence check is the interesting assertion. **A hardware decoder is
 // not bit-exact with a software one and is not required to be**: NVDEC, QSV and
@@ -429,11 +429,11 @@ int main(int argc, char* argv[]) {
     // ── how much it costs ──────────────────────────────────────────────────
     //
     // Three walks over the same file, timed. This is the measurement
-    // docs/manual.md reports, and it is the reason this chunk exists in the shape it does: the
-    // interesting number is not "is the GPU fast" but "what does getting the
-    // picture back cost", because everything downstream of a decode in this
-    // application — the compositor, a software filter, bro's renderer — wants
-    // pixels in system memory.
+    // docs/manual/card.md reports, and it is the reason this chunk exists in the
+    // shape it does: the interesting number is not "is the GPU fast" but "what
+    // does getting the picture back cost", because everything downstream of a
+    // decode in this application — the compositor, a software filter, bro's
+    // renderer — wants pixels in system memory.
 
     std::printf("\nDecode, one pass over the file\n");
     {

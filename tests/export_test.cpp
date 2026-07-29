@@ -3677,10 +3677,11 @@ int main(int argc, char* argv[]) {
         const std::filesystem::path ass = fixtures / "cues.ass";
         // **A skip, not a failure.** Every suite here runs standalone against
         // any real file — that is what the standalone command lines in
-        // CLAUDE.md and docs/manual.md are for — and a real file is not sitting beside
-        // a `cues.srt` this repository generated. Under `ctest` the fixtures
-        // are always there and the whole section runs; pointed at somebody's
-        // footage it says what it is not doing rather than failing at it.
+        // CLAUDE.md and docs/manual/testing.md are for — and a real file is not
+        // sitting beside a `cues.srt` this repository generated. Under `ctest`
+        // the fixtures are always there and the whole section runs; pointed at
+        // somebody's footage it says what it is not doing rather than failing
+        // at it.
         const bool haveCues = std::filesystem::exists(srt) && std::filesystem::exists(ass);
         if (!haveCues)
             std::printf("  SKIP  no cues.srt/cues.ass beside %s — the subtitle sections "

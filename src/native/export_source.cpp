@@ -198,7 +198,7 @@ bool SourceVideo::decodeOne() {
             // worth writing down because everybody assumes it is: measured, the
             // transfer is 3–4% of the wall clock of a CUDA decode, and the
             // decode itself is several times a threaded software one. See
-            // tests/hardware_test.cpp and docs/manual.md.
+            // tests/hardware_test.cpp and docs/manual/card.md.
             if (!keepHw_ && pending_->hw_frames_ctx) {
                 std::string why;
                 if (!downloadFrame(&pending_, &swap_, &why)) return false;

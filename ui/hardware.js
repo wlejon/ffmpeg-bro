@@ -13,14 +13,14 @@
 //
 // **The second thing this file holds is the cost, in a sentence, where the
 // choice is made.** ffmpeg-bro's culture is to measure, and the measurement
-// (tests/hardware_test.cpp; the tables are in docs/manual.md) says something that most
-// software with a "use hardware acceleration" checkbox does not say: on this
-// hardware a hardware *decode* is a loss, several times over, and the readback
-// everybody blames is 3–4% of it. The win is entirely the encoder. A control
-// that offered both as one switch labelled "hardware" would be wrong about half
-// of what it does, so they are two decisions in two places — decoding is per
-// input on Sources, encoding is per stream on Write — and the one that is
-// usually a mistake says so beside itself.
+// (tests/hardware_test.cpp; the tables are in docs/manual/card.md) says
+// something that most software with a "use hardware acceleration" checkbox
+// does not say: on this hardware a hardware *decode* is a loss, several times
+// over, and the readback everybody blames is 3–4% of it. The win is entirely
+// the encoder. A control that offered both as one switch labelled "hardware"
+// would be wrong about half of what it does, so they are two decisions in two
+// places — decoding is per input on Sources, encoding is per stream on Write —
+// and the one that is usually a mistake says so beside itself.
 
 let cached = null;
 
@@ -150,10 +150,10 @@ export function deviceForRender(graphText, inputList) {
 /// control that is about to be used.
 ///
 /// **This is the whole reason the module has an opinion.** The measurement is
-/// in docs/manual.md and it is unambiguous: decoding on the card is slower here than
-/// libavcodec threaded across every core, and it is slower whether or not the
-/// picture comes back down. A checkbox that said nothing would be read as an
-/// optimisation.
+/// in docs/manual/card.md and it is unambiguous: decoding on the card is
+/// slower than libavcodec threaded across every core, and it is slower
+/// whether or not the picture comes back down. A checkbox that said nothing
+/// would be read as an optimisation.
 export const decodeCost =
     'Measured slower here than the CPU — libavcodec decodes threaded across ' +
     'every core, and one NVDEC stream pulled a frame at a time is several ' +

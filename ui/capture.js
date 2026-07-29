@@ -110,7 +110,7 @@
 // a label, a value, and a door to whatever would change it. Where a sentence
 // was load-bearing it is a `title` on the control it is about — attached to the
 // thing, where somebody looking at the thing will find it — and the argument
-// itself lives in docs/manual.md and in these headers.
+// itself lives in docs/manual/capture.md and in these headers.
 //
 // The vocabulary went the same way. `-i` and `-t` were the *labels* of the two
 // fields on a card, which is a UI that can only be read by somebody who did not
@@ -1416,7 +1416,7 @@ function setSource(arg, inp) {
 /// screen in the stage carried four lines explaining the case where there is
 /// nothing to explain. What a person needs here is the answer — none, this, or
 /// this is broken — and a way to go and change it. The argument is in
-/// docs/manual.md and in the header above.
+/// docs/manual/capture.md and in the header above.
 function drawGraph() {
     if (!refs.graph) return;
     put(refs.graph, () => {

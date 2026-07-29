@@ -36,7 +36,7 @@
 // manual explains.** What is on screen is a label, a value, and a door to
 // whatever would change it. A sentence that was load-bearing is a `title` on
 // the control it is about — where somebody looking at the control will find it
-// — and the argument lives in docs/manual.md and in these headers.
+// — and the argument lives in docs/manual/sources.md and in these headers.
 //
 // The vocabulary went with it. `-ss`, `-to`, `-itsoffset`, `-stream_loop`,
 // `-hwaccel`, `-framerate` and `-start_number` were the *labels* of the fields,
