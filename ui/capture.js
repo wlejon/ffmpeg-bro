@@ -61,19 +61,21 @@
 // written down here, and there could not be: this build has five devices and
 // another platform's has different ones.
 //
-// **The graph is a field, and with several inputs it is not optional.** A
-// recording has been able to run a filter graph since the engine grew one, for
-// one input as much as for several — `[0:v]crop=…[vout]` records one monitor
-// out of a wide screen grab — and several inputs *require* one, because two
-// pictures and nothing saying how they combine is not a composition anything
-// could guess at, and the engine refuses rather than picking one.
+// **The graph is built on the Graph stage, and this stage only reports it.**
+// A recording has been able to run a filter graph since the engine grew one,
+// for one input as much as for several — `[0:v]crop=…[vout]` records one
+// monitor out of a wide screen grab — and several inputs *require* one, because
+// two pictures and nothing saying how they combine is not a composition
+// anything could guess at, and the engine refuses rather than picking one.
 //
-// The field is where that string is typed **for now**, and it is the next thing
-// to go: a device in the shared list is a node the Graph stage can already
-// place (`overlay.addSource(input.id)`), so the editor that exists is a better
-// place to build a composition than a textarea and three preset buttons. The
-// presets stay only until it is wired, because a stage that requires a graph
-// and offers no way to make one is worse than a hardcoded list of three.
+// That string used to be typed into a textarea here, beside three buttons that
+// wrote one by concatenation. Both are gone. An activated device is a node the
+// Graph stage can place, wire, preview and check, so the composition has an
+// editor; a textarea beside it would be a second description of one render, and
+// the two would disagree the first time somebody edited the wrong one. What is
+// left here is `graphOf()`, which asks `graph/record.js` what the graph says
+// about *this* recording — and the three answers it can give are drawn below
+// the cards, refusal included.
 //
 // **The preview is the real decode path.** A device in the input list is
 // registered by `ui/inputs.js` like every other one, and is played through an
@@ -100,6 +102,8 @@ import { schemeOf, protocolLinked } from './export/destination.js';
 import { changed as projectChanged } from './project.js';
 import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
          asInput as inputSpec } from './inputs.js';
+import { recordGraph } from './graph/record.js';
+import { current as overlayState, onChange as overlayChanged } from './graph/overlay.js';
 
 let refs = {};
 let hooks = {};
@@ -116,7 +120,6 @@ export const capture = {
     /// first is `[0:v]`/`[0:a]`, the second `[1:…]`. That order is this array's
     /// order and nothing else, which is why activating a device appends.
     inputs: [],
-    graph: '',              // `-filter_complex`, and required once there are two
     path: '',               // where the recording goes
     format: 'matroska',     // the muxer, by name
     videoCodec: '',         // empty asks the muxer for its default
@@ -166,6 +169,21 @@ export function initCapture(nodes, h) {
     refs = nodes || {};
     hooks = h || {};
     if (!capture.path) capture.path = defaultPath();
+    // **The graph is edited on another stage, so this one has to be told.** It
+    // was self-contained while the composition was a textarea here; it is not
+    // now, and a stage that only caught up when you clicked back onto it would
+    // be a Record button that stayed dead after the wire that fixed it. The
+    // spine is told too, because its Capture summary reads the same answer.
+    //
+    // Structure only, which is the same line `isEmpty()` draws and for the same
+    // reason: a card dragged three pixels changes where you like looking at a
+    // node and nothing about what would be recorded, and `pin` fires on every
+    // frame of that drag.
+    overlayChanged((what) => {
+        if (what === 'pin' || what === 'size') return;
+        drawCapture();
+        if (hooks.changed) hooks.changed();
+    });
 }
 
 function defaultPath() {
@@ -247,15 +265,31 @@ export function asInputs() {
     return captureInputs().map((i) => inputSpec(i));
 }
 
+/// What the document's graph says about this recording.
+///
+/// Three answers, and the caller has to distinguish all three — see
+/// `recordGraph()`. `null` is "nothing in the graph reads these devices", which
+/// is the state a fresh recording is in and the one a single device is written
+/// straight through in. Asked rather than stored, because the graph is edited
+/// on another stage and a copy here would be a copy that goes stale the moment
+/// a wire moves.
+export function graphOf() {
+    return recordGraph(capture.inputs, overlayState());
+}
+
 /// Is this recording ready to start? There has to be at least one device, each
-/// needs something after the `-i`, and several of them need a graph — the last
-/// is the engine's rule, checked here so the button is honest rather than so
-/// the refusal is avoided. `record.start` still refuses; this stops the press.
+/// needs something after the `-i`, the graph — if the graph is about this
+/// recording at all — has to be one that runs, and several devices need one,
+/// because two pictures and nothing saying how they combine is what the engine
+/// refuses. Checked here so the button is honest rather than so the refusal is
+/// avoided: `record.start` still refuses, this stops the press.
 export function ready() {
     const all = captureInputs();
     if (!all.length) return false;
     for (const i of all) if (!i.format || !i.path) return false;
-    if (all.length > 1 && !capture.graph.trim()) return false;
+    const g = graphOf();
+    if (g && !g.ok) return false;
+    if (all.length > 1 && !g) return false;
     return true;
 }
 
@@ -594,10 +628,13 @@ export function summary() {
     }
     const live = captureInputs();
     if (!live.length) return ['no device', `${devices().length} available`];
-    if (live.length > 1)
+    if (live.length > 1) {
+        const g = graphOf();
         return [`${live.length} inputs`,
-                capture.graph.trim() ? live.map((i) => i.format).join(' + ')
-                                     : 'no graph — they have nowhere to meet'];
+                !g ? 'no graph — they have nowhere to meet'
+                   : g.ok ? live.map((i) => i.format).join(' + ')
+                          : g.reason];
+    }
     const bits = [live[0].path || 'nothing chosen'];
     if (live[0].to) bits.push(`-t ${live[0].to}`);
     return [`-f ${live[0].format}`, bits.join(' · ')];
@@ -608,10 +645,14 @@ export function summary() {
 export function startRecording() {
     if (recording) return;
     if (!ready()) {
+        const g = graphOf();
         if (hooks.flash)
-            hooks.flash(capture.inputs.length > 1 && !capture.graph.trim()
-                ? 'Several inputs need a filter graph — it is what says how they combine'
-                : 'Activate a device first');
+            hooks.flash(g && !g.ok ? `The graph will not run: ${g.reason}`
+                : capture.inputs.length > 1
+                    ? 'Several inputs need a filter graph — it is what says how they ' +
+                      'combine. Build one on the Graph stage: the devices are in its ' +
+                      'source list.'
+                    : 'Activate a device first');
         return;
     }
     if (!capture.path) capture.path = defaultPath();
@@ -623,6 +664,7 @@ export function startRecording() {
     stopPreviews();
 
     const enc = effectiveVideo();
+    const g = graphOf();
     // **`sources` and not `source`, at one input as much as at several.** The
     // engine reads an absent list as `{source}` and a present one as itself, so
     // the singular spelling buys nothing here except a second shape to keep in
@@ -631,7 +673,7 @@ export function startRecording() {
         sources: asInputs(),
         path: capture.path,
         format: capture.format,
-    }, capture.graph.trim() ? { filterGraph: capture.graph.trim() } : {},
+    }, g && g.ok ? { filterGraph: g.filterGraph } : {},
        enc && enc.crf ? { crf: capture.quality } : {},
        // Fast on purpose and only where the encoder has the word: a capture
        // encodes in real time beside whatever is being recorded, and a preset
@@ -832,139 +874,60 @@ function setSource(arg, inp) {
 
 // ── the graph ──────────────────────────────────────────────────────────────
 
-/// What the recording's filter graph is, and the buttons that write one.
+/// What the Graph stage says about this recording, in the three states it can
+/// be in.
 ///
-/// The field is the truth and the buttons are a keyboard. A preset composes the
-/// string out of what the devices actually are — an input with no sound
-/// contributes no `[n:a]`, which matters because with several inputs **every**
-/// stream has to reach the graph or the engine refuses by name — and then puts
-/// it in the field, where it can be edited like anything typed.
+/// **Read-only, and that is the change.** There was a textarea here, and three
+/// buttons that wrote a chain into it out of the devices' probes. What the
+/// buttons did — scale two pictures to one height, stack them, mix whatever
+/// sound there is — the Graph stage does with nodes, on a canvas that checks the
+/// wiring against libavfilter's own pad lists and can render a preview of any
+/// point in it. Keeping the field as well would mean two descriptions of one
+/// recording and no rule about which wins.
+///
+/// The chains are shown rather than hidden because this is where somebody
+/// decides whether to press Record, and "what will actually run" is the
+/// question they are asking. It is the same text the command bar prints, from
+/// the same call.
 function drawGraph() {
     if (!refs.graph) return;
     put(refs.graph, () => {
-        const several = capture.inputs.length > 1;
-        const field = el('textarea', {
-            cls: 'cap-graph-field mono', 'data-f': 'capgraph', rows: '3',
-            placeholder: several
-                ? 'required: [0:v][1:v]overlay=…[vout]'
-                : 'optional: [0:v]crop=…[vout]',
-            on: { change: () => { capture.graph = field.value; redraw(); } },
-        });
-        field.value = capture.graph;
+        if (!capture.inputs.length) return [];
+        const g = graphOf();
+        const out = [head('The graph')];
 
-        const out = [head('The graph'), row('-filter_complex', field)];
-
-        const buttons = presetButtons();
-        if (buttons.length) out.push(row('', div('cap-presets', buttons)));
-
-        out.push(row('', span(several
-            ? 'Several inputs are composited here or not at all — two pictures and nothing ' +
-              'saying how they combine is refused rather than guessed at, and every stream ' +
-              'of every input has to reach a pad.'
-            : 'A recording can run a filter graph like a render can: one screen grab cropped ' +
-              'to one monitor is [0:v]crop=…[vout]. Leave it empty and the device is written ' +
-              'as it comes.', 'dim')));
-        // Said here because it is now true and was not: an activated device is
-        // a node the Graph stage can place, so the composition has a second and
-        // better home. This field stays until that one can drive a recording.
-        if (capture.inputs.length)
+        if (!g) {
+            out.push(row('', span(capture.inputs.length > 1
+                ? 'Nothing in the graph reads these devices, and with several of them that ' +
+                  'is not a recording: two pictures and nothing saying how they combine is ' +
+                  'refused rather than guessed at. Open the Graph stage — every activated ' +
+                  'device is in its source list — place them, and wire them to video out.'
+                : 'Nothing in the graph reads this device, so it is written as it comes. ' +
+                  'To crop a screen grab to one monitor, or to put a camera in the corner ' +
+                  'of it, place it on the Graph stage: it is in the source list there like ' +
+                  'any other -i.', 'dim')));
+            return out;
+        }
+        if (!g.ok) {
+            out.push(row('', span(`This will not run: ${g.reason}`, 'warn')));
             out.push(row('', span(
-                'These devices are ordinary inputs, so the Graph stage can already read them ' +
-                '— its source list offers every -i this document has. Typing the chain here ' +
-                'is the older way and still the one a recording runs.', 'dim')));
+                'The graph is edited on the Graph stage, which draws the same problem ' +
+                'against the node it is about.', 'dim')));
+            return out;
+        }
+
+        // One row per chain, because that is how a person reads a filtergraph —
+        // the semicolons are where it breaks and joining them into one line is
+        // what makes a five-chain graph unreadable.
+        for (const chain of g.filterGraph.split(';'))
+            out.push(row('', span(chain, 'mono cap-chain')));
+        out.push(row('', span(
+            `Built on the Graph stage from ${capture.inputs.length} ` +
+            `input${capture.inputs.length === 1 ? '' : 's'}, and mapped as ` +
+            [g.video && `[${g.video}]`, g.audio && `[${g.audio}]`].filter(Boolean).join(' + ') +
+            '.', 'dim')));
         return out;
     });
-}
-
-/// What the graph would be for a layout, given the devices that are actually
-/// there. Empty when the layout does not apply — two pictures cannot be put
-/// side by side when only one input has one.
-function presetButtons() {
-    const all = captureInputs();
-    if (all.length < 2) return [];
-    const vids = [], auds = [];
-    all.forEach((input, i) => {
-        const p = input.probe;
-        if (!p) return;
-        if (p.video) vids.push(i);
-        if (p.audio) auds.push(i);
-    });
-
-    const out = [];
-    const offer = (id, label, title, text) => {
-        if (!text) return;
-        out.push(el('button', {
-            cls: 'tiny', 'data-f': 'cappreset', 'data-preset': id, text: label, title,
-            on: { click: () => { capture.graph = text; redraw(); } },
-        }));
-    };
-    offer('pip', 'Picture in picture',
-          'The second picture scaled into the corner of the first, and the sound mixed',
-          pictureInPicture(all, vids, auds));
-    offer('side', 'Side by side',
-          'Every picture scaled to one height and stacked across, and the sound mixed',
-          sideBySide(all, vids, auds));
-    offer('sound', 'Just the sound mixed',
-          'Every input is a microphone: one mixed soundtrack and no picture',
-          soundOnly(vids, auds));
-    return out;
-}
-
-/// The sound half of a preset: every input that has any, mixed into `[aout]`.
-///
-/// One sound input still gets a chain rather than being left alone, because
-/// with several inputs a stream the graph does not read is refused — there is
-/// no bypass to fall back on once there is more than one device.
-function mixChain(auds) {
-    if (!auds.length) return '';
-    if (auds.length === 1) return `[${auds[0]}:a]anull[aout]`;
-    return `${auds.map((i) => `[${i}:a]`).join('')}amix=inputs=${auds.length}:normalize=0[aout]`;
-}
-
-function join(chains) { return chains.filter(Boolean).join(';'); }
-
-function videoOf(all, i) {
-    const p = all[i] && all[i].probe;
-    return (p && p.video) || null;
-}
-
-function pictureInPicture(all, vids, auds) {
-    // Exactly two pictures. With three there is no obvious corner for the third
-    // and a button that quietly used two of them would be a button that
-    // recorded less than it was asked to.
-    if (vids.length !== 2) return '';
-    const v = videoOf(all, vids[0]);
-    const w = v ? v.width : 0;
-    // A quarter of the width it is going over, rounded even because yuv420p has
-    // no half pixels. `-2` keeps the aspect and lands on an even height.
-    const pip = Math.max(2, Math.round((w ? w / 4 : 480) / 2) * 2);
-    return join([
-        `[${vids[1]}:v]scale=${pip}:-2[pip]`,
-        `[${vids[0]}:v][pip]overlay=W-w-32:H-h-32[vout]`,
-        mixChain(auds),
-    ]);
-}
-
-function sideBySide(all, vids, auds) {
-    if (vids.length < 2) return '';
-    // `hstack` wants one height across every input, so they are scaled to it
-    // rather than being handed to a filter that would refuse them. The first
-    // picture's height is the one that does not change.
-    const v = videoOf(all, vids[0]);
-    const h = v && v.height ? Math.max(2, Math.round(v.height / 2) * 2) : 720;
-    return join([
-        ...vids.map((i) => `[${i}:v]scale=-2:${h}[s${i}]`),
-        `${vids.map((i) => `[s${i}]`).join('')}hstack=inputs=${vids.length}[vout]`,
-        mixChain(auds),
-    ]);
-}
-
-function soundOnly(vids, auds) {
-    // Only when there is no picture anywhere. With one, this graph would leave
-    // its stream unread and the engine would refuse — correctly, and it is
-    // better not to offer the button than to offer one that cannot run.
-    if (vids.length || auds.length < 2) return '';
-    return mixChain(auds);
 }
 
 // ── the file ───────────────────────────────────────────────────────────────
@@ -1181,10 +1144,14 @@ export function drawRecording() {
                 disabled: !ready(),
                 on: { click: startRecording },
             }));
-            if (capture.inputs.length > 1 && !capture.graph.trim())
+            const g = graphOf();
+            if (g && !g.ok)
+                out.push(span(`The graph will not run: ${g.reason}`, 'dim'));
+            else if (capture.inputs.length > 1 && !g)
                 out.push(span(
                     'Two inputs and no graph: the graph is what says how they combine, so ' +
-                    'there is nowhere for [0:v] and [1:v] to meet.', 'dim'));
+                    'there is nowhere for [0:v] and [1:v] to meet. They are both in the ' +
+                    'Graph stage’s source list.', 'dim'));
             if (lastFile) {
                 out.push(span(basename(lastFile), 'mono'));
                 out.push(span(bytes(lastBytes), 'dim mono'));
@@ -1413,15 +1380,20 @@ export function commandParts() {
 
     const enc = effectiveVideo();
     const out = [];
-    const graph = capture.graph.trim();
-    if (graph) {
-        out.push('-filter_complex', shellArg(graph));
+    // The same call `startRecording` makes, so the bar cannot print a graph the
+    // recording would not run. A refusal prints nothing rather than a chain
+    // that does not parse: the Record button is disabled and the reason is on
+    // the stage, and a command bar repeating it in ffmpeg's vocabulary would be
+    // offering a line to copy that fails the same way.
+    const graph = graphOf();
+    if (graph && graph.ok) {
+        out.push('-filter_complex', shellArg(graph.filterGraph));
         // What the writer maps. A pad labelled `[vout]`/`[aout]` is the one the
         // muxer takes, which is `resolvePads`' rule stated in the vocabulary of
         // the command line — and a graph that labels neither leaves its single
         // pad as the composite, which `-map` does not need to say.
-        for (const label of ['vout', 'aout'])
-            if (graph.indexOf(`[${label}]`) >= 0) out.push('-map', `[${label}]`);
+        for (const label of [graph.video, graph.audio])
+            if (label) out.push('-map', `[${label}]`);
     }
     if (capture.videoCodec) out.push('-c:v', capture.videoCodec);
     if (capture.audioCodec) out.push('-c:a', capture.audioCodec);

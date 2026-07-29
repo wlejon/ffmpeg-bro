@@ -117,28 +117,55 @@ right way *and* that the screen grab has the right monitor in it. What a card sh
 is that device and not the composition — the graph is not previewed here, for the
 same structural reason the viewer cannot show a filter.
 
-**The graph is a field, and with several inputs it is not optional.** A recording has
-been able to run a filter graph for as long as the engine has had one, at one input
-as much as at several: `[0:v]crop=…[vout]` records one monitor out of a wide screen
-grab. Several inputs *require* one — two pictures and nothing saying how they combine
-is refused rather than guessed at, and once there is more than one input **every**
-stream of every input has to reach a pad, because a stream going straight to the
-writer would be one device's picture silently becoming the file. Both refusals name
-what is wrong and which pad it is about.
+**The graph is built on the Graph stage, and with several inputs it is not
+optional.** A recording has been able to run a filter graph for as long as the engine
+has had one, at one input as much as at several: cropping one monitor out of a wide
+screen grab is a `crop` node between the device and video out. Several inputs
+*require* one — two pictures and nothing saying how they combine is refused rather
+than guessed at, and once there is more than one input **every** stream of every
+input has to reach a pad, because a stream going straight to the writer would be one
+device's picture silently becoming the file. Both refusals name what is wrong and
+which pad it is about.
 
-The preset buttons write a real graph into that field and then get out of the way.
-They are not modes: what a button does is type for you, the string it typed is the
-string handed to `avfilter_graph_parse2`, and editing it afterwards keeps the edit.
-They are built from what the devices actually are, so an input with no sound
-contributes no `[n:a]` and `Just the sound mixed` is not offered while anything has a
-picture — a graph that left `[0:v]` unread is one the engine would refuse.
+There used to be a textarea here and three buttons that wrote a chain into it. Both
+are gone, and what replaced them is not a smaller version of the same thing: an
+activated device is a document input, so it is already in the Graph stage's source
+list, and placing it there gives a node that can be wired, checked against
+libavfilter's own pad lists and previewed at any point. Keeping the field as well
+would have meant two descriptions of one recording and no rule about which wins.
 
-The field is where that string is typed **for now**. Now that an activated device is
-an ordinary input, the Graph stage can already read one — its source list offers every
-`-i` this document has — so a composition has a second and better home than a textarea
-and three preset buttons. What is missing is the other direction: the graph a recording
-runs is still this string, not that stage's nodes. Until it is wired, three presets
-beat a stage that requires a graph and offers no way to make one.
+**A recording runs the part of the graph its devices feed.** Not a graph of its own —
+there is one document and one editor for it — and not the whole graph either, since
+most of what is on that stage is usually about the timeline. So the walk starts at
+the input nodes that are this recording's `-i`s, takes everything downstream, and
+takes back whatever else feeds those nodes. Three consequences:
+
+- A **generator** comes with it and a **file** does not. A `testsrc` overlaid on a
+  camera is fine — a filter with no inputs makes its own frames, and nothing has to
+  pull one. A file is refused by name, because a recording's graph is *pushed*: a
+  device frame goes in and whatever falls out of the sinks is what there is, and
+  there is nobody to ask a file for its next frame.
+- A **named output** is not the recording's. `out2` is a pad a stream on the Write
+  stage asks for, and a recording writes its own file with its own muxer, so those
+  branches are left out rather than refused — one graph can feed a render and a
+  recording without either being an error.
+- The pads are **renumbered**. The graph numbers `-i`s in the order nodes were
+  placed; a recording numbers them in the order its cards are in, because that order
+  is the one the engine opens the devices in.
+
+The Capture stage shows the chains that will run, one per line, and it is the same
+text the command bar prints from the same call. A graph that will not run says so
+there, in the words the Graph stage uses against the node it is about, and the Record
+button is dead until it does — and the command bar prints no `-filter_complex` at
+all, because a line that cannot be run is not one to offer for copying.
+
+**There is one video out, and a recording and a render both end at it.** Wiring two
+cameras into video out is not a statement about recordings, it is a statement about
+what this graph's picture is — so the render's composite is then feeding nothing, and
+the Graph stage says exactly that. It is a true complaint rather than a side effect
+to be suppressed: unwire it and the timeline has its output back. Giving a recording
+a pad of its own means the named outputs the Graph stage already has, which is in
+[Not yet](#not-yet) below.
 
 **A region is dragged, not typed.** Drag a box on an input's picture and it becomes
 `-offset_x`, `-offset_y` and `-video_size` — that input's own demuxer options, in the
@@ -1872,13 +1899,25 @@ back.
 The session half adds a second input and follows what changes: the card and the
 column that say which input they are about, the refusal at two inputs with no graph
 asserted **twice** — once as the disabled button and once from `record.start`, so
-that a button which stopped asking would still be caught — a preset writing a graph
-that reads every picture, that graph surviving being typed over, two `-f`/`-i` pairs
-and one exact `-filter_complex` in the command bar, and then a real recording of two
+that a button which stopped asking would still be caught — and then the graph, built
+the way a person builds one: two `addSource` calls naming the devices' input ids, an
+`hstack` placed, three wires. Nothing in that sequence knows what a recording is,
+which is the point of it. What is asserted off the other end is the chain
+(`[0:v][1:v]hstack=inputs=2[vout]`), the pad it is mapped by, two `-f`/`-i` pairs and
+one exact `-filter_complex` in the command bar, and then a real recording of two
 paced lavfi devices whose file comes back **640 wide from two 320-wide pictures**.
 That last number is the assertion worth having: nothing but the graph could have
 produced it, so a session that quietly recorded one device would fail rather than
 pass with a plausible file.
+
+Then the states either side of a graph that works. Widening the `hstack` to three
+inputs leaves a pad nothing arrives at, and that is a *refusal* — the button goes
+dead, the stage names the empty pad in the Graph stage's own words, and the command
+bar prints no `-filter_complex` at all rather than a line that cannot be run.
+Releasing an input takes the node reading it with it, which leaves the same refusal
+from the other direction. Clearing the graph is the third state and the commonest:
+`recordGraph` answers null, which is not a broken graph, and one device is written as
+it comes.
 
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
@@ -2146,20 +2185,23 @@ Honest list of what does not work:
   per-node preview is the shape of the answer and it is about the render's
   graph, not the recording's. So a picture-in-picture is judged by its numbers
   and then by playing back the take.
-- **Building a recording's graph on the Graph stage.** Half of this is done: an
-  activated device is a document input, so that stage's source list offers it and
-  a node reading `[0:v]` of a screen grab can be placed and wired like any other.
-  What does not exist is the way back — `record.start` is given a
-  `-filter_complex` string, and nothing turns those nodes into one or knows that
-  a recording is what is being described. So the Capture stage keeps a field and
-  three presets, and they are the older way.
+- **A named output on a recording.** The Graph stage can place one and a stream
+  on the Write stage can be fed from it, but a recording writes one file with its
+  own muxer and no stream list of its own, so those branches are left out of the
+  walk rather than mapped. What a recording maps is video out and sound out —
+  which is also what a *render* maps, so a graph that ends a camera at video out
+  has said the render's picture is that camera. Both would be answered by the
+  same thing: a recording choosing which pad it takes, the way a stream on the
+  Write stage already does with `pad:<label>`.
 - **A file beside a device on the same graph.** A capture's graph is fed by its
-  devices and by nothing else: `filterInputs` — which says which *file* feeds
-  which pad — is refused outright. Overlaying a title card on a screen grab as
-  it records is therefore not something this can express, and the refusal names
-  the reason rather than failing somewhere inside the parse. A graph whose
-  filters want a graphics card is refused the same way, because
-  `-filter_hw_device` has nowhere to be said on this stage.
+  devices and by nothing else, at both ends of the seam: the walk that builds it
+  refuses a file input by name, and `filterInputs` — which says which *file*
+  feeds which pad — is refused by the engine outright. Overlaying a title card on
+  a screen grab as it records is therefore not something this can express, though
+  a `color` or a `testsrc` beside the device is, because a filter with no inputs
+  makes its own frames and nothing has to pull one. A graph whose filters want a
+  graphics card is refused the same way, because `-filter_hw_device` has nowhere
+  to be said on this stage.
 - **A destination editor on the Capture stage.** Recording and streaming the
   same capture works — it is `-f tee` and the same `Writer` — but the argument
   is typed into the path field there rather than built from a list. The Write

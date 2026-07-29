@@ -285,11 +285,14 @@ console.log('\na second device is a second -i, not a second recording');
 
 console.log('\ntwo inputs with no graph have nowhere to meet');
 {
-    same(cap.capture.graph, '', 'nothing has written a graph yet');
+    same(cap.graphOf(), null,
+         'nothing in the graph reads these devices, which is not the same as a broken graph');
     ok(!cap.ready(), 'so the recording is not ready to start');
     ok(q('[data-f="caprecord"]').disabled, 'and the button says so rather than failing later');
     ok(text('#cap-bar').indexOf('nowhere for [0:v] and [1:v] to meet') >= 0,
        `with the reason, which is the engine's own: ${text('#cap-bar')}`);
+    ok(text('#cap-graph').indexOf('source list') >= 0,
+       'and the stage says where a graph is made, because there is no field here to make one in');
     // The same refusal from the engine, in case the button ever stops asking.
     let threw = '';
     try {
@@ -299,34 +302,65 @@ console.log('\ntwo inputs with no graph have nowhere to meet');
        `record.start refuses it too, naming the graph: ${threw}`);
 }
 
-console.log('\na preset writes a graph, and the field is what runs');
+console.log('\nthe recording’s graph is built on the Graph stage');
 {
-    ok(!!q('[data-preset="side"]'), 'two pictures can be put side by side');
-    ok(!!q('[data-preset="pip"]'), 'and one can go in the corner of the other');
-    ok(!q('[data-preset="sound"]'),
-       'and “just the sound” is not offered, because these inputs have pictures — a graph ' +
-       'that left [0:v] unread would be refused');
+    // **This is the whole point of a device being a document input.** Nothing
+    // below knows what a recording is: `addSource` takes an input id, and these
+    // two happen to be cameras. The same three calls made against two files
+    // would build the same graph for a render.
+    const ov = A.graph.overlay;
+    ov.clear();
+    const a = ov.addSource(cap.capture.inputs[0]);
+    const b = ov.addSource(cap.capture.inputs[1]);
+    same(ov.sourceInputs().length, 2, 'both devices are read by the graph on their own account');
 
-    q('[data-preset="side"]').click();
+    const stack = ov.addNode('hstack', { params: { inputs: '2' } });
+    ov.wire(a.id, 0, stack.id, 0);
+    ov.wire(b.id, 0, stack.id, 1);
+    ov.wire(stack.id, 0, 'out:v', 0);
     pump(200);
-    const g = cap.capture.graph;
-    console.log(`  ${g}`);
-    ok(g.indexOf('hstack=inputs=2') >= 0, `the button wrote a real graph (${g})`);
-    ok(g.indexOf('[vout]') >= 0, 'ending in a pad the muxer can map');
-    ok(g.indexOf('[0:v]') >= 0 && g.indexOf('[1:v]') >= 0,
-       'that reads every picture, because with several inputs an unread stream is refused');
-    same(q('[data-f="capgraph"]').value, g, 'and the field shows it — it is not a hidden mode');
 
-    // Typed over, and it stays typed over. A preset is a keyboard, not a state.
-    const field = q('[data-f="capgraph"]');
-    field.value = '[0:v][1:v]hstack=inputs=2[vout]';
-    field.dispatchEvent(new Event('change'));
-    pump(150);
-    same(cap.capture.graph, '[0:v][1:v]hstack=inputs=2[vout]', 'an edit to the field is kept');
-    ok(cap.ready(), 'and with a graph the recording is ready');
+    const g = cap.graphOf();
+    ok(g && g.ok, `the graph now describes the recording: ${g && (g.reason || g.filterGraph)}`);
+    console.log(`  ${g.filterGraph}`);
+    ok(g.filterGraph.indexOf('hstack=inputs=2') >= 0, 'and it is the graph that was wired');
+    ok(g.filterGraph.indexOf('[0:v]') >= 0 && g.filterGraph.indexOf('[1:v]') >= 0,
+       'reading every picture, because with several inputs an unread stream is refused');
+    // The renumbering. The nodes were placed in card order here, but the pads
+    // are the recording's `-i` numbers whatever order they went in — the graph
+    // numbers by where a node was placed and a recording by where its card is.
+    same(g.video, 'vout', 'the pad the muxer takes is named for it');
+    same(g.audio, null, 'and there is no sound, because neither testsrc has any');
+    ok(cap.ready(), 'with a graph that runs, the recording is ready');
+
+    ok(text('#cap-graph').indexOf('hstack') >= 0,
+       'the stage shows what will run rather than a field to type it in');
+    ok(!q('[data-f="capgraph"]'), 'there is no field: one description of one recording');
+    ok(!q('[data-preset]'), 'and no presets — the Graph stage is where a composition is made');
     // Two cards, a picture each, and the graph that joins them — the state the
     // stage exists to let somebody judge before pressing record.
     screenshot('out/ui-capture-two.png');
+}
+
+console.log('\na graph that will not run is a refusal, and it names why');
+{
+    const ov = A.graph.overlay;
+    // A third input, unwired: `hstack=inputs=3` has a pad nothing arrives at,
+    // which is a graph libavfilter refuses.
+    const stack = ov.nodes().find((n) => n.filter === 'hstack');
+    ov.edit({ id: stack.id }, { params: { inputs: '3' } });
+    pump(150);
+    const g = cap.graphOf();
+    ok(g && !g.ok, 'the recording is refused rather than started and failed');
+    ok(/nothing wired/.test(g.reason), `and the reason names the empty pad: ${g.reason}`);
+    ok(!cap.ready(), 'so the button is dead');
+    ok(text('#cap-graph').indexOf('will not run') >= 0, 'and the stage says so where the graph is');
+    same(A.command.currentCommand().indexOf('-filter_complex'), -1,
+         'the command bar prints no graph either — a line that cannot be run is not one to copy');
+
+    ov.edit({ id: stack.id }, { params: { inputs: '2' } });
+    pump(150);
+    ok(cap.graphOf().ok, 'put back, it runs again');
 }
 
 console.log('\nthe command two inputs come to');
@@ -401,14 +435,20 @@ console.log('\nreleasing one');
     ok(!!q('[data-f="capremove"]'),
        'the last card still has a × — no cards is an ordinary state now that the list is shared');
 
-    // The graph field stays, because a single input can run one too. That is
-    // the other thing this stage could not previously ask for.
-    const field = q('[data-f="capgraph"]');
-    ok(!!field, 'one input still has a graph field');
-    field.value = '';
-    field.dispatchEvent(new Event('change'));
+    // Releasing an input takes the node reading it with it, which is `retain()`
+    // doing what it already did for a clip. What is left is a graph with one
+    // source and an `hstack` with an empty pad — a refusal, and the right one:
+    // the recording really would not run.
+    same(A.graph.overlay.sourceInputs().length, 1, 'the node reading it went with it');
+    ok(!cap.graphOf().ok, 'and what is left of the graph will not run, which is said rather ' +
+                          'than silently recorded as something else');
+
+    // Cleared, one device is written as it comes — the case that needs no graph
+    // at all, and the one `recordGraph` answers null for.
+    A.graph.overlay.clear();
     pump(150);
-    ok(cap.ready(), 'and with one input an empty graph is fine — the device is written as it is');
+    same(cap.graphOf(), null, 'with nothing in the graph there is nothing to say about it');
+    ok(cap.ready(), 'and with one input that is fine — the device is written as it is');
     const secs = q('[data-f="capseconds"]');
     secs.value = '';
     secs.dispatchEvent(new Event('change'));

@@ -882,24 +882,22 @@ body.fs #cropbox { display: none; }
     overflow: hidden;
 }
 
-/* The filter graph, typed or written by a preset button. A textarea and not an
-   input: a two-input graph is two chains and a semicolon, and reading one back
-   through a 26px slot is how a misplaced bracket stays invisible. */
+/* What the Graph stage says this recording is. Read-only now — the textarea it
+   replaced is gone with the presets that wrote into it — but one chain per line
+   for the reason the field was a textarea and not an input: a semicolon is
+   where a filtergraph breaks, and reading one back as a single run is how a
+   misplaced bracket stays invisible. */
 .cap-graph { flex-shrink: 0; padding-bottom: 4px; }
-.cap-graph-field {
-    width: 100%;
-    box-sizing: border-box;
-    resize: none;
-    background: #0e1014;
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 3px;
+/* A graph that will not run is the one thing on this stage that must not read
+   as an aside — it is why the Record button is dead. */
+.cap-graph .warn { color: var(--accent); }
+.cap-chain {
+    display: block;
     font-family: Consolas, monospace;
     font-size: 11px;
-    line-height: 1.4;
-    padding: 4px 6px;
+    line-height: 1.5;
+    word-break: break-all;
 }
-.cap-presets { display: flex; gap: 6px; flex-wrap: wrap; }
 /* Placed in pixels by fitPreview(), not stretched to the box: a region is
    dragged on this picture, and a picture that is not the shape of the screen
    is a rectangle that is not the shape of the one you drew. */

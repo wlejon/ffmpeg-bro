@@ -7,7 +7,7 @@
 
 import { project, duration } from '../project.js';
 import { inputs as documentInputs, specInputs, indexOf as inputIndex,
-         lengthOf as inputLength, streamKinds } from '../inputs.js';
+         lengthOf as inputLength, specInputInfo } from '../inputs.js';
 import * as viewer from '../viewer.js';
 import { settings, outputFps, outputExt } from './state.js';
 import { muxerInfo } from './capabilities.js';
@@ -131,22 +131,6 @@ export function range() {
 /// either of them being wrong on its own.
 export function specSources() {
     return project.clips.map((c) => (c.probe && c.probe.video) || null);
-}
-
-/// What the graph has to know about each `-i` beyond how to open it: which
-/// input it is, what streams came back, and its name.
-///
-/// Index-aligned with `specInputs()` — the same list, so the `-i` number is one
-/// fact rather than two. The streams are the probe's, because that is what
-/// decides how many sockets a source card draws: an input with no sound in it
-/// must not offer a pad the render cannot fill.
-function specInputInfo() {
-    return documentInputs.map((i) => ({
-        id: i.id,
-        name: i.name,
-        path: i.path,
-        streams: streamKinds(i),
-    }));
 }
 
 /// A render that is two renders, when the rate control asked for one.

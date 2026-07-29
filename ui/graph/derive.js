@@ -738,6 +738,14 @@ function moveLabelsToChainEnds(g) {
 /// which converts out of the compositing space itself, exactly as it does for a
 /// render with no graph at all. Leaving the tail on for a render would convert
 /// twice and come out slightly worse than either.
+///
+/// `opts.live` says the inputs are devices, and the one thing it changes is the
+/// range: a recording has no end to walk to, so the empty-range refusal below is
+/// not a refusal here, it is the ordinary case. Nothing else in a clip-less
+/// derivation reads the length — the black canvas that would carry it as `d`
+/// exists only where there is something to lay over it — so this is the whole of
+/// the difference and not a mode. See `graph/record.js`, which is the only
+/// caller and explains why a recording's graph is derived at all.
 export function derive(spec, sources, opts = {}) {
     if (!spec || !Array.isArray(spec.clips)) return refuse('there is no edit to describe');
 
@@ -767,16 +775,28 @@ export function derive(spec, sources, opts = {}) {
     // something with no length of its own is. Said here rather than left as
     // "the range is empty", because that is a true sentence that tells nobody
     // what to do about it.
-    if (!(length > 0))
-        return refuse(spec.clips.length
-            ? 'the range is empty'
-            : 'the range is empty — with nothing on the timeline, a source’s own ' +
-              'duration (d) is the only thing that says how long a render would be');
+    //
+    // **Both of these questions are the canvas's**, which is why `opts.live`
+    // excuses both and excuses nothing else. How long, how big and how fast are
+    // the three arguments of the black rectangle every clip is laid over; a
+    // recording has no canvas, because it has no clips and its picture is the
+    // device's own. Refusing a recording for having no output size would be
+    // demanding a scale nobody asked for, which is the same mistake
+    // `CaptureSettings`' zeroed width and height exist to avoid.
+    if (!opts.live) {
+        if (!(length > 0))
+            return refuse(spec.clips.length
+                ? 'the range is empty'
+                : 'the range is empty — with nothing on the timeline, a source’s own ' +
+                  'duration (d) is the only thing that says how long a render would be');
+        if (!(Math.round(spec.width) > 0 && Math.round(spec.height) > 0 &&
+              (Number(spec.fps) || 30) > 0))
+            return refuse('the output size or frame rate is not a number');
+    }
 
     const W = Math.round(spec.width);
     const H = Math.round(spec.height);
     const fps = Number(spec.fps) || 30;
-    if (!(W > 0 && H > 0 && fps > 0)) return refuse('the output size or frame rate is not a number');
 
     // Paint order is the array's order, which the model keeps sorted
     // bottom-track-first — the same order the viewer stacks in and the renderer

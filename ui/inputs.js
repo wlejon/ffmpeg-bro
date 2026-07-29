@@ -357,3 +357,25 @@ export function schemeOf(path) {
 export function specInputs() {
     return inputs.map(asInput);
 }
+
+/// What a graph has to know about each `-i` beyond how to open it: which input
+/// it is, what streams came back, and its name.
+///
+/// Index-aligned with `specInputs()` — the same list, so the `-i` number is one
+/// fact rather than two. The streams are the probe's, because that is what
+/// decides how many sockets a source card draws: an input with no sound in it
+/// must not offer a pad the render cannot fill.
+///
+/// Here rather than in `export/spec.js`, where it was written, because it is a
+/// statement about the input list and nothing else — and there are two callers
+/// now. A recording's graph is derived from the same document inputs a render's
+/// is (`graph/record.js`), and a second copy of this shape would be a second
+/// answer to which streams a device offers.
+export function specInputInfo() {
+    return inputs.map((i) => ({
+        id: i.id,
+        name: i.name,
+        path: i.path,
+        streams: streamKinds(i),
+    }));
+}
