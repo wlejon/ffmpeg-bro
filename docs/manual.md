@@ -1060,6 +1060,19 @@ the whole thing again must not report 43% and leave the rest to be discovered.
 A checkbox instead would have let you ask for two passes of *constant quality*,
 which is two runs of an encoder that had nothing to learn from the first.
 
+A pass's options reach the encoder through the **stream list**, which is worth
+saying because for a while they did not. What a pass overrides is merged onto
+the render it belongs to, and the writer reads the render's own option bag only
+for the two streams it synthesises when nobody supplied a list — and every
+render this application builds supplies one. So `-pass 1` was being dropped on
+the way, silently, in the one place this codebase's rule is that an unknown
+option is an error rather than a shrug: two-pass renders finished, wrote a valid
+file and reported success, having spent the bitrate the way a single pass does.
+The options now go onto the streams as well, which is where an option actually
+reaches libavcodec, and the test for it breaks the render on purpose — a key
+x264 does not have, put on a pass — because a test that only checks the spec is
+a test that passed throughout.
+
 One thing about it cannot be promised, and is said where it is chosen: **whether
 an encoder acts on `-pass` is the one capability libavcodec will not answer in
 advance.** There is no flag for it and no option to ask about. So the control

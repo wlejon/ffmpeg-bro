@@ -1622,6 +1622,41 @@ console.log('\ntwo passes are a rate-control mode, not a switch');
     pump(60);
     same((A.exporter.buildSpec().passes || []).length, 0,
          'constant quality is one pass again — there is nothing for a second to learn');
+
+    // **And the options a pass names reach the encoder.**
+    //
+    // Everything above is about the spec, and the spec was right the whole time
+    // a two-pass render was quietly a one-pass render done twice: a pass's
+    // options were merged into the *settings*, and `outputStreams()` reads
+    // those only for the render with no stream list — which no render this
+    // application builds is. So `-pass 1` was dropped, silently, in the one
+    // codebase whose rule is that an unknown option is an error rather than a
+    // shrug.
+    //
+    // Asserted by breaking it on purpose: a key libx264 does not have, put on a
+    // pass. If it reaches libavcodec the render is refused naming it, and if it
+    // does not the render succeeds — which is the failure, and is what it did.
+    {
+        const broken = A.exporter.buildSpec();
+        broken.path = bro.appDir + '/../out/pass-options.mp4';
+        broken.start = 0; broken.end = 0.4;
+        broken.passes = [{ label: 'the only pass',
+                           videoOptions: { thisoptiondoesnotexist: '1' } }];
+        let refused = '';
+        try {
+            bro.ffmpeg.render.start(broken);
+            waitFor('the render with a broken pass option', () => {
+                const st = A.exporter.lastPoll_ ? null : bro.ffmpeg.render.poll();
+                return st && st.state && st.state !== 'running';
+            }, 60000);
+            refused = (bro.ffmpeg.render.poll() || {}).error || '';
+        } catch (e) {
+            refused = String(e.message || e);
+        }
+        ok(refused.indexOf('thisoptiondoesnotexist') >= 0,
+           `an option a pass names reaches the encoder, and an unknown one stops the ` +
+           `render rather than being dropped (${refused || 'the render succeeded'})`);
+    }
 }
 
 console.log('\na keyframe where the edit cuts');

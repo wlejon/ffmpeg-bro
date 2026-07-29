@@ -80,6 +80,37 @@ ExportSettings settingsForPass(const ExportSettings& base, const ExportPass& p) 
     for (const auto& o : p.videoOptions) s.videoOptions.push_back(o);
     for (const auto& o : p.audioOptions) s.audioOptions.push_back(o);
 
+    // **And onto the streams, which is where an option actually reaches an
+    // encoder.** `outputStreams` reads `s.videoOptions` only for the render
+    // with no stream list — the two the writer synthesises — and every render
+    // this application builds carries a list of its own, so a pass whose
+    // options stopped at the settings never reached libavcodec at all. That
+    // made a two-pass encode two ordinary passes and said nothing: `-pass 1`
+    // was dropped where an unrecognised key would have been an error, which is
+    // the one outcome this codebase refuses everywhere else.
+    //
+    // Appended, so a pass wins where it names the same key twice — the same
+    // "later wins" rule `applyOptions` already walks the bag by.
+    //
+    // A copied stream is skipped because it has no encoder to configure, and a
+    // codec option on one is refused elsewhere by name; adding one here would
+    // be manufacturing that refusal out of a pass the caller wrote correctly.
+    for (auto& st : s.streams) {
+        if (isCopySource(st.source)) continue;
+        if (st.kind == "video") {
+            // The same rule the render-level bag follows: an option table
+            // belongs to an encoder, so a pass that changes the encoder is also
+            // saying that what was set on the old one does not apply. Only for
+            // a stream that was taking the render's codec — one that names its
+            // own is not what the pass is talking about.
+            if (!p.videoCodec.empty() && p.videoCodec != base.videoCodec && st.codec.empty())
+                st.options.clear();
+            for (const auto& o : p.videoOptions) st.options.push_back(o);
+        } else if (st.kind == "audio") {
+            for (const auto& o : p.audioOptions) st.options.push_back(o);
+        }
+    }
+
     // `-f null -`: run everything, keep nothing. The null muxer is
     // AVFMT_NOFILE, so no file is opened and none is left behind — which is
     // what an analysis pass wants, since what it produces is the file a filter
