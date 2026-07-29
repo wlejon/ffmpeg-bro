@@ -2375,8 +2375,14 @@ Honest list of what does not work:
   and subtitle streams are all copyable and attachments are their own kind of
   row. What has no home is a `data` stream — timed metadata, a GoPro's telemetry
   track, a camera's timecode — which `-map` carries and `-c copy` writes and
-  which nothing here will offer, because the probe does not report the kind and
-  the stream list has no row that could say what it is.
+  which nothing here will offer. The probe *does* report it: `kind` is
+  `"data"` for anything that is not one of the other three, and has been since
+  the summary was written. What is missing is everything past that — the stream
+  list drops any kind outside the four it draws, `buildSpec()` never emits one,
+  the spec reader refuses it by name (`streams[3] is a 'data'`), and the writer
+  has no branch that maps a stream it will not encode. A copied data stream
+  needs none of the encode machinery, which is what makes this smaller than the
+  reason it used to be filed under.
 - **Hardware filters that this build does not have.** `hwupload`, `hwdownload`
   and `hwupload_cuda` are here; `scale_cuda`, `overlay_cuda`, `scale_qsv` and
   the rest of the device families are not, because a vcpkg ffmpeg with
