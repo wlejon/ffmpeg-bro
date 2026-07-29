@@ -51,6 +51,7 @@ import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import * as overlay from './overlay.js';
 import * as panel from './panel.js';
 import * as preview from './preview.js';
+import { measureGraph } from './subgraph.js';
 import { chaseWhen } from './when.js';
 
 /// **`Fit` never crosses the level-of-detail threshold**, and that is what stops
@@ -68,6 +69,19 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 2.5;
 
 let refs = {};
+/// What the application handed this stage. Held at module scope as well as
+/// closed over by `initGraphView`, because a panel button pressed later needs
+/// the same hooks a preview started at init does — and a second copy passed
+/// down through `initPanel` would be two answers to "who owns the job slot".
+let outer = {};
+/// A measurement waiting for the one job slot — `{ cut, until }`. See
+/// `runPending`.
+let pending = null;
+/// How long it waits. A node preview is a second at most and there are seldom
+/// more than a couple left when somebody presses the button; past this the
+/// honest thing is to say the slot is busy rather than to keep a promise
+/// nothing is watching.
+const WAIT_MS = 5000;
 let zoom = 1;
 let panX = 0;
 let panY = 0;
@@ -127,6 +141,7 @@ function port() {
 
 export function initGraphView(r, hooks = {}) {
     refs = r;
+    outer = hooks;
 
     preview.initPreview({
         // The preview graph is derived over its own short range, so it asks for a
@@ -140,8 +155,10 @@ export function initGraphView(r, hooks = {}) {
         // the end of the timeline. A node is being watched to decide something
         // about the render, and the render stops where the range does.
         until: () => exportRange().end,
-        // An export and the A/B comparison are both more important than this.
-        busy: () => (hooks.busy ? hooks.busy() : false),
+        // An export and the A/B comparison are both more important than this,
+        // and so is a measurement waiting for the slot — a preview started
+        // ahead of one would be the queue never emptying.
+        busy: () => (hooks.busy ? hooks.busy() : false) || !!pending,
         changed: () => drawGraph(),
     });
 
@@ -178,6 +195,7 @@ export function initGraphView(r, hooks = {}) {
             return { width: s.width, height: s.height, fps: s.fps,
                      sampleRate: s.sampleRate };
         },
+        measureTo: (node) => measureTo(node),
     });
 
     bindViewport();
@@ -866,6 +884,7 @@ function shapeOf(g) {
 // ── the frame loop ─────────────────────────────────────────────────────────
 
 export function tickGraph() {
+    runPending();
     preview.tick();
     playFrame();
     // One style write per strip, for the reason `playFrame` writes the clock
@@ -1155,6 +1174,83 @@ export function chaseGraph() {
     canvasSize = key;
     if (!placed) drawGraph();
     else paint();
+}
+
+/// The graph this stage last drew. Exposed so that a test can name the node it
+/// means the way the panel does — by picking it out of the graph on the screen
+/// — rather than deriving a second one that might not be the same.
+export function currentGraph() { return lastGraph; }
+
+/// Start a measurement that stops at one node, and say what it is of.
+///
+/// Cut from `lastGraph` — the graph this stage last drew, which is the export's
+/// own, derived from `buildSpec()`. Deriving a second one here to cut would be
+/// a second graph that could differ from the one somebody is looking at, and
+/// the whole claim being made is that the node on the screen is the node the
+/// numbers are about.
+///
+/// **The note states how much was left out.** A measurement over part of a
+/// graph is a claim about part of a graph; nothing else on the screen says
+/// which part, and a report that looked exactly like a whole-graph one would be
+/// the stale-measurement failure wearing a different hat.
+///
+/// Returns the reason it could not be started at all, or `''` — which includes
+/// "waiting for the slot", since that is not a refusal.
+export function measureTo(node) {
+    if (!lastGraph || !node) { note('No graph to measure.'); return 'no graph'; }
+    // **Found again by key, not used as handed over.** A node object does not
+    // survive a rebuild and a rebuild is caused by almost anything — a node
+    // preview landing, a timeline edit, a value typed — so a node held across
+    // one belongs to a graph that is no longer on the screen. Cutting with it
+    // would walk `producers()` on a graph that has never seen it, find none, and
+    // refuse with "nothing feeds this node" about a node that plainly has
+    // something feeding it.
+    const key = panel.keyOf(node);
+    const now = lastGraph.node(key) || lastGraph.byAnchor(key);
+    if (!now) { note('That node is not in the graph any more.'); return 'no such node'; }
+    const cut = measureGraph(lastGraph, now);
+    if (!cut.ok) { note(`Nothing to measure: ${cut.reason}.`); return cut.reason; }
+    pending = { cut, until: Date.now() + WAIT_MS };
+    runPending();
+    return '';
+}
+
+/// Start the waiting measurement if the one job slot has come free.
+///
+/// **It waits rather than failing, and it waits for a few seconds rather than
+/// for ever.** This stage is the one place in the application where something
+/// is nearly always rendering: the node previews fill in as the graph settles,
+/// and a `Measure to here` pressed during that would otherwise come back with
+/// "a job is already running" for a reason that has nothing to do with the
+/// measurement and resolves itself in a moment. So it queues — and the previews
+/// stop starting new work while it does, because a measurement is a question
+/// somebody asked and a preview is one they might look at.
+///
+/// The bound is what stops it being a promise this cannot keep. Nothing outside
+/// this stage ticks it, so a queue with no deadline would be a measurement that
+/// fires when you come back to the Graph stage half an hour later, about an
+/// edit that has since changed — which is exactly the stale measurement
+/// `ui/measure.js` refuses to hand anybody.
+function runPending() {
+    if (!pending) return;
+    const { cut } = pending;
+    // **Both halves of "busy", because they stop being true a frame apart.** The
+    // host's slot is free the moment its render ends; the workspace still holds
+    // its own job until the next poll tells it otherwise, and starting inside
+    // that gap is refused by the workspace for a render that has already
+    // finished. Asking one question with both answers in it is the only way the
+    // wait ends where the wait was for.
+    if (outer.slotBusy ? outer.slotBusy() : bro.ffmpeg.render.poll().state === 'running') {
+        if (Date.now() < pending.until) return;
+        pending = null;
+        note('The render slot is still busy — try again in a moment.');
+        return;
+    }
+    pending = null;
+    const no = outer.measure ? outer.measure(cut) : 'nothing here runs a measurement';
+    if (no) { note(`Not measuring: ${no}.`); return; }
+    note(`Measuring ${cut.nodes} of ${cut.of} nodes, ` +
+         `${cut.inputs} input${cut.inputs === 1 ? '' : 's'} — the report says what was found.`);
 }
 
 function note(text) {

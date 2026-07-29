@@ -42,6 +42,11 @@ import { initPreview, drawPreview, drawPreviewStats, chasePreview, startPreview,
 import { initStrip, drawStrip, refitStrip, markPreviewAt } from './export/strip.js';
 import { initProgress, drawProgress } from './export/progress.js';
 import * as destination from './export/destination.js';
+// A measurement cut off at one node runs a subgraph of the export's graph, and
+// a subgraph is not the graph the spec was built with — so which device its
+// filters belong to has to be worked out again for the chains actually being
+// run. One home for that question; the node previews ask it the same way.
+import { deviceForRender } from './hardware.js';
 
 let el_ = {};
 let hooks = {};
@@ -297,11 +302,29 @@ function launch(spec, kind) {
 /// nothing of yours in it renders through the compositor, where there are no
 /// filters to hang metadata on anything, and that is refused with the reason
 /// rather than run to produce an empty report.
-export function startMeasurement() {
+///
+/// `cut` is `graph/subgraph.js`'s `measureGraph()` — **the graph stopped at one
+/// node**, which is the same render over less of the same graph. Nothing here
+/// changes for it except the chains and the files: what a measurement is, what
+/// it costs and what it refuses are the same question either way, and a second
+/// entry point would be a second answer to all three. The size comes from the
+/// graph, because half way down one nothing out here knows how big the picture
+/// is — the same reason a node preview says so.
+export function startMeasurement(cut = null) {
     if (isRendering()) return 'something is already using the one render slot';
     const r = range();
     if (!(r.length > 0)) return 'the range to measure is empty';
     const spec = previewSpec({ start: r.start, end: r.end });
+    if (cut) {
+        spec.filterGraph = cut.filterGraph;
+        spec.filterInputs = cut.filterInputs;
+        spec.filterHwDevice = deviceForRender(cut.filterGraph, spec.inputs);
+        spec.sizeFromGraph = true;
+        // A cut at a sound pad has no picture in it at all, and one at a
+        // picture has no sound: the pruning kept what the chosen node depends
+        // on, and the other half of the graph is not in it to be encoded.
+        spec.audio = !!cut.audio;
+    }
     if (!spec.filterGraph)
         return 'there is no measuring filter on the graph — this render would go through ' +
                'the internal compositor, where there is nothing to hang a measurement on';

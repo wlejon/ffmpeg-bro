@@ -32,9 +32,10 @@ import { supportsTimeline, parseEnable, printEnable, isOnAt } from './graph/enab
 import { padsOf } from './graph/filters.js';
 import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
-         outrankedControls, tickGraph, graphKey } from './graph/view.js';
+         outrankedControls, tickGraph, graphKey, measureTo,
+         currentGraph } from './graph/view.js';
 import * as graphPreview from './graph/preview.js';
-import { previewGraph } from './graph/subgraph.js';
+import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
@@ -168,6 +169,15 @@ initGraphView({
     // waits for anything that wants the host's one job slot.
     busy: () => !exporter.canLeave() || exporter.isOpen(),
     playhead: () => transport.t,
+    // The graph stopped at one node, measured. Asked of the export workspace
+    // for the reason the Report drawer's `Measure now` is: it owns the spec and
+    // the one job slot, and there is one measurement render in this
+    // application whatever part of the graph it is over.
+    measure: (cut) => exporter.startMeasurement(cut),
+    // Whether anything at all holds the one job slot — the host's render *and*
+    // the workspace's own job, which stop being true a frame apart. What waits
+    // on it is the measurement queue; see `runPending`.
+    slotBusy: () => exporter.isRunning() || bro.ffmpeg.render.poll().state === 'running',
     // A filter inserted or a value locked changes what will be rendered, so it
     // changes the three things that state that: the spine's cards, the command
     // underneath them, and the properties panel, whose controls may just have
@@ -1216,6 +1226,7 @@ globalThis.__ffmpegBro = {
              overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
              placement: graphPlacement,
              outranked: outrankedControls, preview: graphPreview, previewGraph,
+             measureGraph, measureTo, current: currentGraph,
              // `enable=` as a set of spans and as the text it is. Pure, and on
              // the surface for the same reason the model is: the control and
              // the expression are one mechanism, and the only way to check that

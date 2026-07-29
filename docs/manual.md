@@ -922,6 +922,12 @@ Pressing play starts on the frame already in the card, because the still is the
 first piece. One node plays at a time — there is one render slot, and two would not
 be two playbacks so much as two stutters.
 
+The column beside the graph has the other half of the same question. **`Measure
+to here`** runs the graph as far as the selected node and no further, keeping
+nothing but what the filters on the way said — the ancestors only, the same
+saving as a preview, and at the node's own size rather than a card's. See
+[Measuring, and doing something about it](#measuring-and-doing-something-about-it).
+
 ### When it is on
 
 A filter does not have to run for the whole render. ffmpeg's timeline support is
@@ -1838,6 +1844,41 @@ away: `-f null -` through an encoder that encodes nothing. It costs the decode
 and the filters and leaves no file, because rendering something nobody wanted in
 order to find out what a filter thought of it is most of a reason not to bother.
 
+**`Measure to here` runs part of it.** A measurement at one point of a graph
+does not need the rest: a `cropdetect` on one clip's decoded picture needs that
+clip's file and the filters between the two, and everything else — the other
+clips, the filters after it, the composite it is laid into, the mix beside it —
+is decoded, run and thrown away so that four numbers can be printed. So a node's
+panel offers to stop the render there. Only what the node depends on is built,
+only the files that feed it are opened, and the note says how much of the graph
+that was: `Measuring 2 of 14 nodes, 1 input`.
+
+It is the pair of the ▶ on the card. A preview answers *what comes out of here*
+with a picture; this answers it with a number, and both are cut from the same
+model by the same printer — so a node's number is as much "what the render would
+do" as its picture is. Two differences, and both are the same reason:
+
+- **No scaling.** A preview ends in a `scale` because a card is three hundred
+  pixels wide. A measurement must not: `cropdetect` on a scaled picture answers
+  in the card's pixels, which is four plausible numbers about a picture nobody
+  is rendering. The pad is taken at whatever size libavfilter made it.
+- **No waveform.** A sound pad previewed is drawn by `showwaves`, because a
+  sound has to be *looked* at to be judged. A sound pad measured is read off
+  `ebur128` or `astats`, which have said everything they have to say without a
+  picture — so the render carries four black pixels once a second, which is the
+  smallest thing that satisfies the renderer's rule that a render has a picture
+  in it.
+
+The button is on every node, not only on the ones that measure, because
+**nothing here knows which filters measure and nothing here should**: what makes
+a filter a measurement is that it emits metadata or logs, which is true of any
+of them. What is being chosen is where the render stops. Whatever measured
+among the ancestors reports; the Report drawer reads it exactly as it reads a
+whole-graph one. And because this is the one stage where something is nearly
+always rendering — the node previews fill in as the graph settles — a press
+while the slot is held **queues** rather than failing, and the previews stand
+aside until it has had its turn.
+
 **Reading it is a plot.** Click a series and it opens over the render's range:
 axes, a hairline grid, up to six lines against each other, a crosshair that
 reads every value under the pointer, and a click that takes the playhead to that
@@ -2393,8 +2434,15 @@ acted on. It clicks `Crop` and finds `cropdetect` on the graph and in the
 command the bar prints; runs `Measure now` and finds the series on the render's
 own clock; opens a plot and checks that taking a line off does not repaint the
 one left; applies the crop and finds a `crop` node at the anchor the
-measurement was taken at, carrying the characters `cropdetect` printed. Three
-sections are written against **hand-made channel records**, the way
+measurement was taken at, carrying the characters `cropdetect` printed. Then it
+puts the same filter at one clip's decode point instead and measures *to* that
+node: the cut is two nodes of fourteen and one input pad, nothing after it is in
+the printed graph, no `scale` is on the end — and the number that comes back is
+the source's own width rather than the square composite's, which is the whole
+claim being made about where a measurement is taken. A sound pad is cut at the
+same way and renders to the end; and a press while the whole-graph measurement
+still holds the one slot queues instead of failing, and starts when it comes
+free. Three sections are written against **hand-made channel records**, the way
 `ui_filtergraph.js` is written against hand-made specs — parsing what a filter
 said is a pure function of what it said, so a `cropdetect` that has not settled,
 an `ebur128` with no summary and a `blackdetect` that found two stretches can be
@@ -2561,10 +2609,6 @@ Honest list of what does not work:
   its own — `Measure now` is a press. Doing it automatically would mean deciding
   when a render is cheap enough to spend without being asked, which is a
   question about somebody's machine and not about this code.
-- **Measuring part of a graph.** `Measure now` runs the whole graph over the
-  whole range. Measuring one node's output means putting the filter at that
-  node's point, which works, and there is no equivalent of the Graph stage's
-  per-node preview for a *number*.
 - **Reading a URL while it is slow, and writing to one while it fails.** A
   render goes to a URL now, with its protocol's own options beside the muxer's,
   and reports what it sent rather than a size. What is not built is either end

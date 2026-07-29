@@ -278,6 +278,31 @@ function filtersNote() {
 
 // ── a node ─────────────────────────────────────────────────────────────────
 
+/// Run the graph as far as this node and no further, keeping what it measured.
+///
+/// **The pair of the ▶ on the card.** A preview answers "what does this node
+/// produce" with a picture; this answers it with whatever the measuring filters
+/// among its ancestors said, which is the half that was missing — `Measure now`
+/// on the Report drawer runs the *whole* graph, so a `cropdetect` on one clip's
+/// decoded picture cost every other clip, every filter after it, the composite
+/// and the mix.
+///
+/// It is offered on every node rather than only on the ones that measure,
+/// because this file does not know which filters measure and must not learn:
+/// what makes a filter a measurement is that it emits metadata or logs, and the
+/// channel captures both from all of them — see `ui/measure.js`. What is being
+/// chosen here is **where the render stops**, which is a fact about the graph
+/// and not about the filter.
+function measureAction(node) {
+    return el('button', {
+        cls: 'tiny', text: 'Measure to here', 'data-f': 'measure-to',
+        title: 'render the range as far as this node — the filters it depends on and no ' +
+               'others — and keep nothing but what they measured. The Report drawer says ' +
+               'what came back.',
+        on: { click: () => { if (hooks.measureTo) hooks.measureTo(node); } },
+    });
+}
+
 function nodePanel(node) {
     // An input is a file with a pad per stream it is read for, so it is named
     // for the input it is rather than for one of its pads.
@@ -323,8 +348,10 @@ function nodePanel(node) {
             out.push(div('gp-actions', [el('button', {
                 cls: 'tiny', text: 'Remove', 'data-f': 'remove',
                 on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
-            })]));
+            }), measureAction(node)]));
+            return out;
         }
+        out.push(div('gp-actions', [measureAction(node)]));
         return out;
     }
 
@@ -370,7 +397,10 @@ function nodePanel(node) {
             title: 'Hand this node back to the derivation',
             on: { click: () => { overlay.unlock(node.anchor); changed(); } },
         }));
-    if (actions.length) out.push(div('gp-actions', actions));
+    // Last, and unconditional — every filter node can be measured to, so the
+    // row is never empty and the guard that used to be here never fired.
+    actions.push(measureAction(node));
+    out.push(div('gp-actions', actions));
 
     if (node.locked && node.derived)
         out.push(div('gp-hint dim',
@@ -420,7 +450,7 @@ function outputRows(node) {
     out.push(div('gp-actions', [el('button', {
         cls: 'tiny', text: 'Remove', 'data-f': 'remove',
         on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
-    })]));
+    }), measureAction(node)]));
     return out;
 }
 

@@ -278,6 +278,157 @@ console.log('\na finding stops being offered when the edit moves under it');
     ok(!q('.rep-stale'), 'and putting the clip back makes it current again');
 }
 
+// ── part of a graph ────────────────────────────────────────────────────────
+//
+// `Measure now` runs the whole thing. A `cropdetect` on one clip's decoded
+// picture does not need the whole thing: it needs that clip's file and the
+// filters between the two, and everything else — the other clips, the filters
+// after it, the composite, the mix — is decoded, run and thrown away so that
+// four numbers can be printed.
+//
+// So a node can be measured *to*, which is the pair of the ▶ on its card: the
+// preview answers "what comes out of here" with a picture and this answers it
+// with a number. The proof that it is the same claim and not a cheaper
+// lookalike is that the cut is printed from the same model by the same
+// `print()` — and the proof that it is worth doing is in the two counts.
+
+console.log('\nmeasuring stops where you say it stops');
+{
+    // Only one cropdetect in the graph at a time, or two points report into one
+    // finding and neither number means anything.
+    for (const rec of overlay.inserts().filter((r) => r.filter === 'cropdetect'))
+        overlay.removeInsert(rec.id);
+    const spec0 = A.exporter.buildSpec();
+    const d0 = A.graph.derive(spec0, A.exporter.specSources(), { overlay: overlay.current() });
+    const point = d0.points.find((p) => /after-decode$/.test(p.id));
+    ok(!!point, `the clip's decoded picture is a point something can be put at (${point && point.id})`);
+    const at = overlay.insert(point.id, 'cropdetect',
+                              { params: { limit: '24', round: '2', reset: '1' } });
+
+    ok(A.shell.goTo('graph'), 'the Graph stage opens');
+    pump(300);
+    A.graph.draw();
+    // The node previews fill in as the stage settles and they hold the one job
+    // slot while they do. Waiting here is not what is under test — the queue
+    // that makes the button work anyway is asserted below.
+    waitFor('the node previews to settle',
+            () => bro.ffmpeg.render.poll().state !== 'running', 120000);
+    pump(300);
+
+    const g = A.graph.current();
+    const node = g && g.nodes.find((n) => n.filter === 'cropdetect');
+    ok(!!node, 'the measuring filter is a node on the graph like any other');
+
+    const cut = A.graph.measureGraph(g, node);
+    ok(cut.ok, `the graph can be cut off there (${cut.reason || 'ok'})`);
+    ok(cut.nodes < cut.of,
+       `and what is left is part of it — ${cut.nodes} nodes of ${cut.of}`);
+    ok(cut.filterGraph.indexOf('cropdetect') >= 0,
+       `with the measurement in it (${cut.filterGraph})`);
+    ok(cut.filterGraph.indexOf('overlay') < 0,
+       'and nothing after it: the composite this clip is laid into is not built');
+    // The saving that matters is the one on the *files*: an input nothing in
+    // the cut reads is an input nothing opens, seeks or decodes.
+    ok(cut.filterInputs.length === 1 && cut.filterInputs[0].stream === 'v',
+       `reading one pad — the picture it measures and not the sound beside it ` +
+       `(${cut.filterInputs.map((i) => i.label).join(' ')})`);
+    // A preview of this node would end in `scale`, because a card is 320 pixels
+    // wide. A measurement must not: four numbers in a card's pixels are four
+    // plausible numbers about a picture nobody is rendering.
+    ok(!/scale=/.test(cut.filterGraph),
+       'and at the node’s own size, because a number in pixels is about a picture');
+
+    // The gesture: select the node, press the button on it.
+    const card = document.querySelector(`#gr-nodes [data-key="${at.id}"]`);
+    ok(!!card, 'the node has a card on the stage');
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(200);
+    const button = document.querySelector('#gr-panel [data-f="measure-to"]');
+    ok(!!button, `and its panel offers to measure to it (“${button && button.textContent}”)`);
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    pump(80);
+
+    const said = el('gr-note') ? el('gr-note').textContent : '';
+    ok(/Measuring \d+ of \d+ nodes/.test(said),
+       `which says how much of the graph it is over (${said})`);
+
+    waitFor('the partial measurement', () => !A.exporter.isRunning());
+    pump(400);
+    const st = A.exporter.lastStatus();
+    ok(st && st.state === 'done' && /measure/.test(st.path || ''),
+       `it goes through the one slot and keeps nothing (${st && st.state})`);
+
+    // And the number is about the point it was taken at. The composite is
+    // 320×320 and the source is not, so a `cropdetect` reading the source's own
+    // width is the whole claim: this is the picture *at that node*, not the one
+    // the render ends with.
+    const w = report.seriesFor('lavfi.cropdetect.w');
+    const src = (A.project.clips[0].probe && A.project.clips[0].probe.video) || {};
+    ok(!!w && w.points.length > 1,
+       `cropdetect answered from inside the cut (${w ? w.points.length : 0} points)`);
+    if (src.displayWidth)
+        ok(w.points[w.points.length - 1].v === src.displayWidth,
+           `about the picture at that node — ${w.points[w.points.length - 1].v} wide, ` +
+           `which is the source (${src.displayWidth}) and not the ${spec0.width}-wide composite`);
+
+    // A sound pad is measured the same way, and the renderer's rule that a
+    // render has a picture in it is satisfied rather than argued with.
+    //
+    // Re-read rather than reused: the render that just finished redrew the
+    // stage, so the graph above is a set of node objects nothing on the screen
+    // refers to any more. The button never has that problem — the panel is
+    // rebuilt with the graph — and `measureTo` finds a node by key for exactly
+    // this reason, but a test naming one has to name it in the graph that is
+    // there now.
+    const g2 = A.graph.current();
+    const sound = g2.nodes.filter((n) => n.kind === 'filter' &&
+                                        /^(atrim|asetpts|adelay|amix|volume)$/.test(n.filter));
+    if (sound.length) {
+        const scut = A.graph.measureGraph(g2, sound[sound.length - 1]);
+        ok(scut.ok && scut.audio,
+           `a sound pad can be cut at too (${scut.filterGraph || scut.reason})`);
+        ok(/color=/.test(scut.filterGraph),
+           'with the smallest picture that is not the sound, because a render has one');
+        ok(!/showwaves/.test(scut.filterGraph),
+           'and no waveform — that is for looking at, and nobody is looking at this');
+        ok(A.graph.measureTo(sound[sound.length - 1]) === '',
+           'and it runs');
+        waitFor('the sound measurement', () => !A.exporter.isRunning());
+        pump(300);
+        const st2 = A.exporter.lastStatus();
+        ok(st2 && st2.state === 'done',
+           `to the end (${st2 && (st2.error || st2.state)})`);
+    }
+
+    // ── and it waits for the slot rather than losing to a preview ──────────
+    //
+    // This stage is the one place where something is nearly always rendering:
+    // the node previews fill in as the graph settles. A button that came back
+    // with "a job is already running" for that reason would be a button that
+    // works when you press it twice, which is not a mechanism — so it queues,
+    // and the previews stop starting new work while it does.
+    {
+        const g3 = A.graph.current();
+        const mine = g3.nodes.find((n) => n.filter === 'cropdetect');
+        ok(A.exporter.startMeasurement() === '',
+           'with the whole graph measuring, the one slot is taken');
+        el('gr-note').textContent = '';
+        ok(A.graph.measureTo(mine) === '',
+           'pressing it anyway is not a refusal');
+        ok(el('gr-note').textContent === '',
+           'and nothing has started — it is waiting for the slot, not racing for it');
+        waitFor('the queued measurement to start',
+                () => /Measuring/.test(el('gr-note').textContent));
+        ok(true, `which it does when the slot comes free (${el('gr-note').textContent})`);
+        waitFor('it to finish', () => !A.exporter.isRunning());
+        pump(300);
+    }
+
+    overlay.removeInsert(at.id);
+    A.shell.goTo('encode');
+    pump(200);
+}
+
 // ── a refusal, rather than a silent rewrite ────────────────────────────────
 //
 // Every one of these is a pure reading of what the channel holds, so the

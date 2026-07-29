@@ -23,6 +23,15 @@
 //   is also why the render is told to take its size from the graph
 //   (`sizeFromGraph`) instead of being given one.
 //
+// **The other reason to cut a graph off somewhere is to measure it there.**
+// `Measure now` renders the whole thing: every clip decoded, every filter run,
+// the composite built and the mix mixed, so that a `cropdetect` on one clip's
+// decoded picture can say four numbers. Cutting at that node instead runs the
+// filters it depends on and no others, and opens the files that feed it and no
+// others — the same saving as a preview, for the same reason, and it is what
+// makes measuring one point of a long edit cost what that point costs. What
+// comes off the end differs, and `measureGraph` says why.
+//
 // **A sound pad gets a waveform, and it is drawn by libavfilter.** The same
 // argument applies to `volume=0.6` as to a crop — it is a claim about a sound,
 // and a card that only restated the argument would be the thing worth
@@ -92,6 +101,67 @@ function pruned(g, keep) {
     return view;
 }
 
+/// The graph cut off at `node`, before anything is put on the end of it.
+///
+/// Returns `{ ok: true, view, chains, head, inputs, node, stream }` or
+/// `{ ok: false, reason }` — `head` being the pad the chosen node leaves by and
+/// `stream` which kind it is. Everything both callers below disagree about is
+/// what they hang on `head`, so the cutting is here once: a preview scales the
+/// pad into a card, a measurement takes it at its own size, and neither is
+/// allowed a second opinion about which nodes the chosen one depends on.
+function cutTo(g, node) {
+    if (!node) return { ok: false, reason: 'no node' };
+    // An input node is a file, not a stream, so which of its pads is being
+    // asked about is a question that has to be answered rather than read off
+    // the node: an input card shows the picture the file carries.
+    const videoPort = node.kind === 'input'
+        ? (node.outs || []).findIndex((o) => o.stream === 'v') : -1;
+    if (node.kind === 'input' && videoPort < 0)
+        return { ok: false, reason: 'this input is not read for a picture' };
+    // A sink is not a picture of its own — it is the pad the muxer maps, and
+    // what it shows is whatever its producer hands it. Following the wire is
+    // worth doing rather than refusing, because the sink at each end is the one
+    // node on that side of the screen that means *the render*, and it is the
+    // first thing anybody clicks.
+    if (node.kind === 'sink') {
+        const from = g.producers(node)[0];
+        return from ? cutTo(g, from) : { ok: false, reason: 'nothing is mapped here' };
+    }
+
+    const keep = ancestors(g, node);
+    const view = pruned(g, keep);
+    // Something has to be producing frames at the top of it — a file, or a
+    // filter that makes pictures out of nothing. The second is asked of
+    // libavfilter rather than named, so a `testsrc` or a `mandelbrot` previews
+    // for the same reason the derived black canvas does.
+    if (!view.nodes.some((n) => n.kind === 'input' ||
+                                (n.kind === 'filter' && isSource(n.filter))))
+        return { ok: false, reason: 'nothing feeds this node' };
+
+    // An input node is not a filter and cannot be a chain on its own, so
+    // cutting at one is cutting at the stream itself: the tail chain reads
+    // `[0:v]` directly and there is no body.
+    const chains = node.kind === 'input' ? [] : print(view).chains;
+    const head = node.kind === 'input'
+        ? `${node.index}:${node.outs[videoPort].stream}`
+        : padAtEndOf(chains, node);
+
+    // The pads this subgraph reads, which for an input node cut on its own is
+    // the one the chain above names — the file's sound is not decoded to draw a
+    // still of its picture.
+    const inputs = node.kind === 'input'
+        ? [{ label: head, path: node.path, stream: node.outs[videoPort].stream,
+             input: node.input === undefined ? -1 : node.input,
+             from: node.from || 0 }]
+        : inputsOf(view);
+
+    // `node` travels back because a sink was followed to its producer above and
+    // both callers ask a question *about the node they ended at*, not about the
+    // one they named.
+    return { ok: true, view, chains, head, inputs, node,
+             stream: node.kind === 'input' ? 'v' : streamsOf(g).of(node) };
+}
+
 /// A graph that ends at `node`, ready to hand to `bro.ffmpeg.render.start`.
 ///
 /// Returns `{ ok: true, filterGraph, filterInputs, pad, audio }` or
@@ -108,54 +178,12 @@ function pruned(g, keep) {
 /// which for a node in the middle of a chain is nothing, and `print()` would
 /// invent a name that nothing else here would know.
 export function previewGraph(g, node, opts = {}) {
-    if (!node) return { ok: false, reason: 'no node' };
-    // An input node is a file, not a stream, so which of its pads is being
-    // asked about is a question that has to be answered rather than read off
-    // the node: an input card shows the picture the file carries.
-    const videoPort = node.kind === 'input'
-        ? (node.outs || []).findIndex((o) => o.stream === 'v') : -1;
-    if (node.kind === 'input' && videoPort < 0)
-        return { ok: false, reason: 'this input is not read for a picture' };
-    // A sink is not a picture of its own — it is the pad the muxer maps, and
-    // what it shows is whatever its producer hands it. Following the wire is
-    // worth doing rather than refusing, because the sink at each end is the one
-    // node on that side of the screen that means *the render*, and it is the
-    // first thing anybody clicks.
-    if (node.kind === 'sink') {
-        const from = g.producers(node)[0];
-        return from ? previewGraph(g, from, opts)
-                    : { ok: false, reason: 'nothing is mapped here' };
-    }
-
-    const keep = ancestors(g, node);
-    const view = pruned(g, keep);
-    // Something has to be producing frames at the top of it — a file, or a
-    // filter that makes pictures out of nothing. The second is asked of
-    // libavfilter rather than named, so a `testsrc` or a `mandelbrot` previews
-    // for the same reason the derived black canvas does.
-    if (!view.nodes.some((n) => n.kind === 'input' ||
-                                (n.kind === 'filter' && isSource(n.filter))))
-        return { ok: false, reason: 'nothing feeds this node' };
-
-    // An input node is not a filter and cannot be a chain on its own, so
-    // previewing one is previewing the stream itself: the tail chain reads
-    // `[0:v]` directly and there is no body.
+    const cut = cutTo(g, node);
+    if (!cut.ok) return cut;
+    const { chains, head, inputs } = cut;
     const fit = Math.max(64, Math.round(opts.fit || 320));
-    const chains = node.kind === 'input' ? [] : print(view).chains;
-    const head = node.kind === 'input'
-        ? `${node.index}:${node.outs[videoPort].stream}`
-        : padAtEndOf(chains, node);
 
-    // The pads this subgraph reads, which for an input node previewed on its
-    // own is the one the chain above names — the file's sound is not decoded to
-    // draw a still of its picture.
-    const inputs = node.kind === 'input'
-        ? [{ label: head, path: node.path, stream: node.outs[videoPort].stream,
-             input: node.input === undefined ? -1 : node.input,
-             from: node.from || 0 }]
-        : inputsOf(view);
-
-    if (streamsOf(g).of(node) === 'a') {
+    if (cut.stream === 'a') {
         chains.push(...waveTail(head, fit, opts.fps));
         return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs,
                  pad: '[pv]', audio: true };
@@ -175,7 +203,7 @@ export function previewGraph(g, node, opts = {}) {
     // with `-hwaccel cuda -hwaccel_output_format cuda` skipped the download and
     // failed with exactly the message the Graph stage exists to explain. The
     // three callers ask three different questions and share this one answer.
-    const up = whereIs(view, node) === 'device';
+    const up = whereIs(cut.view, cut.node) === 'device';
     if (up) chains.push(`[${head}]hwdownload,format=nv12[hwdl]`);
     const shown = up ? 'hwdl' : head;
 
@@ -185,6 +213,63 @@ export function previewGraph(g, node, opts = {}) {
     chains.push(`[${shown}]scale=w='min(${fit}\\,trunc(iw/2)*2)':h=-2[pv]`);
     return { ok: true, filterGraph: chains.join(';'), filterInputs: inputs,
              pad: '[pv]', audio: false };
+}
+
+/// The same graph, cut off at `node`, for a render whose output is a *number*.
+///
+/// Returns `{ ok: true, filterGraph, filterInputs, pad, audio, nodes, inputs,
+/// of }` or `{ ok: false, reason }`, where `nodes`/`inputs` are how much of the
+/// graph is left and `of` how much there was — the two numbers a note has to
+/// state, because a measurement over part of a graph is a claim about part of a
+/// graph and nothing else on the screen says which part.
+///
+/// **Three differences from a preview, and every one of them is the same
+/// reason: a number is not a picture.**
+///
+/// - **No `scale` on the end.** A preview is fitted into a card and a card is
+///   three hundred pixels wide; `cropdetect` on that answers in the card's
+///   pixels, which is four plausible numbers about a picture nobody is
+///   rendering. So the pad is taken at whatever size libavfilter made it, which
+///   is what `sizeFromGraph` is for.
+/// - **No waveform.** `showwaves` exists so a sound can be *looked* at. A
+///   measurement of a sound is read off `ebur128` or `astats`, both of which
+///   have already said everything they have to say by the time a picture would
+///   be drawn, and drawing one would be a video encode per measurement for
+///   nobody.
+/// - **No `hwdownload`.** A preview adds one because it is about to scale, and
+///   scaling wants pixels. A measurement adds nothing to the graph, so what
+///   happens at a pad on a device here is exactly what happens at that pad in
+///   the render — which is the property that makes the answer worth having.
+///
+/// The tail is `null`/`anull` and it is there to give the pad a **name**: a pad
+/// the muxer maps has to have one, and a node in the middle of a chain has
+/// none. Nothing else was cheap enough to be certain about — `null` is
+/// libavfilter's own way of writing "the same frames, called something else".
+export function measureGraph(g, node) {
+    const cut = cutTo(g, node);
+    if (!cut.ok) return cut;
+    const audio = cut.stream === 'a';
+    const chains = cut.chains.slice();
+    chains.push(`[${cut.head}]${audio ? 'anull[ma]' : 'null[mv]'}`);
+    // **A render has a picture in it**, and the renderer says so: a graph whose
+    // only output is a sound pad is refused with "the filter graph has no
+    // picture coming out of it". Which is the right rule for the thing it was
+    // written about — an output file — and leaves a cut at `ebur128` on the mix
+    // with nowhere to go, since loudness is exactly the measurement somebody
+    // wants at a sound pad.
+    //
+    // So the picture is supplied, and it is deliberately the *smallest thing
+    // that is not the sound*: four black pixels once a second, which the null
+    // encoder discards. Not `showwaves`, which is what a preview draws — that
+    // is a video encode of a picture nobody is looking at, for every
+    // measurement. Nothing is added to the path being measured: the pad reaches
+    // the writer through `anull` and one filter, exactly as it does in the
+    // render, which is the property the number is worth having for.
+    if (audio) chains.push('color=c=black:s=2x2:rate=1[mv]');
+    return { ok: true, filterGraph: chains.join(';'), filterInputs: cut.inputs,
+             pad: audio ? '[ma]' : '[mv]', audio,
+             nodes: cut.view.nodes.length, inputs: cut.inputs.length,
+             of: g.nodes.length };
 }
 
 /// The two chains that turn a sound pad into something a card can show and
