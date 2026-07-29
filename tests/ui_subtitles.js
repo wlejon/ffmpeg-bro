@@ -7,17 +7,21 @@
 //   - **A track beside the picture.** A stream row on the Write stage, saying
 //     where its cues come from — carried through as packets, or decoded and
 //     written again in whatever the container holds. `-map 1:0 -c:s mov_text`.
-//   - **Burned into the picture.** A `subtitles` filter on the Graph stage,
-//     placed as an ordinary node, with the path escaped the way libavfilter
-//     needs it — which is a trap with a very poor error message.
+//   - **Burned into the picture.** A `subtitles` filter, placed as an ordinary
+//     node, with the path escaped the way libavfilter needs it — which is a
+//     trap with a very poor error message. It has two homes and they are two
+//     different clocks: over the whole canvas from the Sources stage, for cues
+//     written against the finished programme, and on one clip from its
+//     properties panel, for a track that belongs to that file. Only the second
+//     can be shown in the viewer, and it is.
 //   - **Out on its own.** A render whose only stream is subtitles, which is
 //     what "extract them" and "convert the format" both are.
 //
-// And one thing that is deliberately *not* here: the viewer never shows a soft
-// subtitle track. There is no subtitle path in playback, which is the same
-// structural reason a filter cannot be previewed there, and the honest answer
-// is a sentence on the stage rather than an overlay that would then disagree
-// with the render.
+// And one thing that is deliberately *not* here: the viewer never shows a
+// **soft** subtitle track. bro's `<video>` decodes pictures and sound, and a
+// track a player can switch off is neither — so the honest answer is a sentence
+// on the stage, and a way to make the cues part of the picture if that is what
+// was meant.
 //
 // Usage: ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-directory>
 
@@ -245,8 +249,10 @@ console.log('\nwhat cannot be shown');
 const warned = A.exporter.currentWarnings().join(' | ');
 ok(warned.indexOf('viewer cannot show') >= 0,
    'the stage says out loud that the viewer will not show the track');
-ok(warned.indexOf('no subtitle path in playback') >= 0,
+ok(warned.indexOf('decodes pictures and sound') >= 0,
    'and says why, rather than leaving it looking like the track was not written');
+ok(warned.indexOf('Burn in') >= 0,
+   'and where the viewer *will* show cues, which is a different statement about the file');
 
 // The one thing an attachment is for, said where the ASS row was added. A
 // styled track that carries no font looks different on every machine, and an
@@ -379,6 +385,114 @@ ok(burned.state === 'done',
 const burnedBack = bro.ffmpeg.probe(bro.appDir + '/../out/ui-burn.mp4');
 ok(!burnedBack.streams.some((s) => s.kind === 'subtitle'),
    'with no subtitle stream in it — the cues are the picture now');
+
+// ── burned into one clip, and on the screen ────────────────────────────────
+//
+// The other half of burning in, and the half the viewer can show. A `subtitles`
+// node over the whole canvas is on the *render's* clock and there is nowhere in
+// playback for a filter over the composite to run — the viewer draws a clip per
+// element. A node on one clip is on that clip's own chain, above the `setpts`
+// that turns the file's clock into the edit's, which is the clock a track
+// inside the file and an `.srt` written for the file are both on. So it plays.
+//
+// Three things are checked here and none of them is "it rendered": which stream
+// the filter is told to draw, where the node lands, and that the element in
+// front of you is playing the chain with it in.
+
+console.log('\nburned into one clip');
+{
+    const S = A.subtitles;
+    // **`si=` counts subtitle streams, not streams.** Checked against a shape
+    // written out here rather than against a file, because the shape that
+    // catches it — two subtitle tracks, so that the second one's ordinal and
+    // its stream index are different numbers — is not what any fixture is for.
+    const shape = { streams: [{ index: 0, kind: 'video' }, { index: 1, kind: 'audio' },
+                              { index: 2, kind: 'subtitle' }, { index: 3, kind: 'subtitle' }] };
+    same(S.subtitleOrdinal(shape, 2), 0, 'the first subtitle track of a file is si=0');
+    same(S.subtitleOrdinal(shape, 3), 1,
+         'and the second is si=1 — never si=3, which is where its packets are');
+    same(S.subtitleOrdinal(shape, 1), -1, 'a stream that is not one is not counted at all');
+    same(S.burnParams('x.srt', 1).si, '1', 'a node for the second says so');
+    same(S.burnParams('x.srt', 0).si, undefined,
+         'and one for the first says nothing, because si=0 is what the filter does anyway');
+    ok(S.canBurn({ kind: 'subtitle', textSub: true }) &&
+       !S.canBurn({ kind: 'subtitle', textSub: false }),
+       'and pictures of characters are refused, because libass reads characters');
+}
+
+A.graph.overlay.clear();
+pump(80);
+const vclip = A.project.clips[0];
+A.select(vclip);
+A.showProperties();
+pump(80);
+
+// The clip is `landscape.mp4`, which carries no cues of its own — so the one
+// row is the file of cues that is open, offered against the clip it would be
+// drawn on. A subtitle file is routinely named nothing like the video, so this
+// is not filtered by name.
+let burns = Array.from(qq('[data-burn]'));
+same(burns.length, 1, 'the clip offers the file of cues that is open');
+click(burns[0]);
+pump(400);
+
+const onClip = A.graph.overlay.inserts().find((r) => r.filter === 'subtitles');
+ok(!!onClip, 'pressing it places an ordinary subtitles node');
+same(onClip && onClip.anchor, `clip:${vclip.id}/after-decode`,
+     'on that clip, above the setpts — which is the clock the cues were written on');
+ok(onClip && String(onClip.params.filename).indexOf('cues.srt') >= 0,
+   'naming the file, escaped as a filter argument');
+same(onClip && onClip.params.si, undefined,
+     'and saying nothing about which stream, because a file of cues has one');
+
+ok(vclip.video.src.indexOf('/@fx/') === 0,
+   'and the viewer plays the clip with the burn-in on it');
+const burnView = A.graph.playback.viewFor(vclip.id);
+ok(burnView && burnView.video.indexOf('subtitles=') === 0,
+   `at the head of the chain, before the clock moves: ${burnView && burnView.video}`);
+
+cmd = commandText();
+ok(cmd.indexOf('subtitles=') >= 0 && cmd.indexOf('[0:v]') >= 0,
+   'and the command bar prints it inside the clip’s own chain');
+
+burns = Array.from(qq('[data-burn]'));
+same(burns[0].textContent, 'Burned in', 'the button now says the track is on');
+click(burns[0]);
+pump(400);
+ok(!A.graph.overlay.inserts().some((r) => r.filter === 'subtitles'),
+   'and pressing it again takes the node off');
+same(vclip.video.src, vclip.src,
+     'putting the element back on the plain input, exactly');
+
+// A track *inside* a file, which is the common case and the one that needs a
+// stream named. The file is the one this test rendered above: an mp4 whose
+// streams run video, audio, subtitle — so a burn-in that handed the filter the
+// stream index would say `si=2` and draw nothing.
+console.log('\na track inside the file');
+A.open(outPath);
+waitFor('the rendered file to come back as a clip', () => A.project.clips.length === 2);
+pump(300);
+const sclip = A.project.clips[1];
+A.select(sclip);
+A.showProperties();
+pump(80);
+
+burns = Array.from(qq('[data-burn]'));
+same(burns.length, 2, 'its own track is offered beside the cue file');
+const rowText = burns[0].parentNode.parentNode.textContent;
+ok(rowText.indexOf('2: mov_text') >= 0,
+   `the row names the stream the way every other stream is named (${rowText.trim()})`);
+click(burns[0]);
+pump(400);
+
+const inFile = A.graph.overlay.inserts().find((r) => r.filter === 'subtitles');
+ok(!!inFile && String(inFile.params.filename).indexOf('ui-subs.mp4') >= 0,
+   'the node reads the clip’s own file, which is what subtitles= takes');
+same(inFile && inFile.params.si, undefined,
+     'and asks for si=0 by saying nothing — the track is stream 2 and the first of its kind');
+ok(sclip.video.src.indexOf('/@fx/') === 0, 'the viewer plays it');
+A.graph.overlay.clear();
+pump(200);
 
 // ── and back out again ─────────────────────────────────────────────────────
 //

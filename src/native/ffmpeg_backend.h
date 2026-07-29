@@ -68,6 +68,15 @@ struct StreamSummary {
     int channels = 0;
     std::string channelLayout;
     std::string sampleFmt;
+    // Subtitles: characters rather than pictures of them
+    // (`AV_CODEC_PROP_TEXT_SUB`). The same fact `CodecOption::textSub` reports
+    // about an *encoder*, asked here about a track that already exists —
+    // because it decides two different things and only one of them is a
+    // conversion. Writing this track out as `subrip` is optical character
+    // recognition; *burning it into the picture* is `subtitles=`, and
+    // libavfilter's subtitles filter is libass, which reads characters and
+    // refuses a bitmap track by name. False for every other kind of stream.
+    bool textSub = false;
     // Both
     std::string language;
     std::string title;

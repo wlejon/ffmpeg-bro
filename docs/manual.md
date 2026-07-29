@@ -1630,23 +1630,54 @@ on it reads as an application that cannot write subtitles at all.
 **Pictures of text cannot be converted.** `dvdsub` and `hdmv_pgs_subtitle`
 carry bitmaps rather than characters, and turning one of those into `subrip`
 is optical character recognition, which neither this nor ffmpeg does. Such a
-track can be carried into a container that holds it, or burned into the
-picture; asking for it as text is refused by name, before anything opens.
-Which family a codec is in is libavcodec's own `AV_CODEC_PROP_TEXT_SUB`.
+track can be carried into a container that holds it; asking for it as text is
+refused by name, before anything opens, and so is asking for it burned in,
+because libavfilter's subtitles filter is libass and libass reads characters.
+Which family a codec is in is libavcodec's own `AV_CODEC_PROP_TEXT_SUB`, and
+`probe()` reports it per track as `textSub`.
 
 ### Burning them in
 
+Two buttons, because there are two clocks a set of cues can be on and they are
+not interchangeable.
+
 `Burn it into the picture` on a subtitle input places a `subtitles` filter at
 the point where the whole canvas is, and takes you to the Graph stage where the
-node now is. **What it places is an ordinary node** — it is printed by the
-command bar, it can be moved, configured and deleted, and nothing about the
-render behaves differently because a button rather than the palette put it
-there. A shortcut that produced something you could not then find would be
-worse than no shortcut.
+node now is. That is the right point for cues written against the **finished
+programme** — where 00:01:30 means a minute and a half into what will be
+written.
 
-Burned-in subtitles *are* visible in this application, because a node preview
-and the export preview are real renders. Playing the node is how you watch them
-come and go.
+**Burn in**, on a clip's properties panel, places the same filter on that
+clip's own chain, above the `setpts` that turns the file's clock into the
+edit's. That is the right point for a track that belongs to the *file*: the
+subtitle stream inside a recording, or an `.srt` downloaded to go with it,
+where 00:01:30 means a minute and a half into that shot however it was later
+trimmed and dragged. It lists every subtitle track the clip's input carries and
+every file of cues that is open, and it does not take you anywhere, because the
+point of it is that the picture in front of you changes.
+
+Which track is `si=`, and **`si=` counts subtitle streams rather than
+streams** — the second subtitle track of a file whose streams run video, audio,
+subtitle, subtitle is `si=1` and never `si=3`. It is written only where it is
+not the default, so what the command bar prints for the ordinary case is what
+you would have typed.
+
+**What either button places is an ordinary node** — it is printed by the command
+bar, it can be moved, configured and deleted on the Graph stage, and nothing
+about the render behaves differently because a button rather than the palette
+put it there. A shortcut that produced something you could not then find would
+be worse than no shortcut.
+
+Burned-in subtitles *are* visible in this application. On one clip they are in
+the program monitor, because a clip's playback chain is a filtergraph and this
+is a filter in it — see [A filter in the viewer](#a-filter-in-the-viewer). Over
+the whole canvas they are in a node preview and in the export preview, which
+are real renders; playing the node is how you watch them come and go.
+
+A track that is **pictures of characters** — `dvdsub`, `hdmv_pgs_subtitle` —
+cannot be burned in at all, and the button says so rather than failing at
+parse: libavfilter's subtitles filter is libass, and libass reads characters.
+Such a track can still be carried as a stream into a container that holds it.
 
 One thing is escaped on your behalf and shown so that it is not a mystery: **a
 filtergraph separates a filter's arguments with `:`**, so a Windows path with a
@@ -1667,16 +1698,24 @@ and the picker shows them among the other hundred and eighty.
 ### What the viewer cannot do
 
 **A soft subtitle track is invisible in the viewer, and always will be until
-playback grows a path of its own.** bro's `<video>` decodes into an element and
-there is no subtitle path anywhere in it — the same structural reason a filter
-cannot be previewed there. The track is in the file and plays in any player;
-what this application can show you is the render, not the timeline.
+playback grows a path of its own.** bro's `<video>` decodes pictures and sound,
+and a track a player can switch off is neither. The track is in the file and
+plays in any player; what this application can show you is the render, not the
+timeline.
 
 That is said on the Write stage, out loud, with the reason. Somebody who adds a
 subtitle row, looks at the viewer, sees nothing and concludes the track was not
 written is the failure this is against — and a fake overlay would be worse,
 because it would then disagree with the render in every detail of position,
-font and line breaking.
+font and line breaking. Those details belong to the *player*, which is the
+whole point of writing the track soft.
+
+What the viewer does show is a track **burned into a clip**, because that is a
+`subtitles` filter on the clip's own chain and the program monitor runs a clip's
+filters. It is on the same stage as the warning, one sentence along, and it is
+deliberately not offered as a fix: burning cues into the picture and writing
+them beside it are two different files, and the one you meant is not something
+this can infer.
 
 ### A font travelling with the text
 
@@ -2293,7 +2332,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-decodetest <file> [--rotated <file>] [--sound-only <file>]
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
-./build/Release/ffmpeg-bro-inputtest <file> [<rotated>]  # an -i: forced demuxer, options, window, token, filters
+./build/Release/ffmpeg-bro-inputtest <file> [<rotated>] [<cues>]  # an -i: forced demuxer, options, window, token, filters
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
 ./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, recording one, and a session of several
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
@@ -2395,6 +2434,17 @@ escaped the way libavfilter needs it. It renders both and reads the results
 back, because a subtitle track that is described correctly and not written is
 the failure worth catching.
 
+Both burn-in points are driven: the one over the whole canvas from the Sources
+stage, and the one on a clip from its properties panel — where what is checked
+is the anchor (above the `setpts`, which is the clock the cues are on), the
+`si=` that is *not* written because the track is the first of its kind despite
+being stream 2, and the clip's element ending up pointed at a `/@fx/` view whose
+chain starts with the filter. The stream that proves `si=` counts subtitle
+streams rather than streams is written out in the test as a shape rather than
+made as a file, because two subtitle tracks in one container is not a fact any
+fixture here exists for; the end-to-end half runs against the mp4 the same test
+rendered a page earlier.
+
 The fixture generator writes `cues.srt` and `cues.ass` beside the video, with
 the cues placed so that a burn-in is **measurable**: a second of picture with
 nothing over it, a second with a line over it, a second with nothing again. The
@@ -2430,12 +2480,28 @@ chain that ran nothing cannot land on by accident — and then the same filter
 carrying `enable='gt(t,10)'` twice with nothing changed but the view's `shift`,
 which is the only way to see from outside that a filter is on the render's clock
 and not the file's: at zero the first frame is before the span and comes back
-untouched, and moved twenty seconds along it comes back inverted. Then a `crop`
-for the sizes, a seek for the graph being rebuilt across one, `volume=0` for the sound
-half with the *picture* checked to be untouched and undecoded beside it, a
-filter option nothing has for the refusal, and a clip shot sideways for the
-turn: the chain sees the picture the right way up and the track then asks for no
-turn of its own, both halves asserted because either alone passes for a bug.
+untouched, and moved twenty seconds along it comes back inverted. Three things
+are asserted about that one, because a clock has three ways to be wrong — the
+frame is inverted, it comes back stamped at *its own* second rather than the
+render's, and the same filter written in front of the `setpts` instead of behind
+it is untouched again, which is where the render puts a filter inserted after
+the decode.
+
+Then a **`subtitles` burn-in**, which is the only filter here whose whole job is
+to be different at different moments: the same view is decoded inside a cue and
+between two, and it has to differ from the file at the first and equal it
+exactly at the second. Either check alone passes for a bug — one that never drew
+passes the second, one hard-wired to draw always fails it, and one whose clock is
+out by seconds fails both. The path is escaped by hand in C++ rather than by
+calling the UI's `filterPath`, so that the escaping is *stated* in both
+languages rather than agreed with itself.
+
+Then a `crop` for the sizes, a seek for the graph being rebuilt across one,
+`volume=0` for the sound half with the *picture* checked to be untouched and
+undecoded beside it, a filter option nothing has for the refusal, and a clip shot
+sideways for the turn: the chain sees the picture the right way up and the track
+then asks for no turn of its own, both halves asserted because either alone
+passes for a bug.
 
 `seqtest` is the inputs whose content is assembled, and most of what it asserts
 is what the grouping *refuses*: a lone numbered file is a still, a folder of two
@@ -2757,18 +2823,22 @@ Honest list of what does not work:
   buffers. Both are what `-reconnect`, `-rw_timeout` and the `fifo` muxer exist
   for, and all three are reachable as ordinary options — none of them is
   surfaced as anything better than that.
-- **Subtitles in the viewer.** A soft subtitle track is written correctly,
-  plays in any player and is invisible here for the whole time you are working
-  on it: bro's `<video>` decodes pictures and sound and there is no subtitle
-  path anywhere in that pipeline. What has changed is that there is now a way
-  to fake one honestly — a clip's playback chain is a filtergraph, and
-  `subtitles=` is a filter — so this is no longer structural. What it needs is
-  the decisions around it: whose track, when a clip's input carries three; a
-  control to turn it on, since burning them in for the screen is not the same
-  statement as writing them soft; and an answer for a track that came from a
-  separate file. Burned-in subtitles *are* visible, because a node preview and
-  the export preview are real renders, and the Write stage says which of the two
-  you are looking at.
+- **A soft subtitle track in the viewer.** Cues burned into a clip are on the
+  screen now — see [Burning them in](#burning-them-in) — and a track written
+  *beside* the picture still is not: bro's `<video>` decodes pictures and
+  sound, and a stream a player can switch off is neither. Faking one with the
+  same filter would be the wrong answer rather than a partial one, because the
+  two are different statements about the finished file and the whole value of
+  the burn-in control is that it says which you meant. What is left is either
+  a subtitle path through bro's renderer, or an overlay drawn by this
+  application over the program monitor — and the second has the harder half of
+  the problem in it, which is that a soft track is styled by the *player*.
+- **A programme-wide burn-in in the viewer.** The other of the two burn-in
+  points, over the whole canvas, is not shown: the viewer composites by placing
+  one element per clip, so there is no single picture for a filter after the
+  composite to run on. That is the same absence as a generated source in the
+  viewer, above, and the same thing would close both — an export preview that
+  runs while you edit rather than when you ask for one.
 - **An editor for the cues themselves.** Everything here reads a subtitle file
   and writes one; nothing lets you type a line, retime one against the
   waveform, or split a cue at the playhead. The timeline has the lane that
@@ -2776,10 +2846,14 @@ Honest list of what does not work:
   it is built. What a person with a file that is a second and a half out has
   here is `-itsoffset` on the input, which shifts the whole track and is the
   right tool for exactly that one problem and no other.
-- **Picture subtitles converted to text.** `dvdsub` and `hdmv_pgs_subtitle`
-  can be carried into a container that holds them and burned into the picture;
-  they cannot become `subrip`, because that is optical character recognition.
-  The refusal names the reason rather than failing at the first cue.
+- **Picture subtitles, anywhere but carried.** `dvdsub` and
+  `hdmv_pgs_subtitle` can be carried into a container that holds them and
+  nothing else: they cannot become `subrip`, because that is optical character
+  recognition, and they cannot be burned in, because libavfilter's subtitles
+  filter is libass and libass reads characters. Drawing one *would* be
+  expressible — the packets are pictures and `overlay` draws pictures — but
+  nothing here reads an input for its subtitle pad, so there is no wire to draw.
+  Both refusals name the reason rather than failing at the first cue.
 - **A subtitle stream on the packet path's terms.** A copied subtitle track is
   the whole track: `copyFrom`/`copyTo` cut the *span* read out of it, which is
   what the renderer does, but nothing on the Write stage draws that against the

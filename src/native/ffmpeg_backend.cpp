@@ -1381,8 +1381,11 @@ ProbeResult probeMedia(const MediaInput& in) {
             char fourcc[AV_FOURCC_MAX_STRING_SIZE] = {0};
             s.tag = av_fourcc_make_string(fourcc, par->codec_tag);
         }
-        if (const AVCodecDescriptor* d = avcodec_descriptor_get(par->codec_id))
+        if (const AVCodecDescriptor* d = avcodec_descriptor_get(par->codec_id)) {
             s.codecLong = d->long_name ? d->long_name : "";
+            s.textSub = par->codec_type == AVMEDIA_TYPE_SUBTITLE &&
+                        (d->props & AV_CODEC_PROP_TEXT_SUB) != 0;
+        }
         if (const char* p = avcodec_profile_name(par->codec_id, par->profile))
             s.profile = p;
         s.bitRate = par->bit_rate;

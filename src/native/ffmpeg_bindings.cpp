@@ -103,6 +103,8 @@ JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
         JS_SetPropertyStr(ctx, o, "channels", JS_NewInt32(ctx, s.channels));
         setStr(ctx, o, "channelLayout", s.channelLayout);
         setStr(ctx, o, "sampleFmt", s.sampleFmt);
+    } else if (s.kind == "subtitle") {
+        JS_SetPropertyStr(ctx, o, "textSub", JS_NewBool(ctx, s.textSub));
     }
     return o;
 }

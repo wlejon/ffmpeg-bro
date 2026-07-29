@@ -125,12 +125,19 @@ function copyWarnings(list) {
 ///
 /// **The one that matters most is not a failure at all**: a soft subtitle
 /// track is written correctly, plays correctly in a player, and is invisible in
-/// this application's viewer for the whole time you are working. There is no
-/// subtitle path in playback — bro's `<video>` decodes into an element and
-/// nothing in it draws cues — which is the same structural reason a filter
-/// cannot be previewed there. Said out loud once, on the stage where the row
-/// was added, because the alternative is somebody checking the viewer, seeing
-/// nothing, and concluding the track was not written.
+/// this application's viewer for the whole time you are working. bro's
+/// `<video>` decodes pictures and sound, and a stream a player can switch off
+/// is neither. Said out loud once, on the stage where the row was added,
+/// because the alternative is somebody checking the viewer, seeing nothing, and
+/// concluding the track was not written.
+///
+/// It now names the other thing they may have meant rather than only the
+/// absence. `Burn in`, on a clip's properties panel, puts the cues *into* the
+/// picture and the viewer shows that, because it is a filter on the clip's own
+/// chain like any other. Naming it here is not a suggestion to use it — the two
+/// are different statements about the finished file — but somebody who wanted
+/// burned-in subtitles and reached for a stream row should find that out on
+/// this stage rather than in a player.
 function subtitleWarnings(list) {
     const out = [];
     const subs = list.filter((s) => s.kind === 'subtitle');
@@ -187,10 +194,13 @@ function subtitleWarnings(list) {
                  'will stop the render — burn them into the picture instead, with a ' +
                  'subtitles filter on the Graph stage');
     else
-        out.push('the viewer cannot show a soft subtitle track — there is no subtitle path ' +
-                 'in playback at all, the same reason a filter cannot be previewed there. ' +
-                 'It is in the file; open the result, or burn it in and watch it on the ' +
-                 'Graph stage');
+        out.push('the viewer cannot show a soft subtitle track — bro’s <video> decodes ' +
+                 'pictures and sound, and a track a player can switch off is neither. It ' +
+                 'is in the file; open the result to see it. What the viewer does show is ' +
+                 'a track burned in: Burn in, on the clip’s properties panel, puts a ' +
+                 'subtitles filter on that clip and the picture changes in front of you — ' +
+                 'which is a different statement about the finished file, not a preview ' +
+                 'of this one');
     return out;
 }
 

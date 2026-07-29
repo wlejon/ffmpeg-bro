@@ -215,7 +215,8 @@ add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}"
          --rotated "${FIXTURE_ROTATED}" --sound-only "${FIXTURE_SOUND}")
 add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
-add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}" "${FIXTURE_ROTATED}")
+add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}" "${FIXTURE_ROTATED}"
+         "${FIXTURE_DIR}/cues.srt")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
 # Needs no fixture: the device it records from is `lavfi`, which produces its

@@ -46,6 +46,7 @@ import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
 import * as command from './command.js';
 import * as report from './report.js';
 import { previewSpec, specSources } from './export/spec.js';
+import { subtitleOrdinal, burnParams, burnAnchor, canBurn } from './export/subtitles.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -1276,6 +1277,11 @@ globalThis.__ffmpegBro = {
     // to reach one would be testing the gesture rather than the edit.
     rippleTrim, rollCut, slipClip,
     showProperties, pending,
+    // Burning a track into a clip, minus the panel. On the surface for the
+    // reason `parseEnable` is: `si=` counts subtitle streams rather than
+    // streams, which is a rule about shapes of file no fixture here has, and
+    // the way to check a counting rule is to count something.
+    subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn },
     exporter, capture,
     filtergraph, renderGraph, shell, command, report,
     // The graph beneath filtergraph(): tests written against the model itself

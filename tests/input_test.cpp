@@ -189,7 +189,8 @@ Rgba copyOf(const Rgba* p) {
 int main(int argc, char* argv[]) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 2) {
-        std::printf("usage: ffmpeg-bro-inputtest <media-file> [<rotated-file>]\n");
+        std::printf("usage: ffmpeg-bro-inputtest <media-file> [<rotated-file>] "
+                    "[<subtitle-file>]\n");
         return 2;
     }
     const std::string file = argv[1];
@@ -197,6 +198,11 @@ int main(int argc, char* argv[]) {
     // matrix cannot be faked with content, and every suite here runs against
     // any real file.
     const std::string rotated = argc > 2 ? argv[2] : std::string();
+    // A file of cues written against `file`'s own clock. Optional for the same
+    // reason: what it proves is that a *time-dependent* filter draws the right
+    // thing at the right moment, and that needs a fixture whose contents are
+    // known before the render.
+    const std::string cues = argc > 3 ? argv[3] : std::string();
     registerFfmpegBackend();
 
     std::printf("\nopening one, plainly\n");
@@ -600,6 +606,65 @@ int main(int argc, char* argv[]) {
                    "and the picture is the file's own, unfiltered (%.1f against %.1f)",
                    silenced.meanY, plain.meanY);
             forgetView("fx-3");
+        }
+    }
+
+    std::printf("\nsubtitles, drawn into the picture\n");
+    if (cues.empty()) {
+        std::printf("  ----  no subtitle file given\n");
+    } else {
+        // **The one filter whose whole job is to be different at different
+        // moments.** A `negate` proves a chain ran; a `subtitles` proves the
+        // chain ran *and* was handed the clock the cues were written against,
+        // which is the thing this playback path had to get right and the thing
+        // a size or an "it opened" says nothing about.
+        //
+        // The fixture places its cues to make exactly that measurable: a line
+        // between one and two seconds, and nothing between two and four. So the
+        // same view is checked twice — different from the file inside the cue,
+        // identical to it outside — and either check alone passes for a bug. A
+        // burn-in that never drew passes the second; one whose clock is wrong
+        // by seconds passes neither, and one hard-wired to draw always fails it.
+        //
+        // The path is escaped here by hand rather than by calling the UI's
+        // `filterPath`, which is JavaScript: a colon separates a filter's
+        // arguments and a Windows drive letter has one, and stating the rule in
+        // both languages is how the two are known to agree.
+        std::string arg = "'";
+        for (char ch : cues) {
+            if (ch == '\\') { arg += '/'; continue; }
+            if (ch == ':' || ch == '\'') arg += '\\';
+            arg += ch;
+        }
+        arg += "'";
+
+        PlaybackView v;
+        v.input = of(file);
+        v.video = "subtitles=filename=" + arg;
+        ViewFacts facts;
+        std::string err;
+        const bool settled = settleView(v, &facts, &err);
+        checkf(settled, "a subtitles chain settles (%s)", settled ? "ok" : err.c_str());
+        if (settled) {
+            checkf(facts.width == facts.sourceWidth && facts.height == facts.sourceHeight,
+                   "and draws into the picture rather than resizing it (%dx%d)",
+                   facts.width, facts.height);
+
+            const std::string token = defineView("fx-6", v);
+            const Played onCue = play(token, 1.4);
+            const Played plainOnCue = play(file, 1.4);
+            checkf(onCue.meanY >= 0 && plainOnCue.meanY >= 0 &&
+                       std::fabs(onCue.meanY - plainOnCue.meanY) > 0.05,
+                   "inside a cue the picture is not the file's any more (%.3f against %.3f)",
+                   onCue.meanY, plainOnCue.meanY);
+
+            const Played offCue = play(token, 3.0);
+            const Played plainOffCue = play(file, 3.0);
+            checkf(offCue.meanY >= 0 && plainOffCue.meanY >= 0 &&
+                       std::fabs(offCue.meanY - plainOffCue.meanY) < 0.001,
+                   "and between cues it is the file's exactly (%.3f against %.3f)",
+                   offCue.meanY, plainOffCue.meanY);
+            forgetView("fx-6");
         }
     }
 

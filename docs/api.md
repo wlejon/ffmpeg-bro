@@ -79,6 +79,13 @@ bro.ffmpeg.probe({ path, format, options, decoderOptions,
 //                //        the point of use is entitled to turn one into the
 //                //        other, and it does it by frame height.
 //                // audio: sampleRate, channels, channelLayout, sampleFmt
+//                // subtitle: textSub — characters rather than pictures of
+//                //        them (AV_CODEC_PROP_TEXT_SUB). It decides two
+//                //        different things: writing the track out as `subrip`
+//                //        (optical character recognition, which nothing here
+//                //        does) and *burning it into the picture*, because
+//                //        libavfilter's `subtitles` filter is libass and
+//                //        refuses a bitmap track by name.
 //               }, ...],
 //     video, audio }          // shortcuts to the first of each
 ```

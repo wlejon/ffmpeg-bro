@@ -589,9 +589,12 @@ function subtitleRows(input) {
         strip('Cues', 'no picture and no sound — nothing to lay out',
               'A file of cues is an ordinary -i: the demuxer, its options and Start at all ' +
               'reach it. What it cannot be is a clip.\n\n' +
-              'Two things can be done with it. A subtitle stream on the Write stage travels ' +
-              'beside the picture as a track a player can turn off. A subtitles filter on ' +
-              'the Graph stage burns it into the image, which works in any container.',
+              'Three things can be done with it. A subtitle stream on the Write stage ' +
+              'travels beside the picture as a track a player can turn off. Burn in below ' +
+              'draws it over the whole canvas, which is right for cues written against the ' +
+              'finished programme. Burn in on a clip’s properties panel draws it on that ' +
+              'clip, on the file’s own clock — which is right for an .srt that came with ' +
+              'the shot, and is the one the viewer can show you.',
               doorTo('Write', 'write', 'Carry it as a track the player can turn off')),
         row('Burn in', div('src-demux', [
             el('span', {
@@ -613,6 +616,14 @@ function subtitleRows(input) {
 
 /// The short way to `subtitles=`, and it is short only in the sense that it
 /// knows the name of the filter and how to write the path.
+///
+/// **Over the whole canvas, which is a statement about the clock.** These cues
+/// are being drawn on the composite, where a cue at 00:01:30 is a minute and a
+/// half into what will be *written*. That is right for a file authored against
+/// the finished programme and wrong for one that came with a shot, and the
+/// other door — `Burn in` on a clip's properties panel — is the second, on that
+/// clip's own chain above the derivation's `setpts`. Nothing can ask a file
+/// which of the two it is, so both exist and each says what it is for.
 ///
 /// **What it places is an ordinary node**, at `COMPOSITE_POINT`, which is the
 /// same point the palette offers and the same one a measurement lands at. It

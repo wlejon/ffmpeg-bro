@@ -14,9 +14,19 @@
 // The panel is rebuilt from the model rather than kept in sync field by field.
 // It is a dozen controls, and a panel that can disagree with the picture is
 // worse than one that is redrawn.
+//
+// **Subtitles are here for one reason: this is where a clip is.** Burning a
+// track in is a filter node like any other and the Graph stage is where filter
+// nodes are placed — but *which* track, out of the three a recording carries,
+// is a question about the clip in front of you, and the answer has to be able
+// to name a stream index and a path without either being typed. So the button
+// is here and what it makes is an ordinary node over there.
 
 import { project } from './project.js';
 import { el, div, span, put, head } from './dom.js';
+import { kindOf, inputs } from './inputs.js';
+import * as graph from './graph/overlay.js';
+import { canBurn, subtitleOrdinal, burnParams, burnAnchor } from './export/subtitles.js';
 
 let panel = {};
 let hooks = {};
@@ -169,6 +179,8 @@ export function showTransform(clip) {
                            } } }),
         ]), mark('position')),
 
+        ...subtitleRows(clip, again),
+
         head('Crop'),
         controlRow('Left / Top', div('btns', [cropField('l'), cropField('t')]), mark('crop')),
         controlRow('Right / Bot', div('btns', [cropField('r'), cropField('b')]), mark('crop')),
@@ -185,6 +197,117 @@ export function showTransform(clip) {
 }
 
 const pc = (v) => (v * 100).toFixed(1);
+
+// ── subtitles, burned into this clip ───────────────────────────────────────
+//
+// Three decisions, and they are the whole of why this took a control rather
+// than a checkbox.
+//
+// **Whose track.** A recording carries three of them and the graph node has to
+// name one — `si=`, which counts *subtitle* streams and not streams, so the
+// second subtitle track of a file whose streams run video, audio, subtitle,
+// subtitle is `si=1` and never `si=3`. Every track the clip's own input carries
+// gets a row, named the way the Sources stage names it.
+//
+// **A control to turn it on**, because burning them into the picture and
+// writing them beside it are two different statements about the finished file
+// and nothing should choose between them for you. This one makes them part of
+// the picture; the Write stage's `+ Subtitle` writes them as a track a player
+// can switch off; a file can have both and they do not know about each other.
+//
+// **A track that came from a separate file** is offered here too, against the
+// clip it belongs to — an `.srt` next to `interview.mp4` is timed against
+// *interview.mp4*, which is the clock the burn-in point runs on. A file of cues
+// written for the finished programme is the other case, and it has the other
+// home: `Burn it into the picture` on the Sources stage puts it over the whole
+// canvas. Which of the two somebody has is not something either stage can ask
+// the file, so both doors exist and each says what it is for.
+//
+// What it places is an ordinary node — printed by the command bar, movable and
+// deletable on the Graph stage — and unlike the Sources stage's button this one
+// does not take you there, because the point of it is that the picture in front
+// of you changes.
+
+/// Every subtitle track this clip could burn in.
+function burnable(clip) {
+    const out = [];
+    const probe = clip.input && clip.input.probe;
+    for (const s of (probe && probe.streams) || []) {
+        if (s.kind !== 'subtitle') continue;
+        out.push({
+            label: `${s.index}: ${s.codec}` + (s.language ? ` (${s.language})` : ''),
+            note: s.title || '',
+            path: clip.input.path, ordinal: subtitleOrdinal(probe, s.index),
+            codec: s.codec, can: canBurn(s),
+        });
+    }
+    // Every file of cues open on the Sources stage, whatever it was opened for.
+    // Not filtered to the ones whose name looks like this clip's: a subtitle
+    // file is routinely named nothing like the video, and a list that guessed
+    // would hide the right answer more often than it saved a row.
+    for (const input of inputs) {
+        if (input === clip.input || kindOf(input) !== 'subtitles') continue;
+        const first = ((input.probe && input.probe.streams) || [])[0];
+        out.push({
+            label: input.name, note: first ? first.codec : '',
+            path: input.path, ordinal: 0,
+            codec: first ? first.codec : '', can: canBurn(first),
+        });
+    }
+    return out;
+}
+
+/// The node burning this track into this clip, or null.
+///
+/// Read out of the overlay rather than remembered on the clip, because the node
+/// is the fact: delete it on the Graph stage and this button has to come back
+/// up. Matched on what it *says* — the filename and the stream — so a node
+/// somebody typed by hand at the same point is recognised as the same thing,
+/// which is the difference between a button and a mode.
+function burnedIn(clip, track) {
+    const anchor = burnAnchor(clip.id);
+    const want = burnParams(track.path, track.ordinal);
+    return graph.inserts().find((rec) => {
+        if (rec.anchor !== anchor || rec.filter !== 'subtitles') return false;
+        const p = rec.params || {};
+        return p.filename === want.filename && String(p.si || '0') === String(want.si || '0');
+    }) || null;
+}
+
+function subtitleRows(clip, again) {
+    const list = burnable(clip);
+    if (!list.length) return [];
+    return [
+        // Named, and always: this is the one section on the panel that edits the
+        // primary clip rather than the selection, because a track belongs to a
+        // file and four selected clips are four files. A heading that said only
+        // "Subtitles" over a multi-selection would be the trap the top of this
+        // file is about.
+        head(`Subtitles · ${clip.name}`),
+        ...list.map((track) => {
+            const rec = burnedIn(clip, track);
+            const button = track.can
+                ? toggleButton(rec ? 'Burned in' : 'Burn in', !!rec, () => {
+                      if (rec) graph.removeInsert(rec.id);
+                      else graph.insert(burnAnchor(clip.id), 'subtitles',
+                                        { params: burnParams(track.path, track.ordinal) });
+                      again();
+                  }, 'data-burn')
+                : el('button', {
+                      cls: 'tiny', text: 'Burn in', disabled: true,
+                      title: `${track.codec} carries pictures of characters rather than ` +
+                             'characters. libavfilter’s subtitles filter is libass and ' +
+                             'refuses one by name — so this track can be carried as a ' +
+                             'stream on the Write stage, and cannot be drawn into the ' +
+                             'picture here.',
+                  });
+            return controlRow(track.label, div('btns', [
+                span(track.note, 'mono dim'),
+                button,
+            ]));
+        }),
+    ];
+}
 
 /// `outrankedBy` names the graph control that has taken this row's job, or is
 /// null. The row still works — the value goes into the model and the viewer

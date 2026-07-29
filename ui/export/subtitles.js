@@ -20,6 +20,12 @@
 // here on purpose — a burned-in subtitle is part of the picture, and a Write
 // stage that offered it would be claiming a decision it does not own.
 //
+// That third thing is also the only one the *viewer* can show, and the bottom
+// of this file is what a clip needs to place one: which stream, whether the
+// filter can draw it, and where in the run it goes. A clip's own track and a
+// programme-wide cue file are burned in at two different points because they
+// are on two different clocks — see `burnAnchor`.
+//
 // What is written here rather than anywhere else is the **escaping**, because
 // it is a trap with a very poor error message. A filtergraph separates a
 // filter's arguments with `:` and separates filters with `,`, so a Windows path
@@ -170,6 +176,71 @@ export function filterPath(path) {
     }
     return `'${out}'`;
 }
+
+/// Whether `subtitles=` can draw this track at all.
+///
+/// libavfilter's subtitles filter **is libass**: it decodes the track and
+/// expects characters, and a `dvdsub` or `hdmv_pgs_subtitle` track is pictures
+/// of characters. It refuses one by name rather than drawing nothing, and the
+/// probe carries `textSub` — libavcodec's own `AV_CODEC_PROP_TEXT_SUB` — so the
+/// control can say so before anything opens. The same fact decides whether the
+/// track can be *written* as text, and for the same reason.
+export const canBurn = (stream) => !!(stream && stream.kind === 'subtitle' && stream.textSub);
+
+/// Which subtitle stream of a file `si=` means.
+///
+/// **It counts subtitle streams, not streams.** The second subtitle track of a
+/// file whose streams are video, audio, subtitle, subtitle is `si=1` and its
+/// stream index is 3, and handing the filter the stream index draws the wrong
+/// language or nothing at all. Nothing about the number says which it is, which
+/// is exactly the sort of thing to work out once.
+export function subtitleOrdinal(probe, index) {
+    let n = 0;
+    for (const s of (probe && probe.streams) || []) {
+        if (s.kind !== 'subtitle') continue;
+        if (s.index === index) return n;
+        n++;
+    }
+    return -1;
+}
+
+/// The `subtitles` node that burns `path`'s `ordinal`-th subtitle track in.
+///
+/// `si` is written only where it is not the default, so what the command bar
+/// prints for the ordinary case — a file with one subtitle track, or a `.srt`
+/// beside the video — is what a person would have typed.
+export function burnParams(path, ordinal = 0) {
+    const params = { filename: filterPath(path) };
+    if (ordinal > 0) params.si = String(ordinal);
+    return params;
+}
+
+/// Where a clip's own subtitles go on the graph, and it is not a free choice.
+///
+/// **After the decode, because that is the clock the cues are on.** A track
+/// inside a file, and a `.srt` written for that file, are both timed against
+/// *the file* — and the derivation's `setpts` is what turns the file's clock
+/// into the edit's, so anything above it sees the timestamps the cues were
+/// written against and anything below it sees the moment the clip was dragged
+/// to. Burning in after the scale would move every cue by wherever the clip
+/// happens to sit on the timeline.
+///
+/// It is also the picture's own size and its own pixel format, so the text is
+/// drawn once and scaled with the shot it belongs to rather than at output size
+/// over a clip that may be a quarter of the frame.
+///
+/// A file of cues written against the *finished programme* is the other case
+/// and it has the other home: `COMPOSITE_POINT`, over the whole canvas, which
+/// is what `ui/sources.js` places.
+///
+/// The one place this point is awkward is an input told to keep its pictures on
+/// the graphics card: `after-decode` is above the derivation's `hwdownload`,
+/// because that is what "after the decode" means, so a burn-in there is handed
+/// a frame libass cannot draw on. Nothing here guards it, because the two
+/// things that would notice already say so in their own words — the render with
+/// libavfilter's message, and the settle with "these filters leave the picture
+/// on the graphics card", which the clip wears as its `fx` badge.
+export const burnAnchor = (clipId) => `clip:${clipId}/after-decode`;
 
 // There was an `isSubtitlePath(path)` here, over a list of extensions built by
 // asking libavformat which muxers declare a subtitle codec and neither a video
