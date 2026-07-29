@@ -428,7 +428,11 @@ suite stacks them:
   that point, so it stays honest as you zoom in. There is always one empty lane
   above the highest one in use: dragging a clip into it is how you add a track,
   and the lanes share a fixed height between them so the waveform never gets
-  pushed off the bottom.
+  pushed off the bottom. A clip stored sideways gets upright, portrait slots:
+  the strip is cut to the *displayed* aspect and the pictures are turned to
+  match, which is the one place anything here rotates pixels rather than the
+  thing they are drawn on — a strip is a finished image with nothing left
+  downstream to turn it.
 - **A1** the waveform — peak envelope over an RMS body, so you can see where
   the sound is before you hear it.
 
@@ -2185,14 +2189,6 @@ the order shown, carries libavcodec's own option table and prints as one
 
 Honest list of what does not work:
 
-- **Rotation in the filmstrip.** A clip stored sideways now plays, lays out and
-  exports the right way up. The timeline's *thumbnails* are the one place the
-  display matrix does not reach: `bro.media.thumbnails` decodes with a reader of
-  its own and hands back pictures at the coded size, so a phone clip shot upright
-  has a strip of landscape frames lying on their side underneath a portrait
-  picture. It is wrong for exactly the reason laying the clip out at the coded
-  size was wrong, and the fix belongs in bro's media analysis, which is handed
-  the rotation and does not apply it.
 - **Filters on playback.** A filter you put on the graph runs when you render,
   in the export preview, and in the node's own preview on the Graph stage. The
   *viewer* cannot show it: playback is the engine decoding into a `<video>` and
