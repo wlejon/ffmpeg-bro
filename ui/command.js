@@ -146,6 +146,29 @@ export function parts() {
     const g = filtergraph(spec, specSources(), { overlay: overlayState() });
     const colour = outputColor(spec);
 
+    /// The graph a pass prints, which for a version is not the render's.
+    ///
+    /// **Only the chains differ, and that is a fact rather than an economy.** A
+    /// version is the same edit at another size: the same clips out of the same
+    /// `-i`s, so the same input list, the same numbering and the same output
+    /// labels — everything the `-map`s are planned against. What changes is
+    /// what the chains scale *to*, which is inside the `-filter_complex`
+    /// argument and nowhere else.
+    ///
+    /// Derived here rather than carried on the pass because `derive.js` is a
+    /// pure function of a spec: given the same size and the same rectangles it
+    /// cannot come to a different graph from the one `buildSpec` attached, and
+    /// a printed string that was handed over instead of worked out is the one
+    /// thing this bar exists not to be.
+    const graphOf = (pass) => {
+        if (!pass || !pass.clips || !pass.clips.length) return g;
+        return filtergraph(Object.assign({}, spec, {
+            width: pass.width || spec.width,
+            height: pass.height || spec.height,
+            clips: pass.clips,
+        }), specSources(), { overlay: overlayState() });
+    };
+
     const pre = ['ffmpeg'];
     if (settings.scaler && settings.scaler !== 'bicubic')
         pre.push('-sws_flags', settings.scaler);
@@ -458,8 +481,13 @@ export function parts() {
     // when the extension disagrees. The render is told which muxer by name, so
     // a command that left it to be guessed from the filename would be a
     // different invocation from the one being run.
-    if (spec.format) out.push('-f', spec.format);
-    out.push(arg(spec.path || `out.${outputExt()}`));
+    // The pass's own muxer and its own path, where it has them. A version is
+    // another output of the same render, so this is the one place the two
+    // invocations genuinely part company — and a bar that printed the master's
+    // filename twice would be printing a command that writes one file.
+    const format = (pass && pass.format) || spec.format;
+    if (format) out.push('-f', format);
+    out.push(arg((pass && pass.path) || spec.path || `out.${outputExt()}`));
     return out;
     };
 
@@ -468,8 +496,9 @@ export function parts() {
     // renderer was handed about how many times the range is walked.
     const passes = spec.passes && spec.passes.length ? spec.passes : [null];
     const tails = passes.map(tail);
+    const graphs = passes.map(graphOf);
 
-    return { spec, graph: g, graphUsed, pre, inputs,
+    return { spec, graph: g, graphs, graphUsed, pre, inputs,
              out: tails[tails.length - 1], tails, passes };
 }
 
@@ -494,12 +523,19 @@ function commandText() {
     const cap = describing();
     if (cap) return cap.pre.concat(cap.inputs, cap.out).join(' ');
     const p = parts();
-    const head = p.pre.concat(p.inputs);
-    if (p.graphUsed) head.push('-filter_complex', arg(p.graph.chains.join(';')));
     // One line per pass, in order, because that is how a two-pass render is run
     // by hand. Pasted into a shell they run one after the other, which is what
     // this binary does with them in one job.
-    return p.tails.map((t) => head.concat(t).join(' ')).join('\n');
+    //
+    // The head is rebuilt per line rather than shared, because a version's
+    // `-filter_complex` scales to its own size: the `-i`s are the same and the
+    // graph is not.
+    return p.tails.map((t, i) => {
+        const head = p.pre.concat(p.inputs);
+        if (p.graphUsed) head.push('-filter_complex',
+                                   arg((p.graphs[i] || p.graph).chains.join(';')));
+        return head.concat(t).join(' ');
+    }).join('\n');
 }
 
 export function draw() {
@@ -553,7 +589,8 @@ export function draw() {
                 bits.push(span('-filter_complex' + GAP, 'cmd-exact'));
                 // Dimmed, and on its own lines when opened, because this is the
                 // half that is a translation rather than a transcript.
-                bits.push(span(arg(p.graph.chains.join(open ? ';\n  ' : ';')) + GAP, 'cmd-equiv'));
+                bits.push(span(arg((p.graphs[i] || p.graph).chains.join(open ? ';\n  ' : ';')) +
+                               GAP, 'cmd-equiv'));
             }
             bits.push(span(t.join(' ') + (i + 1 < p.tails.length ? '\n' : ''), 'cmd-exact'));
         });

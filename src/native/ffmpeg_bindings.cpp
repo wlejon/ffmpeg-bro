@@ -537,6 +537,24 @@ std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spe
     return out;
 }
 
+/// A `clips` array off whatever object carries one — the spec, or one of its
+/// passes. Absent and empty read the same, which is what lets a pass say
+/// nothing about the stack and get the render's.
+std::vector<ExportClip> clipsFromJs(JSContext* ctx, JSValueConst o) {
+    std::vector<ExportClip> out;
+    JSValue arr = JS_GetPropertyStr(ctx, o, "clips");
+    if (JS_IsArray(arr)) {
+        const uint32_t len = arrayLength(ctx, arr);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, arr, i);
+            if (JS_IsObject(item)) out.push_back(clipFromJs(ctx, item));
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, arr);
+    return out;
+}
+
 /// `spec.passes` — a render that is more than one render.
 ///
 /// Every field is "the render's unless this says otherwise", so an entry of
@@ -563,6 +581,12 @@ std::vector<ExportPass> passesFromJs(JSContext* ctx, JSValueConst spec) {
                 p.videoCodec = strProp(ctx, item, "videoCodec", "");
                 p.videoOptions = optionsFromJs(ctx, item, "videoOptions");
                 p.audioOptions = optionsFromJs(ctx, item, "audioOptions");
+                // A size and the rectangles that go with it: the other thing a
+                // pass is for, which is a second encode of the same edit rather
+                // than a second walk of the same encode.
+                p.width = static_cast<int>(numProp(ctx, item, "width", 0));
+                p.height = static_cast<int>(numProp(ctx, item, "height", 0));
+                p.clips = clipsFromJs(ctx, item);
                 p.discard = boolProp(ctx, item, "discard", false);
                 out.push_back(std::move(p));
             }
@@ -684,17 +708,7 @@ JSValue js_renderStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     if (!outputFromJs(ctx, spec, &s, &bad))
         return JS_ThrowTypeError(ctx, "%s", bad.c_str());
 
-    std::vector<ExportClip> clips;
-    JSValue arr = JS_GetPropertyStr(ctx, spec, "clips");
-    if (JS_IsArray(arr)) {
-        const uint32_t len = arrayLength(ctx, arr);
-        for (uint32_t i = 0; i < len; ++i) {
-            JSValue item = JS_GetPropertyUint32(ctx, arr, i);
-            if (JS_IsObject(item)) clips.push_back(clipFromJs(ctx, item));
-            JS_FreeValue(ctx, item);
-        }
-    }
-    JS_FreeValue(ctx, arr);
+    const std::vector<ExportClip> clips = clipsFromJs(ctx, spec);
 
     std::string err;
     uint64_t jobNumber = 0;

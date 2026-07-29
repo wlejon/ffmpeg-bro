@@ -30,6 +30,7 @@ import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
 import { kindOf, describeKind, schemeOf, protocolLinked, teeSpec,
          newDestination } from './destination.js';
+import { newVersion, versionSize } from './versions.js';
 
 let panes = {};
 let hooks = {};
@@ -129,6 +130,7 @@ function outputRows() {
     else rows.push(...oneTargetRows(kind));
 
     rows.push(...formatRows());
+    rows.push(...versionRows());
     rows.push(head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
         'data-f': 'formatopts',
         cls: 'section-head ex-toggle',
@@ -272,6 +274,123 @@ function teeRows() {
         'value have to be escaped — and then the shell quotes the lot again, which is a ' +
         'second and separate layer. The command bar prints what runs.')));
     return rows;
+}
+
+// ── the same edit, written twice ────────────────────────────────────────────
+//
+// Under the destination and not among the tee rows, because it is the question
+// people arrive at the tee rows looking for and do not find. `tee` is one
+// encode to several places; this is several encodes of one edit. The heading
+// says which is which, once, where somebody about to pick the wrong one is
+// standing — see ui/export/versions.js.
+
+function versionRows() {
+    const list = settings.versions || [];
+    const rows = [head(`${list.length ? '▾' : '▸'} Also write · ${list.length}`, {
+        'data-f': 'versions',
+        cls: 'section-head ex-toggle',
+        // No fold of its own: the list *is* the disclosure. Empty it is one
+        // line, and a render with a proxy configured is a render where that is
+        // worth seeing without opening anything.
+        on: { click: () => { if (!list.length) addVersion(); } },
+    })];
+
+    if (!list.length) {
+        rows.push(row('', note(
+            'One encode to several places is the tee muxer, above. This is the other one: ' +
+            'the same edit encoded again at another size — a 1080p master and a 720p proxy, ' +
+            'which no single encoder can produce, because an encoder has one frame size.')));
+        return rows;
+    }
+
+    list.forEach((v, i) => {
+        const target = el('input', {
+            cls: 'wide', 'data-f': `ver-path-${i}`, type: 'text', value: v.path,
+            placeholder: 'where this one goes',
+            on: { change: () => { v.path = target.value.trim(); hooks.changed(); } },
+        });
+        const muxer = el('input', {
+            cls: 'wide', 'data-f': `ver-format-${i}`, type: 'text', value: v.format,
+            placeholder: 'the render’s, unless this says otherwise',
+            on: { change: () => { v.format = muxer.value.trim(); hooks.changed(); } },
+        });
+        // One side is enough and the other is worked out from the render's
+        // aspect — see `versionSize`. Both blank is not a version at all, which
+        // is what `activeVersions` refuses: a second encode of exactly the
+        // master is a file copy done the expensive way.
+        const w = el('input', {
+            cls: 'num', 'data-f': `ver-w-${i}`, type: 'number', min: '0',
+            value: String(v.width || ''), placeholder: 'auto',
+            on: { change: () => {
+                v.width = Math.max(0, Math.round(Number(w.value) || 0));
+                hooks.changed();
+            } },
+        });
+        const h = el('input', {
+            cls: 'num', 'data-f': `ver-h-${i}`, type: 'number', min: '0',
+            value: String(v.height || ''), placeholder: 'auto',
+            on: { change: () => {
+                v.height = Math.max(0, Math.round(Number(h.value) || 0));
+                hooks.changed();
+            } },
+        });
+
+        const size = versionSize(v, settings.width || project.width || 1920,
+                                 settings.height || project.height || 1080);
+        rows.push(head(`Version ${i + 1}`, { cls: 'section-head' }));
+        rows.push(row('Size', btns([w, span('×', 'dim'), h])));
+        rows.push(row('', note(v.width && v.height
+            ? `${size.width} × ${size.height}`
+            : `${size.width} × ${size.height} — the other side follows the render’s aspect`)));
+        rows.push(row('-f', muxer));
+        rows.push(row('To', target));
+        rows.push(row('', btns([
+            el('button', { cls: 'tiny', 'data-f': `ver-drop-${i}`, text: 'Remove',
+                           on: { click: () => {
+                               settings.versions.splice(i, 1);
+                               hooks.changed();
+                           } } }),
+        ])));
+    });
+
+    // What is wrong with the list is said in `warnings()`, above the Render
+    // button, and not again here. Two encodes aimed at one path is a render
+    // that succeeds and is wrong, which is precisely what that list is; a
+    // second copy of the sentence beside the row would be a second place that
+    // has to be kept saying the same thing.
+    rows.push(row('', btns([
+        el('button', { cls: 'tiny', 'data-f': 'ver-add', text: '+ Version',
+                       on: { click: addVersion } }),
+    ])));
+    rows.push(row('', note(
+        'Another whole encode of the same edit: the muxer, the codec, the rate control, ' +
+        'the streams and the range are this render’s, and only the size and where it goes ' +
+        'are its own. CRF is a quality target rather than a bitrate, so the smaller one ' +
+        'comes out smaller without being told to.')));
+    return rows;
+}
+
+/// A version pre-filled with the obvious first answer: half the render's width,
+/// beside the render's own file. Both are guesses somebody will change — the
+/// point is that a row arrives meaning something rather than empty, since an
+/// empty one is not a version and would be silently skipped.
+function addVersion() {
+    const w = settings.width || project.width || 1920;
+    const half = Math.max(16, Math.round(w / 2) & ~1);
+    settings.versions.push(newVersion({
+        width: half,
+        path: settings.path ? proxyPath(settings.path, half) : '',
+    }));
+    hooks.changed();
+}
+
+/// `master.mp4` at 960 wide is `master-960.mp4`. The number rather than the
+/// word "proxy", because a render can have several versions and two files
+/// called proxy is the failure this is trying to keep somebody out of.
+function proxyPath(path, width) {
+    const cut = String(path).replace(/(\.[^./\\]*)$/, '');
+    const ext = String(path).slice(cut.length);
+    return `${cut}-${width}${ext}`;
 }
 
 // ── writing a run of files ─────────────────────────────────────────────────

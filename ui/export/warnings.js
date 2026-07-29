@@ -12,6 +12,7 @@ import { codecOf, labelOf } from './streams.js';
 import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
          containerOf, parseCopy } from './copy.js';
 import { kindOf, schemeOf, protocolLinked } from './destination.js';
+import { versionProblems } from './versions.js';
 import { readsInput, readStream, subtitleCodecsOf,
          defaultSubtitleCodec } from './subtitles.js';
 import { parsePad, isPad } from './pads.js';
@@ -283,6 +284,27 @@ function destinationWarnings() {
         if (usable.length === 1)
             out.push('one destination through tee is one destination with a layer of ' +
                      'escaping over it — pick that muxer directly unless a second is coming');
+    }
+
+    // The versions, which are destinations too — and the one thing that can go
+    // wrong with a second output is the whole of what this list is about: it
+    // succeeds, and one of the two files it paid for is not there afterwards.
+    out.push(...versionProblems());
+    for (const v of settings.versions || []) {
+        if (!v.path) continue;
+        const vs = schemeOf(v.path);
+        if (vs && !protocolLinked(vs))
+            out.push(`this build has no ${vs} output protocol, so the version at ` +
+                     `${v.path} will fail at open — after the render it comes after ` +
+                     'has been written, which is the expensive way to find out');
+        // Said here rather than refused in `activeVersions`, which drops it
+        // silently: a row that is filled in except for the one field that
+        // makes it a version is somebody halfway through, and a render that
+        // quietly wrote one file where the stage showed two is the failure.
+        if (!v.width && !v.height && !v.format)
+            out.push(`the version at ${v.path} is the same size and the same muxer as the ` +
+                     'render, so it is a second encode of the identical file — give it a ' +
+                     'size, or take it off');
     }
 
     const scheme = schemeOf(settings.path);

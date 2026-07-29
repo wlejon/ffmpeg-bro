@@ -136,6 +136,15 @@ runs), `export_copy` (stream copy), `export_subtitle`, `export_compositor`,
 shared libav helpers). `ffmpeg_job.h` owns the single job slot shared by renders
 and recordings, and documents the ordering rules around terminal status.
 
+`ExportPass` is *one run over the frames, as a set of overrides on the render*,
+and it now carries both reasons a render is several: a two-pass encode (two
+walks, one output) and a **version** (another output at another size —
+`ui/export/versions.js`). Two sizes cannot come out of one encoder, which is
+precisely what separates a version from `-f tee`. A pass at its own size brings
+its own `clips`, because a rectangle is in output pixels; `ui/export/spec.js`
+builds each version by recursing through `buildSpec()`, so a version is what
+this application *would* render at that size rather than the master scaled.
+
 A **live session** (`LiveSettings` in `ffmpeg_capture.h`) is the same device
 reading with the writer taken off the end: it publishes pads into a `LiveTap`
 (`live_tap.h`) and `<video src="/@live/<id>/<pad>">` plays one. It holds no job

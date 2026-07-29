@@ -1319,7 +1319,7 @@ about, because "two outputs" can mean two different things and only one of them
 is this: `tee` sends the *same packets* to several muxers, so a Matroska file
 and an MPEG-TS stream carry the same bitstream in different wrappers, at the
 cost of one encode. Two outputs at *different settings* is a different feature —
-two encodes — and is not built.
+two encodes — and it is the next section.
 
 The destinations are a list: a muxer, a target, and that destination's own
 options. The `-f tee` argument is **built from the list rather than typed**,
@@ -1342,6 +1342,58 @@ sent somewhere else. The Capture stage takes a tee argument in its own path
 field and says how many destinations it comes to; the editor for the argument is
 on the Write stage, because a second copy of the escaping would be a second
 answer to it.
+
+### The same edit, written twice
+
+**Also write** is the other answer to "two outputs", and the one people arrive at
+the tee rows looking for: a 1080p master and a 720p proxy, out of one job. It
+cannot be a tee, and the reason is not a limitation of this application —
+**an encoder has one frame size**, so two sizes cannot come out of one encoder,
+and `tee` is one encoder by definition. What it costs is what it is: two encodes,
+twice the CPU, two genuinely different bitstreams.
+
+| | |
+|---|---|
+| `-f tee` | one encode, several places — same packets, different wrappers |
+| Also write | several encodes, one edit — different sizes, different files |
+
+**A version is a size and somewhere to put it, and nothing else.** Not a second
+Write stage: the muxer, the codec, the rate control, the stream list and the
+range are the render's, because what makes a proxy a proxy is that it is *the
+same render, smaller*. CRF is a quality target rather than a bitrate, so the
+smaller one comes out smaller without being told to. The one thing offered
+beside the size is the muxer, because a proxy in another container is a real
+thing to want — and left blank it is read off the extension, which is the same
+question libavformat asks of a filename.
+
+Give one side of the size and the other follows the render's aspect: a proxy is
+"720 high" far more often than it is "1280 by 720".
+
+**It is passes, not jobs.** `ExportPass` already means "one run over the frames,
+as a set of overrides", which is exactly what a second output is — so two
+versions are one thing to the person who asked for them: one Stop button, one
+row of progress, one answer at the end. The status names which output it is on
+as well as which pass, because "43%" of the first of three files is a lie by
+omission. Two versions *and* a two-pass encode is four walks, each output
+measured and then spent, each with a statistics log of its own — a bitrate map
+measured on 1080p pictures is not a smaller version of the 720p decision.
+
+**The rectangles travel with the size.** A clip filling a 1920-wide canvas is
+1920 wide, and composited unchanged onto a 1280-wide one it would be cropped
+rather than fitted. So a version carries its own stack at its own scale, built
+by the same `buildSpec()` that builds the render — a version is *what this
+application would render if you had asked for that size*, by construction, and
+not the master scaled afterwards. That is also why it is one resample rather
+than two: each picture goes from its source straight to the size it is shown at.
+
+The command bar prints a whole invocation per version, each with its own
+`-filter_complex` scaling to its own size and its own filename, because that is
+what runs. The Graph stage draws the render's own graph; a version's differs
+only in what its `scale` filters scale to.
+
+Two versions aimed at one path is on the warnings list rather than refused: it
+succeeds, and one of the two files it paid for is gone. So is a version with no
+size and no muxer of its own, which is a second encode of an identical file.
 
 ### What comes back from each
 
@@ -2548,11 +2600,6 @@ Honest list of what does not work:
   cues the way the keyframe strip draws a copied picture. There is nothing to
   snap to, so a strip would be decoration; a list of where the cues are would
   not be, and it is not built.
-- **Two outputs at different settings.** `-f tee` is one encode to several
-  destinations, which is what the Write stage builds. The same render written
-  *twice* — a 1080p master and a 720p proxy — is two encodes and is a different
-  feature; the `passes` list already expresses it as two walks over the range in
-  one job, and no control offers it.
 - **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
   `<video>` drives its clock from decoded pictures, so a file with exactly one
   has nothing to advance through, and the element shows the frame and reports

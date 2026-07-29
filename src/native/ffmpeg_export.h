@@ -348,6 +348,32 @@ struct ExportPass {
     std::vector<ExportOption> videoOptions;
     std::vector<ExportOption> audioOptions;
 
+    /// The frame this pass is encoded at. Zero is the render's.
+    ///
+    /// **A pass at a different size is the second thing `passes` is for**, and
+    /// it is not a two-pass encode: a 1080p master and a 720p proxy are two
+    /// encodes of one edit, which is what `tee` is *not* — `tee` is one encode
+    /// to several places, and two sizes cannot come out of one encoder.
+    ///
+    /// The rectangles go with it, in `clips`, rather than the composite being
+    /// made at the render's size and scaled down here. One resample instead of
+    /// two: each picture goes from its source straight to the size it is shown
+    /// at, which is what the render already does for the master. Handing over
+    /// only a size and letting the writer's scaler take the difference would
+    /// have been a smaller change and a softer picture.
+    int width = 0;
+    int height = 0;
+
+    /// The stack this pass composites, in its own pixels. Empty is the render's.
+    ///
+    /// The list has to travel with the size because a rectangle is in output
+    /// pixels: a clip filling a 1920-wide canvas is `w: 1920`, and composited
+    /// unchanged onto a 1280-wide one it would be cropped rather than fitted.
+    /// Scaling them here instead of in the caller was the alternative, and it
+    /// would have put a second implementation of `buildSpec`'s `sx`/`sy` where
+    /// nothing could compare the two.
+    std::vector<ExportClip> clips;
+
     /// Write through the `null` muxer: run everything, keep nothing.
     ///
     /// This is `-f null -` and it is what an analysis pass wants — the point of

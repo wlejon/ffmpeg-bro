@@ -10,7 +10,8 @@ import { inputs as documentInputs, specInputs, indexOf as inputIndex,
          lengthOf as inputLength, specInputInfo } from '../inputs.js';
 import * as viewer from '../viewer.js';
 import { settings, outputFps, outputExt } from './state.js';
-import { muxerInfo } from './capabilities.js';
+import { muxerInfo, muxerForExtension } from './capabilities.js';
+import { activeVersions, versionSize } from './versions.js';
 import { videoOptions, audioOptions, forceKeyFrames } from './options.js';
 import { streamSpecs } from './streams.js';
 import { outputTarget } from './destination.js';
@@ -166,6 +167,101 @@ export function passesFor(over = {}) {
     ];
 }
 
+/// The same edit again, at another size and under another name.
+///
+/// **Each version is a whole second spec, built by this same function**, and
+/// only then flattened into an `ExportPass`. Deriving one by hand — scaling the
+/// rectangles here, re-printing the graph there — would be a second
+/// implementation of `buildSpec` living beside the first, and the two would
+/// come to disagree the first time a placement rule changed. So the recursion
+/// is the point rather than an economy: a version is *what this application
+/// would render if you had asked for that size*, by construction.
+///
+/// The pass carries the size, the rectangles and the graph, because those three
+/// are the whole of what a size changes. Everything else — the codec, the rate
+/// control, the streams, the range — is left absent and read as the render's,
+/// which is what makes a proxy the same render rather than a second one.
+///
+/// **Two versions and a two-pass encode is four walks, and this composes them
+/// that way.** Each output gets the render's own pass list applied to it, so
+/// the master's two passes are followed by the proxy's two, each with its own
+/// statistics log — which is what a two-pass encode of a different size needs,
+/// since the log is a record of where the bitrate went in *those* pictures.
+function versionPasses(over, base) {
+    // **A render aimed somewhere else has no versions.** Both halves of the A/B
+    // preview are this render written to a temp file, and a proxy is a second
+    // output *beside this render's own* — so a preview that carried one would
+    // spend a second encode writing three seconds of timeline over the file
+    // somebody is keeping. Read off `over.path` rather than a flag of its own
+    // because that is the fact in question: a caller that named the
+    // destination is not asking for this destination's companion.
+    if (over.path !== undefined) return base;
+    const list = activeVersions();
+    if (!list.length) return base;
+
+    // What one output is: the base list if there is one, or a single pass that
+    // overrides nothing. `[{}]` and `undefined` are the same render, which is
+    // what makes this safe to build unconditionally.
+    const walks = base && base.length ? base : [{}];
+    // Said in full on every pass, because with more than one output "pass 2" on
+    // its own does not say which file is being written — and the status line
+    // has room for one label.
+    const label = (which, w, i) =>
+        walks.length > 1 ? `${which} — ${w.label || `pass ${i + 1}`}` : which;
+
+    const out = walks.map((w, i) => Object.assign({}, w, { label: label('the master', w, i) }));
+    for (const v of list) {
+        // Built with the version's size in hand, so every rectangle and every
+        // chain of the filter graph is that version's rather than the master's
+        // scaled afterwards.
+        const size = versionSize(v, over.width || settings.width || project.width || 1920,
+                                 over.height || settings.height || project.height || 1080);
+        const sub = buildSpec(Object.assign({}, over, {
+            width: size.width, height: size.height,
+            // Not `path`: naming one is what tells this function it is building
+            // a preview rather than the render, and a version is only ever the
+            // render's companion.
+            passes: null,
+        }));
+        for (let i = 0; i < walks.length; i++) {
+            const w = walks[i];
+            out.push(Object.assign({}, w, {
+                label: label(`${sub.width}×${sub.height}`, w, i),
+                path: v.path,
+                format: v.format || formatFor(v.path),
+                width: sub.width,
+                height: sub.height,
+                clips: sub.clips,
+                filterGraph: sub.filterGraph,
+                filterInputs: sub.filterInputs,
+                // A two-pass version keeps its statistics somewhere of its own.
+                // Sharing the master's log would have pass 2 of the proxy
+                // spending a bitrate map measured on pictures three times the
+                // size, which is not a smaller version of the same decision —
+                // it is a different one.
+                videoOptions: w.videoOptions && w.videoOptions.passlogfile
+                    ? Object.assign({}, w.videoOptions,
+                                    { passlogfile: `${w.videoOptions.passlogfile}-${v.id}` })
+                    : w.videoOptions,
+            }));
+        }
+    }
+    return out;
+}
+
+/// The muxer for a version that named none: the same question libavformat asks
+/// of a filename, asked here so the answer is on the pass rather than left to
+/// be guessed twice.
+function formatFor(path) {
+    const ext = String(path || '').replace(/^.*\./, '');
+    // Falling back to the render's muxer, **except when that muxer is `tee`**.
+    // A tee's "path" is a list of destinations with an escaping language over
+    // it, and a version has one plain path; handing it `tee` would open a
+    // muxer that reads its filename as something it is not.
+    const mine = settings.container === 'tee' ? '' : settings.container;
+    return (ext && muxerForExtension(ext)) || mine || '';
+}
+
 /// Everything the renderer needs.
 ///
 /// Exported because the headless test builds one directly: driving the form
@@ -294,7 +390,13 @@ export function buildSpec(over = {}) {
         threads: settings.threads,
         threadType: settings.threadType,
         shortest: settings.shortest,
-        passes: over.passes !== undefined ? over.passes : passesFor(over),
+        // Two reasons a render is more than one run over the frames, composed
+        // in that order: a two-pass encode is two walks of one output, and a
+        // version is another output. `null` is how the recursion inside
+        // `versionPasses` says "this one, on its own" without being read as
+        // "the settings' passes".
+        passes: over.passes !== undefined
+            ? (over.passes || undefined) : versionPasses(over, passesFor(over)),
         videoOptions: over.videoOptions !== undefined
             ? over.videoOptions : videoOptions(vcodec, over),
         audioOptions: over.audioOptions !== undefined ? over.audioOptions : audioOptions(acodec),

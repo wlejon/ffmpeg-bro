@@ -1484,6 +1484,158 @@ console.log('\nseveral destinations at once');
     S.destinations = [];
 }
 
+// ── the same edit, written twice ────────────────────────────────────────────
+//
+// The other half of the question above and the one it is mistaken for: `tee`
+// is one encode to several places, a version is several encodes of one edit.
+// Which means the check that matters is the one `tee` cannot pass — two files
+// at two *sizes*, out of one job.
+
+console.log('\na version is the same edit at another size');
+{
+    A.shell.goTo('write');
+    const wasW = S.width, wasH = S.height, wasOut = S.rangeOut, wasPath = S.path;
+    const wasContainer = S.container;
+    S.container = 'mp4';
+    S.width = 640; S.height = 360; S.rangeOut = 0.4;
+    S.path = `${bro.appDir}/../out/uivmaster.mp4`;
+    S.destinations = [];
+    S.versions = [];
+    A.exporter.redraw();
+    pump(40);
+
+    // The list is a control, and the button fills the first row in rather than
+    // adding an empty one: a version with nothing on it is not a version.
+    const add = q('[data-f="versions"]');
+    ok(!!add, 'the Also-write section is on the Write stage');
+    add.click();
+    pump(40);
+    same(S.versions.length, 1, 'and opening it starts a version');
+    same(S.versions[0].width, 320, 'at half the render’s width');
+    ok(/uivmaster-320\.mp4$/.test(S.versions[0].path),
+       `beside the render’s own file (${S.versions[0].path})`);
+
+    // One side given, the other worked out from the render's aspect. 640×360 is
+    // 16:9, so 320 wide is 180 high and nobody has to say so.
+    let spec = A.exporter.buildSpec();
+    same(spec.passes.length, 2, 'the render is two passes: the master and the version');
+    ok(!spec.passes[0].path, 'the master’s pass overrides no path — it is the render');
+    same(spec.passes[1].width, 320, 'and the version’s is its own width');
+    same(spec.passes[1].height, 180, 'with the height taken from the render’s aspect');
+    same(spec.width, 640, 'while the render itself is untouched');
+
+    // **The rectangles travel with the size.** A clip filling a 640-wide canvas
+    // is `w: 640`, and composited unchanged onto a 320-wide one it would be
+    // cropped rather than fitted — so the pass carries its own stack, at its own
+    // scale, and this is the check that says so.
+    ok(spec.passes[1].clips.length === spec.clips.length,
+       'the version composites the same clips');
+    const big = spec.clips.find((c) => c.w > 0);
+    const small = spec.passes[1].clips.find((c) => c.id === big.id);
+    ok(!!small && Math.abs(small.w - big.w / 2) <= 1,
+       `at half the width (${big.w} → ${small && small.w})`);
+
+    // Both consumers of the spec, which must not disagree with it or with each
+    // other: two whole invocations, each scaling to its own size and naming its
+    // own file.
+    const cmd = A.command.currentCommand().split('\n');
+    same(cmd.length, 2, 'the command bar prints two invocations');
+    ok(cmd[0].indexOf('640x360') >= 0 && cmd[0].indexOf('uivmaster.mp4') >= 0,
+       'the first at the render’s size, to the render’s file');
+    ok(cmd[1].indexOf('320x180') >= 0 && cmd[1].indexOf('uivmaster-320.mp4') >= 0,
+       'the second at the version’s size, to the version’s file');
+    ok(cmd[1].indexOf('scale=320:180') >= 0,
+       'and the version’s -filter_complex scales to the version');
+
+    // Now run it, which is the only thing that proves any of the above.
+    {
+        let started = '';
+        try { bro.ffmpeg.render.start(spec); } catch (e) { started = String(e); }
+        ok(!started, `the renderer took it (${started || 'accepted'})`);
+        if (!started) {
+            waitFor('the two-version render',
+                    () => bro.ffmpeg.render.poll().state !== 'running', 90000);
+            const st = bro.ffmpeg.render.poll();
+            ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+            const a = bro.ffmpeg.probe(S.path);
+            const b = bro.ffmpeg.probe(S.versions[0].path);
+            ok(!!a.video && !!b.video, 'both files carry a picture');
+            same(a.video.width, 640, 'the master is the render’s size');
+            same(b.video.width, 320, 'and the version is its own');
+            same(b.video.height, 180, 'both sides of it');
+            // One job, one Stop button, one terminal status — which is the whole
+            // reason this is passes and not two renders.
+            ok(st.passes >= 2, `reported as one job of ${st.passes} passes`);
+        }
+    }
+
+    // A muxer of its own, guessed from the extension the way libavformat guesses
+    // from a filename — so a proxy in another container needs nothing typed.
+    S.versions[0].path = `${bro.appDir}/../out/uivproxy.mkv`;
+    A.exporter.redraw();
+    pump(20);
+    spec = A.exporter.buildSpec();
+    same(spec.passes[1].format, 'matroska',
+         'a version’s muxer is read off its extension when it names none');
+    S.versions[0].format = 'mpegts';
+    spec = A.exporter.buildSpec();
+    same(spec.passes[1].format, 'mpegts', 'and a named one wins');
+    S.versions[0].format = '';
+
+    // **Two encodes aimed at one path is the failure this feature can produce**,
+    // and it is exactly the shape the warnings list is for: it succeeds, and one
+    // of the two files it paid for is gone.
+    S.versions[0].path = S.path;
+    A.exporter.redraw();
+    pump(20);
+    ok(A.exporter.currentWarnings().some((w) => /writes where the render itself writes/.test(w)),
+       'a version aimed at the render’s own path is called out');
+    S.versions[0].path = `${bro.appDir}/../out/uivproxy.mp4`;
+
+    // And a version that is the render — no size, no muxer — is a second encode
+    // of an identical file. Refused as a *render* by `activeVersions` and said
+    // out loud, because a stage showing two outputs and writing one is worse
+    // than either.
+    S.versions[0].width = 0; S.versions[0].height = 0;
+    A.exporter.redraw();
+    pump(20);
+    same(A.exporter.buildSpec().passes, undefined,
+         'a version with nothing of its own is not a pass');
+    ok(A.exporter.currentWarnings().some((w) => /second encode of the identical file/.test(w)),
+       'and it says so rather than silently dropping the row');
+
+    // Two-pass and two versions is four walks: each output measured and then
+    // spent, each with a statistics log of its own — a bitrate map measured on
+    // 640-wide pictures is not a smaller version of the 320-wide decision.
+    S.versions[0].width = 320;
+    const wasRate = S.rate;
+    S.rate = 'twopass';
+    A.exporter.redraw();
+    pump(20);
+    spec = A.exporter.buildSpec();
+    same(spec.passes.length, 4, 'two outputs at two passes each is four walks');
+    ok(spec.passes[0].label.indexOf('the master') === 0 &&
+       spec.passes[2].label.indexOf('320×180') === 0,
+       'labelled by which file as well as which pass');
+    ok(spec.passes[0].videoOptions.passlogfile !== spec.passes[2].videoOptions.passlogfile,
+       'and each output keeps its statistics somewhere of its own');
+    same(spec.passes[2].videoOptions.pass, '1', 'the version is measured first');
+    same(spec.passes[3].videoOptions.pass, '2', 'and then spent');
+    S.rate = wasRate;
+
+    // A preview is this render written to a temp file, so it has no versions:
+    // one would spend a second encode putting three seconds of timeline over
+    // the file somebody is keeping.
+    same(A.exporter.buildSpec({ path: `${bro.appDir}/../out/uivpreview.mp4` }).passes, undefined,
+         'a render aimed somewhere else carries no versions');
+
+    S.versions = [];
+    S.width = wasW; S.height = wasH; S.rangeOut = wasOut;
+    S.path = wasPath; S.container = wasContainer;
+    A.exporter.redraw();
+    pump(20);
+}
+
 console.log('\nprogress says something true for each shape');
 {
     // **Three shapes, three readouts.** A bounded file render has frames, a

@@ -110,6 +110,15 @@ export const settings = {
     // argument and owns the escaping.
     destinations: [],
 
+    // ── the same edit, written twice ───────────────────────────────────────
+    //
+    // The other half of the question above, and the one it is constantly
+    // mistaken for: `tee` is one encode to several places, this is several
+    // encodes of one edit. A 1080p master and a 720p proxy cannot come out of
+    // one encoder, so they cannot come out of a tee. Empty for every render
+    // that is one render — see ui/export/versions.js.
+    versions: [],
+
     // Beside the streams, not among them: a chapter has no index, nothing is
     // mapped to it and it carries no packets. It is a table in the container,
     // which is exactly how ExportSettings holds it and how a muxer writes it.

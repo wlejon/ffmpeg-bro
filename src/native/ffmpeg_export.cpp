@@ -66,6 +66,15 @@ ExportSettings settingsForPass(const ExportSettings& base, const ExportPass& p) 
     if (!p.path.empty()) s.path = p.path;
     if (!p.format.empty()) s.format = p.format;
 
+    // The size, which is the whole of what a proxy pass is. Guarded by `> 0`
+    // rather than by a flag because zero is not a frame: there is no render
+    // this could be the intended size of, so the absent value can say so
+    // itself. `sizeFromGraph` still wins below — a pass that names a size and
+    // renders a node of the graph is describing the size of a picture
+    // libavfilter has not made yet.
+    if (p.width > 0) s.width = p.width;
+    if (p.height > 0) s.height = p.height;
+
     // A pass that names its own encoder starts from an empty option bag: an
     // option table belongs to an encoder, and carrying x264's `preset` onto
     // `wrapped_avframe` is an unknown option — which is an error here, and
@@ -694,7 +703,12 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         st.passLabel = passes[i].label;
         const ExportSettings ps = settingsForPass(s, passes[i]);
         lastPath = ps.path;
-        runPass(ps, clips, st, secondsSince);
+        // The stack this pass composites. A pass that says nothing about it
+        // renders the render's, which is every pass of a two-pass encode —
+        // there the two walks are the same picture and only the encoder
+        // differs. A pass at its own size brings its own rectangles, because
+        // they are in output pixels and cannot mean the same thing at two.
+        runPass(ps, passes[i].clips.empty() ? clips : passes[i].clips, st, secondsSince);
         if (st.state != ExportStatus::State::Running) break;
     }
     // What the file is called is the last pass's, not the first's: an analysis

@@ -350,6 +350,20 @@ bro.ffmpeg.render.start({ …,
              videoOptions: { pass: '1' } },   // merged on top of the render's
            { label: 'the render itself', videoOptions: { pass: '2' } }] })
 
+// The other reason a render is several: **another output, at another size**.
+// A 1080p master and a 720p proxy are two encodes — an encoder has one frame
+// size, so they cannot come out of one, which is what separates this from
+// `-f tee`. `width`/`height` are zero for "the render's", and the rectangles
+// have to travel with them: a clip is `w: 1920` on a 1920-wide canvas and would
+// be *cropped* onto a 1280-wide one rather than fitted, so a pass at its own
+// size brings its own `clips` at that scale. An empty `clips` is the render's.
+bro.ffmpeg.render.start({ …, width: 1920, height: 1080, clips: […],
+  passes: [{ label: 'the master' },                     // overrides nothing
+            { label: '1280×720', path: 'proxy.mp4', format: 'mp4',
+              width: 1280, height: 720,
+              clips: […],                    // the same stack, half the size
+              filterGraph, filterInputs }] })  // scaling to 1280×720, not 1920
+
 // **One job, two passes.** One claim on the run slot, one thread, one Stop,
 // and one terminal status published after the *last* pass has closed its file.
 // `progress` runs across the whole job because the person watching started one

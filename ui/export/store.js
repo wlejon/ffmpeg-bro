@@ -8,6 +8,7 @@
 import { settings } from './state.js';
 import { muxers, hasMuxer, muxerForExtension, encoderInfo, audioInfo } from './capabilities.js';
 import { normalizeStreams } from './streams.js';
+import { newVersion } from './versions.js';
 
 const SETTINGS_KEY = 'ffmpeg-bro.export';
 
@@ -33,6 +34,11 @@ const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     // forgotten destination list is a workspace that opens
                     // saying it will write to several places and naming none.
                     'destinations',
+                    // And the versions, for the same reason: "always cut a 720p
+                    // proxy beside the master" is a house rule, not a fact
+                    // about this timeline, and it is exactly the sort of thing
+                    // that is set once and expected to stay set.
+                    'versions',
                     // `title` beside `metadata` for the reason it is a named
                     // field rather than a key in it: both reach the render, and
                     // a title carries into the next edit exactly as a language
@@ -80,6 +86,20 @@ export function restore() {
         if (!settings[k] || typeof settings[k] !== 'object' || Array.isArray(settings[k]))
             settings[k] = {};
     if (!Array.isArray(settings.destinations)) settings.destinations = [];
+    // A version's size reaches `ExportPass::width` as a number and is read
+    // there as "zero means the render's", so a stored `"720"` — which is what a
+    // text field writes if nothing coerces it — would arrive as a string and be
+    // silently no size at all. Coerced here rather than trusted, because this
+    // blob was written by a version of this code that is not the one reading
+    // it.
+    settings.versions = (Array.isArray(settings.versions) ? settings.versions : [])
+        .filter((v) => v && typeof v === 'object')
+        .map((v) => newVersion({
+            path: String(v.path || ''),
+            format: hasMuxer(v.format) ? v.format : '',
+            width: Math.max(0, Math.round(Number(v.width) || 0)),
+            height: Math.max(0, Math.round(Number(v.height) || 0)),
+        }));
     // A stored blob outlives the shape it was stored in, and a stream row with
     // a kind this build cannot write would reach render.start and be refused
     // there — on the far side of a stage where nothing looks wrong.
