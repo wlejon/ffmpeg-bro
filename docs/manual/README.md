@@ -14,7 +14,8 @@ instead of sitting under **Subtitles**, where it had quietly ended up and where
 no reader looking for the command bar would have gone.
 
 - **[How playback works](playback.md)** — what happens between the file and the
-  screen, and why there is no proxy transcode
+  screen, why there is no proxy transcode, and the render itself on the monitor
+  instead of the clips
 - **[The document](document.md)** — the whole chain as one file, and the only
   part here that is not a stage
 - **[Capture](capture.md)** — screens, cameras and microphones; what a live

@@ -46,6 +46,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_job.cpp
     src/native/ffmpeg_report.cpp
     src/native/playback_filter.cpp
+    src/native/playback_output.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
     src/native/export_copy.cpp
@@ -285,12 +286,18 @@ add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
 add_test(NAME ui-document COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_document.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
+# The render on the program monitor instead of the clips. One file: what this is
+# about is the three things one element per clip cannot show, and all three of
+# them are about the *canvas* rather than about which file is on it.
+add_test(NAME ui-output COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_output.js"
+         -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences hardware PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document PROPERTIES
+                     ui-measure ui-subtitles ui-document ui-output PROPERTIES
                      FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -320,5 +327,5 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-hardware ui-export
-                     ui-sequence ui-report ui-measure ui-subtitles ui-document
+                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

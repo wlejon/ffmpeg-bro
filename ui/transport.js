@@ -9,9 +9,14 @@
 // Three invariants earn their comments, because each was arrived at from a
 // failure that looked like something else:
 //
-//   - **The topmost clip under the playhead *with a picture in it* is the
-//     master clock.** It is the picture in front, so it is the thing that knows
-//     what moment is on screen. The qualification arrived with audio-only
+//   - **Whatever is on screen is the master clock**, which is normally the
+//     topmost clip under the playhead *with a picture in it*. It is the picture
+//     in front, so it is the thing that knows what moment is on screen — and
+//     when the output preview is on, the picture in front is the render, so it
+//     is the master instead (`output.js`). One rule, stated the way it was
+//     always meant, rather than a mode: everything below is written against
+//     *the* clock and does not care which of the two it is.
+//     The qualification arrived with audio-only
 //     clips and is a decision rather than a detail: bro will now drive
 //     `currentTime` from the media clock for a source with no picture, so a
 //     music bed dropped on a lane above the footage *could* be the master —
@@ -34,6 +39,7 @@
 import { project, duration, clipsAt, nextClipAfter, sourceTime,
          selectFollow } from './project.js';
 import * as viewer from './viewer.js';
+import * as output from './output.js';
 
 /// Where the playhead is and how it is being watched. One object, exported by
 /// reference: the frame loop, the readouts and the tests all read it, and a
@@ -67,13 +73,21 @@ export function setPlayhead(t, seek = true) {
     const changedSet = viewer.setActiveSet(here);
     // A clip that has just come into view has its decoder parked wherever it
     // was left, so it always needs the seek even when the caller said not to.
+    // The clips are kept parked where the playhead is even while the output
+    // preview is what is being watched, so that turning it off is instant
+    // rather than a seek per decoder. What they are not is *played*: the
+    // preview has no soundtrack and the clips are not the picture, so running
+    // them would be a mix drifting away from a render being made at whatever
+    // rate it can be made at.
+    const shown = !output.isOn();
     for (const clip of here) {
         applyAudio(clip);
         const want = sourceTime(clip, transport.t);
         if ((seek || changedSet) && Math.abs(clip.video.currentTime - want) > 0.0005)
             clip.video.currentTime = want;
-        if (transport.playing && clip.video.paused) clip.video.play();
+        if (transport.playing && shown && clip.video.paused) clip.video.play();
     }
+    if (seek) output.moveTo(transport.t);
     if (here.length) selectFollow(here[here.length - 1]);
     tell();
 }
@@ -82,12 +96,14 @@ export function play() {
     if (!project.clips.length) return;
     if (transport.t >= duration() - 1e-4) setPlayhead(0);
     transport.playing = true;
-    for (const c of viewer.activeClips()) { applyAudio(c); c.video.play(); }
+    if (output.isOn()) output.play(true);
+    else for (const c of viewer.activeClips()) { applyAudio(c); c.video.play(); }
     tell();
 }
 
 export function pause() {
     transport.playing = false;
+    output.play(false);
     for (const c of viewer.activeClips()) c.video.pause();
     tell();
 }
@@ -103,6 +119,19 @@ export function togglePlay() { transport.playing ? pause() : play(); }
 // frame it started from and nothing happens.
 export function step(frames) {
     if (transport.playing) pause();
+    // The render's own frames, when the render is what is on screen. One
+    // decoded picture is exactly one canvas here, so unlike a file there is no
+    // averaged frame rate for the seconds round trip to miss a boundary by —
+    // and a step backwards is a preview of the moment before this one, which is
+    // a new range rather than a step. `output.js` says so.
+    if (output.isOn()) {
+        if (output.step(frames)) {
+            const t = output.at();
+            if (t !== null) { transport.t = t; tell(); }
+            if (hooks.reveal) hooks.reveal(transport.t);
+        }
+        return;
+    }
     let clip = viewer.activeClip();
     if (!clip) {
         // In a gap: step into the neighbouring clip rather than doing nothing.
@@ -169,6 +198,13 @@ export function tick(dt) {
 /// than a fact, and a frame step from a scrubbed position appears to move by
 /// some odd fraction of a frame because the step really started somewhere else.
 function adoptDecoderTime() {
+    if (output.isOn()) {
+        const t = output.at();
+        if (t === null || Math.abs(t - transport.t) < 1e-6) return;
+        transport.t = t;
+        tell();
+        return;
+    }
     const clip = viewer.activeClip();
     if (!clip || !clip.video || !(clip.video.duration > 0)) return;
     const t = clip.start + clip.video.currentTime - clip.inPoint;
@@ -182,6 +218,32 @@ function adoptDecoderTime() {
 /// runs on the wall.
 function advance(dt) {
     const d = duration();
+
+    // The render is the picture, so the render is the clock. It runs at
+    // whatever rate the frames can be made at rather than on the wall, which is
+    // the honest reading: a preview that ran the playhead at real time past a
+    // picture arriving at half of it would be a timecode describing something
+    // nobody is looking at.
+    if (output.isOn()) {
+        // **It stops where its own range stops**, which is not always the end
+        // of the timeline: a render of seconds 10 to 20 runs out at 20 with
+        // half the edit still to come. `handOver` is the wrong end of that —
+        // it would step into the clip after the range, which is not on the
+        // screen and is not being previewed. Looping is still the timeline's
+        // own answer, because the loop is a property of the transport.
+        if (output.ended()) {
+            if (transport.loop) setPlayhead(0);
+            else pause();
+            return;
+        }
+        const t = output.at();
+        if (t === null) return;             // not open yet; nothing has moved
+        transport.t = Math.max(0, Math.min(d, t));
+        if (transport.t >= d - 1e-6) { handOver(d); return; }
+        if (hooks.reveal) hooks.reveal(transport.t);
+        return;
+    }
+
     const clip = viewer.activeClip();
 
     if (clip) {

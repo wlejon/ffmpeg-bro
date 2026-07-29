@@ -21,6 +21,54 @@ frame. Anything that is not a quarter turn is read as no rotation at all: a size
 can be swapped or not, and a picture drawn at an angle inside a box laid out for
 a rectangle is worse than the picture as it was stored.
 
+## The output, instead of the clips
+
+`O`, or **Output** on the timeline bar, puts the *render* on the program monitor
+instead of the clips. Nothing is encoded and no file is written: what plays is
+the render's own frame source — `TimelineSource` where the edit has no filters of
+anybody's on it and libavfilter's `GraphSource` where it does — with the writer
+taken off the end. It is the same choice `runExport` makes and the same spec
+`Render` is given, so a preview cannot show a render this application would not
+perform.
+
+**It exists for the three things one element per clip cannot show**, all of them
+things that are not about one clip:
+
+- a **generated source** — a `testsrc`, a `color`, a `movie` — which is a node
+  with no clip, so there is no element on the monitor it could be. A render
+  rooted entirely in generators, with nothing on the timeline at all, plays here.
+- a **filter over the whole canvas**: a burn-in after the composite has no single
+  picture to run on, because the composite is one element laid over another.
+- a **filter that changes the size of a clip's picture**, which the viewer
+  refuses — see [A filter in the viewer](graph.md#a-filter-in-the-viewer) — rather
+  than stretching it back into a rectangle the render never puts it in. Placing
+  is what the render does, so the render has no such problem.
+
+**It is the clock while it is on**, because it is the picture on the screen —
+which is the rule the transport has always followed about the topmost clip. The
+playhead moves at whatever rate the frames can be made at rather than on the
+wall: a timecode running at real time past a picture arriving at half of it would
+describe something nobody is looking at. It also **stops where its own range
+stops**, which is not always the end of the timeline — a render of seconds 10 to
+20 runs out at 20 with half the edit still to come, and handing over to the clip
+after it would be handing over to something that is not on the screen.
+
+**Moving the playhead builds a new one.** A filter graph pulls — it produces the
+frames it produces, in order — so there is no seeking inside one, only building
+one whose inputs begin where you want to start. Every position of the playhead is
+therefore its own render, which is also why nothing rebuilds under a moving hand:
+like a node preview, it waits for the edit to hold still before opening the files
+again.
+
+**There is no sound.** The preview is a picture of the render, and the clips
+underneath are paused rather than left playing a mix that would drift away from
+it. Turn it off to listen to the edit — for everything but a filter on the mix,
+what you hear that way *is* the render's soundtrack, since a clip element plays
+at the clip's own volume and the compositor sums exactly those.
+
+A graph libavfilter will not have says so on the stage, in libavfilter's own
+words, rather than showing black.
+
 **A file with no picture in it is an ordinary clip.** Drop an `.mp3`, a `.wav` or
 an `.m4a` on the timeline and it lays out with the length of its audio track,
 plays, moves the playhead and goes into the mix. What it does not do is take up

@@ -334,6 +334,39 @@ bro.ffmpeg.views.define("clip-7", {
 // track the element gets reports no rotation of its own.
 bro.ffmpeg.views.forget("clip-7")
 
+// The same registry once more, one whole render further on: **the output**, as
+// something a `<video>` can play. `<video src="/@out/edit/0-8000">` plays what
+// `render.start` would write — the render's own frame source, made frame by
+// frame as the element asks for it, with no encoder, no file and no job slot.
+// Which of the two renderers it is comes from the spec exactly as it does for a
+// render: a `filterGraph` means libavfilter, and its absence means the internal
+// compositor.
+bro.ffmpeg.output.define("edit", spec)    // spec: exactly a render.start() one
+// → "/@out/edit/0-8000", to use as a <video src>
+//
+// **The token carries the range**, because an element holds the source it
+// opened: a redefinition under an unchanged token would leave the picture
+// playing the render as it used to be. That is also the whole of the seek — a
+// filter graph pulls, so there is no seeking inside one, only building one whose
+// inputs begin where you want to start. Moving the playhead is a redefinition.
+//
+// The encode half of the spec goes unread: there is no writer, so the codec, the
+// container, the passes and the path mean nothing here. `audio` is forced off —
+// this source has no sound track at all, and a `TimelineSource` that was asked
+// for one would open an audio reader per clip to hand the samples to nobody.
+
+bro.ffmpeg.output.settle(spec)
+// → { width, height, fps, start, length, graph }
+//
+// Build the source, say what it produces, and throw it away — so that a graph
+// libavfilter refuses is a sentence the moment somebody wires it rather than a
+// black rectangle and a line in a log. It **throws** with libav's own words.
+// Deliberately *not* what `define` does, which is the opposite split from
+// `views.define`: an output view is a whole render, and the caller redefines one
+// every time the playhead moves, so building is asked for separately and only
+// when the graph itself has changed.
+bro.ffmpeg.output.forget("edit")
+
 bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
 
 // Rendering the timeline. Runs on its own thread; poll it.

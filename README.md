@@ -26,6 +26,10 @@ cut it on a timeline, filter it through a node graph, and export it.
 - **Honest exports.** Per-stream everything: stream copy without re-encoding (with
   the keyframe costs shown, not hidden), subtitles carried, converted, burned in or
   extracted, two-pass encoding, attachments, chapters, dispositions, fourccs.
+- **The output, while you edit.** `O` puts the render itself on the program
+  monitor instead of the clips — the same frame source the export walks, made as
+  you watch it, so a burn-in over the whole canvas or a generator with no clip
+  behind it is on the screen rather than something you take on trust.
 - **The command bar.** The real ffmpeg invocation for what you built, under every
   stage, ready to copy into a shell.
 - **Capture.** Screen, camera, microphone — previewed live, a region dragged
@@ -75,6 +79,7 @@ tested, and a scriptable media tool in its own right).
 | `C` | crop handles on the picture (`Esc` leaves) |
 | `S` | split the selection at the playhead |
 | `G` | grid / stacked layout |
+| `O` | the output on the monitor instead of the clips |
 | `E` | the Encode stage (`Esc` goes back to the edit) |
 | `D` | the Capture stage — a device, watched and recorded |
 | `I` | the Sources stage — what is actually in the files |
@@ -110,11 +115,12 @@ file; the manual's [Testing](docs/manual/testing.md) part has the full list.
 The short version — the manual's [Not yet](docs/manual/not-yet.md) part is the
 honest, complete list:
 
-- Playback shows a clip's own filters, and not a filter over the whole picture,
-  a soft subtitle track or a generated source with no clip behind it — those
-  appear in node previews and the export preview, which are real renders. A clip
-  whose filters cannot be shown honestly (one that resizes the picture, one that
-  forks) is badged `fx` rather than left looking broken.
+- With the clips on the monitor, playback shows a clip's own filters and not a
+  filter over the whole picture, a soft subtitle track or a generated source with
+  no clip behind it; a clip whose filters cannot be shown honestly (one that
+  resizes the picture, one that forks) is badged `fx` rather than left looking
+  broken. `O` puts the render itself there instead, which has none of those
+  exceptions and costs a render — and has no sound.
 - A phone clip plays, lays out and exports the right way up, but the timeline's
   filmstrip still shows its frames on their side.
 - A document holds the edit and not the session: which clip was selected, where

@@ -18,6 +18,7 @@ import * as inputsModel from './inputs.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
+import * as output from './output.js';
 import * as timeline from './timeline.js';
 import * as levels from './levels.js';
 import * as exporter from './export.js';
@@ -106,6 +107,10 @@ graphPlayback.initPlayback({
     sources: specSources,
     overlay: graphOverlay.current,
 });
+
+// The other thing that can be on the program monitor: the render itself, made
+// while you watch it, instead of one element per clip. See ui/output.js.
+output.initOutput({ stage }, { changed: () => drawOutput() });
 
 initSources({
     list: el('src-list'),
@@ -214,7 +219,10 @@ initInspector({ filename, chips, transform: xformPanel }, {
     // step with it is the application's job, not the panel's.
     edited: () => { viewer.refreshAll(); updateCropUI(); changed('edit'); },
     moved: () => { setPlayhead(transport.t); changed('moved'); },
-    canvasResized: () => { viewer.layout(); updateCropUI(); syncUI(); },
+    // The canvas is what the output preview *is*, so a resize is both a
+    // relayout and a different render — the second arrives on the change
+    // channel, which is where `output.invalidate()` lives.
+    canvasResized: () => { viewer.layout(); output.place(); updateCropUI(); syncUI(); },
     audioChanged: () => { applyAudioAll(); timeline.draw(); },
     setLayout: (mode) => setLayout(mode),
     redraw: () => { viewer.refreshAll(); updateCropUI(); timeline.draw(); },
@@ -361,6 +369,38 @@ function refreshPlayback() {
     // The `fx` badge is on the picture and says which clips are *not* showing
     // their filters, so it moves whenever the answer above does.
     viewer.refreshAll();
+    // And the output preview is a render of the edit that has just changed, so
+    // what is on the screen is of a render that no longer exists. It waits for
+    // the edit to hold still before rebuilding — see `chase()` — so this is a
+    // note rather than the work.
+    output.invalidate();
+}
+
+// ── the output preview ─────────────────────────────────────────────────────
+//
+// The render on the program monitor instead of the clips. Everything about what
+// it *is* lives in ui/output.js; here are the press, the key and the two things
+// on the screen that have to follow it.
+
+function setOutputPreview(on) {
+    if (!output.setOn(on, transport.t)) return;
+    viewer.setOutputMode(output.isOn());
+    viewer.layout();
+    output.place();
+    // The preview is the clock while it is on and the clips are while it is not,
+    // so both directions are a handover: whichever is taking over has to be put
+    // where the playhead already is.
+    setPlayhead(transport.t);
+    if (transport.playing) { if (on) output.play(true); else play(); }
+    drawOutput();
+}
+
+function drawOutput() {
+    el('btn-output').classList.toggle('on', output.isOn());
+    const note = el('out-note');
+    const why = output.isOn() ? output.why() : '';
+    note.textContent = why;
+    note.classList.toggle('hidden', !why);
 }
 
 // A filter inserted, edited or taken off. The overlay has its own channel
@@ -1089,6 +1129,8 @@ document.addEventListener('keydown', (e) => {
         case 'c':          setCropMode(!cropMode); break;
         case 's':          splitAtPlayhead(); break;
         case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
+        // `o` for output — the render on the monitor rather than the clips.
+        case 'o':          setOutputPreview(!output.isOn()); break;
         case 'e':          shell.goTo('encode'); break;
         case 'i':          shell.goTo('sources'); break;
         // `d` for device: `c` is the crop handles and `r` is the report.
@@ -1165,8 +1207,13 @@ function frame(now) {
         lastViewerW = viewerEl.clientWidth;
         lastViewerH = viewerEl.clientHeight;
         viewer.layout();
+        output.place();
         updateCropUI();
     }
+    // The output preview rebuilds only once the edit has held still, because
+    // re-pointing it opens every input the render reads. Here rather than on the
+    // change channel for exactly that reason — see ui/output.js.
+    output.chase();
     // Watch the video lanes, not the waveform: the waveform is in the markup
     // and laid out from the first frame, so it never notices a lane that was
     // built a moment ago and has not been measured yet.
@@ -1255,6 +1302,7 @@ el('btn-zoom-fit').addEventListener('click', () => timeline.fitView());
 el('btn-split').addEventListener('click', splitAtPlayhead);
 el('btn-grid').addEventListener('click',
     () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
+el('btn-output').addEventListener('click', () => setOutputPreview(!output.isOn()));
 el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 
 // ── the pipeline ───────────────────────────────────────────────────────────
@@ -1501,6 +1549,11 @@ globalThis.__ffmpegBro = {
     setPlayhead, play, pause, step,
     timeline, viewer, levels,
     setCropMode, cropMode: () => cropMode,
+    // The render on the program monitor. `setOutputPreview` rather than
+    // `output.setOn` because turning it on is also a handover of the clock and a
+    // relayout, and a test that pressed only half of that would be testing a
+    // state the application never reaches.
+    output, setOutputPreview,
     splitAtPlayhead, splitAt, setLayout, select, selectMany,
     // The three edits that are about a cut rather than a clip. On the surface
     // because they are pure model arithmetic — what each one holds constant is

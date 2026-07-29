@@ -51,6 +51,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_measure.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last two sections
@@ -196,6 +197,30 @@ changed nothing is none. The assertion worth naming is the cheap-looking one —
 that a clip is still being decoded by the same element after an undo — because
 that is the whole reason `open()` reconciles instead of rebuilding, and nothing
 else in the suite would notice if it stopped.
+
+`ui_output.js` is the render on the program monitor instead of the clips — see
+[The output, instead of the clips](playback.md#the-output-instead-of-the-clips).
+**Nothing in it compares pixels**, and that is deliberate rather than a gap: a
+screenshot is for the record and the picture on the screen is the host's. What is
+checkable is every claim the mode makes about itself, and each of those is a
+thing that could silently stop being true — that the preview is the render's own
+source and says which of the two renderers it is, that a moved playhead is a new
+source rather than a seek, that the clips underneath are parked and not playing,
+and that a graph libavfilter refuses arrives as libavfilter's own sentence on the
+stage rather than as black.
+
+Two of the checks are there because the behaviour broke in review rather than
+because it looked interesting: an edit made *while* the preview is playing has to
+go on playing — a re-point hands the element a new src, and a new src is a paused
+element at zero — and a preview whose range ends before the timeline does has to
+stop there rather than hand over to the clip after it.
+
+The three sections in the middle are the three things one element per clip
+structurally cannot show, driven one at a time: a filter over the whole canvas, a
+filter that changes the size of a clip's picture — asserted from *both* ends, the
+viewer refusing it by name and the render showing it without complaint — and a
+`testsrc` with nothing on the timeline at all, which is a picture where the
+viewer has no element to put one in.
 
 `captest` is what this build can write, read, reach and capture, and it prints
 as much as it asserts: how many muxers, which of them write pictures, which

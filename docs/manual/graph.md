@@ -497,5 +497,11 @@ something nearly right:
 
 A chain libavfilter will not take is refused the same way, with libav's own
 sentence on the picture — which means a mistyped filter argument is reported
-when you type it rather than when you render. The export preview is still where
-you see the *composition*: this is one clip's own filters, not the canvas.
+when you type it rather than when you render.
+
+Both of those refusals, and everything else this way of showing a filter cannot
+reach — a filter over the whole canvas, a generator with no clip — are what
+`O` is for: **[the output on the program monitor](playback.md#the-output-instead-of-the-clips)**
+plays the render itself rather than one element per clip, so what it shows has
+no such exceptions. This is the cheap way, exact for everything a clip does on
+its own; that is the real render, and it costs a render.

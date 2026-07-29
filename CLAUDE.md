@@ -21,7 +21,7 @@ ctest --test-dir build -C Release
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
 `sequences`, `capture`, `hardware`, `ui-player`, `ui-sources`, `ui-hardware`,
 `ui-export`, `ui-sequence`, `ui-report`, `ui-measure`, `ui-subtitles`,
-`ui-capture`, `ui-filtergraph`, `ui-graph`, `ui-document`):
+`ui-capture`, `ui-filtergraph`, `ui-graph`, `ui-document`, `ui-output`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -180,6 +180,21 @@ which is the same mechanism that makes a `-f lavfi` input playable. A **sound**
 pad holds a level instead of a frame — `live.levels()` reads and clears it, so
 there is exactly one caller — because a meter needs no answer to the questions
 monitoring asks. The scale both it and A1 are drawn on is `ui/levels.js`.
+
+An **output preview** (`playback_output.h`, `ui/output.js`) is the third use of
+the same idea and the second of the same registry trick: the render with the
+*writer* taken off the end, registered under a token so `<video src="/@out/…">`
+can play it. `runExport`'s choice of `FrameSource` is made again there and
+nowhere else, so the picture on the program monitor is the render rather than a
+resemblance of one — which is what puts a generator with no clip, and a filter
+over the whole canvas, on the screen at all. Three consequences worth knowing
+before touching it: a graph *pulls*, so there is no seeking inside one and the
+range is part of the token (a moved playhead is a new source); `settle` is
+separate from `define` because a spec changes on every drag and building one
+opens every input; and it carries no sound, so the transport pauses the clips and
+takes its clock from the preview. `playback_filter.h` is the same registry one
+turn earlier — one input with one chain — and the two prefixes (`/@fx/`, `/@out/`)
+are deliberately distinct.
 
 ## Conventions that are load-bearing
 

@@ -4,15 +4,17 @@
 
 Honest list of what does not work:
 
-- **A filter that resizes the picture, on playback.** Most of them play now —
-  see [A filter in the viewer](graph.md#a-filter-in-the-viewer) — and the exception is
-  the one where the viewer's own layout and the render's disagree: this
-  application places a clip by the rectangle its *source* has, and libavfilter
-  hands back whatever size the chain made. Showing that stretched into the
-  rectangle would be a picture the render never produces, so the clip keeps its
-  `fx` badge and the badge says both sizes. Fixing it properly means the
-  placement rectangle coming from the chain's output rather than from the
-  probe — one number, in one place, and a change to what a clip's size *is*.
+- **A filter that resizes the picture, in place.** It is on the screen now —
+  `O` plays [the output itself](playback.md#the-output-instead-of-the-clips),
+  where placing is what the render does — and what is still not true is the
+  cheap path: with the clips on the monitor, this application places one by the
+  rectangle its *source* has and libavfilter hands back whatever size the chain
+  made, so the clip keeps its `fx` badge rather than being stretched into a
+  rectangle the render never puts it in. The two ways of looking now cost
+  different things — one is free and has exceptions, the other is a render and
+  has none — and closing the gap means the placement rectangle coming from the
+  chain's output rather than from the probe: one number, in one place, and a
+  change to what a clip's size *is*.
 - **Scrubbing a node.** ▶ plays one forward from where the previews were taken,
   and that is the only way to move through it: there is no scrub bar, no way
   back, and nothing to jump with. Somewhere else to start from means moving the
@@ -26,18 +28,18 @@ Honest list of what does not work:
   and it has not been tested on anybody. What would have to come first is a
   single "the settings changed" channel: the encode side has three change hooks
   meaning three different things, and none of them is that.
-- **A generated source in the viewer.** A `testsrc` or a `movie` renders and
-  previews on its own card, and the *viewer* cannot show it — no longer because
-  there is no filtergraph in the playback path (there is one now, per clip), but
-  because a generator is a node with **no clip**. Every element on the program
-  monitor belongs to something laid out on the timeline: it is where the picture
-  goes, how long it is there and which moment of it is on screen. A `color`
-  feeding an `overlay` has none of those, and a render with nothing on the
-  timeline at all is therefore something you watch on the Graph stage and on the
-  Encode stage's preview. What would close it is a lane that holds a generator
-  as though it were a clip — a length and a position for something that has
-  neither of its own — which is a decision about the *edit* and not about
-  playback.
+- **A generator with a place on the timeline.** A `testsrc` or a `color` plays
+  on the program monitor now — `O` shows
+  [the output itself](playback.md#the-output-instead-of-the-clips), and a render
+  rooted entirely in generators, with nothing on the timeline at all, plays there
+  — so the *picture* is no longer the missing half. What is missing is the edit:
+  a generator has no lane, no bar to drag, no in and out points, and the only
+  thing that says how long one is is its own `d`. Every element the viewer places
+  belongs to something laid out on the timeline — where the picture goes, how
+  long it is there, which moment of it is on screen — and a `color` feeding an
+  `overlay` has none of those. What would close it is a lane that holds a
+  generator as though it were a clip, which is a decision about what an edit
+  *contains* and not about playback.
 - **A generator that follows the render on its own.** A source now says when
   its numbers and the render's have drifted apart, and `Match the render` brings
   it up to date in one press — but nothing does it unasked, because a `color`
@@ -105,12 +107,19 @@ Honest list of what does not work:
   a subtitle path through bro's renderer, or an overlay drawn by this
   application over the program monitor — and the second has the harder half of
   the problem in it, which is that a soft track is styled by the *player*.
-- **A programme-wide burn-in in the viewer.** The other of the two burn-in
-  points, over the whole canvas, is not shown: the viewer composites by placing
-  one element per clip, so there is no single picture for a filter after the
-  composite to run on. That is the same absence as a generated source in the
-  viewer, above, and the same thing would close both — an export preview that
-  runs while you edit rather than when you ask for one.
+- **Anything to listen to while the output is on screen.** `O` puts the render
+  on the program monitor — see
+  [the output instead of the clips](playback.md#the-output-instead-of-the-clips)
+  — and it is a picture and nothing else: the clips underneath are paused rather
+  than left playing a mix that would drift away from a preview made at whatever
+  rate it can be made at. For everything but a filter on the mix that costs
+  nothing, because turning the preview off *is* the render's soundtrack — a clip
+  element plays at the clip's own volume and the compositor sums exactly those.
+  What it does cost is that an `-af` chain on the whole programme cannot be
+  heard anywhere. Closing it means the preview source carrying a second track:
+  the mix is already there (`FrameSource::mixInto`) and what is not is an
+  interleave, a resampler and an answer to what happens when the picture cannot
+  keep up and the sound can.
 - **An editor for the cues themselves.** Everything here reads a subtitle file
   and writes one; nothing lets you type a line, retime one against the
   waveform, or split a cue at the playhead. The timeline has the lane that

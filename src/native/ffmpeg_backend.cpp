@@ -3,6 +3,7 @@
 #include "ffmpeg_capture.h"
 #include "live_tap.h"
 #include "playback_filter.h"
+#include "playback_output.h"
 
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
@@ -403,6 +404,99 @@ private:
     double zero_ = 0.0;
     AVFrame* pending_ = nullptr;   ///< the frame `open` described the track with
     double pendingAt_ = 0.0;
+};
+
+// ── A render, as a media source ────────────────────────────────────────────
+//
+// `<video src="/@out/edit/0-8000">` plays what the export would write, made
+// frame by frame as the element asks for it. See playback_output.h for what a
+// view is and why the caller owns the seek; this is the twenty lines that turn
+// one into something bro can play.
+//
+// It is the second source in this backend with no demuxer behind it, and it
+// shares the mechanism with the first: what would be a compressed packet is a
+// picture that was never compressed, carried as `wrapped_avframe` exactly as a
+// live pad's is and as a `-f lavfi` input's is. There is no output decoder for
+// the same reason there is no live one.
+//
+// **It does not block and it does not wait.** A live pad is a camera and has to
+// be waited on; this is a render, so a frame takes however long it takes to make
+// and then it is there. What that means for the element is that a preview which
+// cannot keep up plays slowly rather than dropping frames — which is the right
+// way round for a picture somebody is judging an encode by.
+class OutputSource : public MediaSource {
+public:
+    bool open(const std::string& src) {
+        OutputView view;
+        if (!resolveOutput(src, &view)) return false;
+
+        std::string err;
+        if (!reader_.open(view, &err)) {
+            // The graph would not parse, in libavfilter's own words. Logged
+            // rather than swallowed because the caller settles a view before it
+            // points anything at one — see `settleOutput` — so arriving here
+            // means the graph changed under a token that was good a moment ago.
+            LOG_WARN("ffmpeg: output preview: %s", err.c_str());
+            return false;
+        }
+
+        // **Described from the facts and not from a frame.** A live pad has to
+        // produce one before it knows how big it is; a render's canvas is the
+        // size the spec says, or the size the graph settled on, and both are
+        // known before a picture is made. So opening costs no frame, and an
+        // element pointed at an empty timeline opens rather than failing.
+        const OutputFacts& f = reader_.facts();
+        if (f.width <= 0 || f.height <= 0) return false;
+
+        TrackInfo t;
+        t.id = 1;
+        t.kind = TrackKind::Video;
+        t.codec = Codec::Other;
+        t.width = static_cast<uint32_t>(f.width);
+        t.height = static_cast<uint32_t>(f.height);
+        t.frameRate = f.fps;
+        t.durationNs = static_cast<TimeNs>(llround(f.length * 1e9));
+
+        auto priv = std::make_shared<TrackPrivate>();
+        priv->par = avcodec_parameters_alloc();
+        if (!priv->par) return false;
+        priv->par->codec_type = AVMEDIA_TYPE_VIDEO;
+        priv->par->codec_id = AV_CODEC_ID_WRAPPED_AVFRAME;
+        priv->par->width = f.width;
+        priv->par->height = f.height;
+        priv->par->format = AV_PIX_FMT_RGBA;
+        priv->timeBase = AVRational{1, 1000000};
+        priv->wrapped = true;
+        t.backendPrivate = priv;
+        tracks_.push_back(std::move(t));
+        return true;
+    }
+
+    const std::vector<TrackInfo>& tracks() const override { return tracks_; }
+
+    bool readPacket(MediaPacket& out) override {
+        double at = 0.0;
+        AVFrame* f = reader_.next(&at);
+        if (!f) return false;   // the range has run out: the element has ended
+        out.trackId = 1;
+        out.codec = Codec::Other;
+        out.kind = TrackKind::Video;
+        out.keyframe = true;         // every one of them is
+        out.pts = static_cast<TimeNs>(llround(at * 1e9));
+        out.duration = 0;
+        out.data = wrapOwnedFrame(f);   // takes the reference this holds
+        return out.data != nullptr;
+    }
+
+    /// Refused, and the caller knows: a graph produces the frames it produces in
+    /// order, so there is no seeking inside one — only building one whose inputs
+    /// begin where you want to start. Moving the playhead is a redefinition and
+    /// therefore a new src. See playback_output.h.
+    bool seekTo(TimeNs) override { return false; }
+
+private:
+    OutputReader reader_;
+    std::vector<TrackInfo> tracks_;
 };
 
 // ── MediaSource ────────────────────────────────────────────────────────────
@@ -1293,6 +1387,13 @@ void registerFfmpegBackend() {
             auto live = std::make_unique<LiveSource>();
             if (!live->open(path)) return nullptr;
             return live;
+        }
+        // A render, made as it is watched. Like a live pad it is a lookup
+        // rather than an attempt, and it names inputs rather than being one.
+        if (resolveOutput(path, nullptr)) {
+            auto out = std::make_unique<OutputSource>();
+            if (!out->open(path)) return nullptr;
+            return out;
         }
         // A view: an input, plus the filters its streams go through on the way
         // to the screen. Tried before an input token because a view *names* an

@@ -9,6 +9,7 @@
 #include "ffmpeg_hardware.h"
 #include "ffmpeg_report.h"
 #include "playback_filter.h"
+#include "playback_output.h"
 
 extern "C" {
 #include <libavutil/pixdesc.h>
@@ -1686,6 +1687,86 @@ JSValue js_viewsForget(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     return JS_UNDEFINED;
 }
 
+// ── bro.ffmpeg.output ──────────────────────────────────────────────────────
+//
+// A render, registered so that a `<video>` can play it — the program monitor
+// showing what the export would write rather than one element per clip. The spec
+// is the one `render.start` is given, so a preview cannot describe a render this
+// application would not perform.
+//
+// **`define` registers and `settle` builds**, which is the opposite split from
+// `views.define` and is deliberate. A view is settled on definition because
+// settling one is opening a file, and the caller redefines a view on every
+// gesture; an output view is a whole render — every input the graph reads — and
+// the caller redefines one every time the playhead moves. So building is asked
+// for separately, at the moment something is about to be pointed at it.
+//
+// See playback_output.h for what is and is not in one, and docs/api.md.
+
+/// The two halves of a spec, read exactly as `render.start` reads them. One
+/// place, so a preview cannot be built out of a differently-read spec.
+bool outputViewFromJs(JSContext* ctx, JSValueConst spec, OutputView* v, std::string* err) {
+    if (!outputFromJs(ctx, spec, &v->settings, err)) return false;
+    v->clips = clipsFromJs(ctx, spec);
+    return true;
+}
+
+JSValue js_outputDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "output.define(id, spec) requires an id and a spec");
+    const char* id = JS_ToCString(ctx, argv[0]);
+    if (!id) return JS_EXCEPTION;
+
+    OutputView v;
+    std::string bad;
+    if (!outputViewFromJs(ctx, argv[1], &v, &bad)) {
+        JS_FreeCString(ctx, id);
+        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
+    }
+    const std::string token = defineOutput(id, v);
+    JS_FreeCString(ctx, id);
+    return JS_NewStringLen(ctx, token.data(), token.size());
+}
+
+/// Build the render's source, say what it produces, and throw it away — so that
+/// a graph libavfilter refuses is a sentence the moment somebody wires it rather
+/// than a black rectangle and a line in a log.
+JSValue js_outputSettle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "output.settle(spec) requires a spec object");
+
+    OutputView v;
+    std::string bad;
+    if (!outputViewFromJs(ctx, argv[0], &v, &bad))
+        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
+
+    OutputFacts facts;
+    std::string err;
+    if (!settleOutput(v, &facts, &err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, facts.width));
+    JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, facts.height));
+    JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, facts.fps));
+    JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, facts.start));
+    JS_SetPropertyStr(ctx, o, "length", JS_NewFloat64(ctx, facts.length));
+    // Which of the two renderers this preview is of. The compositor and
+    // libavfilter agree to 43 dB and are still not the same thing to look at —
+    // and it is the one fact a caller cannot work out from the spec without
+    // knowing the rule `runExport` decides by.
+    JS_SetPropertyStr(ctx, o, "graph", JS_NewBool(ctx, facts.graph));
+    return o;
+}
+
+JSValue js_outputForget(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string id;
+    if (!takeName(ctx, argc, argv, &id))
+        return JS_ThrowTypeError(ctx, "output.forget(id) requires an id");
+    forgetOutput(id);
+    return JS_UNDEFINED;
+}
+
 JSValue js_tempPath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "tempPath(name) requires a name");
@@ -1948,6 +2029,15 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, views, "forget",
                       JS_NewCFunction(ctx, js_viewsForget, "forget", 1));
     JS_SetPropertyStr(ctx, ns, "views", views);
+
+    JSValue output = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, output, "define",
+                      JS_NewCFunction(ctx, js_outputDefine, "define", 2));
+    JS_SetPropertyStr(ctx, output, "settle",
+                      JS_NewCFunction(ctx, js_outputSettle, "settle", 1));
+    JS_SetPropertyStr(ctx, output, "forget",
+                      JS_NewCFunction(ctx, js_outputForget, "forget", 1));
+    JS_SetPropertyStr(ctx, ns, "output", output);
 
     JSValue render = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, render, "start", JS_NewCFunction(ctx, js_renderStart, "start", 1));

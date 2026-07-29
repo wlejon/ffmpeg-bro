@@ -36,6 +36,15 @@ let stage = null;       // the output canvas, sized to the project aspect
 let viewerEl = null;    // the box it is centred in
 let active = [];        // the clips currently shown, bottom track first
 
+/// Is the canvas showing the render instead of the clips? See `ui/output.js`.
+///
+/// A flag here rather than an import of it, because the preview's spec comes
+/// from `export/spec.js`, which takes every clip's rectangle from this file —
+/// so a viewer that reached the other way would close the loop. What the viewer
+/// needs to know is one bit, and the caller that turned the mode on is holding
+/// it.
+let outputMode = false;
+
 export function initViewer(refs) {
     stage = refs.stage;
     viewerEl = refs.viewer;
@@ -110,7 +119,18 @@ export function detachClip(clip) {
 /// sit as a black rectangle over whatever is beneath it. One place writes
 /// `display`, so this is the one place that has to know.
 function setVisible(clip, on) {
-    if (clip.frame) clip.frame.style.display = on && hasPicture(clip) ? 'block' : 'none';
+    if (clip.frame)
+        clip.frame.style.display = on && !outputMode && hasPicture(clip) ? 'block' : 'none';
+}
+
+/// Show the render instead of the clips, or the clips again.
+///
+/// The elements stay either way, for the reason they stay when the playhead is
+/// off them: each one *is* a decoder, and a mode that tore them down would make
+/// turning the preview off a seek per clip rather than a repaint.
+export function setOutputMode(on) {
+    outputMode = !!on;
+    for (const c of active) setVisible(c, true);
 }
 
 /// Show exactly this set of clips and no others. Everything else is paused —

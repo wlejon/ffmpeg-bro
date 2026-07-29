@@ -15,6 +15,7 @@
 | `C` | crop handles on the picture (`Esc` leaves) |
 | `S` | split the selection at the playhead |
 | `G` | grid / stacked layout |
+| `O` | the output on the monitor instead of the clips |
 | `E` | the Encode stage (`Esc` goes back to the edit) |
 | `D` | the Capture stage — a device, watched and recorded |
 | `I` | the Sources stage — what is actually in the files |

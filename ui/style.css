@@ -225,6 +225,33 @@ button.st.warn .st-name::after {
     display: block;
     object-fit: fill;
 }
+/* The output preview: not a clip, so not placed like one. It *is* the canvas —
+   the whole picture at the size the render makes it — which is why it fills the
+   stage rather than being fitted into a rectangle. See ui/output.js. */
+.outframe {
+    position: absolute;
+    display: block;
+    object-fit: fill;
+}
+
+/* Why the preview has no picture. Over the middle of the stage, because what it
+   is explaining is the blank rectangle underneath it. */
+#out-note {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 70%;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.72);
+    color: var(--accent);
+    font-size: var(--fs-sm);
+    text-align: center;
+    pointer-events: none;
+    z-index: 950;
+}
+
 /* The ring sits over the picture and takes no space, so marking a selection
    never moves what it is marking. */
 .clipframe .ring {
