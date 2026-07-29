@@ -908,10 +908,18 @@ export function derive(spec, sources, opts = {}) {
         // so the graph and the render cannot disagree about where the picture
         // starts out.
         const onDevice = inputOnDevice(spec, clip.input);
+        // `from` and `at` are this clip's two clocks: where its frames are read
+        // from in the file, and where they land on the render's. The renderer
+        // needs the first (it is `ExportGraphInput::from`, the seek); the
+        // *viewer* needs both, because the difference between them is what puts
+        // a filter's `enable=` on the render's clock while playback is running
+        // on the file's — see ui/graph/playback.js. Written here because this is
+        // where the window is worked out, and a second place that subtracted
+        // them would be a second answer to what time it is.
         const input = g.add({ kind: 'input', index: i, path: clip.path,
                               input: clip.input === undefined ? -1 : clip.input,
-                              anchor: `${key}/in`, from: w.srcIn, onDevice,
-                              outs: [] });
+                              anchor: `${key}/in`, from: w.srcIn, at: w.offset + off,
+                              onDevice, outs: [] });
         inputs.set(key, input);
         // **A pad is added when something reads it**, which is the rule the
         // sound side already followed and which the picture side could take for

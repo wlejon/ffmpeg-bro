@@ -268,12 +268,17 @@ function empty() {
     ];
 }
 
-/// Said here rather than left to be found out. Playback decodes through
-/// `<video>` and has no filter path, so a filter you insert is invisible until
-/// you render — which, without saying so, reads as the filter not working.
+/// Said here rather than left to be found out.
+///
+/// The viewer plays a clip's own filters now — its element is pointed at the
+/// input with the chain on it, see ui/graph/playback.js — so what is left to
+/// say is which filters it does *not* show: the ones over the whole canvas,
+/// which belong to no clip and have no element to be played by. A clip whose own
+/// chain cannot be shown wears the `fx` badge and says why on the picture, so
+/// that half needs nothing here.
 function filtersNote() {
-    return 'Filters run when you render, and in the export preview. The viewer plays ' +
-           'the source files directly and cannot show them.';
+    return 'A clip’s own filters play in the viewer. Filters over the whole picture — ' +
+           'after compositing, after mixing — run when you render and in the export preview.';
 }
 
 // ── a node ─────────────────────────────────────────────────────────────────

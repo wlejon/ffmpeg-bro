@@ -229,9 +229,12 @@ button.st.warn .st-name::after {
 .clipframe.sel .ring { display: block; border: 2px solid rgba(255, 140, 66, 0.5); }
 .clipframe.primary .ring { display: block; border: 2px solid var(--accent); }
 
-/* A clip carrying filters that playback cannot show. On the picture, because
-   that is where they are missing from — the alternative is a picture that
-   silently is not what the render will be. */
+/* A clip carrying filters that playback cannot show — which is now the
+   exception rather than the rule: an element plays its clip's chain, and this
+   is for the two cases where doing so would be a lie (a filter that resizes the
+   picture, a chain that forks). On the picture, because that is where they are
+   missing from; the alternative is a picture that silently is not what the
+   render will be. The frame's `title` says which. */
 .clipframe.filtered .ring::after {
     content: 'fx';
     position: absolute;

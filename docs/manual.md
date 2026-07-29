@@ -1108,13 +1108,44 @@ each other on every `ctest` run — the same edit rendered both ways, compared a
 PSNR, 43 dB and holding — so this is a choice about what is *expressible*, not
 about which is better.
 
-Two consequences worth knowing. The command bar stops calling its filtergraph a
+One consequence worth knowing: the command bar stops calling its filtergraph a
 translation, because on this path it is not one: those are the chains
-libavfilter parses, all but the last. And **the viewer cannot show you a
-filter** — playback is the engine decoding the file straight into a `<video>`,
-with no filter path anywhere in it. Clips carrying filters are marked `fx` in
-the picture rather than left looking as though the filter did nothing; the
-export preview is where you see what it does.
+libavfilter parses, all but the last.
+
+### A filter in the viewer
+
+The program monitor shows them. A clip with filters of its own plays them: its
+`<video>` is pointed at the clip's input **with the clip's chain on it**, which
+libav opens as one demuxer, one decoder and one filtergraph, and hands over as
+frames. It is the same mechanism a `-f lavfi` input and a live capture pad
+already reach the screen by; `src/native/playback_filter.h` is the whole of it.
+
+What runs is the filters *you* put there, in the order the graph runs them —
+the derivation's own `trim`, `crop`, `scale` and opacity are left out, because
+the viewer already does every one of those with the playhead, the crop window,
+the placement rectangle and a style. The conversions are not left out: a
+`negate` spliced in after the derivation's `format=rgba` inverts red, green and
+blue, and the same filter handed the decoder's yuv420p would invert luma and
+chroma, so `format` is kept and `scale` is kept at the picture's own size with
+its colour arguments untouched.
+
+`enable=` comes on where it will come on in the render. Playback runs on the
+file's own timestamps and a span is written on the render's clock, so the view
+carries the difference between them — the same mapping the When strip's mark
+uses, which is why the mark and the picture agree.
+
+Two things it will not show, and both keep the `fx` badge rather than drawing
+something nearly right:
+
+| | |
+|---|---|
+| a filter that **changes the size** of the picture | the viewer places a clip by the rectangle its source has, and the render overlays whatever the chain made at that same top-left — a cropped picture stretched back to full size is a picture the render never makes. The badge says both sizes. |
+| filters that are **not one run** | a fork, or a node wired in by hand from somewhere else. Playback is one stream through one chain, and half a graph shown as though it were all of it is worse than the badge. |
+
+A chain libavfilter will not take is refused the same way, with libav's own
+sentence on the picture — which means a mistyped filter argument is reported
+when you type it rather than when you render. The export preview is still where
+you see the *composition*: this is one clip's own filters, not the canvas.
 
 ## Output
 
@@ -2257,7 +2288,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-decodetest <file> [--rotated <file>] [--sound-only <file>]
 ./build/Release/ffmpeg-bro-exporttest <file> [<file2>] # renderer: geometry, opacity, mix, cancel
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
-./build/Release/ffmpeg-bro-inputtest <file>          # an -i: forced demuxer, options, window, token
+./build/Release/ffmpeg-bro-inputtest <file> [<rotated>]  # an -i: forced demuxer, options, window, token, filters
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
 ./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, recording one, and a session of several
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
@@ -2271,7 +2302,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js         # needs no media
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last two sections
 ```
 
 `hwtest` has the same problem one further on: **CI has no graphics card**, and
@@ -2384,6 +2415,23 @@ with the key named, `-ss` and `-t` moving the input's own clock — checked in
 pixels, by asking a seeked reader for its zero and an unseeked one for the same
 moment — and the token bro's media backend opens a registered input by.
 
+The last third of it is the other token: **an input with filters on it**, which
+is what a `<video>` on the timeline plays when the clip carries any. Asserted by
+decoding the frames back through bro's own registry rather than by reading a
+size, because a chain that quietly did nothing would report the same width as
+one that worked. `negate` is the filter, because its effect can be *predicted* —
+the picture that comes out has to be 255 minus the one that went in, which a
+chain that ran nothing cannot land on by accident — and then the same filter
+carrying `enable='gt(t,10)'` twice with nothing changed but the view's `shift`,
+which is the only way to see from outside that a filter is on the render's clock
+and not the file's: at zero the first frame is before the span and comes back
+untouched, and moved twenty seconds along it comes back inverted. Then a `crop`
+for the sizes, a seek for the graph being rebuilt across one, `volume=0` for the sound
+half with the *picture* checked to be untouched and undecoded beside it, a
+filter option nothing has for the refusal, and a clip shot sideways for the
+turn: the chain sees the picture the right way up and the track then asks for no
+turn of its own, both halves asserted because either alone passes for a bug.
+
 `seqtest` is the inputs whose content is assembled, and most of what it asserts
 is what the grouping *refuses*: a lone numbered file is a still, a folder of two
 runs and a stray picture is two sequences, and an unpadded run crossing from one
@@ -2487,7 +2535,8 @@ the translation into a filter graph is a pure function of it, so the graph is ch
 against specs written out by hand — including the edits it must refuse rather than
 approximate.
 
-`ui_graph.js` needs none either, and watches the graph from inside rather than
+`ui_graph.js` needs one only for its last two sections, and watches the graph
+from inside rather than
 through the string it prints: the model, the printer's chain rule on shapes the
 derivation does not produce, and the whole of what makes an edited graph
 survive a rebuilt one. A filter lands on the wire it names and takes the pad
@@ -2496,6 +2545,16 @@ reports which control it took; a lock that happens to agree has outranked
 nothing; a split copies both halves' filters and a delete takes them away; and
 the run graph differs from the printed one by exactly one chain with the
 inserted filter in both.
+
+Given a file it goes on to the wiring gesture on the real stage, and then to
+**a filter in the viewer**: inserting one points the clip's element at a
+filtered view of its input and takes the `fx` badge off, the element decodes at
+the size the chain produces, taking the filters off puts it back on the input,
+and the two cases that keep the badge — a filter that changes the size of the
+picture, and a chain libavfilter will not parse — do so with a sentence on the
+picture saying which. Every one of them goes through `overlay.insert`, which is
+what the palette calls, so the src moves because the application reacted and not
+because the test asked it to.
 
 `ui_measure.js` is the half above that: a measurement started, run, read and
 acted on. It clicks `Crop` and finds `cropdetect` on the graph and in the
@@ -2605,11 +2664,15 @@ the order shown, carries libavcodec's own option table and prints as one
 
 Honest list of what does not work:
 
-- **Filters on playback.** A filter you put on the graph runs when you render,
-  in the export preview, and in the node's own preview on the Graph stage. The
-  *viewer* cannot show it: playback is the engine decoding into a `<video>` and
-  there is no filter anywhere in that path. Filtered clips are marked `fx` rather
-  than left looking broken.
+- **A filter that resizes the picture, on playback.** Most of them play now —
+  see [A filter in the viewer](#a-filter-in-the-viewer) — and the exception is
+  the one where the viewer's own layout and the render's disagree: this
+  application places a clip by the rectangle its *source* has, and libavfilter
+  hands back whatever size the chain made. Showing that stretched into the
+  rectangle would be a picture the render never produces, so the clip keeps its
+  `fx` badge and the badge says both sizes. Fixing it properly means the
+  placement rectangle coming from the chain's output rather than from the
+  probe — one number, in one place, and a change to what a clip's size *is*.
 - **Scrubbing a node.** ▶ plays one forward from where the previews were taken,
   and that is the only way to move through it: there is no scrub bar, no way
   back, and nothing to jump with. Somewhere else to start from means moving the
@@ -2623,15 +2686,17 @@ Honest list of what does not work:
   argument the project file below is made on. `Give it back` covers the one case
   where "again" is ambiguous — a pad handed to the derivation.
 - **A generated source in the viewer.** A `testsrc` or a `movie` renders and
-  previews on its own card, and the *viewer* cannot show it for the same reason
-  it cannot show a filter: playback on the timeline is the engine decoding a
-  file into a `<video>`, and the filtergraph is not in that path. A render with
-  nothing on the timeline is therefore something you watch on the Graph stage
-  and on the Encode stage's preview, not on the program monitor. The Capture
-  stage's composition is the shape of the answer — a filtergraph's output
-  playing in an ordinary `<video>` — and what it does not have is the other
-  half: a session is pushed by devices on the wall clock, and a timeline is
-  pulled by a playhead that can be dragged.
+  previews on its own card, and the *viewer* cannot show it — no longer because
+  there is no filtergraph in the playback path (there is one now, per clip), but
+  because a generator is a node with **no clip**. Every element on the program
+  monitor belongs to something laid out on the timeline: it is where the picture
+  goes, how long it is there and which moment of it is on screen. A `color`
+  feeding an `overlay` has none of those, and a render with nothing on the
+  timeline at all is therefore something you watch on the Graph stage and on the
+  Encode stage's preview. What would close it is a lane that holds a generator
+  as though it were a clip — a length and a position for something that has
+  neither of its own — which is a decision about the *edit* and not about
+  playback.
 - **A generator that follows the render on its own.** A source now says when
   its numbers and the render's have drifted apart, and `Match the render` brings
   it up to date in one press — but nothing does it unasked, because a `color`
@@ -2689,12 +2754,16 @@ Honest list of what does not work:
   surfaced as anything better than that.
 - **Subtitles in the viewer.** A soft subtitle track is written correctly,
   plays in any player and is invisible here for the whole time you are working
-  on it: bro's `<video>` decodes into an element and there is no subtitle path
-  anywhere in that pipeline, which is the same structural reason a filter
-  cannot be previewed. Burned-in subtitles *are* visible, because a node
-  preview and the export preview are real renders. The Write stage says which
-  of the two you are looking at rather than leaving the viewer to imply the
-  track was not written.
+  on it: bro's `<video>` decodes pictures and sound and there is no subtitle
+  path anywhere in that pipeline. What has changed is that there is now a way
+  to fake one honestly — a clip's playback chain is a filtergraph, and
+  `subtitles=` is a filter — so this is no longer structural. What it needs is
+  the decisions around it: whose track, when a clip's input carries three; a
+  control to turn it on, since burning them in for the screen is not the same
+  statement as writing them soft; and an answer for a track that came from a
+  separate file. Burned-in subtitles *are* visible, because a node preview and
+  the export preview are real renders, and the Write stage says which of the two
+  you are looking at.
 - **An editor for the cues themselves.** Everything here reads a subtitle file
   and writes one; nothing lets you type a line, retime one against the
   waveform, or split a cue at the playhead. The timeline has the lane that

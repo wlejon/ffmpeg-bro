@@ -12,6 +12,7 @@
 
 import { project, isSelected, hasPicture } from './project.js';
 import { inserts } from './graph/overlay.js';
+import { srcFor, whyFor } from './graph/playback.js';
 
 /// Does this clip have filters of its own on the graph? Read here rather than
 /// pushed in, because the overlay is small and this runs once per clip per
@@ -19,6 +20,16 @@ import { inserts } from './graph/overlay.js';
 function hasFilters(id) {
     const key = `clip:${id}/`;
     return inserts().some((n) => n.anchor.indexOf(key) === 0);
+}
+
+/// What this clip's `<video>` should be playing: the filtered view of its input
+/// where there is one, and the input's own token where there is not.
+///
+/// One place, because two callers set a src — the element is built once and
+/// re-pointed whenever the filters change — and a clip playing the file while
+/// the badge says it is filtered would be the worst of both.
+function wantedSrc(clip) {
+    return srcFor(clip.id) || clip.src || clip.path;
 }
 
 let stage = null;       // the output canvas, sized to the project aspect
@@ -70,8 +81,10 @@ export function attachClip(clip) {
     clip.video = video;
     // The token naming the clip's input, not its path: an input's forced
     // demuxer, options and window have to reach playback, and a `<video>` src
-    // is only a string. See src/native/ffmpeg_input.h.
-    video.src = clip.src || clip.path;
+    // is only a string. See src/native/ffmpeg_input.h — and playback_filter.h
+    // for the other token this can be, which is that input with the clip's own
+    // filters on it.
+    video.src = wantedSrc(clip);
     video.volume = 1;
     setVisible(clip, false);
 }
@@ -253,12 +266,14 @@ function place(clip, sw, sh) {
     // a ring on the cell there is nothing tying the two together.
     clip.frame.classList.toggle('sel', project.clips.length > 1 && isSelected(clip));
     clip.frame.classList.toggle('primary', project.selected === clip);
-    // A clip with filters of its own on the graph does not look filtered here
-    // and cannot: playback is the engine decoding the file into a <video>, with
-    // no filter path anywhere in it. The render shows them and so does the
-    // export preview. A badge is the honest answer — leaving the picture
-    // unmarked would read as the filter not working.
-    clip.frame.classList.toggle('filtered', hasFilters(clip.id));
+    // A clip whose filters this picture is *not* showing. Most of them are now
+    // — the element is playing the chain rather than the file, see
+    // graph/playback.js — so the badge is the exception it was always meant to
+    // be: a chain that forks, or one that changes the size of the picture and
+    // would have to be drawn into a rectangle the render never puts it in.
+    // Leaving those unmarked would read as the filter not working.
+    clip.frame.classList.toggle('filtered', hasFilters(clip.id) && !srcFor(clip.id));
+    clip.frame.title = whyFor(clip.id);
 
     // ...and the picture inside it stays whole, pushed up and left so the
     // cropped edges fall outside.
@@ -271,6 +286,38 @@ function place(clip, sw, sh) {
 /// Re-place one clip after its geometry changed.
 export function refresh(clip) {
     place(clip, stage.clientWidth, stage.clientHeight);
+}
+
+/// Re-point every element at what it should be playing, after the filters on a
+/// clip have changed.
+///
+/// Setting a src builds a new source and a new decoder — the element *is* the
+/// decoder — so this is done only for the clips whose answer actually changed.
+///
+/// **The clips it re-pointed come back**, and putting them right is the
+/// caller's: an element handed a new src is an element at zero with the
+/// element's own default volume, and both the playhead and the mix are the
+/// transport's business rather than this file's. Returning them rather than
+/// reaching for `transport` also keeps the import going one way.
+/// `rebuild` is the clips whose src has to be set again *whether or not the
+/// string changed*: a filtered view can be redefined under the token it already
+/// had — a clip dragged along the timeline moves what moment its filters think
+/// they are looking at — and a source that resolved the old one holds it for as
+/// long as it is open.
+export function refreshSources(rebuild) {
+    const moved = [];
+    const again = new Set(rebuild || []);
+    for (const c of project.clips) {
+        if (!c.video) continue;
+        const want = wantedSrc(c);
+        if (c.video.src === want && !again.has(c.id)) continue;
+        try {
+            c.video.pause();
+            c.video.src = want;
+        } catch (e) { /* the element has gone */ }
+        moved.push(c);
+    }
+    return moved;
 }
 
 /// Re-place everything — what a layout-mode or canvas-size change needs.

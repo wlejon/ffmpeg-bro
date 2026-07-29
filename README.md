@@ -108,9 +108,11 @@ The short version — the manual's [Not yet](docs/manual.md#not-yet) section is 
 honest, complete list:
 
 - No undo, anywhere.
-- Playback cannot show filters, soft subtitles or generated sources — those appear
-  in node previews and the export preview, which are real renders; affected clips
-  are badged `fx` rather than left looking broken.
+- Playback shows a clip's own filters, and not a filter over the whole picture,
+  a soft subtitle track or a generated source with no clip behind it — those
+  appear in node previews and the export preview, which are real renders. A clip
+  whose filters cannot be shown honestly (one that resizes the picture, one that
+  forks) is badged `fx` rather than left looking broken.
 - A phone clip plays, lays out and exports the right way up, but the timeline's
   filmstrip still shows its frames on their side.
 - No project file — graph work persists per machine in local storage, not per

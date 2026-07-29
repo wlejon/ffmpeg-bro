@@ -45,6 +45,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_input.cpp
     src/native/ffmpeg_job.cpp
     src/native/ffmpeg_report.cpp
+    src/native/playback_filter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
     src/native/export_copy.cpp
@@ -214,7 +215,7 @@ add_test(NAME decode COMMAND ffmpeg-bro-decodetest "${FIXTURE_A}"
          --rotated "${FIXTURE_ROTATED}" --sound-only "${FIXTURE_SOUND}")
 add_test(NAME export COMMAND ffmpeg-bro-exporttest "${FIXTURE_A}" "${FIXTURE_B}")
 add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
-add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}")
+add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}" "${FIXTURE_ROTATED}")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
 # Needs no fixture: the device it records from is `lavfi`, which produces its

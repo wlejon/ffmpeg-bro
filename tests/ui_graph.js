@@ -2802,4 +2802,90 @@ if (!media) {
     }
 }
 
+// ── a filter, in the viewer ────────────────────────────────────────────────
+//
+// The program monitor used to be the one place in this application that could
+// not show a filter, and the reason was structural: playback is bro's `<video>`
+// decoding a file. What changed is what the element is pointed *at* — a view,
+// which is the clip's input with the clip's own chain on it — so what is
+// asserted here is the src, and then the two cases where the honest answer is
+// still the badge.
+//
+// Every one of these goes through the real change channel: `overlay.insert` is
+// what the palette calls, and the src moves because the application reacted to
+// it and not because this test asked it to.
+if (!media) {
+    console.log('\nfilters on playback — skipped, no media file given');
+} else {
+    console.log('\nfilters on playback');
+    const A = globalThis.__ffmpegBro;
+    overlay.clear();
+    if (!A.project.clips.length) dropFiles(400, 300, [media]);
+    waitFor('a clip on the timeline', () => A.project.clips.length >= 1);
+    pump(200);
+
+    const clip = A.project.clips[0];
+    const anchor = `clip:${clip.id}/after-scale`;
+    const classOf = () => clip.frame.getAttribute('class') || '';
+    const badged = () => classOf().indexOf('filtered') >= 0;
+
+    ok(!!clip.video, 'the clip has an element');
+    ok(clip.video.src.indexOf('/@fx/') !== 0,
+       'a clip with no filters plays its input, plainly');
+    ok(!badged(), 'and wears no fx badge');
+
+    // The ordinary case: a filter that changes pixels and not shape.
+    overlay.insert(anchor, 'negate');
+    pump(300);
+    ok(clip.video.src.indexOf('/@fx/') === 0,
+       'a filter on a clip points its element at a filtered view of its input');
+    ok(!badged(),
+       'and the fx badge goes, because the picture on the screen now has the filter in it');
+    // The element is the decoder, so a src that resolves and then decodes
+    // nothing is a black rectangle. What it reports having is the one thing
+    // from out here that says the frames are arriving — and the size is the
+    // chain's, which for a filter that keeps the size is the file's.
+    ok(waitFor('the filtered view to decode', () => clip.video.videoWidth > 0, 8000) &&
+       clip.video.videoWidth === clip.width,
+       `and it decodes, at the size the chain produces (${clip.video.videoWidth}x` +
+       `${clip.video.videoHeight})`);
+
+    // Two of them, and the second is where the *order* shows: they run in the
+    // order the graph runs them, which is the order they were spliced in.
+    overlay.insert(anchor, 'hflip');
+    pump(300);
+    ok(clip.video.src.indexOf('/@fx/') === 0, 'a second filter is still one chain');
+
+    overlay.clear();
+    pump(300);
+    same(clip.video.src, clip.src,
+         'taking the filters off puts the element back on the input, exactly');
+    ok(!badged(), 'and there is nothing left to badge');
+
+    // **A filter that resizes the picture is refused.** The viewer places a
+    // clip by the rectangle its source has; the render overlays whatever the
+    // chain produced at the same top-left. Drawing a cropped picture stretched
+    // back to full size would be a picture the render never makes.
+    overlay.insert(anchor, 'crop', { pos: ['iw/2', 'ih', '0', '0'] });
+    pump(400);
+    ok(clip.video.src.indexOf('/@fx/') !== 0,
+       'a filter that changes the size of the picture is not played');
+    ok(badged(), 'the fx badge comes back for it');
+    ok((clip.frame.title || '').indexOf('size') >= 0,
+       `and the picture says why: ${clip.frame.title}`);
+
+    // And a chain libavfilter will not take. The message is libav's own,
+    // arriving through the same refusal path as a demuxer option nothing
+    // consumed — an unknown option is an error at both ends.
+    overlay.clear();
+    overlay.insert(anchor, 'eq', { params: { nosuchoption: '3' } });
+    pump(400);
+    ok(clip.video.src.indexOf('/@fx/') !== 0, 'a chain that will not parse is not played');
+    ok(badged() && (clip.frame.title || '').length > 0,
+       `and says what libav said: ${clip.frame.title}`);
+
+    overlay.clear();
+    pump(200);
+}
+
 console.log(`\nPASS ui_graph — ${checks} checks`);

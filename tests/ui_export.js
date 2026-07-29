@@ -2873,11 +2873,16 @@ console.log('\na filter inserted on the graph');
     ok(A.command.currentCommand().indexOf('hflip') > 0,
        'the command bar prints the filter it is about to run');
 
-    // The clip is marked in the viewer, because playback decodes through
-    // <video> and has no filter path — an unmarked picture would read as the
-    // filter not working.
-    ok(qq('#viewer .clipframe.filtered').length >= 1,
-       'and the picture says it is not showing what will be rendered');
+    // And the viewer shows it. `hflip` keeps the size of the picture, so the
+    // clip's element is pointed at its input with the chain on it rather than
+    // at the input alone — see ui/graph/playback.js. The `fx` badge is what a
+    // clip wears when playback *cannot* show its filters, so its absence here
+    // is the assertion: an unmarked picture that was not filtered would read as
+    // the filter not working.
+    ok((A.project.clips[0].video.src || '').indexOf('/@fx/') === 0,
+       'and the viewer plays the filter rather than the file');
+    ok(qq('#viewer .clipframe.filtered').length === 0,
+       'so nothing is badged as unshowable');
 
     screenshot('out/export-05-graph-with-a-filter.png');
 

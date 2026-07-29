@@ -37,6 +37,7 @@ import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
+import * as graphPlayback from './graph/playback.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
 import { initSources, drawSources } from './sources.js';
@@ -44,6 +45,7 @@ import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
          applyAudioAll, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
 import * as report from './report.js';
+import { previewSpec, specSources } from './export/spec.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -88,6 +90,18 @@ let osdTimer = 0;
 el('libav').textContent = bro.ffmpeg.version;
 
 viewer.initViewer({ stage, viewer: viewerEl });
+
+// What the program monitor plays: each clip's input with that clip's own
+// filters on it. The window is the **whole timeline**, because a clip outside
+// the export range is still on the screen — and the origin is left to
+// `buildSpec`, which puts it where the range starts, so a filter's `enable=`
+// comes on at the moment the render will bring it on rather than a range's
+// worth of seconds away from it. See ui/graph/playback.js.
+graphPlayback.initPlayback({
+    spec: () => previewSpec({ start: 0, end: Math.max(duration(), 1e-3) }),
+    sources: specSources,
+    overlay: graphOverlay.current,
+});
 
 initSources({
     list: el('src-list'),
@@ -295,7 +309,44 @@ onChange((what) => {
     // measures is zero behind a `display:none`, and it is rebuilt on the way
     // in anyway.
     if (shell.currentStage() === 'graph') drawGraph();
+    // And so is what the viewer is playing: a clip's filters are part of the
+    // graph, and a clip moved along the timeline changes which moment its
+    // filters think they are looking at.
+    //
+    // **Not while a drag is in flight.** Re-pointing an element builds a source,
+    // a decoder and a filtergraph, and `move` arrives on every mouse move; the
+    // `moved` that ends the drag is what puts it right. A clip whose filters are
+    // a frame out of date for the length of a drag is a trade nobody notices,
+    // and one that stalls under the cursor is a trade everybody does.
+    if (what !== 'move') refreshPlayback();
 });
+
+/// Point the viewer's elements at the filtered inputs, where a clip has
+/// filters this can show.
+///
+/// Here rather than inside the viewer because putting a re-pointed element
+/// right is the transport's job — an element handed a new src is at zero with
+/// the element's own volume — and the viewer deliberately does not reach for
+/// the transport. Called from both change channels: the model's, above, and the
+/// graph overlay's, which is where inserting a filter arrives.
+function refreshPlayback() {
+    const changedViews = graphPlayback.refresh();
+    if (changedViews.length) {
+        const moved = viewer.refreshSources(changedViews);
+        if (moved.length) {
+            applyAudioAll();
+            setPlayhead(transport.t);
+        }
+    }
+    // The `fx` badge is on the picture and says which clips are *not* showing
+    // their filters, so it moves whenever the answer above does.
+    viewer.refreshAll();
+}
+
+// A filter inserted, edited or taken off. The overlay has its own channel
+// because a graph edit is not a change to the timeline, and this is the one
+// thing outside the Graph stage that has to hear about it.
+graphOverlay.onChange(() => refreshPlayback());
 
 // A file named on the command line, handed over by the host binding.
 if (bro.ffmpeg.openOnStart) open(bro.ffmpeg.openOnStart);

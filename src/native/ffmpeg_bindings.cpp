@@ -8,6 +8,7 @@
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_hardware.h"
 #include "ffmpeg_report.h"
+#include "playback_filter.h"
 
 extern "C" {
 #include <libavutil/pixdesc.h>
@@ -1551,6 +1552,78 @@ JSValue js_inputsToken(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     return JS_NewStringLen(ctx, token.data(), token.size());
 }
 
+// ── bro.ffmpeg.views ───────────────────────────────────────────────────────
+//
+// A view is an input plus the filters its streams go through on the way to the
+// screen — what makes the program monitor show the picture the render will make
+// rather than the one the file holds. The registry is the input registry's
+// shape and exists for the same reason: `<video src>` is a string, so a filter
+// on playback has to be part of what is being played.
+//
+// **`define` does the work rather than merely remembering.** It opens the
+// input, builds the chains and reports what they turned out to produce, because
+// the answer decides what the caller does with it: a chain that will not parse
+// is a message worth showing the moment it is typed, and a chain that changes
+// the size of the picture is one the viewer says it cannot show rather than
+// showing at a size the render never puts it at. An element pointed at a token
+// that fails is a black rectangle and a line in a log.
+//
+// See playback_filter.h for what is and is not in a view, and docs/api.md.
+
+JSValue js_viewsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "views.define(id, view) requires an id and a view");
+    const char* id = JS_ToCString(ctx, argv[0]);
+    if (!id) return JS_EXCEPTION;
+
+    PlaybackView v;
+    JSValue input = JS_GetPropertyStr(ctx, argv[1], "input");
+    v.input = inputFromJs(ctx, input);
+    JS_FreeValue(ctx, input);
+    v.video = strProp(ctx, argv[1], "video", "");
+    v.audio = strProp(ctx, argv[1], "audio", "");
+    v.shift = numProp(ctx, argv[1], "shift", 0);
+    if (v.input.path.empty()) {
+        JS_FreeCString(ctx, id);
+        return JS_ThrowTypeError(ctx, "views.define() needs an input with a path in it");
+    }
+
+    ViewFacts facts;
+    std::string token;
+    std::string err;
+    // One call, because settling and registering are one act: a token that
+    // resolves to a view nothing has ever built is a `<video>` that fails at
+    // the open. It settles only when the input or the chains changed — see
+    // `defineSettled`, which is what makes re-registering on every frame of a
+    // drag cost nothing.
+    const bool ok = defineSettled(id, v, &facts, &token, &err);
+    JS_FreeCString(ctx, id);
+    if (!ok) return JS_ThrowTypeError(ctx, "%s", err.c_str());
+
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "src", JS_NewStringLen(ctx, token.data(), token.size()));
+    JS_SetPropertyStr(ctx, o, "video", JS_NewBool(ctx, facts.video));
+    JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, facts.width));
+    JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, facts.height));
+    // What went in, so a caller can ask whether the chain changed the shape of
+    // the picture without probing the file a second time and applying the
+    // display matrix itself.
+    JS_SetPropertyStr(ctx, o, "sourceWidth", JS_NewInt32(ctx, facts.sourceWidth));
+    JS_SetPropertyStr(ctx, o, "sourceHeight", JS_NewInt32(ctx, facts.sourceHeight));
+    JS_SetPropertyStr(ctx, o, "audio", JS_NewBool(ctx, facts.audio));
+    JS_SetPropertyStr(ctx, o, "sampleRate", JS_NewInt32(ctx, facts.sampleRate));
+    JS_SetPropertyStr(ctx, o, "channels", JS_NewInt32(ctx, facts.channels));
+    return o;
+}
+
+JSValue js_viewsForget(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::string id;
+    if (!takeName(ctx, argc, argv, &id))
+        return JS_ThrowTypeError(ctx, "views.forget(id) requires an id");
+    forgetView(id);
+    return JS_UNDEFINED;
+}
+
 JSValue js_tempPath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "tempPath(name) requires a name");
@@ -1802,6 +1875,15 @@ void installFfmpegBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, inputs, "token",
                       JS_NewCFunction(ctx, js_inputsToken, "token", 1));
     JS_SetPropertyStr(ctx, ns, "inputs", inputs);
+
+    // The same registry one turn further on: an input with filters on it, which
+    // is how a filter reaches playback at all.
+    JSValue views = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, views, "define",
+                      JS_NewCFunction(ctx, js_viewsDefine, "define", 2));
+    JS_SetPropertyStr(ctx, views, "forget",
+                      JS_NewCFunction(ctx, js_viewsForget, "forget", 1));
+    JS_SetPropertyStr(ctx, ns, "views", views);
 
     JSValue render = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, render, "start", JS_NewCFunction(ctx, js_renderStart, "start", 1));

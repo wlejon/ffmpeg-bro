@@ -2,6 +2,7 @@
 
 #include "ffmpeg_capture.h"
 #include "live_tap.h"
+#include "playback_filter.h"
 
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_report.h"
@@ -413,7 +414,7 @@ public:
         if (fmt_) avformat_close_input(&fmt_);
     }
 
-    bool open(const MediaInput& in) {
+    bool open(const MediaInput& in, const PlaybackView* view = nullptr) {
         std::string why;
         if (!openInput(&fmt_, in, &why)) {
             // Not this backend's file, unreadable, or opened with an option
@@ -458,6 +459,23 @@ public:
         const TimeNs formatDuration =
             static_cast<TimeNs>(llround(inputDuration(in, formatSeconds) * 1e9));
 
+        // **Filters before tracks**, because a filtered track is described by
+        // what its chain produces and nothing outside libavfilter knows that
+        // until the graph has been configured with real formats at the top. So
+        // the first frame is decoded here, the sink is asked how big it is, and
+        // the track that goes to bro is the *output* of the chain — which is
+        // what makes a `crop` play as a cropped picture rather than as a full
+        // one with a hole in it.
+        if (view && !attachFilters(*view, in, &why)) {
+            // Not fallen back to the unfiltered stream. A chain that will not
+            // run and a picture that plays anyway is the exact failure this
+            // whole path exists against: it would look like the filter doing
+            // nothing. `settleView` is what a caller asks *before* pointing an
+            // element here, so this is the unexpected half and it says so.
+            LOG_WARN("ffmpeg: %s", why.c_str());
+            return false;
+        }
+
         for (unsigned i = 0; i < fmt_->nb_streams; ++i) {
             AVStream* st = fmt_->streams[i];
             AVCodecParameters* par = st->codecpar;
@@ -468,30 +486,42 @@ public:
             // audio file; treating one as the video track would "play" a JPEG.
             if (isVideo && (st->disposition & AV_DISPOSITION_ATTACHED_PIC)) continue;
 
+            // The chain on this stream, if it has one. Everything below asks it
+            // rather than the container wherever the two can disagree.
+            const StreamFilter* fx = filterFor(static_cast<int>(i));
+
             TrackInfo t;
             // bro treats track id 0 as "unset", and stream 0 is a perfectly
             // ordinary stream, so shift by one.
             t.id = static_cast<uint32_t>(i) + 1;
             t.kind = isVideo ? TrackKind::Video : TrackKind::Audio;
-            t.codec = toBroCodec(par->codec_id);
+            t.codec = fx ? Codec::Other : toBroCodec(par->codec_id);
             if (isVideo) {
-                t.width = static_cast<uint32_t>(par->width);
-                t.height = static_cast<uint32_t>(par->height);
+                t.width = static_cast<uint32_t>(fx ? fx->width() : par->width);
+                t.height = static_cast<uint32_t>(fx ? fx->height() : par->height);
                 // Phones record landscape frames and write the correction into
                 // the container rather than turning the pixels, so this is the
                 // only thing that says a 1920x1080 clip is shown 1080x1920.
                 // `width`/`height` stay the size of what the decoder produces —
                 // the swap is bro's, in `VideoPipeline::displayWidth` — because
                 // this is metadata about the picture and not a property of it.
-                t.rotationDegrees = rotationOf(st);
+                //
+                // **A filtered track reports none**, because its turn has
+                // already happened: the filters have to see the picture the
+                // right way up (`crop=iw/2` means one thing on a portrait
+                // picture and another on the landscape frames the decoder
+                // produces), so the transpose is at the top of the chain and
+                // saying it again here would turn it twice.
+                t.rotationDegrees = fx ? 0 : rotationOf(st);
                 // Prefers the container's declared rate and falls back to one
                 // measured from the timestamps, which is what makes this
                 // sensible for a variable-frame-rate phone capture.
                 const AVRational fr = av_guess_frame_rate(fmt_, st, nullptr);
                 if (fr.num > 0 && fr.den > 0) t.frameRate = av_q2d(fr);
             } else {
-                t.sampleRate = static_cast<uint32_t>(par->sample_rate);
-                t.channels = static_cast<uint32_t>(par->ch_layout.nb_channels);
+                t.sampleRate = static_cast<uint32_t>(fx ? fx->sampleRate() : par->sample_rate);
+                t.channels =
+                    static_cast<uint32_t>(fx ? fx->channels() : par->ch_layout.nb_channels);
             }
             if (par->extradata && par->extradata_size > 0) {
                 t.codecPrivate.assign(par->extradata,
@@ -509,6 +539,25 @@ public:
             priv->streamIndex = static_cast<int>(i);
             priv->input = in;
             priv->wrapped = par->codec_id == AV_CODEC_ID_WRAPPED_AVFRAME;
+            // A filtered stream arrives as frames, so the decoder built from
+            // this track opens no codec and unwraps — the same crossing lavfi
+            // and a live pad already use. What the parameters have to say is
+            // therefore what the *chain* produces, since that is what the
+            // frames are: the codec id is the marker and the formats beside it
+            // are what the far end describes its output with.
+            if (fx) {
+                priv->wrapped = true;
+                priv->par->codec_id = AV_CODEC_ID_WRAPPED_AVFRAME;
+                priv->par->format = fx->format();
+                if (isVideo) {
+                    priv->par->width = fx->width();
+                    priv->par->height = fx->height();
+                } else {
+                    priv->par->sample_rate = fx->sampleRate();
+                    if (fx->layout())
+                        av_channel_layout_copy(&priv->par->ch_layout, fx->layout());
+                }
+            }
             t.backendPrivate = priv;
 
             if (isVideo && videoStreamIndex_ < 0) videoStreamIndex_ = static_cast<int>(i);
@@ -523,9 +572,38 @@ public:
     bool readPacket(MediaPacket& out) override {
         if (!fmt_ || !pkt_) return false;
         for (;;) {
+            // **What the graph is already holding comes out first.** A filter
+            // can answer one packet with several frames — or with none, and
+            // then with two — so the frames it has produced have to be drained
+            // before another packet goes in, or the element is handed pictures
+            // in the wrong order.
+            if (emitFiltered(out)) return true;
+            if (drained_) return false;
+
             av_packet_unref(pkt_);
             int rc = loop_.read(fmt_, pkt_);
-            if (rc < 0) return false;   // EOF or hard read error
+            if (rc < 0) {
+                // The end of the file is not the end of a filter: `tpad`,
+                // `tblend` and anything with a delay in it hold frames back
+                // until they are told there is no more. So the chains are
+                // flushed and drained, and only then is this stream over.
+                if (filtered_.empty()) return false;
+                drained_ = true;
+                for (auto& f : filtered_) {
+                    std::string why;
+                    f->filter->push(nullptr, &why);
+                }
+                continue;
+            }
+
+            if (StreamFilter* f = filterFor(pkt_->stream_index)) {
+                std::string why;
+                if (!f->push(pkt_, &why)) {
+                    LOG_WARN("ffmpeg: %s", why.c_str());
+                    return false;
+                }
+                continue;
+            }
 
             const uint32_t trackId = static_cast<uint32_t>(pkt_->stream_index) + 1;
             auto it = std::find_if(tracks_.begin(), tracks_.end(),
@@ -598,14 +676,142 @@ public:
             LOG_WARN("ffmpeg: seek to %.3fs failed: %s", pts / 1e9, avErr(rc).c_str());
             return false;
         }
+        // Every chain starts again from where the seek landed, decoder and
+        // graph both — see `StreamFilter::reset`. A frame from before the seek
+        // is a frame from somewhere else.
+        drained_ = false;
+        for (auto& f : filtered_) {
+            f->filter->reset();
+            if (f->pending) av_frame_free(&f->pending);
+        }
         return true;
     }
 
 private:
+    /// One filtered stream: the chain, which track it feeds, and the frame that
+    /// has come out of it and is waiting its turn.
+    ///
+    /// A `pending` per chain and not one queue between them, because the two
+    /// are pulled independently and picking which to hand over is a comparison
+    /// of two timestamps — see `emitFiltered`.
+    struct Filtered {
+        std::unique_ptr<StreamFilter> filter;
+        uint32_t trackId = 0;
+        TrackKind kind = TrackKind::Video;
+        AVRational timeBase{1, 1000};
+        AVFrame* pending = nullptr;
+        ~Filtered() { if (pending) av_frame_free(&pending); }
+    };
+
+    /// Build the chains this view asks for, one per kind, and settle them.
+    ///
+    /// The first stream of each kind, which is the one playback shows: a view
+    /// is a clip's filters and a clip is a picture and a sound, not a container
+    /// full of alternate angles.
+    bool attachFilters(const PlaybackView& view, const MediaInput& in, std::string* err) {
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool audio = pass == 1;
+            const std::string& chain = audio ? view.audio : view.video;
+            if (chain.empty()) continue;
+            const AVMediaType want = audio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
+            int index = -1;
+            for (unsigned i = 0; i < fmt_->nb_streams && index < 0; ++i) {
+                if (fmt_->streams[i]->codecpar->codec_type != want) continue;
+                if (!audio && (fmt_->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC))
+                    continue;
+                index = static_cast<int>(i);
+            }
+            // A filter on a stream the file does not have is not an error and
+            // not something to refuse the whole view over: a silent clip with a
+            // `volume` on it is a silent clip.
+            if (index < 0) continue;
+
+            auto f = std::make_unique<Filtered>();
+            f->filter = std::make_unique<StreamFilter>();
+            f->trackId = static_cast<uint32_t>(index) + 1;
+            f->kind = audio ? TrackKind::Audio : TrackKind::Video;
+            f->timeBase = fmt_->streams[index]->time_base;
+            // Where this clip sits on the timeline, less where the input's own
+            // zero is — the two halves of "what moment is this, as the render
+            // counts moments". See `PlaybackView::shift`.
+            const double shift = view.shift - startOffsetNs_ / 1e9;
+            if (!f->filter->open(fmt_, index, in, chain,
+                                 audio ? 0 : rotationOf(fmt_->streams[index]), shift, err))
+                return false;
+            if (!settleFilter(fmt_, *f->filter, err)) return false;
+            filtered_.push_back(std::move(f));
+        }
+        if (filtered_.empty()) return true;
+        // Settling read as far into the file as it took to decode a frame, so
+        // the demuxer goes back to the top and every chain starts again — the
+        // frames pushed to get the formats belong to the settle and not to the
+        // playback that follows it.
+        avformat_seek_file(fmt_, -1, INT64_MIN, 0, INT64_MAX, 0);
+        for (auto& f : filtered_) f->filter->reset();
+        return true;
+    }
+
+    StreamFilter* filterFor(int streamIndex) {
+        for (auto& f : filtered_)
+            if (f->filter->index() == streamIndex) return f->filter.get();
+        return nullptr;
+    }
+    const StreamFilter* filterFor(int streamIndex) const {
+        for (const auto& f : filtered_)
+            if (f->filter->index() == streamIndex) return f->filter.get();
+        return nullptr;
+    }
+
+    /// The next filtered frame due, as a packet — or false when every chain is
+    /// empty and wants feeding.
+    ///
+    /// **Whichever is earliest**, because two chains are two clocks running at
+    /// their own pace: a video filter holding three frames while the sound runs
+    /// ahead would otherwise hand the element a second of audio before the
+    /// picture that goes under it.
+    bool emitFiltered(MediaPacket& out) {
+        Filtered* pick = nullptr;
+        for (auto& f : filtered_) {
+            if (!f->pending) f->pending = f->filter->take();
+            if (!f->pending) continue;
+            if (!pick || f->pending->pts < pick->pending->pts) pick = f.get();
+        }
+        if (!pick) return false;
+
+        AVFrame* f = pick->pending;
+        pick->pending = nullptr;
+        TimeNs pts = f->pts != AV_NOPTS_VALUE ? toNs(f->pts, pick->timeBase) - startOffsetNs_ : 0;
+        // Past `-t` this input has ended, and the end of an input is the end of
+        // the stream — the same rule the unfiltered path applies below, said
+        // here because a filtered frame never reaches it. `drained_` is what
+        // turns "nothing to hand over" into "there will be nothing".
+        if (limitNs_ > 0 && pts >= limitNs_) {
+            av_frame_free(&f);
+            drained_ = true;
+            return false;
+        }
+        if (pts < 0) pts = 0;
+
+        out.trackId = pick->trackId;
+        out.codec = Codec::Other;
+        out.kind = pick->kind;
+        out.keyframe = true;          // every one of them is
+        out.pts = pts;
+        out.duration = 0;
+        out.data = wrapOwnedFrame(f); // takes the reference this holds
+        return out.data != nullptr;
+    }
+
     AVFormatContext* fmt_ = nullptr;
     AVPacket* pkt_ = nullptr;
     std::vector<TrackInfo> tracks_;
     InputLoop loop_;
+    /// The chains this source runs, none for an ordinary src. See
+    /// playback_filter.h for what one is and why it is not part of the input.
+    std::vector<std::unique_ptr<Filtered>> filtered_;
+    /// The file has ended and the chains have been told so. Set once, because
+    /// telling a buffersrc twice is an error, and cleared by a seek.
+    bool drained_ = false;
     int videoStreamIndex_ = -1;
     TimeNs startOffsetNs_ = 0;
     TimeNs limitNs_ = 0;
@@ -1085,6 +1291,15 @@ void registerFfmpegBackend() {
             auto live = std::make_unique<LiveSource>();
             if (!live->open(path)) return nullptr;
             return live;
+        }
+        // A view: an input, plus the filters its streams go through on the way
+        // to the screen. Tried before an input token because a view *names* an
+        // input and the two prefixes are distinct — see playback_filter.h.
+        PlaybackView view;
+        if (resolveView(path, &view)) {
+            auto src = std::make_unique<FFmpegSource>();
+            if (!src->open(view.input, &view)) return nullptr;
+            return src;
         }
         MediaInput in;
         if (!resolveToken(path, &in)) in.path = path;

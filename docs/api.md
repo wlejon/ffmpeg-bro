@@ -262,6 +262,42 @@ bro.ffmpeg.inputs.define("in3", { path, format, options, ss, to, itsoffset })
 bro.ffmpeg.inputs.forget("in3")
 bro.ffmpeg.inputs.token("in3")
 
+// The same registry one turn further on: an input **with filters on it**, which
+// is how a filtergraph reaches playback at all. `<video src="/@fx/clip-7">`
+// opens the input, decodes it, runs the chain and hands the frames to the
+// element — which is the same crossing a `-f lavfi` input and a live capture pad
+// already make, so there is no new mechanism in it.
+bro.ffmpeg.views.define("clip-7", {
+    input: { path, format, options, ss, t, ... },   // exactly an inputs.define()
+    video: "eq=contrast=1.4,hue=s=0",   // `-vf` syntax. Empty leaves the stream
+    audio: "volume=0.5",                // alone — and *undecoded*, so a filter
+                                        // on the sound costs no video decode.
+    shift: 12.5,   // seconds added to a frame's clock before the filters see it
+                   // and taken off again after. `enable=` names a moment on the
+                   // render's clock and playback runs on the file's; this is the
+                   // difference. Zero is the file's own clock.
+})
+// → { src: "/@fx/clip-7",
+//     video, width, height,        // what the chain produces
+//     sourceWidth, sourceHeight,   // what went into it, the right way up
+//     audio, sampleRate, channels }
+//
+// **It settles rather than merely remembering.** The input is opened and a frame
+// decoded per filtered stream, because nothing outside libavfilter will say what
+// a chain produces until the graph has been configured with real formats at the
+// top — and because the answer is what a caller decides on: a chain that will
+// not parse **throws**, with libav's own sentence, which is a message worth
+// having the moment a filter argument is typed rather than at the end of a
+// render. Re-registering the same id with the same input and the same chains
+// opens nothing: `shift` is a clock and a clock cannot change what a chain
+// produces, which is what makes calling this on every frame of a drag free.
+//
+// Rotation goes *into* the chain — a display matrix is metadata and `crop=iw/2`
+// means one thing on a portrait picture and another on the landscape frames the
+// decoder produces — so `sourceWidth`/`sourceHeight` are the shown size and the
+// track the element gets reports no rotation of its own.
+bro.ffmpeg.views.forget("clip-7")
+
 bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
 
 // Rendering the timeline. Runs on its own thread; poll it.
