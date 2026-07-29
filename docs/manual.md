@@ -117,6 +117,18 @@ right way *and* that the screen grab has the right monitor in it. What a card sh
 is that device and not the composition — the graph is not previewed here, for the
 same structural reason the viewer cannot show a filter.
 
+**Every device this build can open plays here, `lavfi` included.** It did not always:
+lavfi is a whole filtergraph wrapped up as a demuxer, and what it hands over is
+`wrapped_avframe` — a pointer to an already-decoded frame rather than a packet of
+bytes. bro's `MediaPacket` carries bytes, quite rightly, because bro is
+codec-agnostic and knows nothing about libav's types; so the pointer was copied as
+eight meaningless bytes, the frame behind it was freed on the way past, and the
+decoder at the far end refused it. The fix was the crossing rather than a special
+case in the UI: such a frame now travels as itself, owned by the packet, and only
+the decoder this backend built for that track ever looks inside. Everything else
+about the seam is unchanged, and a `-f lavfi -i testsrc` card now shows its test
+pattern like any other device.
+
 **The graph is built on the Graph stage, and with several inputs it is not
 optional.** A recording has been able to run a filter graph for as long as the engine
 has had one, at one input as much as at several: cropping one monitor out of a wide
@@ -1838,6 +1850,13 @@ mechanism as a source filter inside a filtergraph, which the Graph stage also ha
 *device* wraps a whole graph up as a demuxer so libavformat can read it as an `-i`.
 Two different places in the pipeline spelt almost identically.
 
+Being the vehicle makes it worth one assertion of its own: the card's `<video>` is
+required to reach a picture **1280 wide**, which is a claim about the crossing rather
+than about the UI. lavfi's packets are still `wrapped_avframe` — the probe is asserted
+to say so — so what changed is that such a frame now survives the trip into the
+engine, and a preview that came back empty would fail here rather than be worked
+around with a refusal on the card.
+
 The machine's real devices are asked about as well, and whatever the answer is it is
 *asserted* rather than skipped: gdigrab is either in this build or it is not, and if
 it is then opening it either produces frames or says why it did not. A test that
@@ -2216,14 +2235,6 @@ Honest list of what does not work:
 - **A sound sequence.** An image sequence is pictures. Giving a run of frames a
   separate soundtrack means two inputs and a `-map` per stream, which the Write
   stage can say and nothing yet joins up.
-- **Previewing the `lavfi` device.** Every other device plays in the Capture
-  stage's picture through the ordinary `<video>` path. lavfi cannot, and the
-  reason is about the seam rather than about the device: its packets are not
-  bytes — the demuxer emits `wrapped_avframe`, a pointer to an already-decoded
-  frame — and bro's `MediaPacket` is a byte buffer, because bro is
-  codec-agnostic and knows nothing about libav's types. The pointer does not
-  survive the crossing. It is detected by asking `probe()` what the codec is,
-  said out loud, and it records normally.
 - **A live device on the timeline.** A device never ends, so nothing can be cut
   from it: there is no length for a clip to have and no seeking back to a
   moment that has gone. Forcing `-f dshow` on the Sources stage describes one

@@ -105,14 +105,22 @@ console.log('\nchoosing one');
     ok(text('#cap-list').indexOf('does not list its sources') >= 0,
        'a device with nothing to enumerate says so rather than showing an empty list');
 
-    // The one refusal that is about the seam between this binary and the
-    // engine rather than about the device.
-    // Said on the card whose device it is, not in one note for the stage:
-    // with several inputs the question is always *which* of them could not be
-    // shown, and a stage-wide sentence cannot answer it.
-    ok(text('#cap-cards').indexOf('decoded frames rather than packets') >= 0,
-       `lavfi cannot be previewed, and the reason is stated: ${text('#cap-cards')}`);
-    ok(!q('[data-f="preview"]'), 'so there is no video element pretending otherwise');
+    // **lavfi previews like anything else**, which it could not do until the
+    // crossing between this binary and the engine learned about
+    // `wrapped_avframe`. There was a refusal on this card saying so; the seam
+    // was the thing to fix, and the assertion that it is fixed is a picture of
+    // the right size arriving through the ordinary `<video>` path — the same
+    // evidence the screen grabber further down is judged by.
+    same(A.inputs.byId(cap.capture.inputs[0]).probe.video.codec, 'wrapped_avframe',
+         'lavfi still hands over decoded frames rather than packets — the seam changed, not it');
+    const pic = q('[data-f="preview"]');
+    ok(!!pic, 'and there is a video element on the card rather than a refusal');
+    ok(waitFor('lavfi to decode', () => pic.videoWidth > 0),
+       'which decodes: a picture arrives through the same backend every file uses');
+    same(pic.videoWidth, 1280, `at the size the device was asked for (${pic.videoWidth}x${
+        pic.videoHeight})`);
+    same(text('#cap-cards').indexOf('cannot be played here'), -1,
+         'and nothing on the stage still says it cannot be');
 }
 
 console.log('\nits options are its demuxer’s');

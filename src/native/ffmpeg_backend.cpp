@@ -123,10 +123,90 @@ Codec toBroCodec(AVCodecID id) {
 // AVCodecParameters is the whole point: flattening it into codecPrivate would
 // drop the extradata framing, pixel format and colour description that make an
 // H.264 or HEVC stream decodable at all.
+// ── A stream whose packets are already frames ──────────────────────────────
+//
+// `wrapped_avframe` is not a codec: it is libav's way of handing a decoded
+// AVFrame through something whose shape is a packet. lavfi uses it, because a
+// filtergraph read as an input has nothing to compress — `-f lavfi -i testsrc`
+// produces pictures, and inventing an encode to undo it would be absurd.
+//
+// The trouble is that the packet is a *pointer*. `wrapped_avframe_encode` sets
+// `pkt->data = (uint8_t*)frame` with `pkt->size = sizeof(AVFrame)`, and the
+// decoder at the far end refuses anything where `pkt->data != pkt->buf->data`
+// — the identity check is the only thing standing between it and reading an
+// arbitrary buffer as a frame. bro's `MediaPacket` carries *bytes*, quite
+// rightly: bro is codec-agnostic and a pointer means nothing to it. So copying
+// the eight bytes at `pkt->data` into a `vector<uint8_t>` and handing that over
+// produced a packet whose pointer no longer matched its buffer and whose frame
+// had been freed by `av_packet_unref` on the way past. That is the whole of why
+// a `-f lavfi` device could be recorded but never played.
+//
+// **So the frame travels as itself, and the bytes are a token this backend
+// wrote and only this backend reads.** `MediaPacket::data` is a `shared_ptr`,
+// which is an ownership handle and not merely a buffer: the vector holds a
+// `Wrapped*` and the deleter frees the AVFrame with it, so a packet dropped
+// undecoded releases its picture and one that reaches the decoder still has it.
+// The pairing is `TrackPrivate::wrapped`, set by the source that produced the
+// track and read by the decoder built from it — the same guarantee
+// `backendPrivate` itself rests on, and the reason this is not a hole in bro's
+// byte-buffer contract: nothing outside these two classes ever looks inside.
+//
+// What would break it is a packet crossing a *process* boundary, where a
+// pointer means nothing. Nothing in bro does that — packets are moved between
+// threads, which a `shared_ptr` is exactly right for — and if anything ever
+// did, this token would have to become a frame pool with an index in it. The
+// check that catches it early is `Wrapped::magic`.
+struct Wrapped {
+    static constexpr uint64_t kMagic = 0x66666d70'77726170ull;   // "ffmpwrap"
+    uint64_t magic = kMagic;
+    AVFrame* frame = nullptr;
+};
+
+/// Take the frame out of a `wrapped_avframe` packet, as a `MediaPacket` payload
+/// that owns it.
+///
+/// Cloned rather than moved: the packet the demuxer handed over is unreferenced
+/// on the next read, and `av_frame_clone` is a new frame referencing the same
+/// buffers rather than a copy of any pixels.
+std::shared_ptr<std::vector<uint8_t>> wrapFrame(const AVPacket* pkt) {
+    if (!pkt->data || pkt->size != static_cast<int>(sizeof(AVFrame))) return nullptr;
+    AVFrame* clone = av_frame_clone(reinterpret_cast<const AVFrame*>(pkt->data));
+    if (!clone) return nullptr;
+    auto* holder = new std::vector<uint8_t>(sizeof(Wrapped));
+    Wrapped w{Wrapped::kMagic, clone};
+    std::memcpy(holder->data(), &w, sizeof(w));
+    return std::shared_ptr<std::vector<uint8_t>>(
+        holder, [](std::vector<uint8_t>* v) {
+            Wrapped w{};
+            if (v->size() == sizeof(w)) {
+                std::memcpy(&w, v->data(), sizeof(w));
+                if (w.magic == Wrapped::kMagic && w.frame) av_frame_free(&w.frame);
+            }
+            delete v;
+        });
+}
+
+/// The frame inside such a payload, still owned by it. Null for anything this
+/// backend did not write, which is what makes reading it safe.
+AVFrame* unwrapFrame(const std::vector<uint8_t>* data) {
+    if (!data || data->size() != sizeof(Wrapped)) return nullptr;
+    Wrapped w{};
+    std::memcpy(&w, data->data(), sizeof(w));
+    return w.magic == Wrapped::kMagic ? w.frame : nullptr;
+}
+
+// Carried from the demuxer to the decoder through TrackInfo::backendPrivate.
+// AVCodecParameters is the whole point: flattening it into codecPrivate would
+// drop the extradata framing, pixel format and colour description that make an
+// H.264 or HEVC stream decodable at all.
 struct TrackPrivate {
     AVCodecParameters* par = nullptr;
     AVRational timeBase{1, 1000};
     int streamIndex = 0;
+
+    /// This stream's packets are `wrapped_avframe` — see above. The decoder
+    /// built from this track opens no codec and unwraps instead.
+    bool wrapped = false;
 
     /// The input this track came out of, carried so the decoder can be opened
     /// with the input's own decoder options. A decoder belongs to an `-i` —
@@ -248,6 +328,7 @@ public:
             priv->timeBase = st->time_base;
             priv->streamIndex = static_cast<int>(i);
             priv->input = in;
+            priv->wrapped = par->codec_id == AV_CODEC_ID_WRAPPED_AVFRAME;
             t.backendPrivate = priv;
 
             if (isVideo && videoStreamIndex_ < 0) videoStreamIndex_ = static_cast<int>(i);
@@ -285,8 +366,17 @@ public:
             out.keyframe = (pkt_->flags & AV_PKT_FLAG_KEY) != 0;
             out.pts = pts;
             out.duration = pkt_->duration > 0 ? toNs(pkt_->duration, st->time_base) : 0;
-            out.data = std::make_shared<std::vector<uint8_t>>(
-                pkt_->data, pkt_->data + pkt_->size);
+            // A `wrapped_avframe` packet is a pointer to a decoded frame, and
+            // its bytes are meaningless once this packet is unreferenced. See
+            // `Wrapped` above: the frame travels as itself, owned by the
+            // payload, and the paired decoder is the only thing that looks.
+            if (st->codecpar->codec_id == AV_CODEC_ID_WRAPPED_AVFRAME) {
+                out.data = wrapFrame(pkt_);
+                if (!out.data) continue;   // not the shape it claimed; skip it
+            } else {
+                out.data = std::make_shared<std::vector<uint8_t>>(
+                    pkt_->data, pkt_->data + pkt_->size);
+            }
             return true;
         }
     }
@@ -359,6 +449,18 @@ public:
         if (!priv || !priv->par) return false;
         timeBase_ = priv->timeBase;
 
+        // Nothing to open: the pictures arrive decoded. `avcodec_open2` on the
+        // wrapped_avframe decoder would work and would then refuse every packet
+        // — its first act is to check that the pointer still matches its own
+        // buffer, which is exactly what a crossing cannot preserve — so the
+        // codec is skipped rather than opened and worked around.
+        if (priv->wrapped) {
+            wrapped_ = true;
+            frame_ = av_frame_alloc();
+            swap_ = av_frame_alloc();
+            return frame_ && swap_;
+        }
+
         // Frame + slice threading across all cores. For H.264/HEVC/AV1 this is
         // what makes software decode keep up with 4K, and unlike a hardware
         // decoder it costs no GPU->CPU readback — which matters here more than
@@ -382,6 +484,21 @@ public:
     }
 
     bool decode(const MediaPacket& pkt) override {
+        if (wrapped_) {
+            AVFrame* f = unwrapFrame(pkt.data.get());
+            if (!f) return true;   // not one of ours; nothing to show for it
+            av_frame_unref(frame_);
+            // Referenced, not stolen: the packet owns the frame and may still
+            // be held by whoever routed it. This is one refcount, not a copy
+            // of a picture.
+            if (av_frame_ref(frame_, f) < 0) return true;
+            // The pts on the frame is the graph's; the one on the packet has
+            // already been through `-ss`/`-itsoffset` and the container's start
+            // time, which is the clock everything above here is on.
+            wrappedPts_ = pkt.pts;
+            haveWrapped_ = true;
+            return true;
+        }
         if (!ctx_ || !pkt.data) return false;
         av_packet_unref(avpkt_);
         // Reference the caller's buffer rather than copying: the packet's
@@ -407,11 +524,25 @@ public:
     }
 
     bool nextFrame(VideoFrame& out) override {
+        if (wrapped_) {
+            // One packet is one picture, so there is no reorder buffer to
+            // empty and nothing to hand back on a second call.
+            if (!haveWrapped_) return false;
+            haveWrapped_ = false;
+            return handOver(out, wrappedPts_);
+        }
         if (!ctx_) return false;
         av_frame_unref(frame_);
         int rc = avcodec_receive_frame(ctx_, frame_);
         if (rc < 0) return false;   // EAGAIN/EOF: nothing more this round
+        return handOver(out, -1);
+    }
 
+    /// The picture in `frame_`, as bro takes one. `ptsNs` at or above zero is
+    /// the timestamp to use — a wrapped frame carries the graph's own clock and
+    /// the packet's has already been through the input's `-ss` and the
+    /// container's start time — and below zero asks the frame.
+    bool handOver(VideoFrame& out, int64_t ptsNs) {
         // A hardware decode still has to arrive here as pixels: what bro's
         // renderer takes is three planes it can read, and there is no path in
         // playback that could hand it a device handle. So the picture comes
@@ -437,7 +568,8 @@ public:
         int64_t ts = frame_->best_effort_timestamp != AV_NOPTS_VALUE
                          ? frame_->best_effort_timestamp
                          : frame_->pts;
-        out.pts = ts != AV_NOPTS_VALUE ? toNs(ts, timeBase_) : 0;
+        out.pts = ptsNs >= 0 ? ptsNs
+                             : (ts != AV_NOPTS_VALUE ? toNs(ts, timeBase_) : 0);
         out.width = static_cast<uint32_t>(w);
         out.height = static_cast<uint32_t>(h);
 
@@ -472,6 +604,9 @@ public:
         // Also clears the drained state, so the decoder accepts packets again
         // after a seek away from the end.
         if (ctx_) avcodec_flush_buffers(ctx_);
+        // A wrapped frame from before the seek belongs where it came from, and
+        // there is no codec here holding anything else.
+        haveWrapped_ = false;
     }
 
 private:
@@ -516,6 +651,12 @@ private:
     AVPacket* avpkt_ = nullptr;
     SwsContext* sws_ = nullptr;
     AVRational timeBase_{1, 1000};
+
+    /// This track's packets are frames already — no codec is open and
+    /// `frame_`/`swap_` are the only things allocated. See `Wrapped`.
+    bool wrapped_ = false;
+    bool haveWrapped_ = false;
+    int64_t wrappedPts_ = 0;
 };
 
 // ── AudioDecoder ───────────────────────────────────────────────────────────
@@ -534,6 +675,20 @@ public:
         auto priv = privateOf(t);
         if (!priv || !priv->par) return false;
         timeBase_ = priv->timeBase;
+
+        // Sound arriving already decoded — `-f lavfi -i sine=1000`. The same
+        // crossing and the same answer as the picture side; see `Wrapped`.
+        // What comes out still goes through swresample, because the layout and
+        // rate a filter produces are its own and the caller asked for theirs.
+        if (priv->wrapped) {
+            wrapped_ = true;
+            rate_ = priv->par->sample_rate;
+            channels_ = priv->par->ch_layout.nb_channels;
+            if (rate_ <= 0 || channels_ <= 0) return false;
+            if (av_channel_layout_copy(&outLayout_, &priv->par->ch_layout) < 0) return false;
+            frame_ = av_frame_alloc();
+            return frame_ != nullptr;
+        }
 
         std::string why;
         if (!openDecoder(&ctx_, priv->par, timeBase_, priv->input,
@@ -578,13 +733,22 @@ public:
     }
 
     bool decode(const MediaPacket& pkt, AudioFrame& out) override {
-        if (!ctx_ || !pkt.data) return false;
+        if (!pkt.data) return false;
 
         out.sampleRate = static_cast<uint32_t>(rate_);
         out.channels = static_cast<uint32_t>(channels_);
         out.pts = pkt.pts;
         out.samples.clear();
 
+        if (wrapped_) {
+            AVFrame* f = unwrapFrame(pkt.data.get());
+            if (!f) return false;
+            av_frame_unref(frame_);
+            if (av_frame_ref(frame_, f) < 0) return false;
+            return appendFrame(out);
+        }
+
+        if (!ctx_) return false;
         av_packet_unref(avpkt_);
         avpkt_->data = const_cast<uint8_t*>(pkt.data->data());
         avpkt_->size = static_cast<int>(pkt.data->size());
@@ -680,6 +844,9 @@ private:
     int rate_ = 0;
     int channels_ = 0;
     AVRational timeBase_{1, 1000};
+
+    /// Sound that arrives already decoded — no codec is open. See `Wrapped`.
+    bool wrapped_ = false;
 };
 
 } // namespace

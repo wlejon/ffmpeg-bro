@@ -87,13 +87,13 @@
 // device, not the composition, for the same structural reason the viewer cannot
 // show a filter.
 //
-// The one device that cannot be previewed is `lavfi`, and it is worth knowing
-// why because it is a fact about the seam rather than about the device. lavfi's
-// packets are not bytes — the demuxer emits `wrapped_avframe`, which is a
-// pointer to a decoded AVFrame — and bro's `MediaPacket` is a byte buffer,
-// because bro is codec-agnostic and knows nothing about libav's types. So the
-// pointer does not survive the crossing and the decoder answers EPERM. It is
-// detected by asking `probe()` what the codec is, not by a list.
+// **Every device this build can open can be previewed**, `lavfi` included.
+// It could not be until the crossing learned about `wrapped_avframe` — lavfi
+// hands over pointers to decoded frames rather than packets of bytes, and bro's
+// `MediaPacket` is a byte buffer because bro is codec-agnostic — so there was a
+// refusal here, worded as a fact about the seam rather than about the device.
+// The seam was the thing to fix: see `Wrapped` in `ffmpeg_backend.cpp`, where
+// such a frame now travels as itself.
 
 import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename, shellArg } from './format.js';
@@ -495,13 +495,6 @@ function pictureRefusal(input) {
             ? 'this device produces sound and no picture — there is nothing to show, ' +
               'but it can still be recorded'
             : 'this device produced neither pictures nor sound';
-    // The one refusal that is about the seam rather than about the device. See
-    // the note at the top of this file: lavfi's packets are pointers to decoded
-    // frames and bro's are bytes, so the crossing loses them.
-    if (p.video.codec === 'wrapped_avframe')
-        return 'the lavfi device hands over decoded frames rather than packets, and the ' +
-               'media interface between this binary and the engine carries bytes — so it ' +
-               'cannot be played here. It records normally.';
     return '';
 }
 
