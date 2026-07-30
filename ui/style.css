@@ -986,6 +986,47 @@ body.fs #cropbox { display: none; }
 }
 .src-stream-what { flex: 1; min-width: 0; word-break: break-word; }
 
+/* What a data track carries. Indented under the stream's own line and set in
+   the same size, because it is more about that line rather than a section of
+   its own — a `gpmd` row and the numbers in it are one fact. */
+.src-data {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 1px 12px 1px 42px;
+    font-size: var(--fs-sm);
+}
+.src-data-series {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 2px 12px 6px 42px;
+}
+/* One series, as a thing to put on the timeline. A chip rather than a row in a
+   list: a HERO8 offers forty of them and forty rows is the whole panel, while
+   forty chips wrap into six lines you can read at a glance. */
+.src-series {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 100%;
+    padding: 2px 7px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #171a20;
+    color: var(--fg);
+    font-size: var(--fs-xs);
+    text-align: left;
+    cursor: pointer;
+}
+.src-series:hover { background: #1e222a; }
+/* On the lane. The accent, which everywhere in this application means "this
+   one" — the row's *own* colour is on the lane, where it identifies a line
+   among six; here it would be six colours saying six different things on one
+   panel. */
+.src-series.on { border-color: var(--accent); color: var(--accent); }
+.src-series.on .dim { color: var(--accent-dim); }
+
 /* The act. Pinned under the column for the reason the Record button is: this
    is what the stage is for, and `tiny primary` was never a primary button —
    the stylesheet only ever defined `.icon.primary`, so the one control that

@@ -322,13 +322,55 @@ Honest list of what does not work:
   neither writes its log wherever it likes and pass 2 reads an empty one — the
   render says so, naming the encoder, because there is no capability to ask
   first.
-- **Anything a data stream carries, read.** A `gpmd` telemetry track is now
-  carried through — see [Copying instead of
-  encoding](rendering.md#copying-instead-of-encoding) — and carrying is the whole of it.
-  Nothing parses one, so a GoPro's speed and GPS cannot be plotted beside the
-  waveform, drawn over the picture or used to cut on. That is a parser per
-  format rather than a gap in the render path, and the fourcc the row is named
-  by is exactly what such a parser would dispatch on.
+- **A data stream drawn over the picture, or cut on.** A `gpmd` telemetry track
+  is read now and plotted beside the waveform — see [Reading a data
+  track](sources.md#reading-a-data-track) and [the Data
+  lane](timeline.md#the-data-lane) — which is one of the three things this entry
+  used to name. The other two are not here, and neither is one line.
+
+  **The parser is per format, and there is one.** The seam is the fourcc, as this
+  entry always said it would be: a data stream whose fourcc is X is read by the
+  parser registered for X, and `gpmd` is the row that is filled in. A real GoPro
+  file carries `tmcd` and `fdsc` beside it and a phone writes `mebx`, and each of
+  those is a different specification — so the button is offered against the one
+  that can be read and not against the others, which is a refusal by name rather
+  than a parser that guessed. Adding one is a native file and a row in a table
+  and no change in `ui/` at all, because the list of fourccs is asked of the
+  registry.
+
+  **Drawn over the picture** is closer than it was and is still not free.
+  Everything a burn-in needs exists — a render writes a subtitle file beside the
+  output from cues the document holds, and `subtitles=` puts them on the frames —
+  so "speed, bottom left, updated four times a second" is a *generator*: a cue
+  every quarter-second with a formatted number in it. What is missing is the
+  decision that generator has to embody, which is a format. A number needs a unit
+  and a rounding and a place on the frame and a style, none of which is in the
+  file, and every one of which is a control on a stage that does not exist yet.
+  Doing it by writing cues into the Cues lane would work today and would be
+  dishonest in one specific way: those cues are *content somebody typed* as far
+  as the document is concerned, so they would be saved, undone and re-edited as
+  if a person had written them, and re-reading the track would not update them.
+
+  **Cut on** is a different piece of work and a bigger one. The lane can be
+  looked at and cannot be acted on: there is no "put a cut wherever the
+  accelerometer goes over 20", which is a threshold, a hysteresis, a minimum
+  shot length and then an edit that makes clips. The Measure stage is where the
+  shape of that already exists — a filter measures, a finding is a moment, and
+  the Report drawer marks them — and joining the two would mean a reading being
+  a *source of findings* rather than a line on a lane. That is the honest way in,
+  and it is a stage's worth of design rather than a missing wire.
+
+  Two smaller things sit beside them. A reading is **decimated to two thousand
+  buckets** on the way in, which is what makes two hours of 200 Hz accelerometer
+  the same size as twenty seconds of it — the numbers printed beside a row are
+  exact, over every sample, but zooming the timeline past the decimation shows the
+  decimated line rather than more of it. Closing that is a window on the call
+  (`bro.ffmpeg.data.reads.start` already takes a bucket count) and a re-read per
+  zoom, which is a decision about how often a file is opened rather than a
+  mechanism. And **which series you picked is not saved**: a reading is derived
+  and rightly out of the document, but the pick is an editorial choice and losing
+  it on reopen is a press nobody should have to repeat — it wants a home in the
+  workspace, keyed by something that survives an input being renumbered.
 - **Hardware filters that this build does not have.** `hwupload`, `hwdownload`
   and `hwupload_cuda` are here; `scale_cuda`, `overlay_cuda`, `scale_qsv` and
   the rest of the device families are not, because a vcpkg ffmpeg with

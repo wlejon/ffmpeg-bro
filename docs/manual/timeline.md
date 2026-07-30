@@ -321,6 +321,54 @@ strip, next to the field you are about to type into — because retyping it is w
 they go. There is more about that, and what it costs, under [Cues of your
 own](subtitles.md#what-a-fork-costs-and-it-is-the-one-thing-here-that-can-lose-work).
 
+## The Data lane
+
+Numbers read out of a data track — see [Reading a data
+track](sources.md#reading-a-data-track) — drawn against the timeline's own
+ruler, directly above the waveform.
+
+Beside the waveform is where it belongs, and for the reason the Cues lane is
+where it is: what a number off a camera is *for* is telling you where in the
+shot something happened. A list of readings answers "how fast was I going"; a
+line under the clips answers "which of these shots is the one where the bike
+went over", which is the question somebody reviewing an afternoon of footage
+actually has.
+
+One row per picked series. Each row is drawn **per clip**, not per file: the
+reading belongs to the input and the lane is the edit, so a series is cut the way
+the picture is — two clips from one recording show two pieces of one line, in the
+order they were cut into, following every trim, move and speed change without the
+track being read again.
+
+| | |
+|---|---|
+| the band | the reach of every sample under that pixel — its lowest and its highest |
+| the line | their mean |
+| a break in the line | no sample landed there |
+
+The band and the line are the same claim A1 makes about sound, and for the same
+reason. A lane pixel at a normal zoom covers hundreds of gyroscope samples: the
+mean alone hides every spike, which is the half of a telemetry trace anybody is
+looking for, and the maximum alone says a camera was permanently at its worst
+moment. A break is a break because a recording whose GPS dropped out for a minute
+did not travel in a straight line through it — it was not measured, and a
+straight line is the one drawing that claims it was.
+
+Each row is on **its own vertical scale**, drawn between its own lowest and
+highest sample, with those two numbers printed beside its name. Two quantities on
+one axis invent a correlation that is not in the data — the alignment of the two
+scales is arbitrary and a reader cannot see that it is — which is the rule
+`ui/plot.js` states for the Report drawer's chart and which the shape of this
+lane arrives at on its own.
+
+The numbers beside a name are folded over **every** sample rather than over what
+is drawn. The line is a decimation — two thousand buckets, whether the track is
+twenty seconds or two hours — and the reach is not.
+
+**The lane is there because a series is picked**, the same rule the video tracks,
+the When lane and the Cues lane follow. Nothing on it can be edited: a reading is
+what a file says. Pressing it moves the playhead, as on every other lane.
+
 ## The sync lock
 
 The padlock beside a track's name says whether that track ripples on its own or

@@ -175,6 +175,93 @@ bro.ffmpeg.probes.forget(id)   // abort it and throw the answer away
 ```
 
 ```js
+// **What a data stream carries** — for the fourccs something here knows how to
+// read. The one kind of stream libavcodec cannot decode: `gpmd`, `tmcd`, `mebx`
+// and `fdsc` all probe as `bin_data`, so the container's **fourcc** is the whole
+// identity of one, and the seam is "a data stream whose fourcc is X is parsed by
+// the parser registered for X".
+//
+// **libav has nothing to ask here, and that is not a breach of the "ask libav"
+// rule.** libavformat carries such a track, reports its tag and hands over its
+// packets; it does not parse the payload, there is no option table to enumerate
+// and no descriptor to interrogate. Everything *around* the parser is still
+// asked. Only the byte layout inside a packet is knowledge this repository owns,
+// and it is written down in `src/native/data_gpmf.h` with the files it was
+// verified against.
+bro.ffmpeg.data.parsers()            // → ["gpmd"]
+// Which fourccs have one. Asked of the native registry rather than written down
+// in `ui/`, so a second parser needs no edit on this side — and it is a real
+// filter rather than a formality: a HERO8 file carries three data tracks and one
+// of them is this.
+
+bro.ffmpeg.data.reads.start(path | input, streamIndex, { buckets, timeout })
+// → id, at once. The same `start`/`poll`/`cancel`/`forget` shape `probes.*` has,
+// sharing the same table, because it is the same problem: work long enough to be
+// seen, on a thread, polled from the frame loop the caller is already in. There
+// is **no synchronous twin**, and that is the difference from `probe()`: a local
+// container's headers are always quick and a whole track never reliably is.
+//
+// It takes an input and not only a path for `probe()`'s reason — a track read out
+// of a file opened with a forced demuxer or an `-ss` is a different track.
+//
+// `buckets` is the resolution of the answer and the whole of what bounds its
+// size: two hours of telemetry and twenty seconds of it come back the same
+// shape. Default 2000, cap 20000, and **more than the cap is refused rather than
+// clamped** — a caller asking for a million has a bug and a silently smaller
+// answer is how it would go unnoticed. `timeout` is seconds, default 120, and is
+// a deadline on the interrupt callback rather than an option; see `probes.start`.
+
+bro.ffmpeg.data.reads.poll(id)
+// → { state: "reading" | "done" | "failed" | "stopped", reading,
+//     elapsed, timeout,
+//     error,                 // "" until it has one
+//     result }               // or null
+// → null once a terminal state has been read, exactly as `probes.poll` is.
+//
+// result = { tag,            // the fourcc that chose the parser
+//            device,         // what the payload said made it, e.g. "HERO8 Black"
+//            streamIndex, t0, t1,     // the track's span, on the container's clock
+//            buckets,
+//            packets, refused,        // and how many the parser would not finish
+//            refusal,                 // the first one, with its packet number
+//            series: [ … ] }
+//
+// series = { key,            // the fourcc of the quantity: "ACCL", "GPS5"
+//            name,           // what the *file* calls it ("Accelerometer"), or ""
+//            units,          // what the file calls the unit ("m/s²"), or ""
+//            component, components,   // one series per component of an item
+//            samples, min, max, rate, // exact, over **every** sample
+//            scaled,         // was the format's own divisor applied?
+//            lo, hi, mean,   // Float32Array(buckets) — the reach and the average
+//            filled }        // Uint8Array(buckets) — 0 where nothing landed
+//
+// **`min`/`max`/`samples` are folded over every sample and the buckets are a
+// decimation of them**, so the numbers a readout shows are never the decimated
+// ones. `filled` is 0 where no sample landed: a gap in a recording is a gap in
+// the line, and a zero drawn in its place is a measurement nobody made.
+//
+// **`scaled` is reported rather than assumed.** A value that should have been
+// divided and was not is the failure that still looks plausible — a raw `GPS5`
+// latitude of 474305352 is a number and 47.4305352 is a place — so anything
+// drawing one has to be able to say which it has.
+//
+// **Nothing here lists the sample keys**, which is the point: `GPS5`, `ACCL` and
+// the rest are never named in the parser. A numeric item that is not one of
+// GPMF's structural keys is data, whatever it is called, and the *file* supplies
+// the name and the unit. What is written out is the format's own type alphabet
+// and its structural vocabulary, and the second of those admits it cannot be
+// complete: an omission costs a row with an odd name on a picker and never a
+// wrong number.
+
+bro.ffmpeg.data.reads.cancel(id)   // abort the read; the poll after it says "stopped"
+bro.ffmpeg.data.reads.forget(id)   // abort it and throw the answer away
+// Real rather than a hidden spinner: the interrupt callback reaches libav's own
+// read. **Every other stream is discarded before the first packet**, which is
+// what makes this affordable at all — the same read of a 4.0 GB HERO8 file is
+// 13.3 s with the other streams enabled and **32 ms** without them.
+```
+
+```js
 // What this build can write — asked of libavcodec, not hardcoded.
 bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
                           //    codecName: "h264",   // the codec, not the encoder

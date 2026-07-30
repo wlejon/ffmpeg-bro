@@ -15,13 +15,14 @@ the rest take for granted: one with **no video stream in it at all**, the mirror
 the silent one and the only thing separating the composite from a composite nothing
 feeds; one whose pictures carry a **display matrix**, which is the only thing
 separating a clip laid out upright from one laid out on its side; one with a
-**`gpmd` data track**, which is a stream that is neither picture, sound nor cues and
-is identified by its fourcc alone; and one with a **`dvdsub` track**, whose cues are
+**`gpmd` data track**, which is a stream that is neither picture, sound nor cues,
+is identified by its fourcc alone, and carries **real GPMF** — a payload whose
+`SCAL` divisors are the difference between 9.81 m/s² and 981; and one with a **`dvdsub` track**, whose cues are
 *pictures* of characters and therefore cannot be converted, burned in or read for what
 they say. None can be faked with content: a picture that
 happens to be black is not an absent one, a picture that happens to be tall is not a
 rotated one, a track full of bytes is not a track something can still find by
-name, and a text track with an odd payload is still a text track. Nothing is checked in and nothing depends on what a file you happened to have
+name or read, and a text track with an odd payload is still a text track. Nothing is checked in and nothing depends on what a file you happened to have
 lying around contains.
 
 A UI suite is given one more thing before it starts: **no leftovers**. `localStorage`
@@ -44,6 +45,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
 ./build/Release/ffmpeg-bro-capturetest out [<fixture-dir>]  # devices: an endless input, recording one, a session of several, a file laid over one
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
+./build/Release/ffmpeg-bro-datatest <telemetry.mp4> [<real-gopro.MP4>]  # a data track: which parser, what GPMF says, and a payload it may not trust
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>] [<rotated>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>
@@ -54,6 +56,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last four sections
@@ -280,6 +283,60 @@ control in front of you has to be showing it: the form draws from `settings`, so
 an undo changes the model behind its back and a redraw that stopped happening
 would leave the preset's value on screen under the old settings. Arriving on the
 encode side is asserted *not* to be a step.
+
+`data_test.cpp` is a data track read, and it is the one suite here whose bulk is
+about **input nobody wrote in good faith**. Every length, repeat count and
+nesting depth in a GPMF payload comes from the file, so a malformed or hostile
+`.mp4` is the case the parser is designed for and not an edge of it — a parser
+that segfaulted on a bad file would be a worse outcome than a camera's telemetry
+never being plotted, which was the alternative to writing this.
+
+So a good payload is put through it damaged in five ways, and what is required of
+each is not that it parses but that it **refuses and returns**: truncated at
+every four-byte boundary in it (493 cases — a camera that lost power mid-write
+leaves exactly this); every one of its 25 item headers given an oversized length
+in turn, the declared struct size and the declared repeat count scribbled
+*separately* because a check on their product that trusted either one would pass
+one and fail the other; the largest length a header can express (16.7 MB) put in
+front of a two-kilobyte buffer; a nesting bomb two hundred levels deep, which has
+to stop at the parser's own depth cap rather than at the C stack's; four
+kilobytes of zeros, which is every item nested, empty and named with NULs and is
+the shape that loops a walk advancing by the payload rather than by the header; a
+megabyte of pseudo-random bytes in two hundred packets; and every byte of the
+first kilobyte flipped three ways, 3072 cases, of which 2980 still parse into
+something and 92 are refused. After each one, whatever survived is checked for
+internal consistency — an item whose value count disagreed with its own sample
+and component counts would be a caller indexing off the end of it.
+
+The rest of it is the format, each rule with a value that says the rule was
+followed: a broadcast `SCAL` over three components (an axis that is exactly 9.81
+was divided and one that is 981 was not), a per-component `SCAL` with five
+different divisors in it (an altitude of 123.456 m proves the *third* was used
+and not the first), a float under a divisor that must come back undivided, a
+`SCAL` whose count fits nothing and must therefore be applied to nothing, an item
+of repeat zero that must advance the cursor rather than loop it, and a `?`
+complex item that must be stepped over by its declared length rather than read.
+
+The **second argument is a real camera file** and there is deliberately no
+fixture for it: a fixture is written by this repository and therefore cannot
+prove that a real HERO8 payload parses. Given one, the suite prints every series
+it found with its sample count, rate, units and range, and asserts the two things
+about a real recording that are checkable without knowing where the camera was —
+an accelerometer that reaches a number an accelerometer has rather than one in
+the hundreds of thousands, and a latitude that is on the Earth rather than in the
+hundreds of millions. Without one it says so and skips, so the suite runs on a
+machine with no GoPro in the drawer. `-DGOPRO_FILE=<path>` at configure time is
+how a machine that has one points `ctest` at it.
+
+`ui_telemetry.js` is the two seams either side of that parser: that the control
+is offered against a `gpmd` row and against no other stream — because the list of
+fourccs is asked of the native registry rather than written down in `ui/` — that
+the read is started, polled from the frame loop and answered while the
+application goes on drawing, that a picked series becomes a lane which sits
+directly above the waveform and follows the clips through a trim without the
+track being read again, and that reading a file does **not** mark the document
+unsaved, which is the rule a waveform follows and the reason a reading is not in
+the document.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).

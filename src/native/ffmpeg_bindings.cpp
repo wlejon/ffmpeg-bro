@@ -48,6 +48,7 @@ void installFfmpegBindings(JSContext* ctx) {
         ns.value("linked", JS_TRUE);
 
         installProbe(ns);
+        installData(ns);
         installCapabilities(ns);
         installExpression(ns);
         installSequences(ns);

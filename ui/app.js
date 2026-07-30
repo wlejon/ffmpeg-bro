@@ -54,6 +54,7 @@ import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
+import * as telemetry from './telemetry.js';
 import * as graphPlayback from './graph/playback.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
@@ -331,6 +332,11 @@ onChange((what) => {
     // else in this call would have noticed going away.
     graphOverlay.retain(project.clips.map((c) => c.id),
                         inputsModel.inputs.map((i) => i.id));
+    // And a reading taken off a data track of an input that has gone, which is
+    // the same shape of problem one line up and is answered in the same place
+    // for the same reason: the row on the Telemetry lane would otherwise name a
+    // file nothing answers to.
+    telemetry.retain(inputsModel.inputs.map((i) => i.id));
     // And the settings of a track the timeline no longer shows — a sync lock on
     // V4 after the last clip on it was deleted. Here for the same argument as the
     // line above and stated where that argument already is: a track can empty out
@@ -363,8 +369,11 @@ onChange((what) => {
     // filmstrip arriving off the worker minutes after the edit that asked for
     // them, and a `document` is the change a document *is* — it arrives here on
     // its way in and would otherwise mark a file unsaved the instant it was
-    // opened.
-    if (what !== 'selection' && what !== 'analysis' && what !== 'document')
+    // opened. `telemetry` is the fourth and joins `analysis`: a reading is what
+    // a file says, it is not in the document for that reason, and a track
+    // parsed a minute after the cut that used it did not change the edit.
+    if (what !== 'selection' && what !== 'analysis' && what !== 'document' &&
+        what !== 'telemetry')
         { doc.touch(); history.record(what); drawDocument(); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
@@ -1909,6 +1918,13 @@ globalThis.__ffmpegBro = {
     // can be lost and the only way to see it is to read the file that would be
     // written without writing one.
     cues: cuesModel,
+    // What a data track turned out to carry, and which of it is on the lane. On
+    // the surface whole, because everything worth checking about it is pure and
+    // is *between* two things a screenshot cannot show: the numbers the parser
+    // produced, and which of them somebody put on the timeline. The lane itself
+    // is a canvas, so `timeline.telemetryLane()` is the reader for the drawn
+    // half and this is the reader for the claim.
+    telemetry,
     exporter, capture,
     // What this machine turned out to have, and the rule applied to it. On the
     // surface because the rule is a *pure* answer — a decision plus the sentence

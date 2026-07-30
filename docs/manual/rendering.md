@@ -103,7 +103,10 @@ on it is the span.
 What it is named by is the **fourcc**, not the codec. `gpmd`, `tmcd` and `mebx`
 all decode to nothing and all probe as `bin_data`, so the codec name cannot
 tell one from another and a file with two of them would offer the same entry
-twice; the Sources stage puts the tag on the line for the same reason. The tag
+twice; the Sources stage puts the tag on the line for the same reason — and the
+tag is now also what decides whether such a track can be *read*, which is a
+different question from whether it can be carried. See [Reading a data
+track](sources.md#reading-a-data-track). The tag
 travels into the output with the packets, taken from the input rather than
 looked up — a muxer's tag tables are picture, sound and cues, so there is
 nothing to check `gpmd` against, and a copy that dropped it would write a track

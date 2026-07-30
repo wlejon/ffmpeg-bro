@@ -30,12 +30,14 @@
 //     all, which is the mirror of `silent.mp4` and the only thing that
 //     separates a clip from a clip with a picture in it; `telemetry.mp4` has a
 //     `gpmd` data track, which is a stream that is neither picture, sound nor
-//     cues and is carried by its fourcc alone; `picture-cues.mkv` has a `dvdsub`
+//     cues, is carried by its fourcc alone, and carries **real GPMF** — a
+//     payload whose `SCAL` divisors are the difference between 9.81 m/s² and
+//     981; `picture-cues.mkv` has a `dvdsub`
 //     track, whose cues are *pictures* of characters and therefore cannot be
 //     converted, burned in or read for what they say. None can be faked with
 //     content: a picture that happens to be tall is not a rotated one, a picture
 //     that happens to be black is not an absent one, a track full of bytes is
-//     not a track something can still identify, and a text track with an odd
+//     not a track something can still identify or read, and a text track with an odd
 //     payload is still a text track.
 //   - **The two files differ in every way a render cares about**: size, aspect,
 //     frame rate and duration. A test that passes only because both inputs are
@@ -50,6 +52,8 @@
 // because everything past that seam is already a component.
 //
 // Usage: ffmpeg-bro-mkfixture <directory>
+
+#include "gpmf_write.h"
 
 #include "export_frame.h"
 #include "export_writer.h"
@@ -368,10 +372,19 @@ bool writeRotated(const std::filesystem::path& src, const std::filesystem::path&
 /// recognises. That is the failure worth having a fixture for, and the only
 /// thing that catches it is a name.
 ///
-/// The payload is not GoPro's format and does not pretend to be — nothing in
-/// this repo parses it, and a fixture that imitated the real thing would be
-/// claiming a capability that does not exist. What is real is the *shape*: a
-/// sample per second, on the video's clock, in a stream the muxer numbers.
+/// **The payload is real GPMF**, and it has to be. It used to be a scrap of
+/// text saying so, on the argument that a fixture imitating the real thing would
+/// claim a capability that did not exist — and then the capability arrived
+/// (data_gpmf.h), and a parser cannot be tested against a payload nothing wrote
+/// in the format it parses. So this is a second fact this fixture exists for,
+/// and one that cannot be faked either: **`SCAL` is a divisor**, and a value
+/// reported without it is off by orders of magnitude while still looking
+/// entirely plausible. `tests/gpmf_write.h` builds it, and builds it for the
+/// parser test too, so the bytes here and the bytes that get damaged there are
+/// the same bytes.
+///
+/// What stays true is the *shape*: a payload per second, on the video's clock,
+/// in a stream the muxer numbers.
 bool writeTelemetry(const std::filesystem::path& src, const std::filesystem::path& dst) {
     AVFormatContext* in = nullptr;
     int rc = avformat_open_input(&in, src.string().c_str(), nullptr, nullptr);
@@ -443,11 +456,11 @@ bool writeTelemetry(const std::filesystem::path& src, const std::filesystem::pat
     int written = 0;
     auto pushData = [&](double upTo) {
         while (written < samples && double(written) <= upTo) {
-            char payload[32];
-            const int n = std::snprintf(payload, sizeof(payload), "DVNMsample %02d", written);
+            const gpmfw::Bytes payload = gpmfw::buildPayload(written);
+            const int n = static_cast<int>(payload.size());
             AVPacket* dp = av_packet_alloc();
             av_new_packet(dp, n);
-            std::memcpy(dp->data, payload, static_cast<size_t>(n));
+            std::memcpy(dp->data, payload.data(), payload.size());
             dp->stream_index = data->index;
             dp->pts = dp->dts = int64_t(written) * 1000;
             dp->duration = 1000;
@@ -481,7 +494,7 @@ bool writeTelemetry(const std::filesystem::path& src, const std::filesystem::pat
     avformat_close_input(&in);
     avformat_free_context(oc);
 
-    std::printf("  %s  gpmd data track, %d samples  %lld bytes\n",
+    std::printf("  %s  gpmd data track, %d GPMF payloads  %lld bytes\n",
                 dst.filename().string().c_str(), written, static_cast<long long>(bytes));
     return true;
 }

@@ -48,9 +48,12 @@ add_library(ffmpeg-bro-core STATIC
     src/native/bindings_capture.cpp
     src/native/bindings_capabilities.cpp
     src/native/bindings_expr.cpp
+    src/native/bindings_data.cpp
     src/native/bindings_playback.cpp
     src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
+    src/native/ffmpeg_data.cpp
+    src/native/data_gpmf.cpp
     src/native/ffmpeg_capture.cpp
     src/native/capture_graph.cpp
     src/native/ffmpeg_export.cpp
@@ -157,6 +160,18 @@ target_link_libraries(ffmpeg-bro-capturetest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-capturetest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# A data stream, read: which parser answers for which fourcc, what GPMF says,
+# and — the bulk of it — what the parser does with a payload it is not allowed
+# to trust. Truncated at every boundary, scribbled on header by header, nested
+# two hundred deep and fed a megabyte of noise. The `tests/` directory is on the
+# include path for `gpmf_write.h`, which is shared with the fixture generator so
+# that the bytes damaged here are the bytes the fixture holds.
+add_executable(ffmpeg-bro-datatest tests/data_test.cpp)
+target_link_libraries(ffmpeg-bro-datatest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-datatest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                                   "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # The GPU: what this machine has, whether a hardware decode is the same
 # picture, and what each path costs. Most of it is a measurement rather than an
 # assertion, and every assertion has to pass on a machine with no card at all.
@@ -175,6 +190,10 @@ target_include_directories(ffmpeg-bro-perftest PRIVATE "${BRO_DIR}/src")
 # length. See tests/make_fixture.cpp for why that matters.
 add_executable(ffmpeg-bro-mkfixture tests/make_fixture.cpp)
 target_link_libraries(ffmpeg-bro-mkfixture PRIVATE ffmpeg-bro-core)
+# `gpmf_write.h` lives beside it: the telemetry fixture's payload is real GPMF
+# and is built by the same code the parser test damages.
+target_include_directories(ffmpeg-bro-mkfixture
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 # It writes through the renderer's own Writer, so it needs libav's headers the
 # way ffmpeg-bro-core does.
 target_include_directories(ffmpeg-bro-mkfixture
@@ -210,6 +229,12 @@ set(FIXTURE_ROTATED "${FIXTURE_DIR}/rotated.mp4")
 # length at the right times that the reader it was carried for cannot find.
 set(FIXTURE_DATA "${FIXTURE_DIR}/telemetry.mp4")
 
+# A real camera file, if this machine has one. Nothing in the suite requires it
+# — every section that uses it says what it found and skips otherwise — but a
+# parser for somebody else's format is only really tested by somebody else's
+# file, so there is a way to point at one.
+set(GOPRO_FILE "" CACHE FILEPATH "a real GoPro .MP4 to check the gpmd parser against")
+
 add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
 set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
 
@@ -235,6 +260,12 @@ add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}" "${FIXTURE_ROTATED}"
          "${FIXTURE_DIR}/cues.srt")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
+# The parser behind a data stream, and the hostile file it has to survive. The
+# fixture carries real GPMF; an optional second argument is a real camera file,
+# and the section that needs one says so and skips when there is none —
+# `-DGOPRO_FILE=<path>` at configure time is how a machine that has one passes
+# it in without checking a 4 GB file into anything.
+add_test(NAME telemetry COMMAND ffmpeg-bro-datatest "${FIXTURE_DATA}" "${GOPRO_FILE}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
 # The device it records from is `lavfi`, which produces its own pictures, so
 # most of this needs no fixture at all. What does is the half about a file laid
@@ -305,18 +336,26 @@ add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
 add_test(NAME ui-document COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_document.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
+# A data track, read and put on the timeline. The fixture carries real GPMF
+# whose divisors are the difference between 9.81 and 981, so what this can check
+# that a screenshot cannot is that the number on the lane is the number the file
+# means. Everything about *shape* also holds against a real camera file, and the
+# sections about the fixture's own values say so and skip.
+add_test(NAME ui-telemetry COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_telemetry.js"
+         -- "${FIXTURE_DATA}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
 add_test(NAME ui-output COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_output.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export capabilities inputs sequences hardware PROPERTIES
+set_tests_properties(decode export capabilities inputs sequences hardware telemetry PROPERTIES
                      FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document ui-output PROPERTIES
+                     ui-measure ui-subtitles ui-document ui-output ui-telemetry PROPERTIES
                      FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the

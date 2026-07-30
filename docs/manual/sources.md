@@ -110,6 +110,66 @@ file can be opened without being an `-i`: a `movie` filter, which opens its file
 inside libavfilter with none of this stage's options reaching it. It is listed
 rather than left off, with the offer to make it an input instead.
 
+## Reading a data track
+
+A file's streams are listed as one line each, and one kind of line has a control
+under it: a **data** stream whose fourcc something here can parse.
+
+`gpmd`, `tmcd`, `mebx` and `fdsc` all probe as `bin_data`, because there is no
+decoder for any of them — a data stream is packets whose meaning belongs to
+whatever they were written for, and the container's fourcc is the whole of what
+identifies one. That is why the tag is printed on the line here and nowhere
+else, and it is also the thing a parser dispatches on: **a data stream whose
+fourcc is X is read by the parser registered for X**. One is registered today,
+for GoPro's `gpmd`. A real camera file carries three data tracks and two of them
+get no button rather than a button that fails at the press, because `tmcd` and
+`fdsc` are different formats with different specifications and a parser that
+guessed at one would produce numbers nobody could check.
+
+**Read it** walks the whole track and says what it found:
+
+```
+HERO8 Black · 40 series · 708 packets
+```
+
+then a chip per series. A chip is the quantity's fourcc, the name the *file* gave
+it, and the reach of every sample in it:
+
+```
+ACCL/0 Accelerometer   -15.22..-3.85 m/s²      GPS5/0 GPS (Lat., Long., …)   45.66..47.46 deg
+```
+
+Press one and it goes on [the Data lane](timeline.md#the-data-lane); press it
+again and it comes off. Six at once, because that is how many colours the
+palette runs to.
+
+Nothing in this application knows what a `GPS5` is. The names, the units and the
+divisors all come out of the payload — the parser writes down GPMF's type
+alphabet and its structural vocabulary and no list of quantities at all, so a
+camera firmware that starts writing something nobody has seen plots it with no
+change here.
+
+**It is a press rather than something that happens.** A probe is what makes an
+input usable at all; this is a walk over a whole track that most edits have no
+use for. It costs 32 ms for the 4.5 MB telemetry track of a four-gigabyte camera
+file, and it happens on a thread of its own, so nothing here stops while it runs
+— the same mechanism a URL's open goes through, and for the same reason.
+
+A track that would not parse all the way through is drawn with what survived and
+**says so**, counting the packets and naming the first thing it found: an empty
+plot cannot be told from a file with nothing in it, and a camera that lost power
+mid-write leaves good samples in front of the damage.
+
+A series whose divisor could not be applied is marked `raw`. That is worth a
+word, because it is the one number on this stage that may not mean what it looks
+like: a GPS latitude without its divisor is 474305352, which is a number, and
+47.4305352, which is a place.
+
+**A reading is not in the document**, for the reason a waveform is not: it is
+derived from a file, and storing an answer the next reopen may contradict is how
+a document comes to disagree with the file it describes. Which series you picked
+is not saved either — see [Not yet](not-yet.md).
+
 ## While it is connecting
 
 A file on disk answers in about a millisecond. A URL answers when the far end

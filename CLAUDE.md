@@ -19,9 +19,10 @@ ctest --test-dir build -C Release
 ```
 
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
-`sequences`, `capture`, `hardware`, `ui-player`, `ui-sources`, `ui-hardware`,
-`ui-export`, `ui-sequence`, `ui-report`, `ui-measure`, `ui-subtitles`,
-`ui-capture`, `ui-filtergraph`, `ui-graph`, `ui-document`, `ui-output`):
+`sequences`, `capture`, `hardware`, `telemetry`, `ui-player`, `ui-sources`,
+`ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`, `ui-measure`,
+`ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`, `ui-document`,
+`ui-output`, `ui-telemetry`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -45,7 +46,11 @@ generator in automatically. Each fixture exists for one fact that cannot be
 faked with content — `silent.mp4` has *no audio stream* (not a quiet one),
 `sound.m4a` has *no video stream*, `rotated.mp4` carries a display matrix,
 `telemetry.mp4` carries a `gpmd` data track — a stream identified by its fourcc
-alone, since every data stream probes as `bin_data` — and `picture-cues.mkv`
+alone, since every data stream probes as `bin_data`, and carrying **real GPMF**
+now that there is a parser, because `SCAL` is a divisor and a value reported
+without it is off by orders of magnitude while still looking plausible
+(`tests/gpmf_write.h` builds the payload for the fixture and for the parser test
+both) — and `picture-cues.mkv`
 carries a `dvdsub` track, whose cues are *pictures* of characters and are the
 only thing here that reaches the refusals a bitmap subtitle earns.
 Every suite also runs against any real file, and skips the sections whose
@@ -192,7 +197,7 @@ AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 ### The JS surface
 
 `bro.ffmpeg` is `bindings_*.cpp`, one file per part of ffmpeg's model — probe,
-render, capture, capabilities, playback, sequences, expressions — each owning its calls, the
+data, render, capture, capabilities, playback, sequences, expressions — each owning its calls, the
 helpers that build its answers, and the paragraph saying why the calls are
 shaped that way; `bindings_install.h` lists them and `ffmpeg_bindings.cpp` is
 the assembly. Two are shared and neither may be duplicated: `bindings_value.h`
@@ -209,6 +214,43 @@ own callable, owned by the function object, so a helper may register a family of
 calls from one lambda expression (`optionTable`) — it used to key that storage on
 the closure's type, which made both of those silently call whichever was
 registered last.
+
+### The stream nothing decodes
+
+`ffmpeg_data.h` is the seam for the one kind of stream libavcodec cannot touch:
+**a data stream whose fourcc is X is parsed by the parser registered for X.**
+`gpmd`, `tmcd`, `mebx` and `fdsc` all probe as `bin_data`, so the container's tag
+is the whole identity of one — which is why it is the only thing a copy must
+preserve (`export_writer.cpp`) and why it is what a parser dispatches on. One row
+is filled in, `data_gpmf.h`; the seam does not name GoPro and the parser does.
+
+Three things about it are load-bearing. **libav has nothing to ask here and that
+is not a breach of the "ask libav" convention** — libavformat carries the track,
+reports the tag and hands over the packets, and there is no option table to
+enumerate; only the byte layout inside a packet is knowledge this repository
+owns, and it is written down where it was verified. **The payload is untrusted
+input and the parser is written that way**: every length, repeat count and
+nesting depth comes from the file, so nothing declared is believed, the depth,
+item count and value count are capped, and the walk is proved to make progress so
+a zero-length item cannot loop it — `tests/data_test.cpp` truncates a real payload
+at every boundary, scribbles an oversized length into every header, nests one two
+hundred deep and puts a megabyte of noise through it, and what is required is a
+*refusal*, not a parse. And **nothing lists the sample keys**: a numeric item that
+is not one of GPMF's structural keys is data whatever it is called, and the file
+supplies the name (`STNM`) and the units (`SIUN`/`UNIT`). `SCAL` is the divisor
+and it applies to **integer** items only — a float is already in its units, which
+is what stops a HERO8's 64.57 °C being reported as 0.155 °C.
+
+A whole track is read once, on a thread (`async_open.h`, shared with
+`probe_async.h` so that "handed over exactly once, reaped by whoever notices" has
+one implementation), and **bucketed on the way in** — min, max and mean over a
+fixed grid, so a reading's size is a property of the grid and not of the file.
+`bro.ffmpeg` is not installed in worker realms, so this is a thread rather than a
+job for `ui/analyze-worker.js`. `ui/telemetry.js` is the model on the other side
+and `ui/timeline.js`'s Data lane draws it, per clip, through `sourceTime` — the
+same map `columnsOf` uses for a waveform, which is what makes a series follow a
+trim without being re-read. A reading is derived, so it is not in the document,
+for the reason `peaks` is not.
 
 ### The native encode side
 

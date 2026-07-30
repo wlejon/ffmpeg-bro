@@ -79,6 +79,8 @@ import { COMPOSITE_POINT } from './graph/derive.js';
 import { streamsOf } from './export/streams.js';
 import { readsInput, filterPath } from './export/subtitles.js';
 import { goTo } from './shell.js';
+import { streamsWorthReading, readingOf, readStream, dropReading, tickTelemetry,
+         isPicked, pick, labelOf } from './telemetry.js';
 
 let refs = {};
 let hooks = {};
@@ -159,7 +161,13 @@ const waitingText = new Map();
 /// this stage goes on connecting while you walk to the timeline, exactly as a
 /// render goes on rendering.
 export function tickSources() {
-    const settled = tickInputs();
+    // Both polls run, and neither is allowed to skip the other: a probe
+    // settling and a data read settling are different answers arriving on
+    // different threads, and `||` would leave one of them unpolled for a frame
+    // whenever the other went first.
+    const opened = tickInputs();
+    const read = tickTelemetry();
+    const settled = opened || read;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1264,7 +1272,7 @@ function contentRows(input) {
             div('src-error', input.error),
         ];
     if (!input.probe) return [];
-    return fileRows(input.probe);
+    return fileRows(input.probe, input);
 }
 
 /// What came back, in as many lines as there are streams plus one.
@@ -1274,7 +1282,7 @@ function contentRows(input) {
 /// at on this stage was the one you had to scroll for. Nothing is dropped: what
 /// is not on the line is on the line's tooltip, which is where a pixel aspect
 /// ratio of 1.0000 belongs.
-function fileRows(p) {
+function fileRows(p, input) {
     return [
         head('What came back', { title: 'Probed with the options above in force, so this ' +
                                         'is the file as this input opens it' }),
@@ -1289,8 +1297,114 @@ function fileRows(p) {
                   p.format.bitRate ? kbps(p.format.bitRate) : ''].filter(Boolean).join(' · '),
                  'dim'),
         ]),
-        ...p.streams.map(streamLine),
+        ...p.streams.flatMap((s) => [streamLine(s), ...dataRows(input, s)]),
     ];
+}
+
+/// What a data track carries, for the ones something here can read.
+///
+/// **Under the stream's own line rather than in a panel of its own**, because
+/// this is the one screen where a stream is described and a `gpmd` track is a
+/// stream. It is also where the fourcc is already printed -- the readout's rule
+/// is that a data stream says its tag on the line, since every one of them is
+/// called `bin_data` -- so the control that dispatches on the tag belongs beside
+/// the tag it dispatches on.
+///
+/// Offered **only** where a parser exists: `streamsWorthReading` filters against
+/// `bro.ffmpeg.data.parsers()`, which is asked of the native registry. A real
+/// GoPro file carries `gpmd`, `tmcd` and `fdsc`, and two of those get no button
+/// rather than a button that fails at the press.
+function dataRows(input, stream) {
+    if (!input || stream.kind !== 'data') return [];
+    if (!streamsWorthReading(input).some((s) => s.index === stream.index)) return [];
+
+    const e = readingOf(input.id, stream.index);
+    if (!e) {
+        return [div('src-data', [
+            el('button', { cls: 'btn tiny', text: 'Read it',
+                           title: 'Parse this track and offer what it carries. It is a ' +
+                                  'walk over the whole track -- 32 ms for a four-hour-' +
+                                  'gigabyte camera file -- and it happens on a thread, ' +
+                                  'so nothing here stops while it does.',
+                           on: { click: () => { readStream(input, stream.index); drawSources(); } } }),
+            span('nothing has read this track yet', 'dim'),
+        ])];
+    }
+    if (e.state === 'reading')
+        return [div('src-data', [span('Reading' + (e.elapsed > 0.4
+            ? ' \u00b7 ' + e.elapsed.toFixed(1) + 's' : '') + '\u2026', 'dim')])];
+    if (e.state !== 'done')
+        return [div('src-data', [
+            span(e.error || 'will not read', 'src-error'),
+            el('button', { cls: 'btn tiny', text: 'Again',
+                           on: { click: () => { dropReading(input.id, stream.index);
+                                                readStream(input, stream.index);
+                                                drawSources(); } } }),
+        ])];
+
+    const r = e.reading;
+    const facts = [r.device, r.series.length + ' series', r.packets + ' packets']
+        .filter(Boolean).join(' \u00b7 ');
+    const rows = [div('src-data', [
+        span(facts, 'dim'),
+        el('button', { cls: 'btn tiny', text: 'Forget',
+                       title: 'Drop this reading and take its series off the timeline.',
+                       on: { click: () => { dropReading(input.id, stream.index);
+                                            drawSources(); } } }),
+    ])];
+    // A track that would not parse all the way through is drawn with what
+    // survived and **says so**, because an empty plot cannot be told from a file
+    // with nothing in it. The count is the honest measure: one bad packet in
+    // seven thousand is a scratch, and seven thousand is a different file.
+    if (r.refused > 0)
+        rows.push(div('src-data', [
+            span(r.refused + ' of ' + r.packets + ' packets would not parse \u00b7 ' +
+                 r.refusal, 'src-error'),
+        ]));
+    rows.push(div('src-data-series',
+        r.series.map((sv) => seriesChip(input, stream.index, sv))));
+    return rows;
+}
+
+/// One series, as a thing to put on the timeline or take off it.
+///
+/// The label is the fourcc first and the file's own `STNM` after it, which is
+/// `labelOf`'s rule and is stated there. What is on the chip beside it is the
+/// **reach** -- the exact min and max over every sample, not over the buckets --
+/// and the unit the file gave, because "is this the one I want" is a question
+/// about the numbers and not about the name.
+///
+/// A series the format's own divisor could not be applied to is marked `raw`.
+/// That is the one thing on this stage that says a number may not mean what it
+/// looks like, and it is worth a word: an unscaled `GPS5` latitude is
+/// 474305352, which is a number, and 47.4305352 is a place.
+function seriesChip(input, streamIndex, sv) {
+    const on = isPicked(input.id, streamIndex, sv);
+    const reach = shortNum(sv.min) + '..' + shortNum(sv.max) + (sv.units ? ' ' + sv.units : '');
+    return el('button', {
+        cls: 'src-series' + (on ? ' on' : ''),
+        title: labelOf(sv) + '\n' + sv.samples + ' samples at ' +
+               sv.rate.toFixed(1) + ' Hz\n' + reach +
+               (sv.scaled ? '' : '\nno divisor was applied to this one'),
+        on: { click: () => {
+            const why = pick(input.id, streamIndex, sv);
+            if (why && hooks.flash) hooks.flash(why);
+            drawSources();
+        } },
+    }, [
+        span(labelOf(sv), 'mono'),
+        span(reach + (sv.scaled ? '' : ' raw'), 'dim'),
+    ]);
+}
+
+/// Enough of a number to tell two series apart on a chip.
+function shortNum(v) {
+    if (!Number.isFinite(v)) return '--';
+    const a = Math.abs(v);
+    if (a >= 10000) return v.toExponential(1);
+    if (a >= 100) return String(Math.round(v));
+    if (a >= 1) return v.toFixed(2);
+    return v.toFixed(3);
 }
 
 /// One stream, on one line, in the terms that stream is described in.

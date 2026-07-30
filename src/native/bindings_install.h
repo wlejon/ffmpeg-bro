@@ -40,6 +40,10 @@ void installPlayback(Table& ns);
 /// through. bindings_sequence.cpp.
 void installSequences(Table& ns);
 
+/// `data.*` — what a data stream carries, for the fourccs something here knows
+/// how to read. bindings_data.cpp.
+void installData(Table& ns);
+
 /// `expr.evaluate` — libavutil's expression evaluator, so a filter option
 /// written as an expression can be drawn as the curve libavfilter will perform.
 /// bindings_expr.cpp.
