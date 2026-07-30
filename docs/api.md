@@ -81,12 +81,15 @@ bro.ffmpeg.probe({ path, format, options, decoderOptions,
 //                //        other, and it does it by frame height.
 //                // audio: sampleRate, channels, channelLayout, sampleFmt
 //                // subtitle: textSub — characters rather than pictures of
-//                //        them (AV_CODEC_PROP_TEXT_SUB). It decides two
+//                //        them (AV_CODEC_PROP_TEXT_SUB). It decides four
 //                //        different things: writing the track out as `subrip`
 //                //        (optical character recognition, which nothing here
-//                //        does) and *burning it into the picture*, because
+//                //        does); *burning it into the picture*, because
 //                //        libavfilter's `subtitles` filter is libass and
-//                //        refuses a bitmap track by name.
+//                //        refuses a bitmap track by name; whether `cueText`
+//                //        has anything to read; and — the other way round —
+//                //        whether the input grows a **cues pad** a graph can
+//                //        draw from, which only a bitmap track has.
 //               }, ...],
 //     video, audio }          // shortcuts to the first of each
 ```
@@ -461,6 +464,28 @@ bro.ffmpeg.render.start({ path,
                           // neither of them has is an error.
                           format: "matroska",
                           width, height, fps, start, end,
+                          // **libavfilter instead of the compositor**, when
+                          // there is a graph: `filterGraph` is the
+                          // `-filter_complex` text and `filterInputs` says what
+                          // feeds each pad it reads. One entry per *pad*, so
+                          // `[0:v]` and `[0:a]` are two entries and one `-i`.
+                          //
+                          // `stream` is `v`, `a` or **`s`**, and the third is
+                          // the one worth knowing about: libavfilter has no
+                          // subtitle input, so `[0:s]` is a *picture* pad whose
+                          // frames this renderer paints out of a bitmap
+                          // subtitle track — ffmpeg's own sub2video, one frame
+                          // when a cue appears and a cleared one when it
+                          // expires. A **text** track there is refused by name,
+                          // because drawing characters is libass's job and that
+                          // is the `subtitles` filter. Anything else is an error
+                          // naming the letter. `from` is the earliest source
+                          // time anything downstream asks for, which is where
+                          // the reader seeks to.
+                          filterGraph: '[0:v][0:s]overlay[vout]',
+                          filterInputs: [{ label: '0:v', input: 0, stream: 'v' },
+                                         { label: '0:s', input: 0, stream: 's',
+                                           from: 0 }],
                           videoCodec, audioCodec, audio, clips: [...],
                           pixelFormat, scaler, colorspace, colorRange,
                           faststart, title, sampleRate, channels,

@@ -74,6 +74,7 @@ let selectedCount = 0;
 /// because half the application asks the panel for it and renaming that would
 /// be churn for nothing.
 export { keyOf } from './model.js';
+import { streamWord, padTakes } from './model.js';
 
 export function initPanel(r, h) {
     refs = r;
@@ -482,7 +483,7 @@ function padRows(node) {
     const outs = node.outs || [];
     if (!ins.length && !outs.length) return [];
     const wired = new Set(graph ? graph.inEdges(node).map((e) => e.port || 0) : []);
-    const kind = (s) => (s === 'a' ? 'sound' : 'picture');
+    const kind = streamWord;
     const rows = [head('Pads')];
     ins.forEach((p, i) => {
         rows.push(row(`in ${i + 1}`, [
@@ -676,7 +677,11 @@ function canTake(stream, dir) {
         const pads = padsOf(f.name);
         if (!pads) return false;
         const want = dir === 'in' ? pads.outs : pads.ins;
-        return want.some((s) => s === stream);
+        // `padTakes` rather than equality, so a wire of cues in the air offers
+        // the filters that draw pictures — an `overlay` above all — which is the
+        // whole of what can be done with one. See model.js.
+        return want.some((s) => (dir === 'in' ? padTakes(s, stream)
+                                             : padTakes(stream, s)));
     });
 }
 
@@ -711,8 +716,12 @@ function sourceRows(pad, term) {
     const hit = (a, b) => !term || String(a).toLowerCase().indexOf(term) >= 0 ||
                           String(b || '').toLowerCase().indexOf(term) >= 0;
 
+    // An input is offered for a pad one of its own streams can fill, which for
+    // a picture pad now includes a file whose only usable stream is a bitmap
+    // subtitle track — those cues *are* pictures once painted.
     const files = documentInputs.filter((i) =>
-        (!stream || streamKinds(i).indexOf(stream) >= 0) && hit(i.name, i.path));
+        (!stream || streamKinds(i).some((k) => padTakes(k, stream))) &&
+        hit(i.name, i.path));
     const made = sourceFilters().filter((f) => {
         const pads = padsOf(f.name);
         return pads && (!stream || pads.outs.indexOf(stream) >= 0) &&
@@ -746,7 +755,7 @@ function inputRow(pad, input) {
             else changed();
         } },
     }, [span(input.name, 'gp-fname mono'),
-        span(streams.map((s) => (s === 'a' ? 'sound' : 'picture')).join(' · '), 'gp-badge'),
+        span(streams.map(streamWord).join(' · '), 'gp-badge'),
         span(input.path, 'dim')]);
 }
 
@@ -845,7 +854,7 @@ function padPalette(pad) {
 
     return [
         div('gp-head', [span('Place', 'gp-name'),
-                        span(pad.key ? `from a ${pad.stream === 'a' ? 'sound' : 'picture'} pad`
+                        span(pad.key ? `from a ${streamWord(pad.stream)} pad`
                                      : 'on the canvas', 'gp-badge')]),
         div('gp-hint dim', pad.key
             ? 'It lands where you let go and is wired to the pad you dragged from. ' +

@@ -25,7 +25,7 @@
 import { project, isGenerator } from './project.js';
 import { argsOf, summaryOf } from './generator.js';
 import { el, div, span, put, head } from './dom.js';
-import { kindOf, inputs } from './inputs.js';
+import { kindOf, inputs, streamKinds } from './inputs.js';
 import * as graph from './graph/overlay.js';
 import { canBurn, subtitleOrdinal, burnParams, burnAnchor } from './export/subtitles.js';
 
@@ -278,8 +278,24 @@ function generatorRows(clip, again) {
 // deletable on the Graph stage — and unlike the Sources stage's button this one
 // does not take you there, because the point of it is that the picture in front
 // of you changes.
+//
+// **A track of pictures gets the other button, and it places three nodes.**
+// `dvdsub` and `hdmv_pgs_subtitle` are bitmaps: libass cannot draw them and there
+// is no OCR here, so `Burn in` is not what they need and used to be a disabled
+// button with an explanation. What they need is an `overlay` fed from the input's
+// own subtitle pad — `[0:s]`, painted cue by cue, which is ffmpeg's own sub2video
+// and is `export_sub2video.h` here — and that is one press: `Draw cues`. The
+// picture in front of you does *not* change for this one, because the viewer
+// plays one chain of one input and this is two; `O` plays the render, which is
+// where they are.
 
-/// Every subtitle track this clip could burn in.
+/// Every subtitle track this clip could burn in — or, where it is pictures of
+/// characters, draw.
+///
+/// `input` travels with each row because the *drawn* half needs the `-i` and not
+/// only its path: cues are drawn by placing that input as a node of the graph and
+/// wiring its subtitle pad, which is a thing you can only do to an input the
+/// document holds.
 function burnable(clip) {
     const out = [];
     const probe = clip.input && clip.input.probe;
@@ -289,7 +305,7 @@ function burnable(clip) {
             label: `${s.index}: ${s.codec}` + (s.language ? ` (${s.language})` : ''),
             note: s.title || '',
             path: clip.input.path, ordinal: subtitleOrdinal(probe, s.index),
-            codec: s.codec, can: canBurn(s),
+            codec: s.codec, can: canBurn(s), input: clip.input,
         });
     }
     // Every file of cues open on the Sources stage, whatever it was opened for.
@@ -302,10 +318,60 @@ function burnable(clip) {
         out.push({
             label: input.name, note: first ? first.codec : '',
             path: input.path, ordinal: 0,
-            codec: first ? first.codec : '', can: canBurn(first),
+            codec: first ? first.codec : '', can: canBurn(first), input,
         });
     }
     return out;
+}
+
+/// The nodes drawing this bitmap track over this clip, or null.
+///
+/// Read out of the overlay rather than remembered anywhere, for the reason
+/// `burnedIn` is: the nodes are the fact, and deleting one of them on the Graph
+/// stage has to bring this button back up. Recognised by its *shape* — an
+/// `overlay` at this clip's own point whose second input is fed by a node reading
+/// this input — so a graph somebody built by hand is recognised as the same
+/// thing, which is the difference between a button and a mode.
+function drawnOn(clip, track) {
+    const anchor = burnAnchor(clip.id);
+    for (const rec of graph.inserts()) {
+        if (rec.anchor !== anchor || rec.filter !== 'overlay') continue;
+        const fed = graph.wires().find((w) => w.to === rec.id && (w.port || 0) === 1);
+        const source = fed && graph.nodes().find(
+            (n) => n.id === fed.from && n.kind === 'input' &&
+                   String(n.input) === String(track.input && track.input.id));
+        if (source) return { over: rec, source };
+    }
+    return null;
+}
+
+/// Cues that are pictures, **drawn** — the other half of `Burn in`, and the only
+/// half a `dvdsub` or `hdmv_pgs_subtitle` track has.
+///
+/// Three nodes rather than one, because drawing a picture over a picture is an
+/// `overlay`: the input as a source node of the graph, an `overlay` spliced onto
+/// this clip's own chain, and the wire from the input's subtitle pad to the
+/// overlay's second input. That is the graph a person would build by hand, it is
+/// what the command bar prints, and every one of the three can be moved,
+/// configured and deleted on the Graph stage.
+///
+/// **The clock is why it goes on this clip's chain** rather than over the whole
+/// canvas: a track inside a file is timed against *that file*, which is the clock
+/// above the derivation's `setpts` — the same argument `burnAnchor` is written
+/// for. It is also the clip's own size, which is the size the cues were authored
+/// against.
+///
+/// **A second `-i` of the same file, deliberately.** A graph's input node is an
+/// `-i` in this model and the clip's own input node carries pads only for what
+/// the derivation reads. Teaching the derivation to grow a third pad on demand
+/// would mean the overlay's wires naming a port whose index moves the moment the
+/// clip is muted — a wire that silently points at another stream — so the honest
+/// arrangement is the one ffmpeg would print: the file opened twice, once for the
+/// picture and once for the cues.
+function drawCues(clip, track, port) {
+    const over = graph.insert(burnAnchor(clip.id), 'overlay');
+    const source = graph.addSource(track.input.id);
+    graph.wire(source.id, port, over.id, 1, 's');
 }
 
 /// The node burning this track into this clip, or null.
@@ -323,6 +389,46 @@ function burnedIn(clip, track) {
         const p = rec.params || {};
         return p.filename === want.filename && String(p.si || '0') === String(want.si || '0');
     }) || null;
+}
+
+/// What a track of pictures gets instead of `Burn in`.
+///
+/// **libass reads characters, and these cues are not characters** — so the
+/// filter that burns text in refuses this track by name, and the answer is the
+/// graph: an `overlay` fed from the input's own subtitle pad, which is
+/// `[0:s]` and is drawn by painting the bitmaps the track carries. See
+/// `drawCues` for what is placed and `export_sub2video.h` for what draws it.
+///
+/// Disabled with the reason only where the input has **no cues pad at all**,
+/// which is a file `probe()` could read no subtitle stream out of — `streamKinds`
+/// grows the pad off the probe, so no pad means there is nothing a graph could
+/// read either. It is not the ordinary state of anything and it is a button
+/// rather than a missing row because a row that vanished would say nothing.
+function drawButton(clip, track, again) {
+    const port = streamKinds(track.input).indexOf('s');
+    if (port < 0)
+        return el('button', {
+            cls: 'tiny', text: 'Draw cues', disabled: true,
+            title: `${track.codec || 'this track'} is pictures of characters rather than ` +
+                   'characters, so libass cannot draw it — and this input has no pad of cues ' +
+                   'to draw from either, which is a file nothing could read a subtitle ' +
+                   'stream out of. It can still be carried as a stream on the Write stage.',
+        });
+    const drawn = drawnOn(clip, track);
+    const button = toggleButton(drawn ? 'Cues drawn' : 'Draw cues', !!drawn, () => {
+        if (drawn) {
+            graph.removeInsert(drawn.over.id);
+            graph.removeInsert(drawn.source.id);
+        } else drawCues(clip, track, port);
+        again();
+    }, 'data-draw');
+    button.setAttribute('title',
+        `${track.codec} is pictures of characters, so libavfilter’s subtitles filter — ` +
+        'which is libass — refuses it by name. What draws it is an overlay fed from this ' +
+        'input’s own subtitle pad, on this clip’s chain and on the file’s own clock. ' +
+        'Three ordinary nodes go on the Graph stage; the viewer cannot play an overlay ' +
+        'of two inputs, so press O to watch the render itself.');
+    return button;
 }
 
 function subtitleRows(clip, again) {
@@ -344,14 +450,7 @@ function subtitleRows(clip, again) {
                                         { params: burnParams(track.path, track.ordinal) });
                       again();
                   }, 'data-burn')
-                : el('button', {
-                      cls: 'tiny', text: 'Burn in', disabled: true,
-                      title: `${track.codec} carries pictures of characters rather than ` +
-                             'characters. libavfilter’s subtitles filter is libass and ' +
-                             'refuses one by name — so this track can be carried as a ' +
-                             'stream on the Write stage, and cannot be drawn into the ' +
-                             'picture here.',
-                  });
+                : drawButton(clip, track, again);
             return controlRow(track.label, div('btns', [
                 span(track.note, 'mono dim'),
                 button,

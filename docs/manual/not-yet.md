@@ -112,14 +112,26 @@ Honest list of what does not work:
   it is built. What a person with a file that is a second and a half out has
   here is `-itsoffset` on the input, which shifts the whole track and is the
   right tool for exactly that one problem and no other.
-- **Picture subtitles, anywhere but carried.** `dvdsub` and
-  `hdmv_pgs_subtitle` can be carried into a container that holds them and
-  nothing else: they cannot become `subrip`, because that is optical character
-  recognition, and they cannot be burned in, because libavfilter's subtitles
-  filter is libass and libass reads characters. Drawing one *would* be
-  expressible — the packets are pictures and `overlay` draws pictures — but
-  nothing here reads an input for its subtitle pad, so there is no wire to draw.
-  Both refusals name the reason rather than failing at the first cue.
+- **Picture subtitles as text, or through libass.** `dvdsub` and
+  `hdmv_pgs_subtitle` can be carried into a container that holds them, and they
+  can now be **drawn** — see [Drawing them, when they are
+  pictures](subtitles.md#drawing-them-when-they-are-pictures), which is an input's own
+  cues pad wired into an `overlay`. The two things they cannot be are the two
+  they never could: `subrip`, because that is optical character recognition, and
+  burned in with `subtitles=`, because that filter is libass and libass reads
+  characters. Both refusals name the reason rather than failing at the first
+  cue, and drawing is offered in place of the second.
+
+  Three things about the drawn path are not what they could be. It opens the
+  file a **second time** — one `-i` for the clip's picture and one for its cues —
+  because the clip's own input node carries pads only for what the derivation
+  reads, and teaching it to grow one on demand would mean an overlay's wires
+  naming a port whose index moves when the clip is muted. The **viewer cannot
+  show it**, because an overlay of two inputs is not one chain over one clip; `O`
+  plays the render and has them in it. And `-canvas_size` is not surfaced: the
+  size the cues are painted at is the one the file says, which is ffmpeg's own
+  rule and is right until somebody has a file whose subtitle dimensions are
+  wrong.
 - **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
   `<video>` drives its clock from decoded pictures, so a file with exactly one
   has nothing to advance through, and the element shows the frame and reports

@@ -4193,6 +4193,116 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ── picture subtitles, drawn ────────────────────────────────────────────
+    //
+    // A `dvdsub` track cannot become text and cannot go through libass, and both
+    // of those are refused by name elsewhere in this file. What it *can* do is be
+    // drawn, because its cues are pictures and `overlay` draws pictures — and the
+    // thing to know before reading any of this is that **libavfilter has no
+    // subtitle input**. `[0:s]` reaching an overlay is ffmpeg's own sub2video
+    // mechanism, and export_sub2video.h is that mechanism here.
+    //
+    // Three measurements, and the third is the one nothing else in this suite
+    // would catch: identical before the cue, different while it is on, and
+    // **identical again after it expires**. A graph that is never told the cue
+    // ended goes on drawing it for the rest of the render, which passes the first
+    // two checks and is the ordinary way this is got wrong.
+    {
+        std::printf("\npicture subtitles, drawn\n");
+        const std::filesystem::path fixtures = std::filesystem::path(first).parent_path();
+        const std::filesystem::path pictures = fixtures / "picture-cues.mkv";
+        if (!std::filesystem::exists(pictures)) {
+            std::printf("  SKIP  no picture-cues.mkv beside %s — drawing a bitmap cue wants "
+                        "a bitmap track, which cannot be faked with content\n", first.c_str());
+        } else {
+            const std::string plainPath = "out/export-sub2video-off.mp4";
+            const std::string drawnPath = "out/export-sub2video-on.mp4";
+            ExportSettings ds = baseSettings(plainPath);
+            ds.format = "mp4";
+            ds.endTime = 3.0;
+            ds.includeAudio = false;
+            ds.inputs = {MediaInput{}};
+            ds.inputs[0].path = pictures.string();
+            ds.filterInputs = {{"0:v", pictures.string(), "v", 0.0, 0}};
+            char graph[1024];
+            std::snprintf(graph, sizeof(graph), "[0:v]scale=%d:%d,setsar=1[vout]", kW, kH);
+            ds.filterGraph = graph;
+            const ExportStatus without = render(ds, {});
+
+            // The cue pad, wired the way a person would wire it on the Graph
+            // stage and the way the command bar prints it. Two `filterInputs`
+            // entries and one `-i`: the picture and the cues are two pads of one
+            // input, which is what carrying the same index says.
+            ds.path = drawnPath;
+            ds.filterInputs.push_back({"0:s", pictures.string(), "s", 0.0, 0});
+            std::snprintf(graph, sizeof(graph),
+                          "[0:v]scale=%d:%d,setsar=1[base];[base][0:s]overlay[vout]", kW, kH);
+            ds.filterGraph = graph;
+            const ExportStatus withCues = render(ds, {});
+
+            checkf(withCues.state == ExportStatus::State::Done,
+                   "an input's subtitle pad feeds an overlay and the render goes through (%s)",
+                   withCues.error.empty() ? "no error" : withCues.error.c_str());
+
+            if (without.state == ExportStatus::State::Done &&
+                withCues.state == ExportStatus::State::Done) {
+                VideoPipeline a, b;
+                if (a.open(plainPath) && b.open(drawnPath)) {
+                    auto at = [&](double t) {
+                        a.advanceTo(static_cast<TimeNs>(t * 1e9));
+                        b.advanceTo(static_cast<TimeNs>(t * 1e9));
+                        if (!a.hasFrame() || !b.hasFrame()) return -1.0;
+                        return psnr(a.currentRgba(), b.currentRgba(), kW, kH);
+                    };
+                    // The fixture's cues are at 1–2, 4–5.5 and 7–8 s, so a
+                    // three-second render has exactly one of them in it with
+                    // clear air on both sides.
+                    const double before = at(0.4);
+                    const double during = at(1.5);
+                    const double after = at(2.6);
+                    std::printf("        0.4s: %.1f dB   1.5s: %.1f dB   2.6s: %.1f dB\n",
+                                before, during, after);
+                    checkf(before > 38.0,
+                           "nothing is drawn before the cue begins (%.1f dB)", before);
+                    checkf(during > 0 && during < 34.0,
+                           "the cue's own picture is drawn while it is on (%.1f dB)", during);
+                    checkf(after > 38.0,
+                           "and the cue comes *off* when it expires, which is the frame a "
+                           "sub2video that forgot would never send (%.1f dB)", after);
+                } else {
+                    check(false, "both sub2video renders open for comparison");
+                }
+            }
+
+            // **A text track on a subtitle pad is refused, by name.** ffmpeg's
+            // own sub2video takes one, warns per cue and paints nothing, which is
+            // a render that succeeds with no subtitles in it; painting characters
+            // is libass's job and the answer is the `subtitles` filter.
+            const std::filesystem::path srtHere = fixtures / "cues.srt";
+            if (std::filesystem::exists(srtHere)) {
+                ExportSettings ts = ds;
+                ts.path = "out/export-sub2video-never.mp4";
+                ts.filterInputs.back() = {"0:s", srtHere.string(), "s", 0.0, -1};
+                const ExportStatus text = render(ts, {});
+                checkf(text.state == ExportStatus::State::Failed &&
+                           mentions(text.error, "subrip") && mentions(text.error, "subtitles"),
+                       "a text track on a subtitle pad is refused, naming the filter that "
+                       "does draw one (%s)", text.error.c_str());
+            }
+
+            // And an unknown letter, because a pad is fed v, a or s and anything
+            // else is a spec nothing can honour.
+            ExportSettings us = ds;
+            us.path = "out/export-sub2video-never.mp4";
+            us.filterInputs.back().stream = "x";
+            const ExportStatus unknown = render(us, {});
+            checkf(unknown.state == ExportStatus::State::Failed &&
+                       mentions(unknown.error, "0:s"),
+                   "and a pad fed something that is not v, a or s is refused, naming it (%s)",
+                   unknown.error.c_str());
+        }
+    }
+
     std::printf("\nbad asks are refused, not crashed into\n");
     ExportSettings bad = baseSettings("out/export-never.mp4");
     check(!startExport(bad, {}, &err), "an empty timeline is refused");

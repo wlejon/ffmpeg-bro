@@ -707,6 +707,76 @@ console.log('\ncues that are pictures');
         A.exporter.currentSettings().container = 'mp4';
         A.exporter.redraw();
         pump(60);
+
+        // ── and drawn ───────────────────────────────────────────────────────
+        //
+        // The one thing a bitmap track *can* have done to it besides being
+        // carried. It cannot become text (that is OCR) and it cannot go through
+        // libass — so `Burn in` is refused by name — but its cues are pictures
+        // and `overlay` draws pictures. What `Draw cues` places is three
+        // ordinary nodes, and the check is that they are the right three: an
+        // input node reading this file, an `overlay` on *this clip's* chain
+        // rather than over the whole canvas, and a wire from the input's
+        // subtitle pad to the overlay's second input.
+        //
+        // The renderer's half of this — that the cue is drawn while it is on and
+        // taken *off* when it expires — is measured in `export_test.cpp`, where
+        // two renders can be compared frame by frame.
+
+        console.log('\ncues that are pictures, drawn');
+        A.graph.overlay.clear();
+        pump(80);
+        const ripOf = () => A.project.clips.find(
+            (c) => c.input && String(c.input.path).indexOf('picture-cues') >= 0);
+        A.open(pictures);
+        waitFor('the rip to come back as a clip', () => !!ripOf());
+        pump(300);
+        const rip = ripOf();
+        same(A.inputs.streamKinds(rip.input).join(','), 'v,a,s',
+             'the input grows a cues pad, because its subtitle track is pictures');
+        same(A.inputs.streamKinds(A.inputs.inputs[1]).join(','), 'v',
+             'and a text sidecar grows none — libass draws those, which is a filter');
+
+        A.select(rip);
+        A.showProperties();
+        pump(120);
+        const draw = q('[data-draw]');
+        ok(!!draw, 'the clip offers Draw cues where Burn in would be refused');
+        click(draw);
+        pump(400);
+
+        const over = A.graph.overlay.inserts().find((r) => r.filter === 'overlay');
+        ok(!!over, 'pressing it places an overlay');
+        same(over && over.anchor, `clip:${rip.id}/after-decode`,
+             'on that clip’s own chain, which is the clock the cues were written on');
+        const src = A.graph.overlay.nodes().find((n) => n.kind === 'input');
+        ok(!!src && String(src.input) === String(shot.id),
+           'and the input as a node of the graph, so its pads can be wired');
+        const wire = A.graph.overlay.wires().find((w) => w.to === (over && over.id));
+        ok(!!wire && wire.port === 1, 'wired into the overlay’s second input — what is drawn');
+        same(wire && wire.fromPort, A.inputs.streamKinds(rip.input).indexOf('s'),
+             'leaving by the cues pad and not by the picture');
+
+        // The printed command, which is the point: `[1:s]` into an overlay is
+        // what ffmpeg's own CLI takes, and the bar says in as many words that
+        // the pad is not a link libavfilter makes.
+        cmd = commandText();
+        ok(/\[\d+:s\]/.test(cmd) && cmd.indexOf('overlay') >= 0,
+           `the command draws the subtitle pad into an overlay (${(cmd.match(/\[\d+:v\]\[\d+:s\]overlay/) || ['—'])[0]})`);
+        ok(A.exporter.buildSpec().filterInputs.some((i) => i.stream === 's'),
+           'and the spec the renderer is handed says which pad is cues');
+
+        A.showProperties();
+        pump(120);
+        same(q('[data-draw]').textContent, 'Cues drawn',
+             'the button says the cues are on, read off the nodes rather than remembered');
+        click(q('[data-draw]'));
+        pump(300);
+        ok(!A.graph.overlay.inserts().some((r) => r.filter === 'overlay') &&
+           !A.graph.overlay.nodes().some((n) => n.kind === 'input'),
+           'and pressing it again takes all three back off');
+        A.graph.overlay.clear();
+        pump(80);
     }
 }
 

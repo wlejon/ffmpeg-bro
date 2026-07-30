@@ -4,6 +4,7 @@
 #include "export_graph.h"
 
 #include "export_source.h"
+#include "export_sub2video.h"
 #include "ffmpeg_hardware.h"
 #include "ffmpeg_report.h"
 
@@ -215,9 +216,23 @@ bool GraphSource::attachInput(AVFilterInOut* in, std::string* err) {
         if (err) *err = "the graph reads [" + label + "] and nothing says what feeds it";
         return false;
     }
+    // Three kinds of pad and **not two**, which is the one place the third has
+    // to be named: a subtitle pad is `s`, it carries cues painted into pictures
+    // (see export_sub2video.h), and so it feeds a *video* filter. An unknown
+    // letter is an error rather than "probably video", for the reason every
+    // unknown option in this binary is one — a graph reading a pad nothing can
+    // describe would open the wrong stream of the right file.
     const bool audio = match->stream == "a";
+    const bool cues = match->stream == "s";
+    if (!audio && !cues && match->stream != "v") {
+        if (err) *err = "[" + label + "] says it is fed '" + match->stream +
+                        "', and a pad is fed v (pictures), a (sound) or s (cues)";
+        return false;
+    }
     if (audio != (want == AVMEDIA_TYPE_AUDIO)) {
-        if (err) *err = "[" + label + "] is fed " + (audio ? "sound" : "pictures") +
+        if (err) *err = "[" + label + "] is fed " +
+                        (audio ? "sound" : cues ? "cues, which are painted into pictures"
+                                                : "pictures") +
                         " and the filter it reaches wants the other";
         return false;
     }
@@ -282,7 +297,11 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
     if (!par) { if (err) *err = "out of memory"; return false; }
 
     const AVFilter* kind = avfilter_get_by_name(feed.audio ? "abuffer" : "buffer");
-    const std::string name = (feed.audio ? "in_a_" : "in_v_") + feed.label;
+    // A subtitle pad's name says so even though its source is a `buffer` like
+    // any other picture's: `in_s_0:s` in a libavfilter error message is the
+    // difference between reading it and going looking for a filter nobody wrote.
+    const std::string name = (feed.audio ? "in_a_" : want.stream == "s" ? "in_s_" : "in_v_") +
+                             feed.label;
     feed.src = avfilter_graph_alloc_filter(graph_, kind, name.c_str());
     if (!feed.src) {
         av_free(par);
@@ -290,7 +309,35 @@ bool GraphSource::openFeed(Feed& feed, const ExportGraphInput& want, std::string
         return false;
     }
 
-    if (!feed.audio) {
+    if (want.stream == "s") {
+        // **Cues, painted.** The whole of the mechanism is in
+        // export_sub2video.h; what happens here is that the frames it makes are
+        // described to an ordinary `buffer` exactly as a decoder's would be. No
+        // colour tags, because RGBA has no matrix, and no hardware pool: a cue
+        // is painted in system memory by this process.
+        feed.cues = std::make_unique<SubtitleSource>();
+        std::string open;
+        if (!feed.cues->open(resolveInput(settings_, want.input, want.path), &open)) {
+            av_free(par);
+            if (err) *err = open;
+            return false;
+        }
+        // The same seek the other two feeds make, and safe for the same reason:
+        // backward, so the cues the graph still wants cannot be skipped.
+        if (want.from > 0.0) feed.cues->seekTo(want.from);
+        const AVFrame* f = feed.cues->next();
+        if (!f) {
+            av_free(par);
+            if (err) *err = want.path + ": no cue could be drawn out of it";
+            return false;
+        }
+        feed.first = av_frame_clone(f);
+        par->format = f->format;
+        par->width = f->width;
+        par->height = f->height;
+        par->sample_aspect_ratio = AVRational{1, 1};
+        par->time_base = feed.cues->timeBase();
+    } else if (!feed.audio) {
         feed.video = std::make_unique<SourceVideo>();
         std::string open;
         const AVFrame* f = nullptr;
@@ -497,6 +544,7 @@ bool GraphSource::pushOne(Feed& feed) {
     }
 
     const AVFrame* next = feed.audio ? (feed.sound ? feed.sound->nextRaw() : nullptr)
+                        : feed.cues  ? feed.cues->next()
                                      : (feed.video ? feed.video->nextRaw() : nullptr);
     if (!next) {
         av_buffersrc_add_frame(feed.src, nullptr);

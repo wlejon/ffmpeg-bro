@@ -26,6 +26,15 @@
 // is inserted as `transpose` filters between the buffersrc and the graph, which
 // is exactly where `ffmpeg`'s own autorotate puts it.
 //
+// **A subtitle pad is the other exception, and it is not a libavfilter link at
+// all.** libavfilter has no subtitle input: `[0:s]` reaching an `overlay` is
+// ffmpeg's own sub2video mechanism, which decodes the cues and paints them into
+// RGBA frames fed to an ordinary `buffer` source. `SubtitleSource`
+// (export_sub2video.h) is that, and a feed carrying it is a *picture* feed as far
+// as everything below here is concerned. A **text** track on such a pad is
+// refused when the input is opened, because painting characters is libass's job
+// and the `subtitles` filter is where it is done.
+//
 // **Every input decodes from the start of its file.** `-filter_complex` with no
 // `-ss` does the same, and `trim` throws away what it does not want. It is the
 // honest reading of the graph and the wrong thing for a clip an hour into a
@@ -70,6 +79,7 @@ namespace ffmpegbro {
 
 class SourceVideo;
 class SourceAudio;
+class SubtitleSource;
 
 /// `avfilter_graph_parse2`, in the three steps it is made of, so that a device
 /// can be handed to the filters that need one *between* being created and being
@@ -190,6 +200,12 @@ private:
         AVFilterContext* src = nullptr;
         std::unique_ptr<SourceVideo> video;
         std::unique_ptr<SourceAudio> sound;
+        /// A subtitle stream painted into pictures — see export_sub2video.h. It
+        /// feeds an ordinary video `buffer`, so `audio` is false for one and
+        /// everything past the push treats it as the picture feed it is; what
+        /// makes it its own member is that there is no decoder, no scaler and no
+        /// rotation in it, only cues.
+        std::unique_ptr<SubtitleSource> cues;
         /// The frame the buffersrc was configured from. Decoding it is how the
         /// formats became known, and it is still the first frame of the stream,
         /// so it is kept until the graph is configured and can take it.

@@ -262,19 +262,31 @@ export function lengthOf(input) {
 }
 
 /// Which kinds of stream this input turned out to carry — `['v']`, `['v','a']`,
-/// `['a']`.
+/// `['a']`, `['v','a','s']`.
 ///
 /// One implementation, because three things ask: the spec's `inputInfo` (which
 /// decides how many sockets a source card on the Graph stage draws), the graph
 /// palette (which offers an input only for a pad it can fill), and anything
 /// after them. An unprobed input answers `['v']` rather than nothing — a file
 /// that has not been read yet is not a file with no picture in it.
+///
+/// **`s` is a pad only for a subtitle track made of pictures**, and that is the
+/// load-bearing part of this function rather than a detail of it. A graph draws
+/// cues by painting the bitmaps a `dvdsub` or `hdmv_pgs_subtitle` track carries
+/// — which is what ffmpeg's own sub2video does and what `export_sub2video.h`
+/// does here — and there is nothing to paint out of a *text* track: drawing
+/// characters is libass's job, which is the `subtitles` filter and lives on the
+/// Sources card and the clip panel as `Burn in`. So a `.srt` grows no socket,
+/// because there is nothing anybody could do with one, and a spec that arrives
+/// carrying such a pad anyway is refused by name in the render. `textSub` is
+/// libavcodec's own `AV_CODEC_PROP_TEXT_SUB`, reported per stream by `probe()`.
 export function streamKinds(input) {
     const p = input && input.probe;
     if (!p) return ['v'];
     const out = [];
     for (const s of p.streams) {
-        const kind = s.kind === 'audio' ? 'a' : s.kind === 'video' ? 'v' : '';
+        const kind = s.kind === 'audio' ? 'a' : s.kind === 'video' ? 'v'
+                   : (s.kind === 'subtitle' && s.textSub === false) ? 's' : '';
         if (kind && out.indexOf(kind) < 0) out.push(kind);
     }
     return out.length ? out : ['v'];

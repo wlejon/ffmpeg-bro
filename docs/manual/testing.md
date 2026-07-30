@@ -195,6 +195,13 @@ is still a text track. Its cues are at the same three moments the sidecars use,
 each an opaque box in the lower third: what a check can ask about a picture of
 text is that pixels changed where the box is and did not change where it is not.
 
+The drawn half is measured **three** times rather than twice, and the third is the
+one nothing else would catch: two renders of the same seconds, one with the
+input's cues pad wired into an `overlay` and one without, compared before the cue
+(99 dB), during it (14 dB) and *after it expires* (99 dB again). A sub2video that
+paints each cue and never sends the cleared frame that ends one passes the first
+two and leaves the subtitle on screen for the rest of the render.
+
 `ui_document.js` is the whole edit through a file and back — see
 [The document](document.md). The shape is a round trip, and the step that makes
 it mean anything is the one in the middle: after saving, the suite starts a new

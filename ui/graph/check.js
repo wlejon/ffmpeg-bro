@@ -25,7 +25,7 @@
 // at a node means — so a printer that refused would refuse every preview. The
 // full graph is the only thing these questions are meaningful about.
 
-import { streamsOf, keyOf } from './model.js';
+import { streamsOf, keyOf, streamWord, padTakes } from './model.js';
 import { padsOf } from './filters.js';
 import { supportsTimeline } from './enable.js';
 import { deviceOfFilter, isCrossing, present } from '../hardware.js';
@@ -118,10 +118,11 @@ export function problems(g, stranded = []) {
             else if (n.ins && n.ins[p]) {
                 const carried = streams.ofEdge(at[0]);
                 const wanted = n.ins[p].stream;
-                if (carried && wanted && carried !== wanted)
-                    say(n, `a ${carried === 'a' ? 'sound' : 'picture'} wire arrives at ` +
+                if (carried && wanted && !padTakes(carried, wanted))
+                    say(n, `a ${streamWord(carried)} wire arrives at ` +
                            `${nameOf(n)}’s ${ordinal(p, ins)}, which takes ` +
-                           `${wanted === 'a' ? 'sound' : 'a picture'}`);
+                           `${wanted === 'a' ? 'sound' : wanted === 's' ? 'cues'
+                                                                        : 'a picture'}`);
             }
         }
 
@@ -278,6 +279,7 @@ const PASSES_ANYTHING = new Set(['trim', 'setpts', 'settb', 'fps', 'select',
 function memoryMap(g) {
     const where = new Map();      // node id → 'device' | 'memory'
     const busy = new Set();
+    const carried = streamsOf(g);
 
     const at = (n) => {
         if (!n) return 'memory';
@@ -300,7 +302,15 @@ function memoryMap(g) {
         const seen = [];
         for (const e of g.inEdges(n)) {
             const from = g.node(e.from);
-            if (from) seen.push(at(from));
+            if (!from) continue;
+            // **A pad of cues is in system memory whatever the input decodes
+            // on.** `-hwaccel_output_format` is a decision about the *decoder*,
+            // and there is no hardware subtitle decode: this renderer paints the
+            // bitmaps into frames itself. Read off the node instead, an overlay
+            // drawing a DVD's cues over a clip from the same `-hwaccel` input
+            // would be reported as being handed a picture on a card — a
+            // confident accusation about the one wire this feature exists for.
+            seen.push(carried.ofEdge(e) === 's' ? 'memory' : at(from));
         }
         return seen;
     };

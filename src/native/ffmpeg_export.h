@@ -280,7 +280,14 @@ struct ExportChapter {
 struct ExportGraphInput {
     std::string label;      // "0:v", exactly as the graph text writes it
     std::string path;
-    std::string stream;     // "v" for pictures, "a" for sound
+    /// "v" for pictures, "a" for sound, "s" for cues.
+    ///
+    /// The third is not a third kind of pad to libavfilter — there is no such
+    /// thing as a subtitle input there — it is a picture pad whose frames this
+    /// renderer paints out of a bitmap subtitle track, which is what ffmpeg's own
+    /// CLI does for `[0:s]`. See export_sub2video.h. Anything else is an error
+    /// naming the letter, rather than being read as video.
+    std::string stream;
 
     // The earliest source time the graph will use from this pad, in seconds.
     //

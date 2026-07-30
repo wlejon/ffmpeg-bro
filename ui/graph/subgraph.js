@@ -114,8 +114,17 @@ function cutTo(g, node) {
     // An input node is a file, not a stream, so which of its pads is being
     // asked about is a question that has to be answered rather than read off
     // the node: an input card shows the picture the file carries.
+    // A file's **cues** are a picture too, once painted — so an input whose only
+    // drawable pad is a bitmap subtitle track previews that pad rather than
+    // refusing. Second, so a DVD rip's card still shows the film and not the
+    // subtitles over nothing.
     const videoPort = node.kind === 'input'
-        ? (node.outs || []).findIndex((o) => o.stream === 'v') : -1;
+        ? (() => {
+              const outs = node.outs || [];
+              const v = outs.findIndex((o) => o.stream === 'v');
+              return v >= 0 ? v : outs.findIndex((o) => o.stream === 's');
+          })()
+        : -1;
     if (node.kind === 'input' && videoPort < 0)
         return { ok: false, reason: 'this input is not read for a picture' };
     // A sink is not a picture of its own — it is the pad the muxer maps, and

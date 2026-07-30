@@ -13,6 +13,11 @@ that quietly does one of the three.
 | **Burned into the image** | a `subtitles` filter on the Graph stage, like every other filter |
 | **A file on its own** | a render whose only stream is subtitles: extracting one, and converting the format |
 
+The second of those is libass drawing characters, so it is for text tracks. A
+track of *pictures* — `dvdsub`, `hdmv_pgs_subtitle` — is drawn the other way, by
+wiring its own pad into an `overlay`: [Drawing them, when they are
+pictures](#drawing-them-when-they-are-pictures).
+
 ## A file of cues is an `-i`
 
 Add an `.srt`, a `.vtt` or an `.ass` on the Sources stage and it is an input
@@ -56,8 +61,10 @@ is optical character recognition, which neither this nor ffmpeg does. Such a
 track can be carried into a container that holds it; asking for it as text is
 refused by name, before anything opens, and so is asking for it burned in,
 because libavfilter's subtitles filter is libass and libass reads characters.
-Which family a codec is in is libavcodec's own `AV_CODEC_PROP_TEXT_SUB`, and
-`probe()` reports it per track as `textSub`.
+What it *can* be is [drawn](#drawing-them-when-they-are-pictures), which is
+neither of those two things and is a wire on the Graph stage. Which family a
+codec is in is libavcodec's own `AV_CODEC_PROP_TEXT_SUB`, and `probe()` reports
+it per track as `textSub`.
 
 **The window is two numbers, and the two ways of reading cut differently out of
 them.** `From` and `To` are seconds into the file, the same pair a copied
@@ -162,9 +169,61 @@ the whole canvas they are in a node preview and in the export preview, which
 are real renders; playing the node is how you watch them come and go.
 
 A track that is **pictures of characters** — `dvdsub`, `hdmv_pgs_subtitle` —
-cannot be burned in at all, and the button says so rather than failing at
-parse: libavfilter's subtitles filter is libass, and libass reads characters.
-Such a track can still be carried as a stream into a container that holds it.
+cannot be burned in at all: libavfilter's subtitles filter is libass, and libass
+reads characters. Where `Burn in` would be, such a track gets `Draw cues`
+instead, which is the section below.
+
+## Drawing them, when they are pictures
+
+A bitmap cue cannot become text (that is optical character recognition, which
+neither this nor ffmpeg does) and cannot go through libass. What it *can* be is
+drawn, because the cues are pictures and `overlay` draws pictures.
+
+**The thing to know first is that libavfilter has no subtitle input.** `overlay`
+cannot consume a subtitle stream and `buffer` takes video frames; there is no
+third source that takes cues. When `ffmpeg -filter_complex "[0:v][0:s]overlay"`
+appears to burn a DVD's subtitles in, libavfilter is not what is doing it —
+ffmpeg's *CLI* carries a mechanism called sub2video which decodes the cues
+itself, paints each one's palettised bitmap into an RGBA frame the size of the
+picture they were authored against, and feeds those frames to an ordinary
+`buffer`. This application has the same mechanism, which is why the command it
+prints for a drawn cue runs and draws the same thing.
+
+So an input whose subtitle track is bitmaps grows a third socket on the Graph
+stage — **cues**, in orange, beside its picture and its sound — and a wire from
+it into an `overlay`'s second input is the whole of it. `Draw cues` on a clip's
+properties panel is that in one press: it places the input as a node of the
+graph, an `overlay` on the clip's own chain, and the wire between them. The three
+are ordinary nodes, printed by the command bar and movable, configurable and
+deletable on the Graph stage like anything else.
+
+Three consequences worth knowing:
+
+- **A cue is two frames, and the second one matters most.** One painted when the
+  cue appears and one *cleared* when it expires. Nothing is sent for the gap in
+  between, because `overlay` holds the last frame of its secondary input and
+  reuses it — which is also why a graph never told the cue ended would go on
+  drawing it for the rest of the render.
+- **The canvas is the file's, not the render's.** A rect at (160, 270) means the
+  lower third of the picture it was authored for; the size comes from the
+  subtitle codec's own dimensions, or the largest video stream of the same input,
+  or 720×576, which is ffmpeg's own rule. Using the output size instead would
+  move every cue on any render at a different size.
+- **The viewer cannot show it, and `O` can.** An `overlay` of two inputs is not
+  one chain over one clip, which is all playback runs; the program monitor
+  playing [the output itself](playback.md#the-output-instead-of-the-clips) is a real
+  render and has them in it.
+
+`Draw cues` opens the file a **second time** — one `-i` for the clip's picture
+and one for its cues — because a graph's input node is an `-i` in this model and
+the clip's own node carries pads only for what the derivation reads. It is what
+the printed command says and it costs a demuxer, not a second decode of the
+picture.
+
+One thing this cannot be: a text track on that pad. It is refused when the input
+is opened, naming the filter that does draw one. ffmpeg's own sub2video takes a
+text track, warns once per cue and paints nothing, which is a render that
+succeeds and has no subtitles in it.
 
 One thing is escaped on your behalf and shown so that it is not a mystery: **a
 filtergraph separates a filter's arguments with `:`**, so a Windows path with a

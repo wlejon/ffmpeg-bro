@@ -405,6 +405,36 @@ export function makeGraph(opts = {}) {
     return g;
 }
 
+/// What a stream kind is called in a sentence: `picture`, `sound`, `cues`.
+///
+/// One home, because five things on this stage write it — a socket's tooltip, the
+/// panel's pad rows, the badge on a source in the palette, the problem list and
+/// the wire's own colour class — and there are three kinds now rather than two.
+/// While it was `s === 'a' ? 'sound' : 'picture'` each of those was a place where
+/// a subtitle pad would have been called a picture, which it is not: it is cues,
+/// which this renderer *paints into* pictures, and a socket that hid the
+/// difference would make the one wire people have to understand look like any
+/// other.
+export const streamWord = (stream) =>
+    (stream === 'a' ? 'sound' : stream === 's' ? 'cues' : 'picture');
+
+/// Can a pad carrying `carried` land on one that takes `wanted`?
+///
+/// The same kind, or **cues into a picture pad**, which is the one crossing that
+/// is not a mistake: an input's subtitle pad hands over the bitmaps its cues are
+/// made of, painted into frames the size of the picture they were authored
+/// against — ffmpeg's own sub2video, and `export_sub2video.h` here — so `[0:s]`
+/// into an `overlay` is precisely the arrangement that draws a `dvdsub` track.
+/// Into a *sound* pad it is as wrong as a picture is.
+///
+/// Nothing crosses the other way: a picture is not cues, and there is no filter
+/// that turns one into the other. Here rather than in `check.js` because the
+/// palette asks it too — what a wire of cues can be dropped on and what the
+/// problem list complains about have to be the same answer, or a gesture the
+/// stage offers is one the stage then reports as broken.
+export const padTakes = (carried, wanted) =>
+    carried === wanted || (carried === 's' && wanted === 'v');
+
 /// What names a node across two derivations.
 ///
 /// A derived node's id lasts exactly as long as the graph it was made in, so it

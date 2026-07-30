@@ -27,11 +27,13 @@
 
 import { portY } from './layout.js';
 
-/// The palette's --blue and --good. Canvas takes colours, not custom properties,
-/// and a wire whose colour drifts from the node it leaves is worse than one
-/// written down in two places.
-const WIRE = { v: '#4a9eff', a: '#57c98a' };
-const WIRE_DIM = { v: '#2c5f99', a: '#357a55' };
+/// The palette's --blue, --good and --accent. Canvas takes colours, not custom
+/// properties, and a wire whose colour drifts from the node it leaves is worse
+/// than one written down in two places. `s` is a wire of cues — an input's
+/// subtitle pad on its way to an `overlay`, the one wire that is neither picture
+/// nor sound — and it is the same orange the socket it leaves is drawn in.
+const WIRE = { v: '#4a9eff', a: '#57c98a', s: '#ff8c42' };
+const WIRE_DIM = { v: '#2c5f99', a: '#357a55', s: '#99551f' };
 const GRID = 'rgba(255, 255, 255, 0.17)';
 const MINI_BG = 'rgba(0, 0, 0, 0.35)';
 const MINI_EDGE = 'rgba(255, 255, 255, 0.18)';

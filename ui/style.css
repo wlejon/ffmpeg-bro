@@ -2542,6 +2542,11 @@ select.gn-f { text-align: left; }
    `.gn-a` rule above so it outranks it at equal specificity. */
 .gn-sock-v, .gn-a .gn-sock-v { background: var(--blue); }
 .gn-sock-a, .gn-a .gn-sock-a { background: var(--good); }
+/* Cues are a third kind and get a third colour, because the whole point of the
+   dot is that a wire off it goes somewhere a wire off the blue one does not:
+   this one carries a bitmap track's pictures into an overlay and nothing else
+   can be done with it. */
+.gn-sock-s, .gn-a .gn-sock-s { background: var(--accent); }
 
 /* Zoomed out, a card is its name and its picture. Nine cards of 10px argument
    text at 0.4x is nine grey smudges; nine legible names is a graph. */

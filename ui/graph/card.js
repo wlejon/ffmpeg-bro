@@ -36,6 +36,7 @@
 import { el, div, span } from '../dom.js';
 import { basename } from '../format.js';
 import { portY } from './layout.js';
+import { streamWord } from './model.js';
 import { WAVE_ASPECT } from './subgraph.js';
 import { optionOf } from './filters.js';
 import { whenBar } from './when.js';
@@ -359,7 +360,7 @@ function sockets(n, g, key) {
                  (wired.has(i) ? '' : ' gn-sock-open'),
             'data-port': String(i), 'data-ports': String(ins),
             'data-key': key || '', 'data-dir': 'in', 'data-stream': stream,
-            title: `input ${i + 1} of ${ins}${stream ? ` · ${stream === 'a' ? 'sound' : 'picture'}` : ''}` +
+            title: `input ${i + 1} of ${ins}${stream ? ` · ${streamWord(stream)}` : ''}` +
                    (wired.has(i) ? '' : ' · nothing wired here'),
             on: { mousedown: (e) => hooks.onWireStart &&
                                     hooks.onWireStart(key, 'in', i, stream, e) },

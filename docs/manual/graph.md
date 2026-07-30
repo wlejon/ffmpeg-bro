@@ -219,6 +219,13 @@ Placing a logo over the picture is then two nodes and two wires:
 3. Drag the logo's picture socket onto overlay's second input.
 4. Drag overlay's output onto `video out`.
 
+**A socket per stream the probe found** includes a third kind, on a file whose
+subtitle track is *pictures* of characters: `dvdsub` and `hdmv_pgs_subtitle` grow
+an orange **cues** socket, and a wire from it into an `overlay` is what draws them
+— see [Drawing them, when they are pictures](subtitles.md#drawing-them-when-they-are-pictures).
+A text track grows none, because drawing characters is libass's job and that is
+the `subtitles` filter rather than a pad.
+
 `movie` and `amovie` are still there — they are ordinary filters with no inputs
 and the palette offers every one of those — and if you use one, the file it
 names is listed on the Sources stage under **Opened by the graph**, with what

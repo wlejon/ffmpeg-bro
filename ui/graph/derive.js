@@ -1087,11 +1087,17 @@ export function derive(spec, sources, opts = {}) {
             // decide that by dragging a wire off one of the sockets. An `-i`
             // pad nothing references is ordinary ffmpeg, so an unread one is
             // not a complaint (see check.js).
+            //
+            // **Including its cues, where they are pictures of characters.**
+            // `streamKinds` is where that is decided and why (`ui/inputs.js`):
+            // a `dvdsub` track is drawn by painting the bitmaps it carries, so
+            // it is a pad; a `.srt` is drawn by libass, so it is a `subtitles`
+            // filter and not a pad at all.
             outs: streams.map((s) => ({ stream: s })),
         });
         streams.forEach((s, i) =>
             point(`${rec.id}/after-decode:${i}`, node, i, s,
-                  s === 'a' ? 'input sound' : 'after decode'));
+                  s === 'a' ? 'input sound' : s === 's' ? 'cues, painted' : 'after decode'));
         graphInputs.push(node);
     }
 

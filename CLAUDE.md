@@ -142,9 +142,10 @@ AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 - `ui/graph/model.js` — the graph the app *holds*. One node kind, because ffmpeg
   has one: crop/opacity/stacking are `crop`/`colorchannelmixer`/`overlay`, not
   special cases. Only the ends differ (`input` = an `-i` with an output per
-  stream read, `sink` = a pad the muxer maps, optionally named). Derived nodes
-  are rebuilt on every timeline edit; user nodes never are — that is what
-  `anchor`, `locked` and `derived` are for.
+  stream read — `v`, `a`, and `s` for a **bitmap** subtitle track, whose cues are
+  painted into pictures; `sink` = a pad the muxer maps, optionally named).
+  Derived nodes are rebuilt on every timeline edit; user nodes never are — that
+  is what `anchor`, `locked` and `derived` are for.
 - `ui/graph/derive.js` — edit → nodes and wires. Refuses rather than
   approximates: a nearly-right graph is worse than none.
 - `ui/graph/print.js` — nodes and wires → `-filter_complex` chains.
@@ -189,7 +190,17 @@ them apart. Beyond that: `export_writer` (encoders + muxer — and one writer is
 one *muxer*, not one file: `segment`, `image2`, `hls`/`dash`, `tee` all write
 runs), `export_copy` (stream copy), `export_subtitle`, `export_compositor`,
 `export_source`, `export_frame` (RGBA is the currency of this half, plus the
-shared libav helpers). `ffmpeg_job.h` owns the single job slot shared by renders
+shared libav helpers).
+
+**libavfilter has no subtitle input**, so `[0:s]` reaching an `overlay` is not a
+libavfilter link: it is ffmpeg's own sub2video, and `export_sub2video.h` is that
+mechanism here — a bitmap track decoded and painted into frames a `buffer` source
+takes, one when a cue appears and a **cleared one when it expires**. Do not go
+looking for a subtitle pad in libavfilter; there is not one. A text track on such
+a pad is refused by name, because drawing characters is libass's job (the
+`subtitles` filter). `ui/command.js` prints the pad and says in the notes that
+this one wire is the CLI's mechanism rather than a link libavfilter makes — which
+is the exact/equivalent distinction, so do not blur it. `ffmpeg_job.h` owns the single job slot shared by renders
 and recordings, and documents the ordering rules around terminal status.
 
 `ExportPass` is *one run over the frames, as a set of overrides on the render*,

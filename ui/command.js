@@ -599,6 +599,22 @@ export function draw() {
     });
 }
 
+/// Does any chain read an input's **subtitle** pad?
+///
+/// Asked of the graph rather than of the spec's inputs, because what matters is
+/// whether a wire leaves such a pad: an `-i` with a `dvdsub` track in it that
+/// nothing is drawing says nothing about the command. Exported nowhere — the note
+/// below is the only caller and the graph is already in hand.
+function drawsCues(g) {
+    if (!g || !g.ok || !g.graph) return false;
+    return g.graph.edges.some((e) => {
+        const from = g.graph.node(e.from);
+        if (!from || from.kind !== 'input' || !from.outs) return false;
+        const pad = from.outs[e.fromPort || 0];
+        return !!pad && pad.stream === 's';
+    });
+}
+
 /// What is exact, what is not, and what is known to differ about *this*
 /// render. Only when the bar is open: it is the explanation, not the headline,
 /// and a disclaimer that is always on screen is one nobody reads.
@@ -628,6 +644,24 @@ function notes(p) {
                'all but the last, which converts into the encoder’s colour and is the ' +
                'writer’s job here.'],
     ];
+    // **The one pad in a printed chain that libavfilter does not make.** Said
+    // rather than left in the graph looking like every other wire, because the
+    // line above it claims the chains are what libavfilter parses and for this
+    // one pad that is not true: `[0:s]` is ffmpeg's *CLI* painting cues into
+    // frames (sub2video), which is what this renderer does too — so the command
+    // runs and draws the same pictures, and the chain pasted into something that
+    // only parses a filtergraph does not.
+    if (drawsCues(p.graph))
+        lines.push([span('Cues, drawn: ', 'lead'),
+                    'libavfilter has no subtitle input — [0:s] reaching an overlay is ' +
+                    'ffmpeg’s own sub2video, which decodes the cues and paints each one into ' +
+                    'a frame the size of the picture it was authored against before feeding ' +
+                    'an ordinary buffer source. This render does exactly that, so the command ' +
+                    'above runs and draws the same cues; what that one wire is not is a link ' +
+                    'libavfilter makes, so a tool that parses only a filtergraph will refuse ' +
+                    'it. A text track cannot go this way at all — drawing characters is ' +
+                    'libass’s job, which is the subtitles filter.']);
+
     const streams = p.spec.streams || [];
     const copied = streams.filter((s) => parseCopy(s.source));
     const allCopied = copied.length && copied.length === streams.length;
