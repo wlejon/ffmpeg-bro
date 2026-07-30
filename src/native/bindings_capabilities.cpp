@@ -382,21 +382,13 @@ JSValue filtersToJs(JSContext* ctx) {
 /// libavutil describes all seven with an AVClass and `optionsToJs` reads all
 /// seven the same way. `wants` is the tail of the message, so a caller that
 /// passed nothing is still told what kind of name was missing.
-///
-/// **`Lookup` is a template argument and must stay one.** qjsbind keys a
-/// registered function's storage on the closure's *type*, and a lambda
-/// expression written once inside an ordinary function has one type however many
-/// times it is called — so a non-template helper here would leave all seven
-/// entry points calling whichever was registered last, silently. A lambda inside
-/// a template gets a closure type per instantiation, which is exactly one slot
-/// each. Do not "simplify" this into a function parameter.
-template <auto Lookup>
-void optionTable(Table& ns, const char* name, const char* wants) {
-    ns.function(name, [name, wants](JSContext* ctx, JSValue nameArg) {
+void optionTable(Table& ns, const char* name, const char* wants,
+                 std::vector<OptionInfo> (*lookup)(const std::string&)) {
+    ns.function(name, [name, wants, lookup](JSContext* ctx, JSValue nameArg) {
         std::string n;
         if (!takeName(ctx, nameArg, &n))
             return JS_ThrowTypeError(ctx, "%s(name) requires %s", name, wants);
-        return optionsToJs(ctx, Lookup(n));
+        return optionsToJs(ctx, lookup(n));
     });
 }
 
@@ -469,7 +461,7 @@ void installCapabilities(Table& ns) {
     /// bro.ffmpeg.encoderOptions(name) — every private option of one encoder.
     /// Looked up on demand rather than built for all of them at startup: x265
     /// alone has some eighty, and the dialog only ever shows one encoder's.
-    optionTable<encoderOptions>(ns, "encoderOptions", "an encoder name");
+    optionTable(ns, "encoderOptions", "an encoder name", encoderOptions);
     /// bro.ffmpeg.muxerOptions(name) / demuxerOptions(name) / decoderOptions(name)
     /// / protocolOptions(name) — the same walk `encoderOptions` does, over the
     /// other four kinds of thing in libav that carry an AVClass.
@@ -478,12 +470,12 @@ void installCapabilities(Table& ns) {
     /// fifty demuxers and as many decoders, and their option tables are the
     /// expensive part of describing any of them — which is precisely why
     /// `filterOptions` is asked one filter at a time.
-    optionTable<muxerOptions>(ns, "muxerOptions", "a muxer name");
-    optionTable<demuxerOptions>(ns, "demuxerOptions", "a demuxer name");
-    optionTable<decoderOptions>(ns, "decoderOptions", "a decoder name");
-    optionTable<protocolOptions>(ns, "protocolOptions", "a protocol name");
+    optionTable(ns, "muxerOptions", "a muxer name", muxerOptions);
+    optionTable(ns, "demuxerOptions", "a demuxer name", demuxerOptions);
+    optionTable(ns, "decoderOptions", "a decoder name", decoderOptions);
+    optionTable(ns, "protocolOptions", "a protocol name", protocolOptions);
     ns.value("bitstreamFilters", bsfsToJs(ctx));
-    optionTable<bsfOptions>(ns, "bsfOptions", "a bitstream filter name");
+    optionTable(ns, "bsfOptions", "a bitstream filter name", bsfOptions);
 
     /// bro.ffmpeg.deviceSources(name) — what one capture device can see now.
     ///
@@ -550,7 +542,7 @@ void installCapabilities(Table& ns) {
     /// reason and drawn the same way. On demand for a stronger reason than the
     /// encoders': there are some five hundred filters, and building every option
     /// table at startup would be most of a second before the window opened.
-    optionTable<filterOptions>(ns, "filterOptions", "a filter name");
+    optionTable(ns, "filterOptions", "a filter name", filterOptions);
 }
 
 } // namespace ffmpegbro

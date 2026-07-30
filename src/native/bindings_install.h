@@ -12,9 +12,9 @@
 // `playback` adds three tables of its own.
 #pragma once
 
-namespace ffmpegbro {
+#include "bindings_table.h"
 
-class Table;
+namespace ffmpegbro {
 
 /// `probe` — what libavformat makes of a file. bindings_probe.cpp.
 void installProbe(Table& ns);

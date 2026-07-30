@@ -160,12 +160,15 @@ the assembly. Two are shared and neither may be duplicated: `bindings_value.h`
 `get_prop_*`, for the two reasons its header names) and `bindings_spec.h` (the
 render spec, read once for the render, the recording and the preview).
 
-Registration is qjsbind through `Table` (`bindings_table.h`), which is qjsbind's
-`Namespace` with a parent parameter because this surface is two levels down. A
-call taking a name or an id is a typed lambda; a call reading a whole spec keeps
-QuickJS's own signature. **Register lambda expressions only** — qjsbind keys its
-function storage on the closure type, so a function pointer, or one lambda
-reused for several registrations, silently gives them all the last one.
+Registration is qjsbind through `Table` (`bindings_table.h`), which is a name for
+`qjsbind::Namespace` — the parent parameter this surface needs, being two levels
+down, is qjsbind's own now. A call taking a name or an id is a typed lambda; a
+call reading a whole spec keeps QuickJS's own signature, because there is nothing
+for `Convert<T>` to do with a render spec. qjsbind gives every registration its
+own callable, owned by the function object, so a helper may register a family of
+calls from one lambda expression (`optionTable`) — it used to key that storage on
+the closure's type, which made both of those silently call whichever was
+registered last.
 
 ### The native encode side
 
