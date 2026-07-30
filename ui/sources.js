@@ -58,7 +58,8 @@
 
 import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
-import { devicesFor, deviceNamed, decodeCost } from './hardware.js';
+import { devicesFor, deviceNamed, decodeCost, deviceIndices,
+         unknownDeviceIndex } from './hardware.js';
 import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless, opening, stopOpening, tickInputs } from './inputs.js';
@@ -944,12 +945,42 @@ function decodeRows(input) {
 
     if (input.hwaccel) {
         const dev = deviceNamed(input.hwaccel);
-        const which = el('input', {
-            cls: 'num', 'data-f': 'srchwdev', type: 'text', value: input.hwaccelDevice || '',
-            placeholder: 'the default',
-            title: '-hwaccel_device — which of them, where there is more than one',
-            on: { change: () => change(input, { hwaccelDevice: which.value.trim() }) },
-        });
+        // **The cards this machine has, not a number typed into a box.**
+        // `-hwaccel_device` has been settable since an input grew a device and
+        // this was a text field, because nothing knew how many devices there
+        // were: libavutil has no count and no iterator over the devices of a
+        // type. It has one now — `bro.ffmpeg.hardware()` reports the indices it
+        // could create one of — so this is a picker built from the same measure
+        // the `Decode on` list above is, and a machine with one card sees that
+        // there is one.
+        const indices = deviceIndices(input.hwaccel);
+        const stored = String(input.hwaccelDevice || '');
+        const absent = unknownDeviceIndex(input.hwaccel, stored);
+        // A type that does not address its devices by index answers with an
+        // empty list, and the default is then the only device anybody can name.
+        // The row stays and says so in its tooltip rather than disappearing:
+        // a control that vanished would leave a stored value invisible.
+        const choices = [{ id: '', label: 'the default' }]
+            .concat(indices.map((i) => ({ id: i, label: `${input.hwaccel} ${i}` })));
+        // **A value this machine cannot honour is shown, not snapped.** A
+        // document written where there were two cards, opened where there is
+        // one, carries `-hwaccel_device 1`; quietly selecting the default would
+        // be a render pointed at a different card from the one the file says.
+        // libav refuses it at the open either way — this is so the refusal is
+        // on screen before the render rather than after it.
+        if (absent) choices.push({ id: stored, label: `${stored} — not on this machine` });
+        const which = select({
+            'data-f': 'srchwdev',
+            cls: absent ? 'bad' : '',
+            title: indices.length > 1
+                ? `-hwaccel_device. This machine has ${indices.length} ${input.hwaccel} ` +
+                  'devices; a render is refused at the open if it names one that is not here.'
+                : indices.length === 1
+                    ? `-hwaccel_device. This machine has one ${input.hwaccel} device.`
+                    : `-hwaccel_device. ${input.hwaccel} does not address its devices by ` +
+                      'index here, so the default is the only one that can be named.',
+            on: { change: () => change(input, { hwaccelDevice: which.value }) },
+        }, choices, stored);
         rows.push(row('Which one', which));
         // The second decision, and the one that decides whether a render can
         // keep the picture on the card at all. Off, every frame comes down as

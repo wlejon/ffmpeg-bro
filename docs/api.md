@@ -22,10 +22,22 @@ bro.ffmpeg.openOnStart    // media file named on the command line, or null
 // better part of a second; cached after the first ask.
 bro.ffmpeg.hardware()
 // → [{ name: "cuda", present: true, pixelFormat: "cuda",
+//      devices:  ["0", "1"],                     // the cards, by index
 //      decoders: ["h264", "hevc", "av1", ...],   // asked of avcodec_get_hw_config
 //      encoders: ["h264_nvenc", "hevc_nvenc", "av1_nvenc"],
 //      filters:  ["hwupload_cuda", "hwupload", "hwdownload"] },
 //     { name: "amf", present: false, error: "Unknown error occurred" }, ...]
+// `devices` is **how many, which is a different question from whether any**:
+// `present` says a device of this type could be created, and until this existed
+// nothing could say whether there was a second one. libavutil has no count and
+// no iterator over the devices of a type — only `av_hwdevice_ctx_create` taking
+// the same string `-hwaccel_device` and `-filter_hw_device cuda:1` take — so
+// these are that call per index until it refuses. Each context is freed again
+// rather than kept: a CUDA primary context is a few hundred megabytes of a
+// card's memory, and holding one on every card so a picker could be drawn would
+// be spending a card nobody has chosen to use. It costs 316 ms of the probe's
+// 805 ms here. Empty is "not addressed by index" (a VAAPI node is a path), not
+// "none", and empty for every type that is not `present`.
 
 // An input is an `-i`: a path or a URL, a demuxer, that demuxer's options and
 // the part of the file you want. Everything here appears *before* the `-i` on

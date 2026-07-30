@@ -88,6 +88,16 @@ option is — and refused **before the render starts**, because the compositor
 deliberately draws an unopenable clip as the hole it is, which is right for a
 file that has gone missing and wrong for a setting somebody typed.
 
+**Which one**, under **Decode on**, is a picker of the cards this machine has
+rather than a number to type. It was a text box until libav could be asked how
+many there are — see [A second card](card.md#a-second-card) — because
+`-hwaccel_device 1` has always been settable and nothing here could say whether
+the 1 addressed anything. An index a document brought from a machine with more
+cards stays selected and is marked as not on this machine, rather than being
+snapped to the default: the render is refused at the open either way, and a
+render quietly pointed at a different card from the one the file names is the
+worse of the two.
+
 Two clips from one file are one input, which is what ffmpeg would open. A second drop
 of the same file reuses it — unless something has been set on it, in which case a
 fresh one is made rather than silently inheriting somebody's decision.

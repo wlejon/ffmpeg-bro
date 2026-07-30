@@ -205,8 +205,15 @@ int main(int argc, char* argv[]) {
     // ── what this machine has ──────────────────────────────────────────────
 
     std::printf("\nHardware\n");
+    // The one query in this binary that is a measurement rather than a registry
+    // walk, so what it costs is worth printing: it is asked once per process and
+    // only when something asks, and this is the number that decides whether that
+    // is still the right arrangement now that it counts the devices too.
+    const auto probeBegan = Clock::now();
     const auto& devices = hwDevices();
+    const double probeMs = msSince(probeBegan);
     checkf(!devices.empty(), "this build reports hardware device types (%zu)", devices.size());
+    measured("asking this machine what it has, once", probeMs, 1);
 
     int present = 0;
     for (const auto& d : devices) {
@@ -217,6 +224,19 @@ int main(int argc, char* argv[]) {
                     d.decoders.size(), d.encoders.size(), d.filters.size(),
                     d.error.empty() ? "" : "  — ", d.error.c_str());
         if (d.present) ++present;
+    }
+    // **How many of each, which is a different question from whether any.**
+    // Printed rather than asserted at a number, for the reason every other
+    // count here is: a machine with one card and a machine with two are both
+    // machines this has to work on. What is asserted is the *shape* of the
+    // answer, in the section below: every index the enumeration reported can be
+    // opened, and the first one past the end cannot.
+    for (const auto& d : devices) {
+        if (!d.present) continue;
+        std::printf("        %-10s addressable by index:", d.name.c_str());
+        if (d.devices.empty()) std::printf(" (not by index — the default only)");
+        for (const auto& which : d.devices) std::printf(" %s", which.c_str());
+        std::printf("\n");
     }
     // **Not asserted to be non-zero.** A machine with no graphics card is a
     // machine this application has to work on, and a suite that failed there
@@ -248,6 +268,70 @@ int main(int argc, char* argv[]) {
         AVBufferRef* none = hwDeviceRef("no_such_device", "", &why);
         checkf(none == nullptr && why.find("no_such_device") != std::string::npos,
                "a device that does not exist refuses and names itself (%s)", why.c_str());
+        if (none) av_buffer_unref(&none);
+    }
+
+    // ── which one, of how many ─────────────────────────────────────────────
+    //
+    // `-hwaccel_device 1` has always been settable and nothing could say
+    // whether the 1 addressed anything. These are the two facts a picker needs
+    // and neither of them is a number written down here: every index the
+    // enumeration reported can be opened, and the one past the end cannot.
+    //
+    // Both run on a machine with one card — the list is then `0` and the
+    // refusal is at `1` — and both are skipped on a machine with none, which
+    // is the property every suite here has.
+
+    for (const auto& d : devices) {
+        if (!d.present) continue;
+        if (d.devices.empty()) {
+            // A present type whose devices are not indices. Not a failure and
+            // not a gap: the default device is the only one that can be named,
+            // which is what it was before any of this.
+            std::printf("        (%s does not address its devices by index)\n", d.name.c_str());
+            continue;
+        }
+        bool allOpen = true;
+        std::string why;
+        for (const auto& which : d.devices) {
+            AVBufferRef* r = hwDeviceRef(d.name, which, &why);
+            if (!r) { allOpen = false; break; }
+            av_buffer_unref(&r);
+        }
+        checkf(allOpen, "every %s device the enumeration named can be opened (%zu: %s)",
+               d.name.c_str(), d.devices.size(), allOpen ? "all" : why.c_str());
+
+        // Two references to one context, per index — the same sharing the
+        // default device is checked for above, which is the thing that stops a
+        // render with four inputs making four contexts on card 1.
+        const std::string last = d.devices.back();
+        AVBufferRef* a = hwDeviceRef(d.name, last, &why);
+        AVBufferRef* b = hwDeviceRef(d.name, last, &why);
+        checkf(a && b && a->data == b->data,
+               "and asking for %s %s twice hands back the same device", d.name.c_str(),
+               last.c_str());
+        // A device named by index is not the device named by nothing, even
+        // where they are the same card: they are two keys in the cache and
+        // `-hwaccel_device 0` is a statement where an empty string is a
+        // shrug. Checked because merging them would be the easy mistake and
+        // would quietly re-point a render at whatever the driver felt like.
+        AVBufferRef* dflt = hwDeviceRef(d.name, "", &why);
+        checkf(a && dflt && a->data != dflt->data,
+               "and the default %s device is a separate context from a named one",
+               d.name.c_str());
+        if (a) av_buffer_unref(&a);
+        if (b) av_buffer_unref(&b);
+        if (dflt) av_buffer_unref(&dflt);
+
+        // The first index past the end. This is what makes the enumeration an
+        // answer rather than a list that happened to stop: if the index after
+        // the last one opened, the walk stopped early and the picker is short.
+        const std::string past = std::to_string(d.devices.size());
+        AVBufferRef* none = hwDeviceRef(d.name, past, &why);
+        checkf(none == nullptr,
+               "and %s %s — one past the end — refuses rather than opening (%s)",
+               d.name.c_str(), past.c_str(),
+               none ? "it opened" : (why.empty() ? "no reason" : why.c_str()));
         if (none) av_buffer_unref(&none);
     }
 
@@ -603,6 +687,36 @@ int main(int argc, char* argv[]) {
             std::printf("        %dx%d, %.1f s of output — against x264: on the card %.2fx, "
                         "uploaded %.2fx\n",
                         srcW, srcH, kSpan, msCpu / msGraph, msCpu / msUpload);
+
+        // ── and the same render on each of them ────────────────────────────
+        //
+        // The question `HwDevice::devices` made askable, and the one the
+        // manual's "A second card" section is written out of: **is the second
+        // card the same card?** It is the same render, moved by two strings —
+        // `-hwaccel_device` on the input and `-filter_hw_device cuda:1` on the
+        // graph — and the numbers say whether a machine's cards are
+        // interchangeable, which is not something to assume from them being the
+        // same model. On this one they are not: card 1 is on a shorter PCIe
+        // link and measures a few percent behind.
+        //
+        // Printed and never asserted on, like every other number here. One
+        // device is the ordinary case and prints one row.
+        if (dev->devices.size() > 1) {
+            std::printf("\nThe same render, per %s device\n", dev->name.c_str());
+            for (const auto& which : dev->devices) {
+                ExportSettings one = mix;
+                one.path = "out/hw_card" + which + ".mp4";
+                one.inputs[0].hwaccelDevice = which;
+                one.filterHwDeviceIndex = which;
+                const auto t3 = Clock::now();
+                const ExportStatus s3 = render(one, {});
+                const double ms = msSince(t3);
+                checkf(s3.state == ExportStatus::State::Done,
+                       "the same render runs on %s %s (%s)", dev->name.c_str(), which.c_str(),
+                       s3.error.empty() ? "no error" : s3.error.c_str());
+                measured((dev->name + " " + which).c_str(), ms, 1);
+            }
+        }
     }
 
     // ── the arrangement that must refuse ───────────────────────────────────

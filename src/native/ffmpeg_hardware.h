@@ -24,6 +24,13 @@
 //     *faster* render than the one that was asked for, which makes a silent
 //     fallback impossible to notice. Where a fallback genuinely is the right
 //     answer the caller does it explicitly and says so on the report channel.
+//   - **How many there are is the same measurement one level down.** A type
+//     being present says a card answered, not how many did, and libavutil has
+//     no count and no iterator over the devices of a type — only
+//     `av_hwdevice_ctx_create` taking the string `-hwaccel_device` takes. So
+//     `HwDevice::devices` is that call per index until it refuses. Without it
+//     "which one" is a number typed into a box that this binary cannot say
+//     addresses anything, which is what it was.
 //   - **Nothing is tabled.** Which decoders can use a device, which encoders
 //     take its frames and what pixel format its frames are in are all asked of
 //     libavcodec — `avcodec_get_hw_config` walks each codec's own list, and a
@@ -68,6 +75,22 @@ struct HwDevice {
 
     /// Why not, in libav's own words, when `present` is false.
     std::string error;
+
+    /// **Every device of this type this machine has**, as the string
+    /// `-hwaccel_device` and `-filter_hw_device cuda:1` take: "0", "1", …
+    ///
+    /// `HwDevice` is a *type* — the thing `av_hwdevice_iterate_types` walks —
+    /// and until this existed the only device of it anybody could name was the
+    /// default one. That is what made "which one" a text box: `-hwaccel_device`
+    /// has always been settable, and nothing in this binary knew whether the
+    /// number typed into it addressed anything. Enumerated by creating one of
+    /// each index until libav refuses (`fillDevices`), because there is no
+    /// count in libavutil to ask for.
+    ///
+    /// Empty for a `present` type whose devices are not indices — a VAAPI node
+    /// is a path — which leaves the default device as the only one that can be
+    /// named, which is what it already was.
+    std::vector<std::string> devices;
 
     /// The pixel format frames of this device live in — `cuda`, `qsv`,
     /// `d3d11`. `AV_PIX_FMT_NONE` when nothing could be created.

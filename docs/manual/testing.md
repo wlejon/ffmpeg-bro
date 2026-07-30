@@ -65,7 +65,12 @@ other suites do not. The assertions run everywhere and are about the *shape* of
 the answer — enumeration answers something, a type reported present can be
 created and is shared rather than remade, a type reported absent refuses with a
 sentence, a codec the device cannot decode is refused before a packet is read —
-and every one of them is reachable on a machine with nothing. The numbers are
+and every one of them is reachable on a machine with nothing. **How many devices
+of a type there are is checked the same way**: the indices the enumeration
+reported can all be opened, the first one past the end refuses, and they start at
+0 and are contiguous. One card satisfies that as well as two do, and a machine
+with none skips it — asserting *two* would be asserting something about the
+hardware, which is the line this whole suite is drawn along. The numbers are
 *printed and never asserted on*, because a threshold on them would be a
 statement about the machine rather than about the code; where they belong is
 this README, beside the name of the hardware they came from.

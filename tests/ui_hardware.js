@@ -110,6 +110,29 @@ ok(working.every((d) => d.pixelFormat),
 ok(working.every((d) => Array.isArray(d.decoders) && Array.isArray(d.encoders)),
    'and which decoders and encoders it has, asked of libavcodec');
 
+// **How many, which is a different question from whether any.** `present` says
+// a device of this type could be created; nothing until now said whether there
+// was a second one, because libavutil has no count and no iterator over the
+// devices of a type — only `av_hwdevice_ctx_create` taking the string
+// `-hwaccel_device` takes. So the native half asks by creating one of each
+// index until it refuses.
+//
+// Asserted as a *shape*, never at a number: one card and two cards are both
+// machines this has to work on, and a suite that required two would be
+// asserting something about the hardware. The shape is what a picker rests on
+// — the indices are the strings `-hwaccel_device` takes, they start at 0, and
+// they are contiguous, because the walk stops at the first refusal and a gap
+// would mean it stopped early and the picker is short.
+ok(found.every((d) => Array.isArray(d.devices)),
+   'every type reports the devices of it this machine has, by index');
+ok(working.every((d) => d.devices.every((x, i) => x === String(i))),
+   'and they are 0, 1, 2 … — contiguous, because the walk stops at the first refusal');
+ok(found.filter((d) => !d.present).every((d) => d.devices.length === 0),
+   'a type this machine has no card for reports none of them');
+for (const d of working)
+    console.log(`  ${d.name}: ${d.devices.length ? d.devices.join(', ')
+                                                 : 'not addressed by index'}`);
+
 // ── the decode decision, on Sources ────────────────────────────────────────
 
 console.log('\ndecoding is per input');
@@ -162,6 +185,53 @@ if (canDecode.length) {
     pump(80);
     same(input.hwaccel, device, `picking ${device} sets -hwaccel on the input`);
     ok(!!f('srchwdev'), 'and -hwaccel_device appears, because two cards is an ordinary machine');
+
+    // ── which one, of how many ─────────────────────────────────────────────
+    //
+    // It was a text box until the enumeration existed, for the honest reason
+    // that nothing could say whether the number typed into it addressed
+    // anything. It is a picker of what this machine has now, and these are the
+    // three things that makes true.
+    {
+        const cards = (working.find((d) => d.name === device) || {}).devices || [];
+        const offeredCards = Array.from(qq('[data-f="srchwdev"] option')).map((o) => o.value);
+        same(offeredCards.join(','), [''].concat(cards).join(','),
+             `the picker offers the default and the ${cards.length} ${device} ` +
+             'device(s) this machine reported, and nothing else');
+        same(f('srchwdev').value, '',
+             'starting on the default, which is what an input that never said anything means');
+
+        if (cards.length) {
+            // The last one, so that a machine with two cards exercises the
+            // second and a machine with one exercises the only one — the same
+            // assertion either way rather than a branch on the count.
+            const last = cards[cards.length - 1];
+            pick(f('srchwdev'), last);
+            pump(80);
+            same(input.hwaccelDevice, last, `picking ${device} ${last} sets -hwaccel_device`);
+            A.command.draw();
+            ok(inFrontOfTheInput(A.command.currentCommand(), `-hwaccel_device ${last}`),
+               `and the command prints -hwaccel_device ${last} in front of the -i`);
+
+            // **A value this machine cannot honour is shown, not snapped.**
+            // The case is a document written where there were more cards; the
+            // shape is an input carrying an index the enumeration does not
+            // have. Selecting the default quietly would be a render pointed at
+            // a different card from the one the file says.
+            A.inputs.updateInput(input, { hwaccelDevice: String(cards.length) });
+            A.drawSources();
+            pump(80);
+            const kept = Array.from(qq('[data-f="srchwdev"] option')).map((o) => o.value);
+            same(f('srchwdev').value, String(cards.length),
+                 `a stored ${device} ${cards.length}, which is not here, stays selected`);
+            ok(kept.indexOf(String(cards.length)) >= 0 &&
+               q('[data-f="srchwdev"]').className.indexOf('bad') >= 0,
+               'and is offered as its own choice, marked as not on this machine');
+            A.inputs.updateInput(input, { hwaccelDevice: '' });
+            A.drawSources();
+            pump(80);
+        }
+    }
     const keep = qq('[data-seg="srchwkeep"]');
     ok(keep.length === 2,
        'and -hwaccel_output_format, which is the decision that keeps the picture on the card');

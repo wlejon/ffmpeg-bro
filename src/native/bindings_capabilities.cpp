@@ -493,6 +493,12 @@ void installCapabilities(Table& ns) {
             setStr(ctx, o, "name", d.name);
             JS_SetPropertyStr(ctx, o, "present", JS_NewBool(ctx, d.present));
             if (!d.error.empty()) setStr(ctx, o, "error", d.error);
+            // How many of them there are, by the string `-hwaccel_device`
+            // takes. `present` says a card answered; this says whether there
+            // is a second one, which is the difference between "which one" as
+            // a picker and "which one" as a number typed into a box nothing
+            // could check. Empty for a type whose devices are not indices.
+            JS_SetPropertyStr(ctx, o, "devices", stringsToJs(ctx, d.devices));
             const char* fmt = d.pixelFormat != AV_PIX_FMT_NONE
                                   ? av_get_pix_fmt_name(d.pixelFormat) : nullptr;
             setStr(ctx, o, "pixelFormat", fmt ? fmt : "");

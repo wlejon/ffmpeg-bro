@@ -112,6 +112,70 @@ drawn at **576** — the top of standard definition — and not at a measured nu
 because the measurement has 640×360 at 0.6× and 1920×1080 at 2.2× and no number in
 that gap is more honest than another.
 
+## A second card
+
+**How many is a different question from whether any**, and it is asked the same
+way: by trying. `bro.ffmpeg.hardware()` used to create one device of each type
+and report whether that worked; a machine with two cards and a machine with one
+gave the same answer, so **Which one** on Sources was a text box, and the number
+typed into it was a guess this application could not check. libavutil is why —
+there is no count, and no iterator over the devices of a *type*; the only call
+that takes the string `-hwaccel_device` and `-filter_hw_device cuda:1` take is
+`av_hwdevice_ctx_create`, which either makes a device or does not. So each type
+is asked for index 0, 1, 2 … until it refuses, and the list is a picker.
+
+This machine answers `0, 1` for all four of its working types. The contexts are
+freed again — a CUDA primary context is a few hundred megabytes of a card's
+memory, and holding one on every card so that a menu could be drawn would be
+spending a card nobody has chosen to use — which costs 316 ms of the probe's
+805 ms, paid once and only when something asks.
+
+**An index this machine does not have is shown and not snapped.** A document
+written here and opened on a laptop carries `-hwaccel_device 1` on its input; the
+picker keeps the value, marks it as not on this machine, and the render is
+refused at the open with libav's own reason. Quietly selecting the default would
+be a render pointed at a different card from the one the file names, which is
+the class of silent disagreement this application refuses everywhere else.
+
+### What the second one is worth
+
+Both cards reach the render, and `tests/hardware_test.cpp` measures the same
+1080p render — software decode, `hwupload`, `h264_nvenc` — on each of them:
+
+| | card 0 | card 1 |
+|---|---|---|
+| decode on the CPU, upload, encode on the card | **187 ms** | 195 ms |
+
+**Two of the same model are not two of the same card.** Card 1 is 4% behind, and
+`nvidia-smi` says why: it is on a x4 PCIe link where card 0 has x16. So "which
+one" is a real choice on this machine and not a formality, and the picker is
+worth having for that alone.
+
+**What a second card is not worth is a second render.** The obvious use — run two
+renders at once, one per card — was measured before it was built, and the numbers
+say the card is almost never the thing in the way. Two 1080p renders of the
+arrangement above, through the ffmpeg CLI so that the two could actually run at
+once:
+
+| | one render | two, one card | two, two cards |
+|---|---|---|---|
+| software decode, `h264_nvenc`, 1080p | 1.58 s | 1.66 s | 1.67 s |
+| NVDEC decode, `hevc_nvenc` `p7`, 4K | 13.6 s | 17.2 s | **13.7 s** |
+
+At 1080p the second card is worth nothing, because the first was never busy: two
+renders on one card cost 5% more than one. Only where the encoder is genuinely
+saturated — 4K at the slowest preset, with the decode on the card too — does the
+second card pay, and even there most of the win (27.1 s sequential → 17.2 s) is
+from running two at all rather than from the second card (17.2 s → 13.7 s).
+
+And the case that would have justified it does not use a card at all: the A/B
+stage's reference is `libx264 -crf 0`, deliberately, because the comparison is
+only worth looking at if the reference is what the compositor produced before any
+encoder saw it. Reference and candidate together are 1.09 s sequential, 0.84 s
+concurrent with the candidate on card 0 — and **0.92 s with the candidate on card
+1**, which is slower. See [Not yet](not-yet.md) for the rest of that, including
+what running two jobs at once would cost the report.
+
 ## Never coming down
 
 A render whose pictures are made on a card and encoded on the same card does not

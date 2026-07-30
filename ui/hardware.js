@@ -69,6 +69,47 @@ export function decodes(device, codecName) {
     return (device.decoders || []).indexOf(codecName) >= 0;
 }
 
+/// **Which devices of this type there are**, by the string `-hwaccel_device`
+/// takes: `['0', '1']` on a machine with two cards.
+///
+/// A different question from `present()`, and the one that was never asked. A
+/// type is present when *a* device of it could be created; how many there are
+/// has no answer in libavutil at all, so the native half asks by creating one
+/// of each index until it refuses — see `fillDevices` in ffmpeg_hardware.cpp.
+/// Until that existed, "which one" was a text box: `-hwaccel_device 1` has been
+/// settable since inputs grew a device, and nothing here could say whether the
+/// 1 addressed anything.
+///
+/// **Empty means "cannot say", not "none".** A type whose devices are not
+/// indices — a VAAPI node is a path — answers with nothing, and a control
+/// reading this must then fall back to the default device rather than conclude
+/// the machine has no cards.
+export function deviceIndices(name) {
+    const d = deviceNamed(name);
+    return (d && d.devices) || [];
+}
+
+/// Is this an `-hwaccel_device` that this machine cannot honour?
+///
+/// The case that matters is a **document**: an edit written on the machine with
+/// two cards, opened on the laptop with one, carrying `-hwaccel_device 1` on an
+/// input. Snapping it quietly to the default would be a render pointed at a
+/// different card from the one the document says, which is the sort of silent
+/// disagreement this application refuses everywhere else — so the value is kept,
+/// shown, and said to be absent. libav refuses it at the open either way; this
+/// is so that the refusal is visible before the render rather than after it.
+///
+/// False for an empty string (the default device is always addressable) and
+/// false when the type reports no indices at all, because "cannot say" is not
+/// evidence of absence.
+export function unknownDeviceIndex(name, which) {
+    const value = String(which || '').trim();
+    if (!value) return false;
+    const list = deviceIndices(name);
+    if (!list.length) return false;
+    return list.indexOf(value) < 0;
+}
+
 /// Which device types can decode this input, given what it probed as.
 export function devicesFor(input) {
     const codec = input && input.probe && input.probe.video && input.probe.video.codec;

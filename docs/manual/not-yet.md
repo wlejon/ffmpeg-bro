@@ -371,8 +371,71 @@ Honest list of what does not work:
   audible long before anything is visible; nothing yet marks where a call
   happens so you can jump between them. bro has the parts — `bro.sense` for
   onset and tonality, `bro.kws` for open-vocabulary spotting.
-- **A second GPU used for anything.** `-hwaccel_device` and
-  `-filter_hw_device cuda:1` reach one by index, and this machine has two — but
-  nothing splits a render across them, and the obvious thing to do with the
-  second card (render the A/B preview's reference on it while the candidate
-  runs on the first) needs the one-job-at-a-time slot to become two.
+- **Two renders at once, one per card.** The second card is *chosen* now — see
+  [A second card](card.md#a-second-card): this application asks libav how many
+  devices of each type there are, `Which one` on Sources is a picker of them
+  rather than a number to type, and a render points at either one through
+  `-hwaccel_device` and `-filter_hw_device cuda:1`. Both are measured, and they
+  are not the same card: on this machine card 1 is 4% behind card 0 on the same
+  1080p render, because it is on a x4 PCIe link.
+
+  What is not here is **two renders at the same time**, which is what this entry
+  used to call the obvious thing to do with the second card. It named the case:
+  render the A/B preview's reference on it while the candidate runs on the
+  first. That case was wrong twice over and both halves were measured before
+  anything was built.
+
+  **The reference cannot use a card.** It is `libx264 -crf 0`, deliberately —
+  the comparison is only worth looking at because the reference is what the
+  compositor produced before any encoder saw it — so there is nothing in it for
+  a GPU to do. Reference and a 1080p NVENC candidate: 1.09 s one after the
+  other, 0.84 s at the same time, and **0.92 s with the candidate moved to the
+  second card**, which is slower than leaving it on the first. The win is
+  entirely the second *job*, and the second card is a 9% loss on top of it.
+
+  **And the card is almost never the thing in the way.** Two ordinary 1080p
+  renders — software decode, `hwupload`, NVENC, the arrangement `Choose for me`
+  picks — are 1.58 s alone, 1.66 s for two on one card and 1.67 s for two across
+  both, because the first card was never busy. Only a 4K `hevc_nvenc p7` render
+  with its decode on the card too saturates one: 13.6 s alone, 17.2 s for two on
+  one card, 13.7 s for two across both, against 27.1 s sequential. Even there
+  most of the win is running two at all rather than the second card.
+
+  So what stands between here and two renders is the slot, and the slot turns
+  out to be holding more than a flag. Three things in `ffmpeg_job.h` — one
+  status, one stop, one thread — would widen readily, and `render.poll()` and
+  `render.cancel()` would grow an id with them. The other four would not.
+
+  **The report cannot say which of two renders said something.** Every line
+  libav emits arrives through one global `av_log` callback which is handed an
+  `AVClass**` and nothing else; there is no job in it, so `LogRecord::job` and
+  `MetaRecord::job` — what the Report drawer filters on and what every
+  measurement on the Measure stage is read back by — can only ever mean "the
+  render running now". A thread-local would cover most of it and not the part
+  that matters: counted across the whole export suite, 866 of libx264's 867
+  lines and every one of the filters' come from the job thread, but **all four
+  of `fifo`'s recovery lines and all eight of `hls`'s do not**, because those
+  components recover and write on threads of their own. Those four are exactly
+  `WriteRecovery`, which is the count that says a render's file has a gap in it.
+  Doing better means a registry of every libav context each job owns, matched
+  against the pointer, and a filter's private children are not in it.
+
+  **The slot is a priority ordering, not only an exclusion.** The node previews
+  on the Graph stage yield to an export and to the A/B preview by reading
+  `render.poll().state`, which is the whole of how "a preview is the least
+  important render in the application" is implemented. With a second slot free
+  there is nothing left to yield to.
+
+  **It is what keeps a recording alone with its devices.** A DirectShow camera
+  opens once; a recording closes every live session before opening its own, and
+  the live session holds no slot precisely so that watching can happen while
+  nothing is being written. Two slots make two recordings reaching one camera
+  newly possible.
+
+  **And a version is a pass because there is one slot.** Two output sizes are
+  two encoders and therefore two walks, and `ExportPass` exists to make that one
+  job with one Stop and one status rather than two.
+
+  Which adds up to: the second slot is worth 1.30× on the one case anybody would
+  use it for, and costs the report the ability to say which render said what. So
+  the numbers are here instead of the feature.

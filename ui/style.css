@@ -565,6 +565,12 @@ select {
     padding: 0 4px;
 }
 
+/* A picker holding a value this machine cannot honour — an `-hwaccel_device`
+   index a document brought from a machine with more cards. The value is kept
+   and shown rather than snapped to the default, so it has to look wrong: the
+   render is going to be refused at the open. */
+select.bad { border-color: var(--bad); color: var(--bad); }
+
 input.num {
     width: 62px;
     height: 20px;
