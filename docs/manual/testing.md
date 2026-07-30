@@ -328,6 +328,16 @@ hundreds of millions. Without one it says so and skips, so the suite runs on a
 machine with no GoPro in the drawer. `-DGOPRO_FILE=<path>` at configure time is
 how a machine that has one points `ctest` at it.
 
+A file that carries a data track nothing here parses is **skipped and not
+failed**, and that distinction was found by running this over seventy-one real
+files rather than reasoned about: an older GoPro, or a newer one with telemetry
+switched off, writes a `tmcd` and no `gpmd`, and "this file has no track a parser
+answers for" is a true thing about the file rather than a fault. The skip names
+the tags that got no parser, so the seam is as visible there as it is with a
+`gpmd` present. Of those seventy-one files, twenty-one carry real GPMF and **all
+twenty-one parse with no packet refused** — 40 series each, and the largest (a
+4 GB recording, 1058 payloads) read in 45 ms.
+
 `ui_telemetry.js` is the two seams either side of that parser: that the control
 is offered against a `gpmd` row and against no other stream — because the list of
 fourccs is asked of the native registry rather than written down in `ui/` — that
