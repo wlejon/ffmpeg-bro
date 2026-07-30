@@ -34,6 +34,18 @@ seven parts.
   its length, its geometry, its level. Nothing derived: a clip's name, size,
   rate, duration and probe are all its input's answer, so storing them would be
   storing an answer the next reopen may contradict.
+
+  **A clip says what it is cut from, and there are two answers.** Usually an
+  input's id. For a [generator clip](timeline.md#a-generator-laid-out-like-a-clip)
+  it is `"generator": { "filter": "testsrc", "params": { "size": "1920x1080" } }` —
+  the filter and its arguments, because there is no file for an input to describe.
+  One of the two, never both. A generator carries one number a clip of a file does
+  not, its `media`, and that is the rule above stated exactly rather than an
+  exception to it: how much of a `color` there is cannot be re-measured on the next
+  open, because libavfilter would produce for ever. It is a decision the edit is
+  holding, so the edit holds it. A generator this build has no filter for is
+  skipped on the way in with libavfilter's own sentence, the same way a clip of a
+  file that has moved is.
 - **`canvas`** — the output size, the timeline's rate, and stacked or grid.
 - **`tracks`** — the settings of a track, for the tracks any have been set on:
   today the [sync lock](timeline.md#the-sync-lock), which says whether an

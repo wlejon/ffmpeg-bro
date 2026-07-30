@@ -133,6 +133,16 @@ transport buttons are one width, that the transport is on the window's centre
 line and the zoom controls on the timeline's left edge — because a mistyped
 icon name or a stray width breaks none of the behaviour and all of the look.
 
+Its last section needs **no fixture at all**, which is the whole point of it: a
+[generator laid out on the timeline](timeline.md#a-generator-laid-out-like-a-clip)
+is a clip whose pictures libavfilter makes, so it is dragged, trimmed and played
+with nothing on disk involved. Four things there are checked because they are the
+four places a generator is not a file — the list of them is libavfilter's registry
+and not a table here, its length is a decision that a trim *raises*, it takes no
+`-i` number, and it is never the master clock. What it derives to is in
+`ui_graph.js`, what a document does with it in `ui_document.js`, and the render it
+produces in `ui_export.js`.
+
 `ui_subtitles.js` is the three things people mean by subtitles, each of which is
 a different mechanism: the cue file arriving as an `-i` and being recognised
 from what libavformat found in it, the stream row that carries or converts it,

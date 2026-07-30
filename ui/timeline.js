@@ -20,7 +20,8 @@
 
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
          isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
-         hasPicture, isTrackLocked, setTrackLocked, ripplesWith } from './project.js';
+         hasPicture, isGenerator, isTrackLocked, setTrackLocked,
+         ripplesWith } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
@@ -252,9 +253,19 @@ function drawVideoLane(track, canvas) {
         // It stays on its lane rather than being hidden, because the lane is
         // the track it is on and where it sits in the stack is an edit.
         const sound = !hasPicture(clip);
+        // A generator is a picture and no file, so it gets a colour of its own
+        // rather than the blue a filmstrip is drawn on. It never has one: a strip
+        // is grabbed by seeking and a `-f lavfi` source cannot seek (see
+        // `analysis.js`), so left in the video lane's blue it would read as a clip
+        // whose thumbnails are still coming — the same misreading the sound-only
+        // colour exists to prevent, and this one would never resolve either. The
+        // bar carries the command that makes it instead, which is what its `name`
+        // is.
+        const gen = isGenerator(clip);
 
         ctx.fillStyle = sound ? (selected ? '#24422f' : '#1d3227')
-                              : (selected ? '#2a4666' : '#223449');
+                    : gen ? (selected ? '#43335e' : '#352b4a')
+                          : (selected ? '#2a4666' : '#223449');
         ctx.fillRect(l, 0, r - l, h);
 
         if (sound && r - l > 60 && h > 14) {
@@ -296,7 +307,8 @@ function drawVideoLane(track, canvas) {
             ctx.fillText(Math.round(clip.xform.opacity * 100) + '%', l + 5, 10);
         }
 
-        ctx.strokeStyle = selected ? '#ff8c42' : (sound ? '#35604a' : '#3d6183');
+        ctx.strokeStyle = selected ? '#ff8c42'
+                        : sound ? '#35604a' : gen ? '#5c4a80' : '#3d6183';
         ctx.lineWidth = selected ? 2 : 1;
         ctx.strokeRect(l + 0.5, 0.5, Math.max(1, r - l - 1), h - 1);
 
@@ -430,6 +442,12 @@ function drawAudioLane() {
     // Where the clips are, first, so the mix is drawn over their boxes rather
     // than under the next one's.
     for (const clip of project.clips) {
+        // **A generator is not on this lane at all.** It has no sound to be part
+        // of the mix — the derivation gives it no `atrim` and the render maps
+        // nothing from it — so a box here would be a claim that something is
+        // waiting to be read, and nothing is. Same argument as the video lane's
+        // colour, the other way round.
+        if (isGenerator(clip)) continue;
         const l = Math.max(0, Math.floor(timeToX(clip.start)));
         const r = Math.min(w, Math.ceil(timeToX(clip.start + clip.length)));
         if (r <= l) continue;

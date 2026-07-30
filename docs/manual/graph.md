@@ -161,6 +161,34 @@ derived black canvas either — a rectangle nothing is laid over would be a sour
 nothing reads the moment you wire your own to the sink — so `video out` is empty
 until you fill it, and the stage says which pad it is waiting on.
 
+### A generator that is a clip instead
+
+The same filters can be laid out on the timeline — see [a generator, laid out like
+a clip](timeline.md#a-generator-laid-out-like-a-clip) — and one that has been is a
+different thing on this stage, in the one way that matters here: **its node is
+derived**. It sits at the head of that clip's chain, exactly where the clip's `-i`
+would be for a file, with the same `trim`, `setpts`, `crop`, `scale` and `overlay`
+below it as any other clip; it is rebuilt on every timeline edit, and deleting the
+bar deletes it. So it takes no `-i` number — a file beside it is still `[0:v]` —
+and it is not in the graph you have made: `Clear` leaves it exactly where it is,
+because it belongs to the edit.
+
+A generator you place *here* stays what it has always been: a node, with no lane,
+no bar and no in point, kept in the graph you made and surviving every timeline
+edit. The two do not interfere, and which you want is a real choice — a `color`
+feeding an `overlay` as a badge is a piece of the graph, and a colour card with a
+title on it for four seconds is a shot.
+
+The insert points on a generator clip are the ones every clip has, under the same
+names, so a `drawtext` over a colour card is placed the way a `drawtext` over a shot
+is — and the program monitor shows it, because a generator's clip is played through
+its own `-f lavfi -i` and a filter on it is a chain over that input like any other.
+
+**Refused rather than approximated**, the way everything on this stage is: a filter
+with an input pad cannot be what a clip is cut from, a sound source is not a
+picture, and a filter this build does not have is named. All three say so instead of
+deriving a graph with an empty socket in it.
+
 ## A file the graph reads
 
 A watermark, a logo bug, a picture-in-picture insert and a sound bed are one

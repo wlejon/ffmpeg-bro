@@ -22,7 +22,8 @@
 // to name a stream index and a path without either being typed. So the button
 // is here and what it makes is an ordinary node over there.
 
-import { project } from './project.js';
+import { project, isGenerator } from './project.js';
+import { argsOf, summaryOf } from './generator.js';
 import { el, div, span, put, head } from './dom.js';
 import { kindOf, inputs } from './inputs.js';
 import * as graph from './graph/overlay.js';
@@ -179,6 +180,7 @@ export function showTransform(clip) {
                            } } }),
         ]), mark('position')),
 
+        ...generatorRows(clip, again),
         ...subtitleRows(clip, again),
 
         head('Crop'),
@@ -197,6 +199,55 @@ export function showTransform(clip) {
 }
 
 const pc = (v) => (v * 100).toFixed(1);
+
+// ── the generator this clip is of ──────────────────────────────────────────
+//
+// **One text field, and not a form of controls**, which is a departure from the
+// rest of this panel and is the honest shape for it. A generator's options are
+// the *filter's* own — `size` and `rate` on a `testsrc`, `c` on a `color`, a
+// dozen on `mandelbrot` — and libavfilter has five hundred filters with tables
+// of their own. The Graph stage already draws that form, per option, out of
+// `filterOptions()`; what belongs on the timeline is the one line somebody would
+// have typed after `-f lavfi -i`, exact and copyable, with the node a stage away
+// for the rest. It is the same distinction the command bar draws between a
+// control and the argument it produces.
+//
+// A wrong option is refused in libavfilter's own words and nothing changes — the
+// clip keeps the arguments it had, because "an unknown option is an error, not a
+// shrug" and a field that quietly dropped what it could not parse would be a
+// generator that is not the one on the screen.
+
+/// The arguments of the selected generator, where exactly one is selected.
+///
+/// **A selection of one**, and that is not timidity: the arguments belong to this
+/// filter, and a selection can hold two generators that are not the same filter
+/// at all — a field writing `size=` into both would be writing an option one of
+/// them does not have, which is a refusal on a clip nobody was looking at. Same
+/// argument as `subtitleRows` above, one step stronger.
+function generatorRows(clip, again) {
+    if (!isGenerator(clip) || subjects().length > 1) return [];
+    const field = el('input', {
+        cls: 'gen-args', type: 'text', value: argsOf(clip.generator),
+        placeholder: 'no arguments',
+        'data-gen-args': clip.generator.filter,
+        title: 'What follows the filter name, exactly as ffmpeg takes it — ' +
+               'key=value pairs separated by colons. Every option this build’s ' +
+               `${clip.generator.filter} has is on its card on the Graph stage; ` +
+               'an option it does not have is refused here in libavfilter’s own words.',
+    });
+    field.addEventListener('change', () => {
+        hooks.setGeneratorArgs(clip, field.value);
+        again();
+    });
+    return [
+        // Named, always, for the reason the subtitle heading is: this section is
+        // about the clip in front of you and not about the selection.
+        head(`Generator · ${clip.generator.filter}`),
+        controlRow('Arguments', div('val', [field])),
+        ...(summaryOf(clip.generator.filter)
+                ? [controlRow('', span(summaryOf(clip.generator.filter), 'dim'))] : []),
+    ];
+}
 
 // ── subtitles, burned into this clip ───────────────────────────────────────
 //

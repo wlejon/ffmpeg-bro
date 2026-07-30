@@ -6,6 +6,17 @@
 // draws every clip the playhead is inside, bottom track first; the timeline
 // draws them all in their lanes; the properties panel edits the selection.
 //
+// **A generator is a clip, not a fourth kind of thing.** A `testsrc` or a
+// `color` laid out here carries a *generator spec* — a filter name and its
+// options — where a clip of a file carries an input and a path, and everything
+// else about it is a clip's: a track, a start, a length, in and out points,
+// selection, overlap resolution, ripple, the sync lock, and its place in
+// `clipsAt()`'s paint order. The alternative was a parallel list of generators
+// with a lane of their own, and the objection to it is that every one of those
+// nine things would have to be written a second time — and the second copy is
+// where they drift apart. See `makeGenerator` for what the two sources have in
+// common and `isGenerator` for the three places the difference is real.
+//
 // **A track is not a thing here; it is a number a clip carries.** There is no
 // list of tracks and no "add track" button — `trackCount()` derives how many
 // lanes there are from the clips that exist, and dragging a clip into the spare
@@ -79,6 +90,17 @@ function mediaLength(probe) {
     if (!probe) return 0;
     return (probe.video && probe.video.duration) || probe.format.duration || 0;
 }
+
+/// Is this clip a generator rather than a cut of a file?
+///
+/// One home, because the difference is real in exactly three places and invented
+/// nowhere else: there is no `-i` to open (`graph/derive.js` puts the filter
+/// itself at the head of the chain), there is no sound to mix, and there is no
+/// seeking — libavfilter's sources produce forward and the `lavfi` demuxer has no
+/// `read_seek`, so a generator's element is never the transport's master clock
+/// (`viewer.activeClip()`). Everything else asks a clip the questions it always
+/// asked.
+export function isGenerator(clip) { return !!(clip && clip.generator); }
 
 /// Does this clip put anything on the canvas?
 ///
@@ -162,6 +184,111 @@ export function makeClip(input) {
         frame: null,        // its crop window, owned by the viewer
         ready: false,
     };
+}
+
+/// How long a generator is when nobody has said.
+///
+/// Five seconds, and the number is a decision rather than a measurement — which
+/// is the whole difficulty a generator brings and is stated here because there is
+/// nowhere else it could come from. A `color` is infinite: libavfilter goes on
+/// producing frames for as long as something pulls them, so unlike a file there
+/// is no length to discover. Long enough to see the bar and scrub inside it,
+/// short enough that trimming it down is the ordinary gesture rather than a
+/// chore, and it is a **prompt nobody is asked**: a dialog before a colour card
+/// exists would be a question with no information in it.
+export const GENERATOR_SECONDS = 5;
+
+/// A clip of a generator.
+///
+/// Takes what `ui/generator.js` `settle()` answered rather than a filter name,
+/// for the reason `makeClip` takes an input rather than a path: what libavfilter
+/// says the pictures are — their size, their rate, and a token a `<video>` can
+/// play — is the generator's answer, and asking for it here would put a
+/// `bro.ffmpeg` call in the middle of the model.
+///
+/// **`media` is a decision, and it is the one thing about a generator clip that
+/// is not like a file clip.** For a file, `media` is "the whole file, which in
+/// and length are cut from" — a measurement, and a ceiling the edit may not
+/// raise. A generator has no such number, so this holds the same convention the
+/// rest of the application already reaches for when something has no length of
+/// its own (`inputIsEndless` in src/native/ffmpeg_input.h, `graphLength()` in
+/// ui/export/spec.js): **`-t` is the only thing that can say**, so the number is
+/// the edit's, it starts at `GENERATOR_SECONDS`, and `roomFor()` raises it when a
+/// trim asks for more — because asking a `testsrc` for another ten seconds is a
+/// request it answers rather than one it runs out of.
+///
+/// `Infinity` was the obvious way to write "no end" and is the wrong one to put
+/// in the model: it reaches `duration()`, which is what the ruler, the scrollbar
+/// and every range on the Encode stage are measured against; it reaches the
+/// document, where `JSON.stringify` turns it into `null`; and it reaches
+/// `slipClip`'s clamp, one arithmetic step from a `NaN` position nobody can
+/// trace. A real number that the edit is allowed to revise says the same thing
+/// and cannot do any of that — so `duration()` is always finite.
+export function makeGenerator(settled) {
+    const probe = settled.probe;
+    return {
+        id: nextId++,
+        // No input and no path: there is no `-i`, which is what makes this a
+        // generator. Everything that reads `clip.input` is asking about a file,
+        // and null is the honest answer — `indexOf()` in ui/inputs.js answers -1
+        // for it, which is what the spec carries and what the graph reads as "no
+        // input of the document's".
+        input: null,
+        path: '',
+        // The filter and its options, which is what this clip is *of*. The one
+        // field a clip of a file does not have, and the one a document writes in
+        // place of an input id.
+        generator: settled.gen,
+        // The `-f lavfi -i <filter>` registered for it, so the program monitor
+        // plays the real thing through the real backend. See ui/generator.js.
+        src: settled.src,
+        name: settled.name,
+        // What libavfilter says it produces. Kept exactly as a clip of a file
+        // keeps its input's answer, so that every reader of `clip.probe` — the
+        // chips, `hasPicture`, the waveform lane's "no audio track" — is telling
+        // the truth about a generator rather than merely surviving it.
+        probe,
+        track: 0,
+        start: 0,
+        inPoint: 0,
+        length: GENERATOR_SECONDS,
+        media: GENERATOR_SECONDS,
+        width: settled.width,
+        height: settled.height,
+        fps: settled.fps || 25,
+        xform: defaultTransform(),
+        volume: 1,
+        muted: false,
+        // Neither is ever filled in: a generator has no sound to draw an
+        // envelope of, and a filmstrip is grabbed by seeking, which is the one
+        // thing a lavfi source cannot do. `analysis.js` asks for neither.
+        peaks: null,
+        film: null,
+        video: null,
+        frame: null,
+        ready: false,
+    };
+}
+
+/// A generator's arguments have changed: put back everything that follows from
+/// them.
+///
+/// The mirror of `applyInput()`, and shorter than it by exactly the thing that
+/// makes a generator a generator. `applyInput` clamps the in-point and the length,
+/// because a file reopened through a different demuxer or a narrower window is a
+/// *shorter file* than the trim was made against — and nothing about a generator's
+/// arguments can shorten it. How long there is of one is `media`, which is the
+/// edit's number rather than the filter's, so re-typing the size must leave the bar
+/// exactly where it is. What does change is the picture's size and rate, which the
+/// layout reads and which the render's rectangle comes from.
+export function applyGenerator(clip, settled) {
+    clip.generator = settled.gen;
+    clip.name = settled.name;
+    clip.src = settled.src;
+    clip.probe = settled.probe;
+    clip.width = settled.width;
+    clip.height = settled.height;
+    clip.fps = settled.fps || clip.fps;
 }
 
 function sort() {
@@ -550,6 +677,11 @@ function deselect(clip) {
 /// file — a split costs nothing but a second <video> — and together they cover
 /// exactly what the one clip covered, so nothing on the track moves.
 ///
+/// A generator splits the same way and for the same reason: the two halves share
+/// one generator spec and therefore one registered `-f lavfi -i`, exactly as two
+/// halves of a file share one `-i`. Nothing here has to know which kind it is,
+/// which is the point of a generator being a clip.
+///
 /// Trimming is this plus deleting a half, which is why there is no separate
 /// trim operation for the ends.
 export function splitClip(clip, t, makeElement) {
@@ -571,6 +703,26 @@ export function splitClip(clip, t, makeElement) {
     sort();
     if (makeElement) makeElement(right);
     return right;
+}
+
+/// How much of a clip's source there is to cut from, given how much the edit is
+/// about to ask for.
+///
+/// **A file's answer is a measurement and a generator's is a decision**, which is
+/// why this is a function rather than a field read. For a clip of a file it is
+/// `clip.media` and nothing happens: the edit cannot conjure footage past the end
+/// of a file, and a trim that tried stops there. For a generator it *raises* the
+/// number, because libavfilter goes on producing for as long as it is asked to —
+/// so dragging the end of a colour card out to twenty seconds is a request that
+/// is answered, and the edit's declared length grows to match. See
+/// `makeGenerator` for why that number is finite rather than `Infinity`.
+///
+/// Two callers, and both edits are "make this end later": a trim of the tail and
+/// a roll of the cut after it. Written once so that a generator cannot grow under
+/// one gesture and refuse under the other.
+function roomFor(clip, wanted) {
+    if (isGenerator(clip) && wanted > clip.media) clip.media = wanted;
+    return clip.media;
 }
 
 /// Move one end of a clip. The other end stays put: trimming the head moves the
@@ -598,7 +750,13 @@ export function trimClip(clip, edge, t) {
         clip.inPoint += delta;
         clip.length -= delta;
     } else {
-        const maxLen = Math.min(clip.media - clip.inPoint, after - clip.start);
+        // How far the *neighbour* lets this end go, asked before the source is:
+        // a generator's `media` is raised by what a trim did and not by what the
+        // pointer asked for, so a drag that stopped dead against the clip after it
+        // has not asked for another ten seconds of `testsrc`.
+        const reach = Math.min(t - clip.start, after - clip.start);
+        const room = roomFor(clip, clip.inPoint + reach);
+        const maxLen = Math.min(room - clip.inPoint, after - clip.start);
         clip.length = Math.max(min, Math.min(maxLen, t - clip.start));
     }
     sort();
@@ -698,7 +856,8 @@ export function rollCut(left, right, t) {
     // How far the cut may travel each way, out of the four things that stop it:
     // footage left in the left clip's file, footage left before the right
     // clip's in-point, and one frame of each clip surviving.
-    const laterMost = Math.min(left.media - left.inPoint - left.length,
+    const laterMost = Math.min(roomFor(left, left.inPoint + left.length + (t - cut)) -
+                                   left.inPoint - left.length,
                                right.length - minR);
     const earlierMost = Math.min(right.inPoint, left.length - minL);
     const want = Math.max(cut - earlierMost, Math.min(cut + laterMost, t));

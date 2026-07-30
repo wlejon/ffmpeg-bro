@@ -739,4 +739,123 @@ pump(120);
 ok(!H.canUndo() && !H.canRedo(), 'opening a document starts the history again');
 
 fs.unlinkSync(path);
+// ── a clip that is not of a file ────────────────────────────────────────────
+//
+// A generator clip is written as what it *is* — a filter and its arguments —
+// where a clip of a file is written as an input's id. Three things have to come
+// back and each would fail silently on its own:
+//
+//   - **its id**, out of the same counter every clip's comes from, because
+//     `clip:7/after-scale` is a name the graph overlay wrote down;
+//   - **its `media`**, which is the one number a document holds *for* a clip
+//     rather than re-measuring — a generator produces for as long as it is asked
+//     to, so how much of it there is is a decision and not a fact about a file;
+//   - **its kind**, because a reconcile that decided a generator was the file
+//     clip that used to have that id would re-point the bar at a different shot.
+
+console.log('\na generator clip, round-tripped');
+{
+    doc.reset();
+    pump(150);
+
+    const gen = A.addGenerator('testsrc');
+    pump(200);
+    ok(!!gen && A.isGenerator(gen), `laid a generator out (${gen.name})`);
+    // A file clip beside it, so the ids being kept is a fact about two clips in
+    // one list rather than a coincidence about one.
+    A.open(media);
+    waitFor('the file clip', () => A.project.clips.length === 2);
+    pump(150);
+
+    // Deliberately not the default anything, and the sequence matters: grown past
+    // the length it was made with, trimmed back in so that there is more of it
+    // than the clip uses, slipped inside that, moved, put on the other track and
+    // made half opaque. Every one of those is a field a reader could drop without
+    // any of the others noticing, and the middle two are the ones only a
+    // generator has — `media` past `inPoint + length` is the state that proves
+    // the number is the document's rather than something re-measured.
+    gen.track = 1;
+    gen.start = 0.75;
+    A.rippleTrim(gen, 'end', 0.75 + 12);
+    A.rippleTrim(gen, 'end', 0.75 + 8);
+    A.slipClip(gen, 1.5);
+    gen.xform.opacity = 0.4;
+    A.changed('moved');
+    pump(80);
+    const wantMedia = gen.media, wantLen = gen.length, wantId = gen.id;
+    ok(wantMedia > 5, `and grew it to ${wantMedia.toFixed(2)}s, past the five it was made with`);
+    ok(near(wantLen, 8) && near(gen.inPoint, 1.5) && wantMedia > wantLen + gen.inPoint,
+       `then trimmed it back to ${wantLen.toFixed(2)}s and slipped ` +
+       `${gen.inPoint.toFixed(2)}s into it, leaving more of it than the clip uses`);
+    A.graph.overlay.insert(`clip:${gen.id}/after-scale`, 'hflip');
+    pump(200);
+
+    const genPath = `${bro.ffmpeg.tempPath('gendoc')}.fbro`;
+    doc.save(genPath);
+    const written = JSON.parse(fs.readFileSync(genPath, 'utf-8'));
+    const savedGen = written.clips.find((c) => c.generator);
+    ok(!!savedGen, 'the file says the clip is a generator');
+    same(savedGen.generator.filter, 'testsrc', 'naming the filter');
+    same(savedGen.generator.params.size, '1920x1080', 'and its arguments');
+    ok(!('input' in savedGen), 'and no input, because there is no file behind it');
+    ok(written.clips.some((c) => !c.generator && c.input),
+       'while the clip of a file beside it is written as an input id');
+
+    // Throw the edit away entirely, then open the file again.
+    doc.reset();
+    pump(200);
+    same(A.project.clips.length, 0, 'the edit was really cleared in between');
+
+    const reopened = doc.load(genPath);
+    A.documentOpened(reopened);
+    pump(300);
+    same(reopened.skipped.length, 0, 'and it opened with nothing left out');
+    same(A.project.clips.length, 2, 'both clips back');
+
+    const back = A.project.clips.find((c) => A.isGenerator(c));
+    ok(!!back, 'the generator is a generator again');
+    same(back.id, wantId, `with the id it had (${wantId}), which the graph wrote down`);
+    ok(near(back.media, wantMedia),
+       `and how much of it there is (${back.media.toFixed(2)}s), which nothing could re-measure`);
+    ok(near(back.length, wantLen), `and its length (${back.length.toFixed(2)}s)`);
+    ok(near(back.inPoint, 1.5) && near(back.start, 0.75) && back.track === 1,
+       'and where it sits, where it starts and which track it is on');
+    ok(near(back.xform.opacity, 0.4), 'and its opacity');
+    same(back.generator.filter, 'testsrc', 'and what it is of');
+    // A view over the generator's own `-f lavfi -i`, because there is a filter on
+    // the clip — which is the same token a clip of a file gets for the same
+    // reason. Without the insert it would be the plain `/@input/` one.
+    ok(!!back.video && /^\/@fx\//.test(back.video.src),
+       `with an element playing it again, through the filter on it (${back.video.src})`);
+    const anchored = A.graph.overlay.inserts();
+    ok(anchored.length === 1 && anchored[0].anchor === `clip:${wantId}/after-scale`,
+       'and the filter pinned to it is still pinned to it');
+
+    // A reconcile rather than a rebuild: opening the same document again over the
+    // top must not touch the element, which is what makes an undo cheap.
+    const element = back.video;
+    A.documentOpened(doc.open(written));
+    pump(200);
+    const again = A.project.clips.find((c) => A.isGenerator(c));
+    ok(again === back && again.video === element,
+       'opening the same document again keeps the very same clip and decoder');
+
+    // A generator this build cannot make is skipped with libavfilter's own
+    // sentence, exactly as a clip of a missing file is.
+    const bad = JSON.parse(JSON.stringify(written));
+    bad.clips.find((c) => c.generator).generator.filter = 'no_such_source';
+    const partial = doc.open(bad);
+    A.documentOpened(partial);
+    pump(200);
+    ok(partial.skipped.length === 1 && /no filter called/.test(partial.skipped[0].why),
+       `a generator this build has no filter for is not laid out: ${
+           partial.skipped.length ? partial.skipped[0].why : 'nothing skipped'}`);
+    ok(A.project.clips.length === 1 && !A.isGenerator(A.project.clips[0]),
+       'and the rest of the document is still opened');
+
+    try { fs.unlinkSync(genPath); } catch (e) { /* nothing to clean up */ }
+    doc.reset();
+    pump(150);
+}
+
 console.log(`\n${checks} checks passed`);

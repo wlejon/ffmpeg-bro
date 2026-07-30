@@ -131,7 +131,18 @@ export function range() {
 /// screen that draws one matrix while the command prints another is worse than
 /// either of them being wrong on its own.
 export function specSources() {
-    return project.clips.map((c) => (c.probe && c.probe.video) || null);
+    // **A generator answers nothing, deliberately.** It has a probe like any
+    // other clip — libavfilter's own answer about the pictures it makes — and it
+    // is not a *source colour*: the tags this list carries exist so that the
+    // graph can write the `in_color_matrix` the renderer reads off the file, and
+    // a generator has no file to have been tagged. Left in, an untagged
+    // `color=c=red` would be handed swscale's height-based guess as though it
+    // were a statement, on frames libavfilter has just made. Absent, the
+    // conversion is swscale's own default — which is exactly what
+    // `ffmpeg -f lavfi -i color=c=red,scale=…` does, so the render and the
+    // printed command are the same picture, which is the only claim this list is
+    // for. `graph/derive.js` keeps it out of `caveats` for the same reason.
+    return project.clips.map((c) => (!c.generator && c.probe && c.probe.video) || null);
 }
 
 /// A render that is two renders, when the rate control asked for one.
@@ -262,6 +273,32 @@ function formatFor(path) {
     return (ext && muxerForExtension(ext)) || mine || '';
 }
 
+/// Does this render have to go through libavfilter rather than the internal
+/// compositor?
+///
+/// **One home, because there are two reasons now and they must not be asked
+/// separately.** The two paths are measured against each other in
+/// tests/export_test.cpp and agree to 43 dB, so this is a question about what is
+/// *expressible* rather than about which is better:
+///
+///   - **A filter somebody placed.** The compositor cannot run an `hflip`. That
+///     is `graph/overlay.js`'s `isEmpty()`, and it was the whole answer.
+///   - **A generator clip.** The compositor composites frames read from `-i`s,
+///     and a generator has no `-i` — its picture *is* a filter. Nothing about a
+///     `testsrc` on the timeline is expressible on that path, so an edit holding
+///     one is performed by libavfilter whether or not anybody has opened the
+///     Graph stage. Asked of the spec's clips rather than of the model, so this
+///     stays a function of the same object the render is driven from.
+///
+/// A render that needs the graph and cannot derive one is a warning rather than a
+/// silent fallback — see `ui/export/warnings.js`, which asks this — because on
+/// the compositor path a generator clip is a clip with no reader to open, and
+/// libav's message about an empty path is not a sentence about what is wrong.
+export function needsGraph(spec) {
+    if (!isEmpty()) return true;
+    return ((spec && spec.clips) || []).some((c) => c && c.generator);
+}
+
 /// Everything the renderer needs.
 ///
 /// Exported because the headless test builds one directly: driving the form
@@ -291,6 +328,13 @@ export function buildSpec(over = {}) {
             // input's and a path cannot carry them.
             input: inputIndex(c.input),
             path: c.path,
+            // What this clip is *of*, when it is not of a file: a filter name and
+            // its options. Carried for `graph/derive.js`, which puts that filter
+            // at the head of the clip's run where an `-i` would go — and read by
+            // nothing native, exactly as `clip.id` is, because it is a fact about
+            // the edit and not about a reader the renderer has to open. A clip of
+            // a file carries `undefined` and everything reads as it always did.
+            generator: c.generator,
             start: c.start,
             length: c.length,
             inPoint: c.inPoint,
@@ -412,19 +456,14 @@ export function buildSpec(over = {}) {
     };
 
     // Which of the renderer's two paths this render takes, decided in one
-    // place: a graph with nothing of the user's in it is the internal
-    // compositor, and a graph with a filter in it is libavfilter. The two are
-    // measured against each other in tests/export_test.cpp and agree to 43 dB,
-    // so this is a choice about what is *expressible* rather than about which
-    // is better — the compositor cannot run an `hflip`, and the graph path
-    // decodes every input from the start of its file.
+    // place — see `needsGraph()` for the two reasons it can be libavfilter.
     //
     // Attached here rather than at each `render.start`, because there are three
     // of them — the export, and both halves of the A/B preview — and a
     // reference rendered without the filters would be comparing the picture
     // against a different picture.
     lastGraph = null;
-    if (!isEmpty()) {
+    if (needsGraph(spec)) {
         const g = renderGraph(spec, specSources(), { overlay: overlayState() });
         lastGraph = g;
         if (g.ok) {

@@ -10,7 +10,7 @@
 // renderer as it always did. Stacking and opacity are the same deal: z-index
 // and an opacity on the window, both free.
 
-import { project, isSelected, hasPicture } from './project.js';
+import { project, isSelected, hasPicture, isGenerator } from './project.js';
 import { inserts } from './graph/overlay.js';
 import { srcFor, whyFor, sizeFor } from './graph/playback.js';
 
@@ -63,10 +63,22 @@ export function initViewer(refs) {
 /// topmost clip is still the answer, because bro drives `currentTime` from the
 /// media clock where there is no picture, which is the whole of what makes an
 /// audio-only timeline play.
+///
+/// **A generator is never the answer**, and that is the one clip whose element is
+/// on the screen and cannot be a clock. A `-f lavfi` source has no `read_seek`:
+/// libavfilter's sources produce forward, so the element cannot be sent to a
+/// moment and reports no duration to have run out of. Left as the master, a
+/// `color` on a lane above the footage would drag the playhead onto its own
+/// free-running clock and a scrub would be refused rather than obeyed. So it is
+/// skipped, and a timeline of nothing but generators runs on the wall clock — the
+/// same arm of `advance()` a gap between clips uses, which is exactly what a
+/// stretch of time with no decoder to ask is.
 export function activeClip() {
     for (let i = active.length - 1; i >= 0; i--)
-        if (hasPicture(active[i])) return active[i];
-    return active.length ? active[active.length - 1] : null;
+        if (hasPicture(active[i]) && !isGenerator(active[i])) return active[i];
+    for (let i = active.length - 1; i >= 0; i--)
+        if (!isGenerator(active[i])) return active[i];
+    return null;
 }
 export function activeClips() { return active; }
 

@@ -31,7 +31,7 @@ import { div, span, put, show } from './dom.js';
 import { shellArg as arg } from './format.js';
 import { filtergraph, outputColor } from './filtergraph.js';
 import { settings, outputExt } from './export/state.js';
-import { freshSpec, specSources } from './export/spec.js';
+import { freshSpec, specSources, needsGraph } from './export/spec.js';
 import { parseCopy } from './export/copy.js';
 import { parseDecode, defaultSubtitleCodec } from './export/subtitles.js';
 import { parsePad } from './export/pads.js';
@@ -611,15 +611,22 @@ function notes(p) {
         // is true. With a filter of your own in the graph the render *is* the
         // graph, and saying "translation" would be underselling it by exactly
         // the amount that matters.
-        noUserNodes()
+        //
+        // Asked of `needsGraph()` rather than of the overlay, because there are
+        // two reasons the render is the graph and only one of them is a filter
+        // somebody placed: a generator clip has no `-i` to composite from, so an
+        // edit holding one is run through libavfilter with nothing on the Graph
+        // stage at all. One home for that question, or this bar would call a
+        // graph a translation while the renderer parsed it.
+        !needsGraph(p.spec)
             ? [span('Equivalent: ', 'lead'),
                'this binary composites internally rather than running a filter graph, so ' +
                'the graph above is a translation. Measured against the render it describes, ' +
                'it comes out around 39 dB — the same picture, not the same bits.']
             : [span('Run, not translated: ', 'lead'),
-               'there are filters of your own in this graph, so the render goes through ' +
-               'libavfilter and these are the chains it parses — all but the last, which ' +
-               'converts into the encoder’s colour and is the writer’s job here.'],
+               'this render goes through libavfilter and these are the chains it parses — ' +
+               'all but the last, which converts into the encoder’s colour and is the ' +
+               'writer’s job here.'],
     ];
     const streams = p.spec.streams || [];
     const copied = streams.filter((s) => parseCopy(s.source));

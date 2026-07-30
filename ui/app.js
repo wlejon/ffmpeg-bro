@@ -9,13 +9,15 @@
 
 import * as doc from './document.js';
 import * as history from './history.js';
-import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
+import { project, projectFps, makeClip, makeGenerator, applyGenerator, isGenerator,
+         addClip, removeClip, duration, clipsAt,
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
          applyInput, clipsOf, hasPicture, retainTracks,
          isTrackLocked, setTrackLocked, ripplesWith,
          rippleTrim, rollCut, slipClip } from './project.js';
 import * as inputsModel from './inputs.js';
+import * as generators from './generator.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
@@ -244,6 +246,10 @@ initInspector({ filename, chips, transform: xformPanel }, {
     // rather than pushed, because it is a function of the edit and the overlay
     // together and both move.
     outranked: outrankedControls,
+    // A generator's arguments. Through a hook rather than done in the panel
+    // because it is a reopen — a new registration, a new element, a picture that
+    // may be a different size — and putting an element back is this file's.
+    setGeneratorArgs: (clip, text) => setGeneratorArgs(clip, text),
 });
 timeline.initTimeline({
     timeline: el('timeline'),
@@ -826,6 +832,70 @@ function openInput(input, opts = {}) {
         changed('open');
     }
     return clip;
+}
+
+/// Lay a generator out: a clip whose source is a filter rather than a file.
+///
+/// **Everything past deciding what it is, is `openInput`'s path with the input
+/// half taken out** — the same `addClip`, the same element, the same selection,
+/// the same fit of the ruler. That is the whole claim `ui/project.js`'s header
+/// makes about a generator being a clip, and it is worth noticing that this
+/// function is short because of it.
+///
+/// The canvas's size and rate, where the filter has options to take them (see
+/// `makeSpec`), falling back to the same 1920×1080 `buildSpec()` does for an
+/// empty timeline — so a `testsrc` dropped first *is* the canvas rather than
+/// making a 320×240 one out of libavfilter's default.
+///
+/// A generator that will not open says so and lays out nothing, exactly as a file
+/// that will not open does: the message is libavfilter's own, which for a filter
+/// this build does not have or an option it does not take is the only sentence
+/// worth showing.
+function addGenerator(filter) {
+    const settled = generators.settle(generators.makeSpec(filter, {
+        width: project.width || 1920,
+        height: project.height || 1080,
+        fps: projectFps(),
+    }));
+    if (!settled.ok) { flash(settled.why); return null; }
+
+    const clip = makeGenerator(settled);
+    addClip(clip);
+    viewer.attachClip(clip);
+    select(clip, 'auto');
+    dropzone.classList.add('hidden');
+    setControlsEnabled(true);
+    viewer.layout();
+    timeline.fitView();
+    setPlayhead(clip.start);
+    showProperties();
+    changed('open');
+    flash(`${clip.name} on V${clip.track + 1}`);
+    return clip;
+}
+
+/// New arguments for a generator clip, as somebody typed them.
+///
+/// Refused as a whole or applied as a whole: libavfilter reads the string when the
+/// input is opened, so a filter that will not take it leaves the clip exactly as
+/// it was and the reason is said out loud. `media` is untouched — how long the
+/// clip is is the edit's number and not the filter's — but the picture's *size*
+/// may well have changed, which is why the layout and the render's statements are
+/// put back afterwards.
+function setGeneratorArgs(clip, text) {
+    const want = generators.withArgs(clip.generator, text);
+    const settled = generators.settle(want);
+    if (!settled.ok) { flash(settled.why); return false; }
+    if (settled.src === clip.src) return false;         // the same generator, retyped
+    applyGenerator(clip, settled);
+    // The element *is* the decoder and it is now decoding a different source, so
+    // it is rebuilt rather than re-pointed — the same rule `reloadInput` follows.
+    viewer.detachClip(clip);
+    viewer.attachClip(clip);
+    viewer.layout();
+    setPlayhead(transport.t);
+    changed('generator');
+    return true;
 }
 
 /// An input has been reopened — a demuxer forced, an option set, a window
@@ -1458,6 +1528,36 @@ el('btn-grid').addEventListener('click',
 el('btn-output').addEventListener('click', () => setOutputPreview(!output.isOn()));
 el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 
+// ── the generator picker ───────────────────────────────────────────────────
+//
+// **The list is libavfilter's**, filtered to the sources that write a picture —
+// see `pictureSources()`. Filled in once at startup, because the registry does
+// not change while the process is running, and it is the same walk the Graph
+// stage's palette does.
+//
+// A `<select>` rather than a button and a dialog: the choice *is* which filter,
+// there is nothing else to ask (the length is `GENERATOR_SECONDS` and the
+// arguments are the canvas's), and a dialog in front of a colour card would be a
+// question with no information in it. It falls back to its own first entry after
+// every pick so that picking the same one twice lays out two.
+{
+    const pick = el('gen-pick');
+    const add = (value, text, title) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = text;
+        if (title) opt.title = title;
+        pick.appendChild(opt);
+    };
+    add('', 'add…');
+    for (const f of generators.pictureSources()) add(f.name, f.name, f.description || '');
+    pick.addEventListener('change', () => {
+        const filter = pick.value;
+        pick.value = '';
+        if (filter) addGenerator(filter);
+    });
+}
+
 // ── the pipeline ───────────────────────────────────────────────────────────
 //
 // Four stages over one project, and the spine is both the map and the way
@@ -1691,6 +1791,12 @@ function flash(message) {
 globalThis.__ffmpegBro = {
     project, transport, resolveOverlaps,
     open, openBatch, openInput, removeSelection,
+    // A generator laid out on the timeline, and its arguments retyped. On the
+    // surface because everything a test wants to check about one is downstream of
+    // there being a clip — what it derives to, what the document does with it,
+    // what the render makes of it — and the picker is a `<select>` whose whole
+    // content is a walk of libavfilter's registry.
+    addGenerator, setGeneratorArgs, isGenerator, generators,
     // The `-i`s, which are the document now: a test that wants to know what
     // will be opened asks this rather than walking the timeline for paths.
     inputs: inputsModel,

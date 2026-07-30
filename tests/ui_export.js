@@ -3941,6 +3941,89 @@ if (dataFile) {
     console.log('\n(no file with a data stream given — that section is skipped)');
 }
 
+// ── a render whose picture is not in any file ───────────────────────────────
+//
+// A generator clip is a clip, so nothing on the Encode or Write stages had to
+// learn anything about one — but the *path* the render takes is not the one an
+// edit of files takes, and that is what is checked here. The compositor
+// composites frames read from `-i`s and a generator has none, so an edit holding
+// one is performed by libavfilter with nothing on the Graph stage at all. It
+// needs no fixture: libavfilter makes its own pictures.
+
+console.log('\na render rooted in a generator');
+{
+    A.graph.overlay.clear();
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+
+    const gen = A.addGenerator('smptebars');
+    pump(200);
+    ok(!!gen, `laid out ${gen.name} with nothing else on the timeline`);
+
+    const S = A.exporter.currentSettings();
+    S.width = 320;
+    S.height = 180;
+    S.rangeIn = 0;
+    S.rangeOut = 0;
+    A.exporter.redraw();
+    pump(40);
+
+    // Two clips' worth of one number: the range is measured against the edit's
+    // own duration, and a generator clip is what gives an edit holding no files
+    // one at all.
+    same(A.exporter.range().length, gen.length,
+         `the range is the generator's own length (${gen.length}s)`);
+
+    const spec = A.exporter.buildSpec();
+    ok(!!spec.filterGraph,
+       'a render with a generator on the timeline goes through libavfilter with ' +
+       'nothing on the Graph stage — the compositor has no -i to read');
+    ok(/^smptebars=/.test(spec.filterGraph.split(';')[1] || ''),
+       `and the filter is the head of the clip's chain: ${spec.filterGraph}`);
+    same((spec.filterInputs || []).length, 0, 'and it opens no files at all');
+    ok(spec.clips.length === 1 && spec.clips[0].input === -1 &&
+       !!spec.clips[0].generator,
+       'the clip is in the spec as a clip, with no -i and a generator instead');
+
+    // The command bar stops calling the graph a translation, because on this
+    // path it is not one.
+    ok(A.command.currentCommand().indexOf('-filter_complex') >= 0,
+       'the command prints the chains it will parse');
+
+    spec.path = bro.appDir + '/../out/ui-export-generator.mp4';
+    spec.end = Math.min(spec.end, spec.start + 1);
+    spec.streams = [];
+    spec.chapters = [];
+    let refused = '';
+    try { bro.ffmpeg.render.start(spec); } catch (e) { refused = String(e); }
+    ok(!refused, `the renderer accepted it (${refused || 'accepted'})`);
+    if (!refused) {
+        waitFor('the generator render to finish',
+                () => bro.ffmpeg.render.poll().state !== 'running', 60000);
+        const st = bro.ffmpeg.render.poll();
+        ok(st.state === 'done', `it finished (${st.state}${st.error ? ': ' + st.error : ''})`);
+        const out = bro.ffmpeg.probe(spec.path);
+        ok(!!out.video && out.video.width === 320 && out.video.height === 180,
+           `and wrote a ${out.video ? out.video.width + 'x' + out.video.height : 'broken'} file ` +
+           'out of nothing but a filter');
+        ok(!out.audio, 'with no soundtrack, because a generator has nothing for the mix');
+        ok(Math.abs(out.format.duration - (spec.end - spec.start)) < 0.25,
+           `as long as the range asked for (${out.format.duration.toFixed(2)}s)`);
+    }
+
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+    A.open(media);
+    waitFor('the edit back', () => A.project.clips.length === 1, 20000);
+    pump(150);
+    S.width = 0;
+    S.height = 0;
+    A.exporter.redraw();
+    pump(40);
+}
+
 // ── what is carried between runs ───────────────────────────────────────────
 //
 // `localStorage` is the one thing in this application that outlives the process,

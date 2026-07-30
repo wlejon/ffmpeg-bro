@@ -39,6 +39,14 @@
 //     as an input carrying libav's own message, which is exactly what a Sources
 //     row shows for one; deciding what to do about that is not the document's
 //     business.
+//   - **A clip says what it is cut from, and there are two answers.** An input's
+//     id, or — for a generator clip — the filter and its arguments, which is what
+//     a generator *is*: there is no file, so there is nothing for an input to
+//     describe. One of the two, never both, and `readClipSource()` decides which
+//     kind to make. A generator carries one more number than a file clip does,
+//     its `media`, and that is the rule below stated exactly rather than an
+//     exception to it: how long a `color` goes on for is a decision the edit is
+//     holding and not an answer anything can be re-asked for.
 //   - **A track is written as its settings, never as a track.** `trackCount()`
 //     in `ui/project.js` derives how many lanes there are from the clips, so what
 //     is stored here is a bag keyed by track number holding an entry only where
@@ -85,10 +93,12 @@
 //     could lose, and a document marked unsaved because somebody clicked a clip
 //     is a dot that means nothing.
 
-import { project, makeClip, placeClip, removeClip, sortClips, useClipId, clipById,
+import { project, makeClip, makeGenerator, applyGenerator, isGenerator, placeClip,
+         removeClip, sortClips, useClipId, clipById,
          defaultTransform, applyInput, changed, TRACK_LIMIT,
          isTrackLocked, setTrackLocked } from './project.js';
 import * as inputsModel from './inputs.js';
+import * as generators from './generator.js';
 import * as overlay from './graph/overlay.js';
 import { settings } from './export/state.js';
 import * as store from './export/store.js';
@@ -146,22 +156,48 @@ export function snapshot() {
             sequence: i.sequence || null,
             parts: i.parts || null,
         })),
-        clips: project.clips.map((c) => ({
-            id: c.id,
-            input: c.input.id,
-            track: c.track,
-            start: c.start,
-            inPoint: c.inPoint,
-            length: c.length,
-            xform: copy(c.xform),
-            volume: c.volume,
-            muted: !!c.muted,
-        })),
+        clips: project.clips.map(clipBlob),
         tracks: trackBlob(),
         graph: copy(overlay.current()),
         output: outputBlob(),
         session: sessionBlob(),
     };
+}
+
+/// One clip, as the document holds it.
+///
+/// **A clip says what it is cut from, and there are two answers**: an input's id,
+/// or a generator — a filter name and its arguments. Exactly one of the two is
+/// written, because a clip has one source; `readClipSource()` is the other half
+/// and decides which kind to make from which key is there.
+///
+/// **A generator's `media` is written and a file clip's is not**, which looks
+/// like an exception to "nothing derived is written" and is the rule stated
+/// exactly: a file's length is its input's answer and re-measured on every open,
+/// and a generator's is a *decision* the edit is holding (see `makeGenerator` in
+/// ui/project.js — libavfilter would produce for ever). Left out, a colour card
+/// dragged out to forty seconds would come back clamped to the five it was made
+/// with, because `writeClip()` clamps the length against it.
+function clipBlob(c) {
+    const out = {
+        id: c.id,
+        track: c.track,
+        start: c.start,
+        inPoint: c.inPoint,
+        length: c.length,
+        xform: copy(c.xform),
+        volume: c.volume,
+        muted: !!c.muted,
+    };
+    if (isGenerator(c)) {
+        out.generator = { filter: c.generator.filter,
+                          pos: (c.generator.pos || []).slice(),
+                          params: Object.assign({}, c.generator.params) };
+        out.media = c.media;
+    } else {
+        out.input = c.input.id;
+    }
+    return out;
 }
 
 /// Put one back. Returns what could not be laid out and why, rather than
@@ -209,23 +245,15 @@ export function open(doc) {
     const plan = [];
     for (const saved of list(d.clips)) {
         if (!saved || typeof saved !== 'object') continue;
-        const input = inputsModel.byId(String(saved.input || ''));
-        if (!input) {
-            skipped.push({ name: String(saved.input || '?'),
-                           why: 'names an input this document does not describe' });
-            continue;
-        }
-        if (!input.probe) {
-            skipped.push({ name: input.name, why: input.error || 'could not be opened' });
-            continue;
-        }
+        const source = readClipSource(saved);
+        if (source.why) { skipped.push({ name: source.name, why: source.why }); continue; }
         // A document that hands the same clip id out twice gets a fresh one for
         // the second, whose anchors then simply do not apply — a state the
         // overlay is already built to be in.
         const n = Math.round(Number(saved.id));
         const id = Number.isFinite(n) && n > 0 && !usedIds.has(n) ? n : 0;
         if (id) usedIds.add(id);
-        plan.push({ saved, input, id });
+        plan.push({ saved, input: source.input, settled: source.settled, id });
     }
 
     for (const clip of project.clips.slice())
@@ -236,15 +264,25 @@ export function open(doc) {
         let clip = p.id ? project.clips.find((c) => c.id === p.id) : null;
         // The same id over a different file is not the same clip. Rebuilt rather
         // than re-pointed, because the element *is* the decoder and re-pointing
-        // one is what `reloadInput` exists to avoid getting wrong.
-        if (clip && clip.input !== p.input) { dropClip(clip); clip = null; }
-        let element = !clip || reopened.has(p.input);
+        // one is what `reloadInput` exists to avoid getting wrong. A clip that
+        // has changed *kind* — a generator where a file was, or the other way
+        // round — is the same statement one step further out.
+        if (clip && (p.settled ? !isGenerator(clip) : clip.input !== p.input))
+            { dropClip(clip); clip = null; }
+        // A generator's element is rebuilt when its *arguments* changed, which is
+        // the same fact `reopened` states about a file: one set of arguments is
+        // one registered `-f lavfi -i`, so a src that has stayed the same is a
+        // source that has, and an undo of a crop costs no reopen either way.
+        // Asked before `applyGenerator` below, which is what moves it.
+        let element = !clip || (p.settled ? clip.src !== p.settled.src
+                                         : reopened.has(p.input));
         if (!clip) {
-            clip = makeClip(p.input);
+            clip = p.settled ? makeGenerator(p.settled) : makeClip(p.input);
             if (p.id) { clip.id = p.id; useClipId(p.id); }
             placeClip(clip);
-        } else if (element) {
-            if (hooks.detach) hooks.detach(clip);
+        } else {
+            if (element && hooks.detach) hooks.detach(clip);
+            if (p.settled) applyGenerator(clip, p.settled);
         }
         writeClip(clip, p.saved);
         if (element && hooks.attach) hooks.attach(clip);
@@ -296,6 +334,13 @@ export function open(doc) {
 /// clips are *not* made: on an undo of a crop this is the whole of the work, and
 /// the element it is drawn by never learns anything happened.
 function writeClip(clip, saved) {
+    // **How much of a generator there is is the document's to say**, and it has to
+    // be back before the clamps below are applied against it — see `clipBlob()`
+    // and `makeGenerator()`. A document written before generators existed cannot
+    // reach this line; one whose number is missing or nonsense keeps whatever the
+    // clip was made with, which for a fresh one is `GENERATOR_SECONDS`.
+    if (isGenerator(clip))
+        clip.media = Math.max(0, num(saved.media, clip.media));
     clip.track = clamp(Math.round(num(saved.track)), 0, TRACK_LIMIT - 1);
     clip.start = Math.max(0, num(saved.start));
     clip.inPoint = clamp(num(saved.inPoint), 0, clip.media);
@@ -385,6 +430,50 @@ function readInput(saved, seen) {
         streamLoop: Math.round(num(saved.streamLoop)),
         sequence: saved.sequence && typeof saved.sequence === 'object' ? saved.sequence : null,
         parts: Array.isArray(saved.parts) ? saved.parts.map(String) : null,
+    };
+}
+
+/// What a saved clip is cut from: an input this document has just opened, or a
+/// generator libavfilter has just been asked about.
+///
+/// Returns `{ input }`, `{ settled }` or `{ why, name }` — a reason rather than a
+/// throw, because a document with one clip it cannot lay out is a document you
+/// still want the rest of, which is the rule `open()` is written on.
+///
+/// **Which key is present decides**, and a `generator` wins over an `input`: a
+/// clip has one source, and a hand-edited file carrying both is answered rather
+/// than merged. A generator that will not open — a filter this build does not
+/// have, an option it does not take — is skipped with libavfilter's own sentence,
+/// exactly as a clip whose file has moved is skipped with libavformat's.
+function readClipSource(saved) {
+    const gen = readGenerator(saved.generator);
+    if (gen) {
+        const settled = generators.settle(gen);
+        return settled.ok ? { settled }
+                          : { name: generators.describe(gen) || gen.filter, why: settled.why };
+    }
+    const input = inputsModel.byId(String(saved.input || ''));
+    if (!input)
+        return { name: String(saved.input || '?'),
+                 why: 'names an input this document does not describe' };
+    if (!input.probe)
+        return { name: input.name, why: input.error || 'could not be opened' };
+    return { input };
+}
+
+/// A generator spec, sanitised — or null for a clip that is not one.
+///
+/// Every value a string, for the reason the option bag below is: these become a
+/// filter's arguments, `av_opt_set` takes strings, and a number that came back as
+/// a number would print the same and compare differently.
+function readGenerator(saved) {
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+    const filter = String(saved.filter || '').trim();
+    if (!filter) return null;
+    return {
+        filter,
+        pos: Array.isArray(saved.pos) ? saved.pos.map(String) : [],
+        params: bag(saved.params),
     };
 }
 

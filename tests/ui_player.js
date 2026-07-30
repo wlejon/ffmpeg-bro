@@ -1542,4 +1542,155 @@ if (soundOnly) {
     screenshot('out/14-sound-only.png');
 }
 
+// ── a generator has a place on the timeline ────────────────────────────────
+//
+// A `testsrc` is a clip. So it has a lane, a bar, in and out points, a
+// rectangle, and a `<video>` of its own — and everything it does here is done
+// by the code a clip of a file goes through, which is the whole claim being
+// checked. Four things need a test of their own because they are the four
+// places a generator is not a file:
+//
+//   - **it needs no fixture at all**, which is why this section is
+//     unconditional: libavfilter makes its own pictures;
+//   - **its length is a decision** — `media` starts at `GENERATOR_SECONDS` and a
+//     trim of the tail *raises* it, where a file's is a wall;
+//   - **it takes no `-i` number**, so a file beside it is still `[0:v]`;
+//   - **it is not the master clock**, because a lavfi source cannot seek.
+
+console.log('\na generator on the timeline');
+{
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+    A.setLayout('stack');
+
+    const kinds = A.generators.pictureSources().map((f) => f.name);
+    ok(kinds.indexOf('testsrc') >= 0 && kinds.indexOf('color') >= 0,
+       `libavfilter offers ${kinds.length} picture sources, testsrc and color among them`);
+    ok(kinds.indexOf('sine') < 0 && kinds.indexOf('anullsrc') < 0,
+       'and no sound sources, because a clip on the timeline is somewhere a picture goes');
+    ok(A.addGenerator('sine') === null,
+       'asking for one anyway is refused rather than laid out');
+
+    const gen = A.addGenerator('testsrc');
+    pump(200);
+    ok(!!gen && A.isGenerator(gen), `laid out ${gen.name}`);
+    ok(A.project.clips.length === 1 && A.project.clips[0] === gen,
+       'as an ordinary clip in the ordinary list');
+    ok(gen.length === 5 && gen.media === 5,
+       `five seconds long, which is a decision rather than a measurement ` +
+       `(media ${gen.media})`);
+    ok(gen.width === 1920 && gen.height === 1080,
+       `at the canvas's size, ${gen.width}×${gen.height}, because testsrc has a ` +
+       'size option for the canvas to be written into');
+    ok(!gen.input && !!gen.generator && gen.generator.filter === 'testsrc',
+       'with a generator spec where a clip of a file has an input');
+
+    // The picture, through the real backend: `-f lavfi -i testsrc` is an `-i`
+    // like any other, so this is the same decoder and the same renderer every
+    // other clip uses. Not a preview path.
+    ok(!!gen.video && /^\/@input\//.test(gen.video.src),
+       `its <video> plays the input registered for it (${gen.video.src})`);
+    A.setPlayhead(1);
+    pump(400);
+    const place = A.viewer.placement(gen, 1920, 1080);
+    ok(place.w === 1920 && place.h === 1080,
+       `and it has a rectangle on the canvas (${place.w}×${place.h})`);
+    ok(gen.frame.style.display === 'block', 'with its window shown');
+
+    // The bar. Forced to redraw first, because everything below reads pixels
+    // that were painted before this section existed.
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(40);
+    ok(litFraction(v1().canvas) > 0.3,
+       'the lane draws a bar for it, in a colour of its own and with no filmstrip');
+    ok(!gen.film && !gen.peaks,
+       'neither of which was asked for: a lavfi source cannot seek to a thumbnail ' +
+       'and has no sound to draw');
+
+    // Dragging it, and trimming it out past the length it was made with.
+    const lane = rectOf(v1().lane);
+    const y = lane.top + lane.height / 2;
+    A.select(gen);
+    const from = lane.left + A.timeline.timeToX(1);
+    const to = lane.left + A.timeline.timeToX(2.5);
+    mouseDown(from, y);
+    mouseMove(from + 10, y);
+    mouseMove(to, y);
+    mouseUp(to, y);
+    pump(80);
+    ok(gen.start > 0.5, `dragging the bar moved it to ${gen.start.toFixed(2)}s`);
+
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(40);
+    const wide = rectOf(v1().lane);
+    const wasLen = gen.length, wasMedia = gen.media;
+    const edge = wide.left + A.timeline.timeToX(gen.start + gen.length);
+    const out = wide.left + A.timeline.timeToX(gen.start + gen.length + 2);
+    mouseDown(edge, wide.top + wide.height / 2);
+    mouseMove(edge + 10, wide.top + wide.height / 2);
+    mouseMove(out, wide.top + wide.height / 2);
+    mouseUp(out, wide.top + wide.height / 2);
+    pump(80);
+    ok(gen.length > wasLen,
+       `trimming the tail outward made it longer, ${wasLen.toFixed(2)} → ` +
+       `${gen.length.toFixed(2)}s — a generator produces for as long as it is asked to`);
+    ok(gen.media > wasMedia && Number.isFinite(gen.media),
+       `and raised how much of it there is to ${gen.media.toFixed(2)}s, which is a ` +
+       'real number and not Infinity');
+    ok(Number.isFinite(A.timeline.laneWidthPx()) && A.project.clips.length === 1,
+       'so the edit still has a finite length for the ruler to be drawn against');
+
+    // A generator is not the clock. With a file clip under the playhead it is
+    // the file that drives the transport, whichever is on top — a lavfi source
+    // has no `read_seek`, so a scrub would be refused rather than obeyed.
+    const beside = A.open(media);
+    pump(200);
+    if (beside) {
+        beside.track = 1;
+        beside.start = gen.start;
+        A.changed('moved');
+        A.setPlayhead(gen.start + 0.5);
+        pump(200);
+        ok(A.activeClip() === beside,
+           'with a file clip under the playhead the file is the master clock, ' +
+           'even with the generator on the track above it');
+
+        // And the `-i` numbering counts files, not clips: the generator is
+        // clip 0 and the file is still `[0:v]`.
+        const spec = A.exporter.buildSpec();
+        const g = A.filtergraph(spec, A.exporter.specSources(),
+                                { overlay: A.graph.overlay.current() });
+        ok(g.ok && g.chains.some((c) => c.indexOf('[0:v]') === 0),
+           'the file beside it is still -i number zero, because a generator is not one');
+        ok(g.ok && g.chains.some((c) => c.indexOf('testsrc=') === 0),
+           'and the generator is a chain of its own, headed by the filter itself');
+        A.select(beside);
+        A.removeSelection();
+        pump(120);
+    }
+
+    // With only generators under the playhead there is no decoder to ask, so
+    // the transport runs on the wall clock — the same arm a gap uses.
+    A.setPlayhead(gen.start);
+    pump(60);
+    const t0 = A.transport.t;
+    A.play();
+    pump(700);
+    A.pause();
+    pump(60);
+    ok(A.transport.t > t0 + 0.15,
+       `a timeline of nothing but a generator plays (${t0.toFixed(2)} → ` +
+       `${A.transport.t.toFixed(2)}s)`);
+
+    flush();
+    screenshot('out/15-generator.png');
+
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+}
+
 console.log(`\n${checks} checks passed`);

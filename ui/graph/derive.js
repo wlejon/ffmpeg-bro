@@ -33,6 +33,17 @@
 // cuts the decoded format. That is the sort of thing the remaining 39 dB is
 // made of.
 //
+// **A clip has one of two things at the head of its run.** Usually an `-i`: a
+// file, opened the way its input says, read for the streams this render wants.
+// For a **generator clip** — a `testsrc` or a `color` laid out on the timeline,
+// see ui/generator.js — it is the filter itself, which makes its pictures out of
+// nothing and needs no file. Everything below that node is written by the same
+// code for both, because it is the same edit: the same `trim`, the same clock,
+// the same crop, the same `scale` into the same rectangle, the same `overlay`.
+// A generator's node is *derived*, so it is rebuilt on every timeline edit and
+// vanishes when the bar is deleted; a generator somebody placed by hand on the
+// Graph stage is a user node and is untouched by any of this.
+//
 // The input is `buildSpec()`'s output and nothing else, which is the same
 // object the renderer is driven from — so this cannot describe a render the
 // application would not perform. When an edit cannot be expressed faithfully
@@ -43,6 +54,7 @@
 import { makeGraph, byKey } from './model.js';
 import { padsOf, isSource } from './filters.js';
 import { problems } from './check.js';
+import { whyNotAClip } from '../generator.js';
 
 /// Numbers, short. ffmpeg's parser is happy with any of these, and a graph full
 /// of `0.30000000000000004` is one nobody reads.
@@ -339,6 +351,13 @@ function inputOnDevice(spec, index) {
 /// that does not carry it answers yes**, which is what this always assumed and
 /// is what keeps every hand-written spec in `tests/` deriving exactly as it did.
 function clipHasSound(spec, clip) {
+    // A generator has no `-i` for the mix to read, so there is no pad and the
+    // question is not "was it muted". Said before the list is consulted because
+    // `clip.input` is -1 for one and `list[-1]` is undefined, which the rule
+    // below reads as *yes* — an `[-1:a]atrim…` chain reading a stream that does
+    // not exist. Sound sources are not clips (see ui/generator.js): one is wired
+    // to the mix on the Graph stage, where it has a pad to be wired to.
+    if (clip.generator) return false;
     const list = Array.isArray(spec.inputInfo) ? spec.inputInfo : [];
     const info = list[clip.input];
     if (!info || !Array.isArray(info.streams)) return true;
@@ -364,6 +383,24 @@ function clipHasPicture(spec, clip) {
     if (!info || !Array.isArray(info.streams)) return true;
     return info.streams.indexOf('v') >= 0;
 }
+
+/// The generator a clip is of, or null for a clip of a file.
+///
+/// **A clip has one source or the other**, and which it is decides only what sits
+/// at the head of its run: a filter that makes pictures out of nothing, or an
+/// `-i` its pictures are decoded from. Everything below that node — the trim, the
+/// clock, the crop, the scale, the opacity and the overlay — is written by the
+/// same code for both, because it is the same edit.
+const generatorOf = (clip) =>
+    (clip && clip.generator && clip.generator.filter) ? clip.generator : null;
+
+// `whyNotAClip` is imported rather than written again: **refused rather than
+// approximated** is this file's rule, and the case it protects against is a
+// filter with an input pad at the head of a clip's run — a graph with an empty
+// socket in it, which libavfilter refuses after this application has drawn it
+// with a message about a pad rather than about the thing somebody did. The door a
+// person comes through asks the same question before there is a clip; this asks
+// it of the *spec*, which is where a hand-written one in a test arrives.
 
 /// Which control on the properties panel a node's value came from — so that a
 /// lock can be reported *there*, against the field it outranks, rather than
@@ -828,10 +865,19 @@ export function derive(spec, sources, opts = {}) {
         const clip = spec.clips[ci];
         const w = windowOf(clip, start, end);
         if (!w) continue;                       // outside the range; not an error
+        // A generator is a picture by construction — that is what makes it
+        // something a clip can be cut from — and it is asked of the clip rather
+        // than of `inputInfo`, which describes the `-i`s and knows nothing about
+        // one.
+        const gen = generatorOf(clip);
+        if (gen) {
+            const bad = whyNotAClip(gen);
+            if (bad) return refuse(bad);
+        }
         // A clip that puts nothing on the canvas is not asked for a rectangle.
         // It is still kept — it is in the mix — and it still gets an `-i`, so
         // the numbering the graph gives its pads counts it like any other.
-        const picture = clipHasPicture(spec, clip);
+        const picture = gen ? true : clipHasPicture(spec, clip);
         const c = cropOf(clip);
         if (picture) {
             if (c.l + c.r >= 1 || c.t + c.b >= 1)
@@ -840,7 +886,7 @@ export function derive(spec, sources, opts = {}) {
                 ![clip.x, clip.y, clip.w, clip.h].every(Number.isFinite))
                 return refuse('a clip has no rectangle to be drawn in');
         }
-        kept.push({ clip, w, picture, i: kept.length, key: clipKey(clip, ci),
+        kept.push({ clip, w, picture, gen, i: kept.length, key: clipKey(clip, ci),
                     src: Array.isArray(sources) ? sources[ci] : null });
     }
     // The clips that put something on the canvas, in paint order. Everything
@@ -914,11 +960,45 @@ export function derive(spec, sources, opts = {}) {
     // are not: one demuxer, one seek, one row on the Sources stage.
     const inputs = new Map();
 
+    // The `-i` numbers this graph hands out, in the order it reads them. A
+    // counter rather than a position in `kept`, because a generator clip is not
+    // an `-i`: numbered by position, a `testsrc` between two files would leave a
+    // hole in the list and `[2:v]` would name the wrong file. The graph inputs
+    // below carry on from the same counter for the same reason.
+    let nextInput = 0;
+
     // Nodes are pushed in the order their chains are printed in, and print.js
     // walks the array — so a clip's whole run goes down before the next clip's,
     // and the overlays after all of them.
     kept.forEach((k) => {
-        const { clip, w, src, i, key } = k;
+        const { clip, w, src, i, key, gen } = k;
+        // **What sits at the head of this clip's run**, which is the one thing a
+        // generator changes: a filter that makes pictures out of nothing, where a
+        // clip of a file has the `-i` its pictures are decoded from. Derived like
+        // everything else here — it is rebuilt on every timeline edit, and a
+        // generator somebody placed *by hand* on the Graph stage is a different
+        // node with no lane and no bar, exactly as it was.
+        if (gen) {
+            const source = g.add({ filter: gen.filter, anchor: `${key}/gen`,
+                                   pos: gen.pos || [], params: gen.params || {} });
+            // The same run as a file clip's, written by the same function: cut it
+            // out of the source (`trim` is what bounds an endless generator, and
+            // is why the clip's own length is the only thing that says how long
+            // one is), move it onto the render's clock, crop, size, opacity. No
+            // source colour is passed, because there is no file to have been
+            // tagged — swscale's own default is what `ffmpeg -f lavfi -i testsrc`
+            // gets and therefore what this render and the printed command both
+            // do.
+            k.head = g.run({ node: source, out: 0 },
+                           videoSteps(clip, w, null, key, off, false), `v${i}`);
+            // The same two insert points, under the same names, so a `drawtext`
+            // over a colour card is placed the way a `drawtext` over a shot is —
+            // and so an overlay written down against `clip:7/after-scale` means
+            // the same thing whichever kind of clip 7 turned out to be.
+            point(`${key}/after-decode`, source, 0, 'v', 'after the generator');
+            point(`${key}/after-scale`, g.byAnchor(`${key}/format`), 0, 'v', 'after scale');
+            return;
+        }
         // `index` is the `-i` number this graph gives the input and `input` is
         // which of the spec's inputs that is. Two numbers because they count
         // different things: a graph numbers the pads it reads, in the order it
@@ -933,7 +1013,7 @@ export function derive(spec, sources, opts = {}) {
         // is the renderer's seek (`ExportGraphInput::from`). Where those frames
         // *land* is not here: it is the `setpts` below, which is the node that
         // moves them, and it says so in `moves`.
-        const input = g.add({ kind: 'input', index: i, path: clip.path,
+        const input = g.add({ kind: 'input', index: nextInput++, path: clip.path,
                               input: clip.input === undefined ? -1 : clip.input,
                               anchor: `${key}/in`, from: w.srcIn,
                               onDevice, outs: [] });
@@ -995,7 +1075,7 @@ export function derive(spec, sources, opts = {}) {
             // Two numbers, counting different things, exactly as a clip's input
             // node carries: `index` is the `-i` this graph gives the pad and
             // `input` is which of the document's inputs that is.
-            index: kept.length + graphInputs.length,
+            index: nextInput++,
             input: info.index, path: info.path, title: info.name,
             // The same question a clip's input node answers, asked of the same
             // list: a file the graph reads on its own account can decode on a
@@ -1148,8 +1228,14 @@ export function derive(spec, sources, opts = {}) {
     // What is known to differ about *this* render, rather than a fixed
     // disclaimer. A note that is always the same is one nobody reads, and the
     // two that matter are only sometimes true.
+    // A generator is in neither: there is no file for a tag to have been read
+    // off, and no source rate for a fixed-rate walk to disagree with — the
+    // pictures are made by libavfilter inside this very graph, at whatever rate
+    // its arguments asked for. Saying "a source's colour is not known here" about
+    // one would be a caveat that is true of every render containing a `color` and
+    // means nothing about any of them.
     const caveats = [];
-    if (kept.some(({ src }) => !src))
+    if (kept.some(({ src, gen }) => !src && !gen))
         caveats.push('a source’s colour is not known here, so swscale guesses ' +
                      'the matrix the renderer reads from the file');
     if (kept.some(({ src }) => src && src.fps > 0 && Math.abs(src.fps - fps) > 0.01))

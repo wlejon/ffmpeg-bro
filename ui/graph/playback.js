@@ -76,6 +76,7 @@
 
 import { derive } from './derive.js';
 import { filterArgs } from './print.js';
+import { inputFor } from '../generator.js';
 
 /// `spec()` — the whole timeline as a render spec, with `origin` set to where
 /// the export range starts so the graph's clock is the render's; `sources()`
@@ -143,9 +144,18 @@ function graphNow(spec) {
     return d.ok && d.graph ? d.graph : null;
 }
 
-/// The input node a clip's run starts at.
+/// The node a clip's run starts at: the `-i` its pictures are decoded from, or —
+/// for a generator clip — the filter that makes them.
+///
+/// Both, because a view is an *input plus chains* and a generator is an input:
+/// `-f lavfi -i testsrc=size=…` is what `ui/generator.js` registered for the
+/// element in the first place, so a `hue` put on a colour card is shown by
+/// exactly the mechanism that shows a `hue` put on a shot. Without this arm the
+/// walk found no head, the chain came back empty, and the clip wore the `fx`
+/// badge for a filter there was nothing standing in the way of.
 function headOf(g, id) {
-    return g.nodes.find((n) => n.kind === 'input' && n.anchor === `clip:${id}/in`) || null;
+    return g.nodes.find((n) => n.anchor === `clip:${id}/in` || n.anchor === `clip:${id}/gen`)
+        || null;
 }
 
 /// What the derivation called a step: `clip:3/format` → `format`.
@@ -273,7 +283,15 @@ function askFor(g, spec, clip) {
     // The `-i` the render would open, taken from the spec the graph was derived
     // from — so playback opens the file with the demuxer, the options and the
     // window the render opens it with, rather than with a path.
-    const input = head && head.input >= 0 && spec.inputs ? spec.inputs[head.input] : null;
+    //
+    // A generator clip has no `-i` in the render at all: its picture is a filter
+    // in the graph. What it has is the *other* spelling of the same picture — `-f
+    // lavfi -i testsrc=…`, which is what its bar is already playing — so a view
+    // over it is that input with the chain on top, and `inputFor()` is the one
+    // place that shape is written.
+    const input = clip.generator ? inputFor(clip.generator)
+                : head && head.input >= 0 && spec.inputs ? spec.inputs[head.input]
+                : null;
     if (!input) return { why: 'this clip has no input for playback to open' };
 
     // What the chain did to the clock, to be undone on the way out. The

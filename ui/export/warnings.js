@@ -18,7 +18,7 @@ import { readsInput, readStream, subtitleCodecsOf,
 import { parsePad, isPad } from './pads.js';
 import { isEmpty as noUserNodes } from '../graph/overlay.js';
 import { whereIs } from '../graph/check.js';
-import { range, freshSpec, currentSpec, currentGraph } from './spec.js';
+import { range, freshSpec, currentSpec, currentGraph, needsGraph } from './spec.js';
 import { deviceOfEncoder } from '../hardware.js';
 
 /// How many frames this render will write. A single-frame range written into
@@ -433,10 +433,21 @@ export function warnings() {
     // `overlay` you placed a minute ago has nothing on it.
     out.push(...copyWarnings(settings.streams));
 
-    if (!noUserNodes() && !currentSpec().filterGraph) {
+    // **Two reasons a render needs the graph and one sentence each**, because
+    // what is lost differs: a filter is not applied, and a generator clip has
+    // nothing at all for the compositor to read — there is no `-i` behind it, so
+    // the render fails on an empty path rather than coming out plainer than
+    // asked for. `needsGraph()` is the one place that knows the two reasons.
+    if (needsGraph(currentSpec()) && !currentSpec().filterGraph) {
         const why = currentGraph() || {};
-        out.push(`this render would go through the internal compositor without your ` +
-                 `filters — ${why.reason || 'the graph cannot be expressed for this edit'}`);
+        const said = why.reason || 'the graph cannot be expressed for this edit';
+        const generators = (currentSpec().clips || []).filter((c) => c && c.generator).length;
+        const many = `${generators} generators on the timeline are`;
+        out.push(generators
+            ? `${generators === 1 ? 'a generator on the timeline is' : many} rendered by the ` +
+              `filter graph, and this render has none — ${said}`
+            : `this render would go through the internal compositor without your ` +
+              `filters — ${said}`);
     }
 
     out.push(...padWarnings(settings.streams));

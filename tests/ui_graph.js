@@ -914,6 +914,93 @@ console.log('\na node that produces something out of nothing');
     overlay.clear();
 }
 
+console.log('\na generator that is a clip, not a node');
+{
+    overlay.clear();
+    // The other half of the section above, and the difference is the whole
+    // point. That generator is a node somebody *placed*: it is in the overlay, it
+    // has no lane and no bar, and it survives every timeline edit. This one is a
+    // **clip** — a track, a start, a length, in and out points — so its node is
+    // *derived*: made here from the edit, rebuilt on every drag, and gone when
+    // the bar is deleted. Nothing is in the overlay at all.
+    const spec = oneClip({ generator: { filter: 'testsrc', pos: [],
+                                        params: { size: '1920x1080', rate: '30' } },
+                           input: -1, path: '' });
+    const d = derive(spec, null, { overlay: overlay.current() });
+    ok(d.ok, `a clip of a generator derives: ${d.reason || ''}`);
+    same(d.problems.length, 0, `and runs: ${d.problems.map((p) => p.reason).join(' | ')}`);
+
+    const source = d.graph.byAnchor('clip:7/gen');
+    ok(!!source && source.filter === 'testsrc',
+       'the filter is the head of the clip’s run, where the `-i` goes for a file');
+    ok(!!source && source.derived,
+       'and it is derived, so the next timeline edit rebuilds it');
+    ok(!d.graph.nodes.some((n) => n.kind === 'input'),
+       'there is no input node, because a generator is not an -i');
+    ok(!overlay.nodes().length && overlay.isEmpty(),
+       'and nothing about it is in the overlay: the clip is where it lives');
+
+    // The run below it is a file clip's run, written by the same code.
+    const chain = chainFor(d, 'v0');
+    ok(/^testsrc=size=1920x1080:rate=30,trim=start=0:end=4,setpts=/.test(chain),
+       `cut and moved like any clip: ${chain}`);
+    ok(/scale=1920:1080,format=rgba$|scale=1920:1080,format=rgba\[/.test(chain + '['),
+       'sized into its rectangle and taken into the compositing space');
+    ok(!/in_color_matrix/.test(chain),
+       'with no source matrix written, because there is no file to have been tagged');
+    ok(!d.caveats.some((c) => /colour is not known/.test(c)),
+       'and no caveat about a colour nobody could have known');
+    ok(!chainFor(d, 'a0') && !print(d.graph).audio,
+       'nothing is mapped for its sound: a generator has no pad for the mix to read');
+    ok(!!d.graph.byAnchor('base'),
+       'the canvas is still there, because there is a clip to lay over it');
+
+    // The insert points are a clip's, under the same names — so `clip:7/…` means
+    // the same thing whichever kind of clip 7 turned out to be.
+    const points = d.points.map((pt) => pt.id);
+    ok(points.indexOf('clip:7/after-decode') >= 0 &&
+       points.indexOf('clip:7/after-scale') >= 0,
+       `and a filter can be put on it at the usual two places: ${points.join(' ')}`);
+
+    // A generator beside a file: the file keeps `-i` zero, because the numbering
+    // counts inputs and a generator is not one.
+    const both = oneClip();
+    both.clips.push(Object.assign({}, both.clips[0], {
+        id: 8, input: -1, path: '',
+        generator: { filter: 'color', pos: [], params: { size: '1920x1080' } },
+    }));
+    both.inputs = [{ path: 'a.mp4' }];
+    both.inputInfo = [{ id: 'in1', name: 'a.mp4', path: 'a.mp4', streams: ['v', 'a'] }];
+    const two = derive(both, null, { overlay: overlay.current() });
+    ok(two.ok && two.problems.length === 0, 'a generator beside a file derives and runs');
+    const printed = print(two.graph);
+    same(printed.inputs.length, 1, 'one -i for two clips');
+    same(printed.inputs[0], 'a.mp4', 'and it is the file');
+    ok(printed.chains.some((c) => c.indexOf('[0:v]') === 0),
+       'so the file’s picture is still [0:v] with a generator in front of it in the list');
+    const run = globalThis.__ffmpegBro.renderGraph(both, null, { overlay: overlay.current() });
+    ok(run.ok && run.filterInputs.length === 2 &&
+       run.filterInputs.every((f) => f.path === 'a.mp4'),
+       'and the renderer is told to open one file, for its two pads');
+
+    // **Refused rather than approximated.** A filter that reads a pad cannot be
+    // the head of a clip's run, and a sound source is not a picture — both are
+    // graphs libavfilter would refuse after this application had drawn them.
+    const reads = derive(oneClip({ generator: { filter: 'hflip', pos: [], params: {} },
+                                   input: -1, path: '' }), null, {});
+    ok(!reads.ok && /reads a pad/.test(reads.reason || ''),
+       `a filter with an input pad is refused: ${reads.reason || ''}`);
+    const heard = derive(oneClip({ generator: { filter: 'sine', pos: [], params: {} },
+                                   input: -1, path: '' }), null, {});
+    ok(!heard.ok && /sound rather than pictures/.test(heard.reason || ''),
+       `and so is a sound source: ${heard.reason || ''}`);
+    const absent = derive(oneClip({ generator: { filter: 'no_such_filter', pos: [], params: {} },
+                                    input: -1, path: '' }), null, {});
+    ok(!absent.ok && /no filter called/.test(absent.reason || ''),
+       `and a filter this build does not have: ${absent.reason || ''}`);
+    overlay.clear();
+}
+
 console.log('\na file the graph reads that no clip is cut from');
 {
     overlay.clear();

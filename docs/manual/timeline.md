@@ -106,6 +106,64 @@ deleting the other is how you take a piece out of the middle.
 selection, `Ctrl`+`A` takes everything, `Esc` narrows back to one. `Delete`
 removes the lot. Drag the ruler or A1 to scrub.
 
+## A generator, laid out like a clip
+
+`ffmpeg -f lavfi -i testsrc` is one of the first commands anybody runs. **Generator**
+in the timeline bar lays one out here: pick `testsrc`, `color`, `smptebars`,
+`mandelbrot` — every filter libavfilter declares with no input pads and a picture
+on its output — and what appears on a lane is a **clip**.
+
+That is the whole design and not a turn of phrase. It has a track, a start, a
+length, in and out points, a rectangle on the canvas, a selection ring, and a
+`<video>` of its own showing the real thing on the program monitor. Drag it, trim
+it, `Alt`-drag it to ripple, roll the cut after it, slip inside it, split it,
+stack it under a title, crop it, fade it with `Opacity` — none of that is a second
+implementation of anything. The bar is drawn in a colour of its own with the
+command that makes it written along it, and it carries no filmstrip and nothing on
+A1, because there are no thumbnails to grab from a source that cannot be seeked
+and no sound in it to draw.
+
+**How long one is is a decision, not a measurement.** A `color` is infinite:
+libavfilter goes on producing frames for as long as something pulls them, so unlike
+a file there is nothing to discover. One arrives five seconds long — long enough to
+see and short enough to trim, and no dialog, because a question with no information
+in it is worse than a default. Drag its end *outward* and it gets longer: asking a
+`testsrc` for another ten seconds is a request it answers. That is the same
+convention this application already follows for [an endless
+input](sources.md) — `-t` is the only thing that can say — with the number kept on
+the clip, so it travels in the [document](document.md) and comes back with the
+edit.
+
+**Its arguments are one line, on the properties panel.** `size=1920x1080:rate=25`,
+exactly what you would have typed after `-f lavfi -i`, with the filter's own
+description under it. A new one takes the canvas's size and rate where the filter
+has options to put them, so a test pattern dropped on a 1080p edit is 1080p rather
+than libavfilter's 320×240 default. An option the filter does not have is refused
+in libavfilter's own words and nothing changes; the full option table, drawn per
+option, is on that filter's card on the [Graph stage](graph.md).
+
+**A sound source is not a clip.** `sine` and `anullsrc` are sources too, and they
+are deliberately not in the list: a bar with no picture would have nothing for the
+canvas and no length anything on screen states. One of those is a node wired to the
+mix on the Graph stage, where it has a pad to be wired to.
+
+Two things about a generator are genuinely not like a file, and both come from the
+same fact — libavfilter's sources produce forward and the `lavfi` demuxer cannot
+seek. It is never the **master clock**: with a file clip under the playhead the
+file drives the transport even with the generator on the lane above it, and a
+timeline of nothing but generators runs on the wall clock, the same way a gap
+between clips does. And the picture on the monitor is the generator *running*
+rather than the generator at the playhead's moment — right for a `color` or a
+`smptebars`, and for a moving pattern it is the pictures without the timecode. `O`
+shows [the render itself](playback.md#the-output-instead-of-the-clips), which is
+that moment exactly.
+
+The [Graph stage](graph.md) draws the filter at the head of the clip's chain,
+where an `-i` would be for a file. It is a **derived** node: rebuilt on every
+timeline edit and gone when you delete the bar. A generator you place on that stage
+by hand is the other thing entirely — a node, with no lane and no bar — and the two
+do not interfere.
+
 ## The sync lock
 
 The padlock beside a track's name says whether that track ripples on its own or

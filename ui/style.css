@@ -641,6 +641,26 @@ input[type=range] { width: 130px; }
 #tl-bar > .track-head + * { margin-left: 0; }
 .tl-hint { font-size: 10px; }
 #tl-zoom { font-size: 10px; }
+/* The generator picker sits in a 30px bar beside 22px buttons, so it is sized to
+   them rather than to the 26px a <select> is everywhere else. Capped in width
+   because the longest name in the registry is `smptehdbars` and the list is not
+   what the bar is for. */
+#gen-pick { height: 22px; font-size: 11px; max-width: 132px; }
+/* A generator's arguments: one line of ffmpeg, so it is monospaced and takes the
+   width of the row rather than a number field's 62px — `size=1920x1080:rate=25`
+   does not fit in one and a value you cannot read is a value you retype. */
+input.gen-args {
+    width: 100%;
+    box-sizing: border-box;
+    height: 20px;
+    background: #0e1014;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+}
 
 /* Track heads line the lanes up under a fixed gutter, the way an edit suite
    stacks V1 over A1. The ruler gets a blank head so it starts at the same x. */

@@ -251,6 +251,15 @@
                     <button id="btn-output" class="text" title="Show the render itself instead of the clips (O)">Output</button>
                     <button id="btn-export" class="text" title="Render the timeline to a file (E)">Export</button>
                 </div>
+                <!-- Something to lay out that is not a file. Every filter
+                     libavfilter declares with no input pads and a picture on its
+                     output — testsrc, color, smptebars, mandelbrot — becomes a
+                     clip here: a lane, a bar, in and out points. The list is the
+                     registry's, filled in by app.js. -->
+                <div class="field">
+                    <label for="gen-pick">Generator</label>
+                    <select id="gen-pick" title="Lay a filter that makes its own pictures on the timeline. It becomes a clip: drag it, trim it, stack it, put a filter on it."></select>
+                </div>
                 <span class="spacer"></span>
                 <span class="dim tl-hint">wheel zooms &middot; shift+wheel pans &middot;
                     drag a clip to move it, its ends to trim, another lane to restack</span>

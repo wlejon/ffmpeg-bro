@@ -19,18 +19,23 @@ Honest list of what does not work:
   same badge covers one chain it need not: a resize on the way in *and* a filter
   of yours below the `scale`, where one reported size cannot say which of the two
   did it.
-- **A generator with a place on the timeline.** A `testsrc` or a `color` plays
-  on the program monitor now — `O` shows
-  [the output itself](playback.md#the-output-instead-of-the-clips), and a render
-  rooted entirely in generators, with nothing on the timeline at all, plays there
-  — so the *picture* is no longer the missing half. What is missing is the edit:
-  a generator has no lane, no bar to drag, no in and out points, and the only
-  thing that says how long one is is its own `d`. Every element the viewer places
-  belongs to something laid out on the timeline — where the picture goes, how
-  long it is there, which moment of it is on screen — and a `color` feeding an
-  `overlay` has none of those. What would close it is a lane that holds a
-  generator as though it were a clip, which is a decision about what an edit
-  *contains* and not about playback.
+- **A generator scrubbed to a moment.** A `testsrc` is a clip now — see [a
+  generator, laid out like a clip](timeline.md#a-generator-laid-out-like-a-clip) —
+  with a lane, a bar, in and out points, a rectangle and a `<video>` of its own
+  playing its `-f lavfi -i` through the same backend every other clip uses. What
+  that element cannot do is go to a moment: libavfilter's sources produce forward
+  and the `lavfi` demuxer has no `read_seek`, so the picture on the monitor is the
+  generator *running* rather than the generator at the playhead. For a `color`,
+  `smptebars` or any other still pattern those are the same picture; for a
+  `testsrc`'s counter or a `mandelbrot`'s zoom they are the right pictures at the
+  wrong moment. For the same reason a generator clip is never the transport's
+  master clock, and a timeline of nothing but generators runs on the wall clock the
+  way a gap between clips does — so frame stepping inside one steps clip to clip.
+  `O` plays [the output itself](playback.md#the-output-instead-of-the-clips) and is
+  that moment exactly. Closing it means the element being a *view* whose chain
+  carries a `trim` at the playhead and is rebuilt on every scrub — a reopen per
+  gesture, which is what `views.define` already costs once per edit — or a seekable
+  source in front of libavfilter's, which libavfilter does not have.
 - **A generator that follows the render on its own.** A source now says when
   its numbers and the render's have drifted apart, and `Match the render` brings
   it up to date in one press — but nothing does it unasked, because a `color`

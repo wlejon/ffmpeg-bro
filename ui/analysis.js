@@ -6,7 +6,7 @@
 // one queue: adding a second clip while the first is still being read waits
 // its turn rather than fighting it for the disk.
 
-import { project, changed, hasPicture } from './project.js';
+import { project, changed, hasPicture, isGenerator } from './project.js';
 
 let worker = null;
 let queued = 0;
@@ -52,6 +52,16 @@ function receive(msg) {
 /// notch. One per two seconds, within sane bounds, is dense enough that the
 /// strip still reads when zoomed in and cheap enough on a long file.
 export function analyzeClip(clip) {
+    // **A generator is read for neither half**, and the two refusals have
+    // different reasons. There is no sound in one, so there is no envelope — the
+    // same argument as a file with no audio track, one step further. And a
+    // filmstrip is grabbed by *seeking* to a time and decoding a frame, which is
+    // the one thing a `-f lavfi` source cannot do: libavfilter's sources produce
+    // forward and the demuxer has no `read_seek`, so every grab after the first
+    // would answer with the frame the reader happened to be sitting on. A lane of
+    // pictures that are not the pictures at those moments is worse than a bar
+    // with no pictures on it, which is what `timeline.js` draws for one.
+    if (isGenerator(clip)) return;
     const count = Math.max(8, Math.min(120, Math.round(clip.length / 2)));
     queued++;
     ensureWorker().postMessage({

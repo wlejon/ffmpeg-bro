@@ -21,6 +21,18 @@ frame. Anything that is not a quarter turn is read as no rotation at all: a size
 can be swapped or not, and a picture drawn at an angle inside a box laid out for
 a rectangle is worse than the picture as it was stored.
 
+**A generator clip is played, and never asked to seek.** Its element is an
+ordinary `<video>` pointed at the `-f lavfi -i testsrc=…` registered for it — the
+same backend, the same decoder, the same renderer, the crossing that already makes
+a lavfi device play in its card on the [Capture stage](capture.md). What it cannot
+do is go to a moment: libavfilter's sources produce forward and the `lavfi` demuxer
+has no seek, so the picture is the generator *running* rather than the generator at
+the playhead. For a `color` or a `smptebars` those are the same picture; for a
+moving pattern it is the right pictures without the timecode. It is also never the
+master clock for that reason — with a file clip under the playhead the file drives
+the transport whichever is on top, and a timeline of nothing but generators runs on
+the wall clock the way a gap does. `O` below shows the moment exactly.
+
 ## The output, instead of the clips
 
 `O`, or **Output** on the timeline bar, puts the *render* on the program monitor
@@ -34,9 +46,13 @@ perform.
 **It exists for the three things one element per clip cannot show**, all of them
 things that are not about one clip:
 
-- a **generated source** — a `testsrc`, a `color`, a `movie` — which is a node
-  with no clip, so there is no element on the monitor it could be. A render
-  rooted entirely in generators, with nothing on the timeline at all, plays here.
+- a **generated source placed on the graph** — a `testsrc`, a `color`, a `movie`
+  wired up on the [Graph stage](graph.md) — which is a node with no clip, so there
+  is no element on the monitor it could be. A render rooted entirely in generators,
+  with nothing on the timeline at all, plays here. A generator [laid out on the
+  timeline](timeline.md#a-generator-laid-out-like-a-clip) is the other case and
+  needs none of this: it is a clip, so it has an element of its own, playing its
+  own `-f lavfi -i` through the same backend every other clip goes through.
 - a **filter over the whole canvas**: a burn-in after the composite has no single
   picture to run on, because the composite is one element laid over another.
 - a **filter that resizes a clip's picture below the point where the clip is

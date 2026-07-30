@@ -37,7 +37,7 @@
 //     what was asked for.
 
 import { project, duration, clipsAt, nextClipAfter, sourceTime,
-         selectFollow } from './project.js';
+         selectFollow, isGenerator } from './project.js';
 import * as viewer from './viewer.js';
 import * as output from './output.js';
 
@@ -82,9 +82,17 @@ export function setPlayhead(t, seek = true) {
     const shown = !output.isOn();
     for (const clip of here) {
         applyAudio(clip);
-        const want = sourceTime(clip, transport.t);
-        if ((seek || changedSet) && Math.abs(clip.video.currentTime - want) > 0.0005)
-            clip.video.currentTime = want;
+        // **A generator is not sent anywhere.** libavfilter's sources produce
+        // forward and the `lavfi` demuxer has no `read_seek`, so a `currentTime`
+        // written here is a seek libav refuses with a line in the log — and the
+        // frames it is already making are the frames the generator makes. It is
+        // played and left alone, which is also why `viewer.activeClip()` will not
+        // take one as the master clock.
+        if (!isGenerator(clip)) {
+            const want = sourceTime(clip, transport.t);
+            if ((seek || changedSet) && Math.abs(clip.video.currentTime - want) > 0.0005)
+                clip.video.currentTime = want;
+        }
         if (transport.playing && shown && clip.video.paused) clip.video.play();
     }
     if (seek) output.moveTo(transport.t);
@@ -268,8 +276,12 @@ function resync(master) {
     if (all.length < 2) return;
     for (const c of all) {
         if (c === master || !c.video) continue;
-        const want = sourceTime(c, transport.t);
-        if (Math.abs(c.video.currentTime - want) > DRIFT_LIMIT) c.video.currentTime = want;
+        // A generator has nowhere to be chased to — see `setPlayhead`. It is
+        // still kept running, because it is on the screen.
+        if (!isGenerator(c)) {
+            const want = sourceTime(c, transport.t);
+            if (Math.abs(c.video.currentTime - want) > DRIFT_LIMIT) c.video.currentTime = want;
+        }
         if (c.video.paused && !c.video.ended) c.video.play();
     }
 }
