@@ -84,6 +84,29 @@ export function fitView() {
     draw();
 }
 
+/// Put the window back where a document says it was left.
+///
+/// The pair `getView()` hands out, and it takes the pair rather than a zoom
+/// factor for the reason `getView()` gives one: a factor is `total / span` and
+/// the total is the edit's own length, so a document opened after a clip grew
+/// would come back looking at somewhere it never was. Clamped like every other
+/// move of the window, so a span wider than the edit is simply the whole edit —
+/// which is what `fitView()` is, and is what a document with no window written
+/// gets from the caller instead.
+///
+/// Refused for a span of zero rather than treated as "fit": a document that did
+/// not say has to be answered by the caller, since only the caller knows whether
+/// it is an Open (fit it) or something else.
+export function setView(start, span) {
+    const s = Number(span);
+    if (!(s > 0)) return false;
+    view.span = s;
+    view.start = Math.max(0, Number(start) || 0);
+    clampView();
+    draw();
+    return true;
+}
+
 /// Zoom keeping `anchor` seconds under the same pixel. Without the anchor,
 /// zooming walks away from whatever you were looking at.
 export function zoomBy(factor, anchor) {

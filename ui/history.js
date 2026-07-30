@@ -36,6 +36,12 @@
 // history in place. The output track needs the same freshness for the same
 // reason: `store.adopt()` assigns the bags it is given straight onto `settings`.
 //
+// **A state is the edit and nothing else.** Two keys of the snapshot are taken
+// out and each for its own reason: `output` because it is the other track's, and
+// `session` because it is *neither* track's — where the playhead is standing is
+// not something anybody did. See the `edit` track below, which is where both
+// deletions live because that is where a step is defined.
+//
 // **A gesture is one step, not a hundred.** A clip dragged along the timeline
 // arrives as `move` per mouse position and one `moved` at the end, so `move` is
 // ignored outright and the `moved` records the state from before the drag began.
@@ -164,15 +170,34 @@ function track(read, write) {
     };
 }
 
-/// The edit: a document **minus its `output`**, which is the other track's.
+/// The edit: a document **minus its `output`**, which is the other track's, and
+/// **minus its `session`**, which is nobody's.
 ///
 /// `open()` reconciles rather than rebuilds, so a state where one clip's crop
 /// differs costs one clip's worth of work and the elements playing the others
 /// never learn anything happened.
+///
+/// **This is where a step of history is defined, so this is where the session is
+/// taken out.** A document holds where you were in it — the selected clip, the
+/// playhead, the stage, the timeline's zoom — and every one of those is the
+/// running application rather than the edit. Left in, all three of this file's
+/// rules break at once: `now === baseline` stops meaning "the edit is unchanged",
+/// so scrubbing becomes a hundred steps and a genuine edit made after one gets
+/// coalesced into it; the stack fills with states that differ in nothing anybody
+/// did; and `Ctrl-Z` starts answering with a playhead somewhere else and possibly
+/// a different stage, which is the one thing the two tracks exist to prevent.
+///
+/// Stripped **here rather than in `snapshot()`**, and that is the whole point:
+/// `snapshot()` is the document and the document does hold a session. Stripped in
+/// `open()` instead would be the other wrong home — it would make an *Open*
+/// unable to restore one, which is the feature. So it is taken out at the one
+/// place that says what a *step* is, beside `output`, which is out for the same
+/// shape of reason and a weaker one.
 const edit = track(
     () => {
         const d = snapshot();
         delete d.output;
+        delete d.session;
         return JSON.stringify(d);
     },
     (d) => open(d));

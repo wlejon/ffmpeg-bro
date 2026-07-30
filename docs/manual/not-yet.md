@@ -38,15 +38,6 @@ Honest list of what does not work:
   way to tell those apart from the node alone. Deciding it would mean tracing
   what each generator reaches and what resizes it on the way, which is a real
   piece of work and not a missing line.
-- **A document that remembers where you were in it.** The edit is a file now —
-  see [The document](document.md) — and what a document holds is the *edit*: the
-  inputs, the clips, the canvas, the graph and the output settings, with the ids
-  that the graph's anchors and source nodes are written against. What it does not
-  hold is the session around it: which clip was selected, where the playhead was
-  standing, which stage you were on, how far the timeline was zoomed. Those are
-  the running application rather than the edit, and adding them would mean
-  deciding whether opening somebody else's document should move *your* playhead —
-  which is a question about what a document is for, not a missing field.
 - **Animating a value.** `enable` turns a filter on and off for a span and that
   is the whole of what it does — there is no interpolation anywhere in ffmpeg's
   timeline support, so a value cannot be ramped by it. What ffmpeg has instead is

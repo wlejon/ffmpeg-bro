@@ -22,7 +22,7 @@ unsaved. A document named on the command line opens as one:
 
 A `.fbro` file is indented JSON, on purpose: it describes an edit, it belongs in
 a repository beside the footage, and a diff of one should be readable. It has
-five parts.
+six parts.
 
 - **`inputs`** — one entry per `-i`, **in order**, because the order is the `-i`
   number that a filtergraph's `[0:v]` counts in. Each is written as *what opens
@@ -40,8 +40,10 @@ five parts.
 - **`output`** — what [Encode and Write](output.md) are set to, plus the three
   things that only mean something inside one edit: the chapters, the render
   range, and the output path.
+- **`session`** — where you were in it: the selected clip, the playhead, the
+  stage, and the timeline's window. The one part that is not the edit.
 
-That last split is the same rule the workspace is built on, read the other way
+The `output` split is the same rule the workspace is built on, read the other way
 round. The application already remembered your encoder, your container and your
 house rules about proxies in `localStorage`, because the second render is nearly
 always the first one again — but it deliberately did *not* remember a chapter
@@ -49,7 +51,42 @@ called "Opening, 0 to 12.5 s", because carrying that into the next edit would pu
 a mark somewhere it means nothing. Inside the document that timeline is in, it is
 exactly right.
 
-It is also what `Ctrl`+`N` keeps and drops. A new document empties the timeline,
+## Where you were in it
+
+Open a document and it comes back where it was left: the clip that was selected
+is selected, the playhead is where it was standing, the timeline is at the zoom
+it was at, and you are on the stage the last save was made from.
+
+**Including somebody else's document.** That was the question that kept the
+session out for a while — whether opening a file you were handed should move
+*your* playhead — and the answer is yes, because a `.fbro` is a handoff of work
+in progress rather than an archive of a finished one. Handing over the
+arrangement while throwing away where the work had got to is handing over half of
+it. There is no "only my own documents" case, because that would mean identity on
+the file, and nothing in a document is about who wrote it.
+
+Two things it deliberately is not.
+
+It is **not an undoable act**. `Ctrl`+`Z` is the edit and nothing else — the
+session is taken out of a history state at the one place that decides what a step
+is — so scrubbing does not fill the stack, and a press never answers by moving
+the playhead or switching stages.
+
+It **does not mark the document unsaved**. The dot beside the name is about work
+you could lose; a dot that appeared because you clicked a clip would be a dot
+that means nothing. So the session written is the session as of the last save,
+and moving the playhead afterwards costs nothing and says nothing.
+
+A document that carries no session at all — one written before there was one, one
+hand-edited, one that names a clip that is no longer in it — opens at the top of
+the timeline, fitted, with nothing selected. A named clip that has gone comes back
+as *nothing selected* rather than as whichever clip now happens to have that
+number; a clip id is a name the graph's anchors are written against, and picking
+the wrong shot looks exactly like having picked it.
+
+## What `Ctrl`+`N` keeps
+
+It is the same split `output` is built on. A new document empties the timeline,
 the inputs and the graph, and clears exactly those three — the chapters, the
 range and the output path — because each names something about an edit that has
 just gone. Your encoder, container, quality and render size stay, because those
@@ -131,9 +168,13 @@ having walked there.
 
 Two things it deliberately does not disturb. Opening a document starts the
 history again, because undoing across an Open would land in the middle of
-somebody else's edit. And an undo leaves the playhead and the timeline's zoom
-exactly where they are — putting a crop back while you are looking at a shot two
-minutes in should leave you looking at that shot.
+somebody else's edit. And an undo leaves the playhead, the selection, the stage
+and the timeline's zoom exactly where they are — putting a crop back while you are
+looking at a shot two minutes in should leave you looking at that shot. Those
+four *are* in the document, and they are taken out of a history state at the one
+place that decides what a step is: a stack that recorded them would fill up with
+states that differ in nothing anybody did, and comparing two of them would stop
+meaning "the edit differs".
 
 Applying a state **reconciles** rather than rebuilds: an input the state
 describes exactly as it already is costs nothing, and a clip of one keeps the
@@ -155,10 +196,11 @@ It is not a container for media. Nothing is copied, embedded or cached; a
 document is a description of a render, and every frame it refers to lives where
 it always did.
 
-It is also not a save of the *session*. Which clip you had selected, where the
-playhead was standing, what the analysis worker had got round to and which stage
-you were on are all the running application rather than the edit, and none of
-them is written.
+It is not a snapshot of the running application. It holds where you were in the
+edit — [above](#where-you-were-in-it) — and that is four numbers and a name.
+What the analysis worker had got round to, which waveforms and filmstrips had
+arrived, what a render last said and what a preview was holding are all the
+process rather than the work, and none of them is written.
 
 And it is not a version history. Undo is a stack held while the application is
 running; closing it and opening the file again is the file, not the last hundred

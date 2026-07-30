@@ -21,6 +21,11 @@
 // over the top, and opens the file again. Anything that survives by accident —
 // because the model was never actually cleared — fails the middle step.
 //
+// The last section is the one part of a document that is **not** the edit: where
+// you were standing in it. That is checked in both directions at once, because
+// both halves are the claim — all four of it come back on an Open, and none of it
+// reaches the undo stack or the unsaved marker.
+//
 // Usage: ffmpeg-bro-headless ui/ tests/ui_document.js -- <video> [<second video>]
 
 const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
@@ -295,7 +300,11 @@ ok(!doc.isModified(), 'freshly opened, nothing is unsaved');
 ok(el('doc-name').className.indexOf('modified') < 0, 'and the topbar does not say it is');
 A.select(A.project.clips[0]);
 pump(60);
-ok(!doc.isModified(), 'picking a clip is not an edit — a document holds no selection');
+// The selection *is* in the document now — see the session section below — and
+// the dot deliberately does not follow it. What the marker is about is work you
+// could lose, and one that appeared because somebody clicked a clip would be a
+// marker nobody reads.
+ok(!doc.isModified(), 'picking a clip is not an edit — the dot is about work, not about where you are standing');
 A.setLayout('stack');
 pump(60);
 ok(doc.isModified(), 'moving something is');
@@ -502,6 +511,121 @@ same(A.project.layout, 'stack', 'while undoing the edit that was made beside it'
     same(H.depth('edit'), edits, 'the edit’s history is untouched by any of it');
     ok(H.canUndo('edit') === edits > 0,
        'and back on the timeline the same key is about the edit again');
+}
+
+// ── where you were in it ───────────────────────────────────────────────────
+//
+// The one part of the snapshot that is not the edit: the selected clip, the
+// playhead, the stage and the timeline's window. All four come back, because a
+// `.fbro` is a handoff of work in progress and one that opened at zero on the
+// Compose stage would hand over the arrangement while throwing away where the
+// work had got to.
+//
+// What has to be true alongside that is the two things it must *not* do, and they
+// are the reason `ui/history.js` strips the key: scrubbing must not fill the undo
+// stack, and `Ctrl`+`Z` must not answer by moving the playhead.
+
+console.log('\nwhere you were in it');
+{
+    // A tolerance rather than `near`: the playhead is put back through the
+    // transport, which has a frame to land on.
+    const close = (a, b) => Math.abs(a - b) < 0.05;
+
+    A.shell.goTo('compose');
+    pump(120);
+    const clips = A.project.clips;
+    ok(clips.length >= 1, `${clips.length} clip(s) to be standing among`);
+    const pick = clips[clips.length - 1];
+    A.select(pick);
+    // A window that is neither the whole edit nor the default, so "it came back"
+    // is a fact rather than a coincidence.
+    ok(A.timeline.setView(0.2, Math.max(0.5, pick.length / 3)),
+       'the timeline window can be put somewhere');
+    const view = A.timeline.getView();
+    A.setPlayhead(pick.start + Math.min(0.4, pick.length / 2));
+    const stood = A.transport.t;
+    A.shell.goTo('graph');
+    pump(250);
+
+    const snap = doc.snapshot();
+    ok(!!snap.session, 'the snapshot carries a session');
+    same(snap.session.clip, pick.id,
+         'naming the selected clip by the id everything else in the document is written against');
+    same(snap.session.stage, 'graph', 'and the stage you were on');
+    ok(close(snap.session.playhead, stood),
+       `and where the playhead was standing (${snap.session.playhead} vs ${stood})`);
+    ok(close(snap.session.view.span, view.span),
+       `and how far the timeline was zoomed (${snap.session.view.span} vs ${view.span})`);
+
+    doc.save(path);
+    ok(!doc.isModified(), 'and saving it is a save like any other');
+
+    // Somewhere else entirely. Without this the checks below pass for free.
+    A.shell.goTo('compose');
+    A.select(null);
+    A.setPlayhead(0);
+    A.timeline.fitView();
+    pump(150);
+    ok(!A.project.selected && A.transport.t < 0.05, 'moved away from all of it');
+
+    A.documentOpened(doc.load(path));
+    pump(300);
+    same(A.shell.currentStage(), 'graph', 'opening it puts you back on the stage it was saved from');
+    ok(!!A.project.selected && A.project.selected.id === pick.id,
+       `with the clip that was selected selected (${A.project.selected && A.project.selected.id})`);
+    ok(close(A.transport.t, stood),
+       `and the playhead where it was left (${A.transport.t} vs ${stood})`);
+    ok(close(A.timeline.getView().span, view.span),
+       `and the timeline at the zoom it was at (${A.timeline.getView().span} vs ${view.span})`);
+    ok(!doc.isModified(), 'and none of it counts as an edit — the document is not unsaved');
+
+    // ── and it is not in the history ───────────────────────────────────────
+    A.shell.goTo('compose');
+    pump(200);
+    H.reset();
+    for (let i = 1; i <= 6; i++) { A.setPlayhead(i * 0.1); pump(20); }
+    A.select(A.project.clips[0]);
+    pump(80);
+    same(H.depth('edit'), 0,
+         'scrubbing and picking a clip are not steps — a state is the edit and nothing else');
+    ok(!doc.isModified(), 'and neither marks the document unsaved');
+
+    A.setPlayhead(Math.min(0.8, Math.max(0, A.project.clips[0].length / 2)));
+    pump(60);
+    const at = A.transport.t;
+    const zoomWas = A.project.clips[0].xform.zoom;
+    A.project.clips[0].xform.zoom = zoomWas + 0.3;
+    A.changed('edit');
+    pump(80);
+    same(H.depth('edit'), 1, 'an edit still is one');
+    ok(A.stepHistory(true), 'and it can be undone');
+    pump(120);
+    ok(near(A.project.clips[0].xform.zoom, zoomWas), 'putting the edit back');
+    ok(close(A.transport.t, at),
+       `and leaving the playhead exactly where it was (${A.transport.t} vs ${at})`);
+    same(A.shell.currentStage(), 'compose', 'on the stage you were standing on');
+
+    // ── a session that names something that is not there ───────────────────
+    //
+    // Version-tolerant, the same as every other reader here. A clip id is a name
+    // the graph's anchors are written against, so the one thing this must never
+    // do is select whichever clip now happens to have that number.
+    const hand = JSON.parse(fs.readFileSync(path, 'utf-8'));
+    hand.session.clip = 987654;
+    hand.session.stage = 'not-a-stage';
+    hand.session.playhead = 'nonsense';
+    hand.session.view = null;
+    const odd = doc.open(hand);
+    A.documentOpened(odd);
+    pump(250);
+    same(odd.session.clip, 0,
+         'a session naming a clip the document does not describe reads as nothing selected');
+    ok(!A.project.selected, 'and nothing is selected, rather than the wrong shot');
+    ok(A.shell.currentStage() !== 'not-a-stage',
+       `a stage that does not exist is refused by the shell (${A.shell.currentStage()})`);
+    same(odd.session.playhead, 0, 'a playhead that is not a number is the start');
+    ok(A.timeline.getView().span > 0,
+       `and no window written is the whole edit, fitted (${A.timeline.getView().span})`);
 }
 
 // And an Open is not a step: undoing across one would land in the middle of

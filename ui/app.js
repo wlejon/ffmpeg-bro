@@ -448,6 +448,16 @@ graphOverlay.onChange((what) => {
 doc.initDocument({
     attach: (clip) => { viewer.attachClip(clip); analyzeClip(clip); },
     detach: (clip) => viewer.detachClip(clip),
+    // Where you were in the edit, which is the one part of a document that lives
+    // in four different modules and in none of the model. Asked here because this
+    // is the only file that knows all four exist — the same reason `attach` is a
+    // hook rather than an import.
+    session: () => ({
+        clip: project.selected ? project.selected.id : 0,
+        playhead: transport.t,
+        stage: shell.currentStage(),
+        view: timeline.getView(),
+    }),
 });
 
 const docName = el('doc-name');
@@ -472,15 +482,28 @@ function documentApplied() {
 
 /// And the half that is only true of an Open.
 ///
-/// The two are separated by what an undo must *not* do. Fitting the ruler and
-/// sending the playhead home is right for a document that has just arrived and
-/// wrong for a step backwards inside the one in hand: undoing a crop while
-/// looking at a shot two minutes in must leave you looking at that shot, at that
-/// zoom. Same reason the history is reset here and not there.
+/// The two are separated by what an undo must *not* do. Putting the ruler and the
+/// playhead somewhere is right for a document that has just arrived and wrong for
+/// a step backwards inside the one in hand: undoing a crop while looking at a shot
+/// two minutes in must leave you looking at that shot, at that zoom. Same reason
+/// the history is reset here and not there.
+///
+/// **Where it puts them is what the document says**, when the document says —
+/// see `session` in ui/document.js. A `.fbro` is a handoff of work in progress, so
+/// it opens where the last person left off: their clip selected, their playhead,
+/// their stage, their zoom. A document that carries no session — one written before
+/// there was one, one hand-written, and every state `open()` is handed by the
+/// history or by `reset()` — falls back to the top of the timeline fitted, which is
+/// what this always did.
 function documentOpened(result) {
-    timeline.fitView();
-    setPlayhead(0);
+    const was = (result && result.session) || null;
+    if (was) enterSession(was);
+    else { timeline.fitView(); setPlayhead(0); }
     documentApplied();
+    // The stage last, so that whatever it does on the way in — `prepare()` on the
+    // encode side, building the graph, opening the capture devices — happens over
+    // a screen that is already the document's.
+    if (was && was.stage) shell.goTo(was.stage);
     // A different edit, so there is nothing behind it worth going back to: an
     // undo across an Open would land in the middle of somebody else's document.
     history.reset();
@@ -493,6 +516,29 @@ function documentOpened(result) {
                   ? `${lost[0].name}: ${lost[0].why}`
                   : `${lost.length} clips left out — see the Sources stage`);
     return result;
+}
+
+/// Stand where a document says it was being worked on.
+///
+/// Everything except the stage, which `documentOpened` does last for the reason
+/// stated there.
+///
+/// The clip is already sanitised to an id this edit has, or to zero — see
+/// `readSession()`. `select(null)` for zero rather than leaving whatever was
+/// selected before: opening a document is a replacement, and a selection left over
+/// from the previous edit would be pointing the crop handles at a shot from it.
+///
+/// The playhead is clamped to the edit rather than trusted. A document written
+/// against footage that has since been re-encoded shorter names a moment past the
+/// end of it, and a playhead there is a viewer with no clip under it.
+function enterSession(s) {
+    const clip = s.clip ? project.clips.find((c) => c.id === s.clip) : null;
+    select(clip || null);
+    setPlayhead(Math.max(0, Math.min(s.playhead, Math.max(0, duration()))));
+    // A document that named no window is answered the way one with no session at
+    // all is: the whole edit, fitted. Kept as two cases rather than clamped into
+    // one, because a span of zero is "did not say" and not "a window of nothing".
+    if (!timeline.setView(s.view.start, s.view.span)) timeline.fitView();
 }
 
 /// The name, and whether it has been touched since it was last written.

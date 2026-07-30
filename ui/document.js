@@ -55,6 +55,25 @@
 // on *this* timeline: the chapters, the render range, and the output path. Those
 // are meaningless carried into the next edit and exactly right carried inside
 // this one, which is the whole distinction between a habit and a document.
+//
+// **And a sixth part that is not the edit at all: the session.** Which clip was
+// selected, where the playhead was standing, which stage you were on and how far
+// the timeline was zoomed. It is written and it is put back, because a `.fbro` is
+// a handoff of work in progress rather than an archive of a finished one, and
+// handing over the arrangement while throwing away where the work had got to is
+// handing over half of it. The question that kept it out — whether opening
+// *somebody else's* document should move *your* playhead — is answered yes: there
+// is no "only my own documents" case, because that would mean identity on the
+// file, and nothing in a document is about who wrote it.
+//
+// It is the one part of the snapshot that is **not the edit**, and two things
+// follow that are stated where they are enforced rather than only here:
+//
+//   - `ui/history.js` strips it, so a step of undo stays the edit and nothing
+//     else. Moving the playhead is not an undoable act.
+//   - `touch()` is not called for it. The dot beside the name is about work you
+//     could lose, and a document marked unsaved because somebody clicked a clip
+//     is a dot that means nothing.
 
 import { project, makeClip, placeClip, removeClip, sortClips, useClipId,
          defaultTransform, applyInput, changed } from './project.js';
@@ -73,10 +92,17 @@ export const EXTENSION = 'fbro';
 
 let hooks = {};
 
-/// The two things the document cannot do for itself: a clip's `<video>` is the
-/// viewer's, and analysing one is the worker's. Handed in rather than imported
-/// so that this module stays a statement about the model — the same reason
-/// `ui/project.js` does not know a viewer exists.
+/// The three things the document cannot do for itself: a clip's `<video>` is the
+/// viewer's, analysing one is the worker's, and where you were standing in the
+/// edit is the running application's. Handed in rather than imported so that this
+/// module stays a statement about the model — the same reason `ui/project.js`
+/// does not know a viewer exists.
+///
+/// `session()` answers `{ clip, playhead, stage, view }`; there is deliberately
+/// no hook the other way, because putting one back is the half that is only true
+/// of an *Open* and `ui/app.js` already owns that half — see `documentOpened()`.
+/// A second entry point into it would be a second answer to whether an undo may
+/// move the playhead, and the answer has to be no.
 export function initDocument(h) { hooks = h || {}; }
 
 // ── the object ─────────────────────────────────────────────────────────────
@@ -122,6 +148,7 @@ export function snapshot() {
         })),
         graph: copy(overlay.current()),
         output: outputBlob(),
+        session: sessionBlob(),
     };
 }
 
@@ -236,7 +263,13 @@ export function open(doc) {
     // are rather than reset them to a default nobody chose.
     store.adopt(d.output, store.DOCUMENT_KEYS);
     changed('document');
-    return { clips: made, skipped };
+    // **Handed back rather than applied**, and only when the document has one.
+    // Restoring it is the half that is true of an *Open* and false of an undo —
+    // `ui/history.js` strips the key, so a state put back here never carries one
+    // anyway — and `ui/app.js` already owns that half, where fitting the ruler and
+    // sending the playhead home is decided. Read after the clips, because the one
+    // thing in it that has to be checked is whether the clip it names is there.
+    return { clips: made, skipped, session: readSession(d.session) };
 }
 
 /// Everything a document says about one clip, written over it.
@@ -273,6 +306,10 @@ function dropClip(clip) {
 /// gone: a chapter at 12.5 s, a range, and a path the last edit was going to be
 /// written to. The render *size* stays with the codec, because "always cut
 /// 1080p" is a habit and not a fact about any one timeline.
+///
+/// It carries no session either, and so the caller sends the playhead home and
+/// fits the ruler — which is right, because there is nothing yet to be standing
+/// in the middle of.
 export function reset() {
     open({ output: { chapters: [], rangeIn: 0, rangeOut: 0, path: '' } });
     currentPath = '';
@@ -395,6 +432,69 @@ function outputBlob() {
     for (const k of store.DOCUMENT_KEYS)
         if (settings[k] !== undefined) out[k] = copy(settings[k]);
     return out;
+}
+
+// ── where you were in it ───────────────────────────────────────────────────
+//
+// Four numbers and a name, and not one of them is the edit: the same file opened
+// twice with the playhead in two places is the same render both times. That is
+// exactly why they are separable, and it is what lets `ui/history.js` take them
+// out again without having to know what any of them mean.
+
+/// The running application, as the document holds it.
+///
+/// Sanitised on the way *out* as well as on the way in, which the rest of this
+/// file does not bother with — the difference is that everything else in the
+/// snapshot is already a number in the model, and these come through a hook from
+/// four different modules. A `view` whose span arrived as `NaN` would be written
+/// into the file as `null` and read back as a window of nothing.
+function sessionBlob() {
+    const s = hooks.session ? hooks.session() : null;
+    if (!s || typeof s !== 'object') return null;
+    const v = s.view && typeof s.view === 'object' ? s.view : {};
+    return {
+        // A clip *id*, because that is the name the rest of the document is
+        // written against — see the ids rule at the top. Zero is "nothing
+        // selected", which is a state somebody can be in.
+        clip: Math.max(0, Math.round(num(s.clip))),
+        playhead: Math.max(0, num(s.playhead)),
+        stage: String(s.stage || ''),
+        // The window as a start and a span, never as a zoom factor: a factor is
+        // `total / span` and the total is the edit's own length, so a document
+        // opened after a clip was made longer would come back looking at
+        // somewhere else entirely.
+        view: { start: Math.max(0, num(v.start)), span: Math.max(0, num(v.span)) },
+    };
+}
+
+/// And back again — version-tolerant, like every other reader here.
+///
+/// **The clip is the part that has to be checked.** A session names a clip by id
+/// and an id is a name other things are written against, so a document whose
+/// selected clip is not in it — hand-edited, written by a version that numbered
+/// differently, or simply a clip somebody deleted before saving — has to come to
+/// *nothing selected*. Selecting the wrong shot is the failure worth preventing:
+/// the crop handles and the properties panel would then be pointed at a clip
+/// nobody picked, which looks exactly like having picked it.
+///
+/// The stage is passed through as whatever string it says, because the list of
+/// stages is `ui/shell.js`'s and `goTo()` already refuses one it does not have.
+/// A copy of that list here would be a second answer to what the stages are.
+function readSession(saved) {
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+    const n = Math.round(num(saved.clip));
+    const clip = n > 0 && project.clips.some((c) => c.id === n) ? n : 0;
+    const v = saved.view && typeof saved.view === 'object' ? saved.view : {};
+    return {
+        clip,
+        playhead: Math.max(0, num(saved.playhead)),
+        stage: String(saved.stage || ''),
+        // A span of zero is "the document did not say", which the caller answers
+        // by fitting the ruler — the same thing it does for a document with no
+        // session at all. Clamping it to something positive here would invent a
+        // window nobody chose.
+        view: { start: Math.max(0, num(v.start)), span: Math.max(0, num(v.span)) },
+    };
 }
 
 // ── the file ───────────────────────────────────────────────────────────────
