@@ -13,6 +13,9 @@ that quietly does one of the three.
 | **Burned into the image** | a `subtitles` filter on the Graph stage, like every other filter |
 | **A file on its own** | a render whose only stream is subtitles: extracting one, and converting the format |
 
+Any of the three can read a file you added — and the first can also read cues
+this document *holds*, which is [Cues of your own](#cues-of-your-own).
+
 The second of those is libass drawing characters, so it is for text tracks. A
 track of *pictures* — `dvdsub`, `hdmv_pgs_subtitle` — is drawn the other way, by
 wiring its own pad into an `overlay`: [Drawing them, when they are
@@ -129,6 +132,100 @@ the reason stands where the words would have been and the times are still drawn
 and still snap. That is `AV_CODEC_PROP_TEXT_SUB` again — the same property that
 decides whether the track can be converted or burned in — asked before any
 decoder is opened, so a picture track costs nothing to ask about.
+
+## Cues of your own
+
+A subtitle row's third answer is **edit** — the cues this document holds, rather
+than a file's. `+ Subtitle` with no subtitle file open makes one straight away
+and points the row at it; with one open, the menu has `type them here — a new
+track of your own` at the bottom of the same list the carry and convert entries
+are in, because "where do this row's cues come from" is one question.
+
+They are typed and retimed on the [Cues lane](timeline.md#the-cues-lane), under
+the waveform, which is where a subtitle's timing is judged — by listening to
+where the line is spoken.
+
+### Taking a file's cues, which is a fork
+
+`Edit these cues`, in a subtitle row's fold, copies that track's cues into the
+document. From that press onwards **the document is what renders and the file is
+not read by this row**: the row is repointed in place, so there is never a state
+where both copies reach the output without somebody having added a second row
+for the second one. The fold says which file the cues came out of and that it
+has stopped being read.
+
+**The file itself is never written to.** Not on save, not on render, not ever.
+An editor that rewrites its input is one that loses work, and here the inputs are
+read and the document is the edit — which is also why the cues are undoable with
+`Ctrl`+`Z` and travel inside a `.fbro`.
+
+A track of **pictures** cannot be taken this way, and the press is replaced by
+the reason: `dvdsub` and `hdmv_pgs_subtitle` are pictures of characters, and
+reading the words out of one is optical character recognition. It is the same
+refusal, off the same `AV_CODEC_PROP_TEXT_SUB`, that stops such a track being
+converted or burned in — and such a track can still be
+[drawn](#drawing-them-when-they-are-pictures).
+
+### What a fork costs, and it is the one thing here that can lose work
+
+Every text decoder in libavcodec hands over ASS, so a cue arrives as a dialogue
+line with its layer, its style, its three margins and its override codes —
+`{\i1}`, `{\pos(120,400)}` — inside it. All of that is kept, and a cue **nobody
+retypes is written back exactly as it was**, under the file's own `[V4+ Styles]`.
+
+Retyping a cue's words replaces that one text field, so:
+
+| | |
+|---|---|
+| **kept** | its style, its layer, its margins, its effect — and every other cue's everything |
+| **lost** | that cue's own override codes |
+
+Which is said in the fold, with a count of how many cues still carry any, and
+the count goes down as they do. Reassembling `{\k40}`-style codes around retyped
+words would mean guessing which syllable each belongs to, and a karaoke line put
+back together by guesswork is worse than one plainly reset.
+
+There is no style editor here and there is not going to be one. A cue is text, a
+start and an end; writing an override from a control would be a second opinion
+about what it means, and libass already has the only one that matters.
+
+### The render writes a file, and the printed command names it
+
+**ffmpeg has no way to receive cues except as a file.** There is no `-cue`
+option and no filter that makes text out of nothing — a subtitle stream in an
+output comes from a subtitle stream in an input. So a render materialises the
+track into a real subtitle file and passes it as an ordinary `-i`. That is not a
+compromise, it is the only exact answer, and it is what keeps the command bar
+honest: everything past the compositor is exact, and a command naming a file this
+application actually wrote is exact. The bar says so in its notes, because the
+`-i` looks like a file you added and is not.
+
+It goes **beside the output**, named from the output's name and the track's id —
+`programme.sub1.ass` — rather than into a temp directory, because somebody who
+pastes the command a day later needs the file to be there. The id is what makes
+the name stable, so rendering twice overwrites one file instead of leaving a
+trail; a destination that is a URL or a `tee` list has nothing to sit beside, and
+those go to the temp directory.
+
+The times in it are already the **output's**, with anything outside the render
+range dropped and a cue straddling the start clamped — which is why there is no
+`-ss` in front of that `-i`. Two [versions](output.md) share the one file: a
+version is another output at another size, and cues do not change with the size.
+
+Which format is decided by what the track holds:
+
+| | |
+|---|---|
+| **`.ass`** | a track forked from a file, because its cues are already ASS and nothing else can carry them back out |
+| **`.srt`** | a track typed here, because it is words and times and nothing else, and a script header would be claiming a look nobody chose |
+
+What the **stream in the output** comes out as is a different question with the
+answer it always had — the muxer's, through `avformat_query_codec`, so `.ass`
+into an mp4 is `mov_text` and into Matroska is `ass`.
+
+`-itsoffset` is untouched by any of this and is still exactly the right tool for
+a *file* that is uniformly out: it shifts a whole track on the input, which is
+one number rather than a hundred edits.
 
 ## Burning them in
 

@@ -22,7 +22,7 @@ unsaved. A document named on the command line opens as one:
 
 A `.fbro` file is indented JSON, on purpose: it describes an edit, it belongs in
 a repository beside the footage, and a diff of one should be readable. It has
-seven parts.
+eight parts.
 
 - **`inputs`** — one entry per `-i`, **in order**, because the order is the `-i`
   number that a filtergraph's `[0:v]` counts in. Each is written as *what opens
@@ -61,6 +61,19 @@ seven parts.
   the clips and a list would be a second answer to that. A document with no
   `tracks` at all, one written before there were locks, opens as a timeline that
   ripples one track at a time, which is what it describes.
+- **`subtitles`** — the [cues you typed](subtitles.md#cues-of-your-own), one entry
+  per track: an id, a name, the ASS script header its cues are written against,
+  and the cues themselves. This is *content* in the way a clip is content — the
+  file a track may have been forked from is not what renders any more, so there
+  is nothing to re-derive it from.
+
+  Each cue carries **both** its words and the dialogue line they came out of.
+  That looks like storing one fact twice and is not: one is what the cue says and
+  the other is how it looks, and a document that dropped the second would quietly
+  flatten a styled track the first time it was saved and reopened. A track's id is
+  a name written down — a subtitle row on the [Write](output.md) stage says
+  `cues:3` — so an open that renumbered would point that row at somebody else's
+  dialogue.
 - **`graph`** — everything you inserted, locked, placed and wired on the
   [Graph](graph.md) stage.
 - **`output`** — what [Encode and Write](output.md) are set to, plus the three

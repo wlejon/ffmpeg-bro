@@ -23,14 +23,14 @@ no reader looking for the command bar would have gone.
 - **[Sources](sources.md)** — an input, its streams, and the demuxer options
   that decide how it is read
 - **[The timeline](timeline.md)** — clips, tracks, the sync lock, the When lane,
-  and the edits that are about a cut rather than a clip
+  the Cues lane, and the edits that are about a cut rather than a clip
 - **[The picture](picture.md)** — fit, scale, position, crop and the grid
 - **[The graph](graph.md)** — the node graph, which is `-filter_complex` with
   somewhere to stand
 - **[Output](output.md)** — the Encode and Write stages: encoders, containers,
   where the file goes and how many files there are
 - **[Subtitles](subtitles.md)** — the three different things people mean by the
-  word, each a different mechanism
+  word, each a different mechanism, and cues of your own
 - **[Rendering](rendering.md)** — the packet path, the printed command, the
   report, and what a render costs
 - **[The card](card.md)** — hardware decode and encode, with the measurements

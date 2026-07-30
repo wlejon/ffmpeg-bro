@@ -250,7 +250,9 @@ bro.ffmpeg.cueTimes(path | input, { stream, from, to, max })
 // a subtitle decoder open; `probe()` deliberately does not ask.
 bro.ffmpeg.cueText(path | input, { stream, from, to, max })
 // → { stream, codec: "subrip", textSub: true, complete, from, to,
-//     cues: [{ start: 1, end: 2, text: "first cue" }, …] }
+//     header: "[Script Info]\n…\n[Events]\nFormat: Layer, Start, …\n",
+//     cues: [{ start: 1, end: 2, text: "first cue",
+//              raw: "0,0,Default,,0,0,0,,first cue" }, …] }
 // **A bitmap track answers `textSub: false` and its codec's name, not an empty
 // list.** `dvdsub` and `hdmv_pgs_subtitle` carry pictures of characters, so
 // there is nothing in them to read — which is a different answer from "this
@@ -271,6 +273,19 @@ bro.ffmpeg.cueText(path | input, { stream, from, to, max })
 // that list describes and a panel draws one against the other, so a second
 // epoch here would line nothing up. `max` defaults to 500 rather than 4000,
 // because this one decodes.
+//
+// **`raw` and `header` are the same answer given back rather than read.** A
+// column has room for the words and nothing else, but taking a track into the
+// document to edit it means being able to write it out again — and `text`
+// alone would flatten somebody's styling the moment they retimed one line. So
+// `raw` is the dialogue line exactly as the decoder handed it over
+// (`ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text`, empty for
+// a plain-text rect and for the second rect of a cue that has two), and
+// `header` is the decoder's `subtitle_header` — the styles, the resolution the
+// positions are against and the `Format:` line the fields are ordered by, which
+// is the same buffer an `ass`→`ass` render copies into its encoder. Both are
+// always on the answer: the cost of this call is the decoder and the walk, and
+// the strings are in hand by the time either question is asked.
 
 // The encoder libavformat itself would reach for, given a muxer and a
 // filename — `av_guess_codec`, which is what the `ffmpeg` CLI uses. It matters

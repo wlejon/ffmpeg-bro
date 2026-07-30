@@ -108,11 +108,28 @@ parsing one out is inherently a fresh object. `open()` **reconciles** rather tha
 rebuilds for its sake — an input described exactly as it already is costs
 nothing, and a clip of one keeps its `<video>`.
 
-**Ids are part of it, and that is the load-bearing part.** A clip's id and an
-input's id are names other files write down — `clip:7/after-scale` is a graph
-anchor, `in3` is a source node — so an open that renumbered would silently
-re-point a filter at a different shot. `useClipId`/`useInputId` are how the two
-counters are told what a document has already handed out. `ui/graph/overlay.js`
+**Ids are part of it, and that is the load-bearing part.** A clip's id, an
+input's id and a cue track's id are names other files write down —
+`clip:7/after-scale` is a graph anchor, `in3` is a source node, `cues:3` is a
+subtitle row on the Write stage — so an open that renumbered would silently
+re-point a filter at a different shot or a row at somebody else's dialogue.
+`useClipId`/`useInputId`/`useCueId` are how the three counters are told what a
+document has already handed out.
+
+`ui/cues.js` is the third thing in the document that is *content* rather than a
+description of a file, beside the clips and the graph: cues you typed, on the
+timeline's own clock, with a lane (`ui/timeline.js`) to retime them against A1.
+Two decisions in it are not negotiable. **The source file is never written to** —
+taking a file's cues in is a fork, the row is repointed in place so both copies
+can never render, and the input is read exactly as it always was. And **a render
+materialises the track into a real subtitle file beside the output and reads it
+back as an ordinary `-i`**, because ffmpeg has no way to receive cues except as a
+file; `attachCueFiles` in `ui/export/spec.js` names it (turning `cues:3` into
+`decode:4:0`, which is why nothing downstream learned the third form exists) and
+`ui/export.js` writes it at the one moment a render starts. `cueTextOf` answers
+with `raw` and `header` beside `text` for exactly one reason — a fork through the
+words alone would silently flatten somebody's styled subtitles, which is the one
+failure on this path that loses work. `ui/graph/overlay.js`
 has two reads for exactly this reason: `restore()` (localStorage, drops input
 nodes because the inputs are not coming back) and `adopt()` (a document, keeps
 them because they are).

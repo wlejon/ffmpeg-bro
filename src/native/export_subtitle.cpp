@@ -106,7 +106,8 @@ std::string assDialogueText(const std::string& line) {
     return out;
 }
 
-/// One decoded cue's rects, joined into the words a person would read.
+/// One decoded cue's rects, joined into the words a person would read — and,
+/// through `raw`, the first dialogue line they came out of.
 ///
 /// Both kinds of text rect, because both exist: `SUBTITLE_ASS` is what every
 /// decoder in this build produces and `SUBTITLE_TEXT` is the plain-text rect an
@@ -114,14 +115,21 @@ std::string assDialogueText(const std::string& line) {
 /// described — a track made of those never reaches here, since `cueTextOf`
 /// settles that with `AV_CODEC_PROP_TEXT_SUB` before it opens a decoder, and one
 /// arriving anyway is a rect with no words in it.
-std::string cueWords(const AVSubtitle& sub) {
+///
+/// `raw` is filled from the first ASS rect and never joined; see `CueLine::raw`
+/// for why joining two dialogue lines is not a thing that can be done.
+std::string cueWords(const AVSubtitle& sub, std::string* raw) {
     std::string out;
     for (unsigned i = 0; i < sub.num_rects; ++i) {
         const AVSubtitleRect* r = sub.rects[i];
         if (!r) continue;
         std::string one;
-        if (r->type == SUBTITLE_ASS && r->ass) one = assDialogueText(r->ass);
-        else if (r->type == SUBTITLE_TEXT && r->text) one = r->text;
+        if (r->type == SUBTITLE_ASS && r->ass) {
+            one = assDialogueText(r->ass);
+            if (raw && raw->empty()) *raw = r->ass;
+        } else if (r->type == SUBTITLE_TEXT && r->text) {
+            one = r->text;
+        }
         if (one.empty()) continue;
         if (!out.empty()) out += '\n';
         out += one;
@@ -179,6 +187,15 @@ bool cueTextOf(const MediaInput& in, int stream, double from, double to, int max
         return false;
     }
 
+    // How the cues *look*, which is not in any of them. Taken here, next to the
+    // open, because it is a property of the decoder and not of the walk: a
+    // track whose window turns out to hold no cues still has styles, and a
+    // caller writing the track out again needs them either way. See
+    // `CueText::header`.
+    if (dec->subtitle_header && dec->subtitle_header_size > 0)
+        out->header.assign(reinterpret_cast<const char*>(dec->subtitle_header),
+                           static_cast<size_t>(dec->subtitle_header_size));
+
     // Everything but this stream discarded, so a two-hour file's pictures are
     // not handed back to be thrown away one at a time. The same line
     // `SubtitleStreams::build` has, for the same reason.
@@ -232,7 +249,7 @@ bool cueTextOf(const MediaInput& in, int stream, double from, double to, int max
         line.end = pkt->duration > 0 ? t + pkt->duration * av_q2d(st->time_base) : t;
         if (sub.end_display_time > sub.start_display_time)
             line.end = std::max(line.end, t + sub.end_display_time / 1000.0);
-        line.text = cueWords(sub);
+        line.text = cueWords(sub, &line.raw);
         avsubtitle_free(&sub);
         // A cue whose words come out empty is not listed. An mp4 writes a
         // sample *between* its cues — two bytes, nothing on screen — and a

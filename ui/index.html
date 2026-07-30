@@ -277,6 +277,15 @@
                 <div class="track-head"><span class="track-name">A1</span></div>
                 <div class="track-lane" id="lane-audio"><canvas id="wave"></canvas></div>
             </div>
+            <!-- The one cue you are working on, as text. The lane above draws
+                 where the cues are and a canvas cannot be typed into, so the
+                 words live here — under the waveform, because that is what a
+                 subtitle's timing is judged against and this is one strip. Empty
+                 and hidden until the document has a cue track. -->
+            <div id="cue-row" class="track-row hidden">
+                <div class="track-head"><span class="track-name">Cue</span></div>
+                <div id="cue-edit" class="cue-edit"></div>
+            </div>
             <div id="tl-scroll-row">
                 <div class="track-head"></div>
                 <div id="tl-scroll"><div id="tl-thumb"></div></div>

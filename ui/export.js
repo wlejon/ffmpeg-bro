@@ -50,6 +50,7 @@ import * as destination from './export/destination.js';
 import { deviceForRender } from './hardware.js';
 import { syncFollowing } from './export/copy.js';
 import { forgetCueText } from './export/subtitles.js';
+import { trackById as cueTrackById, writeCueFile } from './cues.js';
 
 let el_ = {};
 let hooks = {};
@@ -98,6 +99,11 @@ export function initExport(refs, h) {
     initStreams(el_.streams, {
         changed: said(() => { drawStreams(); updateSummary(); }),
         restated: said(updateSummary),
+        // Where the render's clock starts on the timeline. Handed in because
+        // `ui/export/spec.js` reads the stream list, so the stream list cannot
+        // read it back for one number — and it is the number that makes taking a
+        // file's cues into the document invisible: a cue lands where it landed.
+        renderZero: () => range().start,
     });
     initPreview({ stage: byId('ex-pv-stage-host'), controls: byId('ex-pv-controls'),
                   stats: byId('ex-pv-stats') }, {
@@ -325,9 +331,30 @@ export function followTimeline() {
 /// can find what it said afterwards. `poll()`'s own `job` cannot answer that:
 /// it is the render running *now* and is zero from the instant one ends, which
 /// is the frame a caller comes to read.
+/// The cues this render was told to write, put on disk before anything opens.
+///
+/// **Here rather than in `buildSpec()`**, which runs on every keystroke of every
+/// field on these two stages — see `attachCueFiles` in export/spec.js, which is
+/// where the file is *named*. The spec already carries the name and the renderer
+/// will open it as an ordinary `-i`, so this is the one moment between the two,
+/// and it is the moment from which the printed command is runnable.
+///
+/// Called from both places a render starts, because there are two and they do
+/// not share a path: `begin()` is the export and `launch()` is everything else.
+/// Nothing `launch()` sends carries cue files today — a preview asks for an empty
+/// stream list — and the call is there anyway, because the failure of the day one
+/// of them does is a subtitle stream silently missing from a file.
+function writeCueFiles(spec) {
+    for (const f of spec.cueFiles || []) {
+        const track = cueTrackById(f.id);
+        if (track) writeCueFile(track, f.path, f.from, f.to);
+    }
+}
+
 function launch(spec, kind) {
     let job = 0;
     try {
+        writeCueFiles(spec);
         job = Number(bro.ffmpeg.render.start(spec)) || 0;
         // What this render is of, taken now — see `renderSubject()`. It has to
         // be recorded at the start and not when the first message arrives: the
@@ -430,6 +457,10 @@ function begin() {
     remember();
 
     try {
+        // Inside the same `try` as the start, so a directory that will not take
+        // the file arrives on the failure panel with libav's messages rather than
+        // as a render that begins and writes an output with no cues in it.
+        writeCueFiles(spec);
         noteRender(Number(bro.ffmpeg.render.start(spec)) || 0, renderSubject(spec));
     } catch (e) {
         put(el_.progress, () => div('ex-failed', String(e.message || e)));

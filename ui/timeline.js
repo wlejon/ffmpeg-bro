@@ -46,8 +46,11 @@ import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
 import { setIcon } from './icons.js';
 import { spanRows, placeSpans, editEdge, editBody, commitSpans } from './graph/spans.js';
+import { cueTracks, addCue, removeCue, splitCue, mergeCue, setCueText, setCueTime,
+         hasOverrides, cuesChanged } from './cues.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
+let cueBar, cueBarRow;
 let lanes = [];                 // [{ row, head, lock, lane, canvas }] bottom track first
 let onSeek = () => {};
 let playheadTime = () => 0;
@@ -75,6 +78,28 @@ const LANE_FLOOR = 18;
 const SPAN_ROW = 14;
 const SPAN_BUDGET = 62;
 const SPAN_FLOOR = 8;
+
+// The Cues lane, on the same trade as the When lane and with bigger numbers,
+// because a region here has to be *read*: a span is a coloured bar with a name
+// beside it and a cue is the line itself, so the ideal row is one line of the
+// 10px face with room around it and the floor is where the words stop fitting.
+// Below `CUE_FLOOR` a row is still worth having — it says when the cues are and
+// it is still draggable — so the lane grows rather than hiding rows.
+const CUE_ROW = 18;
+const CUE_BUDGET = 56;
+const CUE_FLOOR = 10;
+
+// The shortest a cue can be dragged to. Below about a twentieth of a second no
+// player draws anything a person can read, so an end pulled through its own
+// start would come to a cue that is in the file, is in the way, and is invisible
+// — which is indistinguishable from one that failed to be deleted.
+const CUE_MIN = 0.05;
+
+// How long a cue made at the playhead is, when there is nothing after it to stop
+// against. Two seconds is the length of an ordinary line of dialogue; a cue made
+// against a neighbour takes the room there is instead, because the gesture people
+// use to write a whole track is press-press-press down the timeline.
+const CUE_SECONDS = 2;
 
 // The colours a row is told apart by. Six, because the label is what actually
 // names a node and this is what makes two rows readable as two at a glance; a
@@ -827,6 +852,410 @@ function drawSpanLane(over) {
     });
 }
 
+// ── the Cues lane ──────────────────────────────────────────────────────────
+//
+// One row per track of cues the document holds (`ui/cues.js`), each cue drawn as
+// a region with its own words in it. This is where the entry in "Not yet" said an
+// editor would have to be — *the timeline has the lane that would make it
+// possible, A1 is where you would judge a timing* — and that is the whole
+// argument for it being here rather than in a panel: a subtitle's timing is
+// judged by listening to where the line is spoken, so the cue has to be drawn
+// against the waveform and not beside a list of numbers.
+//
+// **The words are inside the region, which is the opposite of what the When lane
+// does**, and the two are right for different reasons. A span's identity is its
+// filter, which is one short name that belongs to the whole row — so it is drawn
+// once, under the regions, and stays readable when a span is four pixels wide. A
+// cue's identity *is* its words: a row of unlabelled boxes would say when
+// somebody speaks and never what they say, which is exactly the half this lane
+// exists to add. So the text is in the region, pinned to the visible left edge
+// the way a clip's name is, and suppressed when there is no room rather than
+// spilling into the next cue.
+//
+// **A drag is committed on release and never on a move**, the same rule and the
+// same reason as the When lane: a write announces an edit, which redraws this
+// lane out from under the hand holding it and leaves sixty steps of history
+// behind one gesture.
+
+/// The lane's own DOM, or null when the document holds no cues.
+let cueRow = null;
+/// The tracks as of the last `syncCueLane()` — held for the reason `spanList` is:
+/// the draw, the hit test and a drag in flight all have to be about one list.
+let cueList = [];
+/// Measured rather than chosen, exactly as `spanRowH` is and for the same
+/// `border-box` reason.
+let cueRowH = 0;
+/// Pixels the lane and the gap above it come to, for `fitHeights()`.
+let cueStack = 0;
+/// Pixels the strip under the waveform comes to, likewise.
+let cueBarStack = 0;
+
+/// Which cue the words strip is about: `{ track, cue }`, or null.
+///
+/// Held as the two objects rather than as ids, because everything that could
+/// invalidate it happens on this side — a delete, a merge, a document opening —
+/// and `cueSelectionStillThere()` checks it against the model on every draw. An
+/// id pair would be the same check written out longer.
+let cueSel = null;
+
+/// Which cue is being edited, for the properties panel and for tests. Null when
+/// nothing is selected.
+export const selectedCue = () => (cueSel ? cueSel.cue : null);
+export const selectedCueTrack = () => (cueSel ? cueSel.track : null);
+
+/// Select one, or nothing. Exported because the Write stage's `Edit these cues`
+/// arrives here with a track and no idea which cue somebody wants — and because a
+/// test that had to synthesise a press to reach a selection would be testing the
+/// press.
+export function selectCue(track, cue) {
+    cueSel = track && cue ? { track, cue } : null;
+}
+
+function cueSelectionStillThere() {
+    if (!cueSel) return;
+    if (cueTracks.indexOf(cueSel.track) < 0 || cueSel.track.cues.indexOf(cueSel.cue) < 0)
+        cueSel = null;
+}
+
+/// Build or drop the lane so that it is there exactly when there are cues.
+///
+/// `trackCount()`'s idiom again, and inside `#tracks` for the same reason the When
+/// lane is: `#playhead` spans that box, and half of what makes a region here
+/// answer anything is being able to see where the playhead cuts it.
+///
+/// **Kept last among the rows**, so the cues sit directly above the waveform. The
+/// When lane appends itself on creation, so a lane made before it would end up
+/// above it; one line moves this back rather than making either of them know
+/// about the other.
+function syncCueLane() {
+    cueList = cueTracks.slice();
+    cueSelectionStillThere();
+    const want = cueList.length;
+    if (!want) {
+        if (cueRow) { tracksEl.removeChild(cueRow.row); cueRow = null; }
+        cueRowH = 0;
+        cueStack = 0;
+        return;
+    }
+    if (!cueRow) {
+        const row = el('div', { cls: 'track-row cue-lane-row' });
+        const head = el('div', { cls: 'track-head',
+            title: 'Cues this document holds. Drag an end to retime one, the middle to ' +
+                   'move it; the words are typed in the strip under the waveform.' },
+            [el('span', { cls: 'track-name', text: 'Cues' })]);
+        const lane = el('div', { cls: 'track-lane', id: 'lane-cues' });
+        const canvas = document.createElement('canvas');
+        lane.appendChild(canvas);
+        row.appendChild(head);
+        row.appendChild(lane);
+        tracksEl.appendChild(row);
+        cueRow = { row, head, lane, canvas };
+        wireCueLane(cueRow);
+        rebuilt = true;
+    }
+    // Last among the rows and then the playhead, which has to stay last in the
+    // box. Done on every sync rather than only on creation, because the When lane
+    // appears and disappears on a channel of its own.
+    if (cueRow.row.nextSibling !== playhead) {
+        tracksEl.appendChild(cueRow.row);
+        tracksEl.appendChild(playhead);
+    }
+    const pitch = Math.max(CUE_FLOOR, Math.min(CUE_ROW, Math.floor(CUE_BUDGET / want)));
+    const h = want * pitch + 2;
+    cueRow.lane.style.height = h + 'px';
+    cueRow.row.style.height = h + 'px';
+    cueRow.head.classList.toggle('tiny', pitch < 22);
+    cueStack = 4 + h;
+}
+
+/// The rows, and the cues on them.
+///
+/// `over` is the cue held mid-drag with the span it is being dragged to, so the
+/// region follows the hand without a write — matched by object rather than by
+/// key, because unlike a derived graph node a cue *is* the model and survives a
+/// redraw.
+function drawCueLane(over) {
+    if (!cueRow) return;
+    const c = laneContext(cueRow.canvas);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    const rh = cueRowH = h / Math.max(1, cueList.length);
+    ctx.font = '10px Consolas, monospace';
+
+    cueList.forEach((track, i) => {
+        const top = i * rh;
+        if (i % 2) {
+            ctx.fillStyle = 'rgba(255,255,255,0.025)';
+            ctx.fillRect(0, top, w, rh);
+        }
+        for (const cue of track.cues) {
+            const held = over && over.cue === cue;
+            const a = held ? over.a : cue.start;
+            const b = held ? over.b : cue.end;
+            const x0 = timeToX(a), x1 = timeToX(b);
+            const l = Math.max(0, x0), r = Math.min(w, x1);
+            if (r <= l) continue;
+            const on = cueSel && cueSel.cue === cue;
+            ctx.fillStyle = on ? 'rgba(124, 196, 255, 0.30)' : 'rgba(124, 196, 255, 0.16)';
+            ctx.fillRect(l, top + 1, r - l, rh - 2);
+            // `#ff8c42` written out rather than `var(--accent)`: a canvas takes a
+            // colour string and does not resolve a custom property, so the
+            // variable would arrive as an invalid value and leave the stroke
+            // whatever it was last set to. The same literal every other selected
+            // thing on this timeline is drawn in.
+            ctx.strokeStyle = on ? '#ff8c42' : '#7cc4ff';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(l + 0.5, top + 1.5, Math.max(1, r - l - 1), rh - 3);
+            // Both ends exist on a cue — unlike a span, which can be open at one
+            // end — so both grips are always drawn, where they are on screen.
+            ctx.fillStyle = on ? '#ffffff' : '#7cc4ff';
+            if (x0 >= 0) ctx.fillRect(l, top + 1, 2, rh - 2);
+            if (x1 <= w) ctx.fillRect(r - 2, top + 1, 2, rh - 2);
+            // The words, pinned to the *visible* left edge so a cue running off
+            // the window keeps its line readable — the same trick a clip's name
+            // uses. Cut to the region rather than clipped, because a canvas clip
+            // for one string is more machinery than measuring it.
+            if (rh >= 11 && r - l > 24) {
+                ctx.fillStyle = on ? '#e8ecf2' : '#b9c1cc';
+                ctx.fillText(fitText(ctx, oneLine(cue.text), r - l - 8), l + 4, top + rh - 4);
+            }
+        }
+    });
+}
+
+/// A cue's words on one line. A `\N` in an ASS cue is a break the *author* asked
+/// for, so it becomes a middle dot rather than disappearing — "he said / and then
+/// he said" reads as two lines and "he saidand then he said" reads as a typo. The
+/// same rule the Write stage's cue list follows.
+function oneLine(text) {
+    return String(text || '').replace(/\s*\n\s*/g, ' · ').trim();
+}
+
+/// As much of a string as fits in `px`, with an ellipsis where it was cut.
+///
+/// Measured rather than counted, because the face is proportional at the edges
+/// even at 10px and a character count would cut a wide line short and let a
+/// narrow one overflow. Binary search rather than a walk: a cue is a sentence and
+/// this runs once per cue per frame.
+function fitText(ctx, text, px) {
+    if (px <= 0) return '';
+    if (ctx.measureText(text).width <= px) return text;
+    let lo = 0, hi = text.length;
+    while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (ctx.measureText(`${text.slice(0, mid)}…`).width <= px) lo = mid;
+        else hi = mid - 1;
+    }
+    return lo > 0 ? `${text.slice(0, lo)}…` : '';
+}
+
+/// What a press on the Cues lane has hold of: an end, a body, or nothing.
+///
+/// Written out rather than shared with `spanGrabAt` for the reason that one is
+/// written out rather than shared with `grabAt`: the shapes are the same and the
+/// *rules* are not — a span can be open at one end and a cue never is, and a cue
+/// carries no row index into a parallel list of drawn positions because it is the
+/// model. Merging them would mean a hit test with a mode.
+function cueGrabAt(x, y) {
+    if (!cueRowH) return null;
+    const track = cueList[Math.floor(y / cueRowH)];
+    if (!track) return null;
+    let best = null, bestD = TRIM_GRAB + 1;
+    for (const cue of track.cues) {
+        const l = timeToX(cue.start), r = timeToX(cue.end);
+        const dl = Math.abs(x - l), dr = Math.abs(x - r);
+        // The same half-pixel tie-break the clip and span hit tests use: two cues
+        // butted together share an edge, and without it the press always finds
+        // the second one's start.
+        if (dl <= TRIM_GRAB && dl - 0.5 < bestD) { bestD = dl - 0.5; best = { track, cue, what: 'start' }; }
+        if (dr <= TRIM_GRAB && dr < bestD) { bestD = dr; best = { track, cue, what: 'end' }; }
+    }
+    if (best) return best;
+    for (const cue of track.cues)
+        if (x >= timeToX(cue.start) && x <= timeToX(cue.end)) return { track, cue, what: 'move' };
+    return { track, cue: null, what: '' };
+}
+
+/// Press to seek and to select, drag an end to retime, drag the middle to move.
+///
+/// **Snapped through the same two functions the rest of the timeline is** —
+/// `snapTime` for an edge and `snapShift` for a body — so a cue's end lands on a
+/// cut, on the playhead or on zero exactly where a clip's would. That is most of
+/// what makes this lane worth having over a pair of number fields: the moment a
+/// line is spoken is a moment on the waveform, and the playhead is how you say
+/// where it is.
+function wireCueLane(entry) {
+    let drag = null;
+
+    tracked(entry.lane,
+        (e) => {
+            const box = entry.lane.getBoundingClientRect();
+            const x = e.clientX - box.left;
+            const grab = cueGrabAt(x, e.clientY - box.top);
+            onSeek(xToTime(x), true);
+            // Selecting on the press rather than on the release, so that the
+            // words strip is already about this cue while it is being dragged —
+            // which is the state somebody retiming a line against the waveform is
+            // in for the whole gesture.
+            if (grab) { selectCue(grab.track, grab.cue); drawCueBar(); }
+            drag = grab && grab.cue
+                ? { track: grab.track, cue: grab.cue, what: grab.what,
+                    a: grab.cue.start, b: grab.cue.end,
+                    grabTime: xToTime(x), moved: false }
+                : null;
+        },
+        (e) => {
+            const x = e.clientX - entry.lane.getBoundingClientRect().left;
+            if (!drag) { onSeek(xToTime(x), false); return; }
+            const t = xToTime(x);
+            const by = t - drag.grabTime;
+            if (!drag.moved && Math.abs(by) * (laneWidth() / view.span) < 3) return;
+            drag.moved = true;
+            if (drag.what === 'move') {
+                const d = snapShift(drag.cue.start, drag.cue.end, by);
+                const at = Math.max(0, drag.a + d);
+                drag.to = { a: at, b: at + (drag.b - drag.a) };
+            } else if (drag.what === 'start') {
+                drag.to = { a: Math.max(0, Math.min(snapTime(t, null), drag.b - CUE_MIN)),
+                            b: drag.b };
+            } else {
+                drag.to = { a: drag.a,
+                            b: Math.max(drag.a + CUE_MIN, snapTime(t, null)) };
+            }
+            drawCueLane({ cue: drag.cue, a: drag.to.a, b: drag.to.b });
+        },
+        () => {
+            if (drag && drag.moved && drag.to) {
+                setCueTime(drag.track, drag.cue, drag.to.a, drag.to.b);
+                cuesChanged('cue-time');
+            }
+            onSeek(undefined, false, true);
+            drag = null;
+        });
+}
+
+// ── the words, which a canvas cannot hold ──────────────────────────────────
+//
+// A strip under the waveform: the selected cue's span, a field for its line, and
+// the four presses the "Not yet" entry named — make one, split one at the
+// playhead, merge two, delete one.
+//
+// **The field writes on every keystroke and announces on `change`.** That is the
+// same rule as a drag committing on release, arrived at from the other side: the
+// model has to be current so the lane draws what is being typed, and an announce
+// per character would be a step of undo per character and a redraw of five stages.
+// `change` fires on blur and on Enter, which is where a sentence ends.
+
+/// What the strip is currently about, so that a redraw for the *same* cue leaves
+/// the field alone.
+///
+/// **This is the one control on the timeline with a caret in it**, and `draw()`
+/// runs on every model change — including the one the field itself makes. Rebuilt
+/// unconditionally, a keystroke would replace the input under the hand and the
+/// caret would jump to the end of the line on every character. So a repeat is the
+/// time label and the styled marker rewritten in place, which are the only two
+/// things that can change without the *subject* changing.
+let cueBarFor = null;
+
+/// The strip, redrawn.
+function drawCueBar() {
+    if (!cueBarRow) return;
+    cueBarRow.classList.toggle('hidden', !cueList.length);
+    if (!cueList.length) { cueBarFor = null; return put(cueBar, () => []); }
+    const track = (cueSel && cueSel.track) || cueList[0];
+    const cue = cueSel && cueSel.cue;
+
+    if (cueBarFor && cueBarFor.track === track && cueBarFor.cue === cue &&
+        cueBarFor.rows === cueList.length) {
+        if (cue && cueBarFor.when)
+            cueBarFor.when.textContent = `${cue.start.toFixed(2)} → ${cue.end.toFixed(2)}`;
+        return;
+    }
+    cueBarFor = { track, cue, rows: cueList.length, when: null };
+
+    // **The playhead is read inside the press and never captured here.** The
+    // strip is rebuilt when its subject changes and not when the playhead moves,
+    // so a moment taken at build time is the moment the cue was *selected* — and
+    // `Split` would then cut where you pressed rather than where the playhead has
+    // since been dragged to, which looks like a control that does not work.
+    //
+    // **The button's own name is the change's kind**, which is what keeps a split
+    // and the cue added after it two steps of undo: `ui/history.js` folds a run of
+    // one kind, and these four are four different things somebody did. All that
+    // is left folding is two presses of the same button inside half a second.
+    const press = (text, title, f, name) => el('button', {
+        cls: 'tiny', text, title, 'data-f': name,
+        on: { click: () => { f(playheadTime()); cuesChanged(name); draw(); } },
+    });
+
+    put(cueBar, () => {
+        const bits = [];
+        if (cueList.length > 1)
+            bits.push(el('span', { cls: 'cue-at', text: track.name }));
+        bits.push(press('+ Cue', 'A new cue at the playhead, running to the next cue or ' +
+                                 'two seconds, whichever comes first', (at) => {
+            const next = track.cues.find((k) => k.start > at + 1e-6);
+            const end = next ? Math.min(next.start, at + CUE_SECONDS) : at + CUE_SECONDS;
+            selectCue(track, addCue(track, at, Math.max(at + CUE_MIN, end), ''));
+        }, 'cue-add'));
+        if (!cue) {
+            bits.push(el('span', { cls: 'dim',
+                text: 'press a cue on the lane to edit its words, or drag its ends to ' +
+                      'retime it against the waveform' }));
+            return bits;
+        }
+        cueBarFor.when = el('span', { cls: 'cue-at',
+                                      text: `${cue.start.toFixed(2)} → ${cue.end.toFixed(2)}` });
+        bits.push(cueBarFor.when);
+        bits.push(el('input', {
+            type: 'text', 'data-f': 'cue-text', value: cue.text,
+            title: 'What this cue says. A newline is a line break the player keeps.',
+            on: {
+                input: (e) => { setCueText(track, cue, e.target.value); drawCueLane(); },
+                change: (e) => { setCueText(track, cue, e.target.value); cuesChanged(); },
+            },
+        }));
+        bits.push(press('Split', 'Cut this cue in two at the playhead. The words stay with ' +
+                                 'the first half and the second arrives empty, because where ' +
+                                 'in the sentence the cut goes is not something this can know.',
+                        (at) => { const half = splitCue(track, cue, at);
+                                  if (half) selectCue(track, half); }, 'cue-split'));
+        // **Offered only where there is a next cue to join.** A press that is
+        // always there and does nothing on the last cue is a control that looks
+        // broken; the last cue in a track simply has nothing after it, which is a
+        // fact about the track rather than a failure to report.
+        if (track.cues.indexOf(cue) < track.cues.length - 1)
+            bits.push(press('Merge', 'Join this cue with the next one — the words become two ' +
+                                     'lines and the span runs from this start to that end. ' +
+                                     'A merge replaces the words, so it costs the override ' +
+                                     'codes for the same reason retyping does.',
+                            () => { mergeCue(track, cue); }, 'cue-merge'));
+        bits.push(press('Delete', 'Take this cue out of the track',
+                        () => { removeCue(track, cue); selectCue(null, null); }, 'cue-delete'));
+        // Said here rather than only on the Write stage, because this is the
+        // field somebody is about to type into and that press is when the codes
+        // go. See `setCueText` in ui/cues.js for why the whole text field is
+        // replaced rather than the words inside the codes.
+        if (hasOverrides(cue))
+            bits.push(el('span', { cls: 'cue-styled',
+                text: 'styled — retyping drops this cue’s override codes',
+                title: 'This cue carries ASS override codes ({\\i1}, {\\pos(…)}) that came ' +
+                       'out of the file. They are written back exactly as they are until ' +
+                       'the words are retyped, which replaces the whole text field. Its ' +
+                       'style, layer and margins are kept either way.' }));
+        return bits;
+    });
+}
+
+/// The lane, for tests: what is on it, how tall a row is, and which cue is
+/// selected. The same reader `whenLane()` is, and for the same reason — a canvas
+/// cannot be asserted against, and a drag driven through `timeToX` plus this is
+/// the gesture rather than an imitation of it.
+export function cueLane() {
+    return { lane: cueRow ? cueRow.lane : null, tracks: cueList,
+             rowHeight: cueRowH, selected: cueSel };
+}
+
 function drawRuler() {
     const w = laneWidth();
     if (w <= 0) return put(ruler, () => []);
@@ -867,12 +1296,15 @@ export function draw() {
     syncLanes();
     syncHeads();
     syncSpanLane();
+    syncCueLane();
     fitHeights();
     clampView();
     drawRuler();
     for (const l of lanes) drawVideoLane(l.track, l.canvas);
     drawAudioLane();
     drawSpanLane();
+    drawCueLane();
+    drawCueBar();
     drawScrollbar();
 
     // A lane created a moment ago has not been through layout yet, so the width
@@ -956,17 +1388,22 @@ let laneStack = 0;
 
 /// How tall the box of lanes is, and how tall the timeline is around it.
 ///
-/// **Written on every draw and from two numbers**, which is the change the When
-/// lane forced: the video lanes divide a budget when the track count moves, and
-/// the When lane appears and disappears when a span is made or taken off, so
-/// neither of those two events can be the only place the total is stated. One
-/// function, called from `draw()`, and the two contributions are added.
+/// **Written on every draw and from three numbers now**, which is the change the
+/// When lane forced and the Cues lane confirmed: the video lanes divide a budget
+/// when the track count moves, and the other two appear and disappear on channels
+/// of their own, so no one of those events can be the only place the total is
+/// stated. One function, called from `draw()`, and the contributions are added.
+///
+/// The words strip is outside the box of lanes — it is a form and not a lane —
+/// so it is a term on the timeline's own height rather than on `#tracks`'s.
 function fitHeights() {
-    const stack = laneStack + spanStack;
+    const stack = laneStack + spanStack + cueStack;
     tracksEl.style.height = stack + 'px';
     // Everything above and below the box of lanes: the zoom bar, the ruler, the
-    // waveform, the scrollbar and the gaps between them.
-    timelineEl.style.height = (30 + 18 + 6 + stack + 4 + 44 + 6 + 9 + 6) + 'px';
+    // waveform, the words strip when there is one, the scrollbar and the gaps.
+    cueBarStack = cueList.length ? 4 + 24 : 0;
+    timelineEl.style.height =
+        (30 + 18 + 6 + stack + 4 + 44 + cueBarStack + 6 + 9 + 6) + 'px';
 }
 
 /// The sync lock on one track head: press it and this track ripples with every
@@ -1351,6 +1788,8 @@ export function initTimeline(refs) {
     scrollThumb = refs.scrollThumb;
     zoomLabel = refs.zoomLabel;
     timelineEl = refs.timeline;
+    cueBar = refs.cueBar;
+    cueBarRow = refs.cueBarRow;
     onSeek = refs.onSeek || onSeek;
     playheadTime = refs.playheadTime || playheadTime;
 

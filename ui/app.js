@@ -19,6 +19,7 @@ import { project, projectFps, makeClip, makeGenerator, applyGenerator, isGenerat
          setSpeed, speedOf, sourceSpan, sourceTime, timelineTime } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as generators from './generator.js';
+import * as cuesModel from './cues.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
@@ -262,6 +263,10 @@ timeline.initTimeline({
     playhead: el('playhead'),
     scrollTrack: el('tl-scroll'), scrollThumb: el('tl-thumb'),
     zoomLabel: el('tl-zoom'),
+    // The strip where the selected cue's words are typed. A form rather than a
+    // lane, so it is handed in as its own two boxes: the row it lives in comes
+    // and goes with the document holding any cues at all.
+    cueBar: el('cue-edit'), cueBarRow: el('cue-row'),
     playheadTime: () => transport.t,
     onSeek: (t, press, release) => {
         if (release) { if (resumeAfterScrub) { resumeAfterScrub = false; play(); } return; }
@@ -1880,6 +1885,14 @@ globalThis.__ffmpegBro = {
     // by *when*, and the way to check that two lists line up is to ask both.
     subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn, cuesFor, cueWindow,
                  cueTextFor, cueSaying },
+    // The cues the *document* holds, which is a different thing from every other
+    // entry above: those read a file and this one is the edit. On the surface
+    // whole rather than by named press, because what has to be checked about it
+    // is pure — what a fork keeps, what a split does to a span, and above all
+    // what comes out of `cueFileText`, which is the one place a person's styling
+    // can be lost and the only way to see it is to read the file that would be
+    // written without writing one.
+    cues: cuesModel,
     exporter, capture,
     // What this machine turned out to have, and the rule applied to it. On the
     // surface because the rule is a *pure* answer — a decision plus the sentence

@@ -759,6 +759,37 @@ button.track-lock.on { color: var(--accent); }
    lane of *statements* about the edit rather than as another lane of clips, which
    is what the darker box says. */
 #lane-when { background: #13151a; }
+/* The Cues lane, one row per track of cues the document holds. The same darker
+   box the When lane wears, for the same reason: it is a lane of things you wrote
+   rather than of shots you cut, and its height is the timeline's to write. */
+#lane-cues { background: #13151a; }
+
+/* The strip under the waveform where the selected cue's words are typed. A row
+   of the same shape as a lane so the head gutter lines up, but a form rather
+   than a canvas — a cue is text and text is what the DOM is for. */
+#cue-row { margin-top: 4px; height: 24px; }
+#cue-row.hidden { display: none; }
+.cue-edit {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 11px;
+}
+.cue-edit input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    padding: 0 5px;
+    font-size: 11px;
+}
+.cue-edit .cue-at {
+    font-family: Consolas, monospace;
+    color: var(--dim);
+    white-space: nowrap;
+}
+.cue-edit .cue-styled { color: var(--accent); white-space: nowrap; }
 
 .track-lane canvas {
     display: block;

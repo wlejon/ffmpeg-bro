@@ -105,13 +105,37 @@ Honest list of what does not work:
   does not pace — a second walk over the range, or a buffer measured in seconds
   instead of frames — and both of those are a second answer to how far ahead a
   preview is allowed to be.
-- **An editor for the cues themselves.** Everything here reads a subtitle file
-  and writes one; nothing lets you type a line, retime one against the
-  waveform, or split a cue at the playhead. The timeline has the lane that
-  would make it possible — A1 is where you would judge a timing — and none of
-  it is built. What a person with a file that is a second and a half out has
-  here is `-itsoffset` on the input, which shifts the whole track and is the
-  right tool for exactly that one problem and no other.
+- **Cues seen where they will be, and cues that keep their styling through a
+  retype.** A line can be typed, retimed against the waveform and split at the
+  playhead now — see [Cues of your own](subtitles.md#cues-of-your-own) and
+  [the Cues lane](timeline.md#the-cues-lane) — and two things about that are not
+  what they could be.
+
+  The first is that **the words are never on the picture.** The lane says when a
+  cue is and the strip says what it says, and the viewer shows neither, for the
+  reason the soft-track entry above gives: bro's `<video>` decodes pictures and
+  sound. So writing a subtitle here is writing it against a waveform and a ruler,
+  and the only way to see it over the shot is to burn a render's worth of it in
+  with `subtitles=`. Closing it is the same piece of work as that entry — an
+  overlay drawn by this application over the program monitor — with the same hard
+  half in it, which is that a soft track is styled by the *player*.
+
+  The second is that **retyping a cue drops that cue's override codes.** A track
+  forked from a file keeps everything — its script header, and each cue's layer,
+  style, margins and `{\i1}` — and a cue nobody retypes is written back byte for
+  byte. The moment its words are replaced, the whole text field is replaced with
+  them. Keeping the codes would mean deciding which `{\k40}` a retyped syllable
+  belongs to, which is a guess, and the loss is stated per cue on the strip and
+  counted on the Write stage rather than discovered afterwards. What is genuinely
+  not here is any way to *write* one: there is no style editor, deliberately —
+  writing an override from a control would be a second opinion about what it
+  means and libass has the only one that matters.
+
+  Two things it is worth saying are *not* missing. Nothing writes back to the
+  file a track came out of, ever, which is a decision and not a gap. And
+  `-itsoffset` on the input is still exactly the right tool for a track that is
+  uniformly out: it shifts the whole thing with one number, which a hundred cue
+  edits is a poor substitute for.
 - **Picture subtitles as text, or through libass.** `dvdsub` and
   `hdmv_pgs_subtitle` can be carried into a container that holds them, and they
   can now be **drawn** — see [Drawing them, when they are
@@ -120,7 +144,10 @@ Honest list of what does not work:
   they never could: `subrip`, because that is optical character recognition, and
   burned in with `subtitles=`, because that filter is libass and libass reads
   characters. Both refusals name the reason rather than failing at the first
-  cue, and drawing is offered in place of the second.
+  cue, and drawing is offered in place of the second. `Edit these cues` is
+  refused for the first reason again — there is nothing in a picture of
+  characters to type into — and it is the same `AV_CODEC_PROP_TEXT_SUB` behind
+  all three.
 
   Three things about the drawn path are not what they could be. It opens the
   file a **second time** — one `-i` for the clip's picture and one for its cues —

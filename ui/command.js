@@ -760,6 +760,25 @@ function notes(p) {
                     'no file; the second reads them and writes the output. This binary ' +
                     'runs both as one job, with one Stop and one progress bar.']);
 
+    // **Cues this document holds, and the `-i` that is how they get there.**
+    // ffmpeg has no way to receive cues except as a file, so a render writes one
+    // and reads it back — which is not a compromise but the only exact form, and
+    // it is why the command above stays *runnable* rather than joining the
+    // chapters below in the "not expressible" line. Said because the `-i` looks
+    // like a file somebody added on the Sources stage and is not: nothing put it
+    // there, this render did.
+    const cueFiles = p.spec.cueFiles || [];
+    if (cueFiles.length)
+        lines.push([span('Cues, written: ', 'lead'),
+                    `${cueFiles.length === 1 ? 'one of the -i files above is'
+                                             : `${cueFiles.length} of the -i files above are`} ` +
+                    'not something you added — the render writes ' +
+                    `${cueFiles.length === 1 ? 'it' : 'them'} beside the output from the cues ` +
+                    'this document holds, because ffmpeg takes cues from an input and there ' +
+                    'is nowhere else to put them. The times in the file are already the ' +
+                    'output’s, which is why there is no -ss in front of it. Run this command ' +
+                    'after a render and the file is there; run it before one and it is not.']);
+
     // The one thing on this stage that an ffmpeg command line genuinely cannot
     // say. There is no `-chapter` option: ffmpeg takes chapters from an input,
     // so the equivalent is an FFMETADATA file and a second `-i`. Printing one

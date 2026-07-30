@@ -255,6 +255,16 @@ JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
 /// there is nothing in them to read, which is a different answer from "this
 /// track has no cues" and has to reach the panel as one — an absence with a
 /// reason beats a blank column. No decoder is opened for such a track at all.
+///
+/// **Each cue comes back twice, and `header` beside them, because there are two
+/// readers now.** The Write stage's cue list wants `text` — the words, with the
+/// dialogue fields and the override codes taken out, which is all a column has
+/// room for. `ui/cues.js` wants to be able to write the track out *again*, and
+/// for that the lossy answer is the one that loses somebody's styling: so `raw`
+/// is the dialogue line as it arrived and `header` is the decoder's
+/// `subtitle_header`. Both are on the same answer rather than behind a flag,
+/// because the cost of this call is the decoder and the walk — the strings are
+/// already in hand by the time either question is asked.
 JSValue js_cueText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "cueText(path) requires a path or an input");
@@ -277,6 +287,9 @@ JSValue js_cueText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
     JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
     JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
+    // Everything the cues are written *against* — the styles, the resolution
+    // the positions are in, and the `Format:` line their fields are ordered by.
+    setStr(ctx, out, "header", list.header);
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
     for (const CueLine& c : list.cues) {
@@ -284,6 +297,7 @@ JSValue js_cueText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, c.start));
         JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, c.end));
         setStr(ctx, o, "text", c.text);
+        setStr(ctx, o, "raw", c.raw);
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     JS_SetPropertyStr(ctx, out, "cues", arr);

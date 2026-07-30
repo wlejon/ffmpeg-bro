@@ -1,10 +1,7 @@
 // Subtitles: where a track comes from, and what it can be written as.
 //
-// A subtitle stream is the one kind on the Write stage with **no composed
-// source**. A picture is made — the canvas — and a soundtrack is made — the mix
-// — and there is no third thing here that makes cues. So a subtitle row is
-// always reading something that already exists, and there are exactly two ways
-// to read it:
+// A subtitle row on the Write stage says where its cues come from, and there are
+// three answers. Two of them read a file that already exists:
 //
 //   - **Carried** (`copy:0:2`). The packets that are already there, into the new
 //     container unchanged. Instant, lossless, and only possible where the
@@ -13,6 +10,15 @@
 //     output container holds — an `.srt` becoming `mov_text` in an mp4, `ass` in
 //     a Matroska file, `webvtt` in a `.vtt` beside the video. This is `-c:s
 //     mov_text` against `-c:s copy`, and it is the same `-map` either way.
+//
+// The third is **edited** (`cues:3`) — the cues the document itself holds, in
+// `ui/cues.js`, typed and retimed on the timeline. This is still not a *composed*
+// source in the way the canvas and the mix are: a render materialises the track
+// into a real subtitle file beside the output and reads it as an ordinary `-i`,
+// because ffmpeg has no way to receive cues except as a file. By the time a spec
+// reaches the renderer such a row has become a `decode:` of that file, which is
+// why nothing downstream of `ui/export/spec.js` has had to learn the third form
+// exists.
 //
 // The third thing people mean by "subtitles" is **burning them into the
 // picture**, which is not a stream at all: it is `subtitles=` on the Graph
@@ -52,6 +58,31 @@ import { muxerInfo } from './capabilities.js';
 /// Every subtitle encoder this build links. Discovered rather than named — see
 /// `availableSubtitleEncoders` — so a build that gains one gains it here.
 export const subtitleEncoders = () => (bro.ffmpeg.subtitleEncoders || []);
+
+// ── the third way a subtitle row reads ─────────────────────────────────────
+//
+// `cues:3` — the cues the *document* holds, in `ui/cues.js`. It is neither of
+// the two above and it could not be: there is no `-i` behind it until a render
+// writes one, because ffmpeg has no way to receive cues except as a file.
+//
+// **What lives here is the string and nothing else.** Parsing `cues:3` is a fact
+// about a row's source, so it belongs beside `parseDecode` — but a *list* of cue
+// tracks is a fact about the document, so it belongs where the document can be
+// seen. `ui/export/streams.js` builds the menu, because `ui/cues.js` reads this
+// module and importing it back would be a cycle for one array.
+
+/// `cues:3` → 3, or null. A track id, which is a name written down: see the ids
+/// rule at the top of ui/document.js.
+export function parseCueTrack(source) {
+    const m = /^cues:(\d+)$/.exec(String(source || ''));
+    return m ? Number(m[1]) : null;
+}
+
+export function isCueRow(row) {
+    return parseCueTrack(row && row.source) !== null;
+}
+
+export const cueSource = (id) => `cues:${id}`;
 
 /// `decode:1:0` → `{ input: 1, stream: 0 }`, or null.
 export function parseDecode(source) {

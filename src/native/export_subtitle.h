@@ -106,6 +106,25 @@ bool parseDecodeSource(const std::string& source, int* input, int* stream);
 //     question is settled by `AV_CODEC_PROP_TEXT_SUB` before anything is read,
 //     which is the same property that decides whether such a track can be
 //     converted or burned in.
+//   - **It answers twice about the same cue, and the second answer is the one
+//     that can be given back.** `CueLine::text` is what a person reads and it
+//     is lossy by design — the eight leading fields and every `{\i1}` are gone,
+//     because a column of override codes is worse than a column of nothing.
+//     `CueLine::raw` is the dialogue line exactly as the decoder handed it over
+//     and `CueText::header` is that decoder's `subtitle_header`, and between
+//     them they are everything an `.ass` file needs to be written again: the
+//     styles, the resolution the positions are against, and per cue its layer,
+//     its style, its margins and its overrides.
+//
+//     That pair exists because of what `ui/cues.js` does with the answer.
+//     Taking a file's cues into the document to edit them is a **fork**, and a
+//     fork through `text` alone would silently flatten somebody's styled
+//     subtitles the moment they retimed one line — losing work, quietly, which
+//     is the one failure this whole path is arranged against. With `raw` a cue
+//     nobody retyped is written back byte for byte, and a cue somebody did
+//     retype loses its own overrides and keeps its style, which the UI says out
+//     loud per cue. The alternative — a second reader that kept the payload —
+//     would be two decoders and two answers about one track.
 //
 // **The clock is the packets', which is `cueTimesOf`'s.** These are the same
 // cues that list describes, and the panel draws one against the other, so a
@@ -113,11 +132,21 @@ bool parseDecodeSource(const std::string& source, int* input, int* stream);
 // therefore the epoch and `cueEpoch` — the clock a *render* places cues on — is
 // deliberately not, for the reason its own doc comment gives.
 
-/// One cue's words.
+/// One cue's words, and the line they came out of.
 struct CueLine {
     double start = 0.0;
     double end = 0.0;      ///< == start where nothing timed the end
     std::string text;      ///< the words, with ASS override codes taken out
+    /// The dialogue line verbatim — `ReadOrder,Layer,Style,…,Effect,Text` —
+    /// or empty for a decoder that handed over a plain-text rect instead.
+    ///
+    /// **The first ASS rect's, and only the first.** No text decoder in this
+    /// build produces two of them for one cue; joining two dialogue lines would
+    /// have to invent a line neither of them is, since a `,` inside one is a
+    /// field separator. A second rect's *words* are still in `text`, which is
+    /// what the panel draws, so nothing is hidden — what cannot be written back
+    /// exactly is a shape nothing here produces.
+    std::string raw;
 };
 
 /// What a subtitle track says over the window asked for — or why it says
@@ -132,6 +161,17 @@ struct CueText {
     bool text = false;      ///< `AV_CODEC_PROP_TEXT_SUB`: is there anything to read at all
     bool complete = false;
     double from = 0.0, to = 0.0;
+    /// The decoder's `subtitle_header`, which is an ASS script's `[Script
+    /// Info]`, `[V4+ Styles]` and the `[Events]` `Format:` line — everything a
+    /// cue's fields are written *against*. Empty for a bitmap track, which
+    /// opens no decoder, and for one whose decoder declares none.
+    ///
+    /// This is the same buffer `Writer::openSubtitleStream` memcpys into the
+    /// encoder, and for the same reason: an ASS file's look lives in the header
+    /// and not in the cues, so an `ass`→`ass` pass that dropped it would keep
+    /// every line of dialogue and silently throw away how it appears. One home
+    /// for that fact; if the copy there changes, this has to.
+    std::string header;
     std::vector<CueLine> cues;
 };
 

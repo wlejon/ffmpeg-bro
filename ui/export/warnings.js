@@ -13,8 +13,9 @@ import { isCopy, copiedStream, copiedInput, keyframesFor, keyframeAtOrBefore,
          containerOf, parseCopy } from './copy.js';
 import { kindOf, schemeOf, protocolLinked } from './destination.js';
 import { versionProblems } from './versions.js';
-import { readsInput, readStream, subtitleCodecsOf,
-         defaultSubtitleCodec } from './subtitles.js';
+import { readsInput, readStream, subtitleCodecsOf, defaultSubtitleCodec,
+         isCueRow, parseCueTrack } from './subtitles.js';
+import { trackById as cueTrackById, cuesIn, fileExtension, demuxerFor } from '../cues.js';
 import { parsePad, isPad } from './pads.js';
 import { isEmpty as noUserNodes } from '../graph/overlay.js';
 import { whereIs } from '../graph/check.js';
@@ -147,6 +148,28 @@ function subtitleWarnings(list) {
     for (const s of subs) {
         const where = labelOf(list, list.indexOf(s));
         const stream = readStream(s);
+        // A row reading the document's own cues reads no input, so the three
+        // tests below are about a file it does not have. What can go wrong here
+        // is its own list: a track with nothing inside the render range, and a
+        // build that cannot read back the format this application would write.
+        // Both are said rather than sent — `attachCueFiles` drops such a row, and
+        // a stream silently missing from a file is the failure that reaches
+        // somebody as "the subtitles did not work".
+        if (isCueRow(s)) {
+            const track = cueTrackById(parseCueTrack(s.source));
+            const r = range();
+            if (!track)
+                out.push(`${where} names a track of cues this document no longer has`);
+            else if (!cuesIn(track, r.start, r.end))
+                out.push(`${where} has no cue inside the render range, so no subtitle ` +
+                         `stream will be written — ${track.cues.length ? 'the cues are ' +
+                         'outside it' : 'the track is empty'}`);
+            else if (!demuxerFor(fileExtension(track)))
+                out.push(`${where} would be written as a .${fileExtension(track)} file for ` +
+                         'the render to read back, and this build has no demuxer for one — ' +
+                         'so it will not be written');
+            continue;
+        }
         if (!readsInput(s)) {
             out.push(`${where} has no file to read cues from, so it will not be written — ` +
                      'add a subtitle file on the Sources stage');
