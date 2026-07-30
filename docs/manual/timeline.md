@@ -40,10 +40,14 @@ suite stacks them:
   so an over is something you see rather than something you infer from a shape
   that has run out of room.
 
-Both come from `bro.media` (see bro's `docs/video-api.js`), which decodes the
-whole file through the same backend registry `<video>` plays through. Both are
-full-file decodes, so ffmpeg-bro runs them in a Worker and the lanes fill in
-behind a UI that never stops responding.
+- **When** — the spans that turn a filter on and off part way through the render,
+  drawn where the shots they cover are. It is only there when there are any; see
+  [the When lane](#the-when-lane).
+
+The filmstrips and the waveform come from `bro.media` (see bro's
+`docs/video-api.js`), which decodes the whole file through the same backend
+registry `<video>` plays through. Both are full-file decodes, so ffmpeg-bro runs
+them in a Worker and the lanes fill in behind a UI that never stops responding.
 
 **Zoom** with the wheel, about the pointer — the only version that lets you
 dive into a moment instead of steering the window back after every notch.
@@ -163,6 +167,60 @@ where an `-i` would be for a file. It is a **derived** node: rebuilt on every
 timeline edit and gone when you delete the bar. A generator you place on that stage
 by hand is the other thing entirely — a node, with no lane and no bar — and the two
 do not interfere.
+
+## The When lane
+
+A filter does not have to run for the whole render: `enable=` turns one on and off
+part way through, and the [Graph stage](graph.md#when-it-is-on) is where an
+expression is written. What that stage cannot answer is the question the spans are
+usually about — *does the blur cover the whole of this take, does the logo come off
+before the cut* — because the take is here.
+
+So every span that exists is drawn here, under the video tracks, as a region on
+the timeline's own ruler:
+
+| | |
+|---|---|
+| drag a region's end | move where it comes on, or goes off |
+| drag its middle | move the whole span, keeping its length |
+| press anywhere on the lane | the playhead goes there, as on any other lane |
+
+Ends snap to the same things a clip snaps to — the start of the timeline, the
+playhead, and the other clips' edges — because "cover exactly that shot" is what
+the gesture is nearly always for. A whole-span drag snaps by whichever of its two
+edges lands on something.
+
+**The lane is there because spans are.** An edit with none does not carry an empty
+lane; a span made on the Graph stage is here when you come back; taking the last
+one off takes the lane with it. That is the same rule the video lanes follow —
+how many there are is a property of the edit and not of the window.
+
+**One row per node, and each says which node it is.** A `hue` on one shot and a
+`drawtext` over the whole canvas are two rows, each carrying the filter's name and
+what it is on — `hue · V1 shot.mp4`, `drawtext · the whole canvas` — in a colour of
+its own. The name is drawn at the left of its row and the regions are translucent
+over it, so it is readable at any zoom rather than only where a region is wide
+enough to hold it.
+
+Rows rather than one shared strip, and that is the load-bearing part: two spans
+from different nodes that overlap in time would otherwise be drawn over each other
+and the one underneath would be unreachable by the pointer, which is the whole
+gesture. The rows are ordered by the clip each node is about, so a drag — which
+moves a span and never a clip — can never reorder them underneath your hand. A
+node you delete takes its row with it.
+
+**It is the same edit as the strip in the column**, through the same two functions,
+so a span dragged here and a span dragged there cannot come to mean different
+things, and either is one press of `Ctrl`+`Z`. It travels in the
+[document](document.md) with the rest of the graph.
+
+Two kinds of span are deliberately not on it, and each because there is nothing
+true to draw. A filter on a file the *graph* reads on its own account — a
+watermark, a logo bug — is written in that file's own timestamps and no clip is cut
+from it, so no second of the edit corresponds to its `t=5`; it has a strip in the
+column, where the ruler is that file's. And `enable` on a filter libavfilter says
+has no timeline support is a graph that will not build, reported on the node rather
+than drawn as a region you could drag.
 
 ## The sync lock
 

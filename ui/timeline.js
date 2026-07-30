@@ -17,6 +17,25 @@
 // the whole lane carries a wash of it — because a ripple that moved clips on a
 // lane nobody was looking at is the exact failure the lock exists to prevent,
 // and a state you discover after the drag is no better than no control at all.
+//
+// **A third kind of lane: When.** Under the stack, one row per filter node whose
+// `enable=` turns it on for part of the render — see `ui/graph/spans.js`, which is
+// where the list comes from and where the write-back goes. It is here rather than
+// only in the column beside the graph because a span is about a *shot*: "does the
+// blur cover the whole of this take" is a question about two rectangles on one
+// ruler, and the ruler is this one. Three rules it follows, each of them the same
+// rule something else on this timeline follows:
+//
+//   - **It exists because spans do**, the way the video lanes exist because
+//     `trackCount()` says so. An edit with no spans carries no When lane, and one
+//     made on the Graph stage is here when you come back.
+//   - **One row per node**, so two spans that overlap in time are two regions in
+//     two rows and both stay reachable by the pointer. Each row says which node
+//     it is, in words and in a colour of its own.
+//   - **What a press means is decided in one place** — `spanGrabAt`, beside
+//     `grabAt`, which is the same decision for the same reason and deliberately
+//     not the same function: a clip and a span are not two readings of one press,
+//     they are on different lanes.
 
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
          isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
@@ -26,6 +45,7 @@ import { rulerLabel, clock } from './format.js';
 import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
 import { setIcon } from './icons.js';
+import { spanRows, placeSpans, editEdge, editBody, commitSpans } from './graph/spans.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
 let lanes = [];                 // [{ row, head, lock, lane, canvas }] bottom track first
@@ -44,6 +64,36 @@ const TRIM_GRAB = 6;
 // below which they stop shrinking and the timeline grows instead.
 const LANE_BUDGET = 110;
 const LANE_FLOOR = 18;
+
+// The When lane: how tall one row wants to be, how much the rows share, and the
+// height below which they stop shrinking. A row is a region and a name, so the
+// ideal is one line of the 10px face with room around it; the budget is a little
+// over four of those, because past that the lane starts competing with the
+// filmstrips for a window that has a viewer in it. Below the floor a row is a
+// coloured bar with no room for its name, which is still worth having — it says
+// where and it says how many — so the lane grows rather than hiding rows.
+const SPAN_ROW = 14;
+const SPAN_BUDGET = 62;
+const SPAN_FLOOR = 8;
+
+// The colours a row is told apart by. Six, because the label is what actually
+// names a node and this is what makes two rows readable as two at a glance; a
+// palette long enough to be unique per node would be a set of colours nobody
+// could tell apart anyway. Chosen clear of the three colours a *clip* is drawn in
+// — blue for a filmstrip, green for sound, violet for a generator — and clear of
+// the accent, which everywhere on this timeline means "selected".
+//
+// Each is a pair: the line, and the wash under it. The wash is transparent
+// because the row's name is drawn *under* the regions, so that a span sitting
+// over the name does not take the name away.
+const SPAN_TINTS = [
+    ['#7cc4ff', 'rgba(124, 196, 255, 0.22)'],
+    ['#ffcf5c', 'rgba(255, 207, 92, 0.20)'],
+    ['#6fdcb0', 'rgba(111, 220, 176, 0.20)'],
+    ['#ff8fa3', 'rgba(255, 143, 163, 0.20)'],
+    ['#c98bff', 'rgba(201, 139, 255, 0.22)'],
+    ['#a8d95c', 'rgba(168, 217, 92, 0.20)'],
+];
 
 /// A copy, not the live window: handing out the object itself means a caller
 /// that holds on to it is silently watching it change rather than remembering
@@ -197,6 +247,48 @@ function grabAt(x, track) {
     if (best) return best;
     const clip = clipAtX(x, track);
     return clip ? { clip, what: 'move' } : null;
+}
+
+/// What a press at (x, y) on the When lane means: one end of a span, the whole of
+/// one, or nothing.
+///
+/// **Beside `grabAt` and not inside it.** The two answer the same question and
+/// they are deliberately two functions, because a press is on one lane or the
+/// other and there is nothing to disambiguate: a clip and a span are never under
+/// the same pixel. Folding them together would mean a single function taking a
+/// track number *or* a row number and deciding which it had been given, which is
+/// the shape that eventually mistakes one for the other. What is shared is the
+/// rule — edges first, nearest edge wins, the body only if no edge was near — and
+/// `TRIM_GRAB` is shared with it, so a grab zone is the same size wherever you
+/// reach for one.
+///
+/// An end that does not exist is not offered: `gt(t,4)` has no far edge and a grip
+/// on the end of the row would say it had one. That is the same restraint the
+/// strip's own handles follow, and it comes from the model — `drawn[].to` — rather
+/// than from anything measured here.
+function spanGrabAt(x, y) {
+    if (!spanRowH) return null;
+    const row = spanList[Math.floor(y / spanRowH)];
+    if (!row) return null;
+    let best = null, bestD = TRIM_GRAB + 1;
+    for (const d of row.drawn) {
+        const l = timeToX(d.a), r = timeToX(d.b);
+        const dl = Math.abs(x - l), dr = Math.abs(x - r);
+        // The half-pixel tie-break `grabAt` uses, for the same reason: two spans
+        // butted together share an x, so "the span under the pointer" has no
+        // answer there and "the nearest end of any of them" always does. On an
+        // exact tie the one that *starts* there wins, which is the one whose left
+        // edge is drawn on top.
+        if (d.from && dl <= TRIM_GRAB && dl - 0.5 < bestD)
+            { bestD = dl - 0.5; best = { row, at: d.i, what: 'from' }; }
+        if (d.to && dr <= TRIM_GRAB && dr < bestD)
+            { bestD = dr; best = { row, at: d.i, what: 'to' }; }
+    }
+    if (best) return best;
+    for (const d of row.drawn)
+        if (x >= timeToX(d.a) && x <= timeToX(d.b))
+            return { row, at: d.i, what: 'move' };
+    return null;
 }
 
 // ── drawing ────────────────────────────────────────────────────────────────
@@ -544,6 +636,176 @@ function drawAudioLane() {
     }
 }
 
+// ── the When lane ──────────────────────────────────────────────────────────
+//
+// One row per filter node whose `enable=` turns it on for part of the render, and
+// the spans of that node drawn as regions on the timeline's own ruler. The list —
+// what the spans are, which clock each is written in, and where that puts them in
+// timeline seconds — is `ui/graph/spans.js`; nothing below works any of it out.
+
+/// The lane's own DOM, or null when the edit has no spans in it.
+let spanRow = null;
+/// The rows as of the last `syncSpanLane()`. Held so that the draw, the hit test
+/// and a drag in flight are all about the same list: re-asking per event would
+/// mean a derivation per mouse move, and re-asking between the press and the
+/// release would mean the row under the hand could be a different row by the time
+/// it was let go of.
+let spanList = [];
+/// How far apart the rows are, **measured rather than chosen**: every box in this
+/// application is `border-box`, so a lane styled 42px tall has 40px of canvas in
+/// it, and rows laid out at the height they were asked for would run past the
+/// bottom and leave the last one clipped. So `syncSpanLane()` decides what the
+/// lane's *height* is and the draw divides what it actually got — which is also
+/// what the hit test has to use, or a press would find a different row from the
+/// one it was aimed at.
+let spanRowH = 0;
+/// Pixels the lane and the gap above it come to, for `fitHeights()`.
+let spanStack = 0;
+
+/// Which of the six colours each row is drawn in, in row order.
+///
+/// **Hashed from the key rather than taken from the row's position**, so a node
+/// keeps its colour when another one appears above it — a lane that recoloured
+/// itself every time a span was added somewhere else would make the colour worth
+/// nothing, and the whole job of the colour is to be the thing you recognise a row
+/// by between glances.
+///
+/// Adjacent rows that come out the same are nudged apart, which is why this is one
+/// pass over the list rather than a function of one key: two touching rows in one
+/// colour is the case the eye reads as a single row, and nudging the second one
+/// can only be decided against what the first one *ended up* as.
+function tintsFor(rows) {
+    const out = [];
+    for (let r = 0; r < rows.length; r++) {
+        const key = String(rows[r].key || '');
+        let h = 0;
+        for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) % 9973;
+        let i = h % SPAN_TINTS.length;
+        if (r && i === out[r - 1]) i = (i + 1) % SPAN_TINTS.length;
+        out.push(i);
+    }
+    return out;
+}
+
+/// Build or drop the lane so that it is there exactly when there are spans.
+///
+/// **`trackCount()`'s idiom**: the timeline shows lanes for what the edit has, so
+/// an edit with nothing on this lane does not carry an empty one, and a span made
+/// three stages away on the Graph stage puts the lane here without anybody
+/// switching it on. It is a row inside `#tracks` rather than a sibling of the
+/// audio row, which is what puts the playhead through it — `#playhead` spans that
+/// box — and the playhead is half of what makes a region on this lane answer
+/// anything.
+function syncSpanLane() {
+    spanList = spanRows();
+    const want = spanList.length;
+    if (!want) {
+        if (spanRow) { tracksEl.removeChild(spanRow.row); spanRow = null; }
+        spanRowH = 0;
+        spanStack = 0;
+        return;
+    }
+    if (!spanRow) {
+        const row = el('div', { cls: 'track-row when-row' });
+        const head = el('div', { cls: 'track-head',
+            title: 'Filters that are on for part of the render — one row per node, ' +
+                   'each drawn where the shot it covers is. Drag an end to move it, ' +
+                   'the middle to move the whole span.' },
+            [el('span', { cls: 'track-name', text: 'When' })]);
+        const lane = el('div', { cls: 'track-lane', id: 'lane-when' });
+        const canvas = document.createElement('canvas');
+        lane.appendChild(canvas);
+        row.appendChild(head);
+        row.appendChild(lane);
+        // After every video lane — `syncLanes()` inserts those at the front — and
+        // before the playhead, which has to stay last in the box.
+        tracksEl.appendChild(row);
+        tracksEl.appendChild(playhead);
+        spanRow = { row, head, lane, canvas };
+        wireSpanLane(spanRow);
+        rebuilt = true;
+    }
+    // A row wants `SPAN_ROW`; the rows share `SPAN_BUDGET` between them and stop
+    // shrinking at `SPAN_FLOOR`, at which point the lane grows instead — the same
+    // trade `syncLanes()` makes, and for the same reason: a row too short to be a
+    // region is not worth the pixels it saves.
+    const pitch = Math.max(SPAN_FLOOR, Math.min(SPAN_ROW, Math.floor(SPAN_BUDGET / want)));
+    // Two for the lane's own border, so that what is left inside it — which is
+    // what the canvas measures and what `spanRowH` is divided out of — is exactly
+    // the rows.
+    const h = want * pitch + 2;
+    spanRow.lane.style.height = h + 'px';
+    spanRow.row.style.height = h + 'px';
+    spanRow.head.classList.toggle('tiny', pitch < 22);
+    // The 4px is the gap `.track-row + .track-row` puts above it.
+    spanStack = 4 + h;
+}
+
+/// The rows, and the spans on them.
+///
+/// **The name is drawn first and the regions over it**, in a wash rather than a
+/// solid, so that a span sitting on top of the name does not take the name away.
+/// That is what makes the row readable at any zoom and any pan: the alternative
+/// was a label inside each region, which vanishes the moment a span is narrower
+/// than its filter's name — and a region nobody can attribute is exactly what this
+/// lane exists not to be.
+function drawSpanLane(over) {
+    if (!spanRow) return;
+    const c = laneContext(spanRow.canvas);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    // The pitch the hit test will use, taken from the height the lane actually
+    // got. See `spanRowH`.
+    const rh = spanRowH = h / Math.max(1, spanList.length);
+    const tints = tintsFor(spanList);
+
+    spanList.forEach((row, i) => {
+        const top = i * rh;
+        const [line, wash] = SPAN_TINTS[tints[i]];
+
+        // Every other row banded, so a stack of them reads as rows rather than as
+        // one lane with shapes at different heights.
+        if (i % 2) {
+            ctx.fillStyle = 'rgba(255,255,255,0.025)';
+            ctx.fillRect(0, top, w, rh);
+        }
+
+        if (rh >= 11) {
+            ctx.font = '10px Consolas, monospace';
+            const base = top + rh - 3;
+            ctx.fillStyle = line;
+            ctx.fillText(row.filter, 4, base);
+            ctx.fillStyle = '#7c838f';
+            ctx.fillText(` · ${row.where}`, 4 + ctx.measureText(row.filter).width, base);
+        }
+
+        // The working copy while a drag is in flight, so the regions follow the
+        // hand without a write — a write locks the node and redraws the stage,
+        // which at sixty frames a second would rebuild the lane out from under it.
+        // By key rather than by object, because a redraw can arrive in the
+        // middle of a gesture — pressing the lane moves the playhead, which can
+        // change the selection, which redraws the timeline — and the list it
+        // rebuilds is a fresh set of row objects describing the same nodes.
+        const drawn = (over && over.key === row.key && over.drawn) || row.drawn;
+        for (const d of drawn) {
+            const x0 = timeToX(d.a), x1 = timeToX(d.b);
+            const l = Math.max(0, x0), r = Math.min(w, x1);
+            if (r <= l) continue;
+            ctx.fillStyle = wash;
+            ctx.fillRect(l, top + 1, r - l, rh - 2);
+            ctx.strokeStyle = line;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(l + 0.5, top + 1.5, Math.max(1, r - l - 1), rh - 3);
+            // The ends you can hold, and only the ends that exist. Drawn where
+            // the edge is actually on screen, so a span running off the window
+            // does not grow a grip at the edge of it.
+            ctx.fillStyle = line;
+            if (d.from && x0 >= 0) ctx.fillRect(l, top + 1, 2, rh - 2);
+            if (d.to && x1 <= w) ctx.fillRect(r - 2, top + 1, 2, rh - 2);
+        }
+    });
+}
+
 function drawRuler() {
     const w = laneWidth();
     if (w <= 0) return put(ruler, () => []);
@@ -583,10 +845,13 @@ function drawScrollbar() {
 export function draw() {
     syncLanes();
     syncHeads();
+    syncSpanLane();
+    fitHeights();
     clampView();
     drawRuler();
     for (const l of lanes) drawVideoLane(l.track, l.canvas);
     drawAudioLane();
+    drawSpanLane();
     drawScrollbar();
 
     // A lane created a moment ago has not been through layout yet, so the width
@@ -657,13 +922,30 @@ function syncLanes() {
         l.lane.style.height = h + 'px';
         l.row.style.height = h + 'px';
     }
-    const stack = want * h + (want - 1) * 4;
-    tracksEl.style.height = stack + 'px';
-    // Everything above and below the video lanes: the zoom bar, the ruler, the
-    // waveform, the scrollbar and the gaps between them.
-    timelineEl.style.height = (30 + 18 + 6 + stack + 4 + 44 + 6 + 9 + 6) + 'px';
+    laneStack = want * h + (want - 1) * 4;
     // A short lane has no room for a pill with a name in it.
     for (const l of lanes) l.head.classList.toggle('tiny', h < 22);
+}
+
+/// Pixels the video lanes and their gaps come to. Held rather than recomputed,
+/// because `syncLanes()` returns early when the track count has not changed and
+/// the height still has to be written on every draw — the When lane comes and
+/// goes on a channel of its own.
+let laneStack = 0;
+
+/// How tall the box of lanes is, and how tall the timeline is around it.
+///
+/// **Written on every draw and from two numbers**, which is the change the When
+/// lane forced: the video lanes divide a budget when the track count moves, and
+/// the When lane appears and disappears when a span is made or taken off, so
+/// neither of those two events can be the only place the total is stated. One
+/// function, called from `draw()`, and the two contributions are added.
+function fitHeights() {
+    const stack = laneStack + spanStack;
+    tracksEl.style.height = stack + 'px';
+    // Everything above and below the box of lanes: the zoom bar, the ruler, the
+    // waveform, the scrollbar and the gaps between them.
+    timelineEl.style.height = (30 + 18 + 6 + stack + 4 + 44 + 6 + 9 + 6) + 'px';
 }
 
 /// The sync lock on one track head: press it and this track ripples with every
@@ -732,6 +1014,20 @@ function syncHeads() {
 export function laneOf(track) {
     for (const l of lanes) if (l.track === track) return l;
     return null;
+}
+
+/// The When lane as it is on screen — `{ lane, rows, rowHeight }`, or `null` when
+/// the edit has no spans and so has no lane.
+///
+/// A reader and nothing else, and it exists because everything this lane claims is
+/// drawn into a canvas: which node a region belongs to, where its ends are, and
+/// how many rows there are cannot be read off the DOM. So the rows a test drags on
+/// are the rows the draw used, which is also what makes an assertion about the
+/// lane an assertion about the picture rather than about the model a second time —
+/// `ui/graph/spans.js` is where the model is checked.
+export function whenLane() {
+    if (!spanRow) return null;
+    return { lane: spanRow.lane, rows: spanList, rowHeight: spanRowH };
 }
 
 /// Which lane a page-space y is over, for dragging a clip between tracks.
@@ -931,6 +1227,95 @@ function wireVideoLane(entry) {
         });
 }
 
+/// A whole span's move, snapped like a clip's.
+///
+/// The same targets `snapStart` uses and for the same reason: the answer somebody
+/// wants out of this lane is almost always "cover exactly that shot", and the ends
+/// of the shots are on the timeline to be snapped to. `by` is a *distance* and
+/// comes back as one, so the caller can hand it to the model unmapped — both
+/// clocks run at a second per second, and only their origins differ.
+///
+/// Both ends are tried, because a span is snapped by whichever of its edges lands
+/// on something: dragging a span so its tail meets a cut is as much the gesture as
+/// dragging its head there.
+function snapShift(a, b, by) {
+    const tolerance = (view.span / Math.max(1, laneWidth())) * 7;
+    const targets = [0, playheadTime()];
+    for (const c of project.clips) targets.push(c.start, c.start + c.length);
+    let best = by, bestD = tolerance;
+    for (const t of targets)
+        for (const edge of [a + by, b + by]) {
+            const d = Math.abs(edge - t);
+            if (d < bestD) { bestD = d; best = by + (t - edge); }
+        }
+    return best;
+}
+
+/// The When lane: press to seek, drag an end to move it, drag the middle to move
+/// the whole span.
+///
+/// **Committed on release and not on every move.** A write goes through
+/// `overlay.edit`, which on a derived node records a lock and in every case
+/// announces an edit — a step of undo, a redraw of the spine, the command bar, the
+/// Graph stage and this lane. At sixty frames a second that would rebuild the lane
+/// under the hand holding it and leave sixty steps of history behind one gesture.
+/// So the regions follow the pointer from a working copy and one write ends the
+/// drag. Same rule, and the same reason, as the strip in the column.
+///
+/// **And nothing is written when the pointer never moved**, which is the same trap
+/// the strip fell into: `printEnable(parseEnable(text))` is not the text —
+/// `between(t,1.00,2.00)` comes back `between(t,1,2)` — so a bare click on a
+/// region would rewrite somebody's expression, and on a derived node it would
+/// write a lock that outranks the edit for ever after.
+function wireSpanLane(entry) {
+    let drag = null;
+
+    tracked(entry.lane,
+        (e) => {
+            const box = entry.lane.getBoundingClientRect();
+            const x = e.clientX - box.left;
+            const grab = spanGrabAt(x, e.clientY - box.top);
+            // Pressing anywhere on a lane moves the playhead there, including on
+            // a span — the same rule the video lanes follow, and it is worth more
+            // here than there: the moment you pressed at is the moment `⇤`/`⇥` in
+            // the column would place an edge at.
+            onSeek(xToTime(x), true);
+            drag = grab ? {
+                // The key as well as the row: the row object may be replaced by a
+                // redraw arriving mid-gesture, and the key is what survives one.
+                // The clock cannot change without the range changing, so it is
+                // read off the row that was pressed on.
+                key: grab.row.key, row: grab.row, i: grab.at, what: grab.what,
+                // The span as it was when the press began, for `editBody` —
+                // measured from the press rather than accumulated, so a drag that
+                // ran past the end of the ruler comes back the way it went out.
+                held: Object.assign({}, grab.row.spans[grab.at]),
+                a: grab.row.drawn[grab.at].a, b: grab.row.drawn[grab.at].b,
+                grabTime: xToTime(x), working: grab.row.spans, moved: false,
+            } : null;
+        },
+        (e) => {
+            const x = e.clientX - entry.lane.getBoundingClientRect().left;
+            if (!drag) { onSeek(xToTime(x), false); return; }
+            const t = xToTime(x);
+            const by = t - drag.grabTime;
+            if (!drag.moved && Math.abs(by) * (laneWidth() / view.span) < 3) return;
+            drag.moved = true;
+            drag.working = drag.what === 'move'
+                ? editBody(drag.row, drag.row.spans, drag.i, drag.held,
+                           snapShift(drag.a, drag.b, by))
+                : editEdge(drag.row, drag.row.spans, drag.i, drag.what, snapTime(t, null));
+            // Placed by the model, not by this: where a span lands on the
+            // timeline has one answer whether it is being dragged or drawn.
+            drawSpanLane({ key: drag.key, drawn: placeSpans(drag.row.clk, drag.working) });
+        },
+        () => {
+            if (drag && drag.moved) commitSpans(drag.row, drag.working);
+            onSeek(undefined, false, true);
+            drag = null;
+        });
+}
+
 export function initTimeline(refs) {
     ruler = refs.ruler;
     tracksEl = refs.tracks;
@@ -945,6 +1330,10 @@ export function initTimeline(refs) {
     playheadTime = refs.playheadTime || playheadTime;
 
     syncLanes();
+    // The heights `syncLanes()` used to write itself. Written here as well as from
+    // `draw()` so that the box has a size before the first draw, which is what
+    // `laneWidth()` measures against.
+    fitHeights();
 
     const scrubOn = (el) => tracked(el,
         (e) => { onSeek(xToTime(localX(e, el)), true); },

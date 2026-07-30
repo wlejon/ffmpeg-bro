@@ -54,7 +54,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last two sections
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last three sections
 ```
 
 `hwtest` has the same problem one further on: **CI has no graphics card**, and
@@ -446,7 +446,7 @@ the translation into a filter graph is a pure function of it, so the graph is ch
 against specs written out by hand — including the edits it must refuse rather than
 approximate.
 
-`ui_graph.js` needs one only for its last two sections, and watches the graph
+`ui_graph.js` needs one only for its last three sections, and watches the graph
 from inside rather than
 through the string it prints: the model, the printer's chain rule on shapes the
 derivation does not produce, and the whole of what makes an edited graph
@@ -477,6 +477,27 @@ has to be measured from the seek rather than crediting the jump as playback; and
 a press back at the start has to land on a piece that is already in hand, which
 is asserted as `waiting` being false — "instant" means no render outstanding, and
 that is the whole reason a playback keeps its pieces.
+
+**The When lane** is the last of it, and it is on the *Compose* stage rather than
+the Graph one — the timeline lives in `#st-compose`, so behind a `display:none`
+every rectangle on it is zero and a press computed from one would land nowhere.
+What is asserted after each real drag is the **stored expression**, because the
+claim is that the lane is a reading of it and writes through the same two
+functions the strip does: an end moves and the other end does not, a body move
+keeps the length, a press that dragged nothing writes nothing, and `Ctrl`+`Z` puts
+a drag back. Then the two halves of the entry it closes — a second node with
+spans is a second row, both cover the same second without either becoming
+unreachable, a drag on one row edits that node and no other, and deleting a node
+takes its row away. The lane's *existence* is checked in both directions (no
+spans, no lane; the last span off, no lane), and a span dragged there is read back
+out of the workspace and out of a document, which are the overlay's two reads.
+
+One section is about the **other clock** and is the reason a span is clamped
+against a window with a start rather than a bare length: on a clip cut from two
+seconds in and laid down at one, a filter above the derivation's `setpts` written
+`between(t,3,3.5)` has to be drawn at the edit's second 2 and a region dropped at
+the edit's second 4 has to be written back as the file's second 5. Both directions,
+because that is what makes the two clocks one map rather than two.
 
 `ui_measure.js` is the half above that: a measurement started, run, read and
 acted on. It clicks `Crop` and finds `cropdetect` on the graph and in the

@@ -39,7 +39,9 @@ import { derive } from './graph/derive.js';
 import { print } from './graph/print.js';
 import { layout, portY } from './graph/layout.js';
 import { problems } from './graph/check.js';
-import { supportsTimeline, parseEnable, printEnable, isOnAt } from './graph/enable.js';
+import { supportsTimeline, parseEnable, printEnable, isOnAt,
+         shiftSpan } from './graph/enable.js';
+import * as graphSpans from './graph/spans.js';
 import { padsOf } from './graph/filters.js';
 import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
@@ -482,6 +484,13 @@ graphOverlay.onChange((what) => {
     // keeps the printed chain — so a filter inserted or edited moves the edit under
     // every finding in the drawer exactly as dragging a clip does.
     report.editMoved();
+    // And the timeline, because the graph now draws part of itself there: a filter
+    // whose `enable=` turns it on for a span has a row on the When lane, and the
+    // lane exists exactly when there are spans. This is the one channel every way
+    // of changing that arrives on — the column beside the graph, the lane itself,
+    // an undo, and a document being opened — so it is the one place the redraw
+    // belongs.
+    timeline.draw();
     refreshPlayback();
 });
 
@@ -1881,6 +1890,13 @@ globalThis.__ffmpegBro = {
              // the surface for the same reason the model is: the control and
              // the expression are one mechanism, and the only way to check that
              // is to round-trip one through the other without a screen.
-             supportsTimeline, parseEnable, printEnable, isOnAt },
+             supportsTimeline, parseEnable, printEnable, isOnAt, shiftSpan,
+             // Every span in the edit, on the timeline's clock — what the When
+             // lane is drawn from. On the surface beside the model above and for
+             // the same reason: the list, the two-way clock mapping and the
+             // write-back are pure, and the way to check that a region on the
+             // lane is the span the expression describes is to read one against
+             // the other without a screen.
+             spans: graphSpans },
 };
 globalThis.__ffmpegBroReady = true;

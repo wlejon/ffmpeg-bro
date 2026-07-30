@@ -53,13 +53,6 @@ Honest list of what does not work:
   surfaces them: no control writes one, no strip draws one, and the `eval` option
   is an entry in the table like any other. That is the shape of a real
   keyframe editor and it is not built.
-- **A span dragged *on* the timeline.** The playhead is on the When strip and
-  can place either end of a span — see [When it is on](graph.md#when-it-is-on)
-  — so the two clocks are reconciled in both directions now. What is still not
-  built is the other reading of it: a span drawn as a region on the timeline
-  itself, where the shot it is meant to cover is. That is a lane, not a button,
-  and it would have to hold spans belonging to several nodes at once and say
-  which is which.
 - **Two-pass filters.** The mechanism is there — a render is a list of passes,
   each the render with overrides, run in one job through one slot — and the two
   filters that need it are `vidstabdetect`/`vidstabtransform`, which this build

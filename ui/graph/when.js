@@ -35,13 +35,23 @@
 // drawn would be this stage contradicting itself in the most literal way it
 // could. Where there is no mapping there is no offer: the buttons go dim and
 // the line under them says why.
+//
+// **The map between the two clocks is now read in both directions**, which is
+// what `ui/graph/spans.js` and the When lane on the timeline are built out of:
+// `onClock` takes a timeline second into a node's own seconds and `onTimeline`
+// takes one back. They live here, next to each other and next to `clockOf`,
+// because a lane that worked out where a span begins for itself would be a
+// second answer to that — and the two would only ever be compared by eye.
+// `playheadOn` is `onClock` plus the one refusal that is about a *playhead*
+// rather than about the arithmetic.
 
 import { el, div, span, put, head, row, select } from '../dom.js';
 import { project, sourceTime } from '../project.js';
 import { transport } from '../transport.js';
 import { range as exportRange } from '../export/spec.js';
 import { supportsTimeline, parseEnable, printEnable, drawnSpan,
-         moveEdge, nextSpan, enableText } from './enable.js';
+         moveEdge, shiftSpan, nextSpan, enableText } from './enable.js';
+import { clipOf } from './derive.js';
 import { clock as timecode } from '../format.js';
 
 /// Which clock a node's `t` is on, and what a ruler over it should say.
@@ -51,10 +61,18 @@ import { clock as timecode } from '../format.js';
 /// is a fact about this graph. A node fed by nothing but a generator is on the
 /// render's clock too — `color`, `testsrc` and the rest start at zero, which is
 /// where the render starts.
+///
+/// A source clock also says **which clip it reads through**, and that is what
+/// makes the mapping between the two clocks invertible. Several clips of one file
+/// are the ordinary case, so "a node on the file's own timestamps" is not enough
+/// to place a moment: `sourceTime` is a different affine map per clip. The clip is
+/// taken off the input node's anchor rather than searched for by path, because a
+/// node is on exactly one clip's chain and the chain is what says which — see
+/// `onTimeline`, which would otherwise have several answers and no way to choose.
 export function clockOf(g, node) {
     const r = exportRange();
     const renderClock = { base: 'render', start: 0, length: Math.max(0.001, r.length),
-                          at: r.start };
+                          at: r.start, clip: null };
     if (!g || !node) return renderClock;
 
     const seen = new Set([node.id]);
@@ -77,7 +95,8 @@ export function clockOf(g, node) {
     const cut = trimBelow(g, input);
     const start = cut ? cut.start : (input.from || 0);
     const length = cut ? Math.max(0.001, cut.end - cut.start) : renderClock.length;
-    return { base: 'source', start, length, at: start, path: input.path || '' };
+    return { base: 'source', start, length, at: start, path: input.path || '',
+             clip: clipOf(input.anchor) };
 }
 
 /// The nearest `trim`/`atrim` downstream of a node, as numbers.
@@ -157,7 +176,7 @@ export function whenRows(node, g, commit) {
                 cls: 'tiny', text: parsed.spans.length ? 'Another span' : 'On for a span',
                 'data-f': 'addspan',
                 on: { click: () => commit(printEnable(
-                    parsed.spans.concat([nextSpan(parsed.spans, clk.length)]))) },
+                    parsed.spans.concat([nextSpan(parsed.spans, clk)]))) },
             }),
             // A span placed where you are looking rather than where the last
             // one left off. It runs to the end of the ruler because that is the
@@ -273,7 +292,7 @@ function spanRow(spans, s, i, clk, commit) {
             // through: it keeps a span's ends in order and on the ruler, and a
             // second answer to that would be a second set of rules for the
             // same span depending on how it was placed.
-            commit(printEnable(moveEdge(spans, i, which, round(t), clk.length)));
+            commit(printEnable(moveEdge(spans, i, which, round(t), clk)));
         } },
     });
 
@@ -297,8 +316,8 @@ function spanRow(spans, s, i, clk, commit) {
 function retype(spans, i, op, clk) {
     const next = spans.map((x) => Object.assign({}, x));
     const s = next[i];
-    const a = s.from === null ? 0 : s.from;
-    const b = s.to === null ? clk.length : s.to;
+    const a = s.from === null ? clk.start : s.from;
+    const b = s.to === null ? clk.start + clk.length : s.to;
     if (op === 'between') next[i] = { op: 'between', from: a, to: Math.max(b, a + 0.1) };
     else if (op === 'gt') next[i] = { op: 'gt', from: a, to: null };
     else next[i] = { op: 'lt', from: null, to: b };
@@ -327,7 +346,10 @@ function strip(spans, clk, commit) {
         // Measured once, at the start of the gesture: the element is not moving
         // and a rect read per mouse move is a layout flush per mouse move.
         const box = track.getBoundingClientRect();
-        const tAt = (ev) => Math.max(0, Math.min(clk.length,
+        // Into the seconds the expression is written in, which for a
+        // source-clock node do not start at zero: the fraction along the track is
+        // the fraction along the *window*, and the window has a start.
+        const tAt = (ev) => clk.start + Math.max(0, Math.min(clk.length,
             ((ev.clientX - box.left) / Math.max(1, box.width)) * clk.length));
         const i = Number((edge || body).split(':')[0]) || 0;
         const which = edge ? edge.split(':')[1] : null;
@@ -338,8 +360,8 @@ function strip(spans, clk, commit) {
         let moved = false;
         const move = (ev) => {
             const t = tAt(ev);
-            if (which) working = moveEdge(spans, i, which, t, clk.length);
-            else working = shift(spans, i, held, t - grabbed, clk.length);
+            if (which) working = moveEdge(spans, i, which, t, clk);
+            else working = shiftSpan(spans, i, held, t - grabbed, clk);
             moved = true;
             paint(working);
         };
@@ -390,6 +412,68 @@ function strip(spans, clk, commit) {
     ]);
 }
 
+// ── the two clocks, both ways ──────────────────────────────────────────────
+//
+// A node's `enable` is written in the node's own seconds and the timeline is
+// drawn in the edit's, and there are now readers going in both directions: the
+// mark on the strip and the `⇤`/`⇥` buttons ask *where is the playhead in this
+// node's seconds*, and the When lane on the timeline asks *where on the timeline
+// is this node's second five*. So the arithmetic is one affine map stated once
+// and inverted once, rather than a second copy of it written the other way round
+// in the lane — which is the version that drifts, because the two would only ever
+// be checked against each other by eye.
+//
+// **The map is affine with a slope of one, and that is worth writing down**: a
+// span two seconds long is two seconds long on either clock, so a *distance* need
+// not be mapped at all and a whole-span drag can hand its delta straight to
+// `shiftSpan`. Only the origin differs, and it differs for exactly two reasons —
+// where the render's range starts, and where in its file a clip was cut from.
+
+/// The clip a source-clock node reads through, as an object, or null.
+///
+/// By the id the clock carries rather than by path: two clips of one file are
+/// two different maps and only the chain the node is on says which of them
+/// applies. Looked up on each call because clips are moved and trimmed under
+/// this, and a held reference would be a clip as it was when the column was
+/// built.
+function clipFor(clk) {
+    if (!clk || clk.base !== 'source' || clk.clip === null || clk.clip === undefined)
+        return null;
+    for (const c of project.clips) if (String(c.id) === String(clk.clip)) return c;
+    return null;
+}
+
+/// A timeline second → the seconds this node's `enable` is written in, or `null`
+/// where there is no mapping at all.
+///
+/// **Affine and unguarded**, which is what separates it from `playheadOn`: it
+/// answers for a moment outside the clip too, because a drag on the When lane is
+/// allowed to run past the shot and what stops it there is `moveEdge` clamping to
+/// the ruler, not this refusing to say. The refusal that *is* about being over the
+/// clip belongs to the one caller that has a playhead, which is the next function.
+export function onClock(clk, t) {
+    if (!clk || clk.length <= 0) return null;
+    if (clk.base !== 'source') return t - exportRange().start;
+    const c = clipFor(clk);
+    return c ? sourceTime(c, t) : null;
+}
+
+/// And back: a second in this node's own clock → where that moment is on the
+/// timeline, or `null` where the node's clock has no place on it.
+///
+/// The inverse of `onClock`, written beside it so the pair can be read as one
+/// thing. `null` is the honest answer for a node reading a file the *graph* opens
+/// on its own account — a watermark, a logo bug — because nothing on the timeline
+/// is cut from it and there is no second of the edit its `t=5` corresponds to.
+/// The When strip in the column is where those are set; the lane leaves them out
+/// rather than parking them somewhere plausible.
+export function onTimeline(clk, at) {
+    if (!clk || clk.length <= 0) return null;
+    if (clk.base !== 'source') return exportRange().start + at;
+    const c = clipFor(clk);
+    return c ? c.start + (at - c.inPoint) : null;
+}
+
 /// Move every strip's playhead to where the playhead now is.
 ///
 /// **Called from the frame loop, and it writes one style per strip.** Judging
@@ -402,12 +486,12 @@ function strip(spans, clk, commit) {
 /// downstream of the derivation's `setpts` is on the render's clock, so the
 /// playhead maps by subtracting where the range starts. A node spliced in
 /// *before* it — at a clip's `after decode` point — sees the source file's own
-/// timestamps, and the honest mapping there goes through the clip that is under
-/// the playhead: `sourceTime` is the one place that arithmetic lives.
+/// timestamps, and the honest mapping there goes through the clip whose chain the
+/// node is on: `onClock` is the one place that arithmetic lives.
 ///
 /// **Where the mapping is not known, nothing is drawn.** A source-clock node
-/// whose file has no clip under the playhead has no answer — the render is not
-/// touching that file at this instant — and a mark parked at an edge would be a
+/// whose clip is not under the playhead has no answer — the render is not
+/// touching that clip at this instant — and a mark parked at an edge would be a
 /// statement that it is.
 /// Where the playhead is standing, in the seconds *this node's* `enable`
 /// expression is written in — or `null` when there is no answer.
@@ -418,27 +502,22 @@ function strip(spans, clk, commit) {
 /// placed an edge somewhere other than where the mark is drawn would be the
 /// stage contradicting itself in the most literal way available to it.
 ///
-/// `null` where the mapping is not known: a source-clock node whose file has no
-/// clip under the playhead is not being touched by the render at this instant,
-/// and there is no moment in its own timecode to name.
+/// `null` where the mapping is not known: a source-clock node whose clip is not
+/// under the playhead is not being touched by the render at this instant, and
+/// there is no moment in its own timecode to name.
 export function playheadOn(clk, t) {
-    if (!clk || clk.length <= 0) return null;
-    if (clk.base !== 'source') return t - exportRange().start;
-    // The clip of that file the playhead is actually inside. Several clips of
-    // one input are the ordinary case, so it is the one under the playhead
-    // rather than the first one found.
-    for (const c of project.clips) {
-        if (c.path !== clk.path) continue;
-        if (t < c.start || t >= c.start + c.length) continue;
-        return sourceTime(c, t) - clk.start;
-    }
-    return null;
+    const at = onClock(clk, t);
+    if (at === null || clk.base !== 'source') return at;
+    // On this clock, but is the render touching this clip *now*? Outside it the
+    // affine answer above is a real number about a frame nobody is rendering.
+    const c = clipFor(clk);
+    return t >= c.start && t < c.start + c.length ? at : null;
 }
 
 /// Whether a moment is on the ruler at all — `playheadOn` can answer with a
 /// number that is simply off the end, which is not somewhere an edge can go.
 function onRuler(clk, at) {
-    return at !== null && at >= 0 && at <= clk.length;
+    return at !== null && at >= clk.start && at <= clk.start + clk.length;
 }
 
 export function chaseWhen() {
@@ -464,7 +543,8 @@ export function chaseWhen() {
         const on = playheadOn(clk, t);
         const reachable = onRuler(clk, on);
         headEl.classList.toggle('hidden', !reachable);
-        if (reachable) headEl.style.left = `${(on / clk.length) * 100}%`;
+        if (reachable)
+            headEl.style.left = `${((on - clk.start) / clk.length) * 100}%`;
 
         // The offers to place an edge there, under the same clock and moving
         // with the same mark: they are only truthful while there is a moment
@@ -475,7 +555,8 @@ export function chaseWhen() {
             // Both numbers: the timecode is what the ruler above is labelled
             // in, and the bare second is what goes in the field and into the
             // printed expression.
-            ? `⇤ ⇥ place an edge at ${timecode(clk.at + on)} — t=${on.toFixed(2)}`
+            ? `⇤ ⇥ place an edge at ${timecode(clk.at + (on - clk.start))} — t=${
+                  on.toFixed(2)}`
             : clk.base === 'source'
                 ? 'the playhead is not over a clip of this file, so there is no moment ' +
                   'here to place an edge at'
@@ -488,7 +569,10 @@ export function chaseWhen() {
 /// end to hold: `gt(t,4)` has no far edge, and a grip on the end of the ruler
 /// would say it had one.
 function spanEl(s, i, clk) {
-    const d = drawnSpan(s, clk.length);
+    const d = drawnSpan(s, clk);
+    // Along the window, so a span written in the source's own seconds lands on a
+    // ruler labelled in them rather than a clip's in-point away from itself.
+    const at = (v) => `${(((v - clk.start) / Math.max(0.001, clk.length)) * 100).toFixed(2)}%`;
     const pc = (v) => `${((v / Math.max(0.001, clk.length)) * 100).toFixed(2)}%`;
     return place(div('when-span', [
         el('span', { cls: 'when-grab', 'data-span': String(i),
@@ -499,30 +583,13 @@ function spanEl(s, i, clk) {
         s.to !== null ? el('span', { cls: 'when-edge when-edge-b',
                                      'data-drag': `${i}:to`,
                                      title: 'Drag to move where it goes off' }) : null,
-    ]), pc(d.a), pc(Math.max(0.001, d.b - d.a)));
+    ]), at(d.a), pc(Math.max(0.001, d.b - d.a)));
 }
 
 function place(node, left, width) {
     node.style.left = left;
     node.style.width = width;
     return node;
-}
-
-/// Move a whole span, keeping its length and staying on the ruler.
-function shift(spans, i, held, by, length) {
-    const out = spans.map((x) => Object.assign({}, x));
-    const s = out[i];
-    if (held.from !== null && held.to !== null) {
-        const width = held.to - held.from;
-        const from = Math.max(0, Math.min(length - width, held.from + by));
-        s.from = from;
-        s.to = from + width;
-    } else if (held.from !== null) {
-        s.from = Math.max(0, Math.min(length, held.from + by));
-    } else {
-        s.to = Math.max(0, Math.min(length, held.to + by));
-    }
-    return out;
 }
 
 // ── the card ───────────────────────────────────────────────────────────────
@@ -542,9 +609,9 @@ export function whenBar(node, g) {
 
     const track = div('when-track', parsed.ok
         ? parsed.spans.map((s, i) => {
-            const d = drawnSpan(s, clk.length);
+            const d = drawnSpan(s, clk);
             return place(div('when-span when-flat'),
-                         `${((d.a / clk.length) * 100).toFixed(2)}%`,
+                         `${(((d.a - clk.start) / clk.length) * 100).toFixed(2)}%`,
                          `${(((d.b - d.a) / clk.length) * 100).toFixed(2)}%`);
         })
         : null);

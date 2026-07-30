@@ -409,7 +409,9 @@ rather than after.
 clock the whole graph runs on, because every derived chain begins
 `setpts=PTS-STARTPTS+offset/TB`. A filter spliced in *before* that, at a clip's
 `after decode` point, sees the source file's own timestamps instead, and the
-strip says so and rules itself in the source's seconds.
+strip says so and rules itself in the source's seconds: on a clip cut from twenty
+seconds in, the numbers are the file's twenty-first second and not the render's
+first, because that is what libavfilter will evaluate.
 
 **The playhead is on the strip, and on the card's line too.** It moves as you
 scrub, in the same accent the timeline's own is drawn in, because the two are
@@ -451,6 +453,38 @@ through the same refusal: where the playhead is off this node's clock the mark
 is hidden, the buttons go dim, and the line says which of the two reasons it is.
 A press on a dim one writes nothing rather than reaching for the nearest
 plausible number.
+
+### And the span is on the timeline, where the shot is
+
+A strip in this column answers "does this span cover the render". The question
+people actually have is "does this blur cover the *shot*", and that one can only
+be answered where the shot is — so every span that exists is also drawn on the
+**When lane** on the timeline, under the video tracks, with both ends draggable
+and the whole span movable. See [the When lane](timeline.md#the-when-lane) for the
+gesture. It is the same data read from the other side: a drag there and a drag
+here go through the same two functions, so they cannot come to mean different
+things, and either of them is one press of `Ctrl`+`Z`.
+
+**The lane is there because spans are**, not because a stage is open. An edit with
+none carries no lane; a span made here is on the timeline the moment you go back
+to it; taking the last one off takes the lane away again. That is the same rule
+the video lanes follow — how many there are is a property of the edit.
+
+**One row per node, named.** A `hue` on one shot and a `drawtext` over the whole
+canvas are two rows, each carrying the filter's name and what it is on — `hue ·
+V1 shot.mp4` — in a colour of its own. Rows rather than one shared strip, because
+two spans from different nodes that overlap in time have to *both* stay reachable
+by the pointer, and one drawn over the other is one you cannot get at. The rows
+are ordered by the clip they are about, so a drag never reorders them underneath
+your hand.
+
+Two things are not on it, and each for a reason that is already stated above. A
+filter on a file the **graph** reads on its own account — a watermark, a logo bug
+— is written in that file's own timestamps and no clip is cut from it, so there is
+no second of the edit its `t=5` corresponds to: it has a strip here and no row
+there. And `enable` set on a filter with no timeline support is a graph that will
+not build, which is reported on its node rather than drawn as a region you could
+drag.
 
 ## Locks
 

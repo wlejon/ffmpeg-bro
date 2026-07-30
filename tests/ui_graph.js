@@ -3149,4 +3149,285 @@ if (!media) {
     pump(200);
 }
 
+// ── a span, on the timeline ────────────────────────────────────────────────
+//
+// The other reading of the When strip. A span in the column answers "does this
+// cover the render"; the same span drawn on the timeline answers "does it cover
+// the *shot*", which is the question people actually have, and only the second
+// one can be answered by putting two rectangles on one ruler.
+//
+// The claim being checked is the same one the strip's section checks, from the
+// other side: the lane is a *reading* of the expression and a drag on it writes
+// through the same functions the strip does. So every assertion below reads the
+// **stored parameter** after a real gesture — mousedown on the lane, mousemove
+// and mouseup on `<body>` where `tracked()` listens — and the coordinates come
+// from `timeToX` and the rows the draw actually used rather than from numbers
+// this test made up.
+//
+// It needs the Compose stage, not the Graph stage: the timeline is inside
+// `#st-compose`, so behind a `display:none` every rectangle on it is zero and a
+// press computed from one would land nowhere.
+if (!media) {
+    console.log('\nthe When lane — skipped, no media file given');
+} else {
+    console.log('\na span dragged on the timeline');
+    const A = globalThis.__ffmpegBro;
+    overlay.clear();
+    if (!A.project.clips.length) dropFiles(400, 300, [media]);
+    waitFor('a clip on the timeline', () => A.project.clips.length >= 1);
+    ok(A.shell.goTo('compose'), 'the Compose stage opens, which is where the timeline is');
+    pump(300);
+    A.timeline.fitView();
+    pump(120);
+
+    const clip = A.project.clips[0];
+    const spec = A.exporter.buildSpec();
+    const length = spec.end - spec.start;
+    const lane = () => A.timeline.whenLane();
+    const enableOf = (i) => (overlay.inserts()[i || 0].params.enable || '');
+    const spansOf = (i) => A.graph.parseEnable(enableOf(i)).spans;
+
+    // Where a moment is, in page coordinates, on a given row of the lane. The
+    // same `timeToX` every lane on this timeline is drawn with, so a press this
+    // test computes is a press on the pixel the region was drawn at.
+    const atRow = (t, row) => {
+        const box = lane().lane.getBoundingClientRect();
+        return { x: box.left + A.timeline.timeToX(t),
+                 y: box.top + (row + 0.5) * lane().rowHeight };
+    };
+    const mouseAt = (type, at, target) => (target || document.body).dispatchEvent(
+        new MouseEvent(type, { bubbles: true, button: 0,
+                               clientX: Math.round(at.x), clientY: Math.round(at.y) }));
+    const dragOn = (from, to) => {
+        mouseAt('mousedown', from, lane().lane);
+        mouseAt('mousemove', to);
+        mouseAt('mouseup', to);
+        pump(200);
+    };
+
+    // **The lane exists because spans do**, which is `trackCount()`'s rule
+    // applied to something that is not a track: an edit with no spans in it does
+    // not carry an empty lane to explain.
+    ok(!lane(), 'an edit with no spans carries no When lane');
+
+    const rec = overlay.insert(`clip:${clip.id}/after-scale`, 'hflip');
+    pump(200);
+    ok(!lane(), 'and neither does a filter that is simply on throughout');
+
+    // Made the way the column makes one — the strip's own printout — so that what
+    // the lane draws is what the Graph stage stored and not a shape this test
+    // invented.
+    overlay.edit({ id: rec.id, derived: false },
+                 { params: { enable: A.graph.printEnable(
+                     [{ op: 'between', from: length * 0.25, to: length * 0.5 }]) } });
+    pump(200);
+    ok(!!lane(), 'a span made three stages away puts the lane on the timeline');
+    same(lane().rows.length, 1, 'one row, because one node has spans');
+    same(lane().rows[0].filter, 'hflip', 'named for the filter it is');
+    ok(lane().rows[0].where.indexOf(clip.name) >= 0,
+       `and for the shot it is on: ${lane().rows[0].where}`);
+
+    // The row places the span on the *timeline's* clock, which for a node below
+    // the derivation's `setpts` is the render's range offset into the edit. That
+    // is the identity the whole lane rests on, so it is checked against the
+    // expression rather than against another drawing.
+    {
+        const d = lane().rows[0].drawn[0];
+        ok(Math.abs(d.a - (spec.start + length * 0.25)) < 0.01 &&
+           Math.abs(d.b - (spec.start + length * 0.5)) < 0.01,
+           `and where the expression says it is (${d.a.toFixed(2)}–${d.b.toFixed(2)}s of ` +
+           `a range starting at ${spec.start.toFixed(2)}s)`);
+        ok(d.from && d.to, 'a between has both ends to hold');
+    }
+
+    // Dragging the far end. Committed on release and not on every move, so what
+    // is read is the one write the gesture made.
+    {
+        const target = length * 0.75;
+        dragOn(atRow(spec.start + length * 0.5, 0), atRow(spec.start + target, 0));
+        const s = spansOf()[0];
+        ok(Math.abs(s.to - target) < length * 0.05,
+           `dragging the far end moves it (${s.to.toFixed(2)}s against ${target.toFixed(2)}s)`);
+        ok(Math.abs(s.from - length * 0.25) < 0.01,
+           'and leaves the near one exactly where it was');
+    }
+
+    // Dragging the body: the length is what a move holds constant, which is the
+    // whole difference between it and a trim.
+    {
+        const was = spansOf()[0];
+        const width = was.to - was.from;
+        const by = -length * 0.15;
+        dragOn(atRow(spec.start + (was.from + was.to) / 2, 0),
+               atRow(spec.start + (was.from + was.to) / 2 + by, 0));
+        const s = spansOf()[0];
+        ok(Math.abs((s.to - s.from) - width) < 0.02,
+           `dragging the middle keeps the span the length it was (${
+               (s.to - s.from).toFixed(2)}s of ${width.toFixed(2)}s)`);
+        ok(Math.abs(s.from - (was.from + by)) < length * 0.05,
+           `and moves both ends together (${s.from.toFixed(2)}s from ${was.from.toFixed(2)}s)`);
+    }
+
+    // **A press that moved nothing writes nothing.** Same trap as the strip:
+    // `printEnable(parseEnable(text))` is not the text, and on a derived node the
+    // write would be a lock that outranks the edit for ever after.
+    {
+        const held = enableOf();
+        const s = spansOf()[0];
+        const at = atRow(spec.start + (s.from + s.to) / 2, 0);
+        mouseAt('mousedown', at, lane().lane);
+        mouseAt('mouseup', at);
+        pump(200);
+        same(enableOf(), held, 'a press that dragged nothing leaves the expression alone');
+    }
+
+    // **`Ctrl`+`Z` reaches it**, and by the path every other overlay edit takes
+    // rather than by one of this lane's own: a span dragged here is an edit to the
+    // graph, and the graph is in the document a step of history is made of.
+    {
+        const before = enableOf();
+        const s = spansOf()[0];
+        dragOn(atRow(spec.start + s.to, 0), atRow(spec.start + length * 0.9, 0));
+        ok(enableOf() !== before, 'a drag on the lane is a change');
+        ok(A.history.canUndo('compose'), 'and a step of history');
+        A.history.undo('compose');
+        pump(300);
+        same(enableOf(), before, 'which one Ctrl+Z puts back');
+    }
+
+    // **Several nodes at once, and which is which.** Two spans that overlap in
+    // time are the case a single row cannot draw: one would be over the other and
+    // the one underneath would be unreachable. Rows are the answer, so what is
+    // checked is that a press at the *same x* on two different rows finds two
+    // different nodes — and then that each of them edits only its own.
+    {
+        const two = overlay.insert(`clip:${clip.id}/after-decode`, 'hue');
+        overlay.edit({ id: two.id, derived: false },
+                     { params: { enable: A.graph.printEnable(
+                         [{ op: 'between', from: 0, to: length * 0.4 }]) } });
+        pump(250);
+        A.timeline.draw();
+        pump(120);
+        same(lane().rows.length, 2, 'a second node with spans is a second row');
+        const names = lane().rows.map((r) => r.filter).sort().join(',');
+        same(names, 'hflip,hue', `each row named for its own node: ${names}`);
+        // Both rows carry a region over the same moment, which is the overlap the
+        // lane has to survive.
+        const over = lane().rows.map((r, i) => ({ i, r,
+            hit: r.drawn.some((d) => d.a <= spec.start + length * 0.3 &&
+                                     d.b >= spec.start + length * 0.3) }));
+        ok(over.every((o) => o.hit),
+           'and both cover the same second, on two rows rather than over each other');
+
+        // Drag the one on the second row and check the other is untouched. Which
+        // insert is which is read by id, not by position, because the rows are
+        // ordered by the clip they are about and not by when they were made.
+        const row = lane().rows.findIndex((r) => r.filter === 'hue');
+        const hueRec = () => overlay.inserts().find((r) => r.id === two.id);
+        const flipRec = () => overlay.inserts().find((r) => r.id === rec.id);
+        const flipWas = flipRec().params.enable;
+        const hueSpan = lane().rows[row].drawn[0];
+        dragOn(atRow(hueSpan.b, row), atRow(spec.start + length * 0.6, row));
+        const moved = A.graph.parseEnable(hueRec().params.enable).spans[0];
+        ok(Math.abs(moved.to - length * 0.6) < length * 0.06,
+           `a drag on one row edits that node (${moved.to.toFixed(2)}s)`);
+        same(flipRec().params.enable, flipWas, 'and no other');
+
+        // ── the other clock ────────────────────────────────────────────────
+        //
+        // A filter spliced in *above* the derivation's `setpts` is evaluated on
+        // the file's own timestamps: `enable=between(t,21,22)` on a clip cut from
+        // twenty seconds in is the file's twenty-first second, not the render's.
+        // So where it lands on the timeline goes through the clip it is on — which
+        // is the arithmetic a lane must not invent, and the case that made the
+        // window a span is clamped against need a *start* as well as a length.
+        {
+            const wasStart = clip.start, wasIn = clip.inPoint, wasLen = clip.length;
+            clip.start = 1;
+            clip.inPoint = 2;
+            clip.length = 4;
+            A.changed('moved');
+            pump(300);
+            A.timeline.fitView();
+            pump(120);
+
+            const row = lane().rows.find((r) => r.filter === 'hue');
+            ok(!!row && row.clk.base === 'source',
+               'a node above the setpts is on the file’s own clock');
+            // Written in the file's seconds, which is what the column's ruler is
+            // labelled in for such a node.
+            overlay.edit({ id: two.id, derived: false },
+                         { params: { enable: A.graph.printEnable(
+                             [{ op: 'between', from: 3, to: 3.5 }]) } });
+            pump(250);
+            A.timeline.draw();
+            pump(120);
+            const d = lane().rows.find((r) => r.filter === 'hue').drawn[0];
+            // Source second 3 is one second into a clip cut from 2 and laid down
+            // at 1, so it is the edit's second 2.
+            ok(Math.abs(d.a - 2) < 0.02 && Math.abs(d.b - 2.5) < 0.02,
+               `and lands where that second of the file is on the timeline (${
+                   d.a.toFixed(2)}–${d.b.toFixed(2)}s, from a clip cut from ` +
+               `${clip.inPoint}s and laid down at ${clip.start}s)`);
+            // And the drag goes back the other way through the same map: a region
+            // dropped at the edit's second 4 is the file's second 5.
+            dragOn(atRow(d.b, lane().rows.findIndex((r) => r.filter === 'hue')),
+                   atRow(4, lane().rows.findIndex((r) => r.filter === 'hue')));
+            const back = A.graph.parseEnable(
+                overlay.inserts().find((r) => r.id === two.id).params.enable).spans[0];
+            ok(Math.abs(back.to - 5) < 0.2,
+               `and a drag writes the file's own second back (t=${back.to.toFixed(2)}, ` +
+               'which is the edit’s 4s on a clip cut from 2s and laid down at 1s)');
+
+            clip.start = wasStart;
+            clip.inPoint = wasIn;
+            clip.length = wasLen;
+            overlay.edit({ id: two.id, derived: false },
+                         { params: { enable: A.graph.printEnable(
+                             [{ op: 'between', from: 0, to: length * 0.4 }]) } });
+            A.changed('moved');
+            pump(300);
+            A.timeline.fitView();
+            pump(120);
+        }
+
+        // **A span whose node has gone leaves no region behind.** The rows are
+        // rebuilt from a fresh derivation on every draw, so a deleted node cannot
+        // leave a draggable rectangle on the lane — which is the failure a lane
+        // holding its own copy of the spans would have.
+        overlay.removeInsert(two.id);
+        pump(250);
+        same(lane().rows.length, 1, 'deleting a node takes its row with it');
+        same(lane().rows[0].filter, 'hflip', 'and leaves the other alone');
+    }
+
+    // **A span survives both of the overlay's reads**, which differ on purpose —
+    // see the note in `ui/graph/overlay.js`. An insert is in both, so a span
+    // dragged here comes back off the workspace and out of a document.
+    {
+        const held = enableOf();
+        overlay.remember();
+        overlay.restore();
+        pump(200);
+        same(overlay.inserts()[0].params.enable, held,
+             'a span dragged on the lane comes back out of the workspace');
+        overlay.adopt(JSON.parse(JSON.stringify(overlay.current())));
+        pump(250);
+        same(overlay.inserts()[0].params.enable, held, 'and out of a document');
+        ok(!!lane() && lane().rows.length === 1, 'with its row still on the lane');
+    }
+
+    // And off again: "always on" is an empty expression, which is a filter with
+    // no `enable` — so the row goes, and with the last row the lane goes.
+    {
+        overlay.edit({ id: overlay.inserts()[0].id, derived: false },
+                     { params: { enable: '' } });
+        pump(250);
+        ok(!lane(), 'taking the last span off takes the lane with it');
+    }
+
+    overlay.clear();
+    pump(200);
+}
+
 console.log(`\nPASS ui_graph — ${checks} checks`);

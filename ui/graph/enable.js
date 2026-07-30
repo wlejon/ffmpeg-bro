@@ -158,12 +158,29 @@ function termOf(s) {
     return `${s.op}(t,${num(s.to)})`;
 }
 
-/// Where a span lands on a ruler running `0 … length`. An open end is the end
-/// of the ruler — which is a drawing decision and not a claim: `gt(t,4)` is
-/// true forever and the render stops where it stops.
-export function drawnSpan(s, length) {
-    const a = s.from === null ? 0 : Math.max(0, Math.min(length, s.from));
-    const b = s.to === null ? length : Math.max(0, Math.min(length, s.to));
+/// The window a span is drawn and edited against: `{ start, length }`, in the
+/// seconds the *expression* is written in.
+///
+/// **It has a start, and the start is not always zero.** A filter downstream of
+/// the derivation's `setpts` is on the render's clock, whose `t=0` is where the
+/// range begins — so `start` is 0 and everything below reads as it always did. A
+/// filter spliced in *above* it sees the source file's own timestamps, and `t`
+/// there is the second of the file: a clip cut from twenty seconds in is
+/// `between(t,21,22)`, because that is what libavfilter will evaluate. Every
+/// clamp, every fraction and every placed edge therefore has to be against a
+/// window that starts at 20 and not at 0 — which is the one thing this file used
+/// to be told nothing about, and the reason a span on a trimmed clip was drawn a
+/// clip's in-point away from where it runs.
+///
+/// A clock out of `when.js` is one of these, which is why nothing converts.
+
+/// Where a span lands on that window. An open end is the end of the window —
+/// which is a drawing decision and not a claim: `gt(t,4)` is true forever and the
+/// render stops where it stops.
+export function drawnSpan(s, win) {
+    const lo = win.start, hi = win.start + win.length;
+    const a = s.from === null ? lo : Math.max(lo, Math.min(hi, s.from));
+    const b = s.to === null ? hi : Math.max(lo, Math.min(hi, s.to));
     return { a: Math.min(a, b), b: Math.max(a, b) };
 }
 
@@ -205,31 +222,69 @@ export function enableText(value) {
     return `${p.spans.length} spans`;
 }
 
-/// Move one end of one span, keeping it a span. Used by the strip's drag and by
-/// the numeric fields, so a dragged edge and a typed number cannot end up
-/// meaning different things.
+/// Move one end of one span, keeping it a span. Used by the strip's drag, by the
+/// When lane's drag, by the `⇤`/`⇥` buttons and by the numeric fields, so an edge
+/// dragged on the timeline, an edge dragged in the column, an edge placed from the
+/// playhead and a typed number cannot end up meaning different things.
 ///
 /// A `between` that is dragged past itself is clamped rather than flipped: an
 /// edge you pushed too far coming back as the other edge is a gesture nobody
 /// asked for, and `between(t,2,2)` is a filter that is never on.
-export function moveEdge(spans, i, which, t, length) {
+export function moveEdge(spans, i, which, t, win) {
     const out = spans.map((s) => Object.assign({}, s));
     const s = out[i];
     if (!s) return out;
-    const v = Math.max(0, Math.min(length, t));
-    const gap = Math.max(0.02, length / 500);
+    const v = Math.max(win.start, Math.min(win.start + win.length, t));
+    const gap = Math.max(0.02, win.length / 500);
     if (which === 'from') s.from = s.to === null ? v : Math.min(v, s.to - gap);
     else s.to = s.from === null ? v : Math.max(v, s.from + gap);
     return out;
 }
 
+/// Move a whole span, keeping its length and staying on the ruler.
+///
+/// `held` is the span as it was when the gesture began and `by` is how far the
+/// pointer has come since, in the seconds the span is written in — measured from
+/// the press rather than accumulated per move, for the reason a slip is: this
+/// clamps at the ends of the ruler, so adding each step would let a drag that ran
+/// past the end come back a different distance from the one it went out.
+///
+/// Beside `moveEdge` because it is the other half of the same rule, and it is
+/// exported for the same reason: the When strip in the column and the When lane
+/// on the timeline both drag a span bodily, and two answers to where one lands
+/// would be two sets of rules for the same span depending on which screen it was
+/// dragged on.
+///
+/// An open-ended span moves the end it has. `gt(t,4)` dragged two seconds later
+/// is `gt(t,6)`, not a `between` that has grown a far edge — the shape somebody
+/// wrote is not a thing a drag may change.
+export function shiftSpan(spans, i, held, by, win) {
+    const out = spans.map((x) => Object.assign({}, x));
+    const s = out[i];
+    if (!s || !held) return out;
+    const lo = win.start, hi = win.start + win.length;
+    if (held.from !== null && held.to !== null) {
+        const width = held.to - held.from;
+        const from = Math.max(lo, Math.min(hi - width, held.from + by));
+        s.from = from;
+        s.to = from + width;
+    } else if (held.from !== null) {
+        s.from = Math.max(lo, Math.min(hi, held.from + by));
+    } else {
+        s.to = Math.max(lo, Math.min(hi, held.to + by));
+    }
+    return out;
+}
+
 /// A span to add when somebody asks for one, placed where there is room: after
-/// the last one, or across the middle of the range when there are none.
-export function nextSpan(spans, length) {
-    const end = spans.reduce((at, s) => Math.max(at, s.to === null ? length : s.to), -1);
-    const width = Math.max(0.1, Math.min(length / 4, 2));
-    if (end < 0) return { op: 'between', from: Math.max(0, length / 2 - width / 2),
-                          to: Math.min(length, length / 2 + width / 2) };
-    const from = Math.min(length - width, end + width / 2);
-    return { op: 'between', from: Math.max(0, from), to: Math.min(length, from + width) };
+/// the last one, or across the middle of the window when there are none.
+export function nextSpan(spans, win) {
+    const lo = win.start, hi = win.start + win.length;
+    const end = spans.reduce((at, s) => Math.max(at, s.to === null ? hi : s.to), lo - 1);
+    const width = Math.max(0.1, Math.min(win.length / 4, 2));
+    const mid = lo + win.length / 2;
+    if (end < lo) return { op: 'between', from: Math.max(lo, mid - width / 2),
+                           to: Math.min(hi, mid + width / 2) };
+    const from = Math.min(hi - width, end + width / 2);
+    return { op: 'between', from: Math.max(lo, from), to: Math.min(hi, from + width) };
 }

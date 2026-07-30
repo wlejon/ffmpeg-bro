@@ -753,6 +753,12 @@ button.track-lock.on { color: var(--accent); }
    plus the waveform is taller than the timeline, and the thing that would fall
    off the bottom is the audio. */
 #lane-audio { height: 44px; }
+/* The When lane: which filters are on for part of the render, one row per node.
+   Its height is written by the timeline — one row per node, sharing a budget the
+   way the video lanes share theirs — so the only thing here is that it reads as a
+   lane of *statements* about the edit rather than as another lane of clips, which
+   is what the darker box says. */
+#lane-when { background: #13151a; }
 
 .track-lane canvas {
     display: block;

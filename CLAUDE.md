@@ -148,6 +148,14 @@ AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 - `ui/graph/print.js` — nodes and wires → `-filter_complex` chains.
 - `ui/filtergraph.js` — the one-call facade over both; `command.js` does not know
   a graph exists.
+- `ui/graph/enable.js` + `ui/graph/when.js` — `enable=` as a set of spans and as
+  the text it is, plus which *clock* a node's `t` is on (`clockOf`) and the map
+  between that clock and the timeline's, read in both directions (`onClock`,
+  `onTimeline`). A span is clamped and drawn against a **window** with a start,
+  not a bare length, because a filter above the derivation's `setpts` is written
+  in the source file's own seconds. `ui/graph/spans.js` is the third reader: every
+  span in the edit on the timeline's clock, which is what the timeline's When lane
+  draws and writes back through.
 
 ### The JS surface
 
