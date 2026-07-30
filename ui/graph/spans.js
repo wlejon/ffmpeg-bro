@@ -10,7 +10,8 @@
 // **It is a list and a write-back, and nothing else.** What a span *is*, what it
 // means, how one is printed into an `enable=` expression and where an end lands
 // when it is dragged all stay in `enable.js`; which clock a node's `t` is on and
-// how the two clocks map onto each other stay in `when.js`. This file asks those
+// how the two clocks map onto each other — origin, inverse and slope — stay in
+// `when.js`. This file asks those
 // questions of the graph and hands the answers to `ui/timeline.js`, which draws
 // them. A lane that composed an expression would be a second `printEnable`, and
 // the failure that follows is one screen writing `between(t,1,2)` where the other
@@ -61,7 +62,7 @@ import * as overlay from './overlay.js';
 import { keyOf } from './model.js';
 import { parseEnable, printEnable, drawnSpan, supportsTimeline,
          moveEdge, shiftSpan } from './enable.js';
-import { clockOf, onClock, onTimeline } from './when.js';
+import { clockOf, onClock, onTimeline, onDistance } from './when.js';
 
 /// The last answer, or null for "ask again". Invalidated rather than compared:
 /// what would have to be compared is the whole edit, which is the thing being
@@ -190,13 +191,15 @@ export function editEdge(row, spans, i, which, t) {
 
 /// A whole span, moved by a distance.
 ///
-/// **The distance is not mapped, and that is a fact about the map rather than a
-/// shortcut**: both clocks run at one second per second, so a span dragged two
-/// seconds along the timeline is two seconds later in its own expression. Only
-/// the origins differ. `held` is the span as it was when the press began, for the
-/// reason `shiftSpan` gives.
+/// **The distance is mapped too**, through `onDistance` — the slope of the same
+/// affine map `editEdge` uses the origin of. A clip played at 2× runs its own
+/// seconds twice as fast as the timeline's, so a span dragged one second along the
+/// lane is two seconds later in the expression; without the term every span on a
+/// sped-up clip would slide at the wrong rate under the hand holding it, and the
+/// lane would agree with itself about it. `held` is the span as it was when the
+/// press began, for the reason `shiftSpan` gives.
 export function editBody(row, spans, i, held, by) {
-    return shiftSpan(spans, i, held, by, row.clk);
+    return shiftSpan(spans, i, held, onDistance(row.clk, by), row.clk);
 }
 
 /// Write it back, through the one call the When strip's own commit goes through.

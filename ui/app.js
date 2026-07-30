@@ -15,7 +15,8 @@ import { project, projectFps, makeClip, makeGenerator, applyGenerator, isGenerat
          selectMany, isSelected, splitClip, trackCount,
          applyInput, clipsOf, hasPicture, retainTracks,
          isTrackLocked, setTrackLocked, ripplesWith,
-         rippleTrim, rollCut, slipClip } from './project.js';
+         rippleTrim, rollCut, slipClip, trimClip,
+         setSpeed, speedOf, sourceSpan, sourceTime, timelineTime } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as generators from './generator.js';
 import * as assemble from './sequence.js';
@@ -1853,7 +1854,14 @@ globalThis.__ffmpegBro = {
     // because they are pure model arithmetic — what each one holds constant is
     // the whole of what it is — and a test that had to synthesise an Alt-drag
     // to reach one would be testing the gesture rather than the edit.
-    rippleTrim, rollCut, slipClip,
+    rippleTrim, rollCut, slipClip, trimClip,
+    // How fast a clip runs, and the map that follows from it. On the surface for
+    // the same reason those four are: it is pure model arithmetic, and what a
+    // speed change *holds constant* — the footage the clip covers — is the whole
+    // of what it is. `sourceTime`/`timelineTime` are the pair the two clocks are
+    // read through, and a test that computed either for itself would be a fourth
+    // copy of the map this commit exists to have one of.
+    setSpeed, speedOf, sourceSpan, sourceTime, timelineTime, duration,
     // The sync lock. On the surface for the same reason those three are — which
     // tracks move together is model arithmetic and `ripplesWith` is the whole of
     // it — plus one this side has that they do not: the record is deliberately not

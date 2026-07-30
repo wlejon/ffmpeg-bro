@@ -22,7 +22,8 @@
 // to name a stream index and a path without either being typed. So the button
 // is here and what it makes is an ordinary node over there.
 
-import { project, isGenerator } from './project.js';
+import { project, isGenerator, speedOf, setSpeed,
+         SPEED_MIN, SPEED_MAX } from './project.js';
 import { argsOf, summaryOf } from './generator.js';
 import { el, div, span, put, head } from './dom.js';
 import { kindOf, inputs, streamKinds } from './inputs.js';
@@ -147,6 +148,7 @@ export function showTransform(clip) {
         controlRow('Opacity', percentSlider('opacity',
             common((k) => k.xform.opacity),
             (f) => { for (const k of subjects()) k.xform.opacity = f; }), mark('opacity')),
+        ...speedRows(again),
         controlRow('Audio', div('btns', [
             toggleButton('Mute', common((k) => k.muted) === true, () => {
                 const on = !(common((k) => k.muted) === true);
@@ -199,6 +201,78 @@ export function showTransform(clip) {
 }
 
 const pc = (v) => (v * 100).toFixed(1);
+
+// ── how fast the clip runs ─────────────────────────────────────────────────
+//
+// Four presets and a field, and the field is the control: a speed is one number
+// and `2` is what somebody would have typed after `setpts=PTS/`. The presets are
+// there because half, double and quarter are most of what anybody asks for and a
+// press beats four keystrokes.
+//
+// **The sentence under it is not a disclaimer, it is the offer.** A speed here
+// resamples, so the pitch moves with it — that is the decision `ui/project.js`'s
+// speed section argues, and the reason is that the compositor has no filter graph
+// to put an `atempo` in and the two paths must describe one render. What a person
+// can do about it is real and one stage away, so the line names `atempo` rather
+// than apologising. The same rule the Graph stage's refusals follow: say the reason
+// and say what to reach for.
+//
+// A refusal — reverse, or a freeze — comes back from `setSpeed()` as words and is
+// shown here, where the hand is. Not a `flash`: the field is still on screen with
+// the number that was rejected in it, and a message that floats away leaves
+// somebody looking at a value that did not take.
+
+const SPEED_PRESETS = [0.25, 0.5, 1, 2];
+
+function speedRows(again) {
+    const value = common((k) => speedOf(k));
+    const mixed = value === undefined;
+    let said = '';
+
+    const set = (v) => {
+        // Per clip, because the clamp is per clip: a speed decrease grows a bar
+        // and what stops it is *its own* neighbour. One selection can therefore
+        // come out at two lengths, which is the honest answer and the same one a
+        // multi-clip trim gives.
+        said = '';
+        for (const k of subjects()) said = setSpeed(k, v) || said;
+        hooks.audioChanged();
+        hooks.moved();
+        again();
+        if (said) sayIt(said);
+    };
+
+    const field = el('input', {
+        cls: 'num' + (mixed ? ' mixed' : ''), type: 'number',
+        value: mixed ? '' : +value.toFixed(3), placeholder: '—',
+        min: SPEED_MIN, max: SPEED_MAX, step: 0.05, 'data-speed': 'x',
+        title: 'How fast this clip runs — 2 is twice as fast in half the timeline, ' +
+               'over the same footage. The pitch moves with it.',
+    });
+    field.addEventListener('change', () => {
+        if (field.value === '') return;             // still mixed, left alone
+        set(Number(field.value));
+    });
+
+    const note = div('gp-hint dim',
+        'The same footage in less of the programme. The sound is resampled, so the ' +
+        'pitch moves with the speed — an atempo filter on the Graph stage is the ' +
+        'pitch-preserving answer. A copied stream cannot be sped up at all.');
+    const sayIt = (why) => { note.textContent = why; note.classList.add('gp-problem'); };
+
+    return [
+        controlRow('Speed', div('btns', [
+            field,
+            span('×', 'dim'),
+            ...SPEED_PRESETS.map((v) => el('button', {
+                cls: 'tiny' + (!mixed && Math.abs(value - v) < 1e-6 ? ' on' : ''),
+                text: v === 1 ? '1×' : `${v}×`, 'data-speed-preset': String(v),
+                on: { click: () => set(v) },
+            })),
+        ])),
+        controlRow('', note),
+    ];
+}
 
 // ── the generator this clip is of ──────────────────────────────────────────
 //

@@ -44,6 +44,15 @@
 // vanishes when the bar is deleted; a generator somebody placed by hand on the
 // Graph stage is a user node and is untouched by any of this.
 //
+// **A clip's speed is the slope of one node.** The `setpts` that takes a clip off
+// its file's clock and onto the render's is where a speed belongs, because a speed
+// is nothing but the slope of that map: `(PTS-STARTPTS)/speed`. The sound cannot
+// be done by re-stamping — samples are a count and not a timestamp — so it is
+// `asetrate` and `aresample`, which is a **resample**: the pitch moves with the
+// speed, in the printed graph and in the compositor both, and `atempo` is the
+// pitch-preserving answer somebody can place. The two paths agreeing is the point;
+// see `audioSteps`.
+//
 // The input is `buildSpec()`'s output and nothing else, which is the same
 // object the renderer is driven from — so this cannot describe a render the
 // application would not perform. When an edit cannot be expressed faithfully
@@ -114,17 +123,38 @@ export function outputColor(spec) {
 /// The part of a clip that lands inside the rendered range, in three clocks:
 /// where it starts in the source, where it starts in the output, and how long
 /// it runs. Returns null for a clip the range does not reach.
+///
+/// **`length` and `offset` are on the output's clock and `srcIn`/`srcOut` are on
+/// the source's, and `speed` is the slope between them** — the same statement
+/// `ui/project.js` makes about `length` and `sourceSpan`, in filter vocabulary.
+/// A clip at 2× spends two seconds of its file per second of the render, so its
+/// `trim` is twice as wide as its bar and the `setpts` below divides.
 function windowOf(clip, start, end) {
     const from = Math.max(clip.start, start);
     const to = Math.min(clip.start + clip.length, end);
     if (to - from <= 1e-6) return null;
+    const speed = speedOf(clip);
     return {
-        srcIn: clip.inPoint + (from - clip.start),
-        srcOut: clip.inPoint + (to - clip.start),
+        srcIn: clip.inPoint + (from - clip.start) * speed,
+        srcOut: clip.inPoint + (to - clip.start) * speed,
         offset: from - start,
         length: to - from,
+        speed,
     };
 }
+
+/// How fast a clip runs, off the spec.
+///
+/// `ui/project.js`'s `speedOf` asked of a spec's clip rather than of the model's,
+/// so this stays a pure function of its argument — and so that a spec written by
+/// hand in a test, which carries no `speed` at all, derives exactly as it always
+/// did. **The rule is the model's and it is stated in one sentence in each place:**
+/// anything that is not a positive number is 1, because zero would be a freeze and
+/// negative would be reverse and neither is expressible here.
+const speedOf = (clip) => {
+    const s = Number(clip && clip.speed);
+    return Number.isFinite(s) && s > 0 ? s : 1;
+};
 
 /// The matrix and range a source will be decoded through, in the scale
 /// filter's vocabulary.
@@ -203,9 +233,20 @@ function videoSteps(clip, w, src, key, off, onDevice) {
         // A render always starts at that frame and can write the map relative
         // to it; the viewer can be sitting anywhere in the file, so the same map
         // has to be written as the constant it amounts to. `ui/graph/playback.js`
-        // is what reads it.
+        // is what reads it — and `moves` is the constant **at speed 1**, which is
+        // why a sped-up clip's late filters are refused a view there rather than
+        // shown on a clock a constant cannot express.
+        //
+        // **A clip's speed is the divisor on this node**, because this is the
+        // node that maps the source's seconds onto the render's and a speed is
+        // nothing but the slope of that map. `(PTS-STARTPTS)/speed` and not an
+        // `fps` or a `setpts` of somebody's: the frames are not resampled, they
+        // are re-stamped, and the canvas's own rate is what the render walks at
+        // (see `base` below). The sound's half is two filters and says why.
         { filter: 'setpts', anchor: `${key}/setpts`, posNames: ['expr'],
-          pos: [`PTS-STARTPTS+${n(w.offset + off, 6)}/TB`],
+          pos: [w.speed === 1
+                    ? `PTS-STARTPTS+${n(w.offset + off, 6)}/TB`
+                    : `(PTS-STARTPTS)/${n(w.speed, 6)}+${n(w.offset + off, 6)}/TB`],
           moves: w.offset + off - w.srcIn });
     if (keepW < 1 || keepH < 1)
         steps.push({ filter: 'crop', anchor: `${key}/crop`,
@@ -247,10 +288,35 @@ function videoSteps(clip, w, src, key, off, onDevice) {
 /// `adelay` prepends real silence; carrying a window five minutes into a render
 /// there would prepend five minutes of it. `asetpts` moves the timestamps and
 /// adds no samples, which is exactly what a clock offset is.
-function audioSteps(clip, w, key, off) {
+function audioSteps(clip, w, key, off, rate) {
     const steps = [
         { filter: 'atrim', anchor: `${key}/atrim`,
           params: { start: n(w.srcIn, 6), end: n(w.srcOut, 6) } },
+    ];
+    // **Speed resamples, and the pitch moves with it.** `asetrate` reinterprets
+    // the samples as though they had been recorded at another rate — which is
+    // exactly what the compositor asks libav's own `swr` for by multiplying the
+    // input rate by the speed (`SourceAudio::open`, one home for the same rule at
+    // the other end) — and `aresample` puts them back on the rate the file was
+    // at, so nothing downstream has to know this happened.
+    //
+    // The pitch-preserving answer is `atempo`, which is WSOLA and is a
+    // libavfilter filter: there is no graph inside `TimelineSource::mixInto`, so
+    // taking it would mean the compositor resampling while this printed `atempo`
+    // — a graph describing a render this application would not perform, which is
+    // the one thing this file exists not to write. So it is a filter somebody
+    // places, and `caveats` says so.
+    //
+    // Before the `asetpts`, so the offset below is on the output's clock and not
+    // divided by the speed along with everything else; and after the `atrim`,
+    // whose numbers are the source's own seconds.
+    if (w.speed !== 1) {
+        steps.push({ filter: 'asetrate', anchor: `${key}/asetrate`, posNames: ['sample_rate'],
+                     pos: [px(rate * w.speed)] });
+        steps.push({ filter: 'aresample', anchor: `${key}/aresample`,
+                     posNames: ['sample_rate'], pos: [px(rate)] });
+    }
+    steps.push(
         // The sound's half of the clock, and it is in two filters where the
         // picture's is in one — see `moves` on the `setpts` above. This node
         // carries the range's origin; the `adelay` below carries where the clip
@@ -258,8 +324,7 @@ function audioSteps(clip, w, key, off) {
         // arithmetic.
         { filter: 'asetpts', anchor: `${key}/asetpts`, posNames: ['expr'],
           pos: [off ? `PTS-STARTPTS+${n(off, 6)}/TB` : 'PTS-STARTPTS'],
-          moves: off - w.srcIn },
-    ];
+          moves: off - w.srcIn });
     if (clip.volume !== 1)
         steps.push({ filter: 'volume', anchor: `${key}/volume`,
                      posNames: ['volume'], pos: [n(clip.volume)] });
@@ -362,6 +427,20 @@ function clipHasSound(spec, clip) {
     const info = list[clip.input];
     if (!info || !Array.isArray(info.streams)) return true;
     return info.streams.indexOf('a') >= 0;
+}
+
+/// What rate this clip's soundtrack is at, or 0 for "the spec did not say".
+///
+/// Only a clip with a **speed** needs it — see `audioSteps`, where `asetrate` takes
+/// a number and not an expression over the input's rate — and 0 is refused there
+/// rather than defaulted, because `asetrate`'s own default is 44100 and a chain
+/// that resampled a 48 kHz file through it would be a graph describing a render
+/// this application would not perform. A hand-written spec carries no `inputInfo`
+/// and no `speed`, so nothing in `tests/` reaches this.
+function clipSoundRate(spec, clip) {
+    const list = Array.isArray(spec.inputInfo) ? spec.inputInfo : [];
+    const info = list[clip.input];
+    return Math.round(Number(info && info.sampleRate)) || 0;
 }
 
 /// And does it have a picture?
@@ -1160,6 +1239,20 @@ export function derive(spec, sources, opts = {}) {
     if (spec.audio !== false) {
         const heard = kept.filter(({ clip }) => !clip.muted && clip.volume > 0 &&
                                                 clipHasSound(spec, clip));
+        // **Refused rather than approximated**, before a node is made: a sped-up
+        // clip's sound is `asetrate=<rate>*<speed>,aresample=<rate>` and
+        // `asetrate` takes a number, so a spec that does not say what rate the
+        // file is at cannot be printed honestly. `asetrate`'s own default is
+        // 44100 and a 48 kHz file put through that comes out slightly slow and a
+        // semitone flat, which is exactly the nearly-right graph this file exists
+        // instead of.
+        for (const k of heard) {
+            if (k.w.speed === 1) continue;
+            if (!clipSoundRate(spec, k.clip))
+                return refuse(`a clip plays at ${n(k.w.speed)}× and nothing here says what ` +
+                              'rate its sound is recorded at, so there is no rate to ' +
+                              'resample it from');
+        }
         const tails = heard.map(({ clip, w, i, key }) => {
             // The clip's own input node, given a second output. A pad is added
             // when something reads it rather than for every stream the file
@@ -1169,7 +1262,9 @@ export function derive(spec, sources, opts = {}) {
             const input = inputs.get(key);
             const out = input.outs.length;
             input.outs.push({ stream: 'a' });
-            const tail = g.run({ node: input, out }, audioSteps(clip, w, key, off), `a${i}`);
+            const tail = g.run({ node: input, out },
+                               audioSteps(clip, w, key, off, clipSoundRate(spec, clip)),
+                               `a${i}`);
             point(`${key}/audio`, input, out, 'a', 'clip audio');
             return tail;
         });
@@ -1254,9 +1349,21 @@ export function derive(spec, sources, opts = {}) {
     if (kept.some(({ src, gen }) => !src && !gen))
         caveats.push('a source’s colour is not known here, so swscale guesses ' +
                      'the matrix the renderer reads from the file');
-    if (kept.some(({ src }) => src && src.fps > 0 && Math.abs(src.fps - fps) > 0.01))
-        caveats.push('the output rate differs from a source’s, and a fixed-rate ' +
-                     'walk and a frame-sync do not choose the same frames');
+    // **A speed is a source arriving at another rate**, which is why the rate
+    // caveat divides by it rather than having one of its own: a 25 fps file at 2×
+    // delivers twelve and a half pictures per second of render, and the
+    // disagreement that follows is exactly the one this sentence already names.
+    // Measured in tests/export_test.cpp over one fixture at 2×: the compositor
+    // takes source frame 2m for output frame m, `overlay`'s frame-sync takes 2m-1
+    // — one frame, never more, 27 dB against the compositor and 50 dB against the
+    // frame either side of it. Raised only where the numbers actually differ, like
+    // everything else in this list, so a clip at 1× on a matching rate says
+    // nothing.
+    if (kept.some(({ src, w }) => src && src.fps > 0 &&
+                                  Math.abs(src.fps / w.speed - fps) > 0.01))
+        caveats.push('the output rate differs from the rate a source’s pictures ' +
+                     'arrive at, and a fixed-rate walk and a frame-sync do not ' +
+                     'choose the same frames');
 
     // What is wrong with the graph, as opposed to what could not be derived.
     //

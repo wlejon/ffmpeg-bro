@@ -40,7 +40,7 @@
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
          isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
          hasPicture, isGenerator, isTrackLocked, setTrackLocked,
-         ripplesWith } from './project.js';
+         ripplesWith, sourceTime, speedOf } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
@@ -378,7 +378,11 @@ function drawVideoLane(track, canvas) {
                 if (sx >= r) break;
                 const dl = Math.max(sx, l), dr = Math.min(sx + slot, r);
                 if (dr <= dl) continue;
-                const t = clip.inPoint + (xToTime(sx) - clip.start);
+                // Through `sourceTime`, which carries the clip's speed: the
+                // filmstrip's times are the file's and a sped-up clip walks
+                // through them faster, so a lane that subtracted a start would
+                // show the same shot stretched across the bar.
+                const t = sourceTime(clip, xToTime(sx));
                 const i = Math.min(count - 1, thumbAt(times, t));
                 // Partial slots at either edge crop the source rather than
                 // squeezing a whole thumbnail into fewer pixels.
@@ -390,13 +394,27 @@ function drawVideoLane(track, canvas) {
         }
 
         // A clip that is not fully opaque says so, since on a lower track that
-        // is the difference between "hidden" and "gone".
-        if (clip.xform.opacity < 0.999) {
+        // is the difference between "hidden" and "gone". A clip that is not at
+        // its own speed says so for the stronger version of the same reason:
+        // nothing else on the bar can tell you, because a shot at 2× looks
+        // exactly like half as much of the same shot until it plays.
+        const speed = speedOf(clip);
+        const marks = [
+            clip.xform.opacity < 0.999 ? { text: Math.round(clip.xform.opacity * 100) + '%',
+                                           colour: '#ffb37a' } : null,
+            Math.abs(speed - 1) > 1e-6 ? { text: `${+speed.toFixed(3)}×`,
+                                           colour: '#7ad4ff' } : null,
+        ].filter(Boolean);
+        if (marks.length) {
             ctx.fillStyle = 'rgba(0,0,0,0.45)';
             ctx.fillRect(l, 0, r - l, 13);
             ctx.font = '10px Consolas, monospace';
-            ctx.fillStyle = '#ffb37a';
-            ctx.fillText(Math.round(clip.xform.opacity * 100) + '%', l + 5, 10);
+            let at = l + 5;
+            for (const m of marks) {
+                ctx.fillStyle = m.colour;
+                ctx.fillText(m.text, at, 10);
+                at += ctx.measureText(m.text).width + 6;
+            }
         }
 
         ctx.strokeStyle = selected ? '#ff8c42'
@@ -438,7 +456,10 @@ function columnsOf(clip, w) {
     if (r <= l || !p || !p.buckets || !p.duration) return null;
     const n = p.buckets;
     const bucketAt = (x) => {
-        const t = clip.inPoint + (xToTime(x) - clip.start);
+        // The same map the filmstrip reads, and for the same reason: the buckets
+        // are the file's seconds and the clip's speed is the slope between them
+        // and the lane.
+        const t = sourceTime(clip, xToTime(x));
         const b = Math.floor((t / p.duration) * n);
         return b < 0 ? 0 : b >= n ? n - 1 : b;
     };
@@ -1193,7 +1214,11 @@ function wireVideoLane(entry) {
                 // nothing on the timeline to snap to, since nothing about the
                 // arrangement moves.
                 drag.clip.inPoint = drag.originIn;
-                slipClip(drag.clip, -delta);
+                // Scaled by the speed, because `slipClip` takes a distance in the
+                // *file's* seconds and `delta` is a distance the pointer moved
+                // along the timeline. At 2× the film has to slide two seconds for
+                // the picture under the pointer to follow it by one.
+                slipClip(drag.clip, -delta * speedOf(drag.clip));
             } else if (drag.edit === 'roll') {
                 const left = drag.what === 'start' ? drag.other : drag.clip;
                 const right = drag.what === 'start' ? drag.clip : drag.other;

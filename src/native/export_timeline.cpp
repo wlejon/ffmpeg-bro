@@ -14,6 +14,18 @@
 
 namespace ffmpegbro {
 
+/// Where in its source a clip is at output time `t`.
+///
+/// One function because two callers need it and they are a frame and a block of
+/// sound apart: the picture asks for an instant and the sound asks where to line
+/// its reader up. A speed written into one and not the other would put a clip's
+/// sound against the wrong pictures of itself, which is the one failure that
+/// sounds like a mistake in the edit rather than in the code.
+static double srcTimeOf(const ExportClip& c, double t) {
+    const double speed = c.speed > 0.0 ? c.speed : 1.0;
+    return c.inPoint + (t - c.start) * speed;
+}
+
 /// Everything one clip needs open at once. Built lazily for the picture and
 /// eagerly for the sound, because whether there is any sound at all has to be
 /// answered before the first frame is written.
@@ -61,7 +73,7 @@ TimelineSource::TimelineSource(const ExportSettings& s, std::vector<ExportClip> 
         if (s.includeAudio && !c.muted && c.volume > 0.0) {
             cs->audio = std::make_unique<SourceAudio>();
             if (cs->audio->open(resolveInput(s, c.input, c.path),
-                                s.audioSampleRate, s.audioChannels)) anyAudio_ = true;
+                                s.audioSampleRate, s.audioChannels, c.speed)) anyAudio_ = true;
             else cs->audio.reset();
         }
         clips_.push_back(std::move(cs));
@@ -89,7 +101,13 @@ const Rgba& TimelineSource::canvasAt(double t) {
                 continue;
             }
         }
-        const double srcTime = cs->spec.inPoint + (t - cs->spec.start);
+        // **The one home for the timeline→source map on this path**, and the clip's
+        // speed is its slope: `length` is how much of the *programme* the clip
+        // occupies, so a clip at 2× walks twice as far into its file per output
+        // second. `ui/project.js`'s `sourceTime` is the same rule in the model and
+        // `windowOf` in `ui/graph/derive.js` is the same rule as a `trim`; if one
+        // changes, all three do.
+        const double srcTime = srcTimeOf(cs->spec, t);
         if (const Rgba* pic = cs->video->rgbaAt(srcTime))
             comp_->draw(*pic, cs->spec, cs->scaler);
     }
@@ -122,7 +140,11 @@ void TimelineSource::mixInto(float* dst, double from, int frames, int rate, int 
             // First sound this clip contributes: line its file up with the
             // timeline. After this the reader is pulled strictly forward,
             // which is what keeps it in sync without a seek per block.
-            cs->audio->seekTo(c.inPoint + (start - c.start));
+            // Through the same map the picture goes through, so the two halves of
+            // one clip cannot be lined up differently. `SourceAudio` was opened
+            // with the speed and resamples from here forward; this only says where
+            // in the file "here" is.
+            cs->audio->seekTo(srcTimeOf(c, start));
             cs->audioPrimed = true;
         }
         cs->audio->mixInto(dst + size_t(offset) * channels, count,

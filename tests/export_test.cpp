@@ -1599,6 +1599,201 @@ int main(int argc, char* argv[]) {
                    nst.error.empty() ? "no error" : nst.error.c_str());
         }
 
+        // ── a clip that plays at twice its own rate ────────────────────────
+        //
+        // **This is the check the whole speed decision rests on.** A clip's speed
+        // is performed two ways and they must not diverge: the track stack asks
+        // `swr` for the file's rate multiplied by the speed and steps `srcTime`
+        // forward twice as fast, and the graph divides the `setpts` and writes
+        // `asetrate,aresample`. If those are two different renders then
+        // `ui/graph/derive.js` describes something this application would not
+        // perform, which is the one claim that file exists to make.
+        //
+        // The source window is *the same window* as every render above — the
+        // clip covers `inPoint`…`inPoint+kSpan` of the file either way — and only
+        // the output is half as long, because that is what "the source span is
+        // preserved" means. So the picture at output second `t` here is the picture
+        // at `2t` there, which is a third thing this catches for free.
+        {
+            const double kSpeed = 2.0;
+            ExportClip fast = c;
+            fast.speed = kSpeed;
+            fast.length = c.length / kSpeed;
+
+            ExportSettings sf = baseSettings("out/export-speed-stack.mp4");
+            sf.endTime = fast.length;
+            const ExportStatus fst = render(sf, {fast});
+            checkf(fst.state == ExportStatus::State::Done,
+                   "the track stack renders a clip at %g× (%s)", kSpeed,
+                   fst.error.empty() ? "no error" : fst.error.c_str());
+
+            // What the file's sound is at, because `asetrate` takes a number and
+            // not an expression over the input's rate — which is exactly why
+            // `specInputInfo()` carries it to the derivation. Asked of the probe
+            // here for the same reason.
+            int rate = 0;
+            for (const auto& s : src.streams) if (s.kind == "audio") { rate = s.sampleRate; break; }
+
+            char fastText[1400];
+            std::snprintf(fastText, sizeof(fastText),
+                "color=c=black:s=%dx%d:r=%g:d=%g[base];"
+                "[0:v]trim=start=%g:end=%g,setpts=(PTS-STARTPTS)/%g+0/TB,"
+                "scale=%d:%d:in_color_matrix=%s:in_range=%s:out_range=full,format=rgba[v0];"
+                "[base][v0]overlay=0:0:eof_action=pass[vout]"
+                "%s",
+                kW, kH, kFps, fast.length,
+                fast.inPoint, fast.inPoint + fast.length * kSpeed, kSpeed,
+                static_cast<int>(c.w), static_cast<int>(c.h), matrix.c_str(), range.c_str(),
+                "");
+            std::string fastGraph = fastText;
+            const bool sound = srcHasAudio && rate > 0;
+            if (sound) {
+                char audio[400];
+                std::snprintf(audio, sizeof(audio),
+                    ";[0:a]atrim=start=%g:end=%g,asetrate=%d,aresample=%d,"
+                    "asetpts=PTS-STARTPTS[a0]",
+                    fast.inPoint, fast.inPoint + fast.length * kSpeed,
+                    int(rate * kSpeed + 0.5), rate);
+                fastGraph += audio;
+            }
+
+            ExportSettings gf = baseSettings("out/export-speed-graph.mp4");
+            gf.endTime = fast.length;
+            gf.filterGraph = fastGraph;
+            gf.filterInputs = {{"0:v", first, "v"}};
+            if (sound) gf.filterInputs.push_back({"0:a", first, "a"});
+            gf.includeAudio = sound;
+            const ExportStatus gst = render(gf, {fast});
+            checkf(gst.state == ExportStatus::State::Done,
+                   "and libavfilter renders the chain the app prints for it (%s)",
+                   gst.error.empty() ? "no error" : gst.error.c_str());
+
+            if (fst.state == ExportStatus::State::Done &&
+                gst.state == ExportStatus::State::Done) {
+                // One source frame, which is the unit the two paths differ by —
+                // see below. Falls back to an output frame for a file whose rate
+                // the container does not state.
+                const double srcFrame = 1.0 / ((sv && sv->fps > 0.1) ? sv->fps : kFps);
+                VideoPipeline a, b, plain;
+                if (a.open("out/export-speed-stack.mp4") &&
+                    b.open("out/export-speed-graph.mp4") && plain.open(outG)) {
+                    double exact = 99.0;
+                    double nearest = 99.0;
+                    double wrongRate = 99.0;
+                    // On output frame boundaries at *both* rates, so that neither
+                    // side is being asked for a moment between two pictures: at
+                    // 25 fps these are frames 4, 10 and 16 of the 2× render and 8,
+                    // 20 and 32 of the 1× render. Sampling at 0.15 asked the two
+                    // for different source frames and measured nothing but that.
+                    for (double at : {0.16, 0.40, 0.64}) {
+                        a.advanceTo(static_cast<TimeNs>(at * 1e9));
+                        b.advanceTo(static_cast<TimeNs>(at * 1e9));
+                        plain.advanceTo(static_cast<TimeNs>(at * kSpeed * 1e9));
+                        if (!a.hasFrame() || !b.hasFrame() || !plain.hasFrame()) {
+                            exact = nearest = wrongRate = -1.0;
+                            break;
+                        }
+                        // The compositor against the same edit at 1×, and the graph
+                        // against the closest source frame either side of it.
+                        const double stack = psnr(a.currentRgba(), plain.currentRgba(), kW, kH);
+                        double best = psnr(b.currentRgba(), plain.currentRgba(), kW, kH);
+                        for (double o : {-srcFrame, srcFrame}) {
+                            VideoPipeline p;
+                            if (!p.open(outG)) break;
+                            p.advanceTo(static_cast<TimeNs>((at * kSpeed + o) * 1e9));
+                            if (p.hasFrame())
+                                best = std::max(best,
+                                                psnr(b.currentRgba(), p.currentRgba(), kW, kH));
+                        }
+                        // And the graph against the picture it would show if the
+                        // speed had never reached it, which is the failure this
+                        // whole section is here to catch.
+                        VideoPipeline unsped;
+                        double dropped = -1.0;
+                        if (unsped.open(outG)) {
+                            unsped.advanceTo(static_cast<TimeNs>(at * 1e9));
+                            if (unsped.hasFrame())
+                                dropped = psnr(b.currentRgba(), unsped.currentRgba(), kW, kH);
+                        }
+                        std::printf("        %.2fs: stack vs 1×@%.2f %.1f dB, graph within a "
+                                    "source frame %.1f dB, graph vs 1×@%.2f %.1f dB\n",
+                                    at, at * kSpeed, stack, best, at, dropped);
+                        exact = std::min(exact, stack);
+                        nearest = std::min(nearest, best);
+                        wrongRate = std::min(wrongRate, dropped < 0 ? 99.0 : dropped);
+                    }
+                    // **The compositor's speed is exact**, and this is what "the
+                    // source span is preserved" means as a picture rather than as
+                    // arithmetic: second t of the 2× render is second 2t of the
+                    // same edit at its own rate, out of the same window of the same
+                    // file. 43 dB is the same floor the unsped comparison uses —
+                    // two independent x264 passes over identical pictures.
+                    checkf(exact > 43.0,
+                           "second t of a %g× render is second %g×t of the same edit at 1× "
+                           "(%.1f dB)", kSpeed, kSpeed, exact);
+                    // **And libavfilter's is the same picture to within the frame
+                    // its frame-sync chose**, which is a real and measured
+                    // difference rather than slack: at 2× the divided `setpts` puts
+                    // the clip's frames on *half* the base's frame interval, and
+                    // `overlay` rescales them into the base's time base before
+                    // comparing — so where the compositor takes source frame 2m for
+                    // output frame m, framesync can take 2m-1. Measured over this
+                    // fixture: 27 dB against the compositor's own frame and 50 dB
+                    // against the one either side of it, so it is exactly one frame
+                    // and never more.
+                    //
+                    // This is the same disagreement `graph/derive.js` already
+                    // raises a caveat for when a source's rate differs from the
+                    // output's — "a fixed-rate walk and a frame-sync do not choose
+                    // the same frames" — and a speed is precisely a source arriving
+                    // at another rate, which is why that caveat's condition divides
+                    // by the speed.
+                    checkf(nearest > 43.0,
+                           "and libavfilter's is the same picture to within the frame its "
+                           "frame-sync chose (%.1f dB)", nearest);
+                    // Which is nothing like a speed that failed to reach the graph:
+                    // that is the picture from half as far into the file, tens of
+                    // frames away, and it measures 17 dB on this fixture.
+                    checkf(wrongRate < nearest - 10.0,
+                           "and nowhere near the picture it would show if the speed had not "
+                           "reached the chain at all (%.1f dB against %.1f)",
+                           wrongRate, nearest);
+                } else {
+                    check(false, "all three renders open for comparison");
+                }
+            }
+
+            // The sound is half as long and no quieter. A resample that had been
+            // written as a *rate* change on the way out — `aresample` without the
+            // `asetrate` — would come out the right length and silent past the
+            // half way point, which is invisible in the picture checks.
+            if (sound && srcAudible && gst.state == ExportStatus::State::Done) {
+                AudioPeaks pa, pg;
+                if (analyzeAudioPeaks("out/export-speed-stack.mp4", 32, pa) &&
+                    analyzeAudioPeaks("out/export-speed-graph.mp4", 32, pg) &&
+                    pa.rms.size() == pg.rms.size() && !pa.rms.empty()) {
+                    double worstDiff = 0, loudest = 0;
+                    for (size_t i = 0; i < pa.rms.size(); ++i) {
+                        worstDiff = std::max(worstDiff, std::fabs(double(pa.rms[i]) - pg.rms[i]));
+                        loudest = std::max(loudest, double(pa.rms[i]));
+                    }
+                    // Looser than the 15% the unsped comparison allows: one path
+                    // resamples through `swr` directly and the other through
+                    // `asetrate` into `aresample`, which is two resamplers where
+                    // the first has one, and the block boundaries a 32-bucket
+                    // envelope is measured on do not fall in the same places. What
+                    // this is asserting is that both paths made *sound of the same
+                    // shape*; a path that had dropped the resample entirely comes
+                    // out an octave and a length apart, which is nowhere near this.
+                    checkf(loudest > 0.0005 && worstDiff < loudest * 0.35,
+                           "and both paths make the same sped-up sound "
+                           "(worst rms difference %.4f of %.4f)", worstDiff, loudest);
+                } else {
+                    check(false, "both sped-up renders' audio decodes for comparison");
+                }
+            }
+        }
+
         // The graph is text the user can edit, so every way of getting it wrong
         // has to arrive as a sentence rather than as a render that produces
         // nothing.

@@ -237,9 +237,29 @@ Honest list of what does not work:
   these sizes, on the machine in front of you and keeping the answer — which is a
   benchmark somebody has to be asked to wait for, and then a second decision about
   when it is stale.
-- **Speed on a render.** `J`/`K`/`L` and the speed selector are transport
-  controls, not part of the edit, so a clip exports at its own rate whatever
-  the viewer was last playing at.
+- **Speed that keeps the pitch, and speed under a filter of yours.** A clip has a
+  speed now and the render performs it — see [Speed](timeline.md#speed) — and
+  three things about it are not what they could be. **The pitch moves**, because
+  speed here is a resample (`asetrate`, `aresample`) and preserving it would mean
+  `atempo`, which is a libavfilter filter: `TimelineSource::mixInto` has no graph
+  to put one in, so taking it would mean the internal compositor and the printed
+  chain describing two different renders. What closes it is a WSOLA
+  time-stretcher on the compositor path, which is a second home for something
+  libavfilter already has — so the answer offered instead is the real one:
+  `atempo` on the Graph stage. **The viewer will not show a filter placed below a
+  sped-up clip's `scale`**, and keeps the `fx` badge: playback puts the render's
+  clock back with a constant, and a speed makes that map a scale, which a
+  constant cannot undo — a filter carrying `enable=` there would come on at the
+  wrong moment on screen and the right one in the file. A filter *above* the
+  clock is unaffected, because its `t` is the source's own timestamps either way.
+  And the two render paths **choose one source frame differently** at a speed: the
+  divided `setpts` puts the clip's frames on half the canvas's frame interval and
+  `overlay`'s frame-sync rounds, so where the compositor takes source frame 2m the
+  graph can take 2m−1. That is the disagreement the Graph stage already raises a
+  caveat for when a source's rate differs from the output's — measured at one
+  frame and never more (tests/export_test.cpp) — and closing it means an `fps`
+  filter in the derived chain, which is a different render rather than a
+  rounding fix.
 - **A meter of the timeline's own mix, during ordinary playback.** There is a
   meter beside the viewer now — see
   [The meter beside the picture](playback.md#the-meter-beside-the-picture) — and

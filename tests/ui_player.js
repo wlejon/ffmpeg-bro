@@ -675,6 +675,146 @@ console.log('\nripple, roll and slip');
     ok(A.project.clips.length === 1, 'back to one clip, where we started');
 }
 
+// ── how fast a clip runs ───────────────────────────────────────────────────
+//
+// A speed is one number on the clip and the arithmetic around it is the whole of
+// the feature, so it is driven through the model here for the reason ripple, roll
+// and slip are: what each edit holds constant *is* the claim.
+//
+// Two things it holds and one it refuses:
+//
+//   - **`length` is the timeline length**, so `duration()` and every layout read
+//     it as they always did, and the source span is `length * speed`;
+//   - **a speed change preserves the source span**, so the same footage occupies
+//     less of the programme — which is the gesture people have, and is what makes
+//     it not a trim;
+//   - **zero and negative are refused by name**, because a freeze frame and
+//     reverse playback are two other features and neither is expressible here.
+
+console.log('\nhow fast a clip runs');
+{
+    const c = A.project.clips[0];
+    c.track = 0;
+    c.start = 0;
+    c.inPoint = 0;
+    c.speed = 1;
+    c.length = Math.min(c.media, 2);
+    A.changed('moved');
+    pump(60);
+
+    const span = () => c.length * c.speed;
+    const wasSpan = span();
+
+    ok(A.setSpeed(c, 2) === '', 'a clip can be told to play at 2×');
+    ok(Math.abs(span() - wasSpan) < 1e-6,
+       `which keeps the footage it covers (${span().toFixed(3)}s of the file)`);
+    ok(Math.abs(c.length - wasSpan / 2) < 1e-6,
+       `in half as much of the programme (${c.length.toFixed(3)}s)`);
+    ok(Math.abs(A.duration() - c.length) < 1e-6,
+       'and the timeline is that much long, because `length` is the timeline length');
+    ok(Math.abs(A.sourceTime(c, 0.5) - (c.inPoint + 1)) < 1e-6,
+       'a second of the file per half second of the edit');
+    ok(Math.abs(A.timelineTime(c, c.inPoint + 1) - 0.5) < 1e-6,
+       'and the inverse says the same thing the other way round');
+
+    // Back down again, and the source span is preserved through that too — which
+    // is what makes the control reversible rather than lossy.
+    ok(A.setSpeed(c, 1) === '', 'and back to its own rate');
+    ok(Math.abs(span() - wasSpan) < 1e-6 && Math.abs(c.length - wasSpan) < 1e-6,
+       'landing exactly where it started');
+
+    // **Refused by name.** Not clamped: each of these is a different feature and
+    // a control that quietly turned one into 0.05× would be answering a question
+    // nobody asked.
+    ok(/reverse/.test(A.setSpeed(c, -1)), 'a negative speed is refused as reverse playback');
+    ok(/freeze/.test(A.setSpeed(c, 0)), 'and zero as a freeze frame');
+    ok(c.speed === 1 && Math.abs(c.length - wasSpan) < 1e-6,
+       'and neither refusal touched the clip');
+
+    // **A slower clip is a longer one, and it stops at its neighbour** — the same
+    // wall a trim stops at, because it is the same question. Not a refusal and not
+    // an overlap: two clips covering one moment on one track has no answer to
+    // "which is on screen".
+    {
+        // Made by splitting, which is how this timeline makes two butted clips
+        // everywhere else in this file.
+        A.select(c);
+        A.setPlayhead(c.start + c.length * 0.5);
+        pump(60);
+        A.splitAtPlayhead();
+        pump(60);
+        const two = A.project.clips.slice().sort((a, b) => a.start - b.start);
+        const left = two[0], after = two[1];
+        ok(two.length === 2, 'two butted clips, to have a wall to stop at');
+        const room = after.start - left.start;
+        ok(A.setSpeed(left, 0.25) === '',
+           'the first is told to play at a quarter speed');
+        ok(Math.abs(left.length - room) < 0.01,
+           `which grows it up to the clip after it and no further (${
+               left.length.toFixed(3)}s into ${room.toFixed(3)}s of room)`);
+        ok(after.start >= left.start + left.length - 0.01,
+           'so nothing overlaps');
+        ok(left.length * left.speed < wasSpan,
+           'and the footage it covers is the part that gave way, which is what a trim ' +
+           'does at the same wall');
+
+        A.select(after);
+        A.removeSelection();
+        pump(60);
+    }
+
+    // With the wall gone, the two edits that spend footage. Both are stated in
+    // *timeline* seconds by the hand that makes them and both come out of the file
+    // at the speed, which is the same slope twice.
+    {
+        const one = A.project.clips[0];
+        one.speed = 1;
+        one.start = 0;
+        one.inPoint = 0;
+        one.length = one.media;
+        A.setSpeed(one, 2);
+        ok(Math.abs(one.length - one.media / 2) < 1e-6,
+           `the whole file at 2× is half the programme (${one.length.toFixed(2)}s of ${
+               one.media.toFixed(2)}s)`);
+
+        const beforeSpan = one.length * one.speed;
+        A.trimClip(one, 'end', one.start + one.length - 0.5);
+        ok(Math.abs((one.length * one.speed) - (beforeSpan - 1)) < 0.05,
+           `half a second off the bar is a second off the footage at 2× (${
+               (beforeSpan - one.length * one.speed).toFixed(3)}s)`);
+        ok(one.inPoint + one.length * one.speed <= one.media + 0.01,
+           'and the trim constraint is inPoint + length × speed ≤ media');
+
+        // A slip is in the file's seconds and clamps against the source span, so a
+        // sped-up clip runs out of file when *twice* its length is at the end.
+        A.slipClip(one, 9999);
+        ok(Math.abs(one.inPoint + one.length * one.speed - one.media) < 0.01,
+           `a slip stops with the source span against the end of the file (${
+               one.inPoint.toFixed(2)} + ${(one.length * one.speed).toFixed(2)} = ${
+               one.media.toFixed(2)}s)`);
+
+        // And trimming the head at 2× moves the in-point twice as far as the bar,
+        // which is the other place a timeline second is spent out of the file.
+        const wasIn = one.inPoint, wasStart = one.start;
+        A.trimClip(one, 'start', one.start + 0.5);
+        ok(Math.abs((one.start - wasStart) - 0.5) < 0.05 &&
+           Math.abs((one.inPoint - wasIn) - 1) < 0.05,
+           `and half a second off the head is a second into the file (${
+               (one.inPoint - wasIn).toFixed(3)}s)`);
+    }
+
+    const only = A.project.clips[0];
+    only.speed = 1;
+    only.start = 0;
+    only.inPoint = 0;
+    only.length = only.media;
+    A.changed('moved');
+    A.timeline.fitView();
+    A.setPlayhead(0);
+    pump(60);
+    ok(A.project.clips.length === 1, 'back to one clip at its own rate');
+}
+
 // ── which tracks a ripple moves ────────────────────────────────────────────
 //
 // The sync lock. A ripple moved its own track and nothing else, which is right
@@ -1428,6 +1568,29 @@ console.log('\na batch');
        'and one drag sets all three');
     ok(A.project.clips.every((c) => Math.abs(parseFloat(c.frame.style.opacity) - 0.5) < 0.001),
        'which reaches all three pictures');
+
+    // The Speed control, which is the one press the whole of the section above is
+    // reachable through. Driven as a preset rather than as a typed number so that
+    // what is checked is the button and not `Number()`.
+    {
+        const spans = A.project.clips.map((c) => c.length * c.speed);
+        const half = document.querySelector('#transform [data-speed-preset="2"]');
+        ok(!!half, 'the properties panel offers a speed');
+        half.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(60);
+        ok(A.project.clips.every((c) => Math.abs(c.speed - 2) < 1e-6),
+           'and one press sets it on the whole selection');
+        ok(A.project.clips.every((c, i) => Math.abs(c.length * c.speed - spans[i]) < 0.01),
+           'keeping the footage each of them covers');
+        ok(A.project.clips.every((c) => Math.abs(c.video.playbackRate - 2 * A.transport.rate)
+                                        < 1e-6),
+           'and the element plays at it, because bro’s <video> honours a rate');
+        document.querySelector('#transform [data-speed-preset="1"]')
+                .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(60);
+        ok(A.project.clips.every((c, i) => Math.abs(c.length - spans[i]) < 0.01),
+           'and back again, landing where it started');
+    }
 
     // A property the clips disagree on reads as mixed rather than as one of them.
     A.project.clips[0].xform.crop.l = 0.2;

@@ -49,8 +49,24 @@ struct ExportClip {
 
     // Timeline, in seconds.
     double start = 0.0;
-    double length = 0.0;
+    double length = 0.0;     // on the TIMELINE; the source span is length*speed
     double inPoint = 0.0;    // where in the file `start` is
+
+    /// How fast the source runs through that window. 1 is the file's own rate.
+    ///
+    /// **`length` is the timeline length and this is the slope**, which is the
+    /// model's rounding carried verbatim — see `ui/project.js`'s speed section. So
+    /// the source time for an output time is `inPoint + (t - start) * speed`, and
+    /// that is stated in exactly one place (`TimelineSource::canvasAt`) plus the
+    /// one seek that lines the sound up.
+    ///
+    /// **The sound is resampled, so the pitch moves with it.** `SourceAudio::open`
+    /// multiplies the *input* rate handed to `swr` by this, which is what
+    /// `asetrate=<rate>*<speed>,aresample=<rate>` means in a filtergraph — the
+    /// same statement `ui/graph/derive.js` prints, deliberately, because the two
+    /// paths must describe one render. Preserving the pitch is `atempo`, a
+    /// libavfilter filter, and there is no graph here to put one in.
+    double speed = 1.0;
 
     // Where the WHOLE picture would land in the output canvas, in canvas
     // pixels, before cropping — exactly what ui/viewer.js `placement()`

@@ -96,6 +96,7 @@
 import { project, makeClip, makeGenerator, applyGenerator, isGenerator, placeClip,
          removeClip, sortClips, useClipId, clipById,
          defaultTransform, applyInput, changed, TRACK_LIMIT,
+         SPEED_MIN, SPEED_MAX,
          isTrackLocked, setTrackLocked } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as generators from './generator.js';
@@ -184,7 +185,14 @@ function clipBlob(c) {
         track: c.track,
         start: c.start,
         inPoint: c.inPoint,
+        // The *timeline* length, which with `speed` is the whole of what footage
+        // this clip covers — the source span is `length * speed`. Written as two
+        // numbers rather than as a source in-and-out because that is what the
+        // model holds; see `ui/project.js`'s speed section for why it rounds that
+        // way. Absent in every document written before this, and `writeClip()`
+        // reads a missing speed as 1, which is exactly what those documents meant.
         length: c.length,
+        speed: c.speed,
         xform: copy(c.xform),
         volume: c.volume,
         muted: !!c.muted,
@@ -344,12 +352,20 @@ function writeClip(clip, saved) {
     clip.track = clamp(Math.round(num(saved.track)), 0, TRACK_LIMIT - 1);
     clip.start = Math.max(0, num(saved.start));
     clip.inPoint = clamp(num(saved.inPoint), 0, clip.media);
+    // **Before the length**, which is measured against the source span and
+    // therefore against this. Clamped to the range a control will offer rather
+    // than to "any positive number": zero is a freeze and negative is reverse,
+    // both of which `setSpeed()` refuses by name, and a hand-edited document
+    // carrying one of them must open as an edit this application can be in.
+    clip.speed = clamp(num(saved.speed, 1), SPEED_MIN, SPEED_MAX);
     // What the file actually has, which is not what the document says it had:
     // an input reopened through a different demuxer, or one whose file has been
     // re-encoded since, is a shorter file than the trim was made against. Same
-    // clamp `applyInput()` applies for the same reason.
-    clip.length = clamp(num(saved.length, clip.media - clip.inPoint),
-                        0, Math.max(0, clip.media - clip.inPoint));
+    // clamp `applyInput()` applies for the same reason — and against the *source
+    // span*, so a clip at 2× is allowed half as much programme out of the same
+    // file.
+    const room = Math.max(0, (clip.media - clip.inPoint) / clip.speed);
+    clip.length = clamp(num(saved.length, room), 0, room);
     clip.xform = readTransform(saved.xform);
     clip.volume = clamp(num(saved.volume, 1), 0, 4);
     clip.muted = !!saved.muted;

@@ -31,9 +31,15 @@ seven parts.
   `-stream_loop`. Opening a document is a reopen, so what has to be stored is
   what the [Sources](sources.md) stage reopens from.
 - **`clips`** — where each one sits, which input it is cut from, its in-point,
-  its length, its geometry, its level. Nothing derived: a clip's name, size,
-  rate, duration and probe are all its input's answer, so storing them would be
-  storing an answer the next reopen may contradict.
+  its length, its [speed](timeline.md#speed), its geometry, its level. Nothing
+  derived: a clip's name, size, rate, duration and probe are all its input's
+  answer, so storing them would be storing an answer the next reopen may
+  contradict.
+
+  `length` is on the timeline and `speed` is the slope, so what footage a clip
+  covers is the two of them together — a document written before there were
+  speeds carries none, which reads as 1 and is exactly what those documents
+  meant.
 
   **A clip says what it is cut from, and there are two answers.** Usually an
   input's id. For a [generator clip](timeline.md#a-generator-laid-out-like-a-clip)

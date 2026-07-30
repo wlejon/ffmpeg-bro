@@ -19,7 +19,7 @@
 //     stream list is rebuilt on every keystroke in a language field.
 
 import { inputs, asInput } from '../inputs.js';
-import { project, clipById } from '../project.js';
+import { project, clipById, speedOf, sourceSpan } from '../project.js';
 
 /// `copy:0:1` → `{ input: 0, stream: 1 }`, or null for a composed source.
 export function parseCopy(source) {
@@ -145,6 +145,20 @@ export function timelineSpan(inputIndex) {
                  reason: `${cut.length} clips are cut from this input — select the one to ` +
                          'follow, because a copy is one continuous run of packets and not ' +
                          'the two of them joined' };
+    // **A copy cannot be sped up**, and this is where that has to be said rather
+    // than where the packets are written: a copy hands libavformat the packets the
+    // demuxer read, so what comes out plays at the file's own rate whatever the
+    // composited picture is doing. The *span* would still be right — the clip does
+    // cover those seconds of the file — and a stream that covered the right seconds
+    // at the wrong rate is worse than no offer, because it would drift against the
+    // picture it was chosen to accompany. Encode it instead and the speed is
+    // performed.
+    if (speedOf(clip) !== 1)
+        return { span: null,
+                 reason: `this clip plays at ${+speedOf(clip).toFixed(3)}× and a copy is ` +
+                         'the packets as they were read — there is nothing a copy can do to ' +
+                         'a packet’s timing, so it would run against the picture. ' +
+                         'Encode this stream instead' };
 
     const { from, to } = clipSpan(clip);
     // A clip nobody has trimmed describes the whole input. Worth saying on the
@@ -162,9 +176,15 @@ export function timelineSpan(inputIndex) {
 /// themselves is how a followed row comes to disagree with the button that offered
 /// to follow. There is no arithmetic in it beyond an addition — see the note above
 /// on why the two clocks are directly comparable.
+///
+/// The span is the **source span** and not the length, which for a clip at its own
+/// speed are the same number and for any other clip are not. `timelineSpan` refuses
+/// to offer a link on one of those at all — a copy plays at the file's rate — so
+/// this is only reached for a sped-up clip by a caller that already had one, and it
+/// answers the honest thing about which seconds of the file the clip covers.
 export function clipSpan(clip) {
     const from = Math.max(0, clip.inPoint);
-    return { from, to: from + Math.max(0, clip.length) };
+    return { from, to: from + sourceSpan(clip) };
 }
 
 // ── the link ────────────────────────────────────────────────────────────────

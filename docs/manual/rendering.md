@@ -61,7 +61,11 @@ clip's in-point and a copy's `From` are the same moment on the same clock —
 `-ss` before an `-i` decides where the input's zero is and a clip is cut out of
 what is left — so nothing is converted and nothing is approximated. With several
 clips of one input it asks which, since a copy is one continuous run of packets
-and two clips are exactly the case where it is not.
+and two clips are exactly the case where it is not. It refuses a clip with a
+[speed](timeline.md#speed) on it, and says so: a copy hands over the packets as
+they were read, so a copied stream plays at the file's own rate whatever the
+composited picture is doing — the span would be right and the stream would drift
+against the picture it was chosen to accompany. Encode that one instead.
 
 **And it keeps following.** Trim, move or ripple that clip afterwards and the row
 moves with it. The row says which clip it is following and offers to `Stop

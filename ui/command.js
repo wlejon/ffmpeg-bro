@@ -690,6 +690,26 @@ function notes(p) {
                         `${p.graph.reason}, so the command above is incomplete.`]);
     }
 
+    // **A clip's speed resamples its sound**, and that is worth one line because it
+    // is the one thing about a speed nobody can read off the command:
+    // `asetrate=<rate>*<speed>,aresample=<rate>` is in the printed chain and what
+    // it means is not obvious from it. Said only where there is a sped-up clip,
+    // like everything else in this list — and said *after* the truncation above,
+    // because it is true of the render whether or not there is a graph on screen to
+    // read it out of. The pitch-preserving alternative is named because it is real
+    // and one stage away; see `ui/project.js`'s speed section for why it is not the
+    // default.
+    const fast = (p.spec.clips || []).filter((c) => Number(c.speed) > 0 &&
+                                                    Number(c.speed) !== 1);
+    if (fast.length)
+        lines.push([span('Speed: ', 'lead'),
+                    `${fast.length === 1 ? 'a clip plays' : `${fast.length} clips play`} at a ` +
+                    'speed of its own, which is a divisor on the setpts that puts it on the ' +
+                    'render’s clock and a resample of its sound — so the pitch moves with the ' +
+                    'speed. Preserving it is atempo, a filter you can place on the Graph ' +
+                    'stage; the compositor has no graph to hold one, and the two paths have ' +
+                    'to describe one render. A copied stream cannot be sped up at all.']);
+
     // The one distinction people get wrong about a copy, said where the two
     // arguments are a foot apart on the screen. It is not trivia: the same
     // three characters on either side of the `-i` are two different operations,

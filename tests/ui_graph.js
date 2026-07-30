@@ -616,6 +616,84 @@ console.log('\nevery derived node is named for what it is');
          'the id is the clip’s own');
 }
 
+// ── a clip that plays at a speed of its own ────────────────────────────────
+//
+// A speed is the slope of the one node that takes a clip off its file's clock and
+// onto the render's, so the whole of it in the picture is a divisor on that
+// `setpts` and a `trim` that is `speed` times as wide as the bar. The sound cannot
+// be done by re-stamping — samples are a count — so it is a **resample**, which
+// moves the pitch, and the point of checking the printed text is that it is the
+// same thing `SourceAudio::open` asks `swr` for: the two paths must describe one
+// render. tests/export_test.cpp renders both and measures how far apart they are.
+console.log('\na clip at a speed of its own');
+{
+    const clip = (over) => Object.assign({
+        input: 0, path: 'a.mp4', start: 0, length: 2, inPoint: 1,
+        x: 0, y: 0, w: 1920, h: 1080,
+        crop: { l: 0, t: 0, r: 0, b: 0 },
+        opacity: 1, volume: 1, muted: false, z: 0,
+    }, over);
+    const at = (speed, over) => ({
+        width: 1920, height: 1080, fps: 25, start: 0, end: 2, audio: true,
+        inputs: [{ path: 'a.mp4' }],
+        inputInfo: [Object.assign({ id: 'in1', name: 'a.mp4', path: 'a.mp4',
+                                    streams: ['v', 'a'], sampleRate: 48000 }, over || {})],
+        clips: [clip({ speed })],
+    });
+
+    const one = derive(at(1));
+    const two = derive(at(2));
+    ok(one.ok && two.ok, `both derive: ${one.reason || ''} ${two.reason || ''}`);
+
+    const vOne = chainFor(one, 'v0');
+    const vTwo = chainFor(two, 'v0');
+    ok(/trim=start=1:end=3,setpts=PTS-STARTPTS\+0\/TB/.test(vOne),
+       `at its own rate the clock is a shift: ${vOne}`);
+    // **`speed` times as wide, and divided by the same number.** The bar is two
+    // seconds and the window is four, which is "the source span is `length *
+    // speed`" written as a filter argument.
+    ok(/trim=start=1:end=5,setpts=\(PTS-STARTPTS\)\/2\+0\/TB/.test(vTwo),
+       `at 2× the trim is twice as wide and the setpts divides: ${vTwo}`);
+
+    const aOne = chainFor(one, 'a0');
+    const aTwo = chainFor(two, 'a0');
+    ok(!/asetrate|aresample/.test(aOne),
+       `a clip at its own rate resamples nothing: ${aOne}`);
+    ok(/atrim=start=1:end=5,asetrate=96000,aresample=48000,asetpts=PTS-STARTPTS/.test(aTwo),
+       `and at 2× the sound is the input rate doubled and put back: ${aTwo}`);
+    // The order is load-bearing: the `atrim` is in the source's own seconds and
+    // the `asetpts` carries the range's origin on the *output's* clock, so a
+    // resample between them is the only place it can go without one of those two
+    // numbers being divided by the speed as well.
+    ok(aTwo.indexOf('asetrate') > aTwo.indexOf('atrim') &&
+       aTwo.indexOf('asetrate') < aTwo.indexOf('asetpts'),
+       'after the trim and before the clock, which is the only place it can go');
+
+    // **Refused rather than resampled from a guess.** `asetrate` takes a number
+    // and its own default is 44100, so a spec that does not say what the file is
+    // at cannot be printed honestly — a 48 kHz source through that comes out
+    // slightly slow and a semitone flat, which is the nearly-right graph this
+    // whole file exists instead of.
+    const blind = derive(at(2, { sampleRate: 0 }));
+    ok(!blind.ok && /rate to.*resample/.test(blind.reason || ''),
+       `a sped-up clip whose sound rate is unknown is refused: ${blind.reason || ''}`);
+    // Unless nothing reads its sound, in which case there is no rate to want.
+    const silent = Object.assign({}, at(2, { sampleRate: 0 }),
+                                 { clips: [clip({ speed: 2, muted: true })] });
+    ok(derive(silent).ok, 'and a muted one is not, because nothing asks');
+
+    // **A rate change is a rate change however it arose.** The caveat that names
+    // a frame-sync disagreement divides by the speed rather than having a second
+    // one of its own: a 25 fps file at 2× delivers twelve and a half pictures per
+    // second of a 25 fps render, and that is exactly the case the sentence is
+    // about. Measured in tests/export_test.cpp: one source frame, never more.
+    const src = [{ fps: 25, height: 1080, colorSpace: 'bt709' }];
+    ok(!derive(at(1), src).caveats.some((c) => /rate/.test(c)),
+       'a clip at its own rate on a matching output rate says nothing about rates');
+    ok(derive(at(2), src).caveats.some((c) => /rate/.test(c)),
+       'and the same clip at 2× says the frames will not be chosen the same way');
+}
+
 console.log('\nthe wires say where something can go');
 {
     const ids = derive(oneClip()).points.map((p) => p.id).sort().join(' ');
@@ -3428,6 +3506,78 @@ if (!media) {
             ok(Math.abs(back.to - 5) < 0.2,
                `and a drag writes the file's own second back (t=${back.to.toFixed(2)}, ` +
                'which is the edit’s 4s on a clip cut from 2s and laid down at 1s)');
+
+            // ── and the clock has a slope as well as an origin ──────────────
+            //
+            // **A speed scales the map an in-point offsets.** A clip cut from 2 s,
+            // laid down at 1 s and played at 2× spends two seconds of its file per
+            // second of the timeline, so the file's second 3 is *half* a second
+            // into the shot rather than a whole one — the edit's 1.5 s and not its
+            // 2 s.
+            //
+            // This is the combination that catches an offset-and-scale mistake and
+            // neither half alone would: with the scale dropped the answer is 2 s
+            // (the in-point right, the slope wrong) and with the offset dropped it
+            // is 2.5 s (the slope right, the origin wrong). Both are numbers the
+            // lane and the strip would agree about, because there is one `onClock`
+            // and one `onTimeline` and they would both be wrong — which is the
+            // whole reason the map is one home read three ways.
+            {
+                clip.speed = 2;
+                A.changed('moved');
+                pump(300);
+                A.timeline.fitView();
+                pump(120);
+
+                const row = () => lane().rows.find((r) => r.filter === 'hue');
+                overlay.edit({ id: two.id, derived: false },
+                             { params: { enable: A.graph.printEnable(
+                                 [{ op: 'between', from: 3, to: 3.5 }]) } });
+                pump(250);
+                A.timeline.draw();
+                pump(120);
+                ok(!!row() && row().clk.base === 'source',
+                   'a sped-up clip’s after-decode node is still on the source’s clock');
+                const d = row().drawn[0];
+                ok(Math.abs(d.a - 1.5) < 0.02 && Math.abs(d.b - 1.75) < 0.02,
+                   `and the file’s 3s–3.5s lands at 1.5s–1.75s on a clip cut from 2s, laid ` +
+                   `down at 1s and played at 2× (${d.a.toFixed(2)}–${d.b.toFixed(2)}s) — 2s ` +
+                   'would be the scale dropped and 2.5s the offset dropped');
+
+                // And back the other way through the same map, which is the read
+                // the lane's drag goes through: the edit's 2 s is the file's 4 s.
+                dragOn(atRow(d.b, lane().rows.findIndex((r) => r.filter === 'hue')),
+                       atRow(2, lane().rows.findIndex((r) => r.filter === 'hue')));
+                const back = A.graph.parseEnable(
+                    overlay.inserts().find((r) => r.id === two.id).params.enable).spans[0];
+                ok(Math.abs(back.to - 4) < 0.3,
+                   `and a drag writes the file's own second back (t=${back.to.toFixed(2)}, ` +
+                   'which is the edit’s 2s on that clip)');
+
+                // A whole span dragged one second along the lane is *two* seconds
+                // later in the expression, because the distance has a slope too.
+                // `editBody` maps it through `onDistance`; without that term the
+                // region would slide at half the speed of the hand holding it.
+                overlay.edit({ id: two.id, derived: false },
+                             { params: { enable: A.graph.printEnable(
+                                 [{ op: 'between', from: 2.4, to: 2.8 }]) } });
+                pump(250);
+                A.timeline.draw();
+                pump(120);
+                const held = row().drawn[0];
+                const at = lane().rows.findIndex((r) => r.filter === 'hue');
+                dragOn(atRow((held.a + held.b) / 2, at),
+                       atRow((held.a + held.b) / 2 + 0.5, at));
+                const moved2 = A.graph.parseEnable(
+                    overlay.inserts().find((r) => r.id === two.id).params.enable).spans[0];
+                ok(Math.abs((moved2.from - 2.4) - 1) < 0.25,
+                   `half a second along the lane is a whole second in the expression ` +
+                   `(t=${moved2.from.toFixed(2)}, from 2.4)`);
+                ok(Math.abs((moved2.to - moved2.from) - 0.4) < 0.05,
+                   'and the span keeps its length in its own seconds');
+
+                clip.speed = 1;
+            }
 
             clip.start = wasStart;
             clip.inPoint = wasIn;

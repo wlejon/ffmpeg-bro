@@ -365,7 +365,13 @@ export function buildSpec(over = {}) {
             // a file carries `undefined` and everything reads as it always did.
             generator: c.generator,
             start: c.start,
+            // **The timeline length, and the source span is `length * speed`** —
+            // the model's rounding, carried verbatim so that the renderer, the
+            // derivation and the printed command all read it the one way. See
+            // `ui/project.js`'s speed section; `ExportClip::speed` is the other
+            // end of it.
             length: c.length,
+            speed: c.speed,
             inPoint: c.inPoint,
             x: p.x * sx, y: p.y * sy, w: p.w * sx, h: p.h * sy,
             crop: { l: c.xform.crop.l, t: c.xform.crop.t,

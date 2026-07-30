@@ -109,6 +109,15 @@ ExportClip clipFromJs(JSContext* ctx, JSValueConst o) {
     c.start = numProp(ctx, o, "start", 0);
     c.length = numProp(ctx, o, "length", 0);
     c.inPoint = numProp(ctx, o, "inPoint", 0);
+    // **One is the default and anything not positive reads as one**, which is the
+    // same sentence `ui/project.js`'s `speedOf` and `graph/derive.js`'s copy of it
+    // say: zero would be a freeze frame and negative would be reverse, and neither
+    // is expressible on this path — a negative slope here would ask the readers to
+    // walk backwards, which is precisely what they cannot do. So a spec written
+    // before speed existed, and every hand-written one in `tests/`, renders exactly
+    // as it did.
+    c.speed = numProp(ctx, o, "speed", 1.0);
+    if (!(c.speed > 0.0)) c.speed = 1.0;
     c.x = numProp(ctx, o, "x", 0);
     c.y = numProp(ctx, o, "y", 0);
     c.w = numProp(ctx, o, "w", 0);

@@ -46,7 +46,7 @@
 // rather than about the arithmetic.
 
 import { el, div, span, put, head, row, select } from '../dom.js';
-import { project, sourceTime } from '../project.js';
+import { project, sourceTime, timelineTime, speedOf } from '../project.js';
 import { transport } from '../transport.js';
 import { range as exportRange } from '../export/spec.js';
 import { supportsTimeline, parseEnable, printEnable, drawnSpan,
@@ -453,11 +453,17 @@ function strip(spans, clk, commit) {
 // in the lane — which is the version that drifts, because the two would only ever
 // be checked against each other by eye.
 //
-// **The map is affine with a slope of one, and that is worth writing down**: a
-// span two seconds long is two seconds long on either clock, so a *distance* need
-// not be mapped at all and a whole-span drag can hand its delta straight to
-// `shiftSpan`. Only the origin differs, and it differs for exactly two reasons —
-// where the render's range starts, and where in its file a clip was cut from.
+// **The map is affine, and it has a slope as well as an origin.** The origin
+// differs for exactly two reasons — where the render's range starts, and where in
+// its file a clip was cut from — and the slope for exactly one: a clip's *speed*.
+// A span two seconds long on a clip played at 2× occupies one second of the
+// timeline, so a **distance** has to be mapped too, which is `onDistance` below.
+//
+// That third function is here rather than at the one call site because dropping
+// it is the mistake that cannot be seen: at speed 1 the slope is 1, every reader
+// agrees, and at any other speed all of them are wrong together in the same
+// direction. Which is the same failure `clockOf` had about a generator clip, one
+// commit earlier, and it is worth the pair being written down beside each other.
 
 /// The clip a source-clock node reads through, as an object, or null.
 ///
@@ -501,7 +507,25 @@ export function onTimeline(clk, at) {
     if (!clk || clk.length <= 0) return null;
     if (clk.base !== 'source') return exportRange().start + at;
     const c = clipFor(clk);
-    return c ? c.start + (at - c.inPoint) : null;
+    // `timelineTime`, which is `sourceTime` inverted in the model rather than
+    // here. It used to be written out as `c.start + (at - c.inPoint)`, which was
+    // right while the map had no *slope* — see the note below, which is now one
+    // sentence out of date on purpose, and `ui/project.js`'s speed section.
+    return c ? timelineTime(c, at) : null;
+}
+
+/// And a *distance*: how many of this node's seconds a stretch of the timeline is.
+///
+/// The slope of the same map, on its own, because a whole-span drag has a delta
+/// and not two moments — `shiftSpan` moves a span by a length and keeps its shape,
+/// so mapping its two ends separately would be two clamps where there should be
+/// one. Zero speed cannot arrive here (`setSpeed` refuses it) and `speedOf`
+/// answers 1 for anything that is not a positive number, so this never scales by
+/// nothing.
+export function onDistance(clk, by) {
+    if (!clk || clk.base !== 'source') return by;
+    const c = clipFor(clk);
+    return c ? by * speedOf(c) : by;
 }
 
 /// Move every strip's playhead to where the playhead now is.

@@ -53,7 +53,10 @@ function referenceKey() {
         // the clip, and a reference that outlived it would be a comparison
         // against the file as it used to open.
         specInputs(),
-        project.clips.map((c) => [c.path, c.start, c.length, c.inPoint, c.track,
+        // `speed` beside `length`, because the two together are what footage this
+        // clip is: a reference that outlived a speed change would be a comparison
+        // against different frames.
+        project.clips.map((c) => [c.path, c.start, c.length, c.speed, c.inPoint, c.track,
                                   c.xform.opacity, c.xform.scale, c.xform.x, c.xform.y,
                                   c.xform.fit, c.xform.crop, project.layout]),
         settings.width, settings.height, outputFps(),

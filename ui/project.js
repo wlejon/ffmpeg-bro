@@ -170,7 +170,14 @@ export function makeClip(input) {
         track: 0,
         start: 0,
         inPoint: 0,
+        // **The `length` is the timeline length and the source span is
+        // `length * speed`.** See the speed section below for why round that way
+        // and not the other: every layout, ripple, collision and drag calculation
+        // in this file and in ui/timeline.js reads `length` as "how much of the
+        // programme this occupies", and a field that sometimes meant seconds of
+        // the file would have to be un-learned in about thirty places.
         length: media,
+        speed: 1,
         media,              // the whole file, which in and length are cut from
         width: probe.video ? probe.video.displayWidth : 0,
         height: probe.video ? probe.video.displayHeight : 0,
@@ -252,6 +259,10 @@ export function makeGenerator(settled) {
         start: 0,
         inPoint: 0,
         length: GENERATOR_SECONDS,
+        // A generator has a speed like any clip, and it means what it means for a
+        // file: the same span of the filter's own seconds in less of the
+        // programme. A `mandelbrot` at 2× zooms twice as fast.
+        speed: 1,
         media: GENERATOR_SECONDS,
         width: settled.width,
         height: settled.height,
@@ -326,7 +337,9 @@ export function applyInput(input) {
             c.height = 0;
         }
         c.inPoint = Math.max(0, Math.min(c.inPoint, Math.max(0, media)));
-        c.length = Math.max(0, Math.min(c.length, media - c.inPoint));
+        // Against the *source span*, because that is what has to fit inside the
+        // file: a clip at 2× on a ten-second window is five seconds of programme.
+        c.length = Math.max(0, Math.min(c.length, (media - c.inPoint) / speedOf(c)));
     }
     sort();
 }
@@ -593,9 +606,154 @@ export function nextClipAfter(t) {
     return best;
 }
 
+// ── speed ──────────────────────────────────────────────────────────────────
+//
+// How fast a clip's source runs through the window the edit gives it. One number
+// on the clip, and the three functions below are every consequence of it.
+//
+// **`length` stays the timeline length**, so nothing that lays out, ripples,
+// resolves an overlap or drags has to learn anything: the source span is
+// `length * speed` and the trim constraint is `inPoint + length * speed <=
+// media`. The other rounding — `length` as seconds of the file — would have made
+// `duration()`, `clipsAt()`, `resolveOverlaps()`, `trackEnd()` and every pixel of
+// ui/timeline.js multiply by a speed they have no business knowing about.
+//
+// **When the speed changes, the source span is what is preserved.** "Play this
+// shot at 2×" means the same footage in half the programme, which is the gesture
+// people have; the alternative — keeping the timeline length and taking twice as
+// much footage — is a trim wearing a speed control's name, and it runs off the end
+// of the file the moment there is not twice as much left. A speed *decrease*
+// therefore grows the clip, so it can reach its neighbour, and it stops there
+// exactly as a trim does rather than refusing or overlapping.
+//
+// **The pitch moves, and it is not an oversight.** Speed here is a *resample* —
+// `asetrate=<rate>*<speed>,aresample=<rate>` in the graph and libav's own `swr`
+// fed the input rate multiplied by the speed in the compositor. Preserving the
+// pitch means time-stretching, which is `atempo` (WSOLA), which is a libavfilter
+// filter — and `TimelineSource::mixInto` has no graph to put one in, so the two
+// paths would have to disagree about what the render is. They must not: the whole
+// claim of ui/graph/derive.js is that it turns the same spec into the graph, so
+// the graph cannot describe a render this application would not perform. A
+// compositor that resampled while the printed chain said `atempo` would be
+// exactly that lie. `atempo` is still the pitch-preserving answer and it is a
+// filter somebody can place on the Graph stage; what the controls and the manual
+// do is say so rather than apologise.
+//
+// **Reverse and freeze are refused by name**, in `setSpeed`.
+
+/// The narrowest and widest a control will offer. **A convenience range and not a
+/// limit** — `asetrate` has no upper bound and neither does dividing a
+/// timestamp — so this is only what a field is willing to read out of a person's
+/// keystroke, and the comment is here so nobody later mistakes it for a fact
+/// about libav.
+export const SPEED_MIN = 0.05;
+export const SPEED_MAX = 20;
+
+/// How fast this clip runs. One home, because "a clip written by a version that
+/// had no speed" is every document and every `localStorage` entry that predates
+/// this, and `clip.speed || 1` written out at fifteen points of use is fifteen
+/// chances for a zero to become a freeze nobody asked for.
+export function speedOf(clip) {
+    const s = clip ? Number(clip.speed) : 1;
+    return Number.isFinite(s) && s > 0 ? s : 1;
+}
+
+/// How much of the source this clip covers, in the source's own seconds.
+///
+/// The other half of "length is the timeline length". Everything that asks *what
+/// does this clip take out of its file* — the trim's ceiling, a slip's clamp, the
+/// span a copied stream would have to cover — asks this, and everything that asks
+/// where the clip sits reads `length`.
+export function sourceSpan(clip) {
+    return Math.max(0, clip.length) * speedOf(clip);
+}
+
 /// Source time inside a clip's file for a timeline time.
 export function sourceTime(clip, t) {
-    return clip.inPoint + (t - clip.start);
+    return clip.inPoint + (t - clip.start) * speedOf(clip);
+}
+
+/// And back: where a moment of the source lands on the timeline.
+///
+/// **The inverse of `sourceTime`, written beside it.** It was `c.start + (at -
+/// c.inPoint)` in `ui/graph/when.js` and `clip.video.currentTime - clip.inPoint`
+/// twice in `ui/transport.js`, which was three copies of a map with no scale in
+/// it — and a scale dropped in one direction only is the mistake that cannot be
+/// seen, because both readers of the pair agree at speed 1 and disagree by a
+/// factor nobody is looking for at any other speed.
+export function timelineTime(clip, srcT) {
+    return clip.start + (srcT - clip.inPoint) / speedOf(clip);
+}
+
+/// Play this clip at another speed, keeping the footage it covers.
+///
+/// Answers `''` when it did it and the reason when it would not, so a control can
+/// say so where somebody is standing rather than failing silently or throwing.
+///
+/// **Two speeds are refused by name rather than clamped**, because each is a
+/// different feature wearing this one's clothes:
+///
+///   - **negative is reverse**, and it is not expressible here at all: decoders
+///     walk forward, and libavfilter's `reverse`/`areverse` buffer the whole
+///     stream in memory before emitting a frame, so it is a different render
+///     rather than a different number.
+///   - **zero is a freeze frame**, which is a real feature and is not this one. It
+///     also makes the arithmetic degenerate: the source span goes to nothing and
+///     the length that would preserve it is `Infinity`, which `makeGenerator`
+///     already records as unusable in a clip — it reaches `duration()`,
+///     `JSON.stringify` turns it into `null`, and `slipClip`'s clamp becomes
+///     `NaN`.
+///
+/// Beyond that it clamps rather than refuses, exactly as a trim does: a *slower*
+/// clip is a longer one and can reach the clip after it, and a drag that stops
+/// dead against the neighbour says where the wall is more clearly than one that
+/// does nothing.
+export function setSpeed(clip, speed) {
+    if (!clip) return 'there is no clip to set a speed on';
+    const next = Number(speed);
+    if (!Number.isFinite(next))
+        return 'a speed is a number of times normal — 2 is twice as fast';
+    if (next < 0)
+        return 'a negative speed is reverse playback, which is not expressible here: ' +
+               'decoders walk forward, and libavfilter’s reverse buffers the whole stream ' +
+               'in memory before it emits a frame';
+    if (next === 0)
+        return 'a speed of zero is a freeze frame, which is a different feature — it makes ' +
+               'a clip of no footage and a length of Infinity, and Infinity is not a number ' +
+               'this model can hold';
+
+    const was = speedOf(clip);
+    if (Math.abs(next - was) < 1e-9) return '';
+    // The source span is what is preserved, so this is the length that covers the
+    // same footage. Everything after it is a clamp.
+    const wanted = clip.length * was / next;
+    const min = 1 / Math.max(1, clip.fps);
+    const { after } = walls(clip);
+    // What the *source* has, asked at the new speed. Preserving the span cannot
+    // exceed it — that is the point of preserving it — but the one-frame floor
+    // below can, on a clip made very short by a very high speed.
+    const source = Math.max(0, (clip.media - clip.inPoint) / next);
+    clip.speed = next;
+    clip.length = Math.max(min, Math.min(wanted, after - clip.start, source));
+    sort();
+    return '';
+}
+
+/// The clips either side of this one on its own track, as the two times an edit
+/// to it may not cross.
+///
+/// One home, because two edits ask: a trim, and a speed decrease — which grows
+/// the clip and is therefore the same question about the same wall. `after` is
+/// `Infinity` where nothing follows, which is what makes both callers' `Math.min`
+/// read as "no limit".
+function walls(clip) {
+    let before = 0, after = Infinity;
+    for (const c of project.clips) {
+        if (c === clip || c.track !== clip.track) continue;
+        if (c.start + c.length <= clip.start + 1e-6) before = Math.max(before, c.start + c.length);
+        else if (c.start >= clip.start + clip.length - 1e-6) after = Math.min(after, c.start);
+    }
+    return { before, after };
 }
 
 // ── selection ──────────────────────────────────────────────────────────────
@@ -691,7 +849,10 @@ export function splitClip(clip, t, makeElement) {
     const right = Object.assign({}, clip, {
         id: nextId++,
         start: clip.start + local,
-        inPoint: clip.inPoint + local,
+        // `local` is on the timeline and an in-point is in the file, so the cut
+        // moves by the source distance the two halves share — which is the whole
+        // of what `speed` changes about a split.
+        inPoint: clip.inPoint + local * speedOf(clip),
         length: clip.length - local,
         xform: JSON.parse(JSON.stringify(clip.xform)),
         video: null,
@@ -732,22 +893,24 @@ export function trimClip(clip, edge, t) {
     const min = 1 / Math.max(1, clip.fps);
     // Growing an end into the neighbour would make two clips cover the same
     // moment on one track, which has no answer to "which one is on screen".
-    // The neighbours are the wall a trim stops at.
-    let before = 0, after = Infinity;
-    for (const c of project.clips) {
-        if (c === clip || c.track !== clip.track) continue;
-        if (c.start + c.length <= clip.start + 1e-6) before = Math.max(before, c.start + c.length);
-        else if (c.start >= clip.start + clip.length - 1e-6) after = Math.min(after, c.start);
-    }
+    // The neighbours are the wall a trim stops at — see `walls`, which a speed
+    // change asks the same question of.
+    const { before, after } = walls(clip);
+    // Every distance below is on the *timeline*; the source distance it comes to
+    // is that times the speed. One term, at each of the two places where a
+    // timeline second has to be spent out of the file.
+    const speed = speedOf(clip);
 
     if (edge === 'start') {
         const limit = clip.start + clip.length - min;
         let want = Math.min(limit, Math.max(before, t));
         // Cannot trim back past the head of the file: there is no footage there.
-        want = Math.max(want, clip.start - clip.inPoint);
+        // At 2× a second of programme costs two of footage, so the head is half
+        // as far back as the in-point suggests.
+        want = Math.max(want, clip.start - clip.inPoint / speed);
         const delta = want - clip.start;
         clip.start = want;
-        clip.inPoint += delta;
+        clip.inPoint += delta * speed;
         clip.length -= delta;
     } else {
         // How far the *neighbour* lets this end go, asked before the source is:
@@ -755,8 +918,8 @@ export function trimClip(clip, edge, t) {
         // pointer asked for, so a drag that stopped dead against the clip after it
         // has not asked for another ten seconds of `testsrc`.
         const reach = Math.min(t - clip.start, after - clip.start);
-        const room = roomFor(clip, clip.inPoint + reach);
-        const maxLen = Math.min(room - clip.inPoint, after - clip.start);
+        const room = roomFor(clip, clip.inPoint + reach * speed);
+        const maxLen = Math.min((room - clip.inPoint) / speed, after - clip.start);
         clip.length = Math.max(min, Math.min(maxLen, t - clip.start));
     }
     sort();
@@ -856,17 +1019,25 @@ export function rollCut(left, right, t) {
     // How far the cut may travel each way, out of the four things that stop it:
     // footage left in the left clip's file, footage left before the right
     // clip's in-point, and one frame of each clip surviving.
-    const laterMost = Math.min(roomFor(left, left.inPoint + left.length + (t - cut)) -
-                                   left.inPoint - left.length,
-                               right.length - minR);
-    const earlierMost = Math.min(right.inPoint, left.length - minL);
+    //
+    // **Both limits are on the timeline and both sources are in their own
+    // seconds, and the two clips need not run at the same speed** — so each
+    // side's footage is divided by its own. A cut rolled one second later spends
+    // `leftSpeed` seconds of the left file and gives back `rightSpeed` of the
+    // right.
+    const leftSpeed = speedOf(left), rightSpeed = speedOf(right);
+    const laterMost = Math.min(
+        (roomFor(left, left.inPoint + (left.length + (t - cut)) * leftSpeed) -
+             left.inPoint) / leftSpeed - left.length,
+        right.length - minR);
+    const earlierMost = Math.min(right.inPoint / rightSpeed, left.length - minL);
     const want = Math.max(cut - earlierMost, Math.min(cut + laterMost, t));
     const delta = want - cut;
     if (Math.abs(delta) < 1e-9) return;
 
     left.length += delta;
     right.start += delta;
-    right.inPoint += delta;
+    right.inPoint += delta * rightSpeed;
     right.length -= delta;
     sort();
 }
@@ -889,7 +1060,12 @@ export function rollCut(left, right, t) {
 /// run past the last, so a slip that would do either stops at the end of the
 /// footage rather than shortening the clip. Shortening would be a slip that
 /// silently became a trim.
+/// Clamped against the *source span* rather than the length, which is the same
+/// statement it always was: what may not run past the last frame is the footage
+/// the window covers, and at 2× that is twice the window. A caller with a pointer
+/// distance rather than a footage distance scales it — see `ui/timeline.js`, which
+/// is the one such caller.
 export function slipClip(clip, delta) {
     const want = clip.inPoint + delta;
-    clip.inPoint = Math.max(0, Math.min(clip.media - clip.length, want));
+    clip.inPoint = Math.max(0, Math.min(clip.media - sourceSpan(clip), want));
 }

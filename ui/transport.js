@@ -2,9 +2,17 @@
 //
 // This is the one part of the application that is *not* an edit. Nothing here
 // changes what would be rendered — play, pause, step, shuttle and loop are how
-// you look at the timeline, not what it says — which is why a render exports a
-// clip at its own rate whatever the viewer was last playing at, and why none of
-// this belongs to the model.
+// you look at the timeline, not what it says — and none of it belongs to the
+// model.
+//
+// **`transport.rate` and a clip's `speed` are two different things and stay
+// two.** A clip now has a speed of its own, which is part of the edit and is
+// rendered; `J`/`K`/`L` and the rate selector are still how fast you are
+// *watching*, and they reach no render. The two meet in exactly one place —
+// `applyAudio`, where they multiply into the element's `playbackRate`, exactly as
+// the transport's volume and the clip's do — because what is on screen is the
+// edit seen at whatever rate you are looking at it. Merging them would make
+// shuttling an edit, which is the whole reason they are separate.
 //
 // Three invariants earn their comments, because each was arrived at from a
 // failure that looked like something else:
@@ -36,8 +44,8 @@
 //     it, so the readout has to say where the picture actually is rather than
 //     what was asked for.
 
-import { project, duration, clipsAt, nextClipAfter, sourceTime,
-         selectFollow, isGenerator } from './project.js';
+import { project, duration, clipsAt, nextClipAfter, sourceTime, timelineTime,
+         speedOf, selectFollow, isGenerator } from './project.js';
 import * as viewer from './viewer.js';
 import * as output from './output.js';
 
@@ -154,7 +162,7 @@ export function step(frames) {
     // boundary to land on and pretending otherwise is what the whole of this
     // function exists not to do.
     if (clip.video.stepFrame(frames)) {
-        transport.t = clip.start + clip.video.currentTime - clip.inPoint;
+        transport.t = timelineTime(clip, clip.video.currentTime);
         tell();
         if (hooks.reveal) hooks.reveal(transport.t);
         return;
@@ -179,7 +187,12 @@ export function applyAudio(clip) {
     // and the transport's, which is just how loud you are listening.
     clip.video.muted = transport.muted || clip.muted;
     clip.video.volume = transport.volume * clip.volume;
-    clip.video.playbackRate = transport.rate;
+    // Two rates multiply, exactly as the two volumes above do, and for the same
+    // reason: the clip's own speed is part of the edit and the transport's is how
+    // fast you are watching. bro's `<video>` honours `playbackRate` for real — it
+    // reaches the pipeline's rate and the audio engine's — so a sped-up clip
+    // previews at its rate rather than wearing a badge saying it will not.
+    clip.video.playbackRate = transport.rate * speedOf(clip);
     // Looping is a property of the timeline, not of any one clip: a clip that
     // looped itself would never hand over to the next one.
     clip.video.loop = false;
@@ -215,7 +228,10 @@ function adoptDecoderTime() {
     }
     const clip = viewer.activeClip();
     if (!clip || !clip.video || !(clip.video.duration > 0)) return;
-    const t = clip.start + clip.video.currentTime - clip.inPoint;
+    // Through `timelineTime`, which is `sourceTime` inverted — including its
+    // speed. The element's clock is always the file's, whatever rate it is being
+    // played at, so this is where a sped-up clip's picture becomes a timecode.
+    const t = timelineTime(clip, clip.video.currentTime);
     if (Math.abs(t - transport.t) < 1e-6) return;
     transport.t = t;
     tell();
@@ -255,7 +271,10 @@ function advance(dt) {
     const clip = viewer.activeClip();
 
     if (clip) {
-        const local = clip.video.currentTime - clip.inPoint;
+        // On the timeline, not in the file: at 2× the element runs out of the
+        // clip's window in half the seconds, and a `local` in the file's would
+        // hand over half way through the bar.
+        const local = timelineTime(clip, clip.video.currentTime) - clip.start;
         if (clip.video.ended || local >= clip.length - 1e-4) {
             handOver(clip.start + clip.length);
             return;

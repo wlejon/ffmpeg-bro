@@ -965,12 +965,22 @@ Every record in the channel below carries the render it was said during, and
 this is where the other half of that pairing comes from.
 
 A clip in a render spec is an input, a slice of it, and a rectangle in the output
-canvas — `{ input, start, length, inPoint, x, y, w, h, crop, opacity, volume,
-muted, z }`. `input` indexes `inputs`; a clip carrying a `path` and no index is
-that path opened plainly, which is what every spec written before inputs existed
-means and still does. Rectangles rather than fit/zoom/pan modes on purpose: the layout
-is worked out once, in `ui/viewer.js`, and both the screen and the encoder are
-driven from the same answer.
+canvas — `{ input, start, length, speed, inPoint, x, y, w, h, crop, opacity,
+volume, muted, z }`. `input` indexes `inputs`; a clip carrying a `path` and no
+index is that path opened plainly, which is what every spec written before inputs
+existed means and still does. Rectangles rather than fit/zoom/pan modes on purpose:
+the layout is worked out once, in `ui/viewer.js`, and both the screen and the
+encoder are driven from the same answer.
+
+**`length` is on the timeline and `speed` is the slope**, so the seconds of the
+source a clip covers are `length * speed` and the source time for an output time
+is `inPoint + (t - start) * speed`. `speed` defaults to 1 and anything not
+positive reads as 1 — zero would be a freeze frame and negative would be reverse,
+and neither is expressible on a path whose readers walk forward. The **sound is
+resampled**, not time-stretched: the input rate handed to `swr` is the file's
+multiplied by the speed, which is `asetrate=<rate>*<speed>,aresample=<rate>` in a
+filtergraph, so the pitch moves with the speed and the two render paths describe
+one render.
 
 A clip of a file with no video stream in it sends a rectangle of no size, which
 is what the compositor reads as "this one is in the mix and nowhere else". It is

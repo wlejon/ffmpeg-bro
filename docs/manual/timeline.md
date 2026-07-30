@@ -110,6 +110,52 @@ deleting the other is how you take a piece out of the middle.
 selection, `Ctrl`+`A` takes everything, `Esc` narrows back to one. `Delete`
 removes the lot. Drag the ruler or A1 to scrub.
 
+## Speed
+
+**Speed** on the properties panel is how fast a clip runs — `2` is twice as fast,
+`0.5` is half. It is part of the *edit*, so it is what the render performs; the
+speed selector and `J`/`K`/`L` beside the viewer are still how fast you are
+*watching*, and they reach no file. The two multiply on screen, exactly as the
+transport's volume and the clip's do.
+
+**Changing it keeps the footage and changes the bar.** "Play this shot at 2×"
+means the same seconds of the file in half as much of the programme, which is the
+gesture people have — so the clip's bar halves and its in and out points do not
+move. Slowing a clip down therefore *grows* it, and it stops at the clip after it
+exactly as a trim does: it clamps rather than refusing and never overlaps. The bar
+carries a `2×` badge, because a shot at 2× looks exactly like half as much of the
+same shot until it plays.
+
+Everything else on the timeline goes on meaning what it meant. A clip's length is
+still how much of the programme it occupies; what it takes out of its file is
+that times the speed, so trimming half a second off the tail of a 2× clip gives
+back a second of footage, and a slip runs out of file when twice the bar's length
+reaches the end.
+
+**The pitch moves with the speed.** Speeding a clip up resamples its sound —
+`asetrate` then `aresample`, which is what the printed command shows and what the
+internal compositor asks libav's own resampler for — so it goes up in pitch like a
+tape run fast. That is deliberate rather than a limitation: preserving the pitch
+means time-stretching, which is libavfilter's `atempo`, and the internal
+compositor has no filter graph to put one in — so a render that did it one way
+while [the graph](graph.md) said the other would be this application describing a
+render it does not perform. `atempo` is a filter you can place on the Graph stage
+if you want it, and it is named in the line under the control and in the command
+bar's notes.
+
+**Reverse and freeze are refused, by name.** A negative speed is reverse playback,
+which nothing here can express: decoders walk forward, and libavfilter's `reverse`
+buffers the whole stream in memory before it emits a frame. Zero is a freeze
+frame, which is a different feature. Both come back as a sentence rather than
+being quietly clamped to something nobody asked for.
+
+Two things a speed costs. A **copied** stream cannot be sped up at all — a copy is
+the packets as they were read, and there is nothing a copy can do to a packet's
+timing — so the Write stage stops offering to follow a sped-up clip and says why;
+encode it instead. And the viewer will not show a filter placed at a sped-up
+clip's `after scale` point, which keeps its `fx` badge: see
+[Not yet](not-yet.md).
+
 ## A generator, laid out like a clip
 
 `ffmpeg -f lavfi -i testsrc` is one of the first commands anybody runs. **Generator**

@@ -429,11 +429,20 @@ export function specInputs() {
 /// now. A recording's graph is derived from the same document inputs a render's
 /// is (`graph/record.js`), and a second copy of this shape would be a second
 /// answer to which streams a device offers.
+///
+/// `sampleRate` is here for one reason and it is worth naming: a clip's **speed**
+/// is printed as `asetrate=<rate>*<speed>,aresample=<rate>`, and `asetrate` takes
+/// a number rather than an expression over the input's own rate — so the graph has
+/// to be told what the file is at. The renderer does not need it (libav's `swr`
+/// reads it off the decoder), which is exactly what this list is for. Zero for an
+/// input with no sound; `graph/derive.js` refuses a sped-up clip whose rate it does
+/// not know rather than printing a chain that would resample to the wrong rate.
 export function specInputInfo() {
     return inputs.map((i) => ({
         id: i.id,
         name: i.name,
         path: i.path,
         streams: streamKinds(i),
+        sampleRate: (i.probe && i.probe.audio && i.probe.audio.sampleRate) || 0,
     }));
 }

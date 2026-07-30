@@ -232,9 +232,10 @@ bool SourceVideo::decodeOne() {
 
 SourceAudio::~SourceAudio() { close(); }
 
-bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels) {
+bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels, double speed) {
     outRate_ = outRate;
     outChannels_ = outChannels;
+    speed_ = speed > 0.0 ? speed : 1.0;
     // The error is dropped rather than reported, as it always was: a file with
     // no sound in it is not a failed render, and the picture side has already
     // said anything worth saying about a file that cannot be opened at all.
@@ -380,9 +381,16 @@ void SourceAudio::append() {
     const auto inFmt = static_cast<AVSampleFormat>(frame_->format);
     if (!swr_ || inFmt != swrFmt_ || frame_->sample_rate != swrRate_) {
         if (swr_) swr_free(&swr_);
+        // **The clip's speed is the input rate multiplied**, which is the whole of
+        // how a speed is performed on this path: telling the resampler the samples
+        // arrived faster than they did is `asetrate`, and converting to `outRate_`
+        // afterwards is `aresample`. So the pitch moves with the speed, exactly as
+        // it does in the chain `ui/graph/derive.js` prints for the same clip. One
+        // multiplication and libav does the work — the alternative, a WSOLA
+        // time-stretcher written here, would be a second home for `atempo`.
         int rc = swr_alloc_set_opts2(&swr_, &outLayout_, AV_SAMPLE_FMT_FLT, outRate_,
-                                     &frame_->ch_layout, inFmt, frame_->sample_rate,
-                                     0, nullptr);
+                                     &frame_->ch_layout, inFmt,
+                                     inRate(frame_->sample_rate), 0, nullptr);
         if (rc < 0 || !swr_ || swr_init(swr_) < 0) return;
         swrFmt_ = inFmt;
         swrRate_ = frame_->sample_rate;
@@ -398,13 +406,20 @@ void SourceAudio::append() {
         // A seek lands on a packet boundary at or before the target; the
         // difference is what makes an in-point sample-accurate instead of
         // up to a packet early.
-        skip = clampi(static_cast<int>(std::llround((seekTarget_ - at) * outRate_)),
+        //
+        // Divided by the speed, because `seekTarget_ - at` is a distance in the
+        // *file's* seconds and what is being skipped is *output* samples: at 2× a
+        // second of overshoot is half a second of the mix. Without the term a
+        // sped-up clip's in-point was out by the seek's error times the speed,
+        // which is a fraction of a packet and therefore invisible until it is not.
+        skip = clampi(static_cast<int>(
+                          std::llround((seekTarget_ - at) / speed_ * outRate_)),
                       0, 1 << 24);
     }
 
     const int64_t delay = swr_get_delay(swr_, outRate_);
     const int maxOut = static_cast<int>(av_rescale_rnd(
-        delay + frame_->nb_samples, outRate_, frame_->sample_rate, AV_ROUND_UP));
+        delay + frame_->nb_samples, outRate_, inRate(frame_->sample_rate), AV_ROUND_UP));
     if (maxOut <= 0) return;
 
     // Sized past what was asked for — see kSwrSlack in export_frame.h. The

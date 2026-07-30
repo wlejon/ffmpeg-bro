@@ -147,7 +147,18 @@ public:
     /// False when the file simply has no audio, which is not an error — a
     /// silent clip is a clip. The input's window applies exactly as it does to
     /// the picture; see SourceVideo::open.
-    bool open(const MediaInput& in, int outRate, int outChannels);
+    ///
+    /// `speed` is how fast the clip plays, and it is applied by handing `swr` the
+    /// file's rate **multiplied by it** as the input rate. That is `asetrate`'s
+    /// semantics exactly — the samples are reinterpreted as having been recorded
+    /// faster and then resampled back — which is what `ui/graph/derive.js` prints
+    /// for the same clip, and why the two paths cannot come to describe different
+    /// renders. **It moves the pitch**, because a resample does; the
+    /// pitch-preserving answer is `atempo` and there is no graph here to hold one.
+    /// Asking libav's resampler for it rather than writing a time-stretcher by hand
+    /// is the other half of that: WSOLA is hundreds of lines of DSP libavfilter
+    /// already has.
+    bool open(const MediaInput& in, int outRate, int outChannels, double speed = 1.0);
 
     void seekTo(double srcSeconds);
 
@@ -168,6 +179,21 @@ public:
     AVRational timeBase() const { return timeBase_; }
 
 private:
+    /// What rate to tell `swr` the samples arrived at: the file's, times the clip's
+    /// speed. One home because `append()` asks twice — once to build the context
+    /// and once to size the buffer for what will come out of it — and two answers
+    /// there would size a buffer for a different conversion from the one performed.
+    ///
+    /// **An integer, deliberately.** `asetrate`'s `sample_rate` is an `int`, so the
+    /// filtergraph this application prints for the same clip rounds the same way;
+    /// an exact rational here would be a render the printed command could not
+    /// reproduce, which is the one difference between the two paths that is never
+    /// acceptable. The error is under one part in the sample rate.
+    int inRate(int fileRate) const {
+        const int r = static_cast<int>(fileRate * speed_ + 0.5);
+        return r > 0 ? r : (fileRate > 0 ? fileRate : 1);
+    }
+
     void close();
     int available() const;
     void compact();
@@ -192,6 +218,10 @@ private:
 
     int stream_ = -1;
     int outRate_ = 48000, outChannels_ = 2, swrRate_ = 0;
+    /// The clip's speed. `swrRate_` stays the *file's* rate — what the decoder
+    /// hands over, which is what a resampler has to be rebuilt for when it changes
+    /// — and this is the factor applied to it on the way in.
+    double speed_ = 1.0;
     AVRational timeBase_{1, 1000};
     double startOffset_ = 0.0;
     double limit_ = 0.0;

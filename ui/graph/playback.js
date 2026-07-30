@@ -299,6 +299,29 @@ function askFor(g, spec, clip) {
     // filters — one `setpts` against an `asetpts` and an `adelay` — so either
     // answers for both, to within the half-millisecond below which the
     // derivation writes no `adelay` at all.
+    // **A filter below the clock, on a clip that is not at its own speed, is
+    // refused.** The element's clock is always the file's — that is what the whole
+    // of `shift` is for — and a chain puts the render's clock back by adding a
+    // constant and then having that constant taken off at the sink. A speed makes
+    // that map a *scale* rather than a shift, and a constant cannot undo a scale,
+    // so a filter carrying `enable=` after the derivation's `setpts` would come on
+    // at the wrong moment here while coming on at the right one in the render. The
+    // clip still plays at its speed (the element's `playbackRate`, see
+    // ui/transport.js) and it keeps the `fx` badge saying why.
+    //
+    // Filters *above* the clock are unaffected and are not refused: their `t` is
+    // the file's own timestamps in the render and in the element both, which is
+    // exactly what the two insert points are on opposite sides of.
+    // `v.late` alone, because a clip's sound has no insert point below its clock:
+    // `${key}/audio` is on the input node, above the `asetpts`, and the mix point is
+    // not one clip's. `a.late` is structurally always zero (`placed` is set by the
+    // `scale`, which the sound's run has none of).
+    if (Number(clip.speed) > 0 && Number(clip.speed) !== 1 && v.late)
+        return { why: `this clip plays at ${+Number(clip.speed).toFixed(3)}× and these ` +
+                      'filters sit after the point where the render puts it on its own ' +
+                      'clock — a speed scales that clock, and the element’s clock is the ' +
+                      'file’s, so there is no constant that would put the filters’ seconds ' +
+                      'back' };
     const shift = v.text ? v.shift : a.shift;
     // `late` is not in the key, and cannot be: it is read off the same walk that
     // produced the text, so a filter moved from one insert point to the other is

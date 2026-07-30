@@ -122,6 +122,16 @@ second.xform.crop.l = 0.1;
 second.xform.opacity = 0.5;
 second.volume = 0.25;
 second.muted = true;
+// A speed, which is the one field where `length` alone no longer says what
+// footage the clip covers: the source span is `length * speed`, so a reader that
+// dropped this and kept the length would open a clip of half the shot. Set after
+// the length, and low enough that the source span still fits inside the file —
+// which is exactly the clamp `writeClip()` applies on the way back in.
+second.speed = 0.5;
+// Held now, because `open()` reconciles: the clip object below *is* this one, so
+// an assertion written against `second.length` after the round trip would be
+// comparing the answer with itself.
+const secondSpan = second.length * second.speed;
 A.project.width = 640;
 A.project.height = 360;
 A.project.fps = 30;
@@ -259,6 +269,13 @@ ok(near(two.xform.opacity, 0.5), 'and its opacity');
 ok(near(two.volume, 0.25) && two.muted === true, 'and its level');
 ok(near(two.start, 2.5) && near(two.inPoint, 0.4), 'and where it sits and starts');
 same(two.track, 1, 'and which track it is on');
+// **And how fast it runs**, which is half of what footage it covers: `length`
+// alone came back right in every version before this one and would have described
+// twice the shot.
+ok(near(two.speed, 0.5), `and its speed (${two.speed}×)`);
+ok(near(two.length * two.speed, secondSpan),
+   `so the source span is the span it was written with (${
+       (two.length * two.speed).toFixed(3)}s)`);
 
 // The whole reason the ids are in the file.
 const inserts = A.graph.overlay.inserts();
@@ -464,6 +481,27 @@ A.stepHistory(true);
 pump(60);
 ok(near(A.project.clips[0].xform.zoom, 1),
    `and undoing it goes back past all three (${A.project.clips[0].xform.zoom})`);
+
+// **A speed is a step, because it is the edit.** It changes what footage a clip
+// covers and how much of the programme it occupies — the same test a sync lock
+// passes and the playhead fails. Driven through `setSpeed` and the model's own
+// channel, which is what the inspector's control does.
+{
+    const clip = A.project.clips[0];
+    const wasSpeed = clip.speed;
+    const wasLen = clip.length;
+    const depth = H.depth();
+    A.setSpeed(clip, 2);
+    A.changed('moved');
+    pump(60);
+    same(H.depth(), depth + 1, 'setting a clip’s speed is one step of history');
+    ok(A.stepHistory(true), 'which Ctrl+Z takes back');
+    pump(80);
+    const back = A.project.clips[0];
+    ok(near(back.speed, wasSpeed) && near(back.length, wasLen),
+       `putting back both halves of it — the speed and the length it changed (${
+           back.speed}×, ${back.length.toFixed(3)}s)`);
+}
 
 // ...and apart, they are not. The gap is the rule, so the test has to wait it
 // out rather than assert around it.
