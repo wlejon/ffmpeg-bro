@@ -51,7 +51,8 @@ import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
          brokeFollowing } from './copy.js';
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
-         defaultSubtitleSource, cuesFor, cueWindow, cueWindowNote } from './subtitles.js';
+         defaultSubtitleSource, cuesFor, cueWindow, cueWindowNote,
+         cueTextFor, cueSaying } from './subtitles.js';
 import { isPad, padChoices } from './pads.js';
 import { wires as overlayWires } from '../graph/overlay.js';
 
@@ -1060,6 +1061,14 @@ function subNum(s, key, restate) {
 /// survive the window rather than where they sit proportionally. Each is a
 /// button, because moving the in-point onto a cue is the fix for nearly
 /// everything this section has to report.
+///
+/// **And each says what it says**, which is a second read of the file and is
+/// what makes the list answer the question somebody actually has: not "is there
+/// a cue at 4.5 s" but "which line am I cutting into". The words come from
+/// `cueTextFor` — a decoder per track, alive while this stage is — and where
+/// there are none the reason is written in their place, because a `dvdsub` cue is
+/// a picture with no characters in it and a blank column would read as a track
+/// this panel failed to read.
 function cueRows(s, restate) {
     const list = cuesFor(s);
     if (!list)
@@ -1074,18 +1083,44 @@ function cueRows(s, restate) {
     const kept = new Set(w.kept);
     const first = w.kept.length ? w.kept[0] : null;
     const time = (t) => `${t.toFixed(2)}`;
+    // The words, or the reason there are none. Asked once for the whole list
+    // rather than per mark: it is one decode of one track, and sixteen calls
+    // would be sixteen.
+    const words = cueTextFor(s);
+    const saying = words && words.textSub ? words : null;
 
-    const marks = shown.map((c) => el('button', {
-        cls: 'ex-cue' + (c === first ? ' on' : '') + (kept.has(c) ? '' : ' out'),
-        'data-cue': c.start.toFixed(3),
-        text: c.end > c.start + 1e-6 ? `${time(c.start)}–${time(c.end)}` : time(c.start),
-        title: kept.has(c)
+    const marks = shown.map((c) => {
+        const said = saying ? cueSaying(saying, c.start) : '';
+        const when = c.end > c.start + 1e-6 ? `${time(c.start)}–${time(c.end)}` : time(c.start);
+        const where = kept.has(c)
             ? (c === first ? 'The output starts on this cue' : 'Inside the window')
-            : 'Outside the window — start here to take it in',
-        on: { click: () => { s.copyFrom = c.start; restate(); drawStreams(); } },
-    }));
+            : 'Outside the window — start here to take it in';
+        return el('button', {
+            cls: 'ex-cue' + (c === first ? ' on' : '') + (kept.has(c) ? '' : ' out'),
+            'data-cue': c.start.toFixed(3),
+            // The whole of it in the tooltip and a line of it on the screen: a
+            // cue can be a paragraph, and a list of paragraphs is not a list.
+            title: said ? `${when} s\n${said}` : where,
+            on: { click: () => { s.copyFrom = c.start; restate(); drawStreams(); } },
+        }, said ? [span(when, 'ex-cue-at'), span(oneLine(said), 'ex-cue-said')]
+                : [span(when, 'ex-cue-at')]);
+    });
 
-    const out = [row('Cues', div('ex-cues', marks))];
+    // Laid out as one cue per line where there are words to read and as a
+    // wrapped row of times where there are not, which is the same list either
+    // way — the times are what a `dvdsub` track has and they still snap.
+    const out = [row('Cues', div('ex-cues' + (saying ? ' words' : ''), marks))];
+    if (words && !words.textSub)
+        out.push(div('ex-copy-note dim',
+            `This track is ${words.codec}, which carries pictures of characters rather than ` +
+            'characters — so there is nothing to read out of it, and when each picture is on ' +
+            'screen is the whole of what can be said about one. It can be carried into a ' +
+            'container that holds it; it cannot be converted, and it cannot be burned in, ' +
+            'because libavfilter’s subtitles filter is libass and libass reads characters.'));
+    else if (!words)
+        out.push(div('ex-copy-note dim',
+            'What these cues say could not be read. The times are off the packets and are ' +
+            'unaffected, so the window still cuts where it says it does.'));
     out.push(div('ex-copy-note' + (w.slip > 0.001 || (w.converting && w.onScreen) ? ' warn' : ' dim'),
                  cueWindowNote(s, list)));
 
@@ -1107,8 +1142,9 @@ function cueRows(s, restate) {
     out.push(div('ex-note dim',
         `${total} cue${total === 1 ? '' : 's'}` +
         `${list.complete ? '' : ' at least — the list was cut short, so there are more'}, ` +
-        'read off the packets rather than decoded, which is why this can say when a ' +
-        'picture track is on screen as readily as a text one. ' +
+        'timed off the packets — which is why this can say when a picture track is on ' +
+        'screen as readily as a text one' +
+        (saying ? ', with the words decoded beside them' : '') + '. ' +
         (shown.length < total
             ? `${shown.length} of them are drawn, the ones the window’s ends fall among. `
             : '') +
@@ -1124,6 +1160,18 @@ function cueRows(s, restate) {
             'An mp4 writes an empty sample between one cue and the next, so some of these ' +
             'are the gaps rather than the lines.'));
     return out;
+}
+
+/// A cue's words on one line, short enough to sit in a list.
+///
+/// A cue is two or three lines of dialogue and a `\N` in an ASS one is a break
+/// the *author* asked for, so the newlines become a middle dot rather than
+/// disappearing: "he said / and then he said" reads as two lines and "he saidand
+/// then he said" reads as a typo. Cut at sixty characters, which is about the
+/// longest subtitle line anybody writes; the whole of it is in the tooltip.
+function oneLine(text) {
+    const flat = String(text).replace(/\s*\n\s*/g, ' · ').trim();
+    return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
 }
 
 /// At most sixteen cues: the ones the window's two ends fall among.

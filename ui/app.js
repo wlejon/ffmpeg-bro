@@ -61,7 +61,7 @@ import * as report from './report.js';
 import * as hardware from './hardware.js';
 import { previewSpec, specSources } from './export/spec.js';
 import { subtitleOrdinal, burnParams, burnAnchor, canBurn,
-         cuesFor, cueWindow } from './export/subtitles.js';
+         cuesFor, cueWindow, cueTextFor, cueSaying } from './export/subtitles.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -1867,7 +1867,10 @@ globalThis.__ffmpegBro = {
     // `cueWindow` is here on the same argument again: which cues a window keeps
     // differs between a copy and a conversion, and the way to check a rule
     // about which is to hand it rows of both kinds and count what survives.
-    subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn, cuesFor, cueWindow },
+    // `cueTextFor` and `cueSaying` for a third: the words are joined to the times
+    // by *when*, and the way to check that two lists line up is to ask both.
+    subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn, cuesFor, cueWindow,
+                 cueTextFor, cueSaying },
     exporter, capture,
     // What this machine turned out to have, and the rule applied to it. On the
     // surface because the rule is a *pure* answer — a decision plus the sentence

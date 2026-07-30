@@ -97,6 +97,32 @@ be worth cutting has more cues than a panel can show, so sixteen are drawn —
 the ones the window's two ends fall among — with the count saying how many
 there are in total.
 
+### What each cue says
+
+Beside each of those times is the line itself, because the question a person
+actually has at an in-point is not "is there a cue at 4.5 s" but "which line am
+I cutting into the middle of". It is a **second query** —
+`bro.ffmpeg.cueText` — and a second cost: the words are inside a cue's payload,
+so reading them is a decoder per track. One is opened when the panel asks,
+closed again before the answer comes back, and the answers are kept for as long
+as the Write stage is up and dropped when you leave it. Nothing here holds a
+subtitle decoder open, and probing a file does not open one at all.
+
+A cue is written on its line as far as it fits, with the whole of it in the
+tooltip; a two-line cue reads as two, because `\N` in an ASS line is a break the
+author asked for. What comes back is the *words* and not the dialogue line they
+arrive in: every text decoder in libavcodec hands over ASS, so the eight leading
+fields come off and the override codes — `{\i1}`, `{\pos(120,400)}` — come out.
+They are instructions to a renderer, and a column of them where the line should
+be would be worse than a column of nothing.
+
+**A `dvdsub` track has no words, and the panel says which codec that is.** A
+bitmap cue is a picture of characters; there is nothing to read out of one, so
+the reason stands where the words would have been and the times are still drawn
+and still snap. That is `AV_CODEC_PROP_TEXT_SUB` again — the same property that
+decides whether the track can be converted or burned in — asked before any
+decoder is opened, so a picture track costs nothing to ask about.
+
 ## Burning them in
 
 Two buttons, because there are two clocks a set of cues can be on and they are

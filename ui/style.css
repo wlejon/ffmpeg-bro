@@ -1749,6 +1749,14 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
 .ex-cue:hover { border-color: var(--text); }
 .ex-cue.out { color: var(--dim); border-style: dashed; }
 .ex-cue.on { color: var(--accent); border-color: var(--accent); }
+/* With the words beside them a cue is a line rather than a chip: sixteen of
+   them wrapped mid-sentence is not a list anybody reads, and the times line up
+   in a column when each starts one. A bitmap track keeps the wrapped row,
+   because times are all it has. */
+.ex-cues.words { display: block; }
+.ex-cues.words .ex-cue { display: block; width: 100%; text-align: left; margin-bottom: 2px; }
+.ex-cue-said { color: var(--dim); padding-left: 8px; }
+.ex-cue.on .ex-cue-said { color: var(--text); }
 
 .ex-copy-note { font-size: var(--fs-sm); line-height: 1.5; padding: 3px 0; }
 .ex-copy-note.warn { color: var(--accent); }

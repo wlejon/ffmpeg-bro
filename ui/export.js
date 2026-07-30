@@ -49,6 +49,7 @@ import * as destination from './export/destination.js';
 // run. One home for that question; the node previews ask it the same way.
 import { deviceForRender } from './hardware.js';
 import { syncFollowing } from './export/copy.js';
+import { forgetCueText } from './export/subtitles.js';
 
 let el_ = {};
 let hooks = {};
@@ -185,6 +186,11 @@ export function closeExport() {
     if (isRendering()) return;
     open = false;
     stopPreviewPlayback();
+    // The words of every cue this stage read, given back. They are the one thing
+    // on it that cost a decoder — see `cueTextFor` — and a panel nobody is
+    // looking at is not a reason to hold what a decode produced. Coming back
+    // reads the file again, which is also right for a sidecar edited in between.
+    forgetCueText();
     if (hooks.workspace) hooks.workspace();
 }
 

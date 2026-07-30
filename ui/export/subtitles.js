@@ -302,6 +302,74 @@ export function cuesFor(row) {
     return cueCache.get(key);
 }
 
+// ── and what they say ──────────────────────────────────────────────────────
+//
+// The list above is times and nothing else, because it is read off the packets.
+// That answers where a window lands and not what it lands *in* — and the
+// question a person actually has when they are deciding where a programme
+// starts is which line they are about to cut into the middle of.
+//
+// **It is a second query with a second cost, and the cost is a decoder per
+// track.** `bro.ffmpeg.cueText` opens one, walks the window and closes it again
+// (see export_subtitle.h), so nothing is held open for a panel nobody is looking
+// at and `probe()` pays nothing at all. This side of that decision is the cache
+// below: the words live for as long as the Write stage is up and are dropped on
+// the way out, which is what `forgetCueText` is and why `closeExport()` calls
+// it. Coming back to the stage reads the file again, which is also the honest
+// answer for a sidecar somebody has edited in between.
+//
+// **A track of pictures has no words, and that is an answer rather than an empty
+// column.** `dvdsub` and `hdmv_pgs_subtitle` carry bitmaps; the call says so by
+// name and never opens a decoder for one, and the panel writes the reason where
+// the words would have been.
+
+const textCache = new Map();
+
+/// What the cues of the track a row reads *say*, or null when it could not be
+/// read at all.
+///
+/// `{ codec, textSub, complete, cues: [{ start, end, text }] }` — and
+/// `textSub: false` with an empty list is the bitmap answer, which is a
+/// different thing from a track with no cues in it and must stay one.
+///
+/// No `max`: the native default is 500, which is already more than the panel
+/// draws, and repeating the number here would be a second cap to disagree with.
+export function cueTextFor(row) {
+    const at = readsInput(row);
+    if (!at) return null;
+    const input = inputs[at.input];
+    if (!input || !input.path) return null;
+    const key = `${input.key}#${at.stream}`;
+    if (!textCache.has(key)) {
+        try {
+            textCache.set(key, bro.ffmpeg.cueText(asInput(input), { stream: at.stream }));
+        } catch (e) {
+            textCache.set(key, null);
+        }
+    }
+    return textCache.get(key);
+}
+
+/// Every decoded cue, forgotten. Called when the Write stage closes — see the
+/// note above: the words are the one thing on this stage that cost a decoder.
+export function forgetCueText() { textCache.clear(); }
+
+/// What the cue at `t` says, or '' when nothing there does.
+///
+/// Joined by *when*, because the two lists are two answers about one set of
+/// packets and neither has an index the other can be trusted to share: an mp4
+/// writes an empty sample between its cues, which is a packet in the first list
+/// and nothing at all in the second. Both times are computed from the same
+/// packet stamps against the same epoch (`streamZero`), so they are equal rather
+/// than close; the millisecond of slack is for the day one of them rounds.
+export function cueSaying(words, t) {
+    for (const c of (words && words.cues) || [])
+        if (Math.abs(c.start - t) < 0.001) return c.text || '';
+    return '';
+}
+
+// ── where the window lands ─────────────────────────────────────────────────
+
 /// The cue a copy starting at `t` would begin on: the last one at or before it.
 ///
 /// At or *before*, and never mind whether it is still on screen — the seek is

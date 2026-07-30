@@ -18,10 +18,13 @@
 // rather than enumerates — `hardware()` creates a device of every type,
 // `deviceSources()` asks every camera driver on the machine.
 //
-// `keyframes` and `cueTimes` are the two calls here that are about a particular
-// *file* rather than about the build. They live with the capabilities because
-// they are the same kind of question asked the same way: something the UI has to
-// know before a render rather than discover from one.
+// `keyframes`, `cueTimes` and `cueText` are the three calls here that are about
+// a particular *file* rather than about the build. They live with the
+// capabilities because they are the same kind of question asked the same way:
+// something the UI has to know before a render rather than discover from one.
+// `cueText` is the dearest of the three by a long way — it opens a decoder,
+// where the other two read an index or a run of packets — which is why it is a
+// call of its own rather than a field on `cueTimes`'s answer.
 
 #include "bindings_install.h"
 
@@ -29,6 +32,7 @@
 #include "bindings_table.h"
 #include "bindings_value.h"
 #include "export_copy.h"
+#include "export_subtitle.h"
 #include "ffmpeg_backend.h"
 #include "ffmpeg_capabilities.h"
 #include "ffmpeg_hardware.h"
@@ -118,6 +122,41 @@ JSValue optionsToJs(JSContext* ctx, const std::vector<OptionInfo>& opts) {
     return arr;
 }
 
+/// The arguments the three file queries here share: an input (or a bare path)
+/// and a window in it.
+///
+/// One reader because there are three of them now and the fourth line of it is
+/// the one that matters — `stream` defaults to −1 and not to 0, which is "the
+/// best stream of the kind I am about" rather than "the first stream of the
+/// file". Written out three times, that is the default one of the three
+/// eventually gets wrong. `*in` is left alone on failure, which only happens
+/// when a path will not convert.
+struct FileQuery {
+    MediaInput in;
+    int stream = -1;
+    double from = 0, to = 0;
+    int max = 0;
+};
+
+bool fileQuery(JSContext* ctx, int argc, JSValueConst* argv, FileQuery* q) {
+    if (JS_IsObject(argv[0])) {
+        q->in = inputFromJs(ctx, argv[0]);
+    } else {
+        const char* path = JS_ToCString(ctx, argv[0]);
+        if (!path) return false;
+        q->in.path = path;
+        JS_FreeCString(ctx, path);
+    }
+    JSValueConst opts = argc >= 2 ? argv[1] : JS_UNDEFINED;
+    if (JS_IsObject(opts)) {
+        q->stream = static_cast<int>(numProp(ctx, opts, "stream", -1));
+        q->from = numProp(ctx, opts, "from", 0);
+        q->to = numProp(ctx, opts, "to", 0);
+        q->max = static_cast<int>(numProp(ctx, opts, "max", 0));
+    }
+    return true;
+}
+
 /// bro.ffmpeg.keyframes(path | input, { stream, from, to, max }) — where a copy
 /// can start.
 ///
@@ -137,29 +176,12 @@ JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "keyframes(path) requires a path or an input");
 
-    MediaInput in;
-    JSValueConst opts = argc >= 2 ? argv[1] : JS_UNDEFINED;
-    if (JS_IsObject(argv[0])) {
-        in = inputFromJs(ctx, argv[0]);
-    } else {
-        const char* path = JS_ToCString(ctx, argv[0]);
-        if (!path) return JS_EXCEPTION;
-        in.path = path;
-        JS_FreeCString(ctx, path);
-    }
-    int stream = -1;
-    double from = 0, to = 0;
-    int max = 0;
-    if (JS_IsObject(opts)) {
-        stream = static_cast<int>(numProp(ctx, opts, "stream", -1));
-        from = numProp(ctx, opts, "from", 0);
-        to = numProp(ctx, opts, "to", 0);
-        max = static_cast<int>(numProp(ctx, opts, "max", 0));
-    }
+    FileQuery q;
+    if (!fileQuery(ctx, argc, argv, &q)) return JS_EXCEPTION;
 
     KeyframeList list;
     std::string err;
-    if (!keyframesOf(in, stream, from, to, max, &list, &err))
+    if (!keyframesOf(q.in, q.stream, q.from, q.to, q.max, &list, &err))
         return JS_ThrowTypeError(ctx, "%s", err.c_str());
 
     JSValue out = JS_NewObject(ctx);
@@ -192,29 +214,12 @@ JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "cueTimes(path) requires a path or an input");
 
-    MediaInput in;
-    JSValueConst opts = argc >= 2 ? argv[1] : JS_UNDEFINED;
-    if (JS_IsObject(argv[0])) {
-        in = inputFromJs(ctx, argv[0]);
-    } else {
-        const char* path = JS_ToCString(ctx, argv[0]);
-        if (!path) return JS_EXCEPTION;
-        in.path = path;
-        JS_FreeCString(ctx, path);
-    }
-    int stream = -1;
-    double from = 0, to = 0;
-    int max = 0;
-    if (JS_IsObject(opts)) {
-        stream = static_cast<int>(numProp(ctx, opts, "stream", -1));
-        from = numProp(ctx, opts, "from", 0);
-        to = numProp(ctx, opts, "to", 0);
-        max = static_cast<int>(numProp(ctx, opts, "max", 0));
-    }
+    FileQuery q;
+    if (!fileQuery(ctx, argc, argv, &q)) return JS_EXCEPTION;
 
     CueTimes list;
     std::string err;
-    if (!cueTimesOf(in, stream, from, to, max, &list, &err))
+    if (!cueTimesOf(q.in, q.stream, q.from, q.to, q.max, &list, &err))
         return JS_ThrowTypeError(ctx, "%s", err.c_str());
 
     JSValue out = JS_NewObject(ctx);
@@ -229,6 +234,56 @@ JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
         JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, c.start));
         JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, c.end));
         JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt32(ctx, c.bytes));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    JS_SetPropertyStr(ctx, out, "cues", arr);
+    return out;
+}
+
+/// bro.ffmpeg.cueText(path | input, { stream, from, to, max }) — what a
+/// subtitle track's cues *say*.
+///
+/// The other half of `cueTimes` above, and a second call rather than two more
+/// fields on that one because it is a second cost: this opens a decoder per
+/// track, which is the only way the words come out of a payload. It closes it
+/// again before answering — nothing in this binary holds a subtitle decoder —
+/// so the cost is paid by whoever asks and by nobody else. `probe()`
+/// deliberately does not ask.
+///
+/// **A bitmap track answers `text: false` and its codec's name, not an empty
+/// list.** `dvdsub` and `hdmv_pgs_subtitle` carry pictures of characters and
+/// there is nothing in them to read, which is a different answer from "this
+/// track has no cues" and has to reach the panel as one — an absence with a
+/// reason beats a blank column. No decoder is opened for such a track at all.
+JSValue js_cueText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "cueText(path) requires a path or an input");
+
+    FileQuery q;
+    if (!fileQuery(ctx, argc, argv, &q)) return JS_EXCEPTION;
+
+    CueText list;
+    std::string err;
+    if (!cueTextOf(q.in, q.stream, q.from, q.to, q.max, &list, &err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "stream", JS_NewInt32(ctx, list.stream));
+    setStr(ctx, out, "codec", list.codec);
+    // Whether there are words in this track at all — libavcodec's
+    // `AV_CODEC_PROP_TEXT_SUB`, under the name `probe()` reports it per stream
+    // by, so the two cannot come to be read as different questions.
+    JS_SetPropertyStr(ctx, out, "textSub", JS_NewBool(ctx, list.text));
+    JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
+    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
+    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const CueLine& c : list.cues) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, c.start));
+        JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, c.end));
+        setStr(ctx, o, "text", c.text);
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     JS_SetPropertyStr(ctx, out, "cues", arr);
@@ -511,6 +566,7 @@ void installCapabilities(Table& ns) {
     // somebody takes rather than one they discover.
     ns.function("keyframes", js_keyframes, 2);
     ns.function("cueTimes", js_cueTimes, 2);
+    ns.function("cueText", js_cueText, 2);
     /// bro.ffmpeg.codecTags(container, codec) — the fourccs this muxer will take
     /// for this codec, first being what it writes by itself. The `-tag:v hvc1`
     /// control is drawn from this rather than being a four-character text box: a

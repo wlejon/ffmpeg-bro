@@ -2,6 +2,7 @@
 
 #include "export_subtitle.h"
 
+#include "export_copy.h"
 #include "export_writer.h"
 
 #include "util/log.h"
@@ -60,6 +61,194 @@ bool parseDecodeSource(const std::string& source, int* input, int* stream) {
 double cueEpoch(AVFormatContext* fmt, const MediaInput& in) {
     return inputEpoch(in, fmt->start_time != AV_NOPTS_VALUE
                               ? fmt->start_time / double(AV_TIME_BASE) : 0.0);
+}
+
+// ── What a cue says ────────────────────────────────────────────────────────
+
+// See export_subtitle.h for why the split counts fields from the front and why
+// the override codes come out.
+std::string assDialogueText(const std::string& line) {
+    size_t at = 0;
+    // Nine fields before the words in the old shape (`Layer,Start,End,Style,
+    // Name,MarginL,MarginR,MarginV,Effect`), eight in the one libavcodec emits
+    // now (`ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect`).
+    int fields = 8;
+    if (line.compare(0, 9, "Dialogue:") == 0) { at = 9; fields = 9; }
+    for (int i = 0; i < fields; ++i) {
+        const size_t comma = line.find(',', at);
+        // Fewer commas than a dialogue line has fields: not one. The whole of
+        // it is then the best answer there is, which is better than nothing at
+        // all for a format this build has not seen before.
+        if (comma == std::string::npos) { at = 0; break; }
+        at = comma + 1;
+    }
+
+    std::string out;
+    for (size_t i = at; i < line.size(); ++i) {
+        const char c = line[i];
+        if (c == '{') {
+            const size_t close = line.find('}', i + 1);
+            // Unterminated: libass reads the rest of the line as override and
+            // draws none of it, so neither does this.
+            if (close == std::string::npos) break;
+            i = close;
+            continue;
+        }
+        if (c == '\\' && i + 1 < line.size()) {
+            const char n = line[i + 1];
+            if (n == 'N' || n == 'n') { out += '\n'; ++i; continue; }
+            if (n == 'h') { out += ' '; ++i; continue; }
+            // A brace that is text rather than the start of a block.
+            if (n == '{' || n == '}') { out += n; ++i; continue; }
+        }
+        out += c;
+    }
+    return out;
+}
+
+/// One decoded cue's rects, joined into the words a person would read.
+///
+/// Both kinds of text rect, because both exist: `SUBTITLE_ASS` is what every
+/// decoder in this build produces and `SUBTITLE_TEXT` is the plain-text rect an
+/// older one could hand over. A `SUBTITLE_BITMAP` rect is skipped rather than
+/// described — a track made of those never reaches here, since `cueTextOf`
+/// settles that with `AV_CODEC_PROP_TEXT_SUB` before it opens a decoder, and one
+/// arriving anyway is a rect with no words in it.
+std::string cueWords(const AVSubtitle& sub) {
+    std::string out;
+    for (unsigned i = 0; i < sub.num_rects; ++i) {
+        const AVSubtitleRect* r = sub.rects[i];
+        if (!r) continue;
+        std::string one;
+        if (r->type == SUBTITLE_ASS && r->ass) one = assDialogueText(r->ass);
+        else if (r->type == SUBTITLE_TEXT && r->text) one = r->text;
+        if (one.empty()) continue;
+        if (!out.empty()) out += '\n';
+        out += one;
+    }
+    return out;
+}
+
+bool cueTextOf(const MediaInput& in, int stream, double from, double to, int max,
+               CueText* out, std::string* err) {
+    AVFormatContext* fmt = nullptr;
+    if (!openInput(&fmt, in, err)) return false;
+
+    if (stream < 0) stream = av_find_best_stream(fmt, AVMEDIA_TYPE_SUBTITLE, -1, -1, nullptr, 0);
+    if (stream < 0 || static_cast<unsigned>(stream) >= fmt->nb_streams ||
+        fmt->streams[stream]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE) {
+        // The same two sentences `cueTimesOf` answers with, because they are
+        // answers to the same mistake: a stream named as the wrong kind is
+        // actionable, and "no cues" sends somebody looking through a file.
+        *err = in.path + (stream >= 0 && static_cast<unsigned>(stream) < fmt->nb_streams
+                              ? " stream " + std::to_string(stream) + " is not subtitles"
+                              : " has no subtitle stream to read cues from");
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    AVStream* st = fmt->streams[stream];
+    const double epoch = streamZero(st, in);
+    const double limit = inputLimit(in);
+    if (max <= 0) max = 500;
+    if (to <= 0.0 || (limit > 0.0 && to > limit)) to = limit;
+    out->stream = stream;
+    out->from = from;
+    out->to = to;
+
+    // **Asked, never listed.** Which family a subtitle codec is in is
+    // libavcodec's own property, and it is the same question that decides
+    // whether such a track can be written as text or burned in — so it is asked
+    // here in the same words `SubtitleStreams::build` asks it, and a build that
+    // gains a text codec gains it in this answer.
+    const AVCodecDescriptor* d = avcodec_descriptor_get(st->codecpar->codec_id);
+    out->codec = d && d->name ? d->name : avcodec_get_name(st->codecpar->codec_id);
+    out->text = d && (d->props & AV_CODEC_PROP_TEXT_SUB);
+    if (!out->text) {
+        // Nothing is opened and nothing is read. A picture of characters has no
+        // characters in it, and a caller told so by name can say *why* the
+        // column is empty, which is the whole reason this field exists.
+        out->complete = true;
+        avformat_close_input(&fmt);
+        return true;
+    }
+
+    AVCodecContext* dec = nullptr;
+    if (!openDecoder(&dec, st->codecpar, st->time_base, in, false, err)) {
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    // Everything but this stream discarded, so a two-hour file's pictures are
+    // not handed back to be thrown away one at a time. The same line
+    // `SubtitleStreams::build` has, for the same reason.
+    for (unsigned i = 0; i < fmt->nb_streams; ++i)
+        fmt->streams[i]->discard = (static_cast<int>(i) == stream) ? AVDISCARD_DEFAULT
+                                                                  : AVDISCARD_ALL;
+    // Backward, and on the subtitle stream itself — the two decisions every
+    // seek in this renderer makes. Landing early costs cues that are then
+    // dropped by the window test below; landing late loses cues the caller
+    // asked for.
+    if (from > 0.0)
+        av_seek_frame(fmt, stream, inputSeekTarget(st->time_base, in, from),
+                      AVSEEK_FLAG_BACKWARD);
+
+    AVPacket* pkt = av_packet_alloc();
+    if (!pkt) {
+        *err = "out of memory";
+        avcodec_free_context(&dec);
+        avformat_close_input(&fmt);
+        return false;
+    }
+    for (;;) {
+        av_packet_unref(pkt);
+        if (av_read_frame(fmt, pkt) < 0) { out->complete = true; break; }
+        if (pkt->stream_index != stream) continue;
+        // `dts` is the stamp that is always there, which is `stampOf`'s reason
+        // in export_copy.cpp; for a cue the two are the same number, since
+        // nothing about a subtitle reorders.
+        const int64_t stamp = pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
+        if (stamp == AV_NOPTS_VALUE) continue;
+        const double t = stamp * av_q2d(st->time_base) - epoch;
+        if (to > 0.0 && t > to + 1e-6) { out->complete = true; break; }
+        if (t < from - 1e-6) continue;
+
+        AVSubtitle sub{};
+        int got = 0;
+        if (avcodec_decode_subtitle2(dec, &sub, &got, pkt) < 0) {
+            // One unreadable cue is not a reason to lose the rest of them — the
+            // same treatment the render's own subtitle path gives it.
+            LOG_WARN("cueText: a cue in %s would not decode", in.path.c_str());
+            continue;
+        }
+        if (!got) continue;
+
+        CueLine line;
+        // The **packet's** moment, not `start_display_time`'s. Every text
+        // format times its cue with the packet and leaves the display offsets
+        // at zero, and this list is drawn against `cueTimes`, whose entries are
+        // the packets. An offset added here would move the words off the marks.
+        line.start = t;
+        line.end = pkt->duration > 0 ? t + pkt->duration * av_q2d(st->time_base) : t;
+        if (sub.end_display_time > sub.start_display_time)
+            line.end = std::max(line.end, t + sub.end_display_time / 1000.0);
+        line.text = cueWords(sub);
+        avsubtitle_free(&sub);
+        // A cue whose words come out empty is not listed. An mp4 writes a
+        // sample *between* its cues — two bytes, nothing on screen — and a
+        // panel full of blanks is exactly what this call exists instead of; the
+        // packet list is where those samples are visible, and it says so.
+        if (line.text.empty()) continue;
+        out->cues.push_back(std::move(line));
+        if (static_cast<int>(out->cues.size()) >= max) break;
+    }
+
+    // **The decoder does not outlive the call.** See the note in the header:
+    // this is the whole of "a second cost, paid when it is asked for".
+    av_packet_free(&pkt);
+    avcodec_free_context(&dec);
+    avformat_close_input(&fmt);
+    return true;
 }
 
 SubtitleStreams::Tap::~Tap() {

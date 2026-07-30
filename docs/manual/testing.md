@@ -10,16 +10,18 @@ cmake --build build --config Release && ctest --test-dir build -C Release
 gradient and a tone at a known level, differing in size, aspect, frame rate and length,
 and a third with **no audio stream in it at all**, which is not the same file as one
 whose soundtrack is quiet and is the only thing that separates "the mix" from "a mix
-nothing feeds" — and runs every suite against them. Three more are each about a stream
+nothing feeds" — and runs every suite against them. Four more are each about a stream
 the rest take for granted: one with **no video stream in it at all**, the mirror of
 the silent one and the only thing separating the composite from a composite nothing
 feeds; one whose pictures carry a **display matrix**, which is the only thing
-separating a clip laid out upright from one laid out on its side; and one with a
+separating a clip laid out upright from one laid out on its side; one with a
 **`gpmd` data track**, which is a stream that is neither picture, sound nor cues and
-is identified by its fourcc alone. None can be faked with content: a picture that
+is identified by its fourcc alone; and one with a **`dvdsub` track**, whose cues are
+*pictures* of characters and therefore cannot be converted, burned in or read for what
+they say. None can be faked with content: a picture that
 happens to be black is not an absent one, a picture that happens to be tall is not a
-rotated one, and a track full of bytes is not a track something can still find by
-name. Nothing is checked in and nothing depends on what a file you happened to have
+rotated one, a track full of bytes is not a track something can still find by
+name, and a text track with an odd payload is still a text track. Nothing is checked in and nothing depends on what a file you happened to have
 lying around contains.
 
 A UI suite is given one more thing before it starts: **no leftovers**. `localStorage`
@@ -178,6 +180,20 @@ export suite renders the same seconds with the filter and without it and
 compares them at both moments — 99 dB apart before the cue and 31 dB during it.
 Either half alone proves nothing, because a filter that did nothing passes the
 first and a filter that ruined every frame passes the second.
+
+One of `cues.srt`'s three cues is **marked up** (`<i>third cue</i>`), which is
+there for the decoded half: a cue does not arrive as its words but as an ASS
+dialogue line, so a reader that printed the `{\i1}` override codes instead of
+the line passes against the two plain cues and fails only against that one.
+
+`picture-cues.mkv` is the fixture for the other family — a `dvdsub` track beside
+a picture, written by the generator with libavcodec's own dvdsub encoder. It is
+the only fixture that reaches the three refusals a bitmap track earns (it cannot
+become text, cannot be burned in, and has no words to read) and the only one a
+drawn bitmap cue can be rendered from, because a text track with an odd payload
+is still a text track. Its cues are at the same three moments the sidecars use,
+each an opaque box in the lower third: what a check can ask about a picture of
+text is that pixels changed where the box is and did not change where it is not.
 
 `ui_document.js` is the whole edit through a file and back — see
 [The document](document.md). The shape is a round trip, and the step that makes

@@ -68,6 +68,32 @@ inline bool isCopySource(const std::string& source) {
 /// is a caller's mistake and is reported as one rather than guessed at.
 bool parseCopySource(const std::string& source, int* input, int* stream);
 
+/// Where one stream's own packet clock starts, in seconds.
+///
+/// **A packet clock is not a frame clock, and this is where that bites.** The
+/// rest of this renderer measures an input from the container's `start_time`,
+/// which is where the first *picture is presented*. A packet carries a decode
+/// timestamp, and for anything with B-frames in it the first one is the reorder
+/// delay *earlier* — two frames, 80 ms at 25 fps, in every mp4 this application
+/// writes. Measured the container's way, the first keyframe of the fixture came
+/// out at −0.08 s, fell outside a window starting at zero, and the second
+/// keyframe of the file was offered as the first place a cut could start.
+///
+/// So a copy counts from the stream's own first packet — which is the demuxer's
+/// index entry zero where there is an index, and `start_time` where there is
+/// not. `st->start_time` alone is not enough: an mp4's edit list puts it at
+/// zero while the packets still begin at −0.08, which is the whole of the bug
+/// above. The result is that a copy's clock and the file it writes agree — a
+/// cut at 2 s starts 2 s in and the output starts at zero — and that the
+/// keyframes a UI snaps to are the numbers the render seeks to.
+///
+/// **Exported for the one caller outside the packet path**, which is
+/// `cueTextOf` (export_subtitle.h): the words of a cue are drawn against the
+/// list `cueTimesOf` produced, so the two have to be on one clock or a panel
+/// joining them by time joins nothing. `cueEpoch` — the clock a *render* places
+/// cues on — is the other question and is documented where it lives.
+double streamZero(AVStream* st, const MediaInput& in);
+
 /// Where a copy can start: one stream's keyframes, on the input's own clock.
 ///
 /// A fact about the input and not about the render, which is why it is a query

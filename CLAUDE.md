@@ -45,7 +45,9 @@ generator in automatically. Each fixture exists for one fact that cannot be
 faked with content — `silent.mp4` has *no audio stream* (not a quiet one),
 `sound.m4a` has *no video stream*, `rotated.mp4` carries a display matrix,
 `telemetry.mp4` carries a `gpmd` data track — a stream identified by its fourcc
-alone, since every data stream probes as `bin_data`.
+alone, since every data stream probes as `bin_data` — and `picture-cues.mkv`
+carries a `dvdsub` track, whose cues are *pictures* of characters and are the
+only thing here that reaches the refusals a bitmap subtitle earns.
 Every suite also runs against any real file, and skips the sections whose
 fixture is absent rather than failing; keep that property when adding tests.
 

@@ -120,15 +120,6 @@ Honest list of what does not work:
   expressible — the packets are pictures and `overlay` draws pictures — but
   nothing here reads an input for its subtitle pad, so there is no wire to draw.
   Both refusals name the reason rather than failing at the first cue.
-- **What a cue says, anywhere on the Write stage.** Where the cues are is drawn
-  now — see [A track beside the picture](subtitles.md#a-track-beside-the-picture) — and it
-  is times and nothing else, because it is read off the packets. So a window
-  can be placed against the cue it lands in without the line it is cutting into
-  being readable, which is the half of the question a person actually has when
-  they are deciding where a programme starts. The words are a decoder per
-  track, kept alive while the panel is open, and for `dvdsub` they are a
-  picture with no text in it at all — so it is a second query with a second
-  cost rather than a column this one forgot to fill in.
 - **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
   `<video>` drives its clock from decoded pictures, so a file with exactly one
   has nothing to advance through, and the element shows the frame and reports

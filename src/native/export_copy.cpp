@@ -31,34 +31,14 @@ bool haveStamp(const AVPacket* pkt) {
     return pkt->dts != AV_NOPTS_VALUE || pkt->pts != AV_NOPTS_VALUE;
 }
 
-/// Where one stream's own packet clock starts, in seconds.
-///
-/// **A packet clock is not a frame clock, and this is where that bites.** The
-/// rest of this renderer measures an input from the container's `start_time`,
-/// which is where the first *picture is presented*. A packet carries a decode
-/// timestamp, and for anything with B-frames in it the first one is the reorder
-/// delay *earlier* — two frames, 80 ms at 25 fps, in every mp4 this application
-/// writes. Measured the container's way, the first keyframe of the fixture came
-/// out at −0.08 s, fell outside a window starting at zero, and the second
-/// keyframe of the file was offered as the first place a cut could start.
-///
-/// So a copy counts from the stream's own first packet — which is the demuxer's
-/// index entry zero where there is an index, and `start_time` where there is
-/// not. `st->start_time` alone is not enough: an mp4's edit list puts it at
-/// zero while the packets still begin at −0.08, which is the whole of the bug
-/// above. The result is that a copy's clock and the file it writes agree — a
-/// cut at 2 s starts 2 s in and the output starts at zero — and that the
-/// keyframes a UI snaps to are the numbers the render seeks to.
+/// The first timestamp this stream's own packets carry. The reason it is not
+/// the container's `start_time` is `streamZero`'s, in export_copy.h.
 int64_t streamOrigin(AVStream* st) {
     if (avformat_index_get_entries_count(st) > 0) {
         const AVIndexEntry* e = avformat_index_get_entry(st, 0);
         if (e && e->timestamp != AV_NOPTS_VALUE) return e->timestamp;
     }
     return st->start_time != AV_NOPTS_VALUE ? st->start_time : 0;
-}
-
-double streamZero(AVStream* st, const MediaInput& in) {
-    return streamOrigin(st) * av_q2d(st->time_base) + in.ss - in.itsoffset;
 }
 
 /// The same moment, as `av_seek_frame` wants to hear it. The arithmetic and
@@ -70,6 +50,12 @@ int64_t seekTarget(AVStream* st, const MediaInput& in, double at) {
 }
 
 } // namespace
+
+// See export_copy.h for why this is the stream's own first packet rather than
+// the container's start.
+double streamZero(AVStream* st, const MediaInput& in) {
+    return streamOrigin(st) * av_q2d(st->time_base) + in.ss - in.itsoffset;
+}
 
 bool parseCopySource(const std::string& source, int* input, int* stream) {
     if (!isCopySource(source)) return false;

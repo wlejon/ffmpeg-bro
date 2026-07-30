@@ -9,7 +9,13 @@
 // container will hold. An `.srt` beside a video goes into an mp4 as `mov_text`
 // and into Matroska as `ass`; neither is the bytes that were already there.
 //
-// So this is the decode-and-encode half, and `ExportStream::source` names it:
+// So this is where a subtitle decoder lives, and there are two things in this
+// file that open one. The first is the render's own decode-and-encode path,
+// described below. The second is `cueTextOf` at the bottom — what a cue *says*,
+// for the Write stage's cue list — which is the same decoder opened for a
+// question rather than for an output, and closed again before it answers.
+//
+// The render half, and `ExportStream::source` names it:
 // `decode:0:2` is input 0's stream 2, read, decoded and handed to this stream's
 // own encoder. It is the same `-map 0:2` a copy names — what differs is
 // `-c:s`, and that is exactly the difference ffmpeg's own command line draws
@@ -73,6 +79,91 @@ inline bool isDecodeSource(const std::string& source) {
 
 /// `decode:0:2` → input 0, stream 2. False when the text is not that shape.
 bool parseDecodeSource(const std::string& source, int* input, int* stream);
+
+// ── What a cue says ────────────────────────────────────────────────────────
+//
+// `cueTimesOf` (export_copy.h) answers *when* the cues of a track are, off the
+// packets, without opening anything that decodes — which is why it answers for
+// a `dvdsub` track as readily as for an `.srt`. This is the other half of the
+// question and it is a different query with a different cost, deliberately, and
+// not a column the first one forgot to fill in:
+//
+//   - **It costs a decoder per track.** A cue's words are inside its payload
+//     and only libavcodec can get them out, so this opens one, walks the
+//     window, and **closes it before it returns**. Nothing in this binary holds
+//     a subtitle decoder open: a probe must not pay for one (every input is
+//     probed, most of them have no subtitle track and none of the callers of
+//     `probe()` want words), and holding one for the life of the process would
+//     keep a demuxer and a decoder alive for a panel nobody is looking at. The
+//     UI's side of the same decision is that it caches the answer while the
+//     Write stage is up and drops it on the way out — see `cueTextFor` in
+//     ui/export/subtitles.js.
+//   - **For a bitmap codec there is nothing to read, and that is the answer.**
+//     `dvdsub` and `hdmv_pgs_subtitle` carry pictures of characters, so the
+//     honest answer is not an empty list of words but "this track has none,
+//     because it is `dvdsub`" — which is what `CueText::text` and
+//     `CueText::codec` are for. No decoder is opened in that case at all: the
+//     question is settled by `AV_CODEC_PROP_TEXT_SUB` before anything is read,
+//     which is the same property that decides whether such a track can be
+//     converted or burned in.
+//
+// **The clock is the packets', which is `cueTimesOf`'s.** These are the same
+// cues that list describes, and the panel draws one against the other, so a
+// second epoch here would be a panel that lines nothing up. `streamZero` is
+// therefore the epoch and `cueEpoch` — the clock a *render* places cues on — is
+// deliberately not, for the reason its own doc comment gives.
+
+/// One cue's words.
+struct CueLine {
+    double start = 0.0;
+    double end = 0.0;      ///< == start where nothing timed the end
+    std::string text;      ///< the words, with ASS override codes taken out
+};
+
+/// What a subtitle track says over the window asked for — or why it says
+/// nothing.
+///
+/// `complete` is false when the walk was cut short by `max`, for the reason
+/// `KeyframeList::complete` exists: a list that quietly stops is one somebody
+/// reads the end of as the end of the track.
+struct CueText {
+    int stream = -1;
+    std::string codec;      ///< libavcodec's own name for what the track turned out to be
+    bool text = false;      ///< `AV_CODEC_PROP_TEXT_SUB`: is there anything to read at all
+    bool complete = false;
+    double from = 0.0, to = 0.0;
+    std::vector<CueLine> cues;
+};
+
+/// The cues of one subtitle stream, decoded, over `[from, to]` seconds of the
+/// input's own clock. `stream < 0` takes the best subtitle stream there is;
+/// `max <= 0` is 500 cues, which is already more than any panel draws and is a
+/// tenth of what the packet walk allows itself, because this one decodes.
+///
+/// False with `*err` set only for a stream that is not there or is not
+/// subtitles. A track with no words in it is a true answer, not a failure.
+bool cueTextOf(const MediaInput& in, int stream, double from, double to, int max,
+               CueText* out, std::string* err);
+
+/// The words out of one ASS dialogue line, which is what every text subtitle
+/// decoder in libavcodec produces.
+///
+/// **A rect's `ass` field is a line of dialogue, not a line of text**: eight or
+/// nine comma-separated fields and then the words, which may themselves contain
+/// commas — so the split is by counting fields from the front and never by
+/// taking the last one. Two shapes exist and both are handled: the modern
+/// `ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text` that every
+/// decoder in this build emits, and the older `Dialogue: Layer,Start,End,…`
+/// with the event's own prefix, which is what a file's `[Events]` section holds
+/// and what an older libavcodec handed over.
+///
+/// Then the **override codes come out**: `{\i1}`, `{\pos(120,400)}`, `{\fad…}`
+/// are instructions to the renderer and printing them in a column whose whole
+/// purpose is the words would be worse than printing nothing. `\N` and `\n`
+/// become newlines and `\h` a space, which is what they are. An unterminated
+/// `{` takes the rest of the line with it, because that is what libass does
+/// with one and this column is meant to say what would be drawn.
+std::string assDialogueText(const std::string& line);
 
 /// Every decoded subtitle stream of one render, and the demuxers they read.
 ///

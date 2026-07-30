@@ -272,6 +272,35 @@ same(drawn.length, 3, 'the row draws one entry per cue');
 ok(drawn[1].textContent.indexOf('4.00') >= 0 && drawn[1].textContent.indexOf('5.50') >= 0,
    `written as the span it covers rather than as a mark (${drawn[1].textContent})`);
 
+// ── and what each of them says ─────────────────────────────────────────────
+//
+// The times above are off the packets. What a cue *says* is a second query with
+// a second cost — a decoder per track, opened for the question and closed again
+// — and the interesting part is not that words come back but what they are: a
+// decoded cue is an **ASS dialogue line**, so the words are the last field after
+// eight commas and any markup in them has become `{\i1}` override codes. A
+// reader that handed either of those to a panel would put punctuation where the
+// line should be.
+
+console.log('\nand what they say');
+const words = bro.ffmpeg.cueText(cues);
+ok(words.textSub === true, `the track is reported as having words in it (${words.codec})`);
+same(words.cues.length, 3, 'one entry per cue, decoded');
+same(words.cues[0].text, 'first cue',
+     'the words themselves, with the dialogue line’s eight leading fields off');
+same(words.cues[1].text, 'second cue\nand its second line',
+     'a two-line cue as two lines — \\N in an ASS line is a break the author asked for');
+same(words.cues[2].text, 'third cue',
+     'and the override codes taken out: {\\i1} is an instruction to a renderer, not a word');
+// The two lists are joined by *when*, because neither has an index the other
+// shares: an mp4 writes an empty sample between its cues, which is a packet in
+// the first list and nothing at all in the second.
+same(A.subtitles.cueSaying(words, cueList.cues[2].start), 'third cue',
+     'and they line up with the packet times, which is how the panel joins them');
+same(A.subtitles.cueSaying(words, 3.3), '', 'with nothing to say about a moment with no cue');
+ok(drawn[1].textContent.indexOf('second cue') >= 0,
+   `so the row draws the line beside the span (${drawn[1].textContent.trim()})`);
+
 type(q(`[data-stream="${srow.id}"] [data-f="copy-copyFrom"]`), '4.5');
 pump(60);
 
@@ -612,6 +641,73 @@ console.log('\nthe escaping comes back off');
        'and neither layer left behind');
     A.graph.overlay.clear();
     pump(80);
+}
+
+// ── a track with no words in it ────────────────────────────────────────────
+//
+// `dvdsub` is the case every question about a subtitle track forks on, and the
+// answer is never an empty column: a bitmap cue is a picture of characters, so
+// there is nothing to read and the panel has to *say* which codec that is and
+// why. The fixture is a Matroska file with a `dvdsub` track beside a picture —
+// skipped where it is absent, like every other fixture section here, because
+// this suite also runs against a real file somebody passed it.
+
+console.log('\ncues that are pictures');
+{
+    const pictures = `${dir}/picture-cues.mkv`;
+    let has = false;
+    try { has = !!bro.ffmpeg.probe(pictures); } catch (e) { has = false; }
+    if (!has) {
+        console.log(`  SKIP  no picture-cues.mkv in ${dir} — the bitmap section needs one`);
+    } else {
+        const said = bro.ffmpeg.cueText(pictures);
+        same(said.textSub, false, `the track is reported as pictures (${said.codec})`);
+        same(said.cues.length, 0, 'with no cues of words, because there are none to have');
+        // The times are still knowable, which is the whole reason the two calls
+        // are separate: when a picture of text is on screen is the one thing
+        // anybody can say about one.
+        same(bro.ffmpeg.cueTimes(pictures).cues.length, 3,
+             'while when each picture is on screen is read off the packets as usual');
+
+        A.shell.goTo('sources');
+        pump(60);
+        type(el('src-path'), pictures);
+        click(el('src-add'));
+        pump(150);
+        const shot = A.inputs.inputs[A.inputs.inputs.length - 1];
+        const at = A.inputs.inputs.length - 1;
+
+        A.exporter.currentSettings().container = 'matroska';
+        A.shell.goTo('write');
+        pump(100);
+        click(q('[data-add="subtitle"]'));
+        pump(80);
+        const brow = A.exporter.currentSettings().streams.filter(
+            (s) => s.kind === 'subtitle').pop();
+        const bstream = shot.probe.streams.find((s) => s.kind === 'subtitle');
+        choose(q(`[data-stream="${brow.id}"] [data-f="stream-source"]`),
+               `copy:${at}:${bstream.index}`);
+        pump(80);
+        if (!q(`[data-stream="${brow.id}"] .ex-cue`)) {
+            click(q(`[data-stream="${brow.id}"] [data-f="detail"]`));
+            pump(80);
+        }
+        const bmarks = qq(`[data-stream="${brow.id}"] .ex-cue`);
+        same(bmarks.length, 3, 'the row still draws the three cues, off the packets');
+        const bnote = Array.from(qq(`[data-stream="${brow.id}"] .ex-copy-note`))
+            .map((n) => n.textContent).join(' | ');
+        ok(bnote.indexOf('pictures of characters') >= 0,
+           'and says the cues are pictures rather than leaving the words blank');
+        ok(bnote.indexOf('dvd_subtitle') >= 0,
+           `naming the codec it asked libavcodec about (${bnote.slice(0, 70)}…)`);
+        ok(bnote.indexOf('libass reads characters') >= 0,
+           'and why it cannot be burned in either');
+
+        A.exporter.currentSettings().streams = A.exporter.defaultStreams();
+        A.exporter.currentSettings().container = 'mp4';
+        A.exporter.redraw();
+        pump(60);
+    }
 }
 
 console.log(`\n${checks} checks passed`);

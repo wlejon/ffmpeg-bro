@@ -240,6 +240,35 @@ bro.ffmpeg.cueTimes(path | input, { stream, from, to, max })
 // every subtitle packet is one, so this reads the file up to `to` with every
 // other stream discarded in the demuxer.
 
+// And what those cues *say*. The other half of the question above, and a call
+// of its own because it is a second cost rather than two more fields: this
+// opens a **decoder per track**, which is the only way words come out of a
+// payload, and closes it again before it answers. Nothing in this binary holds
+// a subtitle decoder open; `probe()` deliberately does not ask.
+bro.ffmpeg.cueText(path | input, { stream, from, to, max })
+// → { stream, codec: "subrip", textSub: true, complete, from, to,
+//     cues: [{ start: 1, end: 2, text: "first cue" }, …] }
+// **A bitmap track answers `textSub: false` and its codec's name, not an empty
+// list.** `dvdsub` and `hdmv_pgs_subtitle` carry pictures of characters, so
+// there is nothing in them to read — which is a different answer from "this
+// track has no cues" and reaches a panel as one, because an absence with a
+// reason beats a blank column. No decoder is opened for such a track at all:
+// libavcodec's `AV_CODEC_PROP_TEXT_SUB` settles it first, which is the same
+// property `probe()` reports per stream as `textSub` and the same one that
+// decides whether a track can be converted or burned in.
+//
+// The words are the words: every text decoder in libavcodec hands over an
+// **ASS dialogue line**, so the eight leading fields come off, `{\i1}` and its
+// family come out, and `\N` becomes a newline. A cue whose words come out
+// empty is not listed — mp4 writes a sample between its cues and a list of
+// blanks is what this call exists instead of; `cueTimes` is where those
+// packets are visible and it says so.
+//
+// The clock is the packets', which is `cueTimes`'s: these are the same cues
+// that list describes and a panel draws one against the other, so a second
+// epoch here would line nothing up. `max` defaults to 500 rather than 4000,
+// because this one decodes.
+
 // The encoder libavformat itself would reach for, given a muxer and a
 // filename — `av_guess_codec`, which is what the `ffmpeg` CLI uses. It matters
 // for one muxer: **`image2`'s extension names a codec, not a container**, so
@@ -822,7 +851,8 @@ streams: [
   // the cue at or before `copyFrom` — still on screen at that moment or long
   // finished — and *that cue's* stamp is the output's zero. Which is the
   // keyframe story in subtitle vocabulary. `bro.ffmpeg.cueTimes` is what a
-  // caller draws either against.
+  // caller draws either against, and `bro.ffmpeg.cueText` is what puts the line
+  // it is cutting into beside the number.
   //
   // **Pictures of text are refused rather than converted.** `dvdsub` and
   // `hdmv_pgs_subtitle` carry bitmaps; the pairing is refused by name before

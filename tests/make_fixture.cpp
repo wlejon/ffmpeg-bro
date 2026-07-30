@@ -23,17 +23,20 @@
 //     that is a property of the names rather than of the pixels. They are
 //     written by the same `Writer` through the `image2` muxer, which makes
 //     them the check that the picture side of it works at all.
-//   - **Three of them are about a stream the others take for granted.**
+//   - **Four of them are about a stream the others take for granted.**
 //     `rotated.mp4` is stored sideways and carries a display matrix saying so,
 //     which is the only thing that separates a portrait clip laid out upright
 //     from one laid out on its side; `sound.m4a` has no video stream in it at
 //     all, which is the mirror of `silent.mp4` and the only thing that
 //     separates a clip from a clip with a picture in it; `telemetry.mp4` has a
 //     `gpmd` data track, which is a stream that is neither picture, sound nor
-//     cues and is carried by its fourcc alone. None can be faked with content:
-//     a picture that happens to be tall is not a rotated one, a picture that
-//     happens to be black is not an absent one, and a track full of bytes is
-//     not a track something can still identify.
+//     cues and is carried by its fourcc alone; `picture-cues.mkv` has a `dvdsub`
+//     track, whose cues are *pictures* of characters and therefore cannot be
+//     converted, burned in or read for what they say. None can be faked with
+//     content: a picture that happens to be tall is not a rotated one, a picture
+//     that happens to be black is not an absent one, a track full of bytes is
+//     not a track something can still identify, and a text track with an odd
+//     payload is still a text track.
 //   - **The two files differ in every way a render cares about**: size, aspect,
 //     frame rate and duration. A test that passes only because both inputs are
 //     1080p25 is a test that has not been run. This one is not decoration: the
@@ -483,6 +486,225 @@ bool writeTelemetry(const std::filesystem::path& src, const std::filesystem::pat
     return true;
 }
 
+/// A clip whose cues are **pictures of characters** rather than characters.
+///
+/// The fifth fixture that is about a stream the others take for granted, and it
+/// cannot be faked either: `cues.srt` and `cues.ass` are words, and every
+/// question this application asks about a subtitle track forks on whether there
+/// are words in it at all. A `dvdsub` track cannot become `subrip` (that is
+/// optical character recognition), cannot be burned in (libavfilter's subtitles
+/// filter is libass, and libass reads characters), and cannot be read for what
+/// it says — and each of those has to be *refused by name*, which is a code path
+/// nothing in the fixture set reaches. A text track with an unusual payload does
+/// not reach it; only a track libavcodec reports without
+/// `AV_CODEC_PROP_TEXT_SUB` does.
+///
+/// **Matroska, and beside a picture, both on purpose.** The container is the one
+/// this build can hold `dvdsub` packets in, so the same file is what "carried
+/// into a container that holds it" means. The video stream beside it is what
+/// gives the cues a size: ffmpeg's own sub2video takes the canvas a bitmap cue
+/// is painted onto from the largest video stream of the same input file when the
+/// subtitle codec does not carry its own dimensions, and a subtitle-only file
+/// would therefore be drawn at libavformat's 720×576 fallback rather than at
+/// anything measurable.
+///
+/// The cues are at the same three moments `cues.srt` uses, so a render can be
+/// checked against times that were written down before the file existed, and
+/// each is a solid opaque box in the lower third — the only thing a check can
+/// ask about a picture of text is that pixels changed where it was and did not
+/// change where it was not.
+bool writePictureCues(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    struct Moment { double start, end; };
+    const Moment moments[] = {{1.0, 2.0}, {4.0, 5.5}, {7.0, 8.0}};
+
+    AVFormatContext* in = nullptr;
+    int rc = avformat_open_input(&in, src.string().c_str(), nullptr, nullptr);
+    if (rc < 0 || avformat_find_stream_info(in, nullptr) < 0) {
+        std::fprintf(stderr, "%s: cannot reopen (%s)\n", src.string().c_str(),
+                     avErr(rc).c_str());
+        if (in) avformat_close_input(&in);
+        return false;
+    }
+
+    AVFormatContext* oc = nullptr;
+    if (avformat_alloc_output_context2(&oc, nullptr, nullptr, dst.string().c_str()) < 0 || !oc) {
+        std::fprintf(stderr, "%s: no muxer\n", dst.string().c_str());
+        avformat_close_input(&in);
+        return false;
+    }
+
+    // Everything that fails below has the same three things to give back, and
+    // the function has eight ways out. One lambda rather than eight copies.
+    AVCodecContext* enc = nullptr;
+    const auto giveUp = [&](const char* what, int code) {
+        std::fprintf(stderr, "%s: %s%s%s\n", dst.string().c_str(), what,
+                     code < 0 ? " — " : "", code < 0 ? avErr(code).c_str() : "");
+        if (enc) avcodec_free_context(&enc);
+        avformat_close_input(&in);
+        if (oc->pb) avio_closep(&oc->pb);
+        avformat_free_context(oc);
+        return false;
+    };
+
+    int width = 0, height = 0;
+    std::vector<int> mapping(in->nb_streams, -1);
+    for (unsigned i = 0; i < in->nb_streams; ++i) {
+        AVStream* is = in->streams[i];
+        AVStream* os = avformat_new_stream(oc, nullptr);
+        if (!os || avcodec_parameters_copy(os->codecpar, is->codecpar) < 0)
+            return giveUp("cannot copy a stream", 0);
+        os->codecpar->codec_tag = 0;
+        os->time_base = is->time_base;
+        mapping[i] = os->index;
+        if (is->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            width = is->codecpar->width;
+            height = is->codecpar->height;
+        }
+    }
+    if (width <= 0 || height <= 0) return giveUp("the source has no picture to size cues by", 0);
+
+    // The encoder, asked for by name — `dvdsub` is what a bitmap subtitle
+    // *encoder* is called in libavcodec, and a build without it should say so
+    // here rather than write a file with a text track in it.
+    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_DVD_SUBTITLE);
+    if (!codec) return giveUp("this build has no dvdsub encoder", 0);
+    enc = avcodec_alloc_context3(codec);
+    if (!enc) return giveUp("out of memory", 0);
+    // The size the cue coordinates are against. dvdsub writes it into its
+    // extradata, which is how a decoder — and sub2video after it — knows how big
+    // the canvas the rects sit on is.
+    enc->width = width;
+    enc->height = height;
+    // Milliseconds, which is the clock a cue's display times are in and the one
+    // the packets below are stamped on.
+    enc->time_base = AVRational{1, 1000};
+    if ((rc = avcodec_open2(enc, codec, nullptr)) < 0)
+        return giveUp("cannot open the dvdsub encoder", rc);
+
+    AVStream* subs = avformat_new_stream(oc, nullptr);
+    if (!subs) return giveUp("cannot add the subtitle stream", 0);
+    if ((rc = avcodec_parameters_from_context(subs->codecpar, enc)) < 0)
+        return giveUp("cannot describe the subtitle stream", rc);
+    subs->time_base = enc->time_base;
+
+    if (!(oc->oformat->flags & AVFMT_NOFILE) &&
+        (rc = avio_open(&oc->pb, dst.string().c_str(), AVIO_FLAG_WRITE)) < 0)
+        return giveUp("cannot open it for writing", rc);
+    if ((rc = avformat_write_header(oc, nullptr)) < 0)
+        return giveUp("will not take a header", rc);
+
+    // One rect per cue, in the lower third and the same box every time: what a
+    // check can ask about a picture of text is that the picture changed where
+    // the box is and not where it is not, and a box that moved would make the
+    // second half of that unanswerable.
+    const int boxW = std::max(2, (width / 2) & ~1);
+    const int boxH = std::max(2, (height / 6) & ~1);
+    const int boxX = ((width - boxW) / 2) & ~1;
+    const int boxY = ((height - boxH - height / 12)) & ~1;
+
+    // Four colours, which is what a DVD subtitle has: transparent, white, and
+    // two more so the encoder's colour map is exercised rather than degenerate.
+    // AVPALETTE entries are 0xAARRGGBB in the machine's own byte order.
+    std::vector<uint32_t> palette(256, 0u);
+    palette[0] = 0x00000000;   // transparent — everything outside the letters
+    palette[1] = 0xFFFFFFFF;   // opaque white
+    palette[2] = 0xFF000000;   // opaque black
+    palette[3] = 0xFFFF3020;   // opaque red
+
+    int written = 0;
+    auto pushCue = [&](double upTo) {
+        while (written < static_cast<int>(std::size(moments)) &&
+               moments[written].start <= upTo) {
+            const Moment& m = moments[written];
+            std::vector<uint8_t> pixels(static_cast<size_t>(boxW) * boxH, 1);
+            // A black frame two pixels in, so the bitmap is not one flat colour
+            // and a palette that came through wrong is visible.
+            for (int y = 0; y < boxH; ++y)
+                for (int x = 0; x < boxW; ++x)
+                    if (x < 2 || y < 2 || x >= boxW - 2 || y >= boxH - 2)
+                        pixels[static_cast<size_t>(y) * boxW + x] = 2;
+
+            AVSubtitleRect rect{};
+            rect.type = SUBTITLE_BITMAP;
+            rect.x = boxX;
+            rect.y = boxY;
+            rect.w = boxW;
+            rect.h = boxH;
+            rect.nb_colors = 4;
+            rect.linesize[0] = boxW;
+            rect.data[0] = pixels.data();
+            rect.data[1] = reinterpret_cast<uint8_t*>(palette.data());
+            AVSubtitleRect* rects[1] = {&rect};
+
+            AVSubtitle sub{};
+            sub.format = 0;                 // 0 is a bitmap; 1 would be text
+            sub.num_rects = 1;
+            sub.rects = rects;
+            // **The timing is the cue's own, in milliseconds relative to the
+            // packet.** `avcodec_encode_subtitle` refuses a non-zero
+            // `start_display_time` outright, so the start is the packet's stamp
+            // and the end is how long the picture stays up — which for dvdsub is
+            // encoded into the payload as a stop-display command and is why such
+            // a track's packets can carry no duration at all.
+            sub.start_display_time = 0;
+            sub.end_display_time =
+                static_cast<uint32_t>(std::llround((m.end - m.start) * 1000.0));
+
+            std::vector<uint8_t> payload(1 << 16);
+            const int n = avcodec_encode_subtitle(enc, payload.data(),
+                                                  static_cast<int>(payload.size()), &sub);
+            if (n <= 0) {
+                std::fprintf(stderr, "%s: cue %d would not encode\n",
+                             dst.string().c_str(), written);
+                ++written;
+                continue;
+            }
+            AVPacket* sp = av_packet_alloc();
+            av_new_packet(sp, n);
+            std::memcpy(sp->data, payload.data(), static_cast<size_t>(n));
+            sp->stream_index = subs->index;
+            sp->pts = sp->dts = std::llround(m.start * 1000.0);
+            sp->duration = std::llround((m.end - m.start) * 1000.0);
+            sp->flags |= AV_PKT_FLAG_KEY;
+            sp->pos = -1;
+            av_interleaved_write_frame(oc, sp);
+            av_packet_free(&sp);
+            ++written;
+        }
+    };
+
+    AVPacket* pkt = av_packet_alloc();
+    while (av_read_frame(in, pkt) >= 0) {
+        const int to = mapping[pkt->stream_index];
+        if (to >= 0) {
+            const AVRational tb = in->streams[pkt->stream_index]->time_base;
+            // Offered as they come due, because `av_interleaved_write_frame`
+            // buffers by timestamp and a cue handed over after the picture it
+            // belongs beside has already gone out is a cue the muxer refuses.
+            if (in->streams[pkt->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                pushCue(double(pkt->pts) * tb.num / tb.den);
+            av_packet_rescale_ts(pkt, tb, oc->streams[to]->time_base);
+            pkt->stream_index = to;
+            pkt->pos = -1;
+            if (av_interleaved_write_frame(oc, pkt) < 0) break;
+        }
+        av_packet_unref(pkt);
+    }
+    pushCue(1e9);
+    av_packet_free(&pkt);
+    av_write_trailer(oc);
+    const int64_t bytes = oc->pb ? avio_size(oc->pb) : 0;
+    if (oc->pb) avio_closep(&oc->pb);
+    avcodec_free_context(&enc);
+    avformat_close_input(&in);
+    avformat_free_context(oc);
+
+    std::printf("  %s  dvdsub track, %d picture cues %dx%d at (%d,%d)  %lld bytes\n",
+                dst.filename().string().c_str(), written, boxW, boxH, boxX, boxY,
+                static_cast<long long>(bytes));
+    return true;
+}
+
 /// A run of stills, written the way this application writes one: the `image2`
 /// muxer, a frame-number pattern for a path, and `-start_number` said out loud
 /// rather than left to a default nobody can see.
@@ -547,7 +769,8 @@ bool writeStills(const std::filesystem::path& pattern, int count, int width, int
 ///
 /// The words differ between the two files on purpose. A conversion that wrote
 /// its input straight back out, or that read the wrong one of the two, would
-/// otherwise pass.
+/// otherwise pass. And one cue of the three is *marked up*, for the reason
+/// written beside it.
 bool writeSubtitles(const std::filesystem::path& dir) {
     struct Sidecar { const char* name; std::vector<std::string> lines; };
     const Sidecar files[] = {
@@ -563,7 +786,12 @@ bool writeSubtitles(const std::filesystem::path& dir) {
             "",
             "3",
             "00:00:07,000 --> 00:00:08,000",
-            "third cue",
+            // **One cue carries markup**, because a decoded cue does not arrive
+            // as the words: every text decoder in libavcodec hands over an ASS
+            // dialogue line, and `<i>` becomes `{\i1}…{\i0}` inside it. A reader
+            // that printed the override codes instead of the words passes against
+            // the two plain cues above and fails only against this one.
+            "<i>third cue</i>",
             "",
         }},
         // The same three moments in the format that carries styling, so a
@@ -665,5 +893,10 @@ int main(int argc, char* argv[]) {
     // seconds — so the same file can be burned into it, muxed beside it and
     // converted, all against times that are written down above.
     if (!writeSubtitles(dir)) return 1;
+
+    // And the one subtitle track that is not words: a `dvdsub` stream beside a
+    // picture, which is the only fixture that reaches the three refusals a
+    // bitmap track earns. See `writePictureCues`.
+    if (!writePictureCues(dir / "landscape.mp4", dir / "picture-cues.mkv")) return 1;
     return 0;
 }
