@@ -75,10 +75,10 @@ export function setPlayhead(t, seek = true) {
     // was left, so it always needs the seek even when the caller said not to.
     // The clips are kept parked where the playhead is even while the output
     // preview is what is being watched, so that turning it off is instant
-    // rather than a seek per decoder. What they are not is *played*: the
-    // preview has no soundtrack and the clips are not the picture, so running
-    // them would be a mix drifting away from a render being made at whatever
-    // rate it can be made at.
+    // rather than a seek per decoder. What they are not is *played*: the preview
+    // carries the render's own soundtrack now, so a clip playing underneath it
+    // would be that clip heard twice — once as itself and once through the mix,
+    // a third of a second apart.
     const shown = !output.isOn();
     for (const clip of here) {
         applyAudio(clip);

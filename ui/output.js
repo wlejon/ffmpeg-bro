@@ -41,11 +41,20 @@
 // hold still. It is the same rule the viewer's per-clip filters follow for the
 // same reason.
 //
-// **It is the clock while it is on**, because it is the picture on the screen,
-// which is exactly the rule `transport.js` already states about the topmost
-// clip. What it is not is the sound: this preview has no soundtrack, so the
-// clips are paused rather than left playing a mix that would drift away from a
-// picture being made at whatever rate it can be made at. See [Not yet].
+// **It is the clock and the sound while it is on**, because it is the picture on
+// the screen and the mix coming out of it — which is exactly the rule
+// `transport.js` already states about the topmost clip, now true of both halves.
+// The clips underneath stay paused: they are the same sound by a cheaper route
+// for everything except the thing this is for, and playing them as well would be
+// every clip heard twice, once as itself and once through the mix.
+//
+// So the element is **not muted**, and that is the only line of this file the
+// sound cost. What it bought is the half of a render no clip element can play: an
+// `-af` chain on the whole programme, a `loudnorm`, an `amix` with a generator in
+// it. What it did *not* buy is a soundtrack that stretches when the render cannot
+// keep up — the sound is the authoritative half and pictures are dropped to keep
+// it real time, which is argued in `playback_output.h` and is why a slow graph
+// preview shows an older picture than the playhead claims.
 
 import { previewSpec, range } from './export/spec.js';
 
@@ -331,11 +340,13 @@ function apply() {
     if (v.src !== src) {
         try { v.pause(); } catch (e) {}
         v.src = src;
-        // Muted, and it is not a setting: this source has no audio track at all
-        // — see playback_output.h — so this says what is true rather than
-        // choosing it, and keeps the element out of the mix.
-        v.muted = true;
-        v.volume = 0;
+        // Audible, and full scale: what comes out of this element is the render's
+        // own mix, so anything less than 1.0 would be a gain nobody asked for
+        // sitting between the numbers on the Encode stage and the sound in the
+        // room. Said on every re-point rather than once, because an element handed
+        // a new src is a fresh one in every respect.
+        v.muted = false;
+        v.volume = 1;
     }
     tell();
 }

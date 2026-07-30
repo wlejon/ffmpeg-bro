@@ -351,9 +351,21 @@ bro.ffmpeg.output.define("edit", spec)    // spec: exactly a render.start() one
 // inputs begin where you want to start. Moving the playhead is a redefinition.
 //
 // The encode half of the spec goes unread: there is no writer, so the codec, the
-// container, the passes and the path mean nothing here. `audio` is forced off —
-// this source has no sound track at all, and a `TimelineSource` that was asked
-// for one would open an audio reader per clip to hand the samples to nobody.
+// container, the passes and the path mean nothing here.
+//
+// **It carries the render's sound as well as its picture**, as two tracks of one
+// source, which is what makes an `-af` chain on the whole programme audible —
+// nothing else in this application can play one, because there is no clip whose
+// element it belongs to. Two things follow from that and both are visible from
+// here. The render behind a token is **shared**: bro opens a media element's
+// source twice, once for the pipeline and once for the audio ring, and a render
+// per open would be two renders of one edit racing for the same files — so
+// several elements on one token play one render, and a `define` is what ends it
+// (a redefinition is a new render, even under a token that spells the same).
+// And the **sound is the authoritative half**: a preview is made at whatever rate
+// it can be made at, so pictures are dropped to keep the sound at real time
+// rather than the sound being stretched to keep every picture. See
+// `src/native/playback_output.h`.
 
 bro.ffmpeg.output.settle(spec)
 // → { width, height, fps, start, length, graph }
@@ -361,6 +373,10 @@ bro.ffmpeg.output.settle(spec)
 // Build the source, say what it produces, and throw it away — so that a graph
 // libavfilter refuses is a sentence the moment somebody wires it rather than a
 // black rectangle and a line in a log. It **throws** with libav's own words.
+// Settled *without* its sound, which is why nothing here says whether the render
+// has any: building the audio half opens a reader per clip, and settling happens
+// on every graph edit. Whether there is a soundtrack is answered once, by the
+// element that is about to play it.
 // Deliberately *not* what `define` does, which is the opposite split from
 // `views.define`: an output view is a whole render, and the caller redefines one
 // every time the playhead moves, so building is asked for separately and only

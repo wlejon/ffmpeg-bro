@@ -512,34 +512,44 @@ private:
 
 // ── A render, as a media source ────────────────────────────────────────────
 //
-// `<video src="/@out/edit/0-8000">` plays what the export would write, made
-// frame by frame as the element asks for it. See playback_output.h for what a
-// view is and why the caller owns the seek; this is the twenty lines that turn
-// one into something bro can play.
+// `<video src="/@out/edit/0-8000">` plays what the export would write — its
+// picture and its soundtrack both, made while you watch it. See
+// playback_output.h for what a view is, why the caller owns the seek, and why
+// the sound is the authoritative half; this is what turns a run into something
+// bro can play.
 //
 // It is the second source in this backend with no demuxer behind it, and it
 // shares the mechanism with the first: what would be a compressed packet is a
-// picture that was never compressed, carried as `wrapped_avframe` exactly as a
-// live pad's is and as a `-f lavfi` input's is. There is no output decoder for
-// the same reason there is no live one.
+// picture — or a block of samples — that was never compressed, carried as
+// `wrapped_avframe` exactly as a live pad's is and as a `-f lavfi` input's is.
+// There is no output decoder for the same reason there is no live one.
 //
-// **It does not block and it does not wait.** A live pad is a camera and has to
-// be waited on; this is a render, so a frame takes however long it takes to make
-// and then it is there. What that means for the element is that a preview which
-// cannot keep up plays slowly rather than dropping frames — which is the right
-// way round for a picture somebody is judging an encode by.
+// **It reads pads rather than driving the render**, which is the whole reason
+// there is an `OutputRun`: bro opens a media element's source *twice* — once for
+// the pipeline and once for the audio ring it keeps ahead of the mixer — and a
+// source that built a render per open would build two renders of one edit and
+// race them for the same files. So both opens attach to one run and read its tap:
+// the picture from `vout`, newest wins, and the sound from `aout`, a queue per
+// listener. Each object holds both readers and `setActiveTracks` says which of
+// them is wanted, which is bro telling us plainly rather than us guessing.
+//
+// **It waits, where it used to make.** A pull that rendered inside `readPacket`
+// could not be shared and could not be paced; what waits here is a reader in
+// front of a producer that is being paced by the sound, so a preview which cannot
+// keep up drops pictures instead of playing slowly. That is the trade the header
+// argues for, and this class is where it is felt: `take` hands back the newest
+// picture there is and no older one.
 class OutputSource : public MediaSource {
 public:
     bool open(const std::string& src) {
-        OutputView view;
-        if (!resolveOutput(src, &view)) return false;
-
         std::string err;
-        if (!reader_.open(view, &err)) {
-            // The graph would not parse, in libavfilter's own words. Logged
-            // rather than swallowed because the caller settles a view before it
-            // points anything at one — see `settleOutput` — so arriving here
-            // means the graph changed under a token that was good a moment ago.
+        run_ = attachOutput(src, &err);
+        if (!run_) {
+            // The graph would not parse, in libavfilter's own words, or the token
+            // names nothing. Logged rather than swallowed because the caller
+            // settles a view before it points anything at one — see
+            // `settleOutput` — so arriving here means the graph changed under a
+            // token that was good a moment ago.
             LOG_WARN("ffmpeg: output preview: %s", err.c_str());
             return false;
         }
@@ -549,11 +559,13 @@ public:
         // size the spec says, or the size the graph settled on, and both are
         // known before a picture is made. So opening costs no frame, and an
         // element pointed at an empty timeline opens rather than failing.
-        const OutputFacts& f = reader_.facts();
+        const OutputFacts& f = run_->facts();
         if (f.width <= 0 || f.height <= 0) return false;
+        picture_ = run_->tap()->pad("vout");
+        if (!picture_) return false;
 
         TrackInfo t;
-        t.id = 1;
+        t.id = kVideoTrack;
         t.kind = TrackKind::Video;
         t.codec = Codec::Other;
         t.width = static_cast<uint32_t>(f.width);
@@ -573,23 +585,91 @@ public:
         priv->wrapped = true;
         t.backendPrivate = priv;
         tracks_.push_back(std::move(t));
+
+        // The soundtrack, if this render has one. Described from the facts as
+        // well — a track has to say its rate and its layout before a sample of it
+        // exists, and `mixInto` produces exactly what the spec asked for.
+        soundPad_ = f.audioRate > 0 ? run_->tap()->pad("aout") : nullptr;
+        if (soundPad_) {
+            TrackInfo a;
+            a.id = kAudioTrack;
+            a.kind = TrackKind::Audio;
+            a.codec = Codec::Other;
+            a.sampleRate = static_cast<uint32_t>(f.audioRate);
+            a.channels = static_cast<uint32_t>(f.audioChannels);
+            a.durationNs = static_cast<TimeNs>(llround(f.length * 1e9));
+
+            auto ap = std::make_shared<TrackPrivate>();
+            ap->par = avcodec_parameters_alloc();
+            if (!ap->par) return false;
+            ap->par->codec_type = AVMEDIA_TYPE_AUDIO;
+            ap->par->codec_id = AV_CODEC_ID_WRAPPED_AVFRAME;
+            ap->par->format = AV_SAMPLE_FMT_FLT;
+            ap->par->sample_rate = f.audioRate;
+            av_channel_layout_default(&ap->par->ch_layout, f.audioChannels);
+            ap->timeBase = AVRational{1, 1000000};
+            ap->wrapped = true;
+            a.backendPrivate = ap;
+            tracks_.push_back(std::move(a));
+        }
         return true;
     }
 
     const std::vector<TrackInfo>& tracks() const override { return tracks_; }
 
     bool readPacket(MediaPacket& out) override {
-        double at = 0.0;
-        AVFrame* f = reader_.next(&at);
-        if (!f) return false;   // the range has run out: the element has ended
-        out.trackId = 1;
-        out.codec = Codec::Other;
-        out.kind = TrackKind::Video;
-        out.keyframe = true;         // every one of them is
-        out.pts = static_cast<TimeNs>(llround(at * 1e9));
-        out.duration = 0;
-        out.data = wrapOwnedFrame(f);   // takes the reference this holds
-        return out.data != nullptr;
+        if (!run_) return false;
+        // **Asked for, every time.** The run produces while it is being asked and
+        // idles a quarter of a second after the asking stops, which is what makes
+        // a paused preview cost nothing — so a reader that woke it once at the
+        // start would get one frame and then a stall.
+        run_->wake();
+
+        // Sound first where it is wanted, and by a whole packet rather than by a
+        // comparison of timestamps: the two are read by two different objects in
+        // the ordinary case, and where one object reads both, a block that is
+        // already made is a block the ring is waiting for.
+        if (wantSound_ && soundPad_) {
+            if (!ears_) ears_ = soundPad_->listen();
+            for (int waited = 0; waited < kReadWaitMs; waited += kSliceMs) {
+                double at = 0.0;
+                if (AVFrame* f = soundPad_->takeSound(*ears_, &at, kSliceMs))
+                    return hand(out, f, at, kAudioTrack, TrackKind::Audio);
+                if (soundPad_->ended()) break;
+                if (wantPicture_) break;   // the picture is what this reader is for
+                run_->wake();
+            }
+            if (!wantPicture_) return false;
+        }
+
+        if (!wantPicture_) return false;
+        for (int waited = 0; waited < kReadWaitMs; waited += kSliceMs) {
+            double at = 0.0;
+            if (AVFrame* f = picture_->take(&seen_, &at, kSliceMs))
+                return hand(out, f, at, kVideoTrack, TrackKind::Video);
+            // Ended *and* empty is the only false this returns: the range has run
+            // out, which is the element ending.
+            if (picture_->ended()) return false;
+            run_->wake();
+        }
+        return false;
+    }
+
+    /// Which half of the render this object is reading — and for the sound it is
+    /// also whether anything is listening at all.
+    ///
+    /// bro asks the pipeline's source for the video track alone and the ring's
+    /// source for the audio track alone, so this is not a hint: dropping the
+    /// listener when sound is not wanted is what stops the run queueing blocks
+    /// for a reader that will never take one. See `LivePadTap::listen`.
+    void setActiveTracks(const std::vector<uint32_t>& trackIds) override {
+        wantPicture_ = false;
+        wantSound_ = false;
+        for (uint32_t id : trackIds) {
+            if (id == kVideoTrack) wantPicture_ = true;
+            if (id == kAudioTrack) wantSound_ = true;
+        }
+        if (!wantSound_) ears_.reset();
     }
 
     /// Refused, and the caller knows: a graph produces the frames it produces in
@@ -599,8 +679,38 @@ public:
     bool seekTo(TimeNs) override { return false; }
 
 private:
-    OutputReader reader_;
+    static constexpr uint32_t kVideoTrack = 1;
+    static constexpr uint32_t kAudioTrack = 2;
+    static constexpr int kSliceMs = 100;
+    static constexpr int kReadWaitMs = 4000;
+
+    /// One frame off a pad, as the packet that carries it.
+    ///
+    /// `at` is the moment the run published it, which is the clock both kinds are
+    /// on: the element's own. See the header on why that is the wall clock and not
+    /// the position in the range.
+    bool hand(MediaPacket& out, AVFrame* f, double at, uint32_t track, TrackKind kind) {
+        out.trackId = track;
+        out.codec = Codec::Other;
+        out.kind = kind;
+        out.keyframe = true;         // every one of them is
+        out.pts = static_cast<TimeNs>(llround(std::max(0.0, at) * 1e9));
+        out.duration = 0;
+        out.data = wrapOwnedFrame(f);   // takes the reference this holds
+        return out.data != nullptr;
+    }
+
+    std::shared_ptr<OutputRun> run_;
+    std::shared_ptr<LivePadTap> picture_;
+    std::shared_ptr<LivePadTap> soundPad_;
+    /// This reader's queue of the mix, made on the first read that wants it — so
+    /// a reader that only ever wanted the picture never causes a block to be
+    /// queued at all.
+    std::shared_ptr<LiveSoundQueue> ears_;
     std::vector<TrackInfo> tracks_;
+    uint64_t seen_ = 0;
+    bool wantPicture_ = true;
+    bool wantSound_ = true;
 };
 
 // ── MediaSource ────────────────────────────────────────────────────────────

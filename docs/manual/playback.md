@@ -62,11 +62,21 @@ therefore its own render, which is also why nothing rebuilds under a moving hand
 like a node preview, it waits for the edit to hold still before opening the files
 again.
 
-**There is no sound.** The preview is a picture of the render, and the clips
-underneath are paused rather than left playing a mix that would drift away from
-it. Turn it off to listen to the edit — for everything but a filter on the mix,
-what you hear that way *is* the render's soundtrack, since a clip element plays
-at the clip's own volume and the compositor sums exactly those.
+**It has the render's own soundtrack.** What a preview is for is a statement
+about the whole programme — an `-af` chain, a `loudnorm`, an `amix` against a
+generator — and none of those is anything a clip element can play, so the preview
+carries the mix as well as the picture. The clips underneath stay parked: one of
+them playing under it would be that clip heard twice, once as itself and once
+through the mix.
+
+**When it cannot keep up, the sound wins.** A soundtrack stretched to match a
+slow render is a slower piece of music, and anything you decide while listening
+to it is a decision about the wrong thing. So the mix is made for every frame of
+the range, in order, and the *picture* is what gets dropped — the instant nearest
+to now is a true answer even when the ones in between were never made. A graph is
+the exception and can drop nothing: libavfilter holds every frame it has pushed at
+a sink until somebody takes it, so a pull skipped is memory grown rather than work
+saved, and a `filter_complex` slower than real time gaps its sound instead.
 
 A graph libavfilter will not have says so on the stage, in libavfilter's own
 words, rather than showing black.

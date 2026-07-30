@@ -66,6 +66,7 @@ extern "C" {
 #include <libavutil/frame.h>
 }
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -268,6 +269,7 @@ public:
             // reader looks for frames or for a level.
             if (!ears_.empty()) sound_ = true;
             const int rate = f->sample_rate > 0 ? f->sample_rate : 48000;
+            rate_ = rate;   // so a backlog can be quoted in seconds
             const int64_t hold = static_cast<int64_t>(kSoundHoldSeconds * rate);
             for (auto it = ears_.begin(); it != ears_.end();) {
                 std::shared_ptr<LiveSoundQueue> q = it->lock();
@@ -293,6 +295,28 @@ public:
             }
         }
         if (any) cv_.notify_all();
+    }
+
+    /// How much sound the fullest listener is holding, in seconds — and **−1
+    /// when nobody is listening at all**, which is a different answer rather than
+    /// a zero.
+    ///
+    /// One call for the two questions because a producer needs them together: it
+    /// is what a source of sound reads to decide whether to make more. With a
+    /// listener that is falling behind, the room in the queue *is* the pacing —
+    /// a render feeding a monitor runs at exactly the rate the monitor drains it,
+    /// which is real time, and no clock has to be consulted to arrange that. With
+    /// nobody listening there is no such regulator and the caller has to pace
+    /// itself; see `playback_output.h`.
+    double soundBacklog() const {
+        std::lock_guard<std::mutex> lock(m_);
+        const int rate = rate_ > 0 ? rate_ : 48000;
+        double most = -1.0;
+        for (const auto& w : ears_) {
+            if (auto q = w.lock())
+                most = std::max(most, static_cast<double>(q->samples_) / rate);
+        }
+        return most;
     }
 
     /// The next block this listener has not had, **owned by the caller**, or null
@@ -342,6 +366,7 @@ private:
     /// Everyone monitoring this pad. Weak, so that stopping is letting go — see
     /// `listen` — and pruned by `putSound` rather than by anybody's destructor.
     std::vector<std::weak_ptr<LiveSoundQueue>> ears_;
+    int rate_ = 0;   ///< of the last block through, for `soundBacklog`
 };
 
 /// Every pad of one session.

@@ -43,21 +43,69 @@
 // for the same reason `LiveSource` refuses it: forward is the only direction
 // there is.
 //
-// **Sound is not part of it.** A preview is a picture of the render, and the
-// sound you are listening to is the timeline's own — which is the same mix by a
-// cheaper route, since a clip element plays at the clip's volume and the
-// compositor sums exactly those. So `includeAudio` is turned off before the
-// source is built, which is not a saving at the margin: `TimelineSource` opens
-// an audio reader per clip in its constructor to answer `hasAudio()`, and a
-// preview that asked would open every file on the timeline to hand the samples
-// to nobody. What this does cost is that a filter on the *mix* is not heard,
-// which the manual says.
+// **Sound is part of it, and the sound is authoritative.** A preview used to be
+// a picture and nothing else, on the argument that the clips underneath were the
+// same mix by a cheaper route — true for everything except the thing a preview
+// exists for, which is a filter on the *whole programme*: an `-af` chain, a
+// `loudnorm`, an `amix` of a generator, none of which any clip element can play.
+// So the render's `mixInto` is published here beside its canvas and the element
+// plays both.
+//
+// What that needed was an answer to "what happens when the picture cannot keep
+// up and the sound can", and the answer is that **the sound wins**. A soundtrack
+// stretched to match a slow render is not the render's soundtrack — it is a
+// slower piece of music, and every judgement somebody makes listening to it is
+// about the wrong thing. Pictures, by contrast, are droppable: one is what the
+// output looks like at an instant, and the instant nearest to now is a true
+// answer even when the ones in between were never made. So:
+//
+//   - the mix is produced for **every** frame of the range, in order, because a
+//     gap in sound is audible in a way a missing picture is not;
+//   - the *composite* is skipped for a frame the render has arrived at late,
+//     which is what makes the sound keep up rather than merely claiming to —
+//     the picture is where nearly all of the cost is;
+//   - a **graph cannot be skipped**, because libavfilter holds every frame it
+//     has pushed at a sink until somebody takes it, so a pull skipped is memory
+//     grown rather than work saved. A graph preview too slow for real time
+//     therefore gaps its sound, and that is the shape of a pull rather than a
+//     decision made here.
+//
+// **A preview is therefore one render read by two elements, and the render runs
+// behind a tap.** That is not a flourish: bro opens a media element's source
+// twice — once for the pipeline and once for the audio ring it keeps ahead of
+// the mixer — so a source that built a render per open would build two renders
+// of the same edit and race them for the same decoders. So a *run* is shared by
+// token, publishes into the `LiveTap` (live_tap.h) a live capture session
+// publishes into, and both opens read pads of it. Picture: newest wins, which is
+// how a picture is dropped. Sound: a bounded queue per listener, which is how a
+// block never is.
+//
+// **The run produces nothing while nobody is asking.** A reader wakes it and the
+// demand expires; a preview left paused on screen — which is most of the time a
+// preview is on screen — costs what it always cost, nothing. While there *is* a
+// listener the queue's room is the pacing (a monitor drains at real time, so the
+// render runs at real time and no clock is consulted); with no sound in the
+// render there is no such regulator, and the run paces itself at the output rate.
+//
+// **The clock is the sound's, which is real time.** Pictures are stamped with the
+// moment they were published rather than with where they sit in the range, for
+// the reason `LiveSource` stamps them that way: an element told a picture is from
+// a moment already past will pump for more, and a render slower than real time
+// would be asked for frames faster than it can make them for as long as it ran.
+// The two numbers are the same whenever the render is keeping up, which is the
+// case this is tuned for; when it is not, the picture is older than the playhead
+// says and the sound is right, which is this file's whole trade written into one
+// timestamp.
 #pragma once
 
 #include "ffmpeg_export.h"
 
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 struct AVFrame;
@@ -65,6 +113,7 @@ struct AVFrame;
 namespace ffmpegbro {
 
 class FrameSource;
+class LiveTap;
 
 /// A render, registered so that an element can be pointed at it.
 ///
@@ -115,6 +164,12 @@ struct OutputFacts {
     double start = 0.0;   ///< where on the timeline the first frame sits
     double length = 0.0;  ///< seconds of it, 0 for a range with no end
     bool graph = false;   ///< libavfilter's answer rather than the compositor's
+    /// The soundtrack this render would have, which is the shape the preview's
+    /// audio track is described from. Zero on both when it has none — and that is
+    /// what a reader asks rather than `hasAudio()`, because a track has to be
+    /// described before a sample of it has been made.
+    int audioRate = 0;
+    int audioChannels = 0;
 };
 
 /// Build the source, say what it produces, and throw it away again.
@@ -128,6 +183,14 @@ struct OutputFacts {
 /// so the caller settles when it is about to show the picture and not before.
 ///
 /// False with `*err` set for a graph libavfilter refuses, in its own words.
+///
+/// **Settled without its sound**, which is the one thing this does not answer.
+/// Building the audio half opens a reader per clip — `TimelineSource`'s
+/// constructor does it to be able to answer `hasAudio()` at all — and settling
+/// happens on every graph edit, so it would be every file on the timeline opened
+/// to be told a number nobody has asked for. What comes back therefore has
+/// `audioRate` at zero whatever the render's sound would be; the run below is
+/// where that question is asked, once, by something that is about to play it.
 bool settleOutput(const OutputView& v, OutputFacts* facts, std::string* err);
 
 // ── One render, read a frame at a time ─────────────────────────────────────
@@ -148,28 +211,90 @@ public:
 
     /// Build the source for this view. False with `*err` set for a graph that
     /// will not parse.
-    bool open(const OutputView& v, std::string* err);
+    ///
+    /// `wantSound` decides whether the render is built with its soundtrack, and
+    /// it is a parameter rather than always-on because the audio half costs a
+    /// reader per clip — see `settleOutput`, which is the caller that passes
+    /// false.
+    bool open(const OutputView& v, bool wantSound, std::string* err);
 
     const OutputFacts& facts() const { return facts_; }
 
-    /// The next picture, as an RGBA frame **owned by the caller**, or null once
-    /// the range has run out.
+    /// One tick of the render: a picture, a block of sound, or both.
     ///
-    /// A copy of the compositor's canvas rather than a reference into it: the
-    /// source owns one buffer and overwrites it on the next call, and what this
-    /// hands back travels through a packet queue that outlives the call. It is
-    /// one frame in flight, not a queue of them — see `Wrapped` in
-    /// ffmpeg_backend.cpp for who frees it.
-    ///
-    /// `*at` is seconds from the start of the range, which is the element's own
-    /// clock; the timeline moment is `facts().start + *at`.
-    AVFrame* next(double* at);
+    /// Everything here is **owned by the caller**. The canvas is copied rather
+    /// than referenced because the compositor paints the next frame into the same
+    /// buffer, and the samples are copied because there is no buffer to reference
+    /// — `mixInto` adds into one this provides. See `Wrapped` in
+    /// ffmpeg_backend.cpp for who frees them afterwards.
+    struct Tick {
+        AVFrame* picture = nullptr;  ///< RGBA; null when skipped or past the end
+        AVFrame* sound = nullptr;    ///< packed float; null for a silent render
+        double at = 0.0;             ///< seconds from the start of the range
+        bool done = false;           ///< the range has run out; nothing follows
+    };
+
+    /// Render the next tick. `wantPicture` false composites nothing and still
+    /// produces the sound, which is how a late render catches up — and it is
+    /// honoured only for the compositor: see the note at the top about a graph
+    /// having nothing that can be skipped.
+    Tick next(bool wantPicture);
 
 private:
     std::unique_ptr<FrameSource> source_;
     OutputFacts facts_;
-    int64_t n_ = 0;        ///< the next frame's number in the range
-    int64_t total_ = 0;    ///< how many there are, or 0 for "until it stops"
+    int64_t n_ = 0;              ///< the next frame's number in the range
+    int64_t total_ = 0;          ///< how many there are, or 0 for "until it stops"
+    int64_t samplesDone_ = 0;    ///< of the mix, counted from the start of the range
+    std::vector<float> mix_;     ///< one tick's worth, reused
 };
+
+// ── One render, shared by everything playing it ────────────────────────────
+
+/// A render running behind a tap: the reader above, driven on a thread of its
+/// own, publishing `vout` and — when the render has sound — `aout`.
+///
+/// **Shared by token**, because bro opens one media element's source twice and
+/// two renders of one edit would be two sets of decoders on the same files. Held
+/// by `shared_ptr` from every reader, so the last one to let go stops the render;
+/// nothing else does, and `forgetOutput` deliberately does not — a token that no
+/// longer resolves is about what the *next* element would open.
+class OutputRun {
+public:
+    ~OutputRun();
+    OutputRun(const OutputRun&) = delete;
+    OutputRun& operator=(const OutputRun&) = delete;
+
+    const OutputFacts& facts() const { return facts_; }
+    const std::shared_ptr<LiveTap>& tap() const { return tap_; }
+
+    /// Somebody is waiting for something. The run produces while it is being
+    /// asked and idles a quarter of a second after the asking stops, which is
+    /// what makes a paused preview free — see the note at the top.
+    void wake();
+
+private:
+    friend std::shared_ptr<OutputRun> attachOutput(const std::string& src,
+                                                   std::string* err);
+    OutputRun() = default;
+    void loop();
+
+    OutputFacts facts_;
+    std::shared_ptr<LiveTap> tap_;
+    std::unique_ptr<OutputReader> reader_;
+    std::thread thread_;
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool quit_ = false;
+    /// When the demand runs out, on the steady clock in milliseconds.
+    int64_t until_ = 0;
+};
+
+/// The run behind this src, joining one that is already going or starting it.
+///
+/// Null with `*err` set when the token names no view or the graph will not parse
+/// — the same two refusals `OutputReader::open` has, answered here because this
+/// is where a source is built.
+std::shared_ptr<OutputRun> attachOutput(const std::string& src, std::string* err);
 
 } // namespace ffmpegbro

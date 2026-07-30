@@ -98,19 +98,18 @@ Honest list of what does not work:
   a subtitle path through bro's renderer, or an overlay drawn by this
   application over the program monitor — and the second has the harder half of
   the problem in it, which is that a soft track is styled by the *player*.
-- **Anything to listen to while the output is on screen.** `O` puts the render
-  on the program monitor — see
+- **A graph preview that keeps its sound when it cannot keep up.** The program
+  monitor carries the render's soundtrack now — see
   [the output instead of the clips](playback.md#the-output-instead-of-the-clips)
-  — and it is a picture and nothing else: the clips underneath are paused rather
-  than left playing a mix that would drift away from a preview made at whatever
-  rate it can be made at. For everything but a filter on the mix that costs
-  nothing, because turning the preview off *is* the render's soundtrack — a clip
-  element plays at the clip's own volume and the compositor sums exactly those.
-  What it does cost is that an `-af` chain on the whole programme cannot be
-  heard anywhere. Closing it means the preview source carrying a second track:
-  the mix is already there (`FrameSource::mixInto`) and what is not is an
-  interleave, a resampler and an answer to what happens when the picture cannot
-  keep up and the sound can.
+  — and the trade that made it possible is that a late *picture* is dropped so
+  the sound stays real time. The compositor can be skipped that way. A graph
+  cannot: libavfilter holds every frame it has pushed at a sink until somebody
+  takes it, so a pull skipped is memory grown rather than work saved, and a
+  `filter_complex` slower than real time therefore gaps its sound rather than
+  dropping its picture. Closing it means the sound leaving by a route the graph
+  does not pace — a second walk over the range, or a buffer measured in seconds
+  instead of frames — and both of those are a second answer to how far ahead a
+  preview is allowed to be.
 - **An editor for the cues themselves.** Everything here reads a subtitle file
   and writes one; nothing lets you type a line, retime one against the
   waveform, or split a cue at the playhead. The timeline has the lane that

@@ -120,8 +120,8 @@ console.log('\nthe clock');
     // The picture in front is the master clock, which is the rule transport.js
     // has always stated — and while this is on, the picture in front is the
     // render. So the playhead comes off the preview, and the clips are parked
-    // rather than played: this preview has no soundtrack, and a mix running
-    // beside a picture made at whatever rate it can be made at would drift.
+    // rather than played: the preview carries the render's own mix now, so a clip
+    // playing underneath it would be that clip heard twice.
     A.setPlayhead(0);
     pump(200);
     A.play();
@@ -133,6 +133,82 @@ console.log('\nthe clock');
     A.pause();
     pump(100);
     ok(out().paused, 'and pause stops the preview');
+}
+
+// ── the sound of the render ────────────────────────────────────────────────
+//
+// The preview was a picture and nothing else, on the argument that the clips
+// underneath were the same mix by a cheaper route. True of everything except what
+// a preview is for: a filter on the whole programme. So the render's own mix
+// comes out of the element, and both halves of that are asserted here —
+// that it is audible at all, and that it is *the render's*, which is proved by
+// silencing it with a filter on the mix and nothing else.
+//
+// **Measured at bro's mixer, not at the element.** An element with a src on it
+// says nothing about whether anything is audible; `getBusPeakL(0)` is what the
+// speakers are being handed. It is bro's own reading — post its pan law — so what
+// is checked is silent-versus-audible rather than a number.
+console.log('\nthe sound of the render');
+{
+    const probe = bro.ffmpeg.probe(media);
+    const hasSound = !!probe.streams && probe.streams.some((s) => s.kind === 'audio');
+    let ctx = null;
+    try { ctx = new AudioContext(); } catch (e) { ctx = null; }
+    if (!hasSound || !ctx) {
+        console.log(`  (skipped: ${!hasSound ? 'the file has no sound' : 'no audio engine'})`);
+    } else {
+        const loudest = () => {
+            let top = 0;
+            for (let i = 0; i < 30; i++) { pump(20); top = Math.max(top, ctx.getBusPeakL(0)); }
+            return top;
+        };
+        A.setPlayhead(0);
+        pump(200);
+        ok(loudest() < 0.001, 'nothing is coming out while the preview is paused');
+
+        A.play();
+        pump(400);
+        const heard = loudest();
+        ok(heard > 0.005, `playing the render is audible (master bus peak ${heard.toFixed(3)})`);
+        ok(clip.video.paused, 'and it is not the clip underneath, which is parked');
+        A.pause();
+        pump(300);
+
+        // The half no clip element can play: a filter on the *mix*. Silencing it
+        // there is the assertion worth having — the sound cannot be coming from
+        // anywhere but libavfilter's own render if a `volume=0` after the mix
+        // stops it.
+        // Off and on again around the insert, rather than left on and nudged: the
+        // token an element holds carries the *range*, so an edit that leaves the
+        // playhead where it is leaves the element pointed at the src it already
+        // has — and an assertion made after that is an assertion about the render
+        // from before the filter existed.
+        A.setOutputPreview(false);
+        A.graph.overlay.insert('audio/after-mix', 'volume', { params: { volume: '0' } });
+        pump(200);
+        A.setPlayhead(0);
+        A.setOutputPreview(true);
+        opened('the preview to rebuild around the filter');
+        ok(A.output.currentFacts().graph, 'a filter on the mix makes it libavfilter’s render');
+        A.play();
+        pump(600);
+        ok(loudest() < 0.001,
+           'and a volume=0 on the whole programme is heard — by there being nothing to hear');
+        ok(A.transport.t > 0.1, `while the picture goes on playing (${A.transport.t.toFixed(2)} s)`);
+        A.pause();
+
+        A.setOutputPreview(false);
+        A.graph.overlay.clear();
+        pump(200);
+        A.setPlayhead(0);
+        A.setOutputPreview(true);
+        opened('the preview without it');
+        A.play();
+        pump(400);
+        ok(loudest() > 0.005, 'taking the filter off brings the sound back');
+        A.pause();
+        pump(200);
+    }
 }
 
 console.log('\nmoving the playhead');

@@ -213,12 +213,20 @@ the same idea and the second of the same registry trick: the render with the
 can play it. `runExport`'s choice of `FrameSource` is made again there and
 nowhere else, so the picture on the program monitor is the render rather than a
 resemblance of one — which is what puts a generator with no clip, and a filter
-over the whole canvas, on the screen at all. Three consequences worth knowing
+over the whole canvas, on the screen at all. Four consequences worth knowing
 before touching it: a graph *pulls*, so there is no seeking inside one and the
 range is part of the token (a moved playhead is a new source); `settle` is
 separate from `define` because a spec changes on every drag and building one
-opens every input; and it carries no sound, so the transport pauses the clips and
-takes its clock from the preview. `playback_filter.h` is the same registry one
+opens every input — and it answers with no rate and no channel count, because
+sound is the half that would open every file on the timeline to be told a number
+nobody has asked for; it **carries the render's own soundtrack**, on which the
+sound is authoritative and a late composite is dropped, so the transport parks
+the clips rather than playing them (a clip playing under the preview is that clip
+heard twice, once as itself and once through the mix); and bro opens a media
+element's source *twice* — once for the pipeline, once for the audio ring it
+keeps ahead of the mixer — so a run is shared by token and published into the
+same `LiveTap` monitoring reads, or the same edit would be rendered twice and the
+two raced for one set of decoders. `playback_filter.h` is the same registry one
 turn earlier — one input with one chain — and the two prefixes (`/@fx/`, `/@out/`)
 are deliberately distinct.
 
