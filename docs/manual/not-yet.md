@@ -19,15 +19,6 @@ Honest list of what does not work:
   same badge covers one chain it need not: a resize on the way in *and* a filter
   of yours below the `scale`, where one reported size cannot say which of the two
   did it.
-- **Undo on the Encode and Write stages.** `Ctrl-Z` covers the edit — the
-  clips, the inputs, the canvas and the graph — and stops at the form; see
-  [Undo](document.md#undo) for why, which is that a control you just changed is
-  in front of you with its old value one keystroke away, and that a `Ctrl-Z`
-  pressed on the timeline which silently reverted a codec three stages away
-  would be worse than none. Whether that is the right line is a real question
-  and it has not been tested on anybody. What would have to come first is a
-  single "the settings changed" channel: the encode side has three change hooks
-  meaning three different things, and none of them is that.
 - **A generator with a place on the timeline.** A `testsrc` or a `color` plays
   on the program monitor now — `O` shows
   [the output itself](playback.md#the-output-instead-of-the-clips), and a render

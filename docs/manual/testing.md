@@ -198,6 +198,18 @@ that a clip is still being decoded by the same element after an undo — because
 that is the whole reason `open()` reconciles instead of rebuilding, and nothing
 else in the suite would notice if it stopped.
 
+Then **the other track**, which is the boundary asserted from both sides: a press
+on a stage about the timeline leaves the form alone, and a press on the encode
+side is about the form and adds no step to the edit's stack at all. It is driven
+through the *Start from* row, because a preset is the press this exists for — the
+test walks the row until one of them actually changes what will be written, since
+which preset differs from the default depends on what this build can encode. What
+comes back has to be the codec, the rate control and the quality it was, and the
+control in front of you has to be showing it: the form draws from `settings`, so
+an undo changes the model behind its back and a redraw that stopped happening
+would leave the preset's value on screen under the old settings. Arriving on the
+encode side is asserted *not* to be a step.
+
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).
 **Nothing in it compares pixels**, and that is deliberate rather than a gap: a

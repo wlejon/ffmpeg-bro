@@ -22,6 +22,10 @@ import * as output from './output.js';
 import * as timeline from './timeline.js';
 import * as levels from './levels.js';
 import * as exporter from './export.js';
+// The one channel saying the Encode and Write stages are set to something else.
+// Read from the module that owns the settings rather than through `exporter`,
+// because it is the fact and `exporter` is the screen over it.
+import { onSettingsChange } from './export/state.js';
 import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
 import { clock, timecode, basename, bytes } from './format.js';
 import { paintIcons, setIcon } from './icons.js';
@@ -537,18 +541,32 @@ function newDocument() {
     return true;
 }
 
+/// Which history a press belongs to: the stage you are standing on.
+///
+/// **The whole reason there are two.** A `Ctrl-Z` on the timeline that silently
+/// reverted a codec three stages away would be worse than no undo; so would one
+/// on the Write stage that quietly moved a clip. Asked here because the stage is
+/// the shell's business and neither history knows one exists.
+const historyTrack = () => {
+    const at = shell.currentStage();
+    return at === 'encode' || at === 'write' ? 'output' : 'edit';
+};
+
 /// One step back, and the screen put right afterwards.
 ///
 /// Refused out loud rather than silently, because `Ctrl-Z` doing nothing is
 /// indistinguishable from `Ctrl-Z` not being wired up — and this application had
-/// no undo at all until now, so that is the reading somebody arrives with.
+/// no undo at all until now, so that is the reading somebody arrives with. The
+/// refusal names the half it is about, since "nothing to undo" while the timeline
+/// plainly has a stack behind it reads as a bug rather than as a boundary.
 function stepHistory(back) {
-    if (back ? history.undo() : history.redo()) {
-        documentApplied();
-        timeline.draw();
+    const which = historyTrack();
+    if (back ? history.undo(which) : history.redo(which)) {
+        if (which === 'edit') { documentApplied(); timeline.draw(); }
         return true;
     }
-    flash(back ? 'Nothing to undo' : 'Nothing to redo');
+    const what = which === 'output' ? ' on this stage' : '';
+    flash((back ? 'Nothing to undo' : 'Nothing to redo') + what);
     return false;
 }
 
@@ -556,10 +574,35 @@ const btnUndo = el('doc-undo');
 const btnRedo = el('doc-redo');
 
 function drawHistory() {
-    if (btnUndo) btnUndo.disabled = !history.canUndo();
-    if (btnRedo) btnRedo.disabled = !history.canRedo();
+    const which = historyTrack();
+    if (btnUndo) btnUndo.disabled = !history.canUndo(which);
+    if (btnRedo) btnRedo.disabled = !history.canRedo(which);
 }
 history.onChange(drawHistory);
+
+// The settings changing is a step on the other track. One channel, announced by
+// every one of the encode side's three consequence hooks — see
+// `settingsChanged` in ui/export/state.js, which exists because recording this
+// reliably was impossible while there were three places to listen and no
+// guarantee of having found them all.
+// **Undo and nothing else.** The obvious second consumer is the workspace, and
+// it is deliberately not one: `remember()` runs when a render *starts*, so what
+// carries into the next run is what you actually wrote a file with rather than
+// whatever the form was last touched to. Writing it on every change looks like a
+// free improvement and is not — an option bag belongs to the muxer it was set on,
+// so a half-finished state saved on the way past comes back at boot attached to a
+// container that has never heard of it, and "an unknown option is an error, not a
+// shrug" then fails every render with a key nobody typed.
+onSettingsChange(() => history.recordOutput());
+
+// And what has to happen on the screen when they are put back. The form draws
+// every control from `settings`, so an undo has changed the model behind its
+// back in exactly the way a test that writes into `settings` does.
+history.onOutputRestored(() => {
+    exporter.redraw();
+    shell.drawSpine();
+    command.draw();
+});
 
 el('doc-open').addEventListener('click', openDocument);
 el('doc-save').addEventListener('click', () => saveDocument(false));
@@ -1361,8 +1404,15 @@ shell.initShell({
         return null;
     },
     changed: (id, leaving) => {
-        if (id === 'encode' || id === 'write') exporter.prepare();
-        else exporter.closeExport();
+        if (id === 'encode' || id === 'write') {
+            exporter.prepare();
+            // What `prepare()` fills in on the way over — a path, a size, the
+            // codecs, and on a first run a whole preset — is the stage arriving
+            // rather than a decision somebody took, so it becomes the baseline
+            // instead of a step. An undo offering to go back to "no filename"
+            // would be offering to undo having walked here.
+            history.rebaseOutput();
+        } else exporter.closeExport();
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
         if (id === 'sources') drawSources();
         // The device is opened when you arrive and given back when you leave.
@@ -1380,6 +1430,9 @@ shell.initShell({
             drawGraph();
         }
         command.draw();
+        // Which stack the buttons are about has just changed, even though
+        // neither stack has.
+        drawHistory();
     },
     state: stageState,
     warnings: (id) => (id === 'encode' || id === 'write' ? exporter.currentWarnings() : null),
@@ -1541,7 +1594,9 @@ globalThis.__ffmpegBro = {
     doc, documentOpened,
     // Undo, and the press that drives it. `history` is the model half and
     // `stepHistory` is that plus putting the screen back, which is the half a
-    // test of "does the picture follow" has to go through.
+    // test of "does the picture follow" has to go through — and the half that
+    // knows which of the two stacks a press belongs to, since that is the stage
+    // and the stage is the shell's.
     history, stepHistory,
     // The model's change channel. On the surface because the history's rule
     // about what counts as one step is stated in its vocabulary — a `move` is a

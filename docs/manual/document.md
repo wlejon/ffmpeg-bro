@@ -106,10 +106,28 @@ forty presses of `Ctrl`+`Z`.
 redraw, a tidy-up or an edit that came back to where it started never becomes a
 step that appears to do nothing when it is undone.
 
-**Undo does not reach the Encode and Write stages.** They are a form: the control
-you just changed is in front of you with its old value one keystroke away, and a
-`Ctrl`+`Z` pressed on the timeline that silently reverted a codec three stages
-away would be worse than no undo at all.
+**`Ctrl`+`Z` only ever changes what is in front of you.** There are two histories
+and the stage you are standing on decides which one a press is answered by: the
+edit — the clips, the inputs, the canvas, the graph — on the stages about the
+timeline, and the Encode and Write stages' settings on those two. A press on the
+timeline that silently reverted a codec three stages away would be worse than no
+undo at all, and so would one on the Write stage that quietly moved a clip.
+Neither stack can surprise you with the other's work, and the button says which
+one it is about: on the Write stage with nothing to go back to it reads *nothing
+to undo on this stage*.
+
+The form was outside history for a while on the argument that the control you just
+changed is in front of you with its old value one keystroke away. That is true of
+one control and false of the press that changes twenty: *Start from* rewrites the
+codec, the rate control, the quality, the preset and the pixel format at once, and
+the raw option editor and the stream list both rewrite whole bags. "What was it
+before I pressed that" has no other answer.
+
+Arriving on the encode side is not a step. Walking over there fills in a path, a
+size and the codecs from the timeline — and on a first run a whole preset — which
+is the stage arriving rather than a decision anybody took, so it becomes the
+baseline. An undo offering to go back to *no filename* would be offering to undo
+having walked there.
 
 Two things it deliberately does not disturb. Opening a document starts the
 history again, because undoing across an Open would land in the middle of
@@ -122,6 +140,14 @@ describes exactly as it already is costs nothing, and a clip of one keeps the
 `<video>` it already has. That is not a refinement, it is what makes undo usable
 — tearing down every decoder to put a crop back would take a second and blank
 the picture.
+
+The settings track goes back through `store.adopt`, which is the same reader a
+document and the workspace both go through — so a state put back is sanitised
+exactly as one read off the disk is, and there is one answer to what a stored
+container means. Both tracks are the same stack with the same three rules; they
+differ in what a state *is* and in what putting one back means, and in nothing
+else, because two copies of the coalescing rule would be two answers to what one
+gesture is.
 
 ## What it is not
 

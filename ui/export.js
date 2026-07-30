@@ -25,7 +25,8 @@ import { el, div, put, byId, show } from './dom.js';
 import { bytes, clock } from './format.js';
 
 import { settings, preview, currentJob, setJob, onJobChange, isRendering,
-         activeVideoCodec, activeAudioCodec, outputFps } from './export/state.js';
+         settingsChanged, activeVideoCodec, activeAudioCodec,
+         outputFps } from './export/state.js';
 import { videoOptions } from './export/options.js';
 import { buildSpec, previewSpec, range, defaultPath, specSources,
          renderSubject } from './export/spec.js';
@@ -67,14 +68,19 @@ export function initExport(refs, h) {
     // the frame that becomes true, not the next time something redraws.
     onJobChange(() => { if (hooks.workspace) hooks.workspace(); });
 
+    // **Three hooks, and every one of them announces the same fact first.** The
+    // three are consequences — see `settingsChanged` in export/state.js — and
+    // wrapping them here is what makes that channel complete: a control cannot
+    // reach the settings without going through one of these, so it cannot change
+    // them without saying so.
     initForm({ settings: el_.settings, advanced: el_.advanced, dest: el_.dest,
                format: byId('ex-format-opts') }, {
-        changed: after,
-        tweaked: () => { invalidateCandidate(); updateSummary(); },
+        changed: said(after),
+        tweaked: said(() => { invalidateCandidate(); updateSummary(); }),
         // The same third hook the stream list has, and it means the same thing:
         // a control that changes what is *in* the file rather than what the
         // picture looks like only re-says what will be written.
-        restated: updateSummary,
+        restated: said(updateSummary),
     });
     // The stream list changes what is *in* the file and not what the picture
     // looks like, so a language or a disposition must not throw away a
@@ -82,8 +88,8 @@ export function initExport(refs, h) {
     // stream was added, removed or re-coded); `restated` only re-says what will
     // be written, which is the summary, the spine and the command bar.
     initStreams(el_.streams, {
-        changed: () => { drawStreams(); updateSummary(); },
-        restated: updateSummary,
+        changed: said(() => { drawStreams(); updateSummary(); }),
+        restated: said(updateSummary),
     });
     initPreview({ stage: byId('ex-pv-stage-host'), controls: byId('ex-pv-controls'),
                   stats: byId('ex-pv-stats') }, {
@@ -91,12 +97,14 @@ export function initExport(refs, h) {
         status: () => lastPoll,
         mark: markPreviewAt,
     });
+    // The range is in `settings` too — `rangeIn`/`rangeOut` are what the render
+    // walks — so dragging an end of the strip is the settings changing.
     initStrip({ canvas: byId('ex-strip-c'), nums: byId('ex-range-nums'),
                 marker: byId('ex-strip-head'), all: byId('ex-range-all') }, {
         previewRange,
         movePreviewTo: (t) => { preview.at = t; },
-        changed: () => { invalidatePreview(); drawAll(); },
-        tweaked: updateSummary,
+        changed: said(() => { invalidatePreview(); drawAll(); }),
+        tweaked: said(updateSummary),
     });
     initProgress(el_.progress, {
         back: () => { showPanel('form'); drawAll(); },
@@ -202,6 +210,15 @@ function after() {
     drawAll();
 }
 
+/// The one channel, in front of any of the three consequences.
+///
+/// **Announced after the consequence rather than before**, and that ordering is
+/// load-bearing: `after()` calls `clampToEncoder()`, which is itself a change to
+/// the settings — a preset's bitrate pulled inside what the encoder will take —
+/// so announcing first would record a state the form was never actually in and
+/// leave the clamp to be picked up by whatever changed next.
+const said = (fn) => () => { fn(); settingsChanged(); };
+
 // ── the intent row ─────────────────────────────────────────────────────────
 
 function drawIntents() {
@@ -211,7 +228,12 @@ function drawIntents() {
         text: it.label,
         title: it.hint,
         'data-intent': it.id,
-        on: { click: () => { if (applyIntent(it.id)) { invalidatePreview(); drawAll(); } } },
+        // The press this application most needed an undo for: a preset rewrites
+        // the codec, the rate control, the quality, the preset and the pixel
+        // format at once, and "what was it before" has no other answer.
+        on: { click: () => {
+            if (applyIntent(it.id)) { invalidatePreview(); drawAll(); settingsChanged(); }
+        } },
     })));
     show(el_.intentCustom, !active);
 }

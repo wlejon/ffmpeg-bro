@@ -190,6 +190,44 @@ export function setJob(v) {
 
 export function onJobChange(fn) { watchers.push(fn); }
 
+// ── the settings changed ───────────────────────────────────────────────────
+//
+// **One channel saying that, and three hooks saying what to do about it.** The
+// encode side has always had the second: `changed` rebuilds the rows and throws
+// away the candidate render, `tweaked` keeps the candidate and re-says the
+// summary, `restated` only re-says what will be written. Those are three
+// different *consequences*, and every one of them fires after `settings` has
+// been mutated — so none of them was the fact itself, and anything wanting to
+// know that the form is now different from what it was had three places to
+// listen and no guarantee it had found all of them.
+//
+// This is the fact. `ui/export.js` announces it from all three hooks and from
+// the preset row, and the one thing that cares about the fact rather than about
+// any of the consequences reads it here: undo, which cannot record a step it was
+// not told about.
+//
+// **Not the workspace**, which is the obvious second reader and is deliberately
+// not one. `store.remember()` runs when a render starts, so what carries into
+// the next run is what a file was actually written with; saving on every change
+// instead means saving states nobody finished, and an option bag belongs to the
+// muxer it was set on — so one caught on the way past comes back at boot
+// attached to a container that has never heard of it, and an unknown option is
+// an error rather than a shrug.
+//
+// Deliberately carries **nothing about what changed**. A consumer that needed
+// that would be a fourth consequence hook wearing this one's name; both readers
+// compare states, which is the answer that cannot drift out of step with what
+// the settings actually say.
+
+const settingsWatchers = [];
+
+/// Say that the Encode or Write stage is now set to something else.
+export function settingsChanged() {
+    for (const w of settingsWatchers) w();
+}
+
+export function onSettingsChange(fn) { settingsWatchers.push(fn); }
+
 // ── what the settings come to ──────────────────────────────────────────────
 
 /// The video encoder in force. Empty in `settings` means "whatever the

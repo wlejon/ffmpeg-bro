@@ -229,10 +229,11 @@ export function open(doc) {
     // everything pinned to a clip that is no longer open — so an overlay adopted
     // first would be stripped by the tidying that followed it.
     overlay.adopt(d.graph);
-    // **Only when the document has any.** A history state deliberately carries
-    // no `output` — undo is about the edit, not about a form — and an absent key
-    // has to leave the Encode and Write stages exactly as they are rather than
-    // reset them to a default nobody chose.
+    // **Only when the document has any.** An *edit* history state deliberately
+    // carries no `output` — a `Ctrl-Z` on the timeline must not reach the form,
+    // which is why the settings are a second stack rather than part of this one —
+    // and an absent key has to leave the Encode and Write stages exactly as they
+    // are rather than reset them to a default nobody chose.
     store.adopt(d.output, store.DOCUMENT_KEYS);
     changed('document');
     return { clips: made, skipped };

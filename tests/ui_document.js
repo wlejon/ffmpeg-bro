@@ -429,15 +429,80 @@ A.stepHistory(false);
 pump(80);
 same(A.graph.overlay.inserts().length, 1, 'and redoing it puts it back');
 
-// What undo is deliberately not about.
+// What an undo of the *edit* is deliberately not about. Two tracks, and a press
+// on a stage that is about the timeline must not reach across to the form.
 A.exporter.currentSettings().quality = 33;
 A.setLayout('grid');
 pump(60);
 A.stepHistory(true);
 pump(60);
 same(A.exporter.currentSettings().quality, 33,
-     'undo leaves the Encode stage alone — a history state carries no output');
+     'undo on the timeline leaves the Encode stage alone — an edit state carries no output');
 same(A.project.layout, 'stack', 'while undoing the edit that was made beside it');
+
+// ── the other track ────────────────────────────────────────────────────────
+//
+// `Ctrl-Z` is answered by the history belonging to the stage it was pressed on,
+// which is the whole of the argument that kept the form out of history: a press
+// must only ever change what is in front of you. What makes it recordable at all
+// is the one channel — `onSettingsChange` — since the encode side's three hooks
+// are three consequences of the same fact and listening for a consequence means
+// listening in three places and hoping.
+{
+    const S = A.exporter.currentSettings();
+    const edits = H.depth('edit');
+    A.shell.goTo('encode');
+    pump(250);
+
+    ok(!H.canUndo('output'),
+       'arriving on the encode side is not a step: a path and a size filled in from the ' +
+       'timeline are the stage arriving, not a decision anybody took');
+
+    // The press this exists for. A preset rewrites the codec, the rate control,
+    // the quality, the preset and the pixel format at once, and "what was it
+    // before" has no other answer.
+    const intents = Array.from(document.querySelectorAll('#ex-intent-list [data-intent]'));
+    ok(intents.length > 1, `there is more than one starting point to move between (${
+        intents.length})`);
+    const was = { codec: S.videoCodec, rate: S.rate, quality: S.quality };
+    let moved = null;
+    for (const b of intents) {
+        b.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(120);
+        if (S.videoCodec !== was.codec || S.rate !== was.rate || S.quality !== was.quality) {
+            moved = b.getAttribute('data-intent');
+            break;
+        }
+    }
+    ok(!!moved, `a preset changed what will be written (${moved})`);
+    same(H.depth('output'), 1, 'and that is one step on the encode side’s own history');
+    same(H.depth('edit'), edits, 'and no step at all on the edit’s — they are two stacks');
+
+    ok(A.stepHistory(true), 'undo on this stage goes back');
+    pump(120);
+    same(S.videoCodec, was.codec, 'to the codec it was');
+    same(S.rate, was.rate, 'and the rate control it was');
+    same(S.quality, was.quality, 'and the quality it was');
+    // The form is drawn from `settings`, so an undo has changed the model behind
+    // its back exactly as a test writing into it does. If nothing redrew, the
+    // control would still be showing the preset's value.
+    const shown = document.querySelector('[data-f="vcodec"]');
+    ok(!shown || shown.value === (was.codec || shown.value),
+       'and the control in front of you shows it, because the form is redrawn from the settings');
+
+    ok(A.stepHistory(false), 'redo goes forward again');
+    pump(120);
+    ok(S.videoCodec !== was.codec || S.rate !== was.rate || S.quality !== was.quality,
+       'to the preset that was picked');
+
+    // And the boundary from the other side: the edit's stack is still there and
+    // is what the same key reaches on a stage about the timeline.
+    A.shell.goTo('compose');
+    pump(200);
+    same(H.depth('edit'), edits, 'the edit’s history is untouched by any of it');
+    ok(H.canUndo('edit') === edits > 0,
+       'and back on the timeline the same key is about the edit again');
+}
 
 // And an Open is not a step: undoing across one would land in the middle of
 // somebody else's edit.
