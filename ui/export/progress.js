@@ -107,14 +107,22 @@ function running(p, pct) {
         // ten minutes says "stuck" rather than "streaming".
         open ? null : bar(pct),
         twoPass,
-        // A render that copies packets has no output frames to count — what it
-        // writes is packets and how many there are is not a thing anybody knows
-        // before reading them, which is why `totalFrames` is zero. "frame 40 of
-        // 0" is the sort of readout that looks like a bug in the progress bar,
-        // so it says what it is counting instead.
-        line(!p.totalFrames ? `${p.frames} packets copied`
-                            : open ? `frame ${p.frames}`
-                                   : `${pct}% · frame ${p.frames} of ${p.totalFrames}`, 'mono'),
+        // **Four shapes, because the count and the total are two questions.** A
+        // render that copies packets has no output frames at all — what it writes
+        // is packets and how many there are is not a thing anybody knows before
+        // reading them. A job with no end counts frames and has no total. And a
+        // paced render (`-fps_mode vfr`) counts frames, has no total either — the
+        // graph decides how many it makes — and still has an honest percentage,
+        // because that one is computed against the range's *length*. So
+        // `totalFrames == 0` no longer says which of the three it is and `packets`
+        // is what tells them apart: "frame 40 of 0" looks like a bug in the
+        // progress bar, and "40 packets copied" about a render encoding pictures
+        // is worse, being wrong and reading as right.
+        line(p.packets ? `${p.frames} packets copied`
+                       : open ? `frame ${p.frames}`
+                       : !p.totalFrames ? `${pct}% · frame ${p.frames}`
+                                        : `${pct}% · frame ${p.frames} of ${p.totalFrames}`,
+             'mono'),
         shapeLine(p, kind),
         line(`${p.fps.toFixed(1)} fps · ${elapsed(p.elapsed)} so far` +
              (left > 0.5 ? ` · about ${elapsed(left)} left` : '') +
@@ -144,7 +152,7 @@ function done(p) {
         line(kind === 'stream' ? `Sent to ${p.path}`
                                : `Wrote ${p.pieces > 0 ? `${p.pieces + 1} files` : basename(p.path)}`,
              'good'),
-        line(`${p.frames} ${p.totalFrames ? 'frames' : 'packets'} · ` +
+        line(`${p.frames} ${p.packets ? 'packets' : 'frames'} · ` +
              `${bytes(p.bytes)}${kind === 'stream' ? ' sent' : ''} · ` +
              `${elapsed(p.elapsed)} at ${p.fps.toFixed(1)} fps`, 'mono dim'),
         line(p.path, 'dim'),
@@ -168,8 +176,10 @@ function stopped(p, pct) {
         bar(pct, 'stopped'),
         line((cancelled ? 'Stopped' : 'Export failed') + (p.error ? `: ${p.error}` : ''),
              cancelled ? 'dim' : 'ex-failed'),
-        cancelled ? line((p.totalFrames ? `${p.frames} of ${p.totalFrames} frames were written`
-                                        : `${p.frames} packets were copied`) +
+        cancelled ? line((p.packets ? `${p.frames} packets were copied`
+                                    : p.totalFrames
+                                        ? `${p.frames} of ${p.totalFrames} frames were written`
+                                        : `${p.frames} frames were written`) +
                          ', and the part it got to is playable', 'mono dim') : null,
         cancelled ? line(p.path, 'dim') : null,
         said(),

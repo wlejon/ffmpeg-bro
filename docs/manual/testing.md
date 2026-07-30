@@ -588,6 +588,22 @@ checked too — a pass 2 with no statistics, a bitstream filter this build lacks
 an option it does not have, an expression that will not parse, a decoder option
 no decoder takes.
 
+And **`-fps_mode vfr`**, which is about timestamps rather than about bytes and is
+checked by reading them out of the container. The graph is deliberately *unevenly*
+spaced — a 50 fps source with `select` keeping two frames in every four, so the
+gaps are one fiftieth then three — because anything constant would pass under
+either mode and prove nothing: what is asserted is that the first gap is a
+fiftieth and the second is three of them, which no frame number can express, and
+that the same graph under `cfr` comes back on an even grid. The container's own
+time base has to be fine enough to hold those, which is the second half of the
+same check. The soundtrack is compared against the *other* walk rather than
+against a number, because the paced walk covers up to each frame's own moment and
+owes whatever the last frame lasts — so the two must come out the same length,
+and it must reach past the last picture to the end of the range. All three
+refusals are checked by their sentences: a composited render, a render mapping a
+graph pad, and a mode this renderer does not perform (`passthrough`), which is
+refused by name rather than mapped onto one it does.
+
 `exporttest` renders a timeline and then opens what it wrote, which is the only
 way to check the things nobody can see until the render is over: that a clip
 lands in the rectangle it was given and the rest of the canvas stays black,
@@ -630,7 +646,9 @@ the range is walked twice with both passes naming one statistics file and the
 command bar printing two invocations; that a forced keyframe at a cut point
 **follows the clip when the clip moves**, which is the whole claim of deriving
 it rather than copying it; that the field order prints as the two things it is;
-that `-fps_mode` has no picker and is stated instead; and that a bitstream
-filter chain is offered only for the codec the stream is encoded with, runs in
-the order shown, carries libavcodec's own option table and prints as one
-`-bsf:v` the way `av_bsf_list_parse_str` takes it.
+that `-fps_mode` is a choice of two whose variable half is **present and refused,
+with its reason**, while the render composites — and becomes available, reaches
+the spec and prints without an `-r` the moment there is a filter on the graph; and
+that a bitstream filter chain is offered only for the codec the stream is encoded
+with, runs in the order shown, carries libavcodec's own option table and prints as
+one `-bsf:v` the way `av_bsf_list_parse_str` takes it.

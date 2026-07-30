@@ -168,14 +168,28 @@ Honest list of what does not work:
   makes its own frames and nothing has to pull one. A graph whose filters want a
   graphics card is refused the same way, because `-filter_hw_device` has nowhere
   to be said on this stage.
-- **Variable frame rate out.** `-fps_mode` has one honest value here and the
-  command says it: `cfr`. Both render paths walk the range forward at the output
-  rate and stamp each frame with its number — the compositor because it samples
-  the edit at *t*, the graph because the writer numbers what leaves the sink —
-  so a variable-rate output is not something either can express, and no control
-  offers it. Making one possible means the `FrameSource` seam handing over a
-  timestamp with each frame instead of being asked for an instant, which is a
-  change to the one interface both paths are measured against.
+- **A variable frame rate out of the *compositor*.** A graph's own frame times
+  reach the file now — see [Frame timing](output.md#frame-timing) — because frames
+  leaving a libavfilter sink carry timestamps and the writer keeps them instead of
+  numbering them. The track stack cannot join in, and the reason is not a missing
+  line: `canvasAt(t)` composites the edit at whatever instant it is handed, so
+  there is no set of times belonging to it, and a stack of clips at three
+  different rates has no answer to *whose* timestamps that is not invented. So the
+  control is present and refused with that sentence rather than absent, and a spec
+  asking for it is refused before a file is opened. What would close it is a
+  decision about which clip's clock an output frame is on — which is a real piece
+  of design and not an interface change; the seam grew the paced pull it needed
+  (`FrameSource::pacedClock`/`nextFrame`, answering "no" by default) and the
+  compositor is the source that honestly answers no.
+
+  Two smaller things sit inside the half that does work. A render whose video
+  streams read named **pads** is refused `vfr` as well, because each pad leaves
+  the graph at its own moments and one walk over the frames has one timestamp to
+  hand over — writing them as renders of their own is the workaround and giving
+  each stream its own clock is the fix. And `passthrough` is not offered at all:
+  it differs from `vfr` only in handing libavcodec a timestamp that does not
+  advance, which is a render that fails at a frame rather than a mode, so what
+  this does with a repeated timestamp is drop the picture and say how many.
 - **Genuinely interlaced content.** The field-order control puts the encoder in
   field mode and marks the frames, which is the whole of what ffmpeg does — but
   what this application composites is a progressive RGBA canvas, so it is a true

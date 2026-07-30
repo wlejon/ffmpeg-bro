@@ -23,7 +23,7 @@ import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
          muxerInfo, optionsOf, formatOptionsOf,
          rateModes, qualityRange } from './capabilities.js';
 import { defaultPath, withExtension, withPattern, withoutPattern,
-         range } from './spec.js';
+         range, freshSpec, effectiveFpsMode } from './spec.js';
 import { cutPoints } from './options.js';
 import { isHardwareEncoder, deviceOfEncoder, encodeCost,
          chooseFor, applyChoice } from '../hardware.js';
@@ -1109,20 +1109,70 @@ const THREAD_TYPES = [{ id: '', label: 'auto' }, { id: 'frame', label: 'frame' }
                       { id: 'slice', label: 'slice' },
                       { id: 'frame+slice', label: 'frame + slice' }];
 
+const FPS_MODES = [
+    { v: 'cfr', l: 'Constant', title: 'The range walked at the output rate, each frame '
+                                    + 'stamped with its number' },
+    { v: 'vfr', l: 'Variable', title: 'The filter graph’s own frame times, kept' },
+];
+
 function timingRows() {
     const rows = [];
 
-    // **`-fps_mode` is stated, not chosen.** This renderer walks the range
-    // forward at a fixed output rate and stamps every frame with its index —
-    // both paths do, the compositor because it samples the edit at t and the
-    // graph because the writer numbers what comes out of the sink. So `cfr` is
-    // not a setting, it is a fact, and a picker offering `vfr` or `passthrough`
-    // would be offering two things this render cannot produce.
-    rows.push(row('Frame timing', span('-fps_mode cfr', 'mono dim')));
+    // **`-fps_mode` is two values here, and only one of them is ever available.**
+    // `cfr` walks the range at the output rate and stamps each frame with its
+    // number; `vfr` keeps the frame times libavfilter put on the pictures, which
+    // is what makes an `fps`, a `select` or a `framestep` in the graph come out
+    // as the rate it made rather than sped up or slowed down by the ratio.
+    //
+    // The compositor has no such times — it answers for whatever instant it is
+    // asked about, and a stack of clips at different rates has no answer to
+    // "whose?" — so a render that composites is constant and the control **says
+    // so** rather than disappearing. Same for a second picture leaving the graph
+    // by a named pad, each of which produces at its own moments. `ffmpeg-bro`'s
+    // whole posture is that a refusal names its reason; `pattern_type=glob` on
+    // the Write stage is the same shape.
+    //
+    // `effectiveFpsMode()` is the one home for which of the two is in force —
+    // the spec sent to the renderer and the printed command read the same
+    // function, so the sentence below cannot come to disagree with the file.
+    //
+    // `freshSpec()` rather than `currentSpec()`: the memo in spec.js is
+    // documented as living for exactly one synchronous answer, and a form drawn
+    // from whatever the last `warnings()` walk left in it would be a sentence one
+    // edit behind. These rows are only drawn with Advanced open, so the build is
+    // paid for by whoever opened it.
+    const spec = freshSpec();
+    const inForce = effectiveFpsMode(spec);
+    const padFed = (spec.streams || []).some((s) => s && s.kind === 'video' &&
+                                                    String(s.source || '').startsWith('pad:'));
+    const canVary = !!spec.filterGraph && !padFed;
+    rows.push(row('Frame timing', btns([
+        segmented('fpsmode', FPS_MODES.map(
+            (m) => (m.v === 'vfr' && !canVary
+                ? Object.assign({}, m, { disabled: true,
+                                         title: 'Only a filter graph has frame times of its '
+                                              + 'own to keep' })
+                : m)), settings.fpsMode,
+            (v) => { settings.fpsMode = v; drawForm(); hooks.changed(); }),
+        span(`-fps_mode ${inForce}`, 'mono dim'),
+    ])));
     rows.push(row('', note(
-        'Constant, by construction: the render walks the range at the output rate and ' +
-        'stamps each frame with its number. Variable frame rate is not something either ' +
-        'render path can express, so it is not offered.')));
+        canVary
+            ? (inForce === 'vfr'
+                ? 'The pictures reach the file with the timestamps libavfilter gave them, on ' +
+                  'the graph’s own clock — so a rate change inside the graph comes out as ' +
+                  'itself. A frame whose timestamp does not advance is dropped, which is what ' +
+                  'ffmpeg’s `vfr` means. The range still says where the file ends.'
+                : 'The render walks the range at the output rate and stamps each frame with ' +
+                  'its number. Variable would keep the graph’s own frame times instead.')
+            : (padFed
+                ? 'Variable is unavailable because a stream here is fed from a graph pad: ' +
+                  'each pad leaves the graph at its own moments, and one walk over the frames ' +
+                  'has one timestamp to give. Map the composite, or write the pads as renders ' +
+                  'of their own.'
+                : 'Variable is unavailable because this render composites the timeline. The ' +
+                  'compositor answers for any instant it is asked about, so it has no frame ' +
+                  'times of its own to keep — put the rate change in the graph and it does.'))));
 
     rows.push(row('Field order', segmented('fieldorder', FIELD_ORDERS, settings.fieldOrder,
                                            (v) => { settings.fieldOrder = v; drawForm();

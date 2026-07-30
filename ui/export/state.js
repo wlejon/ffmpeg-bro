@@ -59,6 +59,15 @@ export const settings = {
     keyframeTimes: '',          // "1.5,4,8" — seconds into the output
     keyframeExpr: '',           // the body of `expr:`, without the prefix
 
+    // `-fps_mode:v`. `cfr` walks the range at the output rate and stamps each
+    // frame with its number; `vfr` keeps the *filter graph's* own frame times,
+    // which is only a thing a graph has — the compositor answers for any instant
+    // it is asked about, so it has no times of its own. Held as a preference
+    // rather than as an assertion about this render: `buildSpec()` sends `cfr`
+    // for a render that composites, and the control says so instead of vanishing.
+    // See `effectiveFpsMode()` there and ExportSettings::fpsMode.
+    fpsMode: 'cfr',
+
     // "" is progressive and is what a composited canvas is. `tt`/`bb` put the
     // encoder into field mode *and* mark the frames, which are two halves of
     // one statement — see ExportStream::fieldOrder.

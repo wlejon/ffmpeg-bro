@@ -296,6 +296,15 @@ namespace {
 /// without a second sorting stage. A render with nothing composed in it has no
 /// frame loop at all and the packets drive the job.
 ///
+/// **The frame loop asks two different sources for its next frame, and stays one
+/// loop.** `-fps_mode cfr` walks the grid and asks the edit what it looks like at
+/// `t`; `vfr` asks the source for the frame it has and takes the time with it
+/// (`FrameSource`'s paced pull). Everything past that — the pads, the sound, the
+/// copied packets, the status — is the same act in both, which is why the two
+/// answers are five lines at the top of the body rather than a second loop with
+/// one word changed in every line of it. Which walk it is, is decided once — the
+/// `paced` flag below — and read from there.
+///
 /// It leaves `st` carrying a terminal state only when the *job* is over —
 /// failure or cancellation. A pass that finished cleanly leaves it Running, so
 /// the next one carries on and the terminal status is published once, at the
@@ -360,6 +369,34 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     } else {
         source = std::make_unique<TimelineSource>(s, std::move(clips));
     }
+
+    // ── which of the two walks this render is ──────────────────────────────
+    //
+    // `cfr` steps the range forward at the output rate and stamps each frame
+    // with its number; `vfr` takes the frames the source makes and the times it
+    // says they are. Asked *of the source* rather than worked out from the spec,
+    // because whether there are frame times to keep is libavfilter's answer and
+    // nothing outside it knows until the graph is configured — a graph with no
+    // pad naming itself the picture has no clock to read at all.
+    //
+    // `startExport` has already refused `vfr` for a render with no graph in it
+    // and for one that composes nothing, so what is left here is the graph that
+    // never said which pad is the composite.
+    const AVRational clock =
+        source && s.fpsMode == "vfr" ? source->pacedClock() : AVRational{0, 1};
+    const bool paced = clock.num > 0 && clock.den > 0;
+    if (s.fpsMode == "vfr" && !paced) {
+        st.state = ExportStatus::State::Failed;
+        st.error = "a variable frame rate is the graph's own frame times, and this graph "
+                   "never said which of its pads the picture is — so there is no clock to "
+                   "read them on. Label one pad vout, or render at a fixed rate";
+        st.elapsedSec = secondsSince();
+        setStatus(st);
+        LOG_ERROR("export failed: %s", st.error.c_str());
+        reportNote(AV_LOG_ERROR, "render", st.error);
+        return;
+    }
+
     const bool wantAudio = source && source->hasAudio();
 
     // The packet path, opened before the writer because a copied stream is
@@ -426,7 +463,12 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     // settings because only libavfilter knows whether the last pad kept its
     // pictures on the card.
     AVBufferRef* const hwFrames = source ? source->hwFrames() : nullptr;
-    if (!writer.open(s, wantAudio, &err, &copies, &subs, hwFrames)) {
+    // And the clock the pictures arrive on, for the same reason and at the same
+    // moment: a video encoder that will carry the graph's own timestamps has to
+    // be *opened* on the base they are exact in, and by the first frame the
+    // header has gone down. `{0, 1}` is the fixed-rate walk, which is `1/fps`.
+    if (!writer.open(s, wantAudio, &err, &copies, &subs, hwFrames,
+                     paced ? clock : AVRational{0, 1})) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
         st.elapsedSec = secondsSince();
@@ -441,22 +483,130 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
     const int channels = s.audioChannels;
     int64_t samplesWritten = 0;
 
+    /// Every soundtrack this file has, brought up to `outSeconds` into the
+    /// output.
+    ///
+    /// **One home for the accumulator, because there are two callers and they
+    /// have to agree.** The count is taken from the start of the render rather
+    /// than per frame, so rounding never loses or repeats a sample at a frame
+    /// boundary — and the paced walk needs the same block twice, once per frame
+    /// and once for the tail the last frame's own duration is, which as two
+    /// copies of this would be two places for that guarantee to drift. One count
+    /// for every soundtrack, because they are all the same seconds of the same
+    /// render; what differs is only where each one's samples come from.
+    auto soundUpTo = [&](double outSeconds) {
+        if (!source || (!writer.hasAudio() && padAudio.empty())) return true;
+        const int64_t upTo = std::llround(outSeconds * rate);
+        const int frames = static_cast<int>(std::max<int64_t>(0, upTo - samplesWritten));
+        if (frames <= 0) return true;
+        const double from = s.startTime + double(samplesWritten) / rate;
+        // Only where a stream is fed by the mix. `hasAudio()` counts exactly
+        // those, which is what keeps a render whose only sound comes off a pad
+        // from decoding every clip's soundtrack to hand it to nobody.
+        if (writer.hasAudio()) {
+            mix.assign(static_cast<size_t>(frames) * channels, 0.0f);
+            source->mixInto(mix.data(), from, frames, rate, channels);
+            if (!writer.writeAudio(mix.data(), frames, &err)) return false;
+        }
+        for (const auto& p : padAudio) {
+            // Its own buffer, because it is its own soundtrack: summed into the
+            // mix's it would be one stream carrying both.
+            padMix.assign(static_cast<size_t>(frames) * channels, 0.0f);
+            if (!source->padMixInto(p.label, padMix.data(), from, frames, rate, channels))
+                continue;
+            if (!writer.writeAudioTo(p.desc, padMix.data(), frames, &err)) return false;
+        }
+        samplesWritten = upTo;
+        return true;
+    };
+
     st.stage = composes ? "rendering" : "copying";
     // A copy is not measured in output frames: what it writes is packets, and
     // how many there are is not a thing anybody knows before reading them. Zero
     // is the honest answer, the same one an endless input gives — the progress
     // below comes from the copy's own clock instead.
     if (!composes) { st.framesTotal = 0; }
+    // **And neither is a paced walk**, for the same reason and with the same
+    // honest zero: how many frames the graph will make between here and the end
+    // of the range is what nobody knows until it has made them. `ExportStatus::
+    // framesTotal` documents zero as "nobody knows"; the progress below is
+    // computed against *time*, which both walks have, rather than against a
+    // count one of them has to invent.
+    if (paced) { st.framesTotal = 0; }
+    // Which is why the *unit* has to be said out loud now: with two reasons for
+    // a zero total, the total no longer distinguishes packets from frames. See
+    // `ExportStatus::countingPackets`.
+    st.countingPackets = !composes;
     setStatus(st);
 
-    for (int64_t n = 0; composes && n < total; ++n) {
+    // Where the frame in hand is, on both walks: seconds into the output, and —
+    // paced — the timestamp the file will carry.
+    double at = 0.0;
+    int64_t stamp = AV_NOPTS_VALUE;
+    int64_t firstPts = AV_NOPTS_VALUE;   ///< the source's own zero
+    int64_t lastRel = AV_NOPTS_VALUE;    ///< the last one written, shifted
+    double lastGap = 0.0;                ///< between the last two written
+    int64_t held = 0;                    ///< dropped for not advancing
+    bool rangeRanOut = false;            ///< the walk stopped at `-t`, not at the content
+
+    for (int64_t n = 0; composes; ++n) {
         if (job::stopping()) {
             st.state = ExportStatus::State::Cancelled;
             st.stage = "cancelled";
             break;
         }
 
-        const double t = s.startTime + double(n) / s.fps;
+        if (!paced) {
+            if (n >= total) break;
+            at = double(n) / s.fps;
+        } else {
+            // **Take frames until one arrives whose time advances.** An `fps`
+            // filter holding a frame, and an `overlay` whose framesync repeats
+            // an input, both hand over pictures stamped where the last one was
+            // — and an encoder given a timestamp that does not move drops the
+            // frame silently or fails outright. So the drop happens here, where
+            // it can be counted and said. That *is* what ffmpeg's `vfr` means;
+            // passing them on regardless is `passthrough`, which is why only one
+            // of the two is offered (see ExportSettings::fpsMode).
+            bool more = false, stampless = false;
+            int64_t rel = 0;
+            for (;;) {
+                int64_t pts = AV_NOPTS_VALUE;
+                more = source->nextFrame(&pts);
+                if (!more) break;
+                if (pts == AV_NOPTS_VALUE) { stampless = true; break; }
+                // **The output's zero is the first frame's own moment**, which
+                // is what ffmpeg does without `-copyts`. For an export the two
+                // are already the same number — the graph is built with the
+                // range's start as its origin — but a preview renders a window
+                // out of the middle with the graph's clock offset to match, and
+                // a file whose first picture is stamped ten seconds in is ten
+                // seconds of nothing.
+                if (firstPts == AV_NOPTS_VALUE) firstPts = pts;
+                rel = pts - firstPts;
+                if (lastRel == AV_NOPTS_VALUE || rel > lastRel) break;
+                ++held;
+            }
+            if (!more) break;               // the graph has run out
+            if (stampless) {
+                st.state = ExportStatus::State::Failed;
+                st.error = "libavfilter handed over a picture with no timestamp on it, and a "
+                           "variable frame rate is those timestamps — nothing here can invent "
+                           "one. Render at a fixed rate instead";
+                break;
+            }
+            at = double(rel) * av_q2d(clock);
+            // `-t`: the range said how long to write for. The grid walk stops
+            // after `total` frames, which is every frame strictly inside the
+            // span, and this is that same statement about times that are not on
+            // a grid.
+            if (at >= span) { rangeRanOut = true; break; }
+            lastGap = lastRel == AV_NOPTS_VALUE ? 0.0 : double(rel - lastRel) * av_q2d(clock);
+            lastRel = rel;
+            stamp = rel;
+        }
+        const double t = s.startTime + at;
+
         FrameSource& timeline = *source;
         if (writer.takesNativeFrames()) {
             // The picture never comes down. There is no canvas to ask for and
@@ -466,34 +616,42 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             // black frame to write — black would have to be made in system
             // memory and uploaded once a frame, which is exactly the cost this
             // path exists to avoid — so it ends when its graph does.
-            AVFrame* f = const_cast<AVFrame*>(timeline.nativeAt(t));
+            AVFrame* f = const_cast<AVFrame*>(paced ? timeline.nativeNow()
+                                                    : timeline.nativeAt(t));
             if (!f) break;
-            if (!writer.writeVideoFrame(f, n, &err)) {
+            if (!writer.writeVideoFrame(f, {n, stamp}, &err)) {
                 st.state = ExportStatus::State::Failed;
                 st.error = err;
                 break;
             }
         } else {
-            const Rgba& canvas = timeline.canvasAt(t);
+            // At `t` on the grid, and already in hand on the paced walk —
+            // `nextFrame` advanced the source, and `canvasAt` would advance it
+            // again and convert the frame after the one it was told about.
+            const Rgba* canvas = paced ? timeline.canvasNow() : &timeline.canvasAt(t);
+            if (!canvas) break;
             // `-shortest`: the range said how long to write for and the content
             // has run out first. Asked after the canvas rather than before it
             // because the graph does not know its last input has ended until it
             // has tried to pull — so this is the frame that discovered it, and
             // not writing it is the whole of what `-shortest` does.
             if (s.shortest && timeline.exhausted(t)) break;
-            if (!writer.writeVideo(canvas, n, &err)) {
+            if (!writer.writeVideo(*canvas, {n, stamp}, &err)) {
                 st.state = ExportStatus::State::Failed;
                 st.error = err;
                 break;
             }
-            // The graph's other pictures, on the tick `canvasAt` just
-            // performed. Asked after it and never before: one tick advances
-            // every pad together, and a pad pulled on its own would be a
-            // stream whose frames are out of step with the canvas.
+            // The graph's other pictures, on the tick just performed. Asked
+            // after it and never before: one tick advances every pad together,
+            // and a pad pulled on its own would be a stream whose frames are out
+            // of step with the canvas. Never on the paced walk — a render whose
+            // video streams read named pads is refused, because the pads leave
+            // the graph at their own moments and one walk has no timestamp that
+            // is all of theirs.
             for (const auto& p : padVideo) {
                 const Rgba* picture = timeline.padAt(p.label);
                 if (!picture) continue;      // refused before the render started
-                if (!writer.writeVideoTo(p.desc, *picture, n, &err)) {
+                if (!writer.writeVideoTo(p.desc, *picture, {n, stamp}, &err)) {
                     st.state = ExportStatus::State::Failed;
                     st.error = err;
                     break;
@@ -502,81 +660,105 @@ void runPass(ExportSettings s, std::vector<ExportClip> clips, ExportStatus& st,
             if (st.state != ExportStatus::State::Running) break;
         }
 
-        // The samples this frame covers, counted from the start of the render
-        // so rounding never loses or repeats one at a frame boundary. One count
-        // for every soundtrack this file has, because they are all the same
-        // seconds of the same render — what differs is only where each one's
-        // samples come from.
-        if (writer.hasAudio() || !padAudio.empty()) {
-            const int64_t upTo = std::llround((double(n + 1) / s.fps) * rate);
-            const int frames = static_cast<int>(std::max<int64_t>(0, upTo - samplesWritten));
-            const double from = s.startTime + double(samplesWritten) / rate;
-            if (frames > 0) {
-                // Only where a stream is fed by the mix. `hasAudio()` counts
-                // exactly those, which is what keeps a render whose only sound
-                // comes off a pad from decoding every clip's soundtrack to
-                // hand it to nobody.
-                if (writer.hasAudio()) {
-                    mix.assign(static_cast<size_t>(frames) * channels, 0.0f);
-                    timeline.mixInto(mix.data(), from, frames, rate, channels);
-                    if (!writer.writeAudio(mix.data(), frames, &err)) {
-                        st.state = ExportStatus::State::Failed;
-                        st.error = err;
-                        break;
-                    }
-                }
-                for (const auto& p : padAudio) {
-                    // Its own buffer, because it is its own soundtrack: summed
-                    // into the mix's it would be one stream carrying both.
-                    padMix.assign(static_cast<size_t>(frames) * channels, 0.0f);
-                    if (!timeline.padMixInto(p.label, padMix.data(), from, frames, rate,
-                                             channels))
-                        continue;
-                    if (!writer.writeAudioTo(p.desc, padMix.data(), frames, &err)) {
-                        st.state = ExportStatus::State::Failed;
-                        st.error = err;
-                        break;
-                    }
-                }
-                if (st.state != ExportStatus::State::Running) break;
-                samplesWritten = upTo;
-            }
+        // The samples this frame covers. On the grid it covers up to the *next*
+        // frame, which is `(n + 1)/fps`; paced, the next frame's time is not
+        // known until it has been pulled, so a frame covers up to its own moment
+        // and the tail below writes the last one's duration. The accumulator
+        // inside `soundUpTo` is what makes those the same guarantee.
+        if (!soundUpTo(paced ? at : double(n + 1) / s.fps)) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+            break;
         }
 
-        // The copied streams, caught up to the frame just written. Beside the
-        // frame loop rather than after it: `av_interleaved_write_frame` queues
-        // a stream that runs ahead of its neighbours, so writing a whole copied
-        // track first would hold an hour of packets in memory before the first
-        // encoded frame went down.
-        if (!copies.empty() && !copies.pumpTo(double(n + 1) / s.fps, writer, &err)) {
-            st.state = ExportStatus::State::Failed;
-            st.error = err;
-            break;
-        }
-        // The subtitles, beside them, on the same clock and for the same
-        // reason: a cue arrives on the input's own timeline rather than on the
-        // output's frame grid, and writing a whole track first would leave
-        // `av_interleaved_write_frame` holding an hour of them.
-        if (!subs.empty() && !subs.pumpTo(double(n + 1) / s.fps, writer, &err)) {
-            st.state = ExportStatus::State::Failed;
-            st.error = err;
-            break;
+        // The copied streams and the subtitles, caught up to the frame just
+        // written. Beside the frame loop rather than after it:
+        // `av_interleaved_write_frame` queues a stream that runs ahead of its
+        // neighbours, so writing a whole copied track first would hold an hour
+        // of packets in memory before the first encoded frame went down. A cue
+        // arrives on the input's own timeline rather than on the output's frame
+        // grid and is pumped on the same clock for the same reason.
+        //
+        // Zero is "everything you have" to both pumps, so the paced walk's first
+        // frame — which is at zero by construction — asks for nothing rather
+        // than for the lot.
+        const double until = paced ? at : double(n + 1) / s.fps;
+        if (until > 0.0) {
+            if (!copies.empty() && !copies.pumpTo(until, writer, &err)) {
+                st.state = ExportStatus::State::Failed;
+                st.error = err;
+                break;
+            }
+            if (!subs.empty() && !subs.pumpTo(until, writer, &err)) {
+                st.state = ExportStatus::State::Failed;
+                st.error = err;
+                break;
+            }
         }
 
         st.framesDone = n + 1;
         // Across the whole job, not across this pass. The person watching
         // started one render; a bar that reached the end and went back to zero
         // would be reporting the machine's business rather than theirs.
-        st.progress = base + share * (double(n + 1) / double(total));
+        //
+        // **Against time on the paced walk, because there is no count to be a
+        // fraction of.** A percentage computed against a frame total nobody
+        // knows would be a number that looks like it worked; the range's length
+        // is a fact either way.
+        st.progress = base + share * (paced ? (span > 0 ? std::min(1.0, at / span) : 1.0)
+                                            : double(n + 1) / double(total));
         st.elapsedSec = secondsSince();
         st.encodeFps = st.elapsedSec > 0 ? st.framesDone / st.elapsedSec : 0;
         // Polled by the UI at frame rate; a lock per output frame is nothing
         // next to encoding one.
-        if ((n & 3) == 0 || n + 1 == total) {
+        if ((n & 3) == 0 || (!paced && n + 1 == total)) {
             st.bytesWritten = writer.bytesSoFar();
             st.piecesWritten = writer.piecesWritten();
             setStatus(st);
         }
+    }
+
+    // **The tail of the sound, on the walk that did not know where its last
+    // frame ended.**
+    //
+    // On the grid every frame covered up to the next one, so the last one
+    // covered up to the end of the range and nothing is owed. Paced, each frame
+    // covered up to its own moment, which leaves whatever the last frame lasts
+    // unwritten — and the tail is what the *reason the walk stopped* says it is,
+    // which is the same rule the fixed-rate walk follows without having to state
+    // it:
+    //
+    //   - the range ran out, so the sound covers the range. `-t` is a decision
+    //     somebody made, and a file that came out three hundredths short of it
+    //     because the graph's last picture happened to fall early is not the
+    //     length that was asked for. It is also what ffmpeg's own `-t` does: the
+    //     soundtrack is trimmed to the duration, not to the last frame.
+    //   - the content ran out, so the sound stops where the pictures did — the
+    //     last frame plus however long the one before it lasted, which is the
+    //     only thing here that says how long a last frame is. That is what the
+    //     grid walk does when `-shortest` or an exhausted graph breaks it early.
+    if (paced && lastRel != AV_NOPTS_VALUE && st.state == ExportStatus::State::Running) {
+        const double last = double(lastRel) * av_q2d(clock);
+        const double gap = lastGap > 0 ? lastGap : (s.fps > 0 ? 1.0 / s.fps : 0.0);
+        if (!soundUpTo(rangeRanOut ? span : std::min(span, last + gap))) {
+            st.state = ExportStatus::State::Failed;
+            st.error = err;
+        }
+    }
+
+    // Said once, and only when it happened. A repeated timestamp is a filter
+    // doing its job — `fps` holding a frame, an `overlay` whose framesync
+    // repeated an input — and how many pictures that cost is the difference
+    // between the file somebody expected and the one they got.
+    if (held > 0) {
+        char dropped[192];
+        std::snprintf(dropped, sizeof(dropped),
+                      "%lld picture%s left the graph on a timestamp that did not advance and "
+                      "%s dropped, which is what a variable frame rate means",
+                      static_cast<long long>(held), held == 1 ? "" : "s",
+                      held == 1 ? "was" : "were");
+        LOG_WARN("export: %s", dropped);
+        reportNote(AV_LOG_WARNING, "render", dropped);
     }
 
     // The other loop: a render with nothing composed in it is driven by the
@@ -753,10 +935,20 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         LOG_ERROR("export failed: %s", st.error.c_str());
         reportNote(AV_LOG_ERROR, "render", st.error);
     } else if (st.state == ExportStatus::State::Cancelled) {
-        std::snprintf(said, sizeof(said),
-                      "stopped after %lld of %lld frames; %s was closed properly and plays",
-                      static_cast<long long>(st.framesDone),
-                      static_cast<long long>(st.framesTotal), st.path.c_str());
+        // "of N" only where N is a number somebody knows. A copy is measured in
+        // packets and a paced walk does not know how many frames it was going to
+        // write, so both leave `framesTotal` at zero — and "stopped after 40 of
+        // 0 frames" is the sort of sentence this codebase is otherwise careful
+        // not to print.
+        if (st.framesTotal > 0)
+            std::snprintf(said, sizeof(said),
+                          "stopped after %lld of %lld frames; %s was closed properly and plays",
+                          static_cast<long long>(st.framesDone),
+                          static_cast<long long>(st.framesTotal), st.path.c_str());
+        else
+            std::snprintf(said, sizeof(said),
+                          "stopped after %lld frames; %s was closed properly and plays",
+                          static_cast<long long>(st.framesDone), st.path.c_str());
         reportNote(AV_LOG_WARNING, "render", said);
     }
 }
@@ -801,6 +993,57 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
         return false;
     }
 
+    // ── `-fps_mode`, refused here rather than half-honoured later ──────────
+    //
+    // Three refusals, all of them before a file is opened, because each is a
+    // fact about the *spec* and every one of them would otherwise come out as a
+    // file that plays and is timed wrong — the failure that looks like it
+    // worked. See `ExportSettings::fpsMode` for what the two values are and why
+    // the other three of ffmpeg's are not offered.
+    if (!s.fpsMode.empty() && s.fpsMode != "cfr" && s.fpsMode != "vfr") {
+        if (error)
+            *error = "there is no frame-timing mode called '" + s.fpsMode +
+                     "' here — it is cfr, which walks the range at the output rate, or vfr, "
+                     "which keeps the filter graph's own frame times";
+        return false;
+    }
+    if (s.fpsMode == "vfr") {
+        // **A variable frame rate is a property of the graph path only.** The
+        // compositor samples the edit at whatever instant it is asked about, so
+        // it has no frame times of its own to keep — and a stack of clips at
+        // different rates has no answer to "whose timestamps?" that is not
+        // invented, which is exactly the approximation this renderer refuses.
+        if (s.filterGraph.empty()) {
+            if (error)
+                *error = "a variable frame rate is the filter graph's own frame times, and "
+                         "this render composites the timeline — the compositor answers for "
+                         "any instant it is asked about, so there are no times of its own to "
+                         "keep. Put the rate change in the graph, or render at a fixed rate";
+            return false;
+        }
+        if (!composesAnything(s)) {
+            if (error)
+                *error = "every stream of this render is copied, so no frame is timed here at "
+                         "all — a copied packet keeps the timestamp it came with whatever the "
+                         "frame timing is set to";
+            return false;
+        }
+        // **A named pad is a second set of moments.** Each sink of a graph
+        // produces on its own clock and at its own times; one walk can hand over
+        // one timestamp, and stamping a pad's picture with the composite's would
+        // put that stream out of step with itself.
+        for (const auto& st : s.streams)
+            if (st.kind == "video" && isPadSource(st.source)) {
+                if (error)
+                    *error = "'" + st.source + "' is a second picture leaving the graph at "
+                             "its own moments, and one walk over the frames has one timestamp "
+                             "to give — so a render that maps a pad cannot keep every pad's "
+                             "own frame times. Render at a fixed rate, or write the pads as "
+                             "renders of their own";
+                return false;
+            }
+    }
+
     const uint64_t number = job::claim(s.path, error);
     if (!number) return false;
     if (jobNumber) *jobNumber = number;
@@ -809,8 +1052,15 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
         // difference between it and a recording: this number is what makes a
         // percentage and an estimate mean anything, and a job with no end
         // leaves it at zero rather than inventing one. See ffmpeg_capture.h.
+        //
+        // **Except a paced one**, which knows how long it is in *seconds* and
+        // not in frames — how many the graph will make is what nobody knows
+        // until it has made them. Zero here for the same reason a recording
+        // with no `-t` leaves it at zero, and the progress comes from time.
         ExportStatus st = job::status();
-        st.framesTotal = std::max<int64_t>(1, std::llround((s.endTime - s.startTime) * s.fps));
+        st.framesTotal = s.fpsMode == "vfr"
+            ? 0
+            : std::max<int64_t>(1, std::llround((s.endTime - s.startTime) * s.fps));
         job::publish(st);
     }
     job::run([s, clips] { runExport(s, clips); });

@@ -650,9 +650,11 @@ void Writer::resolveRenames() {
 }
 
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
-                  CopyStreams* copies, SubtitleStreams* subs, AVBufferRef* hwFrames) {
+                  CopyStreams* copies, SubtitleStreams* subs, AVBufferRef* hwFrames,
+                  AVRational frameClock) {
     settings_ = s;
     hwFrames_ = hwFrames;
+    frameClock_ = frameClock.num > 0 && frameClock.den > 0 ? frameClock : AVRational{0, 1};
 
     // `-f`, when the render says which muxer it means. Named rather than left
     // to the extension because that is the only choice that works: a muxer's
@@ -873,10 +875,25 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     return true;
 }
 
+void Writer::stampOf(const Out& o, const FrameAt& at, int64_t* pts, double* t) const {
+    // Absent is the fixed-rate walk, where the frame's number *is* its
+    // timestamp — the encoder's time base is `1/fps` and there is nothing to
+    // convert. Present, it is already on that time base, because the clock the
+    // frames arrived on is the clock the encoder was opened with.
+    *pts = at.pts == AV_NOPTS_VALUE ? at.n : at.pts;
+    // Where the picture is in the *output*, which is what `-force_key_frames` is
+    // written against: seconds from the start of the file, not from the start of
+    // the timeline. Whoever knows the range subtracted its start before the
+    // times got here.
+    const AVRational tb = o.enc ? o.enc->time_base : AVRational{0, 1};
+    *t = tb.num > 0 && tb.den > 0 ? double(*pts) * av_q2d(tb)
+                                  : (settings_.fps > 0 ? double(at.n) / settings_.fps : 0.0);
+}
+
 /// One picture into one stream. The body both write paths share, because what
 /// differs between the canvas and a pad is only which streams are handed which
 /// picture — everything from the scaler down is the same act.
-bool Writer::writeVideoInto(Out& o, const Rgba& canvas, int64_t index, std::string* err) {
+bool Writer::writeVideoInto(Out& o, const Rgba& canvas, const FrameAt& at, std::string* err) {
     if (!ensureScaler(o, canvas.width, canvas.height, err)) return false;
     if (av_frame_make_writable(o.vframe) < 0) {
         *err = "cannot write to the encoder's frame";
@@ -890,43 +907,42 @@ bool Writer::writeVideoInto(Out& o, const Rgba& canvas, int64_t index, std::stri
         *err = "colour conversion failed";
         return false;
     }
-    o.vframe->pts = index;
-    // Where the picture *is* in the output, which is what
-    // `-force_key_frames` is written against: seconds from the start of the
-    // file, not from the start of the timeline. Whoever knows the range
-    // subtracted its start before the times got here.
-    const double t = settings_.fps > 0 ? double(index) / settings_.fps : 0.0;
+    int64_t pts = 0;
+    double t = 0;
+    stampOf(o, at, &pts, &t);
+    o.vframe->pts = pts;
     o.vframe->pict_type =
-        o.keys.wants(index, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+        o.keys.wants(at.n, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
     o.vframe->flags = (o.vframe->flags & ~(AV_FRAME_FLAG_INTERLACED |
                                            AV_FRAME_FLAG_TOP_FIELD_FIRST)) |
                       o.frameFlags;
     return encode(o, o.vframe, err);
 }
 
-bool Writer::writeVideo(const Rgba& canvas, int64_t index, std::string* err) {
+bool Writer::writeVideo(const Rgba& canvas, const FrameAt& at, std::string* err) {
     for (auto& out : outs_) {
         Out& o = *out;
         // Composite-fed only. A pad-fed stream is a different picture and is
         // handed its own through `writeVideoTo`; giving it the canvas here
         // would write the canvas twice and never write the pad at all.
         if (o.desc.kind != "video" || o.copied || isPadSource(o.desc.source)) continue;
-        if (!writeVideoInto(o, canvas, index, err)) return false;
+        if (!writeVideoInto(o, canvas, at, err)) return false;
     }
     return true;
 }
 
-bool Writer::writeVideoTo(size_t desc, const Rgba& picture, int64_t index, std::string* err) {
+bool Writer::writeVideoTo(size_t desc, const Rgba& picture, const FrameAt& at,
+                          std::string* err) {
     for (auto& out : outs_) {
         if (out->descIndex != desc) continue;
-        return writeVideoInto(*out, picture, index, err);
+        return writeVideoInto(*out, picture, at, err);
     }
     // The stream was resolved away, which is the same "nothing to write it to
     // and nothing wrong" `writeCopiedPacket` answers with.
     return true;
 }
 
-bool Writer::writeVideoFrame(AVFrame* frame, int64_t index, std::string* err) {
+bool Writer::writeVideoFrame(AVFrame* frame, const FrameAt& at, std::string* err) {
     if (!frame) { *err = "no picture to write"; return false; }
     for (auto& out : outs_) {
         Out& o = *out;
@@ -934,9 +950,11 @@ bool Writer::writeVideoFrame(AVFrame* frame, int64_t index, std::string* err) {
         // The frame belongs to the graph and is handed to every stream in turn;
         // what is written on it is only what is not pixels, which is the same
         // three things `writeVideo` writes and none of them a copy.
-        frame->pts = index;
-        const double t = settings_.fps > 0 ? double(index) / settings_.fps : 0.0;
-        frame->pict_type = o.keys.wants(index, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+        int64_t pts = 0;
+        double t = 0;
+        stampOf(o, at, &pts, &t);
+        frame->pts = pts;
+        frame->pict_type = o.keys.wants(at.n, t) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
         frame->flags = (frame->flags & ~(AV_FRAME_FLAG_INTERLACED |
                                          AV_FRAME_FLAG_TOP_FIELD_FIRST)) | o.frameFlags;
         if (!encode(o, frame, err)) return false;
@@ -1217,7 +1235,15 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     const int outH = o.desc.height > 0 ? o.desc.height : settings_.height;
     o.enc->width = outW;
     o.enc->height = outH;
-    o.enc->time_base = av_inv_q(fps);
+    // **The clock the timestamps are in, which is not always `1/fps`.** A render
+    // that keeps its source's own frame times has to express them exactly, and
+    // the base they are exact in is the one they arrived on — libavfilter's, for
+    // the sink the pictures leave by. Rounded into `1/fps` instead, every one of
+    // them would land back on the output grid: the file would be constant rate
+    // and say `-fps_mode vfr`, which is worse than refusing. `framerate` stays
+    // the render's either way, because it is the *nominal* rate the encoder's
+    // rate control plans against and ffmpeg passes the same thing here.
+    o.enc->time_base = frameClock_.num > 0 ? frameClock_ : av_inv_q(fps);
     o.enc->framerate = fps;
     o.enc->pix_fmt = pickPixelFormat(codec);
 
@@ -1381,7 +1407,13 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
         return false;
     }
     o.st->time_base = o.enc->time_base;
-    o.st->avg_frame_rate = fps;
+    // **Unknown for a variable-rate stream, and that is the honest tag.**
+    // Matroska writes `avg_frame_rate` out as a DefaultDuration, so a stream
+    // whose frames are not evenly spaced would carry a per-frame duration that
+    // is true of none of them; mp4 uses it for nothing. Zero is libavformat's
+    // "nobody said", which is what a player then works out from the timestamps
+    // themselves.
+    o.st->avg_frame_rate = frameClock_.num > 0 ? AVRational{0, 1} : fps;
     o.srcTimeBase = o.enc->time_base;
 
     // After the encoder, because a bitstream filter is configured from what the

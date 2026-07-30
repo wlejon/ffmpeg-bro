@@ -25,7 +25,7 @@ const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     // is read from that edit. A list of times *is* remembered,
                     // because a list somebody typed is a decision like a codec.
                     'keyframeMode', 'keyframeTimes', 'keyframeExpr',
-                    'fieldOrder', 'threads', 'threadType', 'shortest',
+                    'fpsMode', 'fieldOrder', 'threads', 'threadType', 'shortest',
                     'colorspace', 'colorRange', 'faststart', 'audio',
                     'audioCodecBitrate', 'sampleRate', 'channels',
                     'extraVideo', 'extraAudio', 'extraFormat', 'previewLength',
@@ -117,6 +117,14 @@ function sanitise() {
         if (!settings[k] || typeof settings[k] !== 'object' || Array.isArray(settings[k]))
             settings[k] = {};
     if (!Array.isArray(settings.destinations)) settings.destinations = [];
+    // **Two words and no others.** `-fps_mode` reaches the renderer as a string
+    // and anything but `cfr` or `vfr` is refused there by name — which is right
+    // for a spec somebody wrote and wrong for a workspace, where it would be a
+    // render that will not start and a stage with nothing on it saying why. This
+    // blob was written by a version of this code that is not the one reading it,
+    // and `passthrough` is exactly the kind of value a later version might have
+    // put here.
+    if (settings.fpsMode !== 'vfr') settings.fpsMode = 'cfr';
     // A version's size reaches `ExportPass::width` as a number and is read
     // there as "zero means the render's", so a stored `"720"` — which is what a
     // text field writes if nothing coerces it — would arrive as a string and be

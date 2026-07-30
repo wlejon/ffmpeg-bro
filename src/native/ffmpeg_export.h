@@ -483,6 +483,31 @@ struct ExportSettings {
     /// writing less of it than was asked for is the wrong half of the trade.
     bool shortest = false;
 
+    /// `-fps_mode:v`. **Two values, and each of them is a different walk.**
+    ///
+    ///   - `cfr` (the default, and what every render before this was): the range
+    ///     is walked forward at `fps` and each frame is stamped with its number.
+    ///     The result is a file every editor accepts, and it is the only thing a
+    ///     composited render can honestly claim — `TimelineSource` answers for
+    ///     any instant it is asked about, so it has no frame times of its own to
+    ///     keep.
+    ///   - `vfr`: the frames leave the filter graph with the timestamps
+    ///     libavfilter gave them and those timestamps reach the file, on the
+    ///     graph's own time base. A frame whose timestamp does not advance is
+    ///     **dropped**, which is exactly what ffmpeg's `vfr` means and is what
+    ///     separates it from `passthrough` — the difference between the two is
+    ///     handing libavcodec a pts that does not move, and that is an encode
+    ///     that fails rather than a mode. So `passthrough` is not offered, nor
+    ///     `drop` (which throws the timestamps away for the muxer to regenerate
+    ///     from the frame rate — `cfr` by another route) nor `auto` (the muxer's
+    ///     choice, and there is no CLI here to make it).
+    ///
+    /// Empty is `cfr`. `vfr` is refused, by name and before a file is opened,
+    /// for a render with no filter graph in it, for one that composes nothing,
+    /// and for one whose video streams read named pads — several pads leave the
+    /// graph at their own moments and one walk has no timestamp to give them all.
+    std::string fpsMode;
+
     /// Everything else written into the container's own metadata dictionary.
     /// `title` above stays a named field because it is the one every caller
     /// sets; these are `-metadata key=value` for the rest.
@@ -723,6 +748,18 @@ struct ExportStatus {
     /// progress bar has to read it: a fraction of an unknown total is zero, and
     /// a bar sitting at zero for ten minutes says the job is stuck.
     bool openEnded = false;
+
+    /// What `framesDone` is counting: **packets of a copy** rather than output
+    /// frames.
+    ///
+    /// It used to be inferable and is not any more, which is the whole reason it
+    /// is written down. `framesTotal == 0` meant "this is a copy", because a
+    /// render always knew how long it was in frames — and a paced walk
+    /// (`fpsMode == "vfr"`) does not: it counts frames it cannot say the number
+    /// of in advance. So the two zeroes now mean different things, and a progress
+    /// readout reading one as the other says "40 packets copied" about a render
+    /// that is encoding pictures.
+    bool countingPackets = false;
 
     double elapsedSec = 0.0;
     double encodeFps = 0.0;         // output frames per second of wall clock

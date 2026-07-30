@@ -79,6 +79,27 @@ namespace ffmpegbro {
 class CopyStreams;
 class SubtitleStreams;
 
+/// Which frame this is, and — where they are two different facts — when it is.
+///
+/// **The ordinal is not the timestamp and neither replaces the other.** `n`
+/// counts the frames this writer has been handed and is the `n` of
+/// `-force_key_frames expr:` — ffmpeg's own variable, and the number a person
+/// writing `eq(n,0)` means. `pts` is *when* the picture is, on the clock
+/// `open()` was given. On the fixed-rate walk the two are the same integer and
+/// `pts` is left absent, which is what every render before `-fps_mode vfr` was;
+/// on the paced walk they part company the moment the graph drops or holds a
+/// frame, and collapsing them into one number is what made `cfr` the only
+/// honest value here.
+///
+/// It is a struct rather than a second parameter because `writeVideo(canvas, {n},
+/// &err)` is the whole of the fixed-rate call and reads as "frame n" — the
+/// alternative was three overloads and a defaulted `int64_t` next to another
+/// `int64_t`.
+struct FrameAt {
+    int64_t n = 0;
+    int64_t pts = AV_NOPTS_VALUE;   ///< absent: `n`, on the encoder's 1/fps clock
+};
+
 class Writer {
 public:
     ~Writer();
@@ -99,15 +120,25 @@ public:
     /// from a pool is *opened* against that pool — `avcodec_open2` builds its
     /// surfaces from it — and by the time the first frame arrives the header
     /// has gone down.
+    /// `frameClock` is the clock the *pictures* arrive on, for a render that
+    /// keeps its source's own frame times (`-fps_mode vfr`). `{0, 1}` — every
+    /// render before that one and every recording — is the fixed-rate walk, and
+    /// the video encoders are opened on `1/fps` as they always were. Given here
+    /// rather than discovered later for the reason `hwFrames` is: the time base
+    /// is settled at `avcodec_open2` and by the first frame the header has gone
+    /// down. Stamping the graph's times into a `1/fps` base would round every one
+    /// of them back onto the grid and write a constant-rate file claiming not to
+    /// be one, which is the failure that looks like it worked.
     bool open(const ExportSettings& s, bool wantAudio, std::string* err,
               CopyStreams* copies = nullptr, SubtitleStreams* subs = nullptr,
-              AVBufferRef* hwFrames = nullptr);
+              AVBufferRef* hwFrames = nullptr,
+              AVRational frameClock = AVRational{0, 1});
 
     /// Encode one composited canvas into every video stream mapped to the
-    /// composite. `index` is the output frame number, which is the whole
-    /// timestamp: a fixed frame rate is what makes the result a file every
-    /// editor will accept.
-    bool writeVideo(const Rgba& canvas, int64_t index, std::string* err);
+    /// composite. See `FrameAt`: `{n}` is the fixed-rate walk, where the frame's
+    /// number is its whole timestamp and what comes out is a file every editor
+    /// will accept.
+    bool writeVideo(const Rgba& canvas, const FrameAt& at, std::string* err);
 
     /// The same, into exactly one stream — the one at `desc` in the resolved
     /// list, which is the numbering `outputStreams()` produced and the job
@@ -115,7 +146,7 @@ public:
     /// picture is not the canvas and whose size need not be the render's; the
     /// scaler converts whatever arrives into what the encoder was opened for.
     /// A `desc` that was resolved away writes nothing and is not an error.
-    bool writeVideoTo(size_t desc, const Rgba& picture, int64_t index, std::string* err);
+    bool writeVideoTo(size_t desc, const Rgba& picture, const FrameAt& at, std::string* err);
 
     /// True when this render's pictures never come down: every video stream fed
     /// from the composite was opened against the frames context `open()` was
@@ -132,7 +163,7 @@ public:
     /// no copy: the frame goes from `av_buffersink_get_frame` to
     /// `avcodec_send_frame` and the only things written on it are the ones that
     /// are not pixels (the timestamp, the forced keyframe, the field order).
-    bool writeVideoFrame(AVFrame* frame, int64_t index, std::string* err);
+    bool writeVideoFrame(AVFrame* frame, const FrameAt& at, std::string* err);
 
     /// Take mixed interleaved float samples, for every audio stream mapped to
     /// the mix. They are buffered per stream and handed to each encoder in
@@ -363,7 +394,18 @@ private:
     /// One picture into one stream — the body `writeVideo` and `writeVideoTo`
     /// share, since what differs between them is only which streams get which
     /// picture.
-    bool writeVideoInto(Out& o, const Rgba& canvas, int64_t index, std::string* err);
+    bool writeVideoInto(Out& o, const Rgba& canvas, const FrameAt& at, std::string* err);
+
+    /// The timestamp to put on a frame, and where in the output it is.
+    ///
+    /// One home for the two facts every video write needs out of a `FrameAt`,
+    /// because they are the same question asked in two units and answering it
+    /// twice is how a `-force_key_frames` time comes to disagree with the pts
+    /// beside it. `t` is **seconds into the output** — what
+    /// `-force_key_frames` is written against — and comes from the pts on the
+    /// encoder's own time base, which is the paced clock for one of these
+    /// renders and `1/fps` for every other.
+    void stampOf(const Out& o, const FrameAt& at, int64_t* pts, double* t) const;
     bool writeAudioInto(Out& o, const float* interleaved, int frames, std::string* err);
     bool openAttachment(Out& o, std::string* err);
 
@@ -459,6 +501,10 @@ private:
     /// the life of `open()`. Not owned: the source outlives the writer.
     AVBufferRef* hwFrames_ = nullptr;
     bool native_ = false;
+
+    /// The clock the pictures arrive on, or `{0, 1}` for the fixed-rate walk.
+    /// Every video encoder is opened on it where it is set — see `open()`.
+    AVRational frameClock_{0, 1};
 };
 
 } // namespace ffmpegbro

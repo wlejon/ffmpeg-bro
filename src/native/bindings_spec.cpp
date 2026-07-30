@@ -499,6 +499,12 @@ bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::s
     s.threads = static_cast<int>(numProp(ctx, spec, "threads", 0));
     s.threadType = strProp(ctx, spec, "threadType", "");
     s.shortest = boolProp(ctx, spec, "shortest", false);
+    // `-fps_mode:v`, which is not an encoder option either: it decides how the
+    // range is *walked*, and the two answers are two loops. Empty is `cfr`, and
+    // anything but `cfr` or `vfr` is refused by `startExport` naming the word —
+    // the check is there rather than here because the recording and the output
+    // preview read this same object and each has its own answer about it.
+    s.fpsMode = strProp(ctx, spec, "fpsMode", "");
     s.videoOptions = optionsFromJs(ctx, spec, "videoOptions");
     s.audioOptions = optionsFromJs(ctx, spec, "audioOptions");
     s.formatOptions = optionsFromJs(ctx, spec, "formatOptions");

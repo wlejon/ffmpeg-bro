@@ -14,10 +14,18 @@
 // derived graph starts from a `color` source of the render's own size and rate
 // and every `overlay` syncs to it — so the graph produces exactly the frames
 // asked for, in order, and `canvasAt` is "the next one". `t` is therefore not
-// used to *find* a frame, and a graph that does not carry the output's rate
-// will drift against the timestamps the writer stamps. Past the end of the
-// graph the canvas goes black rather than freezing on the last picture, which
-// is what the track stack does when nothing covers t.
+// used to *find* a frame. Past the end of the graph the canvas goes black rather
+// than freezing on the last picture, which is what the track stack does when
+// nothing covers t.
+//
+// **A graph that does not carry the output's rate is the other case, and it now
+// has an answer.** Put an `fps`, a `select` or a `framestep` in the chain and the
+// frames arrive at moments the output grid has nothing to do with; numbered by
+// the writer they come out slowed or sped by the ratio of the two rates. So the
+// frames' own timestamps are readable — `pacedClock` and `nextFrame` at the
+// bottom of the class, `FrameSource`'s paced pull — and `-fps_mode vfr` is a
+// render that keeps them. `cfr` remains what everything else does and what the
+// compositor can only do.
 //
 // **Sources are fed as decoded, not as pictures.** The graph does its own
 // cropping, scaling and colour conversion — that is what it is for, and a
@@ -181,6 +189,22 @@ public:
     const AVFrame* nativeAt(double t) override;
     void mixInto(float* dst, double from, int frames, int rate, int channels) override;
 
+    // ── the graph's own frame times ────────────────────────────────────────
+    //
+    // See `FrameSource`'s block about the paced pull for why these exist. Here
+    // they are nearly free: a frame is already sitting in `vprimary_->frame`
+    // with the pts libavfilter gave it, on the time base
+    // `av_buffersink_get_time_base` reports — and it is that pts the fixed-rate
+    // walk overwrites with a frame number.
+
+    /// The composite sink's own time base, or `{0, 1}` for a graph that never
+    /// said which pad the picture is — there being no clock to speak of when
+    /// there is no composite to be on one.
+    AVRational pacedClock() const override;
+    bool nextFrame(int64_t* pts) override;
+    const Rgba* canvasNow() override;
+    const AVFrame* nativeNow() override;
+
     /// The graph has ended. Known only once a pull has come back empty, which
     /// is why `FrameSource::exhausted` is documented as a question to ask
     /// *after* `canvasAt` — the frame that discovered it is the black one this
@@ -278,6 +302,10 @@ private:
     /// Pull one frame into every picture sink and empty every sound sink
     /// nobody is reading. The one place the graph is advanced.
     void tick();
+    /// This tick's composite at the render's size, converted. The half of
+    /// `canvasAt` that does not advance anything, which is what `canvasNow`
+    /// needs and `canvasAt` calls after its own `tick()`.
+    const Rgba& composite();
     /// One sink's frame, converted into `dst`: a row-by-row copy when it is
     /// already RGBA at that size, the scaler when it is not, and a download
     /// first when it is still on a card. False when there was nothing to

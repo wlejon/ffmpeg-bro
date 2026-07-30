@@ -920,6 +920,16 @@ export function derive(spec, sources, opts = {}) {
     // rate asked for rather than at whatever the topmost source happens to run
     // at — the same thing the renderer does by holding a fixed output clock.
     //
+    // **This node is why `-fps_mode vfr` changes nothing about a derived graph,
+    // and it is not a coincidence.** Under `vfr` the timestamps that reach the
+    // file are the ones the graph put on the frames — and for a graph rooted in
+    // this `color` those *are* the output rate, because everything below is
+    // frame-synced to it. So the derivation goes on imposing the rate and says so
+    // here; what `vfr` is for is a filter of somebody's that changes it below
+    // this point (an `fps`, a `select`, a `framestep`), which is exactly the
+    // chain a fixed-rate walk came out of fast or slow. One fact, two homes: this
+    // and ExportSettings::fpsMode.
+    //
     // **With nothing on the timeline there is no canvas either.** A black
     // rectangle nothing is laid over is not the picture of an empty edit, it is
     // a node in the way: the moment a `testsrc` was wired to the sink instead,

@@ -115,11 +115,8 @@ produce the same file.
 Under Advanced, four more that are not encoder options and could not be reached
 through the option column:
 
-- **Frame timing** is *stated*, not chosen. This renderer walks the range
-  forward at the output rate and stamps every frame with its number — both
-  paths do — so `-fps_mode cfr` is a fact about it rather than a setting, and
-  the command says so. A picker offering `vfr` or `passthrough` would be
-  offering two things neither render path can produce.
+- **Frame timing** — `-fps_mode`, constant or variable, and only one of the two
+  is ever available. [Its own section](#frame-timing) below.
 - **Field order** — progressive, top field first, bottom field first. It is two
   statements that travel together: the encoder goes into field mode
   (`-flags +ildct+ilme`) *and* every frame is marked to match, because only the
@@ -151,6 +148,58 @@ summary at the bottom shows the result as a command line, because that is the
 shortest complete statement of what is about to happen. An option the encoder
 does not have is an error, not a shrug: a render that succeeds while silently
 ignoring half of what it was told is the worst of the three outcomes.
+
+## Frame timing
+
+`-fps_mode`, and it is a choice of two.
+
+**Constant** walks the range forward at the output rate and stamps every frame
+with its number. It is what this renderer has always done, it is what makes a file
+every editor accepts, and it is printed with the `-r` that says what rate it is
+constant at — because ffmpeg left to itself would take that from the filters, and
+for a graph with an `fps` in it that is a different number and therefore a
+different file.
+
+**Variable** keeps the frame times **libavfilter** put on the pictures: the
+timestamps that reach the file are the graph's own, on the graph's own clock. That
+is the difference between a chain holding an `fps`, a `select`, a `framestep` or a
+`minterpolate` coming out as the rate it made, and coming out sped up or slowed
+down by the ratio of the two rates — which is what numbering those frames did. A
+picture whose timestamp does not advance is **dropped**, and the report says how
+many were, because that is exactly what ffmpeg's `vfr` means. The range still says
+where the file ends and the soundtrack still covers it, so `-t` means what it
+always meant.
+
+Two consequences worth knowing. The progress bar counts against **time** rather
+than against frames, because how many frames the graph will make is not something
+anybody knows until it has made them — so `totalFrames` is zero, on the same rule
+a recording with no `-t` follows. And the stream is tagged with no average frame
+rate at all: Matroska writes that out as a per-frame duration, and one that is
+true of none of the frames is worse than nothing.
+
+It is offered **only where there is a filter graph**, and where there is not the
+button is there, refused, and says why. The compositor answers for whatever
+instant it is asked about — that is the whole of what `canvasAt(t)` is — so it has
+no frame times of its own to keep, and a stack of clips at three different rates
+has no answer to *whose* timestamps that is not invented. Put the rate change in
+the graph and there is an answer. The same refusal covers a stream fed from a
+graph **pad**: each pad produces at its own moments and one walk over the frames
+has one timestamp to hand over. A **recording** refuses it too, and for the
+plainest version of the reason — a device's clock is the wall clock.
+
+Note also that a graph *derived* from the timeline is constant whichever is
+chosen, and that is not an accident: the derivation starts from a `color` of the
+render's own size and rate and everything below is frame-synced to it, so the
+graph's own times *are* the output rate. What variable is for is a filter of yours
+below that point.
+
+ffmpeg's other three values are absent on purpose. `passthrough` differs from
+`vfr` only in handing libavcodec a timestamp that does not move, which is an
+encode that fails at a frame rather than a mode; `drop` throws the timestamps away
+for the muxer to regenerate from the frame rate, which is `cfr` by a longer route;
+and `auto` is a decision the muxer makes on behalf of a command line, and there is
+no command line here to make it for. A value this renderer merely mapped onto
+another would be a control that looks like it worked.
 
 ## Which container
 

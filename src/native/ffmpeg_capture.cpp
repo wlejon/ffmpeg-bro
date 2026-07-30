@@ -448,8 +448,12 @@ bool Output::open(std::string* why) {
 }
 
 bool Output::writeOne(VidDest& v, const Rgba& pic, int64_t n) {
-    const bool ok = v.composite ? writer.writeVideo(pic, n, &err)
-                                : writer.writeVideoTo(v.desc, pic, n, &err);
+    // `{n}` and no timestamp beside it: a recording's clock *is* the frame
+    // count. The wall clock decides when a picture exists and `place()` above
+    // fills the grid in from it, so there is no second set of times for
+    // `-fps_mode vfr` to keep — see FrameAt, and ffmpeg_export.h's `fpsMode`.
+    const bool ok = v.composite ? writer.writeVideo(pic, {n}, &err)
+                                : writer.writeVideoTo(v.desc, pic, {n}, &err);
     if (!ok) {
         st.state = ExportStatus::State::Failed;
         st.error = err;
@@ -1578,6 +1582,22 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
                              "writing to one would interleave into something no player reads";
                 return false;
             }
+        // **A recording's frame timing is the wall clock, so `vfr` is refused by
+        // name.** The devices decide when a picture exists and `place()` fills
+        // the output's grid in from that, which is constant by construction —
+        // there is no second set of frame times for this to keep, and a
+        // recording that accepted the setting and ignored it would be the shrug
+        // an unknown option is refused for everywhere else here.
+        // Anything but `cfr` rather than `vfr` alone, so a word nobody here has
+        // heard of is refused too and not read as the default.
+        if (!s.outputs[i].fpsMode.empty() && s.outputs[i].fpsMode != "cfr") {
+            if (error)
+                *error = "a recording is timed by the wall clock, so its frames have no times "
+                         "of their own for '" + s.outputs[i].fpsMode + "' to keep — a variable "
+                         "frame rate is something a filter graph in a render has and a device "
+                         "does not";
+            return false;
+        }
         // **The sound format is the session's, on every file.** What reaches a
         // writer is interleaved float at one rate and one channel count — it is
         // what came off the graph — and a file that believed otherwise would

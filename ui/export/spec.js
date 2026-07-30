@@ -299,6 +299,35 @@ export function needsGraph(spec) {
     return ((spec && spec.clips) || []).some((c) => c && c.generator);
 }
 
+/// What `-fps_mode` this render actually is, which is not always what the
+/// setting says.
+///
+/// **`vfr` is the filter graph's own frame times, so a render with no graph in it
+/// has none to keep.** `TimelineSource` composites the edit at whatever instant
+/// it is handed — it can answer for any of them, so there is no set of timestamps
+/// belonging to it, and a stack of clips at different rates has no answer to
+/// "whose?" that is not invented. The same is true of a second picture leaving
+/// the graph by a named pad: each pad produces at its own moments and one walk
+/// over the frames has one timestamp to hand over.
+///
+/// So the setting is a *preference* and this is the answer for this render. The
+/// renderer refuses `vfr` in either of those cases, by name and before a file is
+/// opened, and it is right to — but a workspace left set to `vfr` that then has a
+/// clip dropped on it must not become a render that will not start. The control
+/// on the Encode stage says which of the two is in force and why, which is where
+/// a refusal belongs when nothing is wrong.
+///
+/// One home, because three things read it: the spec sent to the renderer,
+/// `ui/command.js`'s `-fps_mode` and the form's own sentence.
+export function effectiveFpsMode(spec) {
+    if (settings.fpsMode !== 'vfr') return 'cfr';
+    if (!spec || !spec.filterGraph) return 'cfr';
+    if ((spec.streams || []).some((s) => s && s.kind === 'video' &&
+                                         String(s.source || '').startsWith('pad:')))
+        return 'cfr';
+    return 'vfr';
+}
+
 /// Everything the renderer needs.
 ///
 /// Exported because the headless test builds one directly: driving the form
@@ -471,6 +500,12 @@ export function buildSpec(over = {}) {
             spec.filterInputs = g.filterInputs;
         }
     }
+
+    // `-fps_mode`, after the graph because it is a question about whether there
+    // is one — see `effectiveFpsMode()`. A caller may name it, which is what the
+    // headless test does; nothing in the UI does, because the setting is where
+    // that decision lives.
+    spec.fpsMode = over.fpsMode !== undefined ? over.fpsMode : effectiveFpsMode(spec);
 
     // `-filter_hw_device`, derived rather than asked for. Two things in a
     // render name a device — an input that decodes on one, and a filter that

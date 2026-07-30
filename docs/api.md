@@ -507,10 +507,33 @@ bro.ffmpeg.render.start({ path,
                           fieldOrder: "tt",              // "" | tt | bb
                           threads: 0, threadType: "",    // 0 is libavcodec's auto
                           shortest: false,
+                          // `-fps_mode:v`, and it decides which of two walks the
+                          // render is rather than setting anything on an encoder.
+                          fpsMode: "cfr",                // "" | cfr | vfr
                           streams: [...], chapters: [...] })
+// `fpsMode` is `cfr` — the range walked at `fps`, each frame stamped with its
+// number — or `vfr`, where the frames leave the **filter graph** carrying the
+// timestamps libavfilter gave them and those reach the file, on the graph's own
+// time base. A frame whose timestamp does not advance is dropped, which is what
+// ffmpeg's `vfr` means; `passthrough`, `drop` and `auto` are not offered, because
+// the first differs from `vfr` only in handing libavcodec a timestamp that does
+// not move (an encode that fails rather than a mode), the second is `cfr` by
+// another route, and the third is a choice the muxer makes for a CLI that is not
+// here. `vfr` is **refused, by name and before a file is opened**, for a render
+// with no `filterGraph`, for one whose every stream is copied, and for one whose
+// video streams read `pad:` labels: the compositor answers for whatever instant
+// it is asked about and so has no frame times of its own, and each pad of a graph
+// produces at its own moments while one walk has one timestamp to hand over. A
+// recording refuses anything but `cfr` for the same kind of reason — its clock is
+// the wall clock.
 bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openEnded,
-                            //     elapsed, fps, bytes, pieces, path, stage,
-                            //     error, job, pass, passes, passLabel }
+                            //     packets, elapsed, fps, bytes, pieces, path,
+                            //     stage, error, job, pass, passes, passLabel }
+// `packets` says what `frames` is counting: packets of a copy rather than output
+// frames. It used to be inferable from `totalFrames == 0` and is not any more —
+// an `fpsMode: "vfr"` render counts frames and cannot say how many there will be
+// either, so the two zeroes mean different things and a readout that guessed
+// would report a render encoding pictures as a rewrap.
 // `bytes` is on disk for a file and *sent* for a URL — a socket cannot be
 // stat'd, and an mp4 that +faststart rewrote is not the write position either.
 // `pieces` is how many files the muxer opened **beside** the one it was named
@@ -564,6 +587,14 @@ bro.ffmpeg.render.start({ …, width: 1920, height: 1080, clips: […],
 // render; `frames`/`totalFrames` are the pass's, because that is what the
 // encoder is doing. `pass` is 1 of 1 for an ordinary render, so nothing has to
 // know passes exist.
+//
+// **`totalFrames` is 0 for an `fpsMode: "vfr"` render**, on the same rule a
+// recording with no `-t` follows: how many frames the graph will make between
+// here and the end of the range is not something anybody knows until it has made
+// them, and zero is the honest answer rather than a number to be papered over.
+// `progress` is still right, because it is computed against the range's *length*
+// — which both walks know — and not against a frame count one of them would have
+// to invent.
 //
 // A pass that names its own encoder starts from an **empty** option bag: an
 // option table belongs to an encoder, and x264's `preset` on `wrapped_avframe`

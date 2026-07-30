@@ -1894,15 +1894,56 @@ console.log('\na keyframe where the edit cuts');
 
 console.log('\nhow the frames are timed and shaped');
 {
-    // Stated, not chosen. Both render paths walk the range at the output rate
-    // and stamp each frame with its number, so `cfr` is a fact about this
-    // renderer rather than a setting — and a picker offering `vfr` would be
-    // offering something neither path can produce.
-    ok(qq('button[data-seg="fpsmode"]').length === 0,
-       'there is no frame-timing picker, because there is nothing to pick');
+    // **Two values, and the one that needs a filter graph is refused with its
+    // reason while there is not one.** `vfr` keeps libavfilter's own frame times;
+    // the compositor answers for any instant it is asked about and so has none of
+    // its own. There is a picker, because there is something to pick — and on a
+    // plain composited timeline the variable button is present, disabled, and
+    // says why, which is what this application does instead of hiding a control.
+    ok(qq('button[data-seg="fpsmode"]').length === 2,
+       'frame timing is a choice of two');
+    const vary = q('button[data-seg="fpsmode"][data-v="vfr"]');
+    ok(vary && vary.disabled,
+       'and variable is refused while the render composites rather than filtering');
     ok(A.command.currentCommand().indexOf('-fps_mode cfr') > 0 ||
        A.command.currentCommand().indexOf('-fps_mode:v cfr') > 0,
-       'and the command says so out loud instead');
+       'and the command says which of the two it is');
+    ok(A.command.currentCommand().indexOf('-r:v ') > 0 ||
+       A.command.currentCommand().indexOf('-r ') > 0,
+       'with the rate cfr is constant at, which ffmpeg would otherwise take from the filters');
+    same(A.exporter.buildSpec().fpsMode, 'cfr', 'and the spec sends the mode in force');
+
+    // Pressing it anyway sets the preference and changes nothing about the
+    // render, because there is still no graph — which is the whole reason the
+    // spec sends what is *in force* rather than what is set.
+    S.fpsMode = 'vfr';
+    pump(60);
+    same(A.exporter.buildSpec().fpsMode, 'cfr',
+         'a remembered vfr does not reach a render that has no graph to take times from');
+
+    // And with a filter on the graph there is one, so the same preference is now
+    // in force — which is the whole point of asking `effectiveFpsMode()` rather
+    // than reading the setting: the answer is about this render.
+    A.graph.overlay.insert('clip:' + A.project.clips[0].id + '/after-scale', 'hflip');
+    // Placing a node on the Graph stage is not something the encode form
+    // listens for — nothing there depends on the graph but this one row — so the
+    // redraw is asked for rather than waited on.
+    A.exporter.redraw();
+    pump(90);
+    same(A.exporter.buildSpec().fpsMode, 'vfr',
+         'a render that goes through libavfilter keeps the graph’s own frame times');
+    {
+        const text = A.command.currentCommand();
+        ok(text.indexOf('-fps_mode:v vfr') > 0 || text.indexOf('-fps_mode vfr') > 0,
+           'and the command prints vfr');
+        ok(text.indexOf('-r:v ') < 0 && text.indexOf(' -r ') < 0,
+           'with no -r beside it, because naming a rate is what vfr must not do');
+    }
+    ok(!q('button[data-seg="fpsmode"][data-v="vfr"]').disabled,
+       'and the control is offered rather than refused');
+    A.graph.overlay.clear();
+    S.fpsMode = 'cfr';
+    pump(90);
 
     q('button[data-seg="fieldorder"][data-v="tt"]').click();
     pump(60);

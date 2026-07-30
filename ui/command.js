@@ -432,10 +432,21 @@ export function parts() {
             if (spec.threads) out.push(`-threads:${sel('v', idx, nVideo)}`, String(spec.threads));
             if (spec.threadType)
                 out.push(`-thread_type:${sel('v', idx, nVideo)}`, spec.threadType);
-            // Stated rather than chosen: this renderer walks the range at the
-            // output rate and stamps each frame with its number, on both paths.
-            // Printing it is what makes the command produce the same file.
-            out.push(`-fps_mode:${sel('v', idx, nVideo)}`, 'cfr');
+            // **Which walk this render is, and `-r` beside it where it is the
+            // fixed one.** `cfr` is the range walked at the output rate with each
+            // frame stamped by its number, and ffmpeg needs to be told what rate
+            // that is or it takes the filter output's — which for a graph with an
+            // `fps` in it is a different number and therefore a different file.
+            // `vfr` keeps the graph's own frame times, so naming a rate is
+            // precisely what must not be printed. `spec.fpsMode` rather than the
+            // setting, because a render that composites is `cfr` whatever the
+            // setting says: one home, in `effectiveFpsMode()`.
+            if (spec.fpsMode === 'vfr') {
+                out.push(`-fps_mode:${sel('v', idx, nVideo)}`, 'vfr');
+            } else {
+                out.push(`-r:${sel('v', idx, nVideo)}`, String(spec.fps || 30));
+                out.push(`-fps_mode:${sel('v', idx, nVideo)}`, 'cfr');
+            }
             bsfArgs(out, s, 'v', idx, nVideo);
             describe(out, s, 'v', idx, nVideo);
             continue;

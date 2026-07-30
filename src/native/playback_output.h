@@ -96,6 +96,15 @@
 // case this is tuned for; when it is not, the picture is older than the playhead
 // says and the sound is right, which is this file's whole trade written into one
 // timestamp.
+//
+// **`-fps_mode` is one of the encode-half settings this ignores, and it has to
+// be.** A render with `vfr` on it keeps the graph's own frame times *in the
+// file*; here there is no file, and what an element is fed is a picture at an
+// instant on the sound's clock — see the paragraph above. So this walks the range
+// at the output rate whatever the setting says, asking `canvasAt(t)` rather than
+// `FrameSource`'s paced pull, and the frame timing of the output is not something
+// a monitor could show in the first place. Nothing is being quietly dropped: the
+// pictures are the render's pictures either way, and only their stamps differ.
 #pragma once
 
 #include "ffmpeg_export.h"

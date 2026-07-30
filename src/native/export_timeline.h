@@ -13,12 +13,28 @@
 // asks nothing else of either, which is why adding the second one left
 // `runExport` a walk over frames with one line changed.
 //
+// **Two of the three questions are about an instant and one is not.** "What does
+// the output look like at t" is the whole of a fixed-rate render and the only
+// thing a track stack can answer, because it composites the edit wherever it is
+// asked to. A filter graph is the other way round: its frames arrive when the
+// graph is ready and carry timestamps of their own, and a walk that asks it for
+// an instant is imposing a grid on times that already existed. So `FrameSource`
+// grew a *paced* pull beside the instant one — `pacedClock` and `nextFrame`
+// below — which answers "no" by default and is what `-fps_mode vfr` is made of.
+//
 // Sources are opened lazily, on the frame a clip first appears. A two-hour
 // timeline of a hundred clips would otherwise open a hundred files, and their
 // decoders, before writing a frame.
 #pragma once
 
 #include "ffmpeg_export.h"
+
+extern "C" {
+// For `AVRational` alone, which `pacedClock()` below answers with. A clock is a
+// pair of integers and libavutil already has the name for one; two ints here
+// would be a second spelling of `AVRational` for the writer to convert back.
+#include <libavutil/rational.h>
+}
 
 #include <memory>
 #include <string>
@@ -130,6 +146,68 @@ public:
     /// Only called when `hwFrames()` said yes *and* the writer agreed to take
     /// them; `canvasAt` remains the question for every other render.
     virtual const AVFrame* nativeAt(double t) { return nullptr; }
+
+    // ── the source that keeps its own time ─────────────────────────────────
+    //
+    // `canvasAt(double t)` asks for an instant, and that is the right question
+    // for two of the three things that ask it: `playback_output.h` wants a
+    // picture at the playhead to hand a `<video>`, and `ffmpeg_capture.h`'s
+    // recording walk is the wall clock, which is constant by definition. The
+    // job's own walk is the third, and it is the only one for which "at t" is a
+    // *decision* rather than the question — it steps t forward at the output
+    // rate and stamps each frame with its number, which is what makes a file
+    // constant frame rate and is `-fps_mode cfr`.
+    //
+    // **Frames leaving a libavfilter sink carry timestamps of their own**, and
+    // throwing them away is what made `cfr` the only honest value here. A graph
+    // holding an `fps`, a `select`, a `framestep` or a
+    // `minterpolate` produces frames at moments that are not the output grid,
+    // and re-numbering them slows the picture down or speeds it up by exactly
+    // the ratio of the two rates. So the four calls below are the paced pull:
+    // *the source says when its next frame is, instead of being asked for an
+    // instant.*
+    //
+    // Optional, and answering "no" by default, exactly as `exhausted`,
+    // `nativeAt` and `padAt` do — and for the same reason. `TimelineSource`
+    // composites the edit at whatever instant it is handed: it can answer for
+    // *any* t, so there is no set of times of its own for it to pass through,
+    // and a multi-clip composite has no answer to "whose timestamps?" that is
+    // not invented. A compositor-driven render therefore stays `cfr` and a
+    // spec asking otherwise is refused by name in `startExport`, rather than
+    // being quietly given the grid it asked to be let off.
+    //
+    // The picture is read *after* `nextFrame` and by the two `…Now` calls, not
+    // by `canvasAt`/`nativeAt`: those advance the source, which on this walk has
+    // already happened. `padAt` needs no twin — it never advanced anything.
+
+    /// The clock this source's own frame times are on, or `{0, 1}` for a source
+    /// that has none.
+    ///
+    /// `{0, 1}` — the default — is the whole of "no": the job checks it before
+    /// the first frame and walks the range at the output rate instead. It is
+    /// asked once, before the writer opens, because a stream that will carry the
+    /// source's own timestamps has to have its *encoder* opened on this clock:
+    /// stamped into a `1/fps` time base every frame would quantise straight back
+    /// onto the grid and the file would be constant-rate while claiming not to
+    /// be.
+    virtual AVRational pacedClock() const { return AVRational{0, 1}; }
+
+    /// Advance to the next frame this source makes, and say when it is.
+    ///
+    /// False once there are no more, which ends the walk. `*pts` is on
+    /// `pacedClock()` and is the source's own — unshifted, so the job is the one
+    /// place that decides where the output's zero is.
+    virtual bool nextFrame(int64_t* pts) { return false; }
+
+    /// The picture the last `nextFrame` handed over, as RGBA. Null when there is
+    /// none, which the job treats as the end of the walk rather than as black:
+    /// on this path a frame exists because the source said so.
+    virtual const Rgba* canvasNow() { return nullptr; }
+
+    /// The same picture exactly as it left the source — on the device when that
+    /// is where it was made. The paced twin of `nativeAt`, for the render whose
+    /// pictures never come down.
+    virtual const AVFrame* nativeNow() { return nullptr; }
 };
 
 class TimelineSource : public FrameSource {

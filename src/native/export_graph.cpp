@@ -195,10 +195,23 @@ bool GraphSource::build(std::string* err) {
         // Said into the report as well as the console, because it is exactly
         // the kind of thing that is only noticed at the end of a render and
         // only explicable if somebody wrote it down while it happened.
+        //
+        // **Unless the render keeps the graph's own frame times**, which is what
+        // `-fps_mode vfr` is and is the answer to this warning rather than an
+        // exception to it: there the timestamps that reach the file are the ones
+        // arriving, so a graph at another rate comes out at its own rate and
+        // nothing runs fast or slow. The two sentences are one fact and live
+        // here together for that reason — see ExportSettings::fpsMode.
         char said[256];
-        std::snprintf(said, sizeof(said),
-                      "the graph runs at %.3f fps and the render at %.3f, so the result "
-                      "will run fast or slow", av_q2d(r), settings_.fps);
+        if (settings_.fpsMode == "vfr")
+            std::snprintf(said, sizeof(said),
+                          "the graph runs at %.3f fps and the render at %.3f; its own frame "
+                          "times are being kept, so the result runs at the graph's rate",
+                          av_q2d(r), settings_.fps);
+        else
+            std::snprintf(said, sizeof(said),
+                          "the graph runs at %.3f fps and the render at %.3f, so the result "
+                          "will run fast or slow", av_q2d(r), settings_.fps);
         LOG_WARN("export: %s", said);
         reportNote(AV_LOG_WARNING, "graph", said);
     }
@@ -698,8 +711,14 @@ bool GraphSource::convertInto(Sink& s, Rgba& dst, SwsContext** scaler) {
     return sws_scale(*scaler, f->data, f->linesize, 0, f->height, out, stride) > 0;
 }
 
-const Rgba& GraphSource::canvasAt(double) {
-    tick();
+/// The tick's composite, converted — the half of `canvasAt` that does not
+/// advance the graph.
+///
+/// Split out for the paced walk, which has already advanced it through
+/// `nextFrame` and would otherwise throw the frame it was told about away and
+/// convert the one after. Nothing else changed: `canvasAt` is still the tick and
+/// this in one line.
+const Rgba& GraphSource::composite() {
     canvas_.resize(settings_.width, settings_.height);
 
     const auto black = [this]() -> const Rgba& {
@@ -713,6 +732,11 @@ const Rgba& GraphSource::canvasAt(double) {
     if (!vprimary_) return black();
     if (!convertInto(*vprimary_, canvas_, &toCanvas_)) return black();
     return canvas_;
+}
+
+const Rgba& GraphSource::canvasAt(double) {
+    tick();
+    return composite();
 }
 
 const Rgba* GraphSource::padPicture(Sink& s) {
@@ -741,13 +765,40 @@ AVBufferRef* GraphSource::hwFrames() const {
 const AVFrame* GraphSource::nativeAt(double) {
     if (!vprimary_) return nullptr;
     tick();
+    return nativeNow();
+}
+
+// ── the graph's own frame times ────────────────────────────────────────────
+
+AVRational GraphSource::pacedClock() const {
+    return vprimary_ ? av_buffersink_get_time_base(vprimary_->ctx) : AVRational{0, 1};
+}
+
+bool GraphSource::nextFrame(int64_t* pts) {
+    if (!vprimary_) return false;
+    tick();
+    if (vprimary_->ended) return false;
+    // libavfilter's own, untouched. A frame with no timestamp is handed over as
+    // one: `AV_NOPTS_VALUE` is a real answer here and the job refuses the render
+    // by name rather than inventing a moment for it, because a variable-rate
+    // output *is* its timestamps.
+    if (pts) *pts = vprimary_->frame->pts;
+    return true;
+}
+
+const Rgba* GraphSource::canvasNow() {
+    if (!vprimary_ || vprimary_->ended) return nullptr;
+    return &composite();
+}
+
+const AVFrame* GraphSource::nativeNow() {
     // No black frame at the end of this path, deliberately. Black in the
     // encoder's format would have to be made in system memory and uploaded,
     // which is the readback this path exists to avoid — done once a frame
     // for however much of the range is left over. A render that keeps its
     // pictures on the card ends when its graph does, and docs/manual/card.md
     // says so.
-    return vprimary_->ended ? nullptr : vprimary_->frame;
+    return !vprimary_ || vprimary_->ended ? nullptr : vprimary_->frame;
 }
 
 // ── Sound ──────────────────────────────────────────────────────────────────

@@ -141,6 +141,11 @@ JSValue js_renderPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     // total is zero, and a bar at zero for ten minutes says "stuck" rather
     // than "recording". See ffmpeg_capture.h.
     JS_SetPropertyStr(ctx, o, "openEnded", JS_NewBool(ctx, st.openEnded));
+    // What `frames` counts. `totalFrames == 0` used to say "packets" on its own,
+    // and stopped: a `-fps_mode vfr` render counts frames and cannot say how many
+    // there will be either. Read it before naming the unit, or a render encoding
+    // pictures is reported as a copy. See ExportStatus::countingPackets.
+    JS_SetPropertyStr(ctx, o, "packets", JS_NewBool(ctx, st.countingPackets));
     JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, st.elapsedSec));
     JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, st.encodeFps));
     JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, st.bytesWritten));

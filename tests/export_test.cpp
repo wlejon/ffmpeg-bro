@@ -1886,6 +1886,170 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ── the graph's own frame times, kept ──────────────────────────────────
+    //
+    // `-fps_mode vfr`. Both render paths used to stamp every frame with its
+    // number, which is `cfr` and is the only thing a composited render can
+    // honestly claim — but a filter graph's frames arrive carrying timestamps of
+    // their own, and numbering them is what made a graph at another rate come
+    // out fast or slow.
+    //
+    // **The graph here is genuinely uneven and that is the whole design of the
+    // check.** A source at 50 fps with `select` keeping two frames out of every
+    // four leaves timestamps at 0, 1, 4, 5, 8, 9… fiftieths of a second: spacing
+    // no frame number can express, so a walk that had gone on numbering them
+    // would show up as evenly spaced packets whatever else it got right.
+    // Anything constant — `fps=`, `framestep` — would pass this under either
+    // mode and prove nothing.
+    {
+        std::printf("\nthe graph's own frame times\n");
+
+        // The sound is here because the *sound* is the half that had to change
+        // shape: the sample count is accumulated from the start of the render so
+        // that no sample is lost or repeated at a frame boundary, and on this
+        // walk a frame does not know where it ends — so each covers up to its own
+        // moment and a tail block covers the last frame's own duration. The check
+        // below is that the two walks write the same length of sound.
+        char text[512];
+        std::snprintf(text, sizeof(text),
+                      "color=c=red:s=%dx%d:r=50,select='lt(mod(n,4),2)',format=rgba[vout];"
+                      "sine=frequency=440:sample_rate=48000[aout]",
+                      kW, kH);
+
+        /// The last packet of a stream, in seconds — which for the sound is how
+        /// far the soundtrack reaches.
+        const auto endOf = [](const std::string& path, AVMediaType kind) {
+            const int idx = streamIndexOf(path, kind);
+            double last = -1.0;
+            if (idx < 0) return last;
+            for (const auto& p : packetsOf(path, idx))
+                if (p.pts != AV_NOPTS_VALUE)
+                    last = std::max(last, p.pts * av_q2d(p.timeBase));
+            return last;
+        };
+
+        const std::string outV = "out/export-vfr.mp4";
+        ExportSettings sv = baseSettings(outV);
+        sv.endTime = 0.4;
+        sv.filterInputs = {};
+        sv.filterGraph = text;
+        sv.fpsMode = "vfr";
+        st = render(sv, {});
+        checkf(st.state == ExportStatus::State::Done,
+               "a graph whose frames are unevenly spaced renders with -fps_mode vfr (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+
+        if (st.state == ExportStatus::State::Done) {
+            const int vs = streamIndexOf(outV, AVMEDIA_TYPE_VIDEO);
+            const std::vector<Pkt> pk = vs >= 0 ? packetsOf(outV, vs) : std::vector<Pkt>();
+            // In seconds, out of the container's own time base — the point being
+            // that the base has to be fine enough to hold 1/50ths, which a
+            // `1/fps` one is not.
+            std::vector<double> times;
+            for (const auto& p : pk)
+                if (p.pts != AV_NOPTS_VALUE) times.push_back(p.pts * av_q2d(p.timeBase));
+            std::sort(times.begin(), times.end());
+            checkf(times.size() >= 6, "and writes the frames the graph made (%d)",
+                   static_cast<int>(times.size()));
+            if (times.size() >= 6) {
+                // 0, .02, .08, .10 … so the first gap is a fiftieth and the
+                // second is three of them. Equal gaps here would be the frame
+                // numbers coming back.
+                const double g1 = times[1] - times[0];
+                const double g2 = times[2] - times[1];
+                checkf(std::abs(g1 - 0.02) < 0.005 && std::abs(g2 - 0.06) < 0.01,
+                       "spaced as the graph spaced them rather than on a grid "
+                       "(%.4f s then %.4f s)", g1, g2);
+                checkf(times.back() < 0.4 + 1e-6,
+                       "and the range still ends the file (%.4f s)", times.back());
+            }
+        }
+
+        // The same graph on the fixed-rate walk, for the contrast: every gap the
+        // same, because a frame number is the whole timestamp there. This is the
+        // behaviour every render in this file relies on, so it is worth one
+        // assertion that it did not change.
+        const std::string outC = "out/export-cfr.mp4";
+        ExportSettings sc = sv;
+        sc.path = outC;
+        sc.fpsMode = "cfr";
+        st = render(sc, {});
+        if (st.state == ExportStatus::State::Done) {
+            const int cs = streamIndexOf(outC, AVMEDIA_TYPE_VIDEO);
+            const std::vector<Pkt> pk = cs >= 0 ? packetsOf(outC, cs) : std::vector<Pkt>();
+            std::vector<double> times;
+            for (const auto& p : pk)
+                if (p.pts != AV_NOPTS_VALUE) times.push_back(p.pts * av_q2d(p.timeBase));
+            std::sort(times.begin(), times.end());
+            bool even = times.size() >= 3;
+            for (size_t i = 2; i < times.size(); ++i)
+                if (std::abs((times[i] - times[i - 1]) - (times[1] - times[0])) > 0.002)
+                    even = false;
+            checkf(even, "and cfr puts the same pictures on an even grid (%d frames)",
+                   static_cast<int>(times.size()));
+
+            // **The soundtrack is the same length either way**, which is the one
+            // thing the paced walk could have got wrong and would not have shown
+            // in the picture: the fixed-rate walk covers up to the *next* frame
+            // and so reaches the end of the range on its own, while the paced one
+            // covers up to each frame's own moment and owes the last frame's
+            // duration. Compared against the other walk rather than against a
+            // number, because 0.4 s of AAC is nineteen packets and a bit and the
+            // "and a bit" is the encoder's business. One packet of tolerance,
+            // which is 1024 samples at 48 kHz.
+            const double av = endOf(outV, AVMEDIA_TYPE_AUDIO);
+            const double ac = endOf(outC, AVMEDIA_TYPE_AUDIO);
+            const double vv = endOf(outV, AVMEDIA_TYPE_VIDEO);
+            checkf(av > 0 && ac > 0 && std::abs(av - ac) <= 1024.0 / 48000.0 + 1e-6,
+                   "and the sound of the two is the same length (%.4f s against %.4f s)",
+                   av, ac);
+            // And it goes past the last picture, which is where it would have
+            // stopped if the tail block were missing — the last frame is at
+            // 0.34 s and the range ends at 0.40.
+            checkf(av > vv, "reaching the end of the range rather than the last picture "
+                            "(%.4f s of sound against %.4f s of picture)", av, vv);
+        }
+
+        // ── and the three renders that cannot keep anybody's frame times ────
+        //
+        // Each refused before a file is opened, and each naming the reason
+        // rather than being silently ignored: a file that plays and is timed
+        // wrong is the failure that looks like it worked.
+        ExportSettings noGraph = baseSettings("out/export-vfr-refused.mp4");
+        noGraph.endTime = 0.4;
+        noGraph.fpsMode = "vfr";
+        ExportClip one;
+        one.path = first;
+        one.start = 0;
+        one.length = 0.4;
+        one.w = kW;
+        one.h = kH;
+        ExportStatus r1 = render(noGraph, {one});
+        checkf(r1.state == ExportStatus::State::Failed &&
+                   r1.error.find("composites the timeline") != std::string::npos,
+               "a composited render is refused vfr, saying the compositor has no times of its "
+               "own (%s)", r1.error.empty() ? "it rendered, which it must not" : r1.error.c_str());
+
+        ExportSettings padded = sv;
+        padded.path = "out/export-vfr-pad.mp4";
+        padded.streams = {{"video", "pad:vout"}};
+        ExportStatus r2 = render(padded, {});
+        checkf(r2.state == ExportStatus::State::Failed &&
+                   r2.error.find("own moments") != std::string::npos,
+               "and a render that maps a graph pad is refused too (%s)",
+               r2.error.empty() ? "it rendered, which it must not" : r2.error.c_str());
+
+        ExportSettings named = sv;
+        named.path = "out/export-vfr-named.mp4";
+        named.fpsMode = "passthrough";
+        ExportStatus r3 = render(named, {});
+        checkf(r3.state == ExportStatus::State::Failed &&
+                   r3.error.find("passthrough") != std::string::npos,
+               "and a mode this renderer does not perform is refused by name rather than "
+               "mapped onto one it does (%s)",
+               r3.error.empty() ? "it rendered, which it must not" : r3.error.c_str());
+    }
+
     // ── a second picture the graph opened for itself ───────────────────────
     //
     // A watermark, a logo bug and an insert are all one shape: a file the graph

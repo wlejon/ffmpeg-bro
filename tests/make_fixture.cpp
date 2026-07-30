@@ -141,7 +141,7 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
 
     for (int64_t n = 0; n < frames; ++n) {
         paint(canvas, double(n) / double(frames > 1 ? frames - 1 : 1), r.tint);
-        if (!writer.writeVideo(canvas, n, &err)) {
+        if (!writer.writeVideo(canvas, {n}, &err)) {
             std::fprintf(stderr, "%s: %s\n", r.name, err.c_str());
             return false;
         }
@@ -738,7 +738,7 @@ bool writeStills(const std::filesystem::path& pattern, int count, int width, int
     canvas.resize(width, height);
     for (int n = 0; n < count; ++n) {
         paint(canvas, double(n) / double(count > 1 ? count - 1 : 1), tint);
-        if (!writer.writeVideo(canvas, n, &err)) {
+        if (!writer.writeVideo(canvas, {n}, &err)) {
             std::fprintf(stderr, "%s: %s\n", pattern.string().c_str(), err.c_str());
             return false;
         }
