@@ -3,7 +3,9 @@
 // The viewer composites by placing one `<video>` per clip, which is exact for
 // everything a clip does on its own and structurally cannot show three things:
 // a generated source with no clip behind it, a filter over the whole canvas,
-// and a filter that changes the size of a clip's picture. This suite is about
+// and a filter that resizes a clip's picture below the point where the clip is
+// placed — where the render lays the result over the canvas at its own size
+// rather than in a rectangle anything could be placed by. This suite is about
 // those three and about the handover the mode is — because the preview is the
 // picture, so while it is on it is also the clock.
 //
@@ -227,17 +229,19 @@ console.log('\na programme-wide filter');
     pump(200);
 }
 
-// ── a filter that resizes a clip's picture ─────────────────────────────────
+// ── a filter that resizes a clip's picture, after it is placed ─────────────
 //
-// The second. The viewer places a clip by the rectangle its *source* has, so a
-// chain that changes the size of the picture is refused rather than stretched
-// back into a rectangle the render never puts it in — and it wears the `fx`
-// badge instead. The render has no such problem, because placing is what the
-// render does.
+// The second, and it is the half of that which is left: a resize on the way *in*
+// changes how big the clip's picture is, which the viewer now lays it out at. A
+// resize below the derivation's `scale` is the other thing — the render lays what
+// comes out of it over the canvas at its own size, at the rectangle's top-left,
+// which is not a rectangle the viewer has any way to place. So that one is
+// refused and wears the `fx` badge, and the render has no such problem, because
+// placing is what the render does.
 
-console.log('\na filter that resizes the picture');
+console.log('\na filter that resizes the picture after the clip is placed');
 {
-    A.graph.overlay.insert(`clip:${clip.id}/after-decode`, 'scale',
+    A.graph.overlay.insert(`clip:${clip.id}/after-scale`, 'scale',
                            { pos: ['iw/2', 'ih/2'] });
     pump(400);
 

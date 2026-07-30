@@ -2906,14 +2906,52 @@ if (!media) {
          'taking the filters off puts the element back on the input, exactly');
     ok(!badged(), 'and there is nothing left to badge');
 
-    // **A filter that resizes the picture is refused.** The viewer places a
-    // clip by the rectangle its source has; the render overlays whatever the
-    // chain produced at the same top-left. Drawing a cropped picture stretched
-    // back to full size would be a picture the render never makes.
+    // **A filter that resizes the picture on the way in is played, and the clip
+    // is laid out at the size the filter made it.** Half the width in, half the
+    // width on the screen: the placement rectangle comes from the chain's output
+    // rather than from the probe, so the render — which is handed the same
+    // rectangle and scales the same chain into it — puts the picture exactly
+    // where the monitor does. The alternative was stretching it back to the
+    // shape of the file, which is the one shape the filter says it is not.
+    const shapeOf = () => {
+        const w = parseFloat(clip.frame.style.width) || 0;
+        const h = parseFloat(clip.frame.style.height) || 0;
+        return h ? w / h : 0;
+    };
+    const wholeShape = shapeOf();
+    overlay.insert(`clip:${clip.id}/after-decode`, 'crop',
+                   { pos: ['iw/2', 'ih', '0', '0'] });
+    pump(400);
+    ok(clip.video.src.indexOf('/@fx/') === 0,
+       'a filter that resizes the picture on the way in is played');
+    ok(!badged(), 'and wears no badge, because the picture on the screen has it in it');
+    const half = A.graph.playback.sizeFor(clip.id);
+    ok(!!half && half.w === Math.floor(clip.width / 2) && half.h === clip.height,
+       `the clip's size is what its chain makes of it: ${half && half.w}x${half && half.h} ` +
+       `out of ${clip.width}x${clip.height}`);
+    ok(wholeShape > 0 && Math.abs(shapeOf() - wholeShape / 2) < 0.02,
+       `and it is laid out in that shape rather than the file's (${shapeOf().toFixed(3)} ` +
+       `from ${wholeShape.toFixed(3)})`);
+    // And the render follows, because there is one layout: the derivation sizes
+    // the clip into the rectangle `placement()` handed the spec, so the `scale`
+    // in the invocation about to be run has the narrow shape too. Read off the
+    // printed command rather than off a graph derived here, because the command
+    // is what this application says it will do.
+    const scaled = /scale=(\d+):(\d+)/.exec(A.command.currentCommand());
+    ok(!!scaled &&
+       Math.abs(Number(scaled[1]) / Number(scaled[2]) - shapeOf()) < 0.02,
+       `and the render sizes it into the same rectangle: scale=${scaled && scaled[1]}:` +
+       `${scaled && scaled[2]}`);
+
+    // **A resize below the point where the clip is placed is refused.** That is
+    // the other side of the derivation's `scale`: the render lays whatever comes
+    // out of it over the canvas at its own size, at the rectangle's top-left,
+    // which is not a rectangle the viewer can place. `O` is where to see it.
+    overlay.clear();
     overlay.insert(anchor, 'crop', { pos: ['iw/2', 'ih', '0', '0'] });
     pump(400);
     ok(clip.video.src.indexOf('/@fx/') !== 0,
-       'a filter that changes the size of the picture is not played');
+       'a filter that resizes the picture after the clip is placed is not played');
     ok(badged(), 'the fx badge comes back for it');
     ok((clip.frame.title || '').indexOf('size') >= 0,
        `and the picture says why: ${clip.frame.title}`);

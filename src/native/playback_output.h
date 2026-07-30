@@ -12,9 +12,11 @@
 // own — and cannot show the three things that are not about one clip: a
 // generated source with no clip behind it (`testsrc` feeding an `overlay`), a
 // filter over the whole canvas (a burn-in after the composite), and a filter
-// that changes the size of a clip's picture, which the viewer refuses because it
-// places a clip by the rectangle its *source* has. All three are questions about
-// what the *output* is, and the only honest answer to those is the output.
+// that resizes a clip's picture *below the point where the clip is placed*,
+// which the render lays over the canvas at its own size rather than in a
+// rectangle — so the viewer, which has only rectangles, refuses it. All three
+// are questions about what the *output* is, and the only honest answer to those
+// is the output.
 //
 // Four decisions, each of them about being the render rather than resembling it:
 //

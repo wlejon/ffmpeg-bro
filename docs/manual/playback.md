@@ -39,10 +39,12 @@ things that are not about one clip:
   rooted entirely in generators, with nothing on the timeline at all, plays here.
 - a **filter over the whole canvas**: a burn-in after the composite has no single
   picture to run on, because the composite is one element laid over another.
-- a **filter that changes the size of a clip's picture**, which the viewer
-  refuses — see [A filter in the viewer](graph.md#a-filter-in-the-viewer) — rather
-  than stretching it back into a rectangle the render never puts it in. Placing
-  is what the render does, so the render has no such problem.
+- a **filter that resizes a clip's picture below the point where the clip is
+  placed**, which the render lays over the canvas at its own size rather than in
+  a rectangle — so the viewer, which has only rectangles, refuses it: see
+  [A filter in the viewer](graph.md#a-filter-in-the-viewer). A resize on the way
+  *in* is a rectangle, and the monitor shows that one. Placing is what the render
+  does, so the render has no such problem with either.
 
 **It is the clock while it is on**, because it is the picture on the screen —
 which is the rule the transport has always followed about the topmost clip. The

@@ -10,9 +10,11 @@
 //     which is a node with no clip, so there is no element for it to be;
 //   - a **filter over the whole canvas**, a burn-in after the composite, which
 //     has no single picture to run on because the composite is the browser's;
-//   - a **filter that changes the size of a clip's picture**, which the viewer
-//     refuses rather than stretching back into a rectangle the render never
-//     puts it in.
+//   - a **filter that resizes a clip's picture below the point where the clip
+//     is placed**, which the render lays over the canvas at its own size rather
+//     than in a rectangle — so there is nothing for the viewer to place, and it
+//     says so instead of guessing. A resize on the way *in* is a rectangle, and
+//     the viewer does show that one.
 //
 // All three are questions about what the *output* is, and the only honest answer
 // to those is the output. So this points one element at

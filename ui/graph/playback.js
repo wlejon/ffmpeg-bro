@@ -40,14 +40,35 @@
 // `shift` is only how much of it to take back off at the end — the element's
 // clock is the file's, whatever the filters in between did to it.
 //
+// **A clip's size is what its chain makes of it.** A `crop` or a `scale` put on
+// a clip does not only change its pixels, it changes how big the picture *is* —
+// and one number decides everything about where a picture goes:
+// `viewer.placement()` fits it, `buildSpec` carries the rectangle that fitting
+// produced, and the derivation's own `scale` sizes the clip into that rectangle.
+// So `sizeFor` reports what the chain settled on and the layout asks it before
+// it asks the probe. Reported rather than written onto the clip: `clip.width` is
+// what the *file* holds, which is a different question and still has an answer.
+//
+// That is also what makes the picture on the screen and the picture in the
+// render the same one. The viewer stretches the element into the rectangle; the
+// render scales the chain's output into the same rectangle and lays it there.
+// Neither of them knows a filter resized anything, and the rectangle is the
+// shape the filter made — which is the whole of what applying a resize *in
+// place* comes to.
+//
 // **A chain that cannot be shown honestly is not shown.** Two cases, and both
 // keep the badge rather than drawing something nearly right:
 //
-//   - **a filter that changes the size of the picture.** The viewer places a
-//     clip by the rectangle its *source* has and the render overlays whatever
-//     the chain produced at the same top-left, so a `crop` on the end of a run
-//     would be drawn stretched back into a rectangle the render never puts it
-//     in. `views.define` reports both sizes and this refuses when they differ.
+//   - **a resize below the point where the clip is placed.** The derivation's
+//     `scale` is where a clip stops being its own size and becomes a rectangle
+//     on the canvas, and the render lays whatever comes out below that node over
+//     the canvas *at its own size*, at the rectangle's top-left — so a `crop`
+//     inserted after the scale is not a rectangle at all and there is nothing
+//     for the viewer to place. Which side of the scale a filter is on is what
+//     the walk below counts, because `views.define` reports one size for the
+//     whole chain and cannot say where in it the size changed: a resize on the
+//     way *in* with any filter of somebody's below the scale is refused as well,
+//     since from one number there is no telling which of the two did it.
 //   - **filters that are not one run.** A hand-wired fork, a node placed on the
 //     canvas and wired into the middle of a clip, anything with two producers:
 //     playback is one stream through one chain, and half of a graph shown as
@@ -87,6 +108,18 @@ export function srcFor(id) {
 export function viewFor(id) {
     const s = state.get(id);
     return (s && s.ask) || null;
+}
+
+/// The size this clip's picture *is* — `{ w, h }`, what its chain produced — or
+/// null for a clip whose element is playing its input plainly.
+///
+/// Read by `viewer.placement()` before it reads the probe, which is what puts a
+/// resizing filter into the layout rather than into a badge; see the note at the
+/// top of this file. Null rather than the source's size, so that the one place
+/// with a default keeps it: a clip with no picture at all has neither.
+export function sizeFor(id) {
+    const s = state.get(id);
+    return (s && s.size) || null;
 }
 
 /// Why this clip's filters are not on the screen, for a clip that has some and
@@ -170,19 +203,23 @@ function derivedStep(node, stream) {
 
 /// One clip's user filters on one stream, as `-vf`/`-af` text.
 ///
-/// Returns `{ ok: true, text, shift }` or `{ ok: false, reason }` — `shift`
-/// being how far the text moves the clock, so the caller can say what to take
-/// back off at the end. Walking rather than filtering, because the answer is an
-/// *order* and only the wires know it.
+/// Returns `{ ok: true, text, shift, late }` or `{ ok: false, reason }` —
+/// `shift` being how far the text moves the clock, so the caller can say what to
+/// take back off at the end, and `late` how many of the user's filters are below
+/// the derivation's `scale`, which is the node that decides whether a resize is
+/// a rectangle or a picture laid over one. Walking rather than filtering, because
+/// both answers are about *order* and only the wires know it.
 function chainOf(g, id, stream) {
     const key = `clip:${id}/`;
     const head = headOf(g, id);
-    if (!head) return { ok: true, text: '', shift: 0 };
+    if (!head) return { ok: true, text: '', shift: 0, late: 0 };
     const port = (head.outs || []).findIndex((o) => o.stream === stream);
-    if (port < 0) return { ok: true, text: '', shift: 0 };   // not read for that
+    if (port < 0) return { ok: true, text: '', shift: 0, late: 0 };  // not read for that
 
     const parts = [];
     let user = 0;
+    let late = 0;
+    let placed = false;
     let shift = 0;
     let edges = g.outEdges(head).filter((e) => (e.fromPort || 0) === port);
     for (;;) {
@@ -192,7 +229,7 @@ function chainOf(g, id, stream) {
         if (edges.length !== 1)
             return user
                 ? { ok: false, reason: 'these filters fork, and playback runs one chain' }
-                : { ok: true, text: '', shift: 0 };
+                : { ok: true, text: '', shift: 0, late: 0 };
         const node = g.node(edges[0].to);
         if (!node) break;
         // Out of this clip: the compositor's `overlay`, the mix, or the sink.
@@ -206,17 +243,22 @@ function chainOf(g, id, stream) {
             const step = derivedStep(node, stream);
             if (step) parts.push(step);
             shift += Number(node.moves) || 0;
+            // Everything from here down is running on a picture the size of the
+            // rectangle this clip is drawn in, in the render — so a filter here
+            // that resizes has resized the placed picture and not the clip.
+            if (stepOf(node.anchor) === 'scale') placed = true;
         } else {
             parts.push(filterArgs(node));
             user++;
+            if (placed) late++;
         }
         edges = g.outEdges(node);
     }
     // The conversions on their own are not worth a view: without a filter of
     // somebody's in the chain, what comes out is the picture the element was
     // already playing, decoded twice.
-    return user ? { ok: true, text: parts.join(','), shift }
-                : { ok: true, text: '', shift: 0 };
+    return user ? { ok: true, text: parts.join(','), shift, late }
+                : { ok: true, text: '', shift: 0, late: 0 };
 }
 
 /// What to ask for, for one clip — or what to say instead.
@@ -240,18 +282,30 @@ function askFor(g, spec, clip) {
     // answers for both, to within the half-millisecond below which the
     // derivation writes no `adelay` at all.
     const shift = v.text ? v.shift : a.shift;
-    return { input, video: v.text, audio: a.text, shift,
+    // `late` is not in the key, and cannot be: it is read off the same walk that
+    // produced the text, so a filter moved from one insert point to the other is
+    // a different chain in the text before it is a different number here.
+    return { input, video: v.text, audio: a.text, shift, late: v.late,
              key: JSON.stringify([input, v.text, a.text, shift]) };
 }
 
-/// Recompute every clip's view. Returns the ids whose view changed, which is
-/// the caller's cue to re-point those elements and seek them back into position.
+/// Recompute every clip's view. Returns `{ moved, resized }`, two lists of ids
+/// and two different things for the caller to do about them: `moved` is the
+/// elements to re-point and seek back into position, `resized` the clips whose
+/// picture is now a different size and whose layout — and therefore the graph
+/// and the printed command, which are downstream of a rectangle — was stated
+/// before this ran.
 ///
 /// **The ids and not a flag**, because a view can change without its token
 /// changing: dragging a clip along the timeline moves its `shift` and the src
 /// stays `/@fx/clip-7`, and a source that resolved the old one holds it for as
 /// long as it is open. The element has to be rebuilt for that, and only the
 /// clips it is true of.
+///
+/// A clip that has just *stopped* being filtered is in `resized` too, even where
+/// the chain it lost never changed the size: what the layout falls back to is the
+/// probe's answer, and this file does not hold that to compare against. The cost
+/// of being wrong that way is one redraw of two statements.
 ///
 /// Cheap when nothing relevant moved: one derivation, and a settle only for a
 /// clip whose input or chains actually changed — `defineSettled` in the native
@@ -261,11 +315,12 @@ export function refresh() {
     const g = graphNow(spec);
     const live = new Set();
     const moved = [];
+    const resized = [];
 
     for (const clip of (spec && spec.clips) || []) {
         if (clip.id === undefined || clip.id === null) continue;
         live.add(clip.id);
-        const had = state.get(clip.id) || { key: '', src: '', why: '' };
+        const had = state.get(clip.id) || { key: '', src: '', why: '', size: null };
         // A graph that will not derive leaves everything exactly as it was: the
         // Graph stage is where a broken graph is explained, and pulling the
         // pictures off the screen while somebody is half way through wiring
@@ -277,23 +332,31 @@ export function refresh() {
         if (had.key === key) continue;
 
         let src = '';
+        let size = null;
         let why = ask.why || '';
         if (ask.key) {
             try {
                 const got = bro.ffmpeg.views.define(`clip-${clip.id}`, {
                     input: ask.input, video: ask.video, audio: ask.audio, shift: ask.shift,
                 });
-                if (ask.video && got.video &&
-                    (got.width !== got.sourceWidth || got.height !== got.sourceHeight)) {
+                const changedSize = ask.video && got.video &&
+                    (got.width !== got.sourceWidth || got.height !== got.sourceHeight);
+                if (changedSize && ask.late) {
                     // Refused, not drawn at the wrong size — see the note at the
                     // top. The token is dropped so nothing can be pointed at it
                     // by accident later.
                     bro.ffmpeg.views.forget(`clip-${clip.id}`);
                     why = `these filters make a ${got.width}×${got.height} picture out of a ` +
-                          `${got.sourceWidth}×${got.sourceHeight} one, and the viewer places ` +
-                          'this clip at the size its source is';
+                          `${got.sourceWidth}×${got.sourceHeight} one below the point where ` +
+                          'this clip is placed, and the render lays that over the canvas at ' +
+                          'its own size rather than in a rectangle';
                 } else {
                     src = got.src;
+                    // What the clip's picture now *is*, for the layout to fit —
+                    // whatever the chain settled on, which for the chains that
+                    // change no size is the size the file already had.
+                    if (got.video && got.width > 0)
+                        size = { w: got.width, h: got.height };
                 }
             } catch (e) {
                 why = String((e && e.message) || e);
@@ -305,7 +368,10 @@ export function refresh() {
         // Both mean this element is playing something that is no longer what
         // was asked for.
         if (src !== had.src || src) moved.push(clip.id);
-        state.set(clip.id, { key, src, why, ask: ask.key ? ask : null });
+        if ((size ? size.w : 0) !== (had.size ? had.size.w : 0) ||
+            (size ? size.h : 0) !== (had.size ? had.size.h : 0))
+            resized.push(clip.id);
+        state.set(clip.id, { key, src, why, size, ask: ask.key ? ask : null });
     }
 
     // Clips that have gone. The token goes with them: a view holds an input
@@ -313,7 +379,7 @@ export function refresh() {
     // every file this session has opened named in it.
     for (const id of Array.from(state.keys()))
         if (!live.has(id)) { forget(id); state.delete(id); }
-    return moved;
+    return { moved, resized };
 }
 
 function forget(id) {

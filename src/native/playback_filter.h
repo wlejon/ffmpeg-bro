@@ -52,11 +52,11 @@
 // input, builds the graph and reports what it turned out to produce — because
 // the answer decides what the caller does, and a `<video>` that fails to open is
 // a black rectangle with the reason in a log nobody reads. A chain that will not
-// parse is a refusal with libavfilter's own words in it, and a chain that
-// changes the size of the picture is one the viewer says it cannot show rather
-// than showing at the wrong size: the program monitor places a clip by the
-// rectangle its *source* has, and a filter that resizes the picture would be
-// drawn into a rectangle the render never puts it in.
+// parse is a refusal with libavfilter's own words in it, and the size the chain
+// settled on is what the program monitor lays the clip out at — `width` against
+// `sourceWidth` is a fact reported rather than a rule enforced, because which of
+// the two the caller wants depends on where in its own graph the resize happened
+// and this cannot know that. `ui/graph/playback.js` is where that is decided.
 #pragma once
 
 #include "ffmpeg_input.h"

@@ -487,13 +487,27 @@ and the view takes the whole of it back off at the end so the playhead is still
 counting the file. A clip laid down twelve seconds into the edit from three
 seconds into its file plays `setpts=PTS+9/TB` in the middle of its chain.
 
+**A filter that resizes the picture resizes the clip.** A `crop` or a `scale` put
+on a clip does not only change its pixels — it changes how big that clip's
+picture *is*, and the layout asks the chain what it produced before it asks the
+file. So half the width in is half the width on the screen: the picture is fitted
+in the shape the filter made it rather than stretched back to the shape the file
+was. The render follows without being told, because there is one layout
+implementation — the rectangle the monitor drew the clip in is the rectangle the
+spec carries, and the derivation's own `scale` sizes the clip into it.
+
 Two things it will not show, and both keep the `fx` badge rather than drawing
 something nearly right:
 
 | | |
 |---|---|
-| a filter that **changes the size** of the picture | the viewer places a clip by the rectangle its source has, and the render overlays whatever the chain made at that same top-left — a cropped picture stretched back to full size is a picture the render never makes. The badge says both sizes. |
+| a **resize below the point where the clip is placed** | the derivation's `scale` is where a clip stops being its own size and becomes a rectangle on the canvas. The render lays whatever comes out below that node over the canvas *at its own size*, at the rectangle's top-left, which is not a rectangle the viewer has any way to place. Press `O` to see it: placing is what the render does. The badge says both sizes. |
 | filters that are **not one run** | a fork, or a node wired in by hand from somewhere else. Playback is one stream through one chain, and half a graph shown as though it were all of it is worse than the badge. |
+
+One chain is refused more than it has to be: a resize on the way *in* combined
+with any filter of yours below the `scale`. The view reports one size for the
+whole chain, so from that number there is no telling which of the two resized
+it — and guessing wrong puts the picture in a rectangle the render never uses.
 
 A chain libavfilter will not take is refused the same way, with libav's own
 sentence on the picture — which means a mistyped filter argument is reported

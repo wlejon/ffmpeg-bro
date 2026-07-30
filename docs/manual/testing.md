@@ -217,8 +217,9 @@ stop there rather than hand over to the clip after it.
 
 The three sections in the middle are the three things one element per clip
 structurally cannot show, driven one at a time: a filter over the whole canvas, a
-filter that changes the size of a clip's picture — asserted from *both* ends, the
-viewer refusing it by name and the render showing it without complaint — and a
+filter that resizes a clip's picture below the point where the clip is placed —
+asserted from *both* ends, the viewer refusing it by name and the render showing
+it without complaint — and a
 `testsrc` with nothing on the timeline at all, which is a picture where the
 viewer has no element to put one in.
 
@@ -390,9 +391,11 @@ Given a file it goes on to the wiring gesture on the real stage, and then to
 **a filter in the viewer**: inserting one points the clip's element at a
 filtered view of its input and takes the `fx` badge off, the element decodes at
 the size the chain produces, taking the filters off puts it back on the input,
-and the two cases that keep the badge — a filter that changes the size of the
-picture, and a chain libavfilter will not parse — do so with a sentence on the
-picture saying which. Every one of them goes through `overlay.insert`, which is
+a filter that resizes the picture on the way in is laid out in the shape it made
+— on the screen and in the printed invocation, which is the same rectangle
+arriving twice — and the two cases that keep the badge, a resize below the point
+where the clip is placed and a chain libavfilter will not parse, do so with a
+sentence on the picture saying which. Every one of them goes through `overlay.insert`, which is
 what the palette calls, so the src moves because the application reacted and not
 because the test asked it to.
 

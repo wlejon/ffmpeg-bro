@@ -358,7 +358,7 @@ onChange((what) => {
 /// the transport. Called from both change channels: the model's, above, and the
 /// graph overlay's, which is where inserting a filter arrives.
 function refreshPlayback() {
-    const changedViews = graphPlayback.refresh();
+    const { moved: changedViews, resized } = graphPlayback.refresh();
     if (changedViews.length) {
         const moved = viewer.refreshSources(changedViews);
         if (moved.length) {
@@ -369,6 +369,18 @@ function refreshPlayback() {
     // The `fx` badge is on the picture and says which clips are *not* showing
     // their filters, so it moves whenever the answer above does.
     viewer.refreshAll();
+    // A clip whose chain resizes the picture is a clip of a different size, and
+    // a size is upstream of every statement of the render: the rectangle the
+    // clip is placed in, the `scale` the graph writes to reach it, the command
+    // that prints both. Those are drawn on the model's channel, which runs
+    // *before* this does — a view settles here — so a resize restates them
+    // rather than leaving them a gesture out of date. Not `changed()`, which
+    // would be an edit: nothing here is in the document.
+    if (resized.length) {
+        shell.drawSpine();
+        command.draw();
+        if (shell.currentStage() === 'graph') drawGraph();
+    }
     // And the output preview is a render of the edit that has just changed, so
     // what is on the screen is of a render that no longer exists. It waits for
     // the edit to hold still before rebuilding — see `chase()` — so this is a

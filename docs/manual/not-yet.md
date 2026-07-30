@@ -4,17 +4,21 @@
 
 Honest list of what does not work:
 
-- **A filter that resizes the picture, in place.** It is on the screen now —
-  `O` plays [the output itself](playback.md#the-output-instead-of-the-clips),
-  where placing is what the render does — and what is still not true is the
-  cheap path: with the clips on the monitor, this application places one by the
-  rectangle its *source* has and libavfilter hands back whatever size the chain
-  made, so the clip keeps its `fx` badge rather than being stretched into a
-  rectangle the render never puts it in. The two ways of looking now cost
-  different things — one is free and has exceptions, the other is a render and
-  has none — and closing the gap means the placement rectangle coming from the
-  chain's output rather than from the probe: one number, in one place, and a
-  change to what a clip's size *is*.
+- **A resize *below* the point where a clip is placed, on the cheap path.** A
+  filter that resizes the picture on the way in is laid out at the size it made
+  it now, on the program monitor and in the render both — a clip's size is what
+  its chain makes of it, and there is one layout. A filter under the derivation's
+  `scale` is the other thing: the render lays what comes out of it over the
+  canvas *at its own size*, at the rectangle's top-left, and that is not a
+  rectangle the viewer has any way to place. `O` plays
+  [the output itself](playback.md#the-output-instead-of-the-clips) and shows it;
+  the clips on the monitor keep the `fx` badge. Closing it would mean an element
+  whose box is the chain's pixels scaled by the canvas, anchored rather than
+  fitted and not clipped by the crop window — which is a second layout rule for
+  one case, and a nearly-right picture is what the badge exists instead of. The
+  same badge covers one chain it need not: a resize on the way in *and* a filter
+  of yours below the `scale`, where one reported size cannot say which of the two
+  did it.
 - **Scrubbing a node.** ▶ plays one forward from where the previews were taken,
   and that is the only way to move through it: there is no scrub bar, no way
   back, and nothing to jump with. Somewhere else to start from means moving the

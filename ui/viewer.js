@@ -12,7 +12,7 @@
 
 import { project, isSelected, hasPicture } from './project.js';
 import { inserts } from './graph/overlay.js';
-import { srcFor, whyFor } from './graph/playback.js';
+import { srcFor, whyFor, sizeFor } from './graph/playback.js';
 
 /// Does this clip have filters of its own on the graph? Read here rather than
 /// pushed in, because the overlay is small and this runs once per clip per
@@ -245,7 +245,16 @@ export function placement(clip, sw, sh) {
     const bx = cell ? cell.x : 0, by = cell ? cell.y : 0;
     const bw = cell ? cell.w : sw, bh = cell ? cell.h : sh;
 
-    const W = clip.width || 16, H = clip.height || 9;
+    // **How big the picture is, which is not always what the file holds.** A
+    // filter on the way into a clip resizes it, and `graph/playback.js` reports
+    // what the chain settled on; the probe's answer is the fallback rather than
+    // the answer. Asked here because this is the one place a size becomes a
+    // rectangle — the renderer is handed what this returns — so a `crop` on a
+    // clip narrows the box it is drawn in on the screen and in the output both,
+    // instead of being stretched back to the shape the file was.
+    const filtered = sizeFor(clip.id);
+    const W = (filtered && filtered.w) || clip.width || 16;
+    const H = (filtered && filtered.h) || clip.height || 9;
     const x = clip.xform;
     const fit = cell ? 'contain' : x.fit;
     let dw, dh;
@@ -289,8 +298,9 @@ function place(clip, sw, sh) {
     // A clip whose filters this picture is *not* showing. Most of them are now
     // — the element is playing the chain rather than the file, see
     // graph/playback.js — so the badge is the exception it was always meant to
-    // be: a chain that forks, or one that changes the size of the picture and
-    // would have to be drawn into a rectangle the render never puts it in.
+    // be: a chain that forks, or one that resizes the picture below the point
+    // where the clip is placed, which the render lays over the canvas at its own
+    // size rather than in a rectangle at all.
     // Leaving those unmarked would read as the filter not working.
     clip.frame.classList.toggle('filtered', hasFilters(clip.id) && !srcFor(clip.id));
     clip.frame.title = whyFor(clip.id);
