@@ -2,6 +2,8 @@
 
 #include "probe_async.h"
 
+#include "ffmpeg_capabilities.h"
+
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -26,6 +28,9 @@ struct Entry {
     std::thread th;
     Clock::time_point began = Clock::now();
     double timeout = kProbeTimeoutSec;
+    /// Settled once, when the probe starts, because it is a fact about the
+    /// input and not about where the open has got to.
+    bool stoppable = true;
 
     // Written by the thread, read under the lock.
     std::shared_ptr<ProbeResult> result = std::make_shared<ProbeResult>();
@@ -71,6 +76,11 @@ uint64_t startProbe(const MediaInput& in, double timeoutSec) {
 
     auto entry = std::make_unique<Entry>();
     entry->timeout = timeoutSec > 0 ? timeoutSec : kProbeTimeoutSec;
+    // Asked of libavdevice's own registry rather than matched against a list of
+    // device names, so a build with `v4l2` or `avfoundation` in it needs no
+    // edit here — and so this cannot disagree with `kindOf()` on the JS side,
+    // which walks the same registry to decide the same thing.
+    entry->stoppable = !isInputDevice(in.format);
     // Set before the thread starts, so an open that blocks on its very first
     // syscall is already on the clock.
     entry->watch->expireIn(entry->timeout);
@@ -102,6 +112,7 @@ bool probeProgress(uint64_t id, ProbeProgress* out) {
 
     out->elapsed = secondsSince(e.began);
     out->timeout = e.timeout;
+    out->stoppable = e.stoppable;
     if (!e.finished->load(std::memory_order_acquire)) {
         out->state = ProbeProgress::State::Opening;
         return true;

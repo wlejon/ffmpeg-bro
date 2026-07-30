@@ -12,10 +12,17 @@
 // headers and every caller wants the answer before it can lay anything out —
 // routing a path on disk through a thread and a poll would cost every user a
 // round trip to fix a case few hit. `probes.start`/`poll`/`cancel` is the same
-// open on a thread of its own, for the case where the wait is not measured in
-// microseconds: a URL. **The decision of which is which is a string parse**
-// (`schemeOf` in ui/inputs.js), so the thing that chooses cannot itself block —
-// which was the other way of getting this wrong.
+// open on a thread of its own, for the two cases where the wait is not measured
+// in microseconds: a URL, and a **device**. **The decision of which is which is
+// a lookup that opens nothing** — `schemeOf` parses a scheme out of the path,
+// `isDeviceFormat` finds the `-f` in libavdevice's registry (both in
+// ui/inputs.js) — so the thing that chooses cannot itself block, which was the
+// other way of getting this wrong.
+//
+// A device needed nothing added to these calls: it is `-f dshow -i video=…`,
+// which is a `MediaInput`, and `inputArg` below has always read one whole. A
+// `devices.start`/`poll`/`cancel` of the same shape beside this one would have
+// been two homes for "an open that can be waited on and stopped".
 //
 // `streamToJs` and `probeToJs` live here rather than beside `StreamSummary` for
 // the same reason: they are this answer's shape and not the struct's, and the
@@ -236,6 +243,13 @@ JSValue js_probePoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
                       JS_NewBool(ctx, p.state == ProbeProgress::State::Opening));
     JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, p.elapsed));
     JS_SetPropertyStr(ctx, o, "timeout", JS_NewFloat64(ctx, p.timeout));
+    // **What a `Stop` beside this will actually do.** False for a device,
+    // whose `read_header` never polls the interrupt callback — see `OpenWatch`
+    // in ffmpeg_input.h for the measurement. Reported rather than worked out
+    // by the caller, because a button that claimed to abort an open it cannot
+    // reach would be a lie about what the machine is doing, and the fact
+    // belongs to the open rather than to whoever is drawing it.
+    JS_SetPropertyStr(ctx, o, "stoppable", JS_NewBool(ctx, p.stoppable));
     // The failure is a string here rather than an exception, which is the one
     // place these two calls differ in more than timing: `probe()` throws
     // because a caller that ignored the failure would lay out a file it never
@@ -259,6 +273,11 @@ void installProbe(Table& ns) {
     /// Abort the open. The interrupt callback is what reaches libav, so this is
     /// a real stop and not a hidden spinner: the connect, the handshake or the
     /// read in progress is abandoned and the poll after it says `stopped`.
+    ///
+    /// **Only where `poll().stoppable` said so.** A device's own `read_header`
+    /// never polls the callback, so this would set a flag and leave the entry
+    /// Opening until the driver answered — which is the state the press was
+    /// meant to end. `forget` is what a device's Stop is.
     probes.function("cancel", [](JSContext* ctx, JSValue idArg) {
         int64_t id = 0;
         if (JS_ToInt64(ctx, &id, idArg) < 0) return JS_EXCEPTION;

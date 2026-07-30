@@ -33,6 +33,33 @@ What is *not* possible is laying a device on the timeline, and that is not a gap
 clip is an in-point and a length, and a live input has neither. It is refused by name,
 with what to do instead.
 
+**Activating one does not stop the window.** Opening a device is not this
+application's to make fast — `dshow` opening a working audio device measures 920 ms
+here, and a camera another program is holding or a capture card mid-reset does not
+measure at all — and on this architecture a blocked UI thread is a frozen window,
+because stage views hide each other rather than being unmounted and the `<video>` on
+a card *is* the decoder. So the open runs on a thread of its own, the same one a URL
+uses, and the card says **Opening · 1.2s of 10** while it does. Two things wait for
+it and say so: the previews, because a DirectShow device can be opened once and a
+session opened over a probe still holding one is an error rather than a slow path,
+and **Record**, whose reason reads *A device is still opening*.
+
+The **Stop waiting** beside the readout is worded exactly as narrowly as it works.
+libav's interrupt callback is the only thing that can abort an open in progress, and
+libavdevice never consults it — measured with a callback that counts its own calls,
+**zero polls across that 400 ms `dshow` open**, and an already-aborting one does not
+shorten it. So the press ends the waiting, not the open: the card settles at once and
+the thread is reaped whenever the driver answers. What the deadline *does* reach is
+the stream analysis afterwards, which is 92 ms of a 92 ms `gdigrab desktop` open and
+520 ms of a 920 ms `dshow` one. There is no timeout to set instead — no device
+demuxer in this build has one. Asking about a device again is `Re-probe`, on
+[Sources](sources.md).
+
+Enumeration is a different call and a different cost: `avdevice_list_input_sources`
+on `dshow` measures 119 ms here, which is why it is asked once per device and again
+only on `Rescan`. Everything else answers `ENOSYS` in a fortieth of a millisecond,
+because it takes a rectangle or a filter graph rather than a name.
+
 Three columns, in the order somebody works:
 
 - **What to capture**, on the left. libavdevice's own list — on Windows `dshow`,

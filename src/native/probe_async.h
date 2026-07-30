@@ -20,12 +20,28 @@
 // have to be marshalled onto it and looked at from the animation frame — which
 // is where the caller already is. See bindings_probe.cpp.
 //
-// **Stopping is real.** `OpenWatch` (ffmpeg_input.h) is an `AVIOInterruptCB`,
-// which is the only thing that aborts an open in progress; `stopProbe` sets it
-// and libav abandons the connect, the handshake or the read it was inside. The
-// one thing it cannot cut short is `getaddrinfo`, which has no callback in it —
-// a name that resolves slowly holds the *probe thread* until the resolver gives
-// up, which is exactly why there is a thread for it to hold.
+// **A device is opened through here too, and for the same reason.** A camera
+// another application already holds, or a capture card mid-reset, blocks inside
+// libav exactly as a slow URL does — `dshow` opening a working audio device is
+// 920 ms on this machine with nothing wrong — and it blocks on the thread that
+// draws the window. Nothing was widened to carry one: a device is `-f dshow -i
+// video=…`, which is a `MediaInput` and always was, so `startProbe` already
+// took it. What decides whether an open comes through here is a *lookup* — a
+// scheme parsed out of the path, or a format name found in libavdevice's own
+// registry — and neither opens anything, which is what keeps the thing that
+// chooses from being the thing that blocks.
+//
+// **Stopping is real for a URL and only half real for a device**, and that
+// difference is reported rather than hidden. `OpenWatch` (ffmpeg_input.h) is an
+// `AVIOInterruptCB`, which is the only thing that aborts an open in progress;
+// `stopProbe` sets it and libav abandons the connect, the handshake or the read
+// it was inside. It reaches every part of a URL's open except `getaddrinfo`,
+// which has no callback in it. It reaches **none** of a device's `read_header`
+// — measured, zero polls across a 400 ms `dshow` open — and all of the
+// `find_stream_info` that follows. `ProbeProgress::stoppable` says which of the
+// two is in flight, so a `Stop` on screen can say what its press will do; a
+// button claiming to abort an open it cannot reach would be worse than no
+// button, because it would be a lie about what the machine is doing.
 #pragma once
 
 #include "ffmpeg_backend.h"
@@ -53,6 +69,22 @@ struct ProbeProgress {
     State state = State::Opening;
     double elapsed = 0.0;   ///< seconds since `startProbe`, still counting while Opening
     double timeout = 0.0;   ///< what it was given, so a caller can draw against it
+
+    /// Can `stopProbe` reach the open, or only the waiting?
+    ///
+    /// True for everything libavformat opens through its AVIO layer, which is
+    /// every path and every URL: the interrupt callback is polled inside the
+    /// connect, the handshake and the read. False for a libavdevice demuxer,
+    /// whose `read_header` never consults it — see `OpenWatch` for the
+    /// measurement. A false one still ends by itself when the deadline is
+    /// reached in `avformat_find_stream_info`, and a Stop still stops the
+    /// *waiting*; what it cannot do is shorten the device's own open.
+    ///
+    /// **A fact about the input, so it is settled when the probe starts** and
+    /// not re-derived by whoever draws the button. Two answers to "will this
+    /// press land" is exactly the disagreement this field exists to prevent.
+    bool stoppable = true;
+
     ProbeResult result;
 };
 
@@ -78,6 +110,12 @@ bool probeProgress(uint64_t id, ProbeProgress* out);
 /// the entry stays pollable and reports Stopped, so a caller that pressed Stop
 /// still learns that its press landed. A caller that will never poll again
 /// should say so with `abandonProbe`.
+///
+/// **On a probe whose `stoppable` is false this is not the call to make.** It
+/// is not wrong — the flag is set and `find_stream_info` will honour it — but
+/// the entry then stays Opening for as long as the device's own `read_header`
+/// takes, which is the state a press is supposed to end. `abandonProbe` is
+/// what a device's Stop means.
 void stopProbe(uint64_t id);
 
 /// Stop it and stop caring. The thread is reaped by whichever call notices it

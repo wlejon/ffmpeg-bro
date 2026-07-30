@@ -133,7 +133,7 @@ import { schemeOf, protocolLinked, teeSpec, newDestination,
          destinationRows } from './export/destination.js';
 import { changed as projectChanged } from './project.js';
 import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
-         asInput as inputSpec } from './inputs.js';
+         opening, openStoppable, stopOpening, asInput as inputSpec } from './inputs.js';
 import { recordGraph, recordPads } from './graph/record.js';
 import { current as overlayState, onChange as overlayChanged } from './graph/overlay.js';
 
@@ -209,6 +209,10 @@ let lastFile = '';
 let lastBytes = 0;
 let recording = false;
 let status = null;
+
+/// Which inputs were opening the last time the frame loop looked, so that the
+/// moment one settles is a redraw and no other moment is.
+let lastWaits = '';
 
 // Which devices have been asked what they can see. `deviceSources` is the one
 // query in this application that talks to hardware — enumerating DirectShow
@@ -401,6 +405,12 @@ export function ready() {
     const all = captureInputs();
     if (!all.length) return false;
     for (const i of all) if (!i.format || !i.path) return false;
+    // A recording opens the devices itself, on the thread that asked for it,
+    // and a device already being opened by its own probe would refuse the
+    // second handle. That is a wait, not a fault, so the press is held rather
+    // than made to fail — the button comes alive of its own accord a moment
+    // later. See `stillOpening()`.
+    if (stillOpening()) return false;
     const g = graphOf();
     if (g && !g.ok) return false;
     if (all.length > 1 && !g) return false;
@@ -565,7 +575,26 @@ export function release(i) {
 /// `updateInput` reopens it when the change is one that reopens a file, which
 /// for a device is every change there is.
 function change(input, patch) {
-    updateInput(input, patch);
+    withDevicesFree(() => updateInput(input, patch));
+}
+
+/// Open an input again with the devices given back first.
+///
+/// **The session holds every device on this stage, and a DirectShow device can
+/// be opened once.** A probe that started while the session still had the
+/// camera would be refused by the driver and would report that refusal as a
+/// fact about the device — which is the failure this application can least
+/// afford, because it looks exactly like the camera being in use by somebody
+/// else. So the session is torn down before the probe starts and rebuilt by
+/// `syncPreviews()` once it has settled. The cost is the picture going dark for
+/// the length of one open, which is what a changed option cost anyway.
+///
+/// One helper and not two calls at each site, because the ordering *is* the
+/// rule: a `reprobe` written the other way round works on `lavfi` and on a
+/// screen grab and fails only on the camera nobody is testing with.
+function withDevicesFree(fn) {
+    closeSession();
+    fn();
     projectChanged('inputs');
     redraw();
 }
@@ -636,7 +665,11 @@ function buildCard() {
     const rows = el('div', { cls: 'cap-card-rows' });
     const title = el('div', { cls: 'cap-card-head' });
     const root = el('div', { cls: 'cap-card' }, [title, pic, rows]);
-    const card = { root, pic, marquee, rows, title, video: null, key: '' };
+    // `waitNode` is the elapsed readout while this card's device is opening,
+    // held so the frame loop can write one text node instead of redrawing the
+    // card sixty times a second to move one number — the same trade
+    // `ui/sources.js` makes with `waitingText`.
+    const card = { root, pic, marquee, rows, title, video: null, key: '', waitNode: null };
     // Clicking anywhere on a card is how the left column and the option column
     // come to be about it — including on the picture, which is also where a
     // region is dragged. A drag is not a click, so the focus is taken on
@@ -671,6 +704,45 @@ function pictureRefusal(input) {
         return p.audio ? 'Sound only — nothing to show, and it still records'
                        : 'Neither picture nor sound came out';
     return '';
+}
+
+/// "Opening · 1.2s of 10", or the same without the deadline until the first
+/// poll has said what the deadline is. The Sources stage draws the same figure
+/// from the same two fields; the words differ because a card is about a device
+/// and that stage's row is about whatever the input turned out to be.
+function openingLabel(input) {
+    const o = input.opening || {};
+    const secs = `${(o.elapsed || 0).toFixed(1)}s`;
+    return o.timeout > 0 ? `Opening · ${secs} of ${o.timeout.toFixed(0)}` : `Opening · ${secs}`;
+}
+
+/// What a card says while its device is being opened, and the way to give up.
+///
+/// **The Stop does not abort the open and does not claim to.** libavdevice
+/// talks to a driver, and nothing in that conversation polls libav's interrupt
+/// callback — measured at zero polls across a 400 ms `dshow` open — so the
+/// press ends this application's waiting and the thread is reaped whenever the
+/// device finally answers. What the deadline does reach is the stream analysis
+/// afterwards, which is most of an open on a screen grabber. See `OpenWatch` in
+/// src/native/ffmpeg_input.h.
+function openingRows(c, input) {
+    c.waitNode = span(openingLabel(input), 'mono cap-waiting');
+    return [
+        row('Opening', c.waitNode),
+        row('', el('button', {
+            cls: 'tiny', 'data-f': 'capstop',
+            text: openStoppable(input) ? 'Stop' : 'Stop waiting',
+            title: openStoppable(input)
+                ? 'Abandon the open — this reaches libav’s interrupt callback.'
+                : 'Stop waiting for this device. The driver is not interruptible, so the ' +
+                  'open is abandoned rather than aborted; Re-probe on the Sources stage ' +
+                  'is how to ask again.',
+            on: { click: () => { stopOpening(input); redraw(); } },
+        })),
+        div('cap-note dim',
+            'The open is on a thread of its own, so this window is not blocked. ' +
+            'The preview and Record wait for it.'),
+    ];
 }
 
 function drawCardRows(i) {
@@ -741,10 +813,18 @@ function drawCardRows(i) {
                 keys.map((k) => `${k}=${input.options[k]}`).join('  '),
                 'dim mono cap-card-opts')));
 
-        const why = pictureRefusal(input);
-        if (why) out.push(div('cap-error', why));
-        else if (!c.video) out.push(div('cap-note dim', 'No picture yet.'));
-        if (several && !why)
+        // **Opening comes before the refusal**, because it is not one: a device
+        // that has not answered yet has said nothing about itself, and "No
+        // picture yet" beside a driver that is going to hang for a minute is
+        // the state this whole path exists to stop being silent about.
+        c.waitNode = null;
+        if (opening(input)) out.push(...openingRows(c, input));
+        else {
+            const why = pictureRefusal(input);
+            if (why) out.push(div('cap-error', why));
+            else if (!c.video) out.push(div('cap-note dim', 'No picture yet.'));
+        }
+        if (several && !opening(input) && !pictureRefusal(input))
             out.push(row('', span(
                 `→ [${i}:v]` +
                 (input.probe && input.probe.audio ? ` [${i}:a]` : ''),
@@ -785,10 +865,26 @@ let session = { id: 0, pads: [], key: '' };
 /// Everything that would make the session wrong if it changed: which devices,
 /// how each opens, and the graph they run through. Not the pad choice — that
 /// decides which end a *recording* writes and the session publishes all of them.
+///
+/// **The probe in flight is in it**, which is the one entry that is not a
+/// setting. A device's own open is asynchronous now, and a session opened while
+/// one is outstanding would be this application asking a DirectShow camera for
+/// a second handle on itself — an error rather than a slow path. So "still
+/// opening" is part of what the session describes, and settling is what makes
+/// `openSession` try.
 function sessionKey() {
     const g = graphOf();
-    return captureInputs().map((i) => i.key).join('|') + '::' +
-           (g && g.ok ? g.filterGraph : '');
+    return captureInputs().map((i) => `${i.key}${opening(i) ? '@opening' : ''}`).join('|') +
+           '::' + (g && g.ok ? g.filterGraph : '');
+}
+
+/// Is some device on this stage still being opened by its probe?
+///
+/// One question, three readers — the session, the Record button and the card —
+/// because all three have to hold off for the same moment and three spellings
+/// of it is how one of them comes to act a frame early.
+export function stillOpening() {
+    return captureInputs().find((i) => opening(i)) || null;
 }
 
 /// Open the session this stage needs, or leave the one that already fits.
@@ -804,6 +900,10 @@ function openSession() {
     closeSession();
     const live = captureInputs();
     if (!live.length || live.some((i) => !i.path)) return;
+    // A device whose probe is still holding it open cannot be opened again —
+    // that is what makes this a wait rather than a retry. `sessionKey()` carries
+    // the state, so the frame it settles is the frame this runs for real.
+    if (stillOpening()) return;
 
     const g = graphOf();
     try {
@@ -1359,6 +1459,25 @@ export function stopRecording() {
 /// marshalled onto it anyway.
 export function tick() {
     if (!recording) {
+        // **A device's own open is asynchronous now, and this is where the
+        // stage notices it finish.** `tickInputs` settles the probe from the
+        // frame loop wherever you are standing — it has to, because a card
+        // started on this stage goes on opening while you walk to the timeline
+        // — and everything here reads the probe it produces: the picture, the
+        // graph panel, the Record button. Compared rather than acted on every
+        // frame, because opening a session is opening devices and doing that
+        // sixty times a second is not a redraw, it is a camera being taken and
+        // given back.
+        const waits = captureInputs().filter((i) => opening(i)).map((i) => i.id).join(',');
+        if (waits !== lastWaits) { lastWaits = waits; drawCapture(); syncPreviews(); }
+        // The seconds, into one text node each. Same trade the Sources stage
+        // makes: a card redrawn to move one number relays out the column.
+        if (waits) {
+            const all = captureInputs();
+            for (let i = 0; i < cards.length; i++)
+                if (cards[i].waitNode && all[i] && opening(all[i]))
+                    cards[i].waitNode.textContent = openingLabel(all[i]);
+        }
         // A device element that is sitting paused is a preview nobody can see.
         // `play()` is asked for again rather than once at creation because the
         // element is pointed at the device before the demuxer has opened it —
@@ -2068,6 +2187,9 @@ function blocker() {
     const all = captureInputs();
     if (!all.length) return 'Pick a device';
     for (const i of all) if (!i.format || !i.path) return 'A source is empty';
+    // The one clause here that ends by itself. Named as a wait rather than as a
+    // fault because that is what it is, and the card above says which device.
+    if (stillOpening()) return 'A device is still opening';
     const g = graphOf();
     // Short, because the strip directly above already carries the reason —
     // twice on one screen is the habit this whole stage was rewritten out of.
@@ -2348,7 +2470,7 @@ function optionRows() {
         // The bag is edited in place, so the input has to be told to open
         // again with it — the same call the Sources stage makes after editing
         // a file's demuxer options, and for the same reason.
-        onChange: () => { reprobe(inp); projectChanged('inputs'); redraw(); },
+        onChange: () => withDevicesFree(() => reprobe(inp)),
     });
 }
 

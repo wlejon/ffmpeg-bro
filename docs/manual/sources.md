@@ -22,8 +22,9 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   `srt`, `rtmp`, `udp`, `tcp`, thirty-six of them. A URL gets an **Over** row naming
   its protocol and saying whether it is one of them, because a URL naming a protocol
   that is absent otherwise fails at open with a message about a filename.
-- **Opening**, only while a URL is being opened, with the seconds against the
-  deadline and a **Stop**. See [While it is
+- **Connecting**, only while a URL is being opened, with the seconds against the
+  deadline and a **Stop** — or **Opening** with a **Stop waiting**, when what is
+  being opened is a device. See [While it is
   connecting](#while-it-is-connecting) below.
 - **Read as** — the demuxer. What it probed as, `Change…` for a search over all three
   hundred and fifty, and `Auto` to hand the choice back to libavformat. Searched
@@ -47,7 +48,8 @@ hidden or collected: opening a file to see what is in it is a thing people do.
 
 **And under the column, the act.** `Use on the timeline`, pinned, with the reason
 beside it where it is dead — `A device has no end`, `One picture, no time at all`,
-`Never ends — set Stop at`, `Nothing to play`, `Will not open`, `Still connecting`.
+`Never ends — set Stop at`, `Nothing to play`, `Will not open`, `Still connecting`,
+`Still opening`.
 Those mirror `openInput()` exactly, so the button is never alive and then refusing.
 `Re-probe` and
 `Remove` sit at the other end of the same bar; `Remove` says who is holding the input
@@ -111,8 +113,8 @@ no cursor, no timeline and nothing to press.
 A URL is now opened **on a thread of its own**, and the card says what is
 happening while it is:
 
-- **Opening · 3.4s of 10** — how long it has been waiting, and against what. The
-  seconds are counted where the deadline is measured, so the readout cannot
+- **Connecting · 3.4s of 10** — how long it has been waiting, and against what.
+  The seconds are counted where the deadline is measured, so the readout cannot
   drift from the thing that will act on it.
 - **Stop** — abandon the open now. This is a real stop and not a hidden spinner:
   it sets libav's `AVIOInterruptCB`, which is the only thing in libav that can
@@ -151,9 +153,30 @@ nothing and asks libav nothing, so the decision cannot itself be the thing that
 blocks. A `file:` URL counts as a path, because that is the long way of writing
 one.
 
-**A device is still opened synchronously**, and a camera another application is
-holding can block for as long as its driver takes. That is a different open on a
-different stage; see [Capture](capture.md).
+**A device goes the same way, and the row says a different thing.** `-f dshow -i
+video=…` is an `-i` whose open is not this application's to make fast either —
+opening a working audio device measures 920 ms here, and a camera another
+program holds or a capture card mid-reset does not measure at all — so it is
+started on a thread by the same call, and the card says **Opening · 1.2s of 10**
+rather than *Connecting*, because it is waiting on a driver and not on a host.
+What decides is the `-f` looked up in libavdevice's own registry, which is a
+lookup in a list already in memory.
+
+**What differs is the Stop, and the button says so: `Stop waiting`.** libav's
+interrupt callback aborts a URL's open wherever it has got to; a libavdevice
+demuxer never consults it, because it is inside COM and a driver rather than
+inside libavformat's AVIO layer. Measured with a callback that counts its own
+calls: **zero polls across a 400 ms `dshow` open**, and an already-aborting one
+does not shorten it by a millisecond. So a press ends this application's waiting
+— the input settles at once, saying so — and the thread is abandoned and reaped
+whenever the device finally answers. `Re-probe` is how to ask again. The
+deadline and Stop *do* reach the stream analysis that follows the open, which is
+92 ms of a 92 ms `gdigrab desktop` open and 520 ms of a 920 ms `dshow` one, so
+they are worth having and are not the whole story. There is no timeout to set
+instead: no device demuxer in this build has one.
+
+Where a device is watched and recorded is still [Capture](capture.md); this
+stage is where the same `-i` is described.
 
 ## An input that is not one file
 

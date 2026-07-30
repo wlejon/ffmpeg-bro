@@ -262,6 +262,32 @@ bool downloadFrame(AVFrame** frame, AVFrame** scratch, std::string* err);
 /// the open is on a thread of its own as well as behind a deadline: the
 /// deadline is what makes it end, and the thread is what stops it taking the
 /// window with it.
+///
+/// **And what it does not reach at all is the first half of a device open.**
+/// This is measured rather than assumed, and the measurement is the reason the
+/// thread is not an optimisation here but the whole mechanism. A libavdevice
+/// demuxer carries `AVFMT_NOFILE`, so `avformat_open_input` opens no AVIO layer
+/// for it and goes straight into the demuxer's own `read_header` — which on
+/// this platform is COM, DirectShow graph building and the driver, none of
+/// which has ever heard of `ff_check_interrupt`. Counting the callback's calls
+/// on this machine: `dshow` opening a real audio device takes **400 ms and
+/// polls this zero times**, `gdigrab desktop` 0.1 ms and zero, `lavfi
+/// testsrc` 1.3 ms and zero. An already-aborting callback does not shorten any
+/// of them — the 400 ms dshow open still runs to completion.
+///
+/// `avformat_find_stream_info` *is* covered, because libavformat checks the
+/// callback between reads there: 520 ms of the dshow open, 92 ms of the
+/// gdigrab one, 6 ms of the lavfi one, and it aborts in 0.04 ms when told to.
+/// So for a device the deadline and the Stop cover the second half of an open
+/// and not the first — 57% of a `dshow` open and 99.9% of a `gdigrab` one, on
+/// those numbers — and **a Stop that arrives during `read_header` stops the
+/// waiting rather than the open**. `probe_async.h` reports which of the two a
+/// caller is holding, so nothing on screen may claim more than this does.
+///
+/// No device demuxer in this build offers a timeout to put in the option bag
+/// instead: asked of libav rather than assumed, the only option with "time" in
+/// its name across `dshow`, `gdigrab`, `lavfi` and `vfwcap` is dshow's
+/// `use_video_device_timestamps`, which is about which clock a frame carries.
 class OpenWatch {
 public:
     /// Give up `seconds` from now. Zero or less is no deadline, which is what

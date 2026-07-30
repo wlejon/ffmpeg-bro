@@ -29,20 +29,33 @@
 // answer: run the file through a different demuxer or a different `-probesize`
 // and it says something else, which is exactly what the Sources stage is for.
 //
-// **A URL is opened off this thread, and a path is not.** `probe()` is
-// in-process and synchronous, which is right for the overwhelmingly common case
-// — a file on disk answers in a few hundred microseconds and every caller wants
-// the answer before it can lay anything out. It is wrong for a URL: an open
-// that waits four seconds for a handshake waits on *this* thread, and this
-// thread is the whole application, because stage views are never unmounted and
-// the viewer's `<video>` elements are the decoders. So a scheme goes through
-// `bro.ffmpeg.probes.start` and is watched from the frame loop; anything else
-// takes the call it always took and costs exactly what it always cost.
+// **A URL and a device are opened off this thread, and a path is not.**
+// `probe()` is in-process and synchronous, which is right for the
+// overwhelmingly common case — a file on disk answers in a few hundred
+// microseconds and every caller wants the answer before it can lay anything
+// out. It is wrong for the two kinds of input whose open is not this
+// application's to make fast: a URL that waits four seconds for a handshake,
+// and a device that is another application's, or mid-reset, or simply slow —
+// `dshow` opening a *working* audio device measures 920 ms here. Both wait on
+// *this* thread, and this thread is the whole application, because stage views
+// are never unmounted and the viewer's `<video>` elements are the decoders. So
+// both go through `bro.ffmpeg.probes.start` and are watched from the frame
+// loop; anything else takes the call it always took and costs exactly what it
+// always cost.
 //
-// **What decides is a string parse.** `schemeOf` reads the first characters of
-// the path and nothing else — it opens nothing, asks libav nothing and cannot
+// **What decides is a lookup that opens nothing.** `schemeOf` reads the first
+// characters of the path and `isDeviceFormat` looks the `-f` up in the device
+// registry already in memory — neither opens anything, neither asks libav a
+// question that can wait on hardware, and so the thing that chooses cannot
 // itself block, which was the other way of getting this wrong. A `file:` URL
 // comes back as no scheme, because that is the long way of writing a path.
+//
+// **The two waits are not the same wait, and the difference is on screen.**
+// libav's interrupt callback aborts a URL's open wherever it has got to; it is
+// never consulted during a device's `read_header` at all, so a Stop there ends
+// the *waiting* and leaves the thread inside libav until the driver answers.
+// `probes.poll().stoppable` is which one this is, and `stopOpening` below acts
+// on it rather than pretending they are one thing.
 
 import { basename, urlScheme } from './format.js';
 import { changed } from './project.js';
@@ -207,12 +220,22 @@ function reopen(input) {
     } catch (e) {
         input.error = String((e && e.message) || e);
     }
-    if (schemeOf(input.path)) {
+    if (schemeOf(input.path) || isDeviceFormat(input.format)) {
         // No timeout named, so the native side's own applies — one number, in
         // one place (`kProbeTimeoutSec`), rather than a second one here that
         // could disagree with the deadline actually being measured.
+        //
+        // **`stoppable` is seeded rather than left optimistic**, because the
+        // card is drawn in the same turn this runs and a button that read
+        // `Stop` for one frame and `Stop waiting` for the next would be a
+        // flicker between a lie and the truth. The seed is the same registry
+        // walk the native side makes — `isDeviceFormat` below says why the two
+        // cannot disagree — and the first poll replaces it with the answer the
+        // open itself carries, which stays the authority.
         try {
-            input.opening = { id: bro.ffmpeg.probes.start(asInput(input)), elapsed: 0, timeout: 0 };
+            input.opening = { id: bro.ffmpeg.probes.start(asInput(input)),
+                              elapsed: 0, timeout: 0,
+                              stoppable: !isDeviceFormat(input.format) };
         } catch (e) {
             input.error = input.error || String((e && e.message) || e);
         }
@@ -232,21 +255,49 @@ function dropOpening(input) {
     input.opening = null;
 }
 
-/// Is this input still waiting on something that answers over a network?
+/// Is this input still waiting on something this application does not control —
+/// a host at the far end of a socket, or a driver?
 export function opening(input) { return !!(input && input.opening); }
+
+/// Would `stopOpening` reach the open itself, or only the waiting?
+///
+/// The native side's answer, carried rather than re-derived: whoever draws the
+/// button and whoever presses it must be reading one fact, and "is this a
+/// device" is only the same question by measurement. False for an input that is
+/// not opening at all, because there is nothing there to reach.
+export function openStoppable(input) {
+    return !!(input && input.opening && input.opening.stoppable !== false);
+}
 
 /// Give up on the open in flight. The press behind `Stop`.
 ///
-/// **It reaches the open**, which is the whole reason this exists: `cancel`
-/// sets the `AVIOInterruptCB` the native side installed before the first byte
-/// was read, and libav abandons the connect, the handshake or the read it is
-/// inside. A button that only hid a spinner while the thread stayed blocked
-/// would be worse than no button, because it would be a lie about what the
-/// machine is doing. The answer still arrives through `tickInputs`, saying
-/// `stopped`, so the press is visibly what ended it.
+/// **Two presses, because there are two waits**, and collapsing them would make
+/// the button claim something it cannot do on one of them.
+///
+/// On a URL it reaches the open: `cancel` sets the `AVIOInterruptCB` the native
+/// side installed before the first byte was read, and libav abandons the
+/// connect, the handshake or the read it is inside. The answer arrives through
+/// `tickInputs`, saying `stopped`, so the press is visibly what ended it.
+///
+/// On a device it cannot — libavdevice's `read_header` never polls that
+/// callback (measured: zero polls across a 400 ms `dshow` open) — so what the
+/// press ends is the *waiting*. `forget` abandons the entry, the thread is
+/// reaped whenever libav lets it go, and the input settles **now**, saying so
+/// in its own words. `cancel` here would leave the card reading "Opening" until
+/// the driver answered, which is exactly the state the press was meant to end.
+///
+/// Returns true when there was something to stop.
 export function stopOpening(input) {
     if (!input || !input.opening) return false;
-    try { bro.ffmpeg.probes.cancel(input.opening.id); } catch (e) { /* already gone */ }
+    if (input.opening.stoppable !== false) {
+        try { bro.ffmpeg.probes.cancel(input.opening.id); } catch (e) { /* already gone */ }
+        return true;
+    }
+    dropOpening(input);
+    // Not "will not open": nobody has learned that it will not. What is known
+    // is that nobody is waiting any more, and `Re-probe` is how to wait again.
+    input.error = 'stopped waiting — the device had not answered';
+    changed('inputs');
     return true;
 }
 
@@ -276,6 +327,7 @@ export function tickInputs() {
         if (p.opening) {
             input.opening.elapsed = p.elapsed;
             input.opening.timeout = p.timeout;
+            input.opening.stoppable = p.stoppable !== false;
             continue;
         }
         input.opening = null;

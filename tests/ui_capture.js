@@ -97,8 +97,35 @@ console.log('\nthe devices, out of libavdevice');
 
 console.log('\nchoosing one');
 {
+    const began = Date.now();
     q('[data-device="lavfi"]').click();
+    const clickMs = Date.now() - began;
+
+    // **A device is opened off this thread, and this is the assertion that it
+    // is.** `probe()` is synchronous and a device open is not this
+    // application's to make fast — `dshow` opening a working audio device
+    // measures 920 ms, and a camera another program holds or a capture card
+    // mid-reset does not measure at all — so an open on this thread is a frozen
+    // window, because stage views are never unmounted and the `<video>` on a
+    // card *is* the decoder. `lavfi` opens in a few milliseconds, so what is
+    // checked here is the **route** rather than a wait anybody would notice:
+    // the input is `opening` the instant the click returns, which is only
+    // possible if nothing waited for libav.
+    ok(clickMs < 500, `activating one returns in ${clickMs}ms`);
+    ok(A.inputs.opening(CI()[0]),
+       'and the input is opening rather than probed — the device is on a thread of its own');
+    ok(!A.inputs.openStoppable(CI()[0]),
+       'a Stop beside it would not reach the open: libavdevice never polls libav’s ' +
+       'interrupt callback while it is talking to a driver, so the button says so');
+    ok(!!cap.stillOpening(), 'the stage knows a device is outstanding');
+    ok(!cap.ready(),
+       'so Record is held — a recording opens the devices itself and a second handle ' +
+       'on a camera is an error, not a slow path');
+    same(cap.sessionId(), 0,
+         'and no preview session is opened over the top of it, for the same reason');
+
     pump(300);
+    ok(!cap.stillOpening(), 'it settles by itself, from the frame loop');
     same(CI()[0].format, 'lavfi', 'the device is chosen');
     ok(CI()[0].path.indexOf('testsrc') === 0,
        `and it starts from something openable (${CI()[0].path})`);

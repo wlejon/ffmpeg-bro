@@ -408,6 +408,21 @@ needs something to stop, the way every suite here skips what its fixture cannot
 provide. What is not tested is a URL that *works*: that needs a server, and a
 test that needs a server does not belong here.
 
+**The device half of the same path needs no hardware either**, because `lavfi` is
+a device in this build and exists on every machine. `input_test.cpp` probes one
+through `startProbe` and asserts two things about it: that the answer comes back
+like any other input's, and that it reports `stoppable: false` — a stop would not
+reach a libavdevice open, which is measured rather than assumed. It then expires a
+deadline inside the stream analysis and requires the probe to *fail*, because
+`avformat_find_stream_info` answers success when the callback cuts it short and a
+successful probe of a half-analysed file is worse than the hang the deadline is
+there to end. `ui_capture.js` asserts the route from the other side: activating a
+device returns at once, the input is `opening` the instant the click does, no
+preview session is opened over the top of it and Record is held while it is
+outstanding. What no suite here can exercise is a device that genuinely hangs —
+that wants a camera another program is holding, which is a machine and not a
+fixture.
+
 `ui_capture.js` follows a device the length of the stage: chosen out of
 libavdevice's list, its option set from its own table and printed in front of its
 `-i`, `-t` printed in front of it too (after the `-i` it would limit the output

@@ -171,12 +171,23 @@ export function tickSources() {
     }
 }
 
+/// What an open in flight is waiting *on*, which is not decoration: the two
+/// kinds wait on different things, and only one of them can be cut short.
+///
+/// A URL is connecting — to a host, through a protocol, and a Stop reaches the
+/// socket libav is sitting on. A device is opening — a driver is being asked
+/// for a picture, and libavdevice's `read_header` never polls the interrupt
+/// callback, so a Stop there ends the waiting and not the open. One word each,
+/// so that what is on screen is the truth about which wait this is.
+function waitingOn(input) { return kindOf(input) === 'device' ? 'device' : 'url'; }
+
 /// "Connecting · 3.4s of 10", or the same without the deadline until the first
 /// poll has said what the deadline is.
 function waitingLabel(input) {
     const o = input.opening || {};
     const secs = `${(o.elapsed || 0).toFixed(1)}s`;
-    return o.timeout > 0 ? `Connecting · ${secs} of ${o.timeout.toFixed(0)}` : `Connecting · ${secs}`;
+    const verb = waitingOn(input) === 'device' ? 'Opening' : 'Connecting';
+    return o.timeout > 0 ? `${verb} · ${secs} of ${o.timeout.toFixed(0)}` : `${verb} · ${secs}`;
 }
 
 // ── the list ───────────────────────────────────────────────────────────────
@@ -254,7 +265,7 @@ function drawList() {
             const recorded = capture.inputs.indexOf(input.id) >= 0;
             const use = node.querySelector('.src-used');
             use.textContent =
-                opening(input) ? 'connecting'
+                opening(input) ? (waitingOn(input) === 'device' ? 'opening' : 'connecting')
                 : input.error ? 'unreadable'
                 : [used ? `${used} clip${used === 1 ? '' : 's'}` : '',
                    recorded ? 'recording' : '',
@@ -493,32 +504,45 @@ function whereRows(input) {
     return rows;
 }
 
-/// What is happening while a URL is being opened, and the way to stop it.
+/// What is happening while an input is being opened, and the way to stop it.
 ///
-/// **The Stop is real.** It reaches the `AVIOInterruptCB` the open was started
-/// with, so libav abandons the connect, the handshake or the read it is inside
-/// and the card says `stopped` a frame or two later. A button that hid the row
-/// while the thread stayed blocked would be worse than no button — it would say
-/// the machine had stopped doing something it was still doing.
+/// **The Stop says what it does, and for a device that is less than it is for a
+/// URL.** On a URL it reaches the `AVIOInterruptCB` the open was started with,
+/// so libav abandons the connect, the handshake or the read it is inside and
+/// the card says `stopped` a frame or two later. On a device it cannot: nothing
+/// in libavdevice's `read_header` consults that callback, so what the press
+/// ends is this application's waiting, and the thread stays inside libav until
+/// the driver answers. A button that hid the row while the thread stayed
+/// blocked would be worse than no button — it would say the machine had stopped
+/// doing something it was still doing — so the row says both halves.
 ///
 /// The elapsed figure is written into `waitingText` and updated from the frame
 /// loop rather than redrawn, which is why it is built as its own node here.
 function waitingRows(input) {
     const readout = span(waitingLabel(input), 'mono src-waiting');
     waitingText.set(input.id, readout);
+    const device = waitingOn(input) === 'device';
     return [
-        row('Opening', readout),
+        row(device ? 'Opening' : 'Connecting', readout),
         row('', el('button', {
-            cls: 'tiny', 'data-f': 'srcstop', text: 'Stop',
-            title: 'Abandon the open. This reaches libav’s interrupt callback, which is ' +
-                   'the only thing that can abort a connect that is already in progress.',
+            cls: 'tiny', 'data-f': 'srcstop', text: device ? 'Stop waiting' : 'Stop',
+            title: device
+                ? 'Stop waiting for this device. It does not abort the open — libavdevice ' +
+                  'never asks libav’s interrupt callback while it is talking to a driver — ' +
+                  'so the thread is abandoned and reaped when the device finally answers.'
+                : 'Abandon the open. This reaches libav’s interrupt callback, which is ' +
+                  'the only thing that can abort a connect that is already in progress.',
             on: { click: () => { stopOpening(input); } },
         })),
-        row('', note(
-            'The open is on a thread of its own, so the window stays alive while it waits — ' +
-            'and it gives up by itself if nothing answers in time. Name resolution is the ' +
-            'one part neither the deadline nor Stop can cut short: getaddrinfo has no ' +
-            'callback in it.')),
+        row('', note(device
+            ? 'The open is on a thread of its own, so the window stays alive while it waits. ' +
+              'A device blocks in its own driver, where neither the deadline nor Stop can ' +
+              'reach it; what they do reach is the stream analysis after it, which is most ' +
+              'of an open on a screen grabber and about half of one on a camera.'
+            : 'The open is on a thread of its own, so the window stays alive while it waits — ' +
+              'and it gives up by itself if nothing answers in time. Name resolution is the ' +
+              'one part neither the deadline nor Stop can cut short: getaddrinfo has no ' +
+              'callback in it.')),
     ];
 }
 
@@ -1015,7 +1039,8 @@ function windowRows(input) {
 function blocked(input) {
     // Still opening is not "will not open", and the difference is the whole
     // point of the asynchronous path: one is a fault and the other is a wait.
-    if (opening(input)) return 'Still connecting';
+    if (opening(input))
+        return waitingOn(input) === 'device' ? 'Still opening' : 'Still connecting';
     if (input.error || !input.probe) return 'Will not open';
     const p = input.probe;
     if (!p.video && !p.audio) return 'Nothing to play';
@@ -1068,6 +1093,9 @@ function whyAt(input, why) {
     if (why === 'Still connecting')
         return 'The open is running on a thread of its own. It will give up by itself if ' +
                'nothing answers, and Stop above abandons it now.';
+    if (why === 'Still opening')
+        return 'The device is being opened on a thread of its own, so nothing here is ' +
+               'blocked. Stop waiting above gives up on it; it cannot abort the driver.';
     if (why === 'Will not open') return input.error || 'Nothing came back from the probe';
     if (why === 'Nothing to play')
         return 'No picture to lay out and no sound to mix. A file of cues travels as a ' +

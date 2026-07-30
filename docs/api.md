@@ -93,18 +93,25 @@ bro.ffmpeg.probe({ path, format, options, decoderOptions,
 //               }, ...],
 //     video, audio }          // shortcuts to the first of each
 
-// The same probe, on a thread of its own, for the case where the wait is not
-// measured in microseconds: **a URL**. `probe()` above is synchronous because a
-// container on disk answers in about a millisecond and every caller wants the
-// answer before it can lay anything out; a network open can wait for as long as
-// the far end likes, and on this architecture that would be the whole window —
-// the UI's stage views are never unmounted and the viewer's `<video>` elements
-// are the decoders, so a blocked frame loop is a frozen application.
+// The same probe, on a thread of its own, for the two cases where the wait is
+// not measured in microseconds: **a URL** and **a device**. `probe()` above is
+// synchronous because a container on disk answers in about a millisecond and
+// every caller wants the answer before it can lay anything out; a network open
+// can wait for as long as the far end likes, and a device open is not this
+// application's to make fast either — `dshow` opening a working audio device
+// measures 920 ms here, and a camera another program holds or a capture card
+// mid-reset does not measure at all. On this architecture either would be the
+// whole window: the UI's stage views are never unmounted and the viewer's
+// `<video>` elements are the decoders, so a blocked frame loop is a frozen
+// application.
 //
-// The result is built by the same function `probe()` returns, so a path and a
-// URL cannot come back described differently. Which of the two calls to use is
-// decided by parsing the string for a scheme, which opens nothing and therefore
-// cannot itself block.
+// A device needed nothing added to these calls — it is `-f dshow -i video=…`,
+// which is a `MediaInput`, and `start` has always taken one whole.
+//
+// The result is built by the same function `probe()` returns, so a path, a URL
+// and a device cannot come back described differently. Which of the two calls
+// to use is decided by a lookup that opens nothing: a scheme parsed out of the
+// path, or the `-f` found in libavdevice's registry.
 bro.ffmpeg.probes.start(path | input, { timeout })   // → id, at once
 // `timeout` is in seconds and defaults to 10. It is **not** an option and never
 // reaches libav: it is a deadline on the `AVIOInterruptCB` the open is given,
@@ -121,6 +128,7 @@ bro.ffmpeg.probes.start(path | input, { timeout })   // → id, at once
 bro.ffmpeg.probes.poll(id)
 // → { state: "opening" | "done" | "failed" | "stopped", opening,
 //     elapsed, timeout,      // seconds, so "3.4s of 10" needs no second clock
+//     stoppable,             // would `cancel` reach the open, or only the wait?
 //     error,                 // "" until it has one; "no answer in time" for a
 //                            // deadline, "stopped" for a cancel — both of which
 //                            // libav reports as "Immediate exit requested"
@@ -135,6 +143,23 @@ bro.ffmpeg.probes.forget(id)   // abort it and throw the answer away
 // a handshake or a read — and the operation is abandoned. The one thing it
 // cannot cut short is `getaddrinfo`, which has no callback in it; that is why
 // the open is on a thread as well as behind a deadline.
+//
+// **`stoppable` is false for a device, and that is measured rather than
+// assumed.** A libavdevice demuxer carries `AVFMT_NOFILE`, so
+// `avformat_open_input` opens no AVIO layer for it and goes straight into the
+// demuxer's own `read_header` — COM, DirectShow, a driver — where nothing polls
+// the interrupt callback. Counted on this machine: **zero polls across a 400 ms
+// `dshow` audio open**, zero for `gdigrab desktop`, zero for `lavfi`, and an
+// already-aborting callback shortens none of them. What the callback does reach
+// is `avformat_find_stream_info` afterwards — 520 ms of that `dshow` open, 92 ms
+// of the `gdigrab` one, aborted in 0.04 ms when told to — so for a device the
+// deadline covers 57–99.9% of the open and `cancel` covers the same half.
+// On such a probe **`forget` is what a Stop means**: `cancel` would set a flag
+// nothing reads until the driver answers, leaving the entry `opening` for
+// exactly as long as the press was meant to end. No device demuxer in this
+// build offers a timeout to use instead — the only option with "time" in its
+// name across `dshow`, `gdigrab`, `lavfi` and `vfwcap` is dshow's
+// `use_video_device_timestamps`, which is about which clock a frame carries.
 ```
 
 ```js

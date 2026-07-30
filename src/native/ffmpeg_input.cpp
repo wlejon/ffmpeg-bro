@@ -234,8 +234,17 @@ bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err,
     }
     av_dict_free(&opts);
 
+    // **`avformat_find_stream_info` answers success when the callback cut it
+    // short**, which is measured and is not what the name suggests: told to
+    // give up on its first poll it returns 0 in 0.04 ms, having learned
+    // whatever `read_header` had already put in the streams. So the watch is
+    // asked as well as the return code — otherwise a deadline that expired
+    // here would produce a *successful* probe of a half-analysed file, which
+    // is the one outcome worse than the hang this deadline exists to end. It
+    // matters most for a device, where this call is 57–99.9% of the open and
+    // the only half a deadline can reach at all.
     const int info = avformat_find_stream_info(*out, nullptr);
-    if (info < 0) {
+    if (info < 0 || (watch && (watch->stopped() || watch->expired()))) {
         avformat_close_input(out);
         if (err) *err = in.path + ": " + openFailure(info, watch);
         return false;

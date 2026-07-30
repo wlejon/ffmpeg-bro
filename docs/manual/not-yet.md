@@ -99,13 +99,32 @@ Honest list of what does not work:
   zero, which is the safe direction and is stated where it is done — but it is
   still a string match, and the alternative is a patch to libavformat.
 
-  A **device** is still opened synchronously, on the UI thread, by both the
-  Sources stage and the Capture stage. A camera another application is holding
-  blocks `avformat_open_input` for as long as its driver takes, and the window
-  waits with it. The mechanism that fixed the URL case is exactly the mechanism
-  this one wants — a deadline is meaningless for a local file and not for a
-  device — and what is missing is only the decision about which opens go through
-  it, which is a rule this application should state rather than discover.
+  **A device's *probe* goes through the same mechanism now** — see [While it is
+  connecting](sources.md#while-it-is-connecting) — and finding that out taught
+  something the URL case did not have to face: the interrupt callback does not
+  reach a device open at all. A libavdevice demuxer carries `AVFMT_NOFILE`, so
+  `avformat_open_input` opens no AVIO layer and goes into the demuxer's own
+  `read_header`, which is COM and a driver. Counted with a callback of its own,
+  a 400 ms `dshow` open polls it **zero times** and an already-aborting one does
+  not shorten it. So the thread is the whole mechanism there, the deadline
+  covers only the `avformat_find_stream_info` that follows — 57% of a `dshow`
+  open, 99.9% of a `gdigrab` one — and the button reads `Stop waiting` because
+  that is all it does.
+
+  **What is still opened on the UI thread is the live session and the
+  recording**, which are not probes and cannot be routed through one: a probe
+  answers with a `ProbeResult` and hands its file back, and both of these keep
+  the devices. On the Capture stage a session is opened whenever the cards or
+  the graph change, which is one `avformat_open_input` per device on the thread
+  that draws — 400 ms for a `dshow` device with nothing wrong. It is bounded in
+  practice, because a session only opens devices whose probe has just come back,
+  which is the strongest evidence available that the open is quick; it is not
+  bounded in principle, and a camera that answers a probe and then goes away is
+  the case that would still freeze. `startCapture` opens on the caller's thread
+  **deliberately** — "there is no camera called that" is a refusal that belongs
+  to the call that asked for the recording, with the name that was wrong still
+  on screen — so making that one asynchronous is a decision about where a
+  refusal arrives and not only a thread.
 - **A soft subtitle track in the viewer.** Cues burned into a clip are on the
   screen now — see [Burning them in](subtitles.md#burning-them-in) — and a track written
   *beside* the picture still is not: bro's `<video>` decodes pictures and

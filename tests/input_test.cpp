@@ -23,7 +23,11 @@
 //     are checked against a closed port on the loopback address, so the test
 //     needs no network and cannot reach one: what it asserts is the *deadline*
 //     and the *refusal*, which are facts about this code, and never that
-//     something answered.
+//     something answered;
+//   - a **device** goes the same way, and says out loud that a stop reaches
+//     only half of it. Checked against `lavfi`, which is a device in this build
+//     and exists on every machine, so the device path is exercised on a machine
+//     with no camera in it.
 //
 // Usage: ffmpeg-bro-inputtest <media-file>
 
@@ -747,6 +751,8 @@ int main(int argc, char* argv[]) {
         checkf(p.result.error == "no answer in time",
                "and says the far end did not answer rather than quoting libav: '%s'",
                p.result.error.c_str());
+        check(p.stoppable,
+              "and it was one a stop could have reached, which is what the button reads");
         check(!probeProgress(id, &p), "a terminal answer is handed over once, then forgotten");
 
         const auto pressed = std::chrono::steady_clock::now();
@@ -776,6 +782,58 @@ int main(int argc, char* argv[]) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         checkf(p.state == ProbeProgress::State::Done && p.result.ok,
                "and an ordinary file probed this way answers with the same result");
+        check(p.stoppable,
+              "a file's open is one the interrupt callback reaches, and says so");
+    }
+
+    // ── a device is opened the same way, and stops differently ─────────────
+    //
+    // `lavfi` is a device in this build and exists on every machine, which is
+    // what makes the device path testable with no camera and no capture card.
+    // It is a *fast* device, so nothing here waits on one; what is asserted is
+    // that the route exists and that what it says about stopping is the truth.
+    //
+    // The truth is uncomfortable and is the reason this section is here. A
+    // libavdevice demuxer carries `AVFMT_NOFILE`, so `avformat_open_input`
+    // opens no AVIO layer and goes into the device's own `read_header` — COM,
+    // DirectShow, a driver — where nothing has heard of `ff_check_interrupt`.
+    // Counted with a callback of its own on this machine: **zero polls across a
+    // 400 ms `dshow` audio open**, and an already-aborting callback does not
+    // shorten it by a millisecond. What the callback does reach is
+    // `avformat_find_stream_info` afterwards, which is 520 ms of that open and
+    // 92 ms of a `gdigrab desktop` one. So a device's open is on a thread
+    // because it has to be, and its `Stop` is honest about reaching only half.
+    std::printf("\na device is opened off the thread too, and says what a stop would reach\n");
+    {
+        MediaInput dev;
+        dev.format = "lavfi";
+        dev.path = "testsrc=size=320x240:rate=10";
+
+        const uint64_t id = startProbe(dev, 10.0);
+        ProbeProgress p;
+        while (probeProgress(id, &p) && p.state == ProbeProgress::State::Opening)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        checkf(p.state == ProbeProgress::State::Done && p.result.ok,
+               "a device probed off the thread answers like any other input (%s)",
+               p.result.formatName.c_str());
+        check(!p.stoppable,
+              "and reports that a stop would NOT reach its open — libavdevice never "
+              "polls the interrupt callback while it is talking to a driver");
+
+        // **The deadline still does something, and this is what.** libavformat
+        // answers `find_stream_info` with success when the callback cut it
+        // short — measured at 0 in 0.04 ms — so `openInput` asks the watch as
+        // well as the return code. Without that line an expired deadline here
+        // produced a *successful* probe of a half-analysed file, which is worse
+        // than the hang it was put in to end.
+        OpenWatch watch;
+        watch.expireIn(1e-6);
+        const ProbeResult cut = probeMedia(dev, &watch);
+        check(!cut.ok, "a deadline that expires inside the stream analysis fails the probe");
+        checkf(cut.error == "no answer in time",
+               "and says so in the deadline's own words rather than libav's: '%s'",
+               cut.error.c_str());
+        check(probeMedia(dev).ok, "while the same device with no deadline on it opens");
     }
 
     {
