@@ -1607,16 +1607,25 @@ bool startCapture(const CaptureSettings& settings, std::string* error,
         s.outputs[i].audioChannels = s.output.audioChannels;
         s.outputs[i].includeAudio = s.output.includeAudio;
     }
-    // **A capture's graph is fed by its devices and by nothing else.** A
-    // `filterInputs` list says which *file* feeds which pad, which is the
-    // render's question: a device cannot be cut from, so a file beside one on
-    // the same graph would be an input with a window on one side and a camera on
-    // the other. It is a later chunk's, and half-supporting it here would be a
-    // door that opens onto the thing the device model says cannot be done.
+    // **A capture's graph is fed by its devices and by nothing else *through
+    // its input pads*.** A `filterInputs` list says which file feeds which
+    // `[n:v]`, which is the render's question and the render's mechanism: there
+    // a `GraphSource` opens the file and pulls it backwards from a sink. Here
+    // those pads are buffersrcs the recording loop pushes device frames into,
+    // nothing pushes a file, and pulling is exactly what a device cannot be
+    // asked for.
+    //
+    // **That is not the same as "no file in a capture's graph"**, and the
+    // refusal says so, because the difference is a whole capability and used to
+    // be written down as a missing one. A `movie` node has no input pad of ours
+    // at all — libavfilter opens the file itself and framesync asks it for the
+    // frame that pairs with the one the device just delivered, which is one per
+    // output frame and no more. Measured in tests/capture_test.cpp.
     if (!s.output.filterInputs.empty()) {
         if (error)
             *error = "a recording's filter graph is fed by the device — [0:v] and [0:a] — "
-                     "and cannot be given input files of its own";
+                     "and cannot be given input files of its own; a movie filter in the "
+                     "graph text reads a file and is pulled in step with the device";
         return false;
     }
     // **Several inputs with no graph have no defined composition.** Two

@@ -42,7 +42,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-inputtest <file> [<rotated>] [<cues>]  # an -i: forced demuxer, options, window, token, filters
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
-./build/Release/ffmpeg-bro-capturetest out         # devices: an endless input, recording one, and a session of several
+./build/Release/ffmpeg-bro-capturetest out [<fixture-dir>]  # devices: an endless input, recording one, a session of several, a file laid over one
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>] [<rotated>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
@@ -435,6 +435,21 @@ checks the numbers it becomes are in the screen's pixels rather than the card's 
 that a drag off the edge is clamped, because an unclamped rectangle is one
 libavdevice refuses at the open — and asserts that leaving the stage gives the device
 back.
+
+**A file beside the device** is checked in both suites and in three parts, because
+the claim has three halves and only the third is hard to believe. `capture_test.cpp`
+records `testsrc` with `movie=still.png` overlaid and reads the strip the card covers:
+it is not the device's picture (so the file is in the frame and not merely in the
+graph), and frame 45 reads the same as frame 5 (so a still is *held*, by `overlay`'s
+own `eof_action=repeat` rather than by a rule this application wrote). Then the same
+with `landscape.mp4`, whose bar sweeps across it over ten seconds: frame 0 and frame
+45 must **differ**, because a file raced to its end would be its last frame repeated
+and both would read alike. That is the assertion that says the file is pulled one
+frame per output frame. `ui_capture.js` does the same from the stage a person uses —
+a `movie` node placed, wired into an `overlay` beside `[0:v]`, `recordGraph`
+accepting it, one `-i` in the command bar because a `movie` is not one, and a real
+recording that comes out at the device's own size. Its file is the one the suite
+recorded a section earlier, so that half still needs no fixture.
 
 The session half adds a second input and follows what changes: the card and the
 column that say which input they are about, the refusal at two inputs with no graph

@@ -352,6 +352,27 @@ double rmsOf(const std::string& path) {
     return n > 0 ? std::sqrt(sum / double(n)) : -1.0;
 }
 
+/// A filename as a filter argument takes it: quoted, with every colon escaped.
+///
+/// Not decoration and not this test being careful — it is ffmpeg's own grammar,
+/// and it is the one piece of syntax a `movie` node makes somebody learn. A
+/// colon separates a filter's arguments, so `movie=D:/shots/card.png` names a
+/// file called `D` and then fails on an argument called `/shots/card.png`; the
+/// first version of this section passed by hand and failed under ctest for
+/// exactly that reason, because ctest passes the fixture directory absolute.
+/// `filterPath()` in ui/export/subtitles.js writes the same two layers for
+/// `subtitles=`, and `ui/sources.js` takes them off again to say which file a
+/// node names.
+std::string filterArg(const std::string& path) {
+    std::string out = "'";
+    for (char ch : path) {
+        if (ch == '\\') { out += '/'; continue; }
+        if (ch == ':' || ch == '\'') out += '\\';
+        out += ch;
+    }
+    return out + "'";
+}
+
 /// A recording of the device, through `graph`, into `path`. Everything these
 /// sections have in common, so that what each of them says is the one thing it
 /// is about.
@@ -421,6 +442,10 @@ int main(int argc, char** argv) {
     av_log_set_level(AV_LOG_ERROR);
 
     const std::string dir = argc > 1 ? argv[1] : "out";
+    // Where the files this suite lays *over* a device live. Optional, and every
+    // section that wants one skips without it — the same rule the rest of the
+    // suites here follow, so this stays runnable by hand with one argument.
+    const std::string fixtures = argc > 2 ? argv[2] : "";
     std::filesystem::create_directories(dir);
 
     // ── what this build has ────────────────────────────────────────────────
@@ -1215,6 +1240,134 @@ int main(int argc, char** argv) {
                        "(%.1f/%.1f/%.1f)", corner.r, corner.g, corner.b);
             else
                 check(false, "and the corner decodes back");
+        }
+    }
+
+    // ── a file beside the device, through libavfilter's own source ─────────
+    //
+    // "A file beside a device on the same graph" was a Not-yet entry, and it
+    // was wrong about its own reason. It said a file cannot be there because
+    // the push shape has nobody to ask for its next frame — while allowing a
+    // `color` or a `testsrc`, "because a filter with no inputs makes its own
+    // frames". `movie` is a filter with no inputs. It reads a file, and in a
+    // graph driven by pushing at a buffersrc and draining a buffersink it is
+    // **pulled**: framesync asks its input for the frame that pairs with the
+    // one the device just delivered, and asks for no more than that.
+    //
+    // So what is asserted here is the whole of that claim, in three parts, and
+    // the third is the one worth having: the picture goes where it was put, it
+    // is *held* when the file has run out, and it **advances in step with the
+    // device** rather than racing to the end of the file and repeating.
+    //
+    // Both fixtures are the ones the rest of the suite uses, and each half is
+    // skipped without its own — the same rule every other suite here follows.
+    std::printf("\nA file beside the device\n");
+    if (!avcodec_find_encoder_by_name("libx264")) {
+        std::printf("  SKIP  no libx264 in this build\n");
+    } else if (!haveFilter("movie")) {
+        std::printf("  SKIP  this build has no movie filter\n");
+    } else if (fixtures.empty()) {
+        std::printf("  SKIP  no fixture directory given: nothing to lay over the device\n");
+    } else {
+        // `still.png` is 320x180 with a bright bar down its left edge, which is
+        // what makes a *strip* readable: a mean over the whole card would move
+        // barely at all when the card changed, and the bar is the part that
+        // says which frame of a file this is.
+        const std::string still = fixtures + "/still.png";
+        const std::string moving = fixtures + "/landscape.mp4";
+
+        const std::string base = dir + "/movie-base.mp4";
+        std::filesystem::remove(base);
+        CaptureSettings b = recording(lavfi("testsrc=size=320x240:rate=25", 2.0), base,
+                                      "[0:v]null[vout]");
+        b.output.includeAudio = false;
+        std::string berr;
+        Mean baseStrip;
+        if (!startCapture(b, &berr)) {
+            checkf(false, "the device alone records: %s", berr.c_str());
+        } else {
+            waitForJob(60.0);
+            baseStrip = meanOf(base, 0, 5, 0, 0, 16, 90);
+        }
+
+        if (!std::filesystem::exists(still)) {
+            std::printf("  SKIP  no still.png: the title-card case needs one\n");
+        } else {
+            const std::string over = dir + "/movie-still.mp4";
+            std::filesystem::remove(over);
+            CaptureSettings c = recording(
+                lavfi("testsrc=size=320x240:rate=25", 2.0), over,
+                "movie=" + filterArg(still) + "[card];[0:v][card]overlay=0:0[vout]");
+            c.output.includeAudio = false;
+            std::string err;
+            if (!startCapture(c, &err)) {
+                checkf(false, "a title card laid over the device records: %s", err.c_str());
+            } else {
+                const ExportStatus st = waitForJob(60.0);
+                checkf(st.state == ExportStatus::State::Done,
+                       "a recording with a file in its graph finishes%s%s",
+                       st.error.empty() ? "" : ": ", st.error.c_str());
+                const Opened o = openResult(over);
+                checkf(o.ok && o.width == 320 && o.height == 240,
+                       "at the device's own size (%dx%d)", o.width, o.height);
+                // The card is *there*: the strip it covers is not the device's.
+                const Mean card = meanOf(over, 0, 5, 0, 0, 16, 90);
+                checkf(card.ok && baseStrip.ok, "both recordings decode back");
+                if (card.ok && baseStrip.ok)
+                    checkf(away(card, baseStrip) > 10.0,
+                           "and the file is in the picture, not merely in the graph "
+                           "(device %.1f/%.1f/%.1f, with the card %.1f/%.1f/%.1f, "
+                           "apart by %.1f)", baseStrip.r, baseStrip.g, baseStrip.b,
+                           card.r, card.g, card.b, away(card, baseStrip));
+                // **And it is still there at the end.** One picture is one
+                // frame: the file ends after it, and what holds it for the rest
+                // of the recording is `overlay`'s own `eof_action=repeat` —
+                // libavfilter's rule, not one this application wrote.
+                const Mean late = meanOf(over, 0, 45, 0, 0, 16, 90);
+                if (late.ok && card.ok)
+                    checkf(away(late, card) < 8.0,
+                           "and a still is held for the whole recording by overlay's own "
+                           "eof_action=repeat (frame 5 %.1f/%.1f/%.1f, frame 45 "
+                           "%.1f/%.1f/%.1f)", card.r, card.g, card.b, late.r, late.g, late.b);
+                else
+                    check(false, "and a later frame decodes back");
+            }
+        }
+
+        if (!std::filesystem::exists(moving)) {
+            std::printf("  SKIP  no landscape.mp4: the moving-file case needs one\n");
+        } else {
+            // **The assertion that says it is pulled and not raced.** The
+            // fixture is a bar sweeping left to right over ten seconds. A file
+            // read as fast as the graph would take it is a file that reaches
+            // EOF in the first instant, and every frame after that is its last
+            // one repeated — so frame 0 and frame 45 would read the same. In
+            // step, frame 45 is 1.8 s into the file, the bar has left the strip,
+            // and they do not.
+            const std::string pulled = dir + "/movie-moving.mp4";
+            std::filesystem::remove(pulled);
+            CaptureSettings m = recording(
+                lavfi("testsrc=size=320x240:rate=25", 2.0), pulled,
+                "movie=" + filterArg(moving) + ",scale=160:-2[clip];[0:v][clip]overlay=0:0[vout]");
+            m.output.includeAudio = false;
+            std::string err;
+            if (!startCapture(m, &err)) {
+                checkf(false, "a moving file laid over the device records: %s", err.c_str());
+            } else {
+                const ExportStatus st = waitForJob(60.0);
+                checkf(st.state == ExportStatus::State::Done,
+                       "a recording with a moving file in its graph finishes%s%s",
+                       st.error.empty() ? "" : ": ", st.error.c_str());
+                const Mean first = meanOf(pulled, 0, 0, 0, 0, 12, 90);
+                const Mean later = meanOf(pulled, 0, 45, 0, 0, 12, 90);
+                checkf(first.ok && later.ok, "and both frames of it decode back");
+                if (first.ok && later.ok)
+                    checkf(away(first, later) > 20.0,
+                           "and the file advanced with the device rather than racing to its "
+                           "end (frame 0 %.1f/%.1f/%.1f, frame 45 %.1f/%.1f/%.1f, apart "
+                           "by %.1f)", first.r, first.g, first.b, later.r, later.g, later.b,
+                           away(first, later));
+            }
         }
     }
 

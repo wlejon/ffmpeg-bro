@@ -228,15 +228,28 @@ Honest list of what does not work:
   monitored is a *pad* — a device's own sound, or an end of the graph — so
   "everything at once, at levels of my choosing" is a monitor mix, which is a
   little mixing desk and not a missing wire.
-- **A file beside a device on the same graph.** A capture's graph is fed by its
-  devices and by nothing else, at both ends of the seam: the walk that builds it
-  refuses a file input by name, and `filterInputs` — which says which *file*
-  feeds which pad — is refused by the engine outright. Overlaying a title card on
-  a screen grab as it records is therefore not something this can express, though
-  a `color` or a `testsrc` beside the device is, because a filter with no inputs
-  makes its own frames and nothing has to pull one. A graph whose filters want a
-  graphics card is refused the same way, because `-filter_hw_device` has nowhere
-  to be said on this stage.
+- **An `-i` beside a device on the same graph.** This entry used to say a *file*
+  could not be there and that a title card over a screen grab was therefore
+  inexpressible. That was wrong, and wrong by its own reasoning: it allowed a
+  `color` or a `testsrc` "because a filter with no inputs makes its own frames
+  and nothing has to pull one", and `movie` is a filter with no inputs. See [A
+  file in the graph](capture.md#a-file-in-the-graph) — a `movie` node beside the
+  device works, and is *pulled in step with it* rather than racing ahead, because
+  a push-and-drain graph asks a source filter for one frame per output frame and
+  no more.
+
+  What is still refused is an **input node** — a real `-i` — in a capture's
+  graph, at both ends of the seam: the walk that builds it refuses one by name,
+  and `filterInputs`, which says which file feeds which `[n:v]`, is refused by the
+  engine outright. The reason is the shape rather than the file: those pads are
+  buffersrcs the recording loop pushes device frames into, nothing pushes a file,
+  and pulling one backwards from a sink is what a *render* does and what a device
+  cannot be asked for. The cost of that refusal is everything an `-i` carries and
+  a `movie` does not — a forced demuxer, `-probesize`, `-ss`, `-t`, `-loop`,
+  `-stream_loop`, a protocol's option table — so a file whose *opening* has to be
+  described is still a file to render with rather than to record with. A graph
+  whose filters want a graphics card is refused separately and for its own
+  reason, because `-filter_hw_device` has nowhere to be said on this stage.
 - **A variable frame rate out of the *compositor*.** A graph's own frame times
   reach the file now — see [Frame timing](output.md#frame-timing) — because frames
   leaving a libavfilter sink carry timestamps and the writer keeps them instead of

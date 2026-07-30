@@ -21,8 +21,23 @@
 //   - **Push, then drain, and never block.** A frame goes into its buffersrc and
 //     every sink is emptied with `av_buffersink_get_frame` until EAGAIN. There
 //     is no `pushSome`, no starvation count and no request loop: nothing here is
-//     allowed to ask an input for a frame, because the input is a camera and the
-//     answer is "when it happens". A sink nobody is writing is drained and
+//     allowed to ask a *feed* for a frame, because a feed is a camera and the
+//     answer is "when it happens".
+//
+//     **A source filter inside the graph is a different sentence, and the
+//     difference turned out to be a capability.** A `movie` node has no feed:
+//     libavfilter opens its file and drives it, and when the drain pulls at a
+//     buffersink every filter above asks its own inputs for what it needs — so
+//     `overlay`'s framesync asks the `movie` for the frame that pairs with the
+//     device's, exactly once per output frame. A file therefore *can* sit beside
+//     a device on one graph, read on demand and never faster:
+//     `[0:v][card]overlay` with `card` a `movie=title.png` is a title card over
+//     a screen grab. What ends it is libavfilter's own rule rather than one
+//     written here — a still is one frame and then EOF, and `overlay`'s default
+//     `eof_action=repeat` holds it for the rest of the recording. Both halves
+//     are measured in tests/capture_test.cpp.
+//
+//     A sink nobody is writing is drained and
 //     dropped all the same — libavfilter holds every frame it has pushed at a
 //     sink until somebody takes it, and a recording has no end for that to stop
 //     growing at.

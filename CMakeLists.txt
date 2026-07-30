@@ -235,10 +235,13 @@ add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}" "${FIXTURE_ROTA
          "${FIXTURE_DIR}/cues.srt")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
-# Needs no fixture: the device it records from is `lavfi`, which produces its
-# own pictures. It writes into out/, so it wants the source directory.
-add_test(NAME capture COMMAND ffmpeg-bro-capturetest "out")
-set_tests_properties(capture PROPERTIES TIMEOUT 300
+# The device it records from is `lavfi`, which produces its own pictures, so
+# most of this needs no fixture at all. What does is the half about a file laid
+# *over* a device — a title card is a file, and there has to be one — so the
+# fixture directory is passed as well and those sections skip without it. It
+# writes into out/, so it wants the source directory.
+add_test(NAME capture COMMAND ffmpeg-bro-capturetest "out" "${FIXTURE_DIR}")
+set_tests_properties(capture PROPERTIES TIMEOUT 300 FIXTURES_REQUIRED media
                      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # The third and fourth files are the two whose point is one fact each: a clip
 # stored sideways has to play the right way up, and a clip with no picture in it

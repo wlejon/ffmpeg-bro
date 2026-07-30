@@ -89,9 +89,22 @@
 // which is what makes a rate-changing filter (`fps=10`) an ordinary filter here.
 //
 // Three things about it are refusals rather than features. A capture's graph is
-// fed by its devices and by nothing else, so `filterInputs` — which says which
-// *file* feeds which pad — is refused: a device cannot be cut from, and a file
-// beside one on the same graph is a later chunk's. A graph whose filters want a
+// fed by its devices and by nothing else *through its input pads*, so
+// `filterInputs` — which says which file feeds which `[n:v]` — is refused: those
+// pads are buffersrcs this loop pushes device frames into, nothing pushes a
+// file, and pulling one backwards from a sink is what `GraphSource` does in a
+// render and what a device cannot be asked for.
+//
+// **That is not the same as "no file in a capture's graph", and this used to say
+// it was.** A `movie`/`amovie` node is a filter with no input pads, so it is not
+// one of these pads at all: libavfilter opens the file itself, and in a
+// push-and-drain graph framesync asks it for the frame that pairs with the one
+// the device just delivered and for no more. A title card over a screen grab is
+// `movie=card.png` beside `[0:v]`, and both halves are measured in
+// tests/capture_test.cpp — a still is held for the rest of the recording by
+// `overlay`'s own `eof_action=repeat`, which is libavfilter's rule and not one
+// written here, and a moving file advances one frame per output frame rather
+// than racing to its end and repeating. A graph whose filters want a
 // graphics card is refused by name, because `-filter_hw_device` has nowhere to
 // be said on the Capture stage and failing inside a parse would be the least
 // readable version of it. And **several inputs with no graph is refused**,

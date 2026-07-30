@@ -240,11 +240,11 @@ and goes *up*. Not a graph of its own, since there is one document and one edito
 it; not the whole graph either, since most of what is on that stage is usually about
 the timeline. Three consequences:
 
-- A **generator** comes with it and a **file** does not. A `testsrc` overlaid on a
-  camera is fine — a filter with no inputs makes its own frames, and nothing has to
-  pull one. A file is refused by name, because a recording's graph is *pushed*: a
-  device frame goes in and whatever falls out of the sinks is what there is, and
-  there is nobody to ask a file for its next frame.
+- A **source filter** comes with it and an **`-i`** does not. A `testsrc` overlaid
+  on a camera is fine — a filter with no inputs makes its own frames — and so is a
+  `movie` reading a file, for the reason below. What is refused by name is an input
+  node: its pad would be a buffersrc the recording pushes device frames into, and
+  there is nothing pushing a file.
 - The **ends it did not name** cost nothing to ignore. Walking upwards cannot reach a
   sink, so a branch leaving by some other output is simply not in the recording —
   which is why the walk runs this way round. One graph feeds a render and a recording
@@ -270,6 +270,48 @@ comes out ending in `[vout]`: a recording is its own invocation with its own mux
 and that is the label the writer maps. Delete the output and the recording drops back
 to video out — the panel says what it is mapped as now, which is the whole of what
 changed.
+
+## A file in the graph
+
+A title card over a screen grab as it records, a logo bug on a camera, a plate to
+key against: all of them are a file beside a device on one graph, and all of them
+are a **`movie` node** on the Graph stage — libavfilter's own source filter, in
+the palette with `color` and `testsrc` because it is the same kind of thing. Wire
+its output into an `overlay` beside `[0:v]` and record.
+
+**It is pulled, in step with the device, and that is why it works.** A recording's
+graph is *pushed*: a decoded device frame goes into a buffersrc and every sink is
+drained of whatever falls out. A file read that way would hand over frames as fast
+as they came off the disk, run ahead of the camera and grow libavfilter's queues
+rather than compose anything — which is exactly why an `-i` is refused. A `movie`
+is not read that way. It has no input pad of this application's at all: when the
+drain pulls at a sink, every filter above asks its own inputs for the frame it
+needs, so `overlay`'s frame sync asks the `movie` for the one that pairs with the
+device's — once per output frame, and never sooner.
+
+**What happens at the end of the file is libavfilter's rule, not one written
+here.** A still picture is one frame and then EOF, and `overlay`'s default
+`eof_action=repeat` holds that frame for the rest of the recording; that is what
+makes a title card a title card rather than a single frame that flashes past.
+`endall` ends the recording with the file and `pass` lets the other input through
+unaltered — both are ordinary options on the `overlay` node, in its own table
+beside every other one.
+
+**A `movie` is not an `-i`, and the difference is what it cannot carry.** It takes
+a filename and a seek point. Everything that decides *how a file is opened* — a
+forced demuxer, `-probesize`, `-ss`, `-t`, `-loop`, `-stream_loop`, and for a URL
+the whole protocol option table — belongs to an `-i` and is simply not there. The
+[Sources](sources.md) stage accounts for the file anyway, under **Opened by the
+graph**, with an `Add` beside it that opens the same file as a real input with all
+of that; that is the gesture for a file whose opening has to be described, and it
+is a render's file rather than a recording's. The command bar prints one `-i` for
+the device and the `movie=` inside the `-filter_complex`, which is exactly what
+ffmpeg would be run with.
+
+One piece of syntax is unavoidable and is worth knowing before it bites: a colon
+separates a filter's arguments, so a Windows path inside a `movie` has to be
+written `'D\:/shots/card.png'` — quoted, with the drive colon escaped. That is
+ffmpeg's own escaping and the same thing `subtitles=` needs.
 
 ## Recording and streaming at once
 

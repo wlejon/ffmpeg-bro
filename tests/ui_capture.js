@@ -288,6 +288,82 @@ console.log('\na recording that does have an end');
     pump(100);
 }
 
+console.log('\na file laid over the device, by the graph');
+{
+    // **The thing docs/manual/not-yet.md said could not be done**, checked from
+    // the stage a person would do it on. A capture's graph is fed by its devices
+    // and by no `-i` of its own — that part is true and stays true — but a
+    // `movie` node is not an `-i`: it is a filter with no input pads, which is
+    // the category the entry itself said already works. What it does that a
+    // `color` does not is read a file, and in a graph driven by pushing at a
+    // buffersrc and draining a buffersink it is **pulled**: framesync asks it
+    // for the frame that pairs with the one the device just delivered, and for
+    // no more than that.
+    //
+    // The file is the one the section above just recorded, so this needs no
+    // fixture — which is the property that keeps this suite runnable with no
+    // media at all.
+    const ov = A.graph.overlay;
+    ov.clear();
+    const shot = `${bro.appDir}/../out/ui-capture-bounded.mkv`;
+    // A filename inside a filter argument carries its own escaping, because a
+    // colon separates a filter's arguments and a Windows path is full of them.
+    // The same two layers `filterPath()` writes for `subtitles=` and
+    // `ui/sources.js` takes off again to say which file a node names.
+    const escaped = `'${shot.replace(/\\/g, '/').replace(/[:']/g, (c) => '\\' + c)}'`;
+
+    const dev = ov.addSource(cap.capture.inputs[0]);
+    const card = ov.addNode('movie', { params: { filename: escaped } });
+    const small = ov.addNode('scale', { pos: ['80', '-2'] });
+    const over = ov.addNode('overlay', { pos: ['0', '0'] });
+    ov.wire(card.id, 0, small.id, 0);
+    ov.wire(dev.id, 0, over.id, 0);
+    ov.wire(small.id, 0, over.id, 1);
+    ov.wire(over.id, 0, 'out:v', 0);
+    pump(200);
+
+    const g = cap.graphOf();
+    ok(g && g.ok, `a movie node beside the device is a graph that runs: ${
+        g && (g.reason || 'ok')}`);
+    if (g && g.ok) {
+        ok(g.filterGraph.indexOf('movie=') >= 0 && g.filterGraph.indexOf('[0:v]') >= 0,
+           `reading the file inside the graph and the device as [0:v]: ${g.filterGraph}`);
+        ok(cap.ready(), 'and the recording is ready — nothing about it is refused');
+        ok(text('#cap-graph').indexOf('movie') >= 0,
+           'the stage shows the file in the chain it is part of');
+        // **No `-i` for it, which is the whole distinction.** A `movie` opens
+        // its file inside libavfilter, so the command has the device's input
+        // and no other — and the Sources stage is where the file is accounted
+        // for, under `Opened by the graph`.
+        const line = text('#cmd-line');
+        same((line.match(/-i /g) || []).length, 1,
+             `one -i, because a movie is not one: ${line.slice(0, 160)}`);
+    }
+
+    // And the recording itself, which is the assertion the graph cannot make:
+    // a file that came out with the card in it.
+    const path = `${bro.appDir}/../out/ui-capture-card.mkv`;
+    const field = q('[data-f="cappath"]');
+    field.value = path;
+    field.dispatchEvent(new Event('change'));
+    const seconds = q('[data-f="capseconds"]');
+    seconds.value = '1';
+    seconds.dispatchEvent(new Event('change'));
+    pump(150);
+    q('[data-f="caprecord"]').click();
+    ok(waitFor('the recording to end', () => !cap.isRecording(), 60000),
+       'a recording with a file in its graph runs to the end');
+    const probe = bro.ffmpeg.probe(path);
+    ok(probe.video && probe.video.width === 1280,
+       `and comes out at the device's own size (${probe.video && probe.video.width}x${
+           probe.video && probe.video.height})`);
+
+    ov.clear();
+    seconds.value = '';
+    seconds.dispatchEvent(new Event('change'));
+    pump(150);
+}
+
 console.log('\na second device is a second -i, not a second recording');
 {
     same(cap.capture.inputs.length, 1, 'one input to start with');

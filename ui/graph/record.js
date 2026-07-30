@@ -27,12 +27,16 @@
 // Three consequences worth stating, because each replaces a rule that used to
 // be written down twice:
 //
-//   - **A generator is pulled in, a file is refused.** `[0:v][1:v]overlay`
+//   - **A source filter is pulled in, an `-i` is refused.** `[0:v][1:v]overlay`
 //     where `[1:v]` is a `testsrc` is fine — a filter with no inputs makes its
-//     own frames and `CaptureGraph` never has to pull one. A file is a refusal
-//     naming the file, because the push shape has nobody to ask for its next
-//     frame: see the top of `capture_graph.h`, where the same fact is stated
-//     from the other end.
+//     own frames — and so is `movie=card.png`, which is the same kind of node
+//     and happens to read a file: libavfilter opens it itself and, in a graph
+//     driven by pushing at a buffersrc and draining a buffersink, asks it for
+//     one frame per output frame and no more. What is refused is an **input
+//     node**, because its pad would be a buffersrc this recording pushes device
+//     frames into and there is nothing pushing a file. See the top of
+//     `capture_graph.h`, where the same distinction is stated from the other
+//     end, and tests/capture_test.cpp, where both halves are measured.
 //   - **The unchosen ends are not walked into at all.** Walking up cannot reach
 //     a sink, so an output this recording did not name costs nothing to ignore
 //     and a graph that feeds both a render and a recording is an ordinary graph
@@ -224,15 +228,27 @@ export function recordGraph(ids, overlay, pads) {
                                         : '') };
     }
 
-    // An `-i` that is not one of this recording's is a file, and a file cannot
-    // be pushed. Named rather than summarised, because the fix is to take that
-    // node out of the branch the camera is in and nothing else says which one.
+    // An `-i` that is not one of this recording's is a file, and a recording's
+    // `-i` list is its devices. Named rather than summarised, because the fix
+    // is about one node and nothing else says which.
+    //
+    // **The refusal is about the `-i` and not about the file**, which is the
+    // correction this sentence has just been through. An input pad of a
+    // capture's graph is a buffersrc the recording loop pushes device frames
+    // into; a file has nothing pushing it, and pulling one is what a device
+    // cannot be asked for. A `movie` node is not one of those pads at all — it
+    // is a filter with no inputs, which libavfilter reads for itself, and in a
+    // graph driven by push-and-drain it is pulled exactly once per output frame
+    // by whatever it feeds. So the file *can* be in the graph; it is the `-i`
+    // that cannot, and the way through is named here rather than left to be
+    // discovered.
     for (const n of g.nodes) {
         if (!keep.has(n.id) || n.kind !== 'input') continue;
         if (numberOf(n) < 0)
             return { ok: false, reason: `the graph feeds ${n.title || n.path || 'an input'} ` +
-                                        'into the recording, and a recording reads live ' +
-                                        'inputs only — a file has nobody to push it' };
+                                        'into the recording as an -i, and a recording’s ' +
+                                        'inputs are its devices — read it with a movie node ' +
+                                        'instead, which the graph pulls in step with them' };
     }
 
     // **Only the problems this recording would hit.** A half-wired node on the
