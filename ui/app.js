@@ -53,6 +53,7 @@ import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
          applyAudioAll, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
 import * as report from './report.js';
+import * as hardware from './hardware.js';
 import { previewSpec, specSources } from './export/spec.js';
 import { subtitleOrdinal, burnParams, burnAnchor, canBurn,
          cuesFor, cueWindow } from './export/subtitles.js';
@@ -288,6 +289,11 @@ exporter.initExport({
     // well as an import: the fastest way to see what you just made is to be
     // standing on the edit with it in front of you.
     open: (path) => { shell.goTo('compose'); open(path); },
+    // The same handler the Sources stage has, and for the same reason: `Choose
+    // for me` on the Encode stage takes an input off its device, and an input
+    // reopened is a different input under whatever is cut from it. One home for
+    // what that costs — the elements, the waveforms and the playhead.
+    reopened: reloadInput,
     finished: (p) => {
         if (p.state === 'done') flash(`Exported ${basename(p.path)}`);
         else if (p.state === 'cancelled') flash('Export stopped');
@@ -1732,6 +1738,11 @@ globalThis.__ffmpegBro = {
     // about which is to hand it rows of both kinds and count what survives.
     subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn, cuesFor, cueWindow },
     exporter, capture,
+    // What this machine turned out to have, and the rule applied to it. On the
+    // surface because the rule is a *pure* answer — a decision plus the sentence
+    // that pays for having taken it — and reading it off the note under the button
+    // would mean pressing the button to find out what it was going to do.
+    hardware,
     filtergraph, renderGraph, shell, command, report,
     // The graph beneath filtergraph(): tests written against the model itself
     // do not have to go through a spec and a printed string to reach it.

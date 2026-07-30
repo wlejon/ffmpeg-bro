@@ -341,6 +341,128 @@ pump(80);
        'and taking the hwupload off takes the warning with it');
 }
 
+// ── the rule, on a press ───────────────────────────────────────────────────
+//
+// Software decode, hardware encode, above SD. That is what this machine was
+// measured to want (docs/manual/card.md) and until now the only way to arrive at
+// it was to read two sentences, walk to two stages and set three controls. The
+// press applies it — and **names what it picked and why**, because choosing on
+// somebody's behalf and then having to say so is the whole cost of the thing.
+//
+// Every assertion here runs on a machine with nothing in it, which is most of what
+// makes the section worth writing: "there is nothing to choose" has to be a
+// sentence rather than a button that appears to do nothing.
+
+console.log('\nthe rule, applied on a press');
+A.graph.overlay.clear();
+A.shell.goTo('encode');
+pump(150);
+{
+    const H = A.hardware;
+    const S = A.exporter.currentSettings();
+    const built = bro.ffmpeg.encoders || [];
+    const codecOf = (id) => (built.find((e) => e.id === id) || {}).codecName || '';
+
+    const button = f('hwchoose');
+    ok(!!button, 'the Encode stage offers to choose for you');
+    // The answer is on the control *before* it is pressed. A button whose effect
+    // can only be discovered by pressing it is a button nobody presses twice.
+    ok(button.title.length > 40,
+       `with what it would do already on it (“${button.title.slice(0, 90)}…”)`);
+
+    // **The candidates are the machine's, not the build's.** This is the failure
+    // the GPU preset was written against and it is the same one: a vcpkg ffmpeg
+    // carries every NVENC, AMF and QSV encoder on a machine with no card in it, so
+    // a list filtered against `bro.ffmpeg.encoders` alone is a list that fails at
+    // `avcodec_open2` with the render already begun.
+    const onCard = H.hardwareChoices('');
+    ok(onCard.every((e) => working.some((d) => (d.encoders || []).indexOf(e.id) >= 0)),
+       `every candidate is one a device that answered reports (${
+           onCard.map((e) => `${e.id} on ${e.device}`).join(', ') || 'none, and none offered'})`);
+    ok(onCard.every((e) => built.some((x) => x.id === e.id)),
+       'and one this build actually carries, so the encoder menu can show it');
+
+    // Above SD, where the card is worth two to three times.
+    S.width = 1920; S.height = 1080;
+    A.exporter.redraw();
+    pump(80);
+    const big = H.chooseFor({ height: 1080, videoCodec: 'libx264', inputs: [] });
+    if (onCard.length) {
+        ok(!!big.encoder && working.some((d) => (d.encoders || []).indexOf(big.encoder) >= 0),
+           `above SD it picks an encoder this machine has (${big.encoder})`);
+        ok(!!big.device && big.why.indexOf(big.device) >= 0,
+           `named with the device it runs on (${big.device})`);
+        ok(/above SD/.test(big.why),
+           `and with the reason, not just the answer (“${big.why.slice(0, 100)}…”)`);
+        // Same codec where the machine has one, so a press changes *where* the
+        // encoding happens and not what will play on the other end.
+        if (onCard.some((e) => e.codec === codecOf('libx264')))
+            same(codecOf(big.encoder), codecOf('libx264'),
+                 'staying in the codec that was already chosen');
+    } else {
+        same(big.encoder, '', 'with nothing on a card here, nothing is chosen');
+        ok(/no encoder that runs on a device/.test(big.why),
+           `and it says so rather than picking nothing silently: “${big.why.slice(0, 110)}…”`);
+    }
+
+    // At or below SD the card loses outright — a small frame is all fixed cost —
+    // so this is the one direction of the press that takes an encoder *off* a
+    // device.
+    if (onCard.length) {
+        const was = onCard[0].id;
+        const small = H.chooseFor({ height: 360, videoCodec: was, inputs: [] });
+        ok(small.encoder ? !H.isHardwareEncoder(small.encoder)
+                         : /no encoder for/.test(small.why),
+           `below SD a device encoder is moved off it (${was} → ${
+               small.encoder || 'nothing, because ' + small.why.slice(0, 50)})`);
+        ok(/below SD/.test(small.why), `with the reason (“${small.why.slice(0, 100)}…”)`);
+    }
+    const soft = H.chooseFor({ height: 360, videoCodec: 'libx264', inputs: [] });
+    same(soft.encoder, '', 'and a software encoder below SD is already the answer');
+    ok(!soft.changed && soft.why.length > 40,
+       `so nothing changes, said as a sentence (“${soft.why.slice(0, 100)}…”)`);
+
+    // The decode half, which is the half of the rule with no exceptions.
+    if (canDecodeSomething()) {
+        A.shell.goTo('sources');
+        pump(80);
+        pick(f('srchw'), firstDecodingDevice());
+        pump(120);
+        ok(!!A.inputs.inputs[0].hwaccel,
+           `an input is put on a device by hand (${A.inputs.inputs[0].hwaccel})`);
+        A.shell.goTo('encode');
+        pump(150);
+        ok(/back to the CPU/.test(f('hwchoose').title),
+           `and the press says beforehand that it will take it off (“${
+               f('hwchoose').title.slice(0, 100)}…”)`);
+        click(f('hwchoose'));
+        pump(250);
+        same(A.inputs.inputs[0].hwaccel, '', 'pressing it does');
+        same(A.inputs.inputs[0].hwaccelOutputFormat, '',
+             'and takes the output format with it, which belongs to the device that named it');
+    } else {
+        console.log('  (nothing on this machine decodes this file on a device — ' +
+                    'the decode half is skipped)');
+        click(f('hwchoose'));
+        pump(250);
+    }
+
+    // And the sentence stays on the stage rather than being flashed away: it is
+    // about a decision that has already been written into the controls above it,
+    // and one that vanished would be a decision nobody could go back and read.
+    const note = q('.ex-chosen');
+    ok(!!note && note.textContent.length > 40,
+       `the press leaves its reason on the stage: “${
+           note ? note.textContent.slice(0, 110) : 'nothing'}…”`);
+    if (onCard.length)
+        ok(H.isHardwareEncoder(A.exporter.currentSettings().videoCodec),
+           `and the encoder it named is the one in force (${
+               A.exporter.currentSettings().videoCodec})`);
+    else
+        ok(!H.isHardwareEncoder(A.exporter.currentSettings().videoCodec),
+           'and nothing was moved onto a device that is not here');
+}
+
 function canDecodeSomething() {
     const c = A.inputs.inputs[0] && A.inputs.inputs[0].probe &&
               A.inputs.inputs[0].probe.video && A.inputs.inputs[0].probe.video.codec;

@@ -209,11 +209,19 @@ Honest list of what does not work:
   takes planes it can read. That is the right trade — the readback is 3% and
   the decode is the slow half — but it does mean `-hwaccel` on the timeline is
   a setting that only costs.
-- **A hardware decode chosen for you.** Nothing looks at the file, the machine
-  and the render and picks. It could: the measurement is in this README and the
-  shape of the answer is clear (software decode, hardware encode, above SD).
-  Doing it would mean choosing on somebody's behalf and then having to say so,
-  which is a design problem and not a plumbing one.
+- **A rule measured on the machine it is applied to.** `Choose for me` on the
+  Encode stage picks — see [Choosing it for you, on a
+  press](card.md#choosing-it-for-you-on-a-press) — and what it asks this machine is
+  what it *has*: which device types answer, and which encoders they report that
+  this build also carries. What it cannot ask is what any of that is *worth here*.
+  The arrangement it applies — software decode, hardware encode, above SD — and the
+  576-line threshold both come from one machine's numbers, a 16-core Ryzen with two
+  RTX 4090s; a laptop with four cores and a QSV block would very likely measure a
+  hardware decode as a *win*, and nothing in this application would notice. Closing
+  it means running `tests/hardware_test.cpp`'s pass from inside the application, at
+  these sizes, on the machine in front of you and keeping the answer — which is a
+  benchmark somebody has to be asked to wait for, and then a second decision about
+  when it is stale.
 - **Speed on a render.** `J`/`K`/`L` and the speed selector are transport
   controls, not part of the edit, so a clip exports at its own rate whatever
   the viewer was last playing at.

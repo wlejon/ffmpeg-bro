@@ -82,6 +82,12 @@ export function initExport(refs, h) {
         // a control that changes what is *in* the file rather than what the
         // picture looks like only re-says what will be written.
         restated: said(updateSummary),
+        // An input taken off its device by `Choose for me`. The decode half of
+        // that rule belongs to Sources and reaches this stage only through the
+        // press, so the reload is handed straight through rather than repeated:
+        // an input reopened is a different input under whatever is cut from it,
+        // and only the application knows what that means for the viewer.
+        reopened: (input) => { if (hooks.reopened) hooks.reopened(input); },
     });
     // The stream list changes what is *in* the file and not what the picture
     // looks like, so a language or a disposition must not throw away a

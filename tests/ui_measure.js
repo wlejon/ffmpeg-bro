@@ -405,6 +405,11 @@ console.log('\na finding can measure itself again, if you asked it to');
     // Left off, because the workspace outlives the process and a suite that armed
     // it would arm it for every run after this one.
     measure.setAutoRemeasure(false);
+    // And left quiet as well as off. The section after this one deliberately races
+    // the node previews for the one slot, and a measurement still running from here
+    // would be a third contender in it.
+    waitFor('the machine to go idle again', () => !A.exporter.isRunning());
+    pump(200);
 }
 
 // ── part of a graph ────────────────────────────────────────────────────────

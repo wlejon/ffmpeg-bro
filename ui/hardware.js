@@ -21,6 +21,16 @@
 // would be wrong about half of what it does, so they are two decisions in two
 // places — decoding is per input on Sources, encoding is per stream on Write —
 // and the one that is usually a mistake says so beside itself.
+//
+// **The third thing is the rule itself, applied on a press.** Two decisions in two
+// places is right, and it is also two controls in two places: `chooseFor()` at the
+// bottom of the file takes the arrangement the measurement arrived at — software
+// decode, hardware encode, above SD — and works out what *this* machine and *this*
+// render make of it. It is a press and never automatic, and it names what it picked
+// and why, because choosing on somebody's behalf without saying so is precisely the
+// checkbox this file exists instead of.
+
+import { updateInput } from './inputs.js';
 
 let cached = null;
 
@@ -163,3 +173,212 @@ export const decodeCost =
 export const encodeCost =
     'Several times faster than x264 above SD, and slower below it. It is the ' +
     'encoder that makes a card worth having here, not the decoder.';
+
+// ── choosing, on a press ───────────────────────────────────────────────────
+//
+// Everything above is a control saying what a decision costs. This is the
+// decision, taken on request, and it exists because the two sentences above are
+// the whole of an answer that nobody should have to assemble by hand: the
+// measurement in docs/manual/card.md says **software decode, hardware encode,
+// above SD**, and until now the only way to arrive at that arrangement was to read
+// both sentences, walk to two stages and set three controls.
+//
+// **A press, and never automatic.** A machine that quietly rewrote somebody's
+// encoder when they opened a file would be the "use hardware acceleration"
+// checkbox this application exists without, one step further on: it would be
+// making the choice *and* not saying so. So it is asked for, and what it produces
+// is a sentence naming the encoder it picked and the reason it picked it. That
+// sentence is not a nicety — "choosing on somebody's behalf and then having to say
+// so" is the entire cost of the feature, and it is paid here.
+//
+// **It asks the machine and never a list.** Which encoders exist on a card here is
+// `bro.ffmpeg.hardware()`'s answer, cut down to the ones this build actually
+// carries by `bro.ffmpeg.encoders`; a vcpkg ffmpeg has every NVENC, AMF and QSV
+// encoder in it on a machine with no card at all, which is the exact failure
+// `firstOnACard` in ui/export/presets.js was written against. Nothing here names a
+// device or an encoder. The only preference expressed is *which* of several to
+// reach for, and even that is derived: the same codec as the one already chosen,
+// so a press does not also change what will play on the other end.
+
+let encoderCache = null;
+
+/// Every video encoder this build carries, by name, with the codec it encodes.
+///
+/// `codecName` is libavcodec's own — `avcodec_get_name(codec->id)` — which is what
+/// makes "the same codec family" a question with an answer rather than a table of
+/// name prefixes here. `libx264` and `h264_nvenc` both answer `h264`.
+function encoders() {
+    if (encoderCache) return encoderCache;
+    try {
+        encoderCache = (bro.ffmpeg.encoders || []).map(
+            (e) => ({ id: e.id, label: e.label || e.id, codec: e.codecName || '' }));
+    } catch (e) {
+        encoderCache = [];
+    }
+    return encoderCache;
+}
+
+const encoderNamed = (id) => encoders().find((e) => e.id === id) || null;
+
+/// Where the card stops paying. Above this a hardware encoder is worth two to
+/// three times; below it, it loses outright.
+///
+/// **576 because that is the top of standard definition**, and not because
+/// anything was measured at 576. The measurement has 640×360 at 0.6× and 1920×1080
+/// at 2.2×, so the crossing is somewhere in between and no number in that gap is
+/// more honest than another — drawing the line at a name everybody already agrees
+/// on is better than inventing a threshold from two points. See docs/manual/card.md
+/// for the tables; if a build ever measures the gap, this is the one place it
+/// changes.
+export const SD_LINES = 576;
+
+/// The rule, applied to one render. **Decides and says why; writes nothing.**
+///
+/// Pure because the saying is half of the point: a function that quietly mutated
+/// the settings could not hand back a sentence to put on the screen, and the press
+/// would be the silent switch this whole file exists instead of. `applyChoice()`
+/// below is the other half, and it is deliberately a second call.
+///
+/// `render` is `{ height, videoCodec, inputs }` — the output's own height, because
+/// a render of a 4K source at 640×360 is a 640×360 encode and the encoder is the
+/// only thing being decided; the encoder in force, so the answer can stay in its
+/// codec family; and the inputs, because the decode half of the rule is theirs.
+///
+/// Returns `{ encoder, device, decodes, why, changed }`. `encoder` is '' for
+/// "leave it alone", which is a real answer and not a failure — it is what a
+/// render already arranged correctly gets.
+export function chooseFor(render) {
+    const r = render || {};
+    const lines = Math.max(0, Math.round(Number(r.height) || 0));
+    const current = String(r.videoCodec || '');
+    // Software decode, which is the half of the rule that has no exceptions: the
+    // decode is two to six times slower on the card here whether or not the
+    // picture comes back down, so every input that is on one comes off it.
+    const decodes = (r.inputs || []).filter((i) => i && i.hwaccel);
+    const family = (encoderNamed(current) || {}).codec || '';
+    const onCard = isHardwareEncoder(current);
+
+    if (!lines)
+        return answer('', decodes,
+            'The render has no size yet, so there is nothing to decide about the encoder. ' +
+            (decodes.length ? decodeSentence(decodes) : 'Nothing to change.'));
+
+    if (lines > SD_LINES) {
+        const pick = hardwareChoices(family)[0];
+        if (!pick)
+            return answer('', decodes,
+                `This machine has no encoder that runs on a device — ${
+                    present().length ? `${present().map((d) => d.name).join(', ')} ${
+                        present().length === 1 ? 'works' : 'work'} here but ${
+                        present().length === 1 ? 'reports' : 'report'} no encoder this build ` +
+                        'carries'
+                                     : 'no device type could be created at all'
+                }. So there is nothing to choose, and ${current || 'the encoder in force'} ` +
+                `stays. ` + (decodes.length ? decodeSentence(decodes)
+                                            : 'The decode is already on the CPU, which is where ' +
+                                              'the measurement wants it.'));
+        if (onCard)
+            return answer('', decodes,
+                `${current} already runs on ${deviceOfEncoder(current) || 'a device'}, which is ` +
+                `the right half to put there at ${lines} lines. ` +
+                (decodes.length ? decodeSentence(decodes)
+                                : 'And the decode is already on the CPU. Nothing to change.'));
+        return answer(pick.id, decodes,
+            `${pick.label} on ${pick.device}, because ${lines} lines is above SD and the card ` +
+            `is worth two to three times there — measured, in docs/manual/card.md${
+                family ? `. Same codec as ${current}, so what will play on the other end ` +
+                         'has not changed' : ''}. ` +
+            (decodes.length ? decodeSentence(decodes)
+                            : 'The decode stays on the CPU, where it is several times faster.'));
+    }
+
+    // At or below SD the card loses outright — a small frame is all fixed cost and
+    // a GPU round trip is mostly fixed cost — so this is the one direction of the
+    // press that takes an encoder *off* a device.
+    if (onCard) {
+        const soft = softwareChoices(family)[0];
+        if (!soft)
+            return answer('', decodes,
+                `${lines} lines is at or below SD, where the card loses outright — but this ` +
+                `build has no encoder for ${family || 'this codec'} that does not run on one, ` +
+                `so ${current} stays. ` + (decodes.length ? decodeSentence(decodes) : ''));
+        return answer(soft.id, decodes,
+            `${soft.label}, because ${lines} lines is at or below SD and ${current} is slower ` +
+            `than the CPU there — a small frame is all fixed cost and a device round trip is ` +
+            `mostly fixed cost. ` +
+            (decodes.length ? decodeSentence(decodes)
+                            : 'The decode is on the CPU already.'));
+    }
+    return answer('', decodes,
+        `${current || 'The encoder in force'} is already the answer at ${lines} lines: at or ` +
+        'below SD a device encode is slower than the CPU, so there is nothing to move onto one. ' +
+        (decodes.length ? decodeSentence(decodes) : 'And the decode is on the CPU. Nothing to change.'));
+}
+
+function answer(encoder, decodes, why) {
+    const same = !encoder;
+    return {
+        encoder,
+        device: encoder ? deviceOfEncoder(encoder) : '',
+        decodes,
+        why,
+        changed: !same || decodes.length > 0,
+    };
+}
+
+function decodeSentence(decodes) {
+    const names = decodes.map((i) => i.name).join(', ');
+    return `${decodes.length === 1 ? `${names} is` : `${names} are`} decoding on a device and ` +
+           `${decodes.length === 1 ? 'goes' : 'go'} back to the CPU: the decode is measured two ` +
+           'to six times slower there, and the readback everybody blames is 3% of it.';
+}
+
+/// The encoders on a working device that this build also carries, best first.
+///
+/// "Best" is the one preference in the whole rule and it is derived rather than
+/// listed: an encoder of the same codec as the one already chosen comes first, so
+/// a press changes where the encoding happens and not what will play on the other
+/// end. Beyond that the order is `bro.ffmpeg.encoders`' own, which is the native
+/// side's candidate order and already the documented home for "which to reach for
+/// first" — see `firstOnACard` in ui/export/presets.js, which states the same rule
+/// for the GPU preset.
+export function hardwareChoices(family) {
+    const here = new Set();
+    for (const d of present()) for (const e of d.encoders || []) here.add(e);
+    const out = encoders().filter((e) => here.has(e.id))
+                          .map((e) => Object.assign({}, e, { device: deviceOfEncoder(e.id) }));
+    if (!family) return out;
+    return out.filter((e) => e.codec === family).concat(out.filter((e) => e.codec !== family));
+}
+
+/// And the same question the other way: what encodes this codec *without* a
+/// device. Asked of the device lists rather than of the name, for the reason
+/// `isHardwareEncoder` gives.
+export function softwareChoices(family) {
+    return encoders().filter((e) => !isHardwareEncoder(e.id) &&
+                                    (!family || e.codec === family));
+}
+
+/// Write a choice's decode half: every input it named comes off its device.
+///
+/// A second call rather than part of `chooseFor()`, so that deciding and doing are
+/// separable — a caller can put the sentence on the screen without having changed
+/// anything, which is what the button's title does before it is pressed.
+///
+/// The **encoder** half is deliberately not here: `settings.videoCodec` belongs to
+/// `ui/export/state.js` and writing it means `clampToEncoder()` and a redraw, which
+/// is the Encode stage's business and not this file's. This module knows about
+/// devices and nothing about what the Encode stage is set to.
+///
+/// Returns the inputs whose opening actually changed, which is what a caller has to
+/// reload: `-hwaccel_output_format` goes with the device that named it, because left
+/// behind it is a pixel format belonging to a device this input no longer decodes
+/// on — the same pairing the Sources picker makes, for the same reason.
+export function applyChoice(choice) {
+    const moved = [];
+    for (const input of (choice && choice.decodes) || []) {
+        if (updateInput(input, { hwaccel: '', hwaccelDevice: '', hwaccelOutputFormat: '' }))
+            moved.push(input);
+    }
+    return moved;
+}

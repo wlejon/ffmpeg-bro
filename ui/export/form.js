@@ -25,7 +25,9 @@ import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
 import { defaultPath, withExtension, withPattern, withoutPattern,
          range } from './spec.js';
 import { cutPoints } from './options.js';
-import { isHardwareEncoder, deviceOfEncoder, encodeCost } from '../hardware.js';
+import { isHardwareEncoder, deviceOfEncoder, encodeCost,
+         chooseFor, applyChoice } from '../hardware.js';
+import { inputs } from '../inputs.js';
 import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
 import { kindOf, describeKind, schemeOf, protocolLinked,
@@ -753,6 +755,7 @@ function videoRows(codec, info, cont) {
     if (isHardwareEncoder(codec))
         rows.push(row('', span(encodeCost + ' A graph that ends on the same card hands ' +
                                'this encoder its frames without a copy.', 'dim')));
+    rows.push(...chooseRows(codec));
 
     rows.push(...rateRows(codec, info));
 
@@ -780,6 +783,68 @@ function videoRows(codec, info, cont) {
          ...[23.976, 24, 25, 29.97, 30, 50, 59.94, 60, 120].map((f) => ({ id: f, label: String(f) }))],
         settings.fps)));
 
+    return rows;
+}
+
+// What the last press decided, kept so it stays on the screen.
+//
+// **Not in `settings`**, because it is not part of the render: it is a sentence
+// about a decision that has already been written into the controls above it, and a
+// render is not different for having been arrived at by pressing a button. Held for
+// the same reason `formatOpen` is — it is where you are, not what will be written.
+let chosenNote = '';
+
+/// `Choose for me`, and the sentence it leaves behind.
+///
+/// **The whole cost of the press is having to say what it did**, so the sentence is
+/// the feature and the button is the way in. The rule is ui/hardware.js's — software
+/// decode, hardware encode, above SD — measured on this machine and written down in
+/// docs/manual/card.md; what is here is the press, the two writes it makes, and the
+/// line it leaves.
+///
+/// **Never on load**, which is the alternative rejected: a render whose encoder was
+/// quietly rewritten when the stage opened would be the "use hardware acceleration"
+/// checkbox this application deliberately does not have, and worse, because it would
+/// have made the choice without anybody having asked for one.
+///
+/// **And it says so when there is nothing to choose.** A machine with no working
+/// device, or one whose devices report no encoder this build carries, gets the
+/// sentence naming that rather than a button that appears to do nothing — which is
+/// the same rule the `-hwaccel` picker follows when nothing can decode the file.
+function chooseRows(codec) {
+    const choice = chooseFor({ height: settings.height || project.height,
+                               videoCodec: codec, inputs });
+    const rows = [row('', [
+        el('button', {
+            cls: 'tiny', 'data-f': 'hwchoose', text: 'Choose for me',
+            // The answer before the press as well as after it, because a button
+            // whose effect can only be discovered by pressing it is a button
+            // nobody presses twice.
+            title: choice.why,
+            on: { click: () => {
+                const answer = chooseFor({ height: settings.height || project.height,
+                                           videoCodec: activeVideoCodec(), inputs });
+                chosenNote = answer.why;
+                // The decode half first: it is the half with no exceptions, and an
+                // input reopened without its device has to be put back under
+                // whatever is cut from it before anything redraws.
+                for (const input of applyChoice(answer))
+                    if (hooks.reopened) hooks.reopened(input);
+                if (answer.encoder) settings.videoCodec = answer.encoder;
+                // `changed` and not `restated`: an encoder is what the picture is
+                // spent on, so the candidate render is no longer of these settings.
+                hooks.changed();
+            } },
+        }),
+        span(choice.changed
+                 ? 'software decode, hardware encode, above SD — the arrangement this machine ' +
+                   'was measured in'
+                 : 'this render already is what the measurement asks for', 'dim'),
+    ])];
+    // The sentence stays until the next press. It is about a decision that was
+    // taken, and a note that vanished on the next redraw would be a decision nobody
+    // could go back and read.
+    if (chosenNote) rows.push(row('', span(chosenNote, 'dim ex-chosen')));
     return rows;
 }
 

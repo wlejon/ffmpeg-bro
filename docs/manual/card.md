@@ -74,6 +74,44 @@ into NVENC, which is what falls out of hardware decode being the slower half.
 And note that x264 is on `ultrafast` throughout — at `medium` the gap widens by
 a great deal more than these numbers show.
 
+## Choosing it for you, on a press
+
+Two decisions in two places is right, and it is also two decisions in two places.
+So the Encode stage carries **`Choose for me`**, which applies the arrangement the
+tables above arrived at — *software decode, hardware encode, above SD* — to this
+machine and this render, and then says what it did.
+
+> H.264 (NVIDIA) on cuda, because 1080 lines is above SD and the card is worth two
+> to three times there — measured, in docs/manual/card.md. Same codec as libx264,
+> so what will play on the other end has not changed. landscape.mp4 is decoding on
+> a device and goes back to the CPU: the decode is measured two to six times slower
+> there, and the readback everybody blames is 3% of it.
+
+**A press, and never automatic.** An application that quietly rewrote your encoder
+when you opened a file would be the "use hardware acceleration" checkbox this one
+exists without, one step worse: it would be making the choice *and* not saying so.
+The sentence is not a nicety — choosing on somebody's behalf and then having to say
+so is the entire cost of the feature, so it is on the button before the press as
+well as on the stage after it.
+
+**It asks the machine, never a list.** Which encoders run on a device here is
+`bro.ffmpeg.hardware()`'s answer, cut down to the ones this build carries; nothing
+in it names a device or an encoder. The only preference it expresses is *which* of
+several to reach for, and even that is derived — the same codec as the one already
+chosen, read off `codecName`, so a press changes where the encoding happens and not
+what will play on the other end.
+
+**And it says so when there is nothing to choose.** A machine with no working
+device, or one whose devices report no encoder this build carries, gets the sentence
+naming that rather than a button that appears to do nothing — the same rule the
+**Decode on** picker follows when nothing here can decode the file.
+
+Below SD it presses the other way, because that is what the second table says: a
+device encoder at 360 lines is moved back to the CPU, naming both. The line is
+drawn at **576** — the top of standard definition — and not at a measured number,
+because the measurement has 640×360 at 0.6× and 1920×1080 at 2.2× and no number in
+that gap is more honest than another.
+
 ## Never coming down
 
 A render whose pictures are made on a card and encoded on the same card does not
