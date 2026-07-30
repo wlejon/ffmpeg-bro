@@ -133,7 +133,113 @@ export function openReport() { setOpen(true); }
 /// exactly where somebody went to look at something.
 export function tick() {
     drain();
+    // Before the draw, so a re-measure that has just started is on the screen in
+    // the frame it started rather than the frame after.
+    if (measure.autoRemeasure() && settled()) remeasure();
     if (dirty) draw();
+}
+
+// ── measuring again, when the edit has moved under a finding ────────────────
+//
+// The toggle is `ui/measure.js`'s and so is the argument for it being a toggle at
+// all. What is here is *when* and the four things it must not do, which are the
+// whole of the mechanism:
+//
+//   - **It must not take the one job slot from anything.** It cannot: the only
+//     way in is `hooks.measureNow`, which refuses when the slot is held, and the
+//     refusal is kept and shown rather than swallowed.
+//   - **It must not queue.** A re-measure that waited for a render to finish would
+//     fire when the reason for it had passed — the edit may have moved again, or
+//     the drawer may have been cleared. So it is asked once and a refusal is
+//     final; the next attempt needs a fresh reason.
+//   - **It must not loop.** A re-measure whose own findings were still stale would
+//     be a spin, so an attempt is made once per *subject*: `renderSubject()` is
+//     the same object the staleness comparison is made against, and a subject
+//     already tried is never tried again however stale it looks. Nothing in a
+//     measurement touches the edit, so the ordinary path never gets that far —
+//     this is the backstop, not the mechanism.
+//   - **It must not fire mid-gesture.** The edit reports every mouse position of
+//     every drag, so it waits for the edit to hold still, the same way the output
+//     preview's `chase()` does.
+
+/// How long the edit has to hold still. Long enough to cover a drag being made in
+/// stops, short enough that a re-measure feels like a consequence of the edit
+/// rather than of the next thing you do.
+const SETTLE_MS = 700;
+
+let movedAt = 0;
+/// The subject the last automatic attempt was made for — see the loop rule above.
+let triedFor = '';
+/// Why the last automatic attempt did not happen, or ''. Shown in the drawer,
+/// because "it did not re-measure" is exactly the sort of thing that reads as the
+/// toggle being broken.
+let autoNote = '';
+
+/// The edit moved. Called from the model's change channel and the graph overlay's,
+/// which between them are every way the subject of a measurement can change.
+///
+/// A timestamp rather than a flag, because what is being waited for is *quiet* and
+/// a flag cannot say when it was set. It is deliberately not a redraw: this arrives
+/// per mouse position, and drawing the drawer sixty times a second to re-say the
+/// same sentence is the sort of thing that makes a drag stall.
+export function editMoved() { movedAt = Date.now(); }
+
+/// Has the edit moved and then held still?
+///
+/// Consumed rather than merely read: the answer is true exactly once per gesture,
+/// which is the second half of "it must not queue" — a run of frames after a
+/// settled drag must not be a run of attempts.
+function settled() {
+    if (!movedAt || Date.now() - movedAt < SETTLE_MS) return false;
+    movedAt = 0;
+    return true;
+}
+
+/// Measure again, if there is a reason to and the machine is free. Returns why it
+/// did not, or '' if it started one.
+///
+/// **On the surface because both interesting things about it are things that do not
+/// happen** — it does not take the slot from a render, and it does not fire twice
+/// for one edit — and waiting for something not to happen is not a test. The
+/// settle window is deliberately *not* in here: `tick()` decides when, this decides
+/// whether, and a test that had to sit out three quarters of a second to reach the
+/// second question would be testing the first.
+export function remeasure() {
+    if (!hooks.subject || !hooks.measureNow) return 'nothing to measure with';
+    // Only a finding that has gone stale, which is the only thing a re-measure
+    // repairs. `stale()` answers '' for an unknown subject too, and that is right
+    // here for the reason it is right on the card: a render this did not see start
+    // is not evidence of anything.
+    if (!stale()) { autoNote = ''; return 'nothing has gone stale'; }
+    // And only where there would be something to act on afterwards. A `cropdetect`
+    // that found nothing to crop is not made truer by being run again.
+    if (!currentFindings().some((f) => f.ok && f.verb)) {
+        autoNote = '';
+        return 'nothing stale has anything to act on';
+    }
+    const key = subjectKey(hooks.subject());
+    if (!key || key === triedFor) return 'already tried for this edit';
+    triedFor = key;
+    autoNote = hooks.measureNow() || '';
+    dirty = true;
+    return autoNote;
+}
+
+/// One render's subject as a string, for the "once per edit" rule.
+///
+/// The same two facts `renderSubject()` keeps separate — what the filters were
+/// shown, and the window they were shown it over — joined here because this is the
+/// only question that wants them as one: *have I already tried this*. They stay
+/// separate where they are compared, because there the difference decides which
+/// sentence gets said.
+function subjectKey(w) {
+    return w ? `${w.edit}|${w.from}|${w.to}` : '';
+}
+
+/// What the toggle and the last automatic attempt amount to, for the drawer and
+/// for tests.
+export function remeasureState() {
+    return { on: measure.autoRemeasure(), note: autoNote, tried: triedFor };
 }
 
 /// Take everything the channel is holding, right now.
@@ -433,7 +539,31 @@ function drawOffers() {
                 draw();
             } },
         }) : null,
+        // **Off by default, and that is the decision rather than a default.**
+        // Whether a render is cheap enough to spend without being asked is a
+        // question about somebody's machine — a 4K graph re-run every time a clip
+        // is nudged is not something to have decided for them — so the answer is
+        // theirs to give, once, here. What it turns on is described at the bottom
+        // of ui/measure.js; what it can never do is take the one job slot from a
+        // render, a preview or a recording, which is `remeasure()` above.
+        el('button', {
+            cls: 'tiny' + (measure.autoRemeasure() ? ' on' : ''),
+            'data-f': 'remeasure',
+            title: measure.autoRemeasure()
+                ? 'A finding that has gone stale measures itself again once the edit holds ' +
+                  'still — click to stop. It never takes the render slot from anything: if ' +
+                  'something else is using it, the re-measure is dropped rather than queued.'
+                : 'Measure again on its own when the edit moves under a finding. Off, because ' +
+                  'whether a render is cheap enough to spend unasked is a question about your ' +
+                  'machine.',
+            text: 'Re-measure when stale',
+            on: { click: () => {
+                measure.setAutoRemeasure(!measure.autoRemeasure());
+                draw();
+            } },
+        }),
         on.length ? span(`${on.map((o) => o.filter).join(', ')} on the graph`, 'dim') : null,
+        autoNote ? span(`did not re-measure: ${autoNote}`, 'dim rep-auto-note') : null,
     ]);
 }
 

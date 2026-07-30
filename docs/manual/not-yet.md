@@ -64,11 +64,17 @@ Honest list of what does not work:
   passes *are* reachable, by a different route: `ebur128` measures and the
   Report drawer offers `loudnorm` told what it found, which is one render and a
   decision rather than two renders.
-- **A measurement that re-runs itself.** A finding that has stopped describing
-  the edit now says so and stops being offered, but nothing measures again on
-  its own — `Measure now` is a press. Doing it automatically would mean deciding
-  when a render is cheap enough to spend without being asked, which is a
-  question about somebody's machine and not about this code.
+- **A measurement that re-runs itself without being asked at all.**
+  `Re-measure when stale` closes most of this — see [Measuring, and doing
+  something about it](rendering.md#measuring-and-doing-something-about-it) — and
+  what closed it was the toggle rather than the mechanism: whether a render is
+  cheap enough to spend unasked is a question about somebody's machine, so it is
+  asked once and then answered forever. What is still not here is anything that
+  could answer it *for* them. Nothing measures how long the last measurement took,
+  nothing knows whether this graph is a `cropdetect` over 640×360 or `libvmaf` over
+  4K, and so nothing could decide to re-measure the cheap one and leave the
+  expensive one alone. That is a cost model of a render, which the A/B stage's
+  numbers are the beginning of and no part of this reads.
 - **Reading a URL while it is slow, and writing to one while it fails.** A
   render goes to a URL now, with its protocol's own options beside the muxer's,
   and reports what it sent rather than a size. What is not built is either end

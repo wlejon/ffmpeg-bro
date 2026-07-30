@@ -278,6 +278,135 @@ console.log('\na finding stops being offered when the edit moves under it');
     ok(!q('.rep-stale'), 'and putting the clip back makes it current again');
 }
 
+// ── unless you asked it to measure itself again ─────────────────────────────
+//
+// The press stays the mechanism and the toggle is the decision: whether a render
+// is cheap enough to spend without being asked is a question about somebody's
+// machine. So what is checked here is the toggle's two states and the three things
+// the automatic path must never do — take the one job slot from something else,
+// queue behind it and fire when the reason has passed, or loop.
+
+console.log('\na finding can measure itself again, if you asked it to');
+{
+    report.setOpen(true);
+    // Whatever a previous run of this suite left under the key, since the
+    // workspace outlives the process.
+    measure.setAutoRemeasure(false);
+    report.draw();
+    pump(120);
+
+    const toggle = q('[data-f="remeasure"]');
+    ok(!!toggle, 'the drawer offers the toggle');
+    ok(toggle.className.indexOf('on') < 0 && !measure.autoRemeasure(),
+       'off, because spending a render unasked is a decision about somebody’s machine');
+
+    // Remembered on the press, under its own key rather than with the encoder
+    // settings — see the block at the bottom of ui/measure.js for why.
+    toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    pump(80);
+    ok(measure.autoRemeasure(), 'clicking it turns it on');
+    ok(q('[data-f="remeasure"]').className.indexOf('on') >= 0, 'and the button says so');
+    const stored = JSON.parse(localStorage.getItem('ffmpeg-bro.measure') || '{}');
+    ok(stored.remeasure === true,
+       `written to the workspace under a key of its own (${JSON.stringify(stored)})`);
+    // And nothing else went with it, which is the hazard: the export blob belongs
+    // to the muxer it was written against.
+    ok(!('container' in stored) && !('extraVideo' in stored),
+       'and nothing else went with it — this is not the encode side’s blob');
+
+    // A clip's level, which is in a render's subject — `spec.clips` carries it —
+    // and is the one thing in there that `cropdetect` cannot see. What is wanted
+    // here is an edit that has *moved*: moving the clip would take it out of the
+    // range and leave the re-measure nothing to measure, and cropping or dimming
+    // the picture would change cropdetect's answer rather than the question.
+    const clip = A.project.clips[0];
+    const wasVolume = clip.volume;
+    const actionable = () => report.findings().some((f) => f.ok && f.verb);
+
+    if (!actionable()) {
+        // A fixture whose picture reaches every edge has nothing to act on, so
+        // there is nothing a re-measure would restore. Said rather than failed.
+        console.log('  (nothing measured here can be acted on — skipped)');
+        measure.setAutoRemeasure(false);
+    } else {
+        // ── it never takes the slot, and never queues ──────────────────────
+        clip.volume = 0.5;
+        A.changed('edit');
+        A.exporter.redraw();
+        report.draw();
+        pump(120);
+        ok(!!q('.rep-stale'), 'the edit moves under the finding');
+
+        const took = A.exporter.startMeasurement();
+        ok(took === '', `something else takes the one job slot by hand (${took || 'it did'})`);
+        const refused = report.remeasure();
+        ok(/slot/.test(refused),
+           `and the automatic one is refused rather than queued (${refused})`);
+        report.draw();
+        pump(60);
+        ok(!!q('.rep-auto-note'), 'with the drawer saying it did not re-measure');
+        waitFor('the hand-started render', () => !A.exporter.isRunning());
+        pump(400);
+        // And nothing fired once the slot came free, which is the whole of "it does
+        // not queue": by then the reason for it may have gone.
+        const afterHand = report.reportState().lastJob;
+        pump(1500);
+        ok(report.reportState().lastJob === afterHand,
+           'and nothing fires once the slot comes free — a refusal is final, not a queue');
+
+        // ── and it does, when there is a reason and the machine is free ────
+        clip.volume = 0.75;
+        A.changed('edit');
+        A.exporter.redraw();
+        report.draw();
+        pump(120);
+        ok(!!q('.rep-stale'), 'a fresh edit is a fresh reason');
+        const before = report.reportState().lastJob;
+        const started = report.remeasure();
+        ok(started === '', `and the re-measure starts (${started || 'it did'})`);
+        waitFor('the automatic measurement', () => !A.exporter.isRunning(), 120000);
+        pump(500);
+        report.draw();
+        pump(120);
+        ok(report.reportState().lastJob !== before,
+           `which is a render of its own like any other (${before} → ${
+               report.reportState().lastJob})`);
+        ok(!q('.rep-stale'),
+           'and the finding describes the edit again, without a press');
+        // What it now *concludes* is cropdetect's business and not this suite's —
+        // the render it just did is a different one, and "no bars in this one" is a
+        // real answer. What is asserted is that the answer is a fresh one rather
+        // than the withdrawn offer and the staleness sentence.
+        const fresh = report.findings().find((x) => x.filter === 'cropdetect');
+        ok(!!fresh && (!!fresh.verb || !!fresh.reason),
+           `with an answer about the render that has just happened (${
+               fresh && (fresh.detail || fresh.reason || '').slice(0, 70)})`);
+
+        // ── and it cannot loop ────────────────────────────────────────────
+        //
+        // Nothing in a measurement touches the edit, so the ordinary path never
+        // reaches this; what is asserted is the backstop, which is one attempt per
+        // edit whatever the findings look like afterwards.
+        const again = report.remeasure();
+        ok(again !== '', `a second attempt for the same edit is refused (${again})`);
+        const held = report.reportState().lastJob;
+        pump(1500);
+        ok(report.reportState().lastJob === held,
+           'and a frame loop left running does not start another');
+
+        clip.volume = wasVolume;
+        A.changed('edit');
+        measure.setAutoRemeasure(false);
+        report.draw();
+        pump(200);
+        ok(!measure.autoRemeasure(), 'and it can be turned off again');
+    }
+
+    // Left off, because the workspace outlives the process and a suite that armed
+    // it would arm it for every run after this one.
+    measure.setAutoRemeasure(false);
+}
+
 // ── part of a graph ────────────────────────────────────────────────────────
 //
 // `Measure now` runs the whole thing. A `cropdetect` on one clip's decoded

@@ -378,6 +378,33 @@ the range, which is what they are for — so their findings are reported as bein
 about *part of it*, naming both spans, rather than as somebody having changed
 something.
 
+**`Re-measure when stale` does it for you, and it is off.** With it on, a finding
+that has stopped describing the edit measures itself again once the edit holds
+still, and the offer comes back without a press. It is a toggle rather than the
+behaviour because whether a render is cheap enough to spend without being asked is
+a question about *your* machine — a 4K graph re-run every time a clip is nudged is
+not a decision to take on somebody's behalf — and once you have answered it, it is
+answered. It is remembered under its own key rather than with the encoder
+settings: it names no muxer and no encoder, it belongs to the drawer rather than to
+the Encode stage, and everything in that other blob is in that stage's undo stack,
+where a `Ctrl`+`Z` that quietly turned re-measuring on would be the surprise the
+two stacks exist to prevent.
+
+Four things it will not do, which are most of what makes it safe to leave on:
+
+- **It never takes the one job slot.** A render, either half of the A/B
+  comparison, a node preview and a recording all hold it, and a re-measure that
+  finds it held is *dropped* — the drawer says `did not re-measure:` and why.
+- **It never queues.** Waiting for a render to finish would mean firing when the
+  reason had gone: the edit may have moved again since. The next attempt needs a
+  fresh reason.
+- **It cannot loop.** One attempt per edit, and the edit is identified by the same
+  record the staleness comparison is made against — so a re-measure whose own
+  findings somehow came back stale is not tried again.
+- **It never fires mid-gesture.** The edit reports every mouse position of a drag,
+  so it waits for the edit to hold still first, the same way the program monitor's
+  preview does.
+
 ## What the settings cost, as a number
 
 The A/B stage renders the same seconds twice, at the chosen settings and

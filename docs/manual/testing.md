@@ -486,7 +486,16 @@ free. Three sections are written against **hand-made channel records**, the way
 said is a pure function of what it said, so a `cropdetect` that has not settled,
 an `ebur128` with no summary and a `blackdetect` that found two stretches can be
 stated exactly rather than hoped for out of a fixture. The cut those spans
-produce is then made on the real timeline through the real split. Last, the A/B
+produce is then made on the real timeline through the real split. `Re-measure
+when stale` is checked in both directions, and the interesting half is the things
+that must *not* happen: the toggle is off to begin with and is written under a key
+of its own with nothing of the encode side's blob beside it; a re-measure asked
+for while something else holds the one job slot is refused and then does **not**
+fire when the slot comes free; a second attempt for the same edit is refused and a
+frame loop left running for a second and a half starts nothing. What it moves to
+make the finding stale is a clip's *level* — the one thing in a render's subject
+that `cropdetect` cannot see, since moving the clip would take it out of the range
+and cropping it would change the answer rather than the question. Last, the A/B
 comparison is rendered and measured, and a better setting has to measure better
 — the one check that says the number is about the encoder rather than about the
 plumbing, and beside it that the score was combined from more than one frame,

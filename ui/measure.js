@@ -44,6 +44,11 @@
 // the reason the command bar prints the invocation: an application whose
 // argument is that ffmpeg should stop being guessed at cannot hand somebody a
 // number and hide where it came from.
+//
+// The one thing here that is not a verb or a parse is the **toggle at the bottom
+// of the file**: whether a finding that has gone stale is allowed to measure
+// itself again. It is off by default and it is stored on its own, and the block
+// above it is why.
 
 import * as overlay from './graph/overlay.js';
 import { infoOf } from './graph/filters.js';
@@ -477,6 +482,78 @@ export function findings(ctx) {
     for (const spec of SPANS)
         if (has(spec.filter, spec.start)) out.push(spanFinding(ctx, spec));
     return out;
+}
+
+// ── measuring again, without being asked ───────────────────────────────────
+//
+// A finding that has stopped describing the edit says so and stops being offered
+// — `ui/report.js` withdraws the button and keeps the sentence, which is this
+// file's own rule about a measurement acted on too late. `Measure now` puts it
+// right in one press, and for a long time that press was the only way: deciding
+// to spend a render unasked is a decision about somebody's machine and not about
+// this code, and a 4K graph re-run every time a clip is nudged is a decision
+// nobody would thank us for having taken for them.
+//
+// **A toggle, off by default**, is the whole of the answer. With it off nothing
+// has changed and the press is still the only way. With it on, the question "is a
+// render cheap enough to spend without being asked" has been answered by the
+// person whose machine it is, which was the only thing missing.
+//
+// **It keeps its own storage key rather than going in `store.adopt`'s blob**,
+// which is where every other remembered preference lives. Three reasons, and the
+// last is the one that decides it:
+//
+//   - It is not a setting of the render. It names no muxer, no encoder and no
+//     option, and in `ExportSettings` it would be a key nothing consumes.
+//   - `remember()` writes that blob when a render *starts*, on purpose — so a
+//     toggle pressed and never rendered with would be a toggle that did not stick,
+//     and writing the blob on the press instead is precisely the hazard that rule
+//     exists to prevent.
+//   - Everything in that blob is in the Encode and Write stages' undo stack. A
+//     `Ctrl-Z` there that silently turned re-measuring on is exactly the surprise
+//     the two stacks exist to prevent, and this control is drawn in the report
+//     drawer, which is under every stage rather than on either of those two.
+//
+// `ui/graph/overlay.js` keeps its own key for the same shape of reason. What is
+// shared is the *rule* rather than the reader: the read is version-tolerant, which
+// here means one boolean coerced out of whatever is in there and off when there is
+// nothing.
+
+const AUTO_KEY = 'ffmpeg-bro.measure';
+
+let auto = readAuto();
+
+function readAuto() {
+    try {
+        const saved = localStorage.getItem(AUTO_KEY);
+        const blob = saved ? JSON.parse(saved) : null;
+        return !!(blob && typeof blob === 'object' && blob.remeasure);
+    } catch (e) {
+        return false;      // never set, or written by a shape that is not this one
+    }
+}
+
+/// Should a finding that has gone stale measure itself again?
+///
+/// Read rather than pushed, because the one caller asks it once per attempt and a
+/// second copy of the flag on the drawing side is a second answer to what the
+/// toggle says. **False on a machine that has never pressed it**, which is the
+/// entire point: the alternative rejected was doing it always, and the objection
+/// to that was never the mechanism.
+export function autoRemeasure() { return auto; }
+
+/// Say so, and remember it.
+///
+/// An object under the key rather than a bare `true`, so a second preference about
+/// measuring has somewhere to go without a migration. Written on the press, which
+/// is the opposite of the export blob's rule and safe for the opposite reason:
+/// there is one boolean here, it belongs to no muxer, and there is no
+/// half-finished state to catch on the way past.
+export function setAutoRemeasure(on) {
+    auto = !!on;
+    try { localStorage.setItem(AUTO_KEY, JSON.stringify({ remeasure: auto })); }
+    catch (e) { /* not fatal: the toggle still holds for this run */ }
+    return auto;
 }
 
 /// The spans a set of findings would draw on a plot's ruler, so the numbers and

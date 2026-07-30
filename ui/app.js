@@ -373,6 +373,11 @@ onChange((what) => {
     // mouse move is a chain nothing has settled before. Deciding that here costs
     // one settle per gesture; deciding it in there would mean the native half
     // knowing which parts of a chain are allowed to differ.
+    // And a measurement in the drawer is now about a render that no longer
+    // describes this. Told rather than asked, because the drawer is shut most of
+    // the time and nothing should be rebuilding a spec behind it — see
+    // `editMoved()`, which notes the moment and waits for the edit to hold still.
+    report.editMoved();
     if (what !== 'move') refreshPlayback();
 });
 
@@ -451,6 +456,10 @@ function drawOutput() {
 // the document unsaved.
 graphOverlay.onChange((what) => {
     if (what !== 'adopt') { doc.touch(); history.record(what); drawDocument(); }
+    // The graph is half of what a measurement's subject *is* — `renderSubject()`
+    // keeps the printed chain — so a filter inserted or edited moves the edit under
+    // every finding in the drawer exactly as dragging a clip does.
+    report.editMoved();
     refreshPlayback();
 });
 
@@ -1548,7 +1557,16 @@ report.initReport({
     // Running the graph over the range and keeping only what it measured. The
     // export workspace owns the spec and the one job slot, so it is asked
     // rather than a second spec being built here.
-    measureNow: () => exporter.startMeasurement(),
+    //
+    // A recording holds the host's slot without the encode side's own flag ever
+    // being set — it goes through `record.start`, which is a different call into
+    // the same `ffmpeg_job.h` slot — so the refusal for one is here, where both
+    // modules are visible. It matters twice over now that a measurement can start
+    // itself: handed to the native side to refuse, an automatic re-measure would be
+    // an exception thrown out of the frame loop.
+    measureNow: () => (capture.isRecording()
+        ? 'a recording is using the machine — stop it first'
+        : exporter.startMeasurement()),
     // What the edit *is*, right now, in the one form a render's own subject was
     // recorded in. Asked of the export workspace for the reason `measureNow` is
     // — it owns the spec — and asked at draw time rather than pushed on every
