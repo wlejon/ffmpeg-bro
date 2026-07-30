@@ -31,6 +31,25 @@
 // One node plays at a time, for the same reason. Nine cards playing at once is
 // nine renders at once against one slot, which is not nine ninths of the speed —
 // it is one of them playing and eight of them stuttering.
+//
+// **Scrubbing is free where the piece is in hand and a render where it is not,
+// and the bar says which.** A playback is already a list of pieces covering the
+// range, made on demand and *kept* — so moving the picture is choosing a piece
+// and a moment inside it, which for anything already rendered costs a
+// `currentTime` write and nothing else. Going back is therefore instant, which
+// is the half of scrubbing that matters when a filter is being judged: the thing
+// you need to see twice is the thing you just saw. Forward into unrendered
+// seconds costs exactly what playing into them costs, and the bar draws how far
+// the ready run extends so that the difference is visible before it is felt.
+//
+// Nothing is thrown away on a seek. A piece the renderer is halfway through
+// still belongs to this playback — `holds()` answers on membership, not on
+// position — so it lands, is kept, and is there if the picture comes back past
+// it. The only thing a seek resets is the **rate measurement**, because a rate
+// is output seconds per wall second *of playback* and the seconds spent
+// deciding where to look are not playback. `mark` is where the current
+// measurement started; without it, jumping four minutes in would read as four
+// minutes rendered in an instant.
 
 /// How far in front of the picture to render. Two pieces is enough to cover the
 /// gap between one finishing and the next being wanted while still giving up
@@ -53,8 +72,8 @@ export function start(key, from, until, seconds, seed) {
     stop();
     const len = Math.max(0.25, Number(seconds) || 2);
     if (!(until > from + 1e-3)) return false;
-    s = { key, from, until, len, segs: [], at: 0, played: 0, pos: 0,
-          wall: Date.now(), done: false };
+    s = { key, from, until, len, segs: [], at: 0, pos: 0,
+          mark: from, into: null, wall: Date.now(), done: false };
     const first = ensure(0);
     if (first && seed && seed.path && Math.abs(seed.seconds - (first.to - first.from)) < 1e-6) {
         first.state = 'ready';
@@ -135,8 +154,6 @@ export function report(pos) {
 /// pointed at it.
 export function advance() {
     if (!s) return 'idle';
-    const done = s.segs[s.at];
-    if (done) s.played += done.to - done.from;
     s.pos = 0;
     const following = ensure(s.at + 1);
     if (!following) { s.done = true; return 'ended'; }
@@ -144,23 +161,83 @@ export function advance() {
     return following.state === 'ready' ? 'moved' : 'waiting';
 }
 
+/// Put the picture at `t` seconds of the timeline. False for a `t` there is no
+/// piece for, which is a range shorter than one piece and nothing else.
+///
+/// **A piece and a moment inside it**, which is what makes this cheap: the piece
+/// is `ensure`d rather than rendered here — `want()` will ask for it on the next
+/// frame if it is new — and the moment is handed to the view as `into`, because
+/// the element is the only thing that can be told where to be and the view is
+/// the only thing holding one. Where the piece is already in hand this is the
+/// whole cost of a seek.
+export function seek(t) {
+    if (!s) return false;
+    const want = Math.max(s.from, Math.min(Number(t) || 0, s.until - 1e-3));
+    const i = Math.max(0, Math.floor((want - s.from) / s.len));
+    const seg = ensure(i);
+    if (!seg) return false;
+    s.at = i;
+    s.pos = Math.max(0, Math.min(want - seg.from, seg.to - seg.from));
+    s.into = s.pos;
+    // A playback that had run off the end is running again, at wherever this is.
+    s.done = false;
+    // The rate starts over from here. See the note at the top of the file: the
+    // seconds spent deciding where to look are not playback.
+    s.mark = seg.from + s.pos;
+    s.wall = Date.now();
+    return true;
+}
+
+/// Where inside the piece on screen the picture has been *asked* to be, or null.
+///
+/// Read and then cleared by the view, which is the one thing holding the
+/// `<video>`. Null rather than the current position, so that the view can tell a
+/// request apart from the ordinary state of playing — writing `currentTime`
+/// every frame would stop the picture dead.
+export function requested() {
+    return s && s.into !== null && s.into !== undefined ? s.into : null;
+}
+
+export function granted() { if (s) s.into = null; }
+
+/// How far the picture can go without waiting for a render: the end of the
+/// unbroken run of ready pieces from the one on screen.
+///
+/// **The run and not the count.** Two ready pieces with a pending one between
+/// them is one second of buffer, not two, and a bar drawn off the total would
+/// promise seconds that are going to stall.
+export function readyUntil() {
+    if (!s) return 0;
+    let end = s.segs[s.at] ? s.segs[s.at].from : s.from;
+    for (let i = s.at; i < s.segs.length; i++) {
+        if (s.segs[i].state !== 'ready') break;
+        end = s.segs[i].to;
+    }
+    return end;
+}
+
 /// What to say about it. `rate` is output seconds shown per second of wall
-/// clock, measured from the moment play was pressed and including every wait —
-/// which is the number somebody deciding whether a filter is affordable actually
-/// wants, rather than the renderer's throughput with the stalls taken out.
+/// clock, measured from the moment play was pressed — or from the last seek, see
+/// the note at the top — and including every wait, which is the number somebody
+/// deciding whether a filter is affordable actually wants, rather than the
+/// renderer's throughput with the stalls taken out.
+///
+/// `at` is worked out from the piece on screen rather than accumulated, so that
+/// it is right after a seek without a second place having to be told about one.
 export function stats() {
     if (!s) return null;
     const wall = Math.max(0.001, (Date.now() - s.wall) / 1000);
-    const played = s.played + s.pos;
     const cur = s.segs[s.at] || null;
+    const at = (cur ? cur.from : s.from) + s.pos;
     return {
         key: s.key,
-        at: s.from + played,
+        at,
         from: s.from,
         until: s.until,
-        played,
+        ready: readyUntil(),
+        played: at - s.from,
         wall,
-        rate: played / wall,
+        rate: Math.max(0, at - s.mark) / wall,
         // Under a second there is nothing to average and every graph looks slow,
         // because the first piece is a render nobody has waited for yet.
         settled: wall > 1.5,

@@ -314,6 +314,23 @@ Pressing play starts on the frame already in the card, because the still is the
 first piece. One node plays at a time — there is one render slot, and two would not
 be two playbacks so much as two stutters.
 
+**A bar under the picture is where in the range it is, and clicking or dragging it
+moves the picture there.** The lighter part of the bar is how far the pieces already
+in hand reach, and it is the one thing on this stage that says a seek is free:
+somewhere inside it costs nothing but telling the element where to be, and past the
+end of it costs exactly what playing there costs, because every second here is a
+real render. Nothing is thrown away when you move — a piece the renderer is halfway
+through still lands and is kept — so going back over something you have just watched
+is instant, which is what you want when the thing worth seeing twice is the thing
+you just saw.
+
+The rate readout starts over from a seek. Output seconds per wall second is a fact
+about playback, and the seconds spent deciding where to look are not playback;
+without that, jumping four minutes into a range would read as four minutes rendered
+in an instant. The picture moves on the press and again on release rather than on
+every pixel of a drag: a seek re-points which piece is wanted, and re-pointing that
+sixty times a second is sixty renders begun and abandoned.
+
 The column beside the graph has the other half of the same question. **`Measure
 to here`** runs the graph as far as the selected node and no further, keeping
 nothing but what the filters on the way said — the ancestors only, the same

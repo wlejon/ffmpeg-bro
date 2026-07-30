@@ -109,6 +109,12 @@ let dragging = null;    // panning
 let moving = null;      // dragging nodes
 let resizing = null;    // dragging a card's corner
 let marquee = null;     // rubber band
+// Dragging the scrub bar of the node that is playing. Held while the hand is
+// down so that the frame loop leaves the marker alone — the bar follows the
+// pointer, and the picture is asked to move on the way down and on release, not
+// on every pixel: a seek re-points which piece is wanted, and re-pointing that
+// sixty times a second is sixty renders begun and abandoned.
+let scrubbing = null;
 /// A wire being drawn, from the socket it was started at to the pointer.
 let wiring = null;
 /// The wire that is selected, by the pad it *arrives* at — `key#port`.
@@ -168,6 +174,13 @@ export function initGraphView(r, hooks = {}) {
         onDragStart: (key, e) => startMove(key, e),
         onWireStart: (key, dir, port, stream, e) => startWire(key, dir, port, stream, e),
         onResizeStart: (key, width, e) => { resizing = { key, from: width, x: e.clientX, at: width }; },
+        // Pressing on the bar moves the picture at once — a click is a jump —
+        // and holding follows the pointer without moving it again until release.
+        onScrubStart: (key, f) => {
+            scrubbing = { key, at: f };
+            preview.seekPlay(f);
+            paintScrub(f);
+        },
         onChanged: () => { drawGraph(); if (hooks.changed) hooks.changed(); },
         onPlayed: (started) => {
             drawGraph();
@@ -240,6 +253,7 @@ function bindViewport() {
 
     document.addEventListener('mousemove', (e) => {
         if (wiring) return dragWire(e);
+        if (scrubbing) return dragScrub(e);
         if (resizing) return dragResize(e);
         if (moving) return dragMove(e);
         if (marquee) {
@@ -261,6 +275,14 @@ function bindViewport() {
 
     document.addEventListener('mouseup', (e) => {
         if (wiring) return endWire(e);
+        if (scrubbing) {
+            const at = scrubbing.at;
+            scrubbing = null;
+            // Where it was let go, which for a plain click is where it went down
+            // — one repeated seek, against a render per pixel of the drag.
+            preview.seekPlay(at);
+            return;
+        }
         if (dragging) { swallowClick = dragging.moved; dragging = null; }
         if (marquee) {
             const m = marquee;
@@ -956,6 +978,19 @@ function playFrame() {
         back.src = after.path;
     }
 
+    // **A seek is applied here and nowhere else**, because the element is the
+    // only thing that can be told where to be and this is the only thing holding
+    // one. After the block above, so that a seek into a piece that has only just
+    // arrived wins over the `currentTime = 0` that starting it writes; and only
+    // once the front element actually holds that piece, since an element cannot
+    // be told to be somewhere in a file it has not got.
+    const into = preview.requestedPosition();
+    if (into !== null && piece && piece.state === 'ready' && front.__path === piece.path) {
+        try { front.currentTime = into; } catch (e) { /* it plays from where it is */ }
+        try { front.play(); } catch (e) { /* it will play when it can */ }
+        preview.positionGranted();
+    }
+
     if (piece && front.__path === piece.path) {
         const at = Number(front.currentTime) || 0;
         const dur = Number(front.duration) || 0;
@@ -987,6 +1022,39 @@ function readout(st) {
         (st.settled ? ` · ${st.rate.toFixed(2)}×` : '') +
         (st.waiting ? ' · rendering' : slow ? ' · slower than real time' : '');
     strip.className = 'gn-clock' + (slow || st.waiting ? ' gn-slow' : '');
+
+    // The marker is left alone while a hand is on it: the bar follows the
+    // pointer during a drag, and writing the picture's position into it would
+    // pull it back to where the picture still is.
+    if (!scrubbing) {
+        const span = Math.max(1e-6, st.until - st.from);
+        paintScrub((st.at - st.from) / span, (st.ready - st.from) / span);
+    }
+}
+
+/// Both marks on the scrub bar, as fractions of the range.
+///
+/// `ahead` is left as it was when it is not given, which is what a drag wants:
+/// how far the pieces reach has not changed because a pointer moved.
+function paintScrub(at, ahead) {
+    const bar = refs.nodes && refs.nodes.querySelector('.gn-scrub');
+    if (!bar) return;
+    const head = bar.querySelector('.gn-scrub-head');
+    const run = bar.querySelector('.gn-scrub-ahead');
+    const pct = (f) => `${Math.max(0, Math.min(1, f)) * 100}%`;
+    if (head) head.style.left = pct(at);
+    if (run && ahead !== undefined) {
+        run.style.left = pct(at);
+        run.style.width = pct(Math.max(0, ahead - at));
+    }
+}
+
+/// The bar under the pointer, while it is held. No seek: see `scrubbing`.
+function dragScrub(e) {
+    const bar = refs.nodes && refs.nodes.querySelector('.gn-scrub');
+    if (!bar || !scrubbing) return;
+    scrubbing.at = cards.scrubFraction(bar, e.clientX);
+    paintScrub(scrubbing.at);
 }
 
 /// Whether the filter being watched is on right now.

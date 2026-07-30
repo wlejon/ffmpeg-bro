@@ -2528,6 +2528,98 @@ if (!media) {
         pump(160);
     }
 
+    // ── moving through one ─────────────────────────────────────────────────
+    //
+    // ▶ used to be the only way through a playback: forward from where the
+    // previews were taken, with no way back and nothing to jump with. A playback
+    // is already a list of pieces covering the range, made on demand and *kept* —
+    // so a position is a piece and a moment inside it, and going back over
+    // anything already rendered costs a `currentTime` write. What is asserted is
+    // both halves of that: that the position follows, and that the seconds in
+    // hand are the ones that are free.
+    console.log('\nscrubbing a node');
+    {
+        overlay.clear();
+        const rec = overlay.insert(`clip:${clipId}/after-scale`, 'hflip');
+        A.graph.draw();
+        pump(200);
+
+        const P = A.graph.preview;
+        const play = (key) => document.querySelector(`#gr-nodes [data-play="${key}"]`);
+        const clockText = () => {
+            const c = document.querySelector('#gr-nodes .gn-playbar .gn-clock');
+            return c ? c.textContent : '';
+        };
+        const bar = () => document.querySelector('#gr-nodes .gn-scrub');
+        const headAt = () => parseFloat((document.querySelector('#gr-nodes .gn-scrub-head')
+                                         || { style: {} }).style.left) || 0;
+
+        waitFor('the node’s own picture', () => !!play(rec.id), 20000);
+        play(rec.id).dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        waitFor('the playback readout', () => /·/.test(clockText()), 15000);
+
+        ok(!!bar(), 'a node that is playing gets a scrub bar; a still has no position to draw');
+        const st0 = P.playStats();
+        ok(!!st0 && st0.until > st0.from, `it covers the range being played (${
+            st0.from.toFixed(2)}–${st0.until.toFixed(2)})`);
+
+        // The first piece is the still that was already on the card, so the
+        // seconds at the head of the range are in hand before anything is
+        // pressed — which is what makes going back to them free.
+        ok(P.playStats().ready > st0.from,
+           'and the seconds already rendered are marked on it, which is what says a seek back ' +
+           'is instant');
+
+        // Forward, into the middle of the range. Through the bar rather than
+        // through the module: the arithmetic that turns a pointer into a fraction
+        // belongs to the bar, and a test that called `seekPlay` directly would
+        // not have exercised it.
+        const rect = bar().getBoundingClientRect();
+        const pressAt = (f) => {
+            const x = rect.left + rect.width * f;
+            bar().dispatchEvent(new MouseEvent('mousedown',
+                { bubbles: true, button: 0, clientX: x, clientY: rect.top + 5 }));
+            document.dispatchEvent(new MouseEvent('mouseup',
+                { bubbles: true, button: 0, clientX: x, clientY: rect.top + 5 }));
+            pump(120);
+        };
+
+        const want = st0.from + (st0.until - st0.from) * 0.5;
+        pressAt(0.5);
+        const mid = P.playStats();
+        ok(Math.abs(mid.at - want) < 0.35,
+           `pressing half way along puts the picture half way along (${mid.at.toFixed(2)} for ${
+               want.toFixed(2)})`);
+        ok(headAt() > 40 && headAt() < 60,
+           `and the marker is drawn where it is (${headAt().toFixed(0)}%)`);
+
+        // The rate starts over from a seek, because the seconds spent deciding
+        // where to look are not playback — without that, jumping into the middle
+        // of a long range reads as minutes rendered in an instant.
+        ok(!P.playStats().settled || P.playStats().rate < 8,
+           `and the rate is measured from the seek rather than crediting the jump (${
+               P.playStats().rate.toFixed(2)}×)`);
+
+        // Back to the start, which is the one piece guaranteed to be in hand.
+        // Instant means *not waiting*: the picture is there and no render is
+        // outstanding for it.
+        pressAt(0);
+        const back = P.playStats();
+        ok(Math.abs(back.at - st0.from) < 0.35,
+           `and it goes back, which ▶ alone could not (${back.at.toFixed(2)})`);
+        ok(!back.waiting,
+           'to a piece already rendered, so there is nothing to wait for — which is the whole ' +
+           'reason a playback keeps its pieces');
+
+        const stop = play(rec.id);
+        if (stop) stop.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+        ok(!bar(), 'stopping takes the bar with it');
+        overlay.clear();
+        A.graph.draw();
+        pump(160);
+    }
+
     // A filter libavfilter says has no timeline support is not offered one.
     // Refused rather than ignored: `set_enable_expr` checks the flag and hands
     // back AVERROR_PATCHWELCOME, so a graph carrying one never builds.

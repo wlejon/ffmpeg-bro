@@ -478,6 +478,18 @@ export function startPlay(key) {
 
 export function stopPlay() { play.stop(); }
 
+/// Move the picture, as a fraction of the range being played.
+///
+/// A fraction and not a time, because what the caller has is a pointer on a bar
+/// and the bar *is* the range — converting in the caller would put the range's
+/// ends in two places. Answers false when there was nothing to move.
+export function seekPlay(f) {
+    const st = play.stats();
+    if (!st) return false;
+    const t = st.from + Math.max(0, Math.min(1, Number(f) || 0)) * (st.until - st.from);
+    return play.seek(t);
+}
+
 export const playingKey = play.playingKey;
 export const isPlaying = play.isPlaying;
 export const playStats = play.stats;
@@ -485,6 +497,8 @@ export const currentPiece = play.current;
 export const nextPiece = play.next;
 export const reportPosition = play.report;
 export const advancePlay = play.advance;
+export const requestedPosition = play.requested;
+export const positionGranted = play.granted;
 
 /// Whether anything is outstanding, for the status line — a graph that is
 /// halfway through filling in should say so rather than looking half broken.

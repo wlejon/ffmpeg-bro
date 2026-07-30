@@ -19,10 +19,6 @@ Honest list of what does not work:
   same badge covers one chain it need not: a resize on the way in *and* a filter
   of yours below the `scale`, where one reported size cannot say which of the two
   did it.
-- **Scrubbing a node.** ▶ plays one forward from where the previews were taken,
-  and that is the only way to move through it: there is no scrub bar, no way
-  back, and nothing to jump with. Somewhere else to start from means moving the
-  playhead and pressing `At playhead`.
 - **Undo on the Encode and Write stages.** `Ctrl-Z` covers the edit — the
   clips, the inputs, the canvas and the graph — and stops at the form; see
   [Undo](document.md#undo) for why, which is that a control you just changed is

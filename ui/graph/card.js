@@ -442,7 +442,10 @@ function shotView(key, width) {
         // on this screen changed.
         if (!preview.isPlaying(key)) showStill(pair, shot.path, wave);
         box.append(playButton(key));
-        if (preview.isPlaying(key)) box.append(div('gn-playbar mono', span('', 'gn-clock')));
+        if (preview.isPlaying(key)) {
+            box.append(scrubBar(key));
+            box.append(div('gn-playbar mono', span('', 'gn-clock')));
+        }
         return box;
     }
     // Three states and not two. A render that failed is red and says why; a node
@@ -475,6 +478,47 @@ function playButton(key) {
                   if (hooks.onPlayed) hooks.onPlayed(started);
               } },
     });
+}
+
+/// Where in the range the picture is, and where it can go without waiting.
+///
+/// **Drawn only while a node is playing**, because it is about a playback and not
+/// about the node: a still has no position in anything. The two marks are written
+/// in place by the frame loop, like the clock beside them and for the same reason
+/// — a redraw re-derives the graph and measures every card, and doing that to
+/// move a marker would make the stage unusable.
+///
+/// The lighter fill is how far the pieces already in hand reach. It is the one
+/// thing on this stage that says a seek is free: back over it costs a
+/// `currentTime` write, past the end of it costs a render, and both are the
+/// truth about a preview path that renders everything it shows.
+function scrubBar(key) {
+    const bar = el('div', {
+        cls: 'gn-scrub', 'data-scrub': key,
+        title: 'Where in the range this is. Click or drag to move it — anything already ' +
+               'rendered (the lighter part) is instant, and further on costs what playing ' +
+               'there costs, because every second on this stage is a real render.',
+        on: {
+            // The card's own mousedown starts a move, and the viewport's starts a
+            // marquee. Neither is what a hand on this bar means.
+            mousedown: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (hooks.onScrubStart) hooks.onScrubStart(key, scrubFraction(bar, e.clientX), e);
+            },
+        },
+    }, [div('gn-scrub-track'), div('gn-scrub-ahead'), div('gn-scrub-head')]);
+    return bar;
+}
+
+/// Where along the bar a page-space x is, from 0 to 1. Exported because the
+/// drag is followed by the view — one `mousemove` for the whole stage — and the
+/// arithmetic has to be the bar's own either way.
+export function scrubFraction(bar, clientX) {
+    if (!bar) return 0;
+    const r = bar.getBoundingClientRect();
+    if (!(r.width > 0)) return 0;
+    return Math.max(0, Math.min(1, (clientX - r.left) / r.width));
 }
 
 /// The corner you drag to make a card bigger. The drag writes straight to the

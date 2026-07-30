@@ -2486,6 +2486,42 @@ select.gn-f { text-align: left; }
     pointer-events: none;
 }
 .gn-playbar .gn-slow { color: var(--accent); }
+
+/* Where in the range the picture is, and how much of it is already rendered.
+   Above the clock rather than beside it: the clock is a value and this is a
+   place, and a bar as wide as the picture is what makes a position readable. */
+.gn-scrub {
+    position: absolute;
+    left: 3px;
+    right: 3px;
+    bottom: 17px;
+    height: 11px;
+    cursor: pointer;
+}
+.gn-scrub-track, .gn-scrub-ahead {
+    position: absolute;
+    top: 4px;
+    height: 3px;
+    border-radius: 2px;
+}
+.gn-scrub-track {
+    left: 0;
+    right: 0;
+    background: rgba(0, 0, 0, 0.55);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+/* The seconds already in hand, which is the part that is free to go back over. */
+.gn-scrub-ahead { background: rgba(255, 255, 255, 0.45); }
+.gn-scrub-head {
+    position: absolute;
+    top: 0;
+    width: 3px;
+    height: 11px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--blue);
+    box-shadow: 0 0 3px #000;
+}
 .gn-shot-wait, .gn-shot-fail {
     display: flex;
     align-items: center;

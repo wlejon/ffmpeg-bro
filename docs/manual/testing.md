@@ -411,6 +411,15 @@ sentence on the picture saying which. Every one of them goes through `overlay.in
 what the palette calls, so the src moves because the application reacted and not
 because the test asked it to.
 
+**Scrubbing a node** is driven through the bar rather than through `seekPlay`,
+because the arithmetic that turns a pointer into a fraction of the range belongs
+to the bar and calling past it would not have exercised it. A press half way
+along has to put the picture half way along and draw the marker there; the rate
+has to be measured from the seek rather than crediting the jump as playback; and
+a press back at the start has to land on a piece that is already in hand, which
+is asserted as `waiting` being false — "instant" means no render outstanding, and
+that is the whole reason a playback keeps its pieces.
+
 `ui_measure.js` is the half above that: a measurement started, run, read and
 acted on. It clicks `Crop` and finds `cropdetect` on the graph and in the
 command the bar prints; runs `Measure now` and finds the series on the render's
