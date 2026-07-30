@@ -19,7 +19,7 @@
 //     stream list is rebuilt on every keystroke in a language field.
 
 import { inputs, asInput } from '../inputs.js';
-import { project } from '../project.js';
+import { project, clipById } from '../project.js';
 
 /// `copy:0:1` → `{ input: 0, stream: 1 }`, or null for a composed source.
 export function parseCopy(source) {
@@ -93,12 +93,30 @@ export function copiedInput(row) {
 // cut, and `inputSeekTarget` in `ffmpeg_input.h` is the one place the input's
 // window is applied to both.
 //
-// **What is offered is a number to take, not a binding to keep.** Following the
-// clip live would be a second source of truth for `copyFrom`: the row would
-// stop meaning what it says the moment somebody trimmed on another stage, and
-// there would be a hidden mode to be in or out of. So this is the same rule the
-// rewrap shortcut is written on — press it and ordinary values are left behind,
-// visible, and changeable a field at a time.
+// **What is offered is a link, and the link is visible and breakable.** For a
+// while it was a press that left two ordinary numbers behind, on the argument
+// that a binding would be a second source of truth for `copyFrom` and a hidden
+// mode to be in or out of. Half of that argument was right and is kept: `copyFrom`
+// and `copyTo` are still the only things the renderer, the command bar and the
+// warnings read, and a bound row's numbers are *written* rather than derived at
+// the far end — see `syncFollowing`. So there is no second source of truth and
+// nothing downstream has to learn that a row can be bound.
+//
+// The other half was about invisibility, and that is what is answered rather than
+// given up. A bound row says which clip it follows and offers to stop; stopping
+// leaves the two numbers exactly where they were, because breaking a link is not
+// undoing a trim; and a clip that has gone breaks the link and **says so**, since
+// a row quietly naming an id nothing answers to is precisely the hidden mode the
+// objection was about.
+//
+// The link is a clip **id**, which is the name a document's clip list and the
+// graph's anchors are already written against — so it survives the round trip
+// through a `.fbro` for the same reason an anchor does, and it survives an undo
+// because `open()` puts the same ids back. What it does not survive is arriving in
+// the *next* edit out of `localStorage`, where clip 7 is a different shot: the
+// stored blob has no clips beside it at boot, so every link is dropped on the way
+// in. That repair is `normalizeStreams()`, beside the one that turns a copy of an
+// input that has gone back into the composite.
 
 /// The span the timeline cuts out of one input, in that input's own seconds.
 ///
@@ -128,12 +146,136 @@ export function timelineSpan(inputIndex) {
                          'follow, because a copy is one continuous run of packets and not ' +
                          'the two of them joined' };
 
-    const from = Math.max(0, clip.inPoint);
-    const to = from + Math.max(0, clip.length);
-    // A clip nobody has trimmed describes the whole input, so taking its span
-    // would write two numbers that mean what "all of it" already meant.
+    const { from, to } = clipSpan(clip);
+    // A clip nobody has trimmed describes the whole input. Worth saying on the
+    // row, and no longer a reason not to offer the link: two numbers meaning what
+    // "all of it" already meant were nothing, but a *link* set before the trim is
+    // exactly the case the link is for.
     const whole = from < 0.001 && (!clip.media || to >= clip.media - 0.001);
     return { span: { from, to, clip, whole }, reason: '' };
+}
+
+/// What one clip takes out of its input, in that input's own seconds.
+///
+/// One home, because three things ask: the offer on the row, the `Cut` shortcut,
+/// and the sync that keeps a bound row up to date. Two of those computing it
+/// themselves is how a followed row comes to disagree with the button that offered
+/// to follow. There is no arithmetic in it beyond an addition — see the note above
+/// on why the two clocks are directly comparable.
+export function clipSpan(clip) {
+    const from = Math.max(0, clip.inPoint);
+    return { from, to: from + Math.max(0, clip.length) };
+}
+
+// ── the link ────────────────────────────────────────────────────────────────
+
+// Which rows stopped following because the clip went away.
+//
+// **Held here rather than on the row**, because it is a notice about something
+// that happened and not part of what will be written: a field on the row would
+// travel into the document and into `localStorage` and have to be stripped out of
+// both. And said on the row rather than only in a flash, because the act that
+// breaks a link is usually a *deletion* — which says "Removed landscape.mp4"
+// itself, a fifth of a second later, over the top of anything the channel said
+// first. A sentence that can be shouted over is not a sentence.
+const broken = new Set();
+
+/// Did this row stop following a clip that has gone?
+export function brokeFollowing(row) { return broken.has(row); }
+
+/// The clip a row follows, or null.
+///
+/// Null for a row with no link, for one whose clip has been deleted, and for one
+/// that has since been re-pointed at another input — the last because a row
+/// copying input 1 while following a clip of input 0 is not following anything
+/// anybody asked for, and it would write that clip's span onto a different file's
+/// clock.
+export function followedClip(row) {
+    const clip = row && row.followClip ? clipById(row.followClip) : null;
+    if (!clip) return null;
+    const at = parseCopy(row.source);
+    return at && inputs[at.input] === clip.input ? clip : null;
+}
+
+/// Start following one. Writes the span as well as the link, so the row means
+/// what it says before anything has moved.
+export function follow(row, clip) {
+    if (!row || !clip) return false;
+    broken.delete(row);
+    row.followClip = clip.id;
+    const sp = clipSpan(clip);
+    row.copyFrom = sp.from;
+    row.copyTo = sp.to;
+    return true;
+}
+
+/// Stop following one, **leaving the numbers exactly where they are.**
+///
+/// The alternative — putting the row back to the whole file, or to whatever it
+/// said before the link was made — would make breaking a link an undo of the trim
+/// it took across, which is two acts wearing one button. What a broken link leaves
+/// is the ordinary pair of numbers the press used to leave, which is where this
+/// started.
+export function unfollow(row) {
+    if (!row) return false;
+    // Cleared here too: pressing `Stop following` on a row that had already lost
+    // its clip is somebody acknowledging the notice, and one that stayed on the
+    // screen afterwards would be a notice about a link that no longer exists in
+    // either direction.
+    broken.delete(row);
+    if (!row.followClip) return false;
+    delete row.followClip;
+    return true;
+}
+
+/// Bring every bound row up to date with the edit, and report the links that
+/// broke.
+///
+/// **This is where the binding happens, and it is why there is no second source of
+/// truth.** A trim, a move, a ripple, an undo and an opened document all arrive
+/// here through the model's own change channel; what they do is write `copyFrom`
+/// and `copyTo`, which are the same two numbers a person typing in the fields
+/// writes. The renderer, `command.js` and `warnings()` are unchanged and cannot
+/// tell a followed row from a typed one.
+///
+/// A clip that has gone, or a row re-pointed at another input, **breaks the
+/// link** — with the numbers left where they were — and the reason comes back for
+/// the caller to say out loud. Kept silent it would be the invisible mode this was
+/// written against; repaired by re-following something else it would be this
+/// application choosing a shot on somebody's behalf.
+///
+/// Returns `{ moved, broke }`: how many rows' numbers changed, and a sentence per
+/// link that broke. `moved` is counted rather than assumed so that a caller on the
+/// change channel can redraw only when something actually moved — this runs on
+/// every mouse position of every drag.
+export function syncFollowing(rows) {
+    let moved = 0;
+    const broke = [];
+    const list = rows || [];
+    // The notices belong to rows that are still in the list. A stream list that
+    // has been replaced wholesale — by a rewrap, by an opened document — takes its
+    // notices with it, and this is what stops the set growing for the life of the
+    // process.
+    for (const row of Array.from(broken)) if (list.indexOf(row) < 0) broken.delete(row);
+    for (const row of list) {
+        if (!row || !row.followClip) continue;
+        const clip = followedClip(row);
+        if (!clip) {
+            const kind = String(row.kind || 'copied');
+            unfollow(row);
+            broken.add(row);
+            broke.push({ row, why: `the clip the ${kind} row was following has gone — ` +
+                                   `its span stays where it is` });
+            continue;
+        }
+        const sp = clipSpan(clip);
+        if (Math.abs((Number(row.copyFrom) || 0) - sp.from) < 1e-6 &&
+            Math.abs((Number(row.copyTo) || 0) - sp.to) < 1e-6) continue;
+        row.copyFrom = sp.from;
+        row.copyTo = sp.to;
+        moved++;
+    }
+    return { moved, broke };
 }
 
 // ── Where a copy can start ─────────────────────────────────────────────────
@@ -229,6 +371,12 @@ export function inPointNote(row) {
 /// `Cut`: the same rows over the same streams, with the edit's own numbers on
 /// them or without.
 ///
+/// A span that came off a clip brings the **link to that clip** with it, so `Cut`
+/// is a cut that goes on being the cut somebody made rather than a photograph of
+/// one. Each row says so and each can be unhooked on its own — the shortcut still
+/// writes ordinary rows, and a link on one is as ordinary and as visible as its
+/// `copy:` source is.
+///
 /// **Every row gets the same span, and that is a claim rather than a
 /// convenience.** A file's streams share one clock, so a picture cut at 4 s and
 /// a soundtrack cut at 4.2 s is a rewrap that drifts; the renderer takes one
@@ -251,6 +399,7 @@ export function rewrapRows(inputIndex, newId, span) {
             copyFrom: span ? span.from : 0,
             copyTo: span ? span.to : 0,
         });
+        if (span && span.clip) rows[rows.length - 1].followClip = span.clip.id;
     }
     return rows;
 }

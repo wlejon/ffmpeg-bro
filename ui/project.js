@@ -250,6 +250,24 @@ export function useClipId(id) {
     if (Number.isFinite(n) && n >= nextId) nextId = Math.floor(n) + 1;
 }
 
+/// The clip with this id, or null.
+///
+/// The other half of `useClipId`, and here for the same reason it is: an id is a
+/// name written down *outside* this file, so several places have to turn one back
+/// into a clip — a document's session says which clip was selected, a copied
+/// stream on the Write stage says which clip it follows, and the graph's anchors
+/// are parsed out of `clip:7/after-scale`. Three copies of `find` is three chances
+/// for one of them to compare a string against a number and quietly answer
+/// nothing; the coercion is the whole of what this adds.
+///
+/// Null rather than undefined, because every caller here is asking a yes/no
+/// question about a clip that may have been deleted since the id was written.
+export function clipById(id) {
+    const n = Number(id);
+    if (!Number.isFinite(n)) return null;
+    return project.clips.find((c) => c.id === n) || null;
+}
+
 export function removeClip(clip) {
     const i = project.clips.indexOf(clip);
     if (i < 0) return false;

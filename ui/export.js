@@ -48,6 +48,7 @@ import * as destination from './export/destination.js';
 // filters belong to has to be worked out again for the chains actually being
 // run. One home for that question; the node previews ask it the same way.
 import { deviceForRender } from './hardware.js';
+import { syncFollowing } from './export/copy.js';
 
 let el_ = {};
 let hooks = {};
@@ -280,6 +281,30 @@ function updateSummary() {
 
 /// What the spine's Encode and Write cards say, and what they warn about.
 export { warnings as currentWarnings };
+
+/// The copy rows that follow a clip, brought up to date with the edit.
+///
+/// **Called from the model's own change channel, not at draw time and not while a
+/// spec is being built.** That is the load-bearing part of the whole binding: what
+/// a followed row keeps is `copyFrom` and `copyTo`, the same two numbers a person
+/// typing in the fields writes, so `buildSpec()`, `command.js` and `warnings()`
+/// cannot tell a followed row from a typed one and none of them had to learn that
+/// a link exists. Derived at the far end instead, it would be the second source of
+/// truth the press was written to avoid.
+///
+/// Returns `{ moved, broke }` — how many rows' spans changed, and a sentence per
+/// link that broke. Both are the caller's business rather than this module's: it
+/// has nothing to flash with, and only the caller knows that a change nobody made
+/// has to become the encode side's history baseline.
+export function followTimeline() {
+    const answer = syncFollowing(settings.streams);
+    // Redrawn only when something actually moved: this runs on every mouse
+    // position of every drag, and rebuilding the stream list sixty times a second
+    // to draw the same rows is the sort of thing that makes a drag stall under the
+    // cursor.
+    if (open && (answer.moved || answer.broke.length)) { drawStreams(); updateSummary(); }
+    return answer;
+}
 
 // ── running ────────────────────────────────────────────────────────────────
 

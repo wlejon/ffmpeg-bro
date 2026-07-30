@@ -308,6 +308,23 @@ onChange((what) => {
     // else in this call would have noticed going away.
     graphOverlay.retain(project.clips.map((c) => c.id),
                         inputsModel.inputs.map((i) => i.id));
+    // And the copied rows on the Write stage that follow a clip. Same shape of
+    // problem as the line above and answered in the same place for the same
+    // reason: a trim, a move, a ripple, an undo and an opened document all arrive
+    // here, and a row updated in four of those and not the fifth would be a span
+    // that is right most of the time. A clip that has gone breaks the link and is
+    // said out loud — a row left naming an id nothing answers to is the invisible
+    // mode the press this replaces was written against.
+    const followed = exporter.followTimeline();
+    if (followed.broke.length)
+        flash(followed.broke.length === 1
+                  ? followed.broke[0].why
+                  : `${followed.broke.length} copied rows stopped following a clip that has gone`);
+    // The Write stage's settings have just changed without anybody having decided
+    // anything, so the encode side's history takes them as the baseline rather than
+    // offering to go back to a span that describes a trim the timeline no longer
+    // has. Same call and same reason as arriving on the encode side.
+    if (followed.moved || followed.broke.length) history.rebaseOutput();
     // The unsaved marker, for everything on this channel that is an *edit*.
     // Three things here are not one, and each for its own reason: a `selection`
     // is not in the document at all, an `analysis` is a waveform and a

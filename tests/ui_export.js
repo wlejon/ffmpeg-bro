@@ -2241,15 +2241,94 @@ console.log('\na stream copied rather than encoded');
            `and the row carries the clip's own in and out points ` +
            `(${followed.copyFrom} → ${followed.copyTo})`);
 
-        // A shortcut leaves ordinary values behind and no hidden mode: moving
-        // the clip afterwards must not move the row, because a `copyFrom` that
-        // silently re-followed would stop meaning what it says.
+        // ── and it keeps following ─────────────────────────────────────────
+        //
+        // The row is bound to the clip now, not a photograph of it. What makes
+        // that a link rather than a hidden mode is the two things checked here
+        // straight after: the row says which clip it follows, and it offers to
+        // stop — and what a following row *keeps* is `copyFrom`, the same field
+        // somebody types in, so nothing downstream can tell one from the other.
+        ok(!q('#ex-streams [data-f="copy-follow"]') &&
+           !!q('#ex-streams [data-f="copy-unfollow"]'),
+           'the row now says it is following and offers to stop, rather than offering to follow again');
+
         clip.inPoint = 2.5;
-        A.exporter.redraw();
-        pump(60);
-        same(A.exporter.buildSpec().streams[0].copyFrom, 1.5,
-             'and it does not follow again on its own — what it wrote is a number, not a link');
+        A.changed('edit');
+        pump(80);
+        ok(Math.abs(A.exporter.buildSpec().streams[0].copyFrom - 2.5) < 0.001,
+           `trimming the clip afterwards moves the row (${
+               A.exporter.buildSpec().streams[0].copyFrom})`);
+
+        // A ripple moves the clip's in-point and everything after it, which is
+        // the third of the three gestures the row has to follow.
+        A.rippleTrim(clip, 'start', clip.start + 0.5);
+        A.changed('moved');
+        pump(80);
+        ok(Math.abs(A.exporter.buildSpec().streams[0].copyFrom - clip.inPoint) < 0.001,
+           `and a ripple does too (${A.exporter.buildSpec().streams[0].copyFrom} = ` +
+           `${clip.inPoint})`);
+
+        // Breaking it leaves the numbers exactly where they are: a link broken is
+        // not a trim undone.
+        const held = A.exporter.buildSpec().streams[0].copyFrom;
+        q('#ex-streams [data-f="copy-unfollow"]').click();
+        pump(80);
+        same(A.exporter.buildSpec().streams[0].copyFrom, held,
+             'stopping leaves the numbers exactly where they were');
         clip.inPoint = 1.5;
+        A.changed('edit');
+        pump(80);
+        same(A.exporter.buildSpec().streams[0].copyFrom, held,
+             'and the row stops moving — what is left is two ordinary numbers');
+        ok(!!q('#ex-streams [data-f="copy-follow"]'),
+           'with the offer to follow it again back on the row');
+
+        // ── a followed clip that is deleted ────────────────────────────────
+        //
+        // The link breaks and *says so*. A row left naming a clip id nothing
+        // answers to is exactly the invisible mode the press this replaces was
+        // written against. The clip that goes is a half made by splitting, so the
+        // input is still on the timeline afterwards and the rest of this section
+        // still has a clip to be about.
+        {
+            const made = A.splitAt(clip.start + clip.length / 2, false);
+            ok(made > 0, `a split makes a second clip of the same input (${made})`);
+            const half = A.project.clips.find((c) => c.input === clip.input && c !== clip);
+            ok(!!half, 'which is the one to follow');
+            A.selectMany([half]);
+            A.exporter.redraw();
+            pump(80);
+            const on = q('#ex-streams [data-f="copy-follow"]');
+            ok(!!on, 'the row offers to follow the selected one of the two');
+            on.click();
+            pump(80);
+            ok(!!q('#ex-streams [data-f="copy-unfollow"]'), 'and follows it');
+
+            const stood = A.exporter.buildSpec().streams[0].copyFrom;
+            A.selectMany([half]);
+            A.removeSelection();
+            pump(150);
+            ok(!q('#ex-streams [data-f="copy-unfollow"]'),
+               'deleting that clip takes the link off the row');
+            // On the row rather than only in the OSD, because a deletion says
+            // "Removed landscape.mp4" of its own accord a moment after the
+            // channel has spoken — a sentence that can be shouted over is not a
+            // sentence.
+            const said = q('#ex-streams [data-f="copy-broke"]');
+            ok(!!said && /has gone/.test(said.textContent),
+               `and the row says so rather than naming an id nothing answers to: ` +
+               `“${said ? said.textContent.slice(0, 80) : 'nothing'}”`);
+            same(A.exporter.buildSpec().streams[0].copyFrom, stood,
+                 'with the span left exactly where it was');
+
+            // Back to the trim the rest of this section is written against — the
+            // split took half of it and the ripple half a second more.
+            clip.inPoint = 1.5;
+            clip.length = 3;
+            A.selectMany([clip]);
+            A.changed('edit');
+            pump(80);
+        }
 
         // The same decision as one press, which is what `Cut` is: a rewrap
         // with the edit's span on every row rather than none.
@@ -2287,6 +2366,45 @@ console.log('\na stream copied rather than encoded');
            `and what came out is the cut and not the file (${
                backCut.format.duration.toFixed(2)}s from a ${
                clip.media.toFixed(2)}s input)`);
+
+        // ── the link, through the document ─────────────────────────────────
+        //
+        // A link is a clip **id**, which is the one thing a document is careful to
+        // put back unchanged — so a followed row survives a save and an open for
+        // exactly the reason a graph anchor does. What it must not survive is
+        // arriving in the *next* edit, where clip 7 is a different shot, and one
+        // reader answers both questions: a link is kept only where the clip it
+        // names is there. That is what the workspace's own read amounts to at
+        // boot, where there are no clips at all.
+        {
+            const saved = A.doc.snapshot();
+            const written = (saved.output.streams || [])[0];
+            ok(written && written.followClip === clip.id,
+               `a document carries the link as the clip's own id (${
+                   written && written.followClip})`);
+
+            A.documentOpened(A.doc.open(saved));
+            pump(250);
+            const back = A.exporter.currentSettings().streams[0];
+            ok(!!back && back.followClip === clip.id,
+               `and an open puts it back naming the same clip (${back && back.followClip})`);
+            const kept = A.project.clips.find((c) => c.id === clip.id);
+            ok(!!kept, 'with that clip still there, by the id it always had');
+            kept.inPoint = 2;
+            A.changed('edit');
+            pump(80);
+            ok(Math.abs(A.exporter.buildSpec().streams[0].copyFrom - 2) < 0.001,
+               `and it is still following it afterwards (${
+                   A.exporter.buildSpec().streams[0].copyFrom})`);
+
+            const odd = JSON.parse(JSON.stringify(saved));
+            for (const r of odd.output.streams) r.followClip = 987654;
+            A.documentOpened(A.doc.open(odd));
+            pump(250);
+            ok(!A.exporter.currentSettings().streams.some((r) => r.followClip),
+               'while a link naming a clip the document does not describe is dropped on the ' +
+               'way in, which is the same read the workspace gets at boot');
+        }
 
         clip.inPoint = wasIn; clip.length = wasLen; clip.start = wasStart;
     }

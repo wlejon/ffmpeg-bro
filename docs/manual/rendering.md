@@ -27,7 +27,8 @@ every row, and appears where the timeline says something a whole-file rewrap
 does not: a clip nobody has trimmed describes the same file, so a second button
 for it would be two names for one operation.
 **It is a shortcut and not a mode** — what it leaves behind is ordinary rows
-with ordinary sources, so everything it decided is on the screen and can be
+with ordinary sources, and the link `Cut` puts on each of them is as ordinary and
+as visible as the source is, so everything it decided is on the screen and can be
 changed or undone a row at a time. Nothing on this stage behaves differently
 afterwards. It leaves the container alone, which is the whole of the remaining
 decision and is taken on its own control a foot away; a subtitle track the new
@@ -58,12 +59,26 @@ with `Snap` beside it. **`Follow the clip`** is beside those: the span you
 trimmed on the timeline, taken across as the two numbers it already is. A
 clip's in-point and a copy's `From` are the same moment on the same clock —
 `-ss` before an `-i` decides where the input's zero is and a clip is cut out of
-what is left — so nothing is converted and nothing is approximated. It is a
-press and not a binding, for the reason `Rewrap` is a shortcut and not a mode:
-what it leaves behind is two ordinary numbers that go on saying what they say
-when the clip moves again. With several clips of one input it asks which, since
-a copy is one continuous run of packets and two clips are exactly the case
-where it is not.
+what is left — so nothing is converted and nothing is approximated. With several
+clips of one input it asks which, since a copy is one continuous run of packets
+and two clips are exactly the case where it is not.
+
+**And it keeps following.** Trim, move or ripple that clip afterwards and the row
+moves with it. The row says which clip it is following and offers to `Stop
+following`, which leaves the two numbers exactly where they are — breaking the
+link is not undoing the trim. `Cut <file>` binds every row it writes to the clip
+it took the span from, so a lossless cut goes on being the cut you made rather
+than a photograph of one.
+
+That is a link and not a hidden mode, and the difference is the whole design. What
+a following row keeps is `From` and `To` — the same two fields you can type in, so
+the printed command, the warnings and the render cannot tell a followed row from a
+typed one and there is no second place the span lives. Delete the clip and the
+link **breaks and says so**, with the numbers left where they were, because a row
+quietly pointing at a shot that is gone is the invisible mode worth being afraid
+of. The link travels in the [document](document.md), by clip id, which is the same
+name the graph's anchors are written against; it is deliberately *not* carried into
+the next edit through the workspace, where clip 7 is a different shot.
 
 Where the keyframes are is asked of the demuxer's own index,
 which is instant for mp4 and Matroska; a container without one is read, and

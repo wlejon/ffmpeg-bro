@@ -183,14 +183,6 @@ Honest list of what does not work:
   neither writes its log wherever it likes and pass 2 reads an empty one — the
   render says so, naming the encoder, because there is no capability to ask
   first.
-- **A copy that keeps following the timeline.** `Follow the clip` and `Cut
-  <file>` take the span off the edit — see [Copying instead of
-  encoding](rendering.md#copying-instead-of-encoding) — and what they leave behind is two
-  ordinary numbers. Trim the clip afterwards and the row does not move: a
-  binding would be a second source of truth for `copyFrom` and a hidden mode to
-  be in or out of, so the connection is a press rather than a link. Whether
-  that is the wrong trade is a real question and it has not been tested on
-  anybody yet.
 - **Anything a data stream carries, read.** A `gpmd` telemetry track is now
   carried through — see [Copying instead of
   encoding](rendering.md#copying-instead-of-encoding) — and carrying is the whole of it.

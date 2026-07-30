@@ -22,12 +22,16 @@
 //
 //   - **Ids are part of the document.** A clip's id and an input's id are
 //     written down, because they are written down elsewhere: the graph overlay
-//     pins a filter to `clip:7/after-scale` and a source node names `in3`. An
-//     open that renumbered would re-point every anchor at a different shot and
-//     every source node at a different file, silently. This is what closes the
-//     hole `ui/graph/overlay.js` records at `restore()` — a node naming an input
-//     is refused from `localStorage` because the inputs do not come back, and it
-//     is restored from a document because they do.
+//     pins a filter to `clip:7/after-scale`, a source node names `in3`, a copied
+//     stream on the Write stage says which clip its span follows, and the session
+//     below says which clip was selected. An open that renumbered would re-point
+//     every anchor at a different shot and every source node at a different file,
+//     silently. This is what closes the hole `ui/graph/overlay.js` records at
+//     `restore()` — a node naming an input is refused from `localStorage` because
+//     the inputs do not come back, and it is restored from a document because they
+//     do. `ui/export/streams.js` refuses a followed clip from `localStorage` for
+//     exactly the same reason and keeps one from a document for exactly the same
+//     reason.
 //   - **An input is written as what opens it**, never as a file: the path, the
 //     demuxer, both option bags, the hardware decode and the window — the whole
 //     of `asInput()`. Opening a document *is* a reopen, so what has to be stored
@@ -75,7 +79,7 @@
 //     could lose, and a document marked unsaved because somebody clicked a clip
 //     is a dot that means nothing.
 
-import { project, makeClip, placeClip, removeClip, sortClips, useClipId,
+import { project, makeClip, placeClip, removeClip, sortClips, useClipId, clipById,
          defaultTransform, applyInput, changed } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as overlay from './graph/overlay.js';
@@ -482,8 +486,8 @@ function sessionBlob() {
 /// A copy of that list here would be a second answer to what the stages are.
 function readSession(saved) {
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
-    const n = Math.round(num(saved.clip));
-    const clip = n > 0 && project.clips.some((c) => c.id === n) ? n : 0;
+    const found = clipById(Math.round(num(saved.clip)));
+    const clip = found ? found.id : 0;
     const v = saved.view && typeof saved.view === 'object' ? saved.view : {};
     return {
         clip,

@@ -98,10 +98,13 @@ The interesting part of a document is not the geometry. It is that a clip and an
 input each keep **the same id** they had.
 
 Both are names that something else writes down. A filter you inserted on the
-Graph stage is pinned to `clip:7/after-scale`, and a source node reading a
-watermark names `in3`. Renumber on open and every insert quietly moves to a
-different shot and every source node quietly reads a different file — which is
-worse than losing them, because nothing on screen would say so.
+Graph stage is pinned to `clip:7/after-scale`, a source node reading a watermark
+names `in3`, a copied stream that [follows a
+clip](rendering.md#copying-instead-of-encoding) names the clip it follows, and the
+session above names the clip that was selected. Renumber on open and every insert
+quietly moves to a different shot, every source node quietly reads a different
+file, and a lossless cut quietly follows something else — which is worse than
+losing them, because nothing on screen would say so.
 
 This is what closes a hole the graph has had since it grew source nodes. A graph
 restored from `localStorage` refuses to bring back a node naming an input, and

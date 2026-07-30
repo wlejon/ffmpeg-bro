@@ -47,7 +47,8 @@ import { videoOptions, audioOptions } from './options.js';
 import { optionColumn } from '../opttable.js';
 import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
          keyframesFor, keyframeAtOrBefore, inPointNote, rewrapRows,
-         timelineSpan } from './copy.js';
+         timelineSpan, clipSpan, followedClip, follow, unfollow,
+         brokeFollowing } from './copy.js';
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
          defaultSubtitleSource, cuesFor, cueWindow, cueWindowNote } from './subtitles.js';
@@ -128,6 +129,16 @@ export function normalizeStreams() {
         }
         s.copyFrom = Number(s.copyFrom) || 0;
         s.copyTo = Number(s.copyTo) || 0;
+        // The link to the clip this row follows, which is a clip **id** — the
+        // same name a document's clip list and the graph's anchors are written
+        // against. Two reads go through here and they want opposite things: a
+        // document has just put the clips back with their ids, so a link is kept;
+        // `localStorage` at boot has no clips beside it at all, so every link is
+        // dropped, because clip 7 in the next edit is a different shot. One test
+        // answers both, and it is the same test `followedClip()` applies — asked
+        // again here rather than trusted, because this blob was written by a
+        // version of this code that is not the one reading it.
+        if (s.followClip && !followedClip(s)) delete s.followClip;
         if (!s.metadata || typeof s.metadata !== 'object') s.metadata = {};
         // A stored chain outlives the shape it was stored in, and a row with no
         // name reaches `render.start` as a bitstream filter called nothing.
@@ -429,7 +440,8 @@ function rewrapRow() {
                 cls: 'tiny', text: `Cut ${input.name}`,
                 'data-cut': input.id,
                 title: `Every stream of this input, copied over the span the clip on the ` +
-                       `timeline takes — ${sp.from.toFixed(2)} to ${sp.to.toFixed(2)} s`,
+                       `timeline takes — ${sp.from.toFixed(2)} to ${sp.to.toFixed(2)} s — and ` +
+                       `each row following that clip, so trimming it again moves the cut`,
                 on: { click: () => rewrap(index, sp) },
             }));
     }
@@ -439,7 +451,8 @@ function rewrapRow() {
         div('ex-note dim',
             'A copied stream is the packets that are already in the file: instant, ' +
             'lossless, and untouched by anything on the Compose or Graph stages. ' +
-            'A cut can only start at a keyframe — open a row to see where they are.'),
+            'A cut can only start at a keyframe — open a row to see where they are. ' +
+            'A cut follows the clip it was taken from until you tell it to stop.'),
     ];
 }
 
@@ -942,37 +955,83 @@ function copyRows(s, restate) {
 /// same decision said twice, on the same clock, and until this existed the
 /// second one had to be typed from the first.
 ///
-/// It stays a button rather than a binding for the reason the rewrap shortcut
-/// is not a mode: what it leaves behind is two ordinary numbers, on the screen,
-/// changeable one at a time — and a row that silently re-followed a clip
-/// somebody trimmed on another stage would be a `copyFrom` that no longer says
-/// what it means.
+/// **It is a link now, and this is the part of it that is on the screen.** It was
+/// a press for a while, and the argument against a binding was that it would be a
+/// second source of truth for `copyFrom` and a hidden mode to be in or out of.
+/// The first half is still true and is still honoured — a followed row's two
+/// numbers are written into the row, so nothing downstream can tell one from a
+/// typed one; see `syncFollowing` in copy.js. The second half is what these two
+/// lines answer: a bound row **names the clip it follows** and offers to stop, and
+/// stopping leaves the numbers exactly where they are, because breaking a link is
+/// not undoing a trim.
+///
+/// Offered for an untrimmed clip too, which the press was not. Two numbers naming
+/// the whole input said nothing a bare `0, 0` did not already say, so there was
+/// nothing to take; a link made *before* the trim is the case a link is for.
 function followRow(s, restate) {
     const at = parseCopy(s.source);
     if (!at) return [];
+
+    const bound = followedClip(s);
+    if (bound) {
+        const held = clipSpan(bound);
+        return [
+            row('Following', [
+                span(`${bound.name} · ${held.from.toFixed(2)} → ${held.to.toFixed(2)} s`, 'mono'),
+                el('button', {
+                    cls: 'tiny', 'data-f': 'copy-unfollow', text: 'Stop following',
+                    title: 'Leave these two numbers exactly where they are and stop taking ' +
+                           'them from the clip',
+                    on: { click: () => { unfollow(s); restate(); drawStreams(); } },
+                }),
+            ]),
+            div('ex-note dim',
+                'Trim, move or ripple that clip and this span moves with it — it is the ' +
+                'clip’s in and out points on the input’s own clock, which is the same clock ' +
+                'these two fields are on. Stop following and the numbers stay where they ' +
+                'are: breaking the link is not undoing the trim.'),
+        ];
+    }
+
+    // A link that broke, said where it cannot be shouted over. The act that
+    // breaks one is nearly always a deletion, and a deletion says "Removed
+    // landscape.mp4" of its own accord a moment later — so the flash is the notice
+    // and this is the record of it.
+    const lost = brokeFollowing(s)
+        ? el('div', { cls: 'ex-copy-note warn', 'data-f': 'copy-broke', text:
+              'This row was following a clip on the timeline and that clip has gone. The two ' +
+              'numbers above are the ones it last took, unchanged — breaking a link is not ' +
+              'undoing the trim — so what is copied is still what it says.' })
+        : null;
+
     const { span: sp, reason } = timelineSpan(at.input);
-    if (!sp) return reason ? [div('ex-note dim', `The clip’s own span is not offered: ${reason}.`)]
-                           : [];
-    // Nothing to take: a clip nobody has trimmed is the whole input, which is
-    // what the two zeroes on the row already say.
-    if (sp.whole) return [];
+    if (!sp)
+        return [lost, reason ? div('ex-note dim',
+                                   `The clip’s own span is not offered: ${reason}.`) : null];
     const already = Math.abs((Number(s.copyFrom) || 0) - sp.from) < 0.001 &&
                     Math.abs((Number(s.copyTo) || 0) - sp.to) < 0.001;
-    if (already)
-        return [div('ex-note dim',
-                    'This is the span the clip on the timeline takes out of the input.')];
-    return [div('ex-add', el('button', {
-        cls: 'tiny', 'data-f': 'copy-follow',
-        text: `Follow the clip (${sp.from.toFixed(2)} → ${sp.to.toFixed(2)} s)`,
-        title: 'Take the in and out points from the clip on the timeline — the same clock, ' +
-               'so the numbers go across unchanged',
-        on: { click: () => {
-            s.copyFrom = sp.from;
-            s.copyTo = sp.to;
-            restate();
-            drawStreams();
-        } },
-    }))];
+    return [
+        lost,
+        div('ex-add', el('button', {
+            cls: 'tiny', 'data-f': 'copy-follow',
+            text: `Follow the clip (${sp.from.toFixed(2)} → ${sp.to.toFixed(2)} s)`,
+            title: 'Take the in and out points from the clip on the timeline, and keep ' +
+                   'taking them — the same clock, so the numbers go across unchanged',
+            on: { click: () => { follow(s, sp.clip); restate(); drawStreams(); } },
+        })),
+        // What the press is about *now*: the numbers may already be these ones,
+        // and following is still worth pressing, because what it adds is that they
+        // stay these ones.
+        already
+            ? div('ex-note dim',
+                  'These are already the numbers the clip on the timeline says. Following it ' +
+                  'is what keeps them so when it is trimmed again.')
+            : sp.whole
+                ? div('ex-note dim',
+                      'That clip is the whole input, so following it changes nothing today — ' +
+                      'and moves this row the moment it is trimmed.')
+                : null,
+    ];
 }
 
 /// One of a subtitle row's two window numbers. The same control the copy rows
