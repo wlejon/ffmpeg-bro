@@ -605,10 +605,10 @@ bro.ffmpeg.live.pads(7)
 //      src: '/@live/7/in0' },
 //    { name: 'in1',   device: true,  sound: false, width: 1920, height: 1080,
 //      src: '/@live/7/in1' },
-//    { name: 'in1:a', device: true,  sound: true },
+//    { name: 'in1:a', device: true,  sound: true,  src: '/@live/7/in1:a' },
 //    { name: 'vout',  device: false, sound: false, width: 2560, height: 1440,
 //      src: '/@live/7/vout' },
-//    { name: 'aout',  device: false, sound: true }]
+//    { name: 'aout',  device: false, sound: true,  src: '/@live/7/aout' }]
 
 bro.ffmpeg.live.levels(7)
 // → [{ name: 'in1:a', heard: true, peak: 0.51, rms: 0.19 },
@@ -626,12 +626,20 @@ bro.ffmpeg.live.close(7)     // and `live.close()` with no id closes every one
 // arrived, numbered as the graph numbers it — plus one per pad the graph
 // produces, under the graph's own name, with the composite called `vout`.
 //
-// **A sound pad has no `src`, because it publishes a level and not frames.**
-// One per input that has sound, named `in<N>:a` the way ffmpeg names that
-// stream, plus one per sound pad the graph produces, with the mix called
-// `aout`. Playing one would be *monitoring*, which asks questions a preview
-// does not — whose speakers, and what happens when the microphone can hear
-// them — and none of that has to be answered to say how loud something is.
+// **A sound pad has a `src` as well as a level, and pointing an element at it
+// is a decision.** One per input that has sound, named `in<N>:a` the way ffmpeg
+// names that stream, plus one per sound pad the graph produces, with the mix
+// called `aout`. Playing one is *monitoring*: the session queues that pad's
+// blocks only while something is listening, so the element is the switch —
+// there is nothing to turn on and nothing to turn off, and an element that is
+// muted rather than removed is still a queue being filled. It plays out of
+// bro's mixer, which is the system's own output; nothing here chooses a device,
+// and nothing ducks, gates or mutes an input while a monitor is on, because
+// whether a microphone can hear those speakers is a fact about the room.
+//
+// The level is there whether or not anybody is listening — measuring a block
+// costs nothing and is what a meter is for — which is why these are two
+// separate answers about one pad rather than one.
 //
 // `levels` is where the numbers are, and **the call clears them**: `peak` and
 // `rms` cover the stretch since the last call, scaled so that full scale is

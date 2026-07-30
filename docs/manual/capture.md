@@ -106,9 +106,10 @@ Behind all of it is **one open per device**. A card used to play the device itse
 which opened it a second time — fine while the cards were the only things watching,
 and an error the moment the composition wanted the same cameras, because a DirectShow
 device can be opened once. So a *session* opens each device exactly once and publishes
-what it sees: each input as `in0`, `in1`, … and whatever the graph makes as `vout`.
-Every picture on the stage is a pad of that one session, and three pictures of two
-cameras costs two opens.
+what it sees: each input as `in0`, `in1`, … its sound as `in0:a`, and whatever the graph
+makes as `vout` and `aout`. Every picture on the stage — and every meter, and anything
+you are listening to — is a pad of that one session, and three pictures of two cameras
+costs two opens.
 
 **And what the sound is doing, which is the half of a composition that cannot be
 seen.** Every input with sound gets a meter, named `in0:a` the way ffmpeg names that
@@ -132,11 +133,26 @@ It is drawn on the same scale as A1 — see [The timeline](timeline.md)
 then the other is comparing them, and two scales disagreeing by a decibel would make
 that comparison a quiet lie.
 
-**This is not monitoring, and that distinction is why it exists.** Nothing here makes
-a sound. Playing the mix asks questions this does not — whose speakers, and what
-happens when the microphone can hear them — and none of them has to be answered to say
-how loud something is. A sound pad publishes a level and no frames, so there is
-nothing to point a `<video>` at even if one wanted to.
+**And you can hear it, which is a different thing from reading it.** `Listen` beside a
+meter plays that pad through this machine's speakers. It starts off, always: sound that
+begins by itself is sound nobody asked for, at whatever gain the last session left. One
+pad at a time, because `in0:a` under `aout` is the microphone twice and neither meter
+beside them would be a reading of what you were hearing — pressing `Listen` on another
+pad moves it. The meter itself runs whether or not anything is being played, which is
+what makes it the thing you glance at.
+
+**Whose speakers: this machine's, chosen nowhere.** There is no output device control,
+because bro's mixer plays to the system default and picking another interface is a
+decision nobody has asked to make yet. The day somebody does, it is a control here and
+nothing else changes.
+
+**What happens when the microphone can hear them: you are told.** While a monitor is
+on, the panel names every input being read for sound and says plainly that nothing is
+being done about it — no ducking, no gating, no muting the input while you listen.
+Doing any of those would be this application deciding that two devices are in the same
+room, which it cannot know: a camera on a desk with the monitor on headphones is the
+ordinary case and all three would silently ruin it. So the risk is stated, with the
+device named, and the choice stays where it belongs.
 
 A recording still opens its own devices, and the session is torn down first. That is
 deliberate rather than a limitation: "there is no camera called that" is a refusal

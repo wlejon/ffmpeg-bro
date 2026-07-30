@@ -827,6 +827,13 @@ function closeSession() {
     // back. `syncMeters` rebuilds from the next session's pads.
     meterKey = '';
     meters.clear();
+    // **And so does the monitoring.** A session closes because the devices are
+    // going somewhere else — a recording, another stage — so the sound stops
+    // whatever happens; what is decided here is that it does not come back on by
+    // itself when the next session opens under the same pad name. Monitoring is a
+    // press, and the press was about the session that has just ended.
+    listening = '';
+    syncMonitor();
     if (refs.meters) put(refs.meters, () => []);
 }
 
@@ -930,11 +937,12 @@ let compKey = '';
 // is a picture, sound recorded ten decibels into the limiter is gone — so it is
 // the reading worth having before you commit and it is what these are.
 //
-// **This is not monitoring, and the distinction is the reason it could be
-// built.** Playing the mix asks questions this does not: whose speakers, and
-// what happens when the microphone can hear them. Nothing here makes a sound.
-// Sound pads publish a level and no frames — see `LivePadTap` — so there is
-// nothing to point a `<video>` at even if one wanted to.
+// **The meter is not the monitor, and it still is not.** A reading is what you
+// can have without deciding anything; hearing it is a decision, and it is the one
+// below this — `Listen`. The two are drawn in one row because they are two
+// answers about one pad, and they are separately true: the meter is running on
+// every sound pad of the session whether or not anything is being played, which
+// is what makes it the thing you glance at.
 //
 // Drawn on the same scale as A1, from `levels.js`, because somebody looking at
 // one and then the other is comparing them.
@@ -967,7 +975,10 @@ const PEAK_FALL = 0.992;
 function syncMeters() {
     if (!refs.meters) return;
     const pads = padsNow().filter((p) => p.sound);
-    const key = pads.map((p) => p.name).join('|');
+    // `listening` is in the key because the panel says which pad is being heard
+    // — the pressed button, and the sentence about feedback under it — and both
+    // of those are markup rather than a number in a style attribute.
+    const key = pads.map((p) => p.name).join('|') + '::' + listening;
     if (key === meterKey) return;
     meterKey = key;
     meters.clear();
@@ -999,13 +1010,148 @@ function syncMeters() {
                     el('div', { cls: 'cap-m-zero',
                                 style: { left: `${(ZERO_DBFS * 100).toFixed(2)}%` } }),
                 ]),
-                read, over,
+                read, over, listenButton(p),
             ]);
         }),
+        ...feedbackNote(),
     ]);
 }
 
 let meterKey = '';
+
+// ── monitoring ─────────────────────────────────────────────────────────────
+//
+// **Hearing it, which the meter deliberately was not.** A sound pad carries its
+// blocks to whoever listens now — see `LivePadTap` — so the two questions that
+// stood in the way are answered here, and this is where they are answered:
+//
+// **Whose speakers: the machine's own, chosen nowhere.** There is no output
+// device control on this stage, because bro's mixer plays to the system default
+// and picking another is a decision nobody has asked to make yet. That is not a
+// gap dressed up as a decision — it is the smallest thing that is true, and the
+// day somebody wants a second interface it is a control here and nothing else
+// changes.
+//
+// **Feedback: said, never suppressed.** A microphone in the room can hear the
+// speakers this plays out of, and the answer to that is a sentence — see
+// `feedbackNote`. Ducking the monitor, gating it or muting the input while
+// something is recorded would all be this application deciding that two devices
+// are in the same room, which it cannot know: a camera on a desk and a monitor
+// on headphones is the ordinary case and would be silently ruined by any of the
+// three. So the risk is stated with the device named and the choice is left where
+// it belongs.
+//
+// **One pad at a time, and it is off to begin with.** Off, because sound that
+// starts by itself is sound somebody did not ask for — on a stage whose whole
+// purpose is judging a take, at whatever gain the last session left. One,
+// because two pads playing together is a mix of a mix: `in0:a` under `aout` is
+// the microphone twice, and neither meter beside them would be a reading of what
+// you were hearing. So pressing `Listen` on another pad moves it.
+
+/// Which pad is being monitored, by name. Empty for none, which is where every
+/// session starts.
+let listening = '';
+
+/// The element that is doing it, or null. One, because there is one monitor.
+let monitor = null;
+
+/// Is anything being monitored, and what? For a test, and for the stage's own
+/// summary — there is nothing else on screen that says a session is audible.
+export function monitoring() { return listening; }
+
+function listenButton(pad) {
+    const on = listening === pad.name;
+    return el('button', {
+        cls: 'tiny cap-m-listen' + (on ? ' on' : ''),
+        'data-f': `listen-${pad.name}`,
+        text: on ? 'Listening' : 'Listen',
+        title: on ? 'Stop playing this pad through this machine’s speakers'
+                  : `Play ${pad.name} through this machine’s speakers, at the ` +
+                    'system output. One pad at a time.',
+        on: { click: () => listenTo(on ? '' : pad.name) },
+    });
+}
+
+/// Start monitoring `name`, or stop with ''.
+///
+/// The element is reconciled here rather than on the next frame so that the
+/// sound starts on the press: `syncMonitor` is idempotent and the frame loop
+/// calls it too, which is what puts the monitor back when a session reopens
+/// under it.
+function listenTo(name) {
+    listening = name || '';
+    // The panel first and the element second, which is the order `syncComposite`
+    // uses and for the same reason: `put` replaces what is in the panel, so an
+    // element appended before it is an element thrown away by it.
+    syncMeters();
+    syncMonitor();
+    if (hooks.changed) hooks.changed();
+}
+
+/// Point the monitor at the pad being listened to, or take it away.
+///
+/// **The element is created and destroyed rather than muted**, because the
+/// element *is* the monitoring: a session queues a pad's sound only while
+/// something is listening to it, so an element left in place with `volume = 0`
+/// would go on copying every block of a microphone into a queue for nobody. See
+/// `LivePadTap::listen`.
+///
+/// It has no box and never will — `display:none` — and that is not a hidden
+/// picture: a sound pad has no picture, and bro pumps a media element's audio
+/// from the event walk rather than from the draw, so an element nobody can see
+/// plays exactly as one in the middle of the stage would.
+function syncMonitor() {
+    const pad = listening ? padNamed(listening) : null;
+    if (!pad || !pad.src || !pad.sound) {
+        // The pad has gone: a session reopened, a wire moved, a device released.
+        // The monitoring goes with it rather than silently moving to whatever is
+        // published under that name next.
+        if (monitor) {
+            try { monitor.pause(); } catch (e) { /* already gone */ }
+            if (monitor.parentNode) monitor.parentNode.removeChild(monitor);
+            monitor = null;
+        }
+        if (listening && !pad) listening = '';
+        return;
+    }
+    if (!monitor) {
+        monitor = el('video', { cls: 'cap-monitor', 'data-f': 'monitor' });
+        monitor.style.display = 'none';
+    }
+    // Put back rather than rebuilt, whenever the panel around it has been
+    // redrawn: this element is a reader of a live session, and making a new one
+    // would tear the pad's queue down and open another — a click of silence for
+    // every rebuild of a panel it happens to live in.
+    if (monitor.parentNode !== refs.meters) refs.meters.appendChild(monitor);
+    if (monitor.getAttribute('src') !== pad.src) monitor.setAttribute('src', pad.src);
+    try { monitor.play(); } catch (e) { /* it starts on the next frame */ }
+}
+
+/// What is being recorded that can hear what is being played, as a sentence.
+///
+/// Empty when nothing is being monitored — there is nothing to warn about — and
+/// empty when no device in the session carries sound, which is the screen-grab
+/// case and is why this is not simply printed beside the button.
+///
+/// **It names the devices and stops there.** Whether they can actually hear the
+/// speakers depends on the room, on whether anybody is wearing headphones, and
+/// on which way a shotgun mic is pointed; none of that is knowable from here, and
+/// a warning that pretended to know would be either ignored or wrong. What is
+/// knowable is that sound is going out of this machine while a device is being
+/// read for sound, and that is exactly what this says.
+function feedbackNote() {
+    if (!listening) return [];
+    const mics = captureInputs()
+        .map((input, i) => ({ input, i }))
+        .filter(({ input }) => input.probe && input.probe.audio);
+    if (!mics.length) return [];
+    const which = mics.map(({ input, i }) => `[${i}:a] ${input.format}`).join(', ');
+    return [div('cap-m-note dim',
+                `Playing ${listening} out of this machine while ${which} ` +
+                'is being read for sound — anything the speakers play, a microphone ' +
+                'in the room records. Nothing is ducked or gated: use headphones, or ' +
+                'stop listening while you take.')];
+}
 
 /// Read every level once and move every bar. **Once**, because the read clears
 /// what it read — see `liveLevels` — and a second caller would halve this one's
@@ -1286,6 +1432,11 @@ export function tick() {
         // The sound pads arrive with the graph's, and for the same reason.
         syncMeters();
         tickMeters();
+        // And the monitor keeps asking to play, for the reason the cards above
+        // do: an element pointed at a pad in the turn the button was pressed is
+        // an element whose source is not open yet, and `play()` on one is
+        // dropped. Idempotent, so it costs a lookup a frame.
+        syncMonitor();
         fitPreviews();
         return;
     }

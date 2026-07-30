@@ -1456,9 +1456,17 @@ void runLive(LiveRun& run) {
                 float peak = 0.0f;
                 double power = 0.0;
                 const int n = measureSound(f, &peak, &power);
-                if (n > 0)
-                    run.tap->ensure("in" + std::to_string(i) + ":a", true)
-                        ->heard(peak, power, n);
+                if (n > 0) {
+                    auto pad = run.tap->ensure("in" + std::to_string(i) + ":a", true);
+                    pad->heard(peak, power, n);
+                    // **And the block itself, to whoever is monitoring.** The
+                    // level is measured whatever happens; the frame is only
+                    // referenced when something is listening — see `putSound`.
+                    // The device's own sound, before the graph, is what somebody
+                    // checking a microphone wants to hear, for the same reason
+                    // its level is the one that answers "is it clipping".
+                    pad->putSound(f, block.second);
+                }
                 const int aFeed = graph && run.devs[i]->hasAudio()
                                       ? graph->feedFor(run.devs[i]->index, true) : -1;
                 const int sr = f->sample_rate > 0 ? f->sample_rate
@@ -1488,7 +1496,15 @@ void runLive(LiveRun& run) {
                     if (n > 0) {
                         const std::string name =
                             t.label.empty() || t.primary ? "aout" : t.label;
-                        run.tap->ensure(name, false)->heard(peak, power, n);
+                        auto pad = run.tap->ensure(name, false);
+                        pad->heard(peak, power, n);
+                        // The mix, for whoever is listening to it. This is the
+                        // pad worth hearing rather than measuring: what two
+                        // microphones and an `amix` make together is the thing
+                        // that only existed in the file afterwards, which is
+                        // exactly what the picture side of this stage already
+                        // says about `vout`.
+                        pad->putSound(t.raw, t.at >= 0.0 ? t.at : 0.0);
                     }
                     return true;
                 }

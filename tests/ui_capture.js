@@ -922,6 +922,99 @@ console.log('\nwhat the sound is doing');
     pump(300);
 }
 
+// ── hearing it, as opposed to reading it ───────────────────────────────────
+//
+// The meter above is what you can have without deciding anything. Monitoring is
+// the decision, and what it costs is a pad carrying its blocks to a listener —
+// so what is asserted here is both halves of that: the element that is doing it,
+// and the sound actually arriving at bro's mixer.
+//
+// **The mixer is the proof, not the element.** An element with a src on it says
+// nothing about whether anything is audible; `AudioContext.getBusPeakL(0)` is the
+// master bus, which is what the speakers are being handed. It is bro's own
+// reading rather than this application's — post its pan law, so a mono pad reads
+// 3 dB below its own samples — which is why what is checked is that it goes from
+// silent to audible and back, rather than a number.
+console.log('\nhearing a pad rather than reading it');
+{
+    const source = q('[data-f="capsource"]');
+    const wasPath = CI()[0].path;
+    const setSource = (v) => {
+        source.value = v;
+        source.dispatchEvent(new Event('change'));
+        pump(400);
+    };
+    setSource('aevalsrc=0.5*sin(1000*2*PI*t):s=48000');
+    ok(waitFor('a sound pad', () => !!q('[data-f="listen-in0:a"]'), 12000),
+       'a sound pad offers Listen beside its meter');
+    same(cap.monitoring(), '', 'and nothing is being monitored to begin with — sound that ' +
+                               'starts by itself is sound nobody asked for');
+    ok(!q('[data-f="monitor"]'), 'so there is no element playing anything');
+    ok(!q('.cap-m-note'), 'and nothing is being said about feedback, because nothing is out');
+
+    let ctx = null;
+    try { ctx = new AudioContext(); } catch (e) { ctx = null; }
+    const loudest = () => {
+        let top = 0;
+        for (let i = 0; i < 25; i++) { pump(20); top = Math.max(top, ctx.getBusPeakL(0)); }
+        return top;
+    };
+    // Silence first, so that "audible" below is a change and not a machine that
+    // was making a noise anyway.
+    if (ctx) ok(loudest() < 0.001, 'the mixer is silent while nothing is monitored');
+
+    q('[data-f="listen-in0:a"]').click();
+    pump(200);
+    same(cap.monitoring(), 'in0:a', 'pressing Listen monitors that pad');
+    const mon = q('[data-f="monitor"]');
+    ok(!!mon, 'which is an element pointed at it');
+    same(mon.getAttribute('src'), `/@live/${cap.sessionId()}/in0:a`,
+         'at the pad’s own src — a sound pad has one now, and pointing something at it is ' +
+         'what makes the session queue any sound at all');
+    same(text('[data-f="listen-in0:a"]'), 'Listening', 'and the button says so while it is on');
+    if (ctx) {
+        const heard = loudest();
+        ok(heard > 0.01, `and the sound reaches bro’s mixer (master bus peak ${heard.toFixed(3)})`);
+    }
+
+    // The warning, which is a sentence and not a behaviour: nothing is ducked,
+    // gated or muted, because whether a microphone can hear these speakers is a
+    // fact about the room.
+    ok(!!q('.cap-m-note'), 'a monitor that is on says what is being recorded while it plays');
+    ok(text('.cap-m-note').indexOf('[0:a]') >= 0,
+       'naming the input that can hear it: ' + text('.cap-m-note'));
+    ok(text('.cap-m-note').indexOf('ducked or gated') >= 0,
+       'and saying plainly that nothing is being done about it for you');
+
+    // Off again. The element goes rather than being muted, because the element
+    // *is* the listening: a muted one would go on copying every block into a
+    // queue for nobody.
+    q('[data-f="listen-in0:a"]').click();
+    pump(200);
+    same(cap.monitoring(), '', 'pressing it again stops');
+    ok(!q('[data-f="monitor"]'), 'and takes the element away rather than muting it');
+    ok(!q('.cap-m-note'), 'with nothing left to warn about');
+    if (ctx) {
+        pump(600);   // the ring holds half a second of what was already decoded
+        ok(loudest() < 0.001, 'and the mixer goes quiet');
+    }
+
+    // Leaving the stage gives the devices back, and the monitoring goes with
+    // them: a session that has ended is not something to be listening to.
+    q('[data-f="listen-in0:a"]').click();
+    pump(150);
+    same(cap.monitoring(), 'in0:a', 'monitoring again');
+    cap.leave();
+    pump(150);
+    same(cap.monitoring(), '', 'leaving the stage stops it with the session');
+    cap.arrive();
+    pump(400);
+    same(cap.monitoring(), '', 'and coming back does not turn it on again by itself');
+
+    setSource(wasPath);
+    pump(300);
+}
+
 console.log('\na live input cannot be laid on a timeline');
 {
     const input = A.inputs.addInput({ path: 'testsrc=size=320x240:rate=25', format: 'lavfi' });

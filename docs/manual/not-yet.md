@@ -152,13 +152,16 @@ Honest list of what does not work:
   watched and recorded. Live *through* the edit — a camera composited with a
   title and streamed out — is a different thing again and needs the render loop
   to run on the wall clock.
-- **Hearing a recording before you commit to it.** The levels are now shown —
-  see [Capture](capture.md) — and hearing it is still not. Nothing on this stage
-  makes a sound, because that is *monitoring* and monitoring asks questions a
-  meter does not: whose speakers, and what happens when the microphone can hear
-  them. A sound pad publishes a level and no frames, so playing one would mean
-  the tap carrying audio as well, an output device chosen somewhere, and an
-  answer to feedback — three decisions, none of which the meter needed.
+- **A monitor on a second interface, and a monitor of a mix that is not a pad.**
+  Hearing a session is built — `Listen` beside a meter, see
+  [Capture](capture.md) — and it plays out of bro's mixer, which is this
+  machine's default output. Choosing *another* interface is not here: the
+  decision was to name no device rather than to offer a list nobody has asked to
+  pick from yet, and the day somebody wants a separate headphone bus it is a
+  control on that stage and a bus in bro. The other half is that what can be
+  monitored is a *pad* — a device's own sound, or an end of the graph — so
+  "everything at once, at levels of my choosing" is a monitor mix, which is a
+  little mixing desk and not a missing wire.
 - **A file beside a device on the same graph.** A capture's graph is fed by its
   devices and by nothing else, at both ends of the seam: the walk that builds it
   refuses a file input by name, and `filterInputs` — which says which *file*

@@ -268,13 +268,20 @@ void stopCapture();
 // answers to "how is a device read" would be two things that can disagree about
 // which frame a stall holds.
 //
-// What it does instead of writing is **publish pads**. Each device appears as
-// `in0`, `in1`, … exactly as it arrived, and everything the graph produces
-// appears under the label the graph gave it — `vout`, `aout`, or a name
-// somebody wrote. A `<video src="/@live/<id>/vout">` therefore plays the
-// composition, which is the one thing the Capture stage could never show:
-// a card is one device, and what two of them make together only existed in the
-// file afterwards.
+// What it does instead of writing is **publish pads**, sound as well as
+// pictures. Each device appears as
+// `in0`, `in1`, … exactly as it arrived — with its sound as `in0:a`, which is
+// ffmpeg's own way of naming that stream — and everything the graph produces
+// appears under the label the graph gave it: `vout`, `aout`, or a name somebody
+// wrote. A `<video src="/@live/<id>/vout">` therefore plays the composition and
+// `/@live/<id>/aout` is what it sounds like, which is the one thing the Capture
+// stage could never show: a card is one device, and what two of them make
+// together only existed in the file afterwards.
+//
+// **Sound is published only while something is listening**, and that is the whole
+// of monitoring being off by default: the level a meter draws is measured from
+// every block whatever happens, and the block is referenced only when a pad has a
+// listener on it. See `LivePadTap::putSound`.
 //
 // **It owns the devices, and that is the point rather than a detail.** A
 // DirectShow camera can be opened once. Previews used to open one each, which
@@ -315,22 +322,26 @@ struct LiveSettings {
 
 /// One pad a session publishes.
 ///
-/// **Pictures only, and that is a decision rather than a gap.** The graph's
-/// sound pads are drained like every other — libavfilter holds what nobody
-/// takes — but nothing is published from them, because playing them would be
-/// *monitoring*, and monitoring asks its own questions (whose speakers, and
-/// what happens when the microphone can hear them) that a preview of a
-/// composition does not. A device with no picture therefore has no pad here,
-/// which the card already knows from its probe.
+/// **Pictures and sound, and each is played the same way.** A sound pad used to
+/// publish a level and nothing else, because playing one is *monitoring* and
+/// monitoring asks its own questions — whose speakers, and what happens when the
+/// microphone can hear them. Both are answered now, and neither answer is in
+/// this struct: the speakers are the system's own until somebody asks for
+/// another, and feedback is stated rather than suppressed. What is here is the
+/// consequence — a sound pad has a `src` like any other, and it carries frames
+/// only while something is listening to it (`LivePadTap::listen`).
+///
+/// A device with no sound and no picture has no pad at all, which the card
+/// already knows from its probe.
 struct LivePad {
-    std::string name;      ///< `in0`, `vout`, `aout`, or whatever the graph called it
+    std::string name;      ///< `in0`, `in0:a`, `vout`, `aout`, or the graph's own label
     bool device = false;   ///< an `in<N>`: one input, before the graph
     int width = 0;         ///< once the graph has settled; zero before that
     int height = 0;
 
-    /// A pad carrying sound rather than pictures. It publishes no frames — see
-    /// `LivePadTap` — so there is nothing to point a `<video>` at; what it has
-    /// is a level, asked for separately by `liveLevels`.
+    /// A pad carrying sound rather than pictures. It has two things instead of
+    /// one: a level, asked for separately by `liveLevels` because asking clears
+    /// it, and — for whoever monitors it — the blocks themselves.
     bool sound = false;
 };
 

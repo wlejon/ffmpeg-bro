@@ -198,9 +198,14 @@ slot — the point of one is to be running while nothing is — and a recording
 closes every session before opening its own devices. Frames reach the element
 as `wrapped_avframe` through the `Wrapped` payload in `ffmpeg_backend.cpp`,
 which is the same mechanism that makes a `-f lavfi` input playable. A **sound**
-pad holds a level instead of a frame — `live.levels()` reads and clears it, so
-there is exactly one caller — because a meter needs no answer to the questions
-monitoring asks. The scale both it and A1 are drawn on is `ui/levels.js`.
+pad holds two things, and they answer different questions: a level, which
+`live.levels()` reads and clears (so there is exactly one caller) and which is
+measured whether or not anybody is listening; and — only while something *is* —
+the blocks themselves, in a bounded queue per listener, because two readers
+popping one queue would each play half the sound. Registering that listener is
+what monitoring *is*: `ui/capture.js` creates one element for the pad somebody
+pressed `Listen` on and destroys it again, so there is nothing to mute. The scale
+every meter is drawn on is `ui/levels.js`.
 
 An **output preview** (`playback_output.h`, `ui/output.js`) is the third use of
 the same idea and the second of the same registry trick: the render with the

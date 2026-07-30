@@ -248,6 +248,23 @@ std::shared_ptr<TrackPrivate> privateOf(const TrackInfo& t) {
 // there is no live decoder: `FFmpegVideoDecoder` unwraps this exactly as it
 // unwraps a `-f lavfi -i testsrc`.
 //
+// **A sound pad is the same source with one track of the other kind.** `/@live/
+// <id>/aout` opens as a single audio track and the sound goes to bro's mixer
+// through `FFmpegAudioDecoder`'s wrapped path, which already existed for
+// `-f lavfi -i sine`. Two things make it a different reader rather than the same
+// one with a flag: it takes from a queue of its own rather than from a
+// latest-frame slot (see `LivePadTap::takeSound` for why sound cannot share one),
+// and it registers as a listener, which is what makes the session queue anything
+// at all. So an element pointed at a sound pad *is* the monitoring decision, and
+// letting go of it is the whole of switching it off.
+//
+// Sound-only is a shape bro plays: `VideoPipeline` opens a source with no video
+// track, keeps the clock and the length, asks it for no packets at all, and the
+// element's sound comes from a *second* open of the same src feeding a broaudio
+// ring. Both of those opens land here, which is why a pad hands each listener its
+// own queue and why the pipeline's copy drops its listener the moment it is told
+// it wants no tracks — see `setActiveTracks`.
+//
 // Three things about the clock, and each of them is what makes an element play
 // rather than stall:
 //
@@ -308,6 +325,8 @@ public:
             return false;
         }
 
+        if (pad_->isSound()) return openSound(src);
+
         // **Described from a real frame**, because a track has to say how big
         // it is and a pad does not know until the graph has configured and the
         // camera has woken up. Bounded: a pad nothing ever reaches is a black
@@ -360,7 +379,8 @@ public:
         double at = pendingAt_;
         pending_ = nullptr;
         for (int waited = 0; !f && waited < kReadWaitMs; waited += kSliceMs) {
-            f = pad_->take(&seen_, &at, kSliceMs);
+            f = ears_ ? pad_->takeSound(*ears_, &at, kSliceMs)
+                      : pad_->take(&seen_, &at, kSliceMs);
             // Ended *and* empty is the only false this returns. A session torn
             // down mid-watch stops the element, which is what has happened.
             if (!f && pad_->ended()) return false;
@@ -369,16 +389,37 @@ public:
 
         // One tick of lead, so the picture stages rather than being consumed
         // and pumped straight past. See the note at the top.
-        const double lead = 1.0 / 30.0;
+        //
+        // **Sound gets none of it**, and that is not an omission: the lead exists
+        // because bro decides which picture is current by finding one whose time
+        // has not come, and there is no such comparison for samples — the ring
+        // takes every block in order and plays it when it reaches it. A lead here
+        // would be a block of silence at the front of the monitor.
+        const double lead = ears_ ? 0.0 : 1.0 / 30.0;
         const double secs = std::max(0.0, at - zero_) + lead;
         out.trackId = 1;
         out.codec = Codec::Other;
-        out.kind = TrackKind::Video;
+        out.kind = ears_ ? TrackKind::Audio : TrackKind::Video;
         out.keyframe = true;         // every one of them is
         out.pts = static_cast<TimeNs>(llround(secs * 1e9));
         out.duration = 0;
         out.data = wrapOwnedFrame(f);   // takes the reference this holds
         return out.data != nullptr;
+    }
+
+    /// Which of this source's tracks the caller still wants — and for a sound pad
+    /// it is how monitoring stops.
+    ///
+    /// bro opens a sound-only source twice: `VideoPipeline` takes one for the
+    /// clock and immediately says it wants *no* tracks (there are no pictures for
+    /// it to pump), and `ElVideo` opens a second for the audio ring. Dropping the
+    /// listener when the answer is "none" is what keeps the first of those from
+    /// holding a queue the session fills for nobody — a bounded leak, but a
+    /// pointless one, and this is the moment the engine tells us it is pointless.
+    void setActiveTracks(const std::vector<uint32_t>& trackIds) override {
+        if (!ears_) return;
+        for (uint32_t id : trackIds) if (id == 1) return;
+        ears_.reset();
     }
 
     // Live: there is nowhere to go but now.
@@ -387,6 +428,65 @@ public:
     ~LiveSource() override { if (pending_) av_frame_free(&pending_); }
 
 private:
+    /// A sound pad, as one audio track. Called by `open` once the pad turns out
+    /// to be one; everything before this point is the same lookup.
+    ///
+    /// **Listening starts before the first block is waited for**, in that order
+    /// and not the other: a pad queues nothing until it has a listener, so a wait
+    /// that came first would be a wait for sound that was being thrown away.
+    ///
+    /// Described from a real block for the reason the picture path is: the rate
+    /// and the layout are the *graph's*, settled when libavfilter configured
+    /// itself, and the session's own settings are what it was asked for rather
+    /// than what came out. Asking the frame is one answer instead of two.
+    bool openSound(const std::string& src) {
+        ears_ = pad_->listen();
+
+        double at = 0.0;
+        AVFrame* first = nullptr;
+        for (int waited = 0; waited < kOpenWaitMs && !first; waited += kSliceMs) {
+            first = pad_->takeSound(*ears_, &at, kSliceMs);
+            if (!first && pad_->ended()) break;
+        }
+        if (!first) {
+            LOG_WARN("ffmpeg: live pad %s produced no sound to open with", src.c_str());
+            return false;
+        }
+        if (first->sample_rate <= 0 || first->ch_layout.nb_channels <= 0) {
+            av_frame_free(&first);
+            return false;
+        }
+
+        TrackInfo t;
+        t.id = 1;
+        t.kind = TrackKind::Audio;
+        t.codec = Codec::Other;
+        t.sampleRate = static_cast<uint32_t>(first->sample_rate);
+        t.channels = static_cast<uint32_t>(first->ch_layout.nb_channels);
+        t.durationNs = 0;    // live: there is no end to seek to
+
+        auto priv = std::make_shared<TrackPrivate>();
+        priv->par = avcodec_parameters_alloc();
+        if (!priv->par) { av_frame_free(&first); return false; }
+        priv->par->codec_type = AVMEDIA_TYPE_AUDIO;
+        priv->par->codec_id = AV_CODEC_ID_WRAPPED_AVFRAME;
+        priv->par->format = first->format;
+        priv->par->sample_rate = first->sample_rate;
+        if (av_channel_layout_copy(&priv->par->ch_layout, &first->ch_layout) < 0) {
+            av_frame_free(&first);
+            return false;
+        }
+        priv->timeBase = AVRational{1, 1000000};
+        priv->wrapped = true;
+        t.backendPrivate = priv;
+        tracks_.push_back(std::move(t));
+
+        zero_ = at;
+        pending_ = first;
+        pendingAt_ = at;
+        return true;
+    }
+
     static constexpr int kSliceMs = 100;
     /// How long a pad that is not there yet is waited for. Shorter than the
     /// frame wait below and deliberately so: this is `open`, which is called on
@@ -399,6 +499,10 @@ private:
 
     std::shared_ptr<LiveTap> tap_;
     std::shared_ptr<LivePadTap> pad_;
+    /// This reader's queue of sound, and — being the pad's only strong reference
+    /// to it — the monitoring itself: null for a picture pad, and dropping it
+    /// stops the session queueing for this reader.
+    std::shared_ptr<LiveSoundQueue> ears_;
     std::vector<TrackInfo> tracks_;
     uint64_t seen_ = 0;
     double zero_ = 0.0;

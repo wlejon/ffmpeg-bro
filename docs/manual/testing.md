@@ -376,6 +376,17 @@ the light latches, the bar changes colour, the number goes above zero rather tha
 pinning to it, one click forgets both latches, and both fill again from what is
 actually arriving.
 
+**Monitoring is asserted at bro's mixer and not at the element.** An element with a
+src on it says nothing about whether anything is audible, so `Listen` is checked by
+reading the master bus — `new AudioContext().getBusPeakL(0)`, bro's own metering of
+what the speakers are being handed — silent before the press, audible after it, and
+silent again once the button is off and the half-second ring has drained. What that
+proves is the part that could have been faked: the pad really is carrying blocks and
+they really are reaching the mixer. The rest is asserted where it is decided —
+monitoring off to begin with, the element removed rather than muted (because the
+element *is* the listening), the feedback sentence naming the input it is warning
+about, and the whole thing stopping with the session when the stage is left.
+
 Then the states either side of a graph that works. Widening the `hstack` to three
 inputs leaves a pad nothing arrives at, and that is a *refusal* — the button goes
 dead, the stage names the empty pad in the Graph stage's own words, and the command

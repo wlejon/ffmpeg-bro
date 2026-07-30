@@ -1165,7 +1165,7 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
 .cap-meters { flex-shrink: 0; }
 .cap-m-row {
     display: grid;
-    grid-template-columns: 46px 1fr 52px 30px;
+    grid-template-columns: 46px 1fr 52px 30px 62px;
     align-items: center;
     gap: 6px;
     margin-bottom: 3px;
@@ -1215,6 +1215,21 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     border: 1px solid transparent;
 }
 .cap-m-over.on { color: #0b0d11; background: #ff7a5c; }
+/* Listening, which is a state and not a moment — so it is lit while it is on,
+   the way a record button is, rather than being a button that looks pressed for
+   as long as the mouse is down. The width is fixed on the row above so that
+   `Listen` becoming `Listening` does not move the meter beside it. */
+.cap-m-listen { font-size: 9.5px; padding: 1px 0; text-align: center; }
+.cap-m-listen.on {
+    color: #0b0d11;
+    background: var(--good, #7ed6a0);
+    border-color: var(--good, #7ed6a0);
+}
+/* What is being recorded while something is being played. A full-width line
+   under the rows rather than a tooltip on the button: it is true for as long as
+   the monitor is on, and a warning you have to hover to find is a warning that
+   is not being given. */
+.cap-m-note { font-size: 10.5px; line-height: 1.45; padding: 3px 0 1px; }
 
 /* What the Graph stage says this recording is, as **one line**.
 

@@ -205,14 +205,21 @@ JSValue js_livePads(JSContext* ctx, JSValue idArg) {
         JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, p.device));
         JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, p.width));
         JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, p.height));
-        // A sound pad publishes no frames, so there is nothing for a `<video>`
-        // to open — see `LivePadTap`. What it has is a level, and that is asked
-        // for by `live.levels` because asking clears it.
+        // Which kind it is, which decides what a caller *does* with it rather
+        // than whether it can be played: a sound pad has a level as well, asked
+        // for by `live.levels` because asking clears it, and it is drawn as a
+        // meter rather than laid out as a picture.
         JS_SetPropertyStr(ctx, o, "sound", JS_NewBool(ctx, p.sound));
         // The src an element takes, made here rather than spelled out in the
         // UI: the token's shape is this binary's and a second place that knew
         // it would be a second place to change.
-        if (!p.sound) setStr(ctx, o, "src", "/@live/" + std::to_string(id) + "/" + p.name);
+        //
+        // **Every pad has one now, sound included.** Pointing an element at a
+        // sound pad is what starts monitoring — the session queues nothing until
+        // something listens — so this string is not a capability the UI may use
+        // freely: it is the decision, and `ui/capture.js` only ever sets it on
+        // the pad somebody asked to hear.
+        setStr(ctx, o, "src", "/@live/" + std::to_string(id) + "/" + p.name);
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;
