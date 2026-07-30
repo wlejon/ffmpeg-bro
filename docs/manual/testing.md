@@ -56,7 +56,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last three sections
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last four sections
 ```
 
 `hwtest` has the same problem one further on: **CI has no graphics card**, and
@@ -553,7 +553,7 @@ the translation into a filter graph is a pure function of it, so the graph is ch
 against specs written out by hand — including the edits it must refuse rather than
 approximate.
 
-`ui_graph.js` needs one only for its last three sections, and watches the graph
+`ui_graph.js` needs one only for its last four sections, and watches the graph
 from inside rather than
 through the string it prints: the model, the printer's chain rule on shapes the
 derivation does not produce, and the whole of what makes an edited graph
@@ -563,6 +563,15 @@ reports which control it took; a lock that happens to agree has outranked
 nothing; a split copies both halves' filters and a delete takes them away; and
 the run graph differs from the printed one by exactly one chain with the
 inserted filter in both.
+
+It also holds the checks on **a value written as an expression**, which need no
+media because an expression is a string: the four states libav's evaluator puts
+one in, the round-trip through the points printer and parser at two, three and
+four points, the refusals for an expression it did not write and for a nest whose
+halves do not join up, and the sampled values themselves — which are the one
+claim that could not be checked by reading the code, since they come out of
+`av_expr_eval` rather than out of anything here. The last of it wants a file,
+because the printed chain has to be read off a real node.
 
 Given a file it goes on to the wiring gesture on the real stage, and then to
 **a filter in the viewer**: inserting one points the clip's element at a

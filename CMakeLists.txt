@@ -47,6 +47,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/bindings_render.cpp
     src/native/bindings_capture.cpp
     src/native/bindings_capabilities.cpp
+    src/native/bindings_expr.cpp
     src/native/bindings_playback.cpp
     src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp

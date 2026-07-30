@@ -3630,4 +3630,224 @@ if (!media) {
     pump(200);
 }
 
+// ── a value written as an expression ───────────────────────────
+//
+// The other half of `enable`: `enable` says when a filter is on and an
+// expression in one of its options says what a value *does* while it is. Both
+// are the same mechanism here — a control that writes text, and a reading of
+// that text — so both are checked the same way: round-trip through the printer
+// and the parser without a screen, and refuse rather than rewrite whatever the
+// parser cannot read.
+//
+// **The evaluation is libav's and this is where that is proved**, which is the
+// one claim that could not be checked by reading the code: the values come back
+// from `av_expr_eval` through `bro.ffmpeg.expr.evaluate`, and they are the
+// numbers ffmpeg itself produces for the same string.
+// `crop=x='lerp(0,160,clip(t/2,0,1))'` over a 320×240 `testsrc` renders at
+// t=1.0 a frame byte-identical (framemd5, ffmpeg 8.0.1) to `crop=x=80`, which is
+// what this answers at that instant.
+//
+// No media needed: an expression is a string and every question here is about
+// what libav makes of one.
+console.log('\na value written as an expression');
+{
+    const X = globalThis.__ffmpegBro.graph.expr;
+
+    // What libav makes of a string, in the four states the panel draws.
+    same(X.read('crop', '80').state, 'constant',
+         'a number is an expression that never moves');
+    same(X.read('crop', "'lerp(0,160,clip((t-0)/(2-0),0,1))'").state, 'varies',
+         'one written against t is one that does');
+    same(X.read('drawtext', 'C:/fonts/arial.ttf').state, 'plain',
+         'a font path is not an expression at all, and libav is what says so');
+    {
+        const r = X.read('crop', "'(in_w-out_w)/2'");
+        same(r.state, 'unreadable',
+             'an expression of the picture size parses and cannot be drawn');
+        same(r.names.join(','), 'in_w,out_w',
+             'and the refusal names what it has no value for');
+    }
+
+    // **`t` is not time everywhere, and the option table is what says so.**
+    // `drawbox` and `drawgrid` expose their own string options as expression
+    // variables — `x`, `y`, `w`, `h` and `t`, where `t` is the box thickness —
+    // which was measured before it was believed: `drawbox=x='t*10':t=3` renders
+    // frames byte-identical to `drawbox=x=30` at every timestamp over two
+    // seconds at 10 fps. So a curve against seconds there would be about the
+    // wrong quantity, and there is not one.
+    ok(X.tIsTime('crop') && X.tIsTime('overlay') && X.tIsTime('rotate'),
+       'in crop, overlay and rotate a filter’s t is the timestamp');
+    ok(!X.tIsTime('drawbox') && !X.tIsTime('drawgrid'),
+       'and in drawbox and drawgrid it is the thickness, which libav’s own option ' +
+       'table is what says');
+    same(X.read('drawbox', "'t*10'").state, 'unreadable',
+         'so an expression of t on one of those is refused rather than drawn');
+
+    // **The generator reads back exactly what it wrote, at every size.** A
+    // control that could not would be a one-way door: edit the text by hand once
+    // and it can never show handles again.
+    const trip = (points) => {
+        const back = X.parsePoints(X.printPoints(points));
+        return back ? back.map((p) => `${p.t}@${p.v}`).join(' ') : null;
+    };
+    same(trip([{ t: 0, v: 0 }, { t: 2, v: 160 }]), '0@0 2@160',
+         'two points round-trip through the expression');
+    same(trip([{ t: 0, v: 0 }, { t: 1, v: 80 }, { t: 3, v: 20 }]), '0@0 1@80 3@20',
+         'and three, as a nest of if(lt(t,…))');
+    same(trip([{ t: 0, v: 0 }, { t: 1, v: 80 }, { t: 3, v: 20 }, { t: 4, v: 100 }]),
+         '0@0 1@80 3@20 4@100', 'and four');
+    same(trip([{ t: 1.25, v: -3.5 }, { t: 2.5, v: 7.25 }]), '1.25@-3.5 2.5@7.25',
+         'fractions and negatives included');
+    // Out of order in, in order out: a point dragged past its neighbour is a
+    // curve of the same shape, not a division by a negative span.
+    same(trip([{ t: 3, v: 20 }, { t: 0, v: 0 }]), '0@0 3@20',
+         'points are sorted before they are printed');
+
+    // And **it says so rather than inventing points** for anything it did not
+    // write, including a hand-edited version of something it did.
+    same(X.parsePoints("'50*sin(t)'"), null, 'an expression of your own is not points');
+    same(X.parsePoints("'lerp(0,160,clip((t-0)/(2-0),0,2))'"), null,
+         'and neither is one of ours with a number changed');
+    same(X.parsePoints("'if(lt(t,1),lerp(0,80,clip((t-0)/(1-0),0,1))," +
+                       "lerp(99,20,clip((t-1)/(3-1),0,1)))'"), null,
+         'a nest whose halves do not join up is refused rather than read as a jump');
+    // A single point is a value that does not move, which is a number and not a
+    // `lerp` from a value to itself.
+    same(X.printPoints([{ t: 1, v: 42 }]), "'42'", 'one point prints as the number it is');
+
+    // **The numbers are libav's.** Sampled across a window that does not start
+    // at zero, because a filter above the derivation's `setpts` is written in the
+    // source file's own seconds and every reader of that has to agree.
+    {
+        const text = X.printPoints([{ t: 0, v: 0 }, { t: 2, v: 160 }]);
+        same(X.sample(text, { start: 0, length: 2 }, 5).values.join(','),
+             '0,40,80,120,160', 'the curve is av_expr_eval, sample by sample');
+        same(X.valueAt(text, 1), 80, 'and one moment of it is the same evaluator');
+        same(X.sample(X.printPoints([{ t: 20, v: 0 }, { t: 22, v: 100 }]),
+                      { start: 20, length: 2 }, 3).values.join(','), '0,50,100',
+             'a window that starts at twenty is sampled at twenty');
+    }
+    // `clip` holds the value at its ends rather than letting it run off, which is
+    // why there is no `if` in the two-point case.
+    same(X.valueAt(X.printPoints([{ t: 1, v: 10 }, { t: 2, v: 20 }]), 5), 20,
+         'past the last point the value holds');
+    same(X.valueAt(X.printPoints([{ t: 1, v: 10 }, { t: 2, v: 20 }]), 0), 10,
+         'and before the first');
+
+    // **What `eval` is a signal for.** Not "this option is an expression" —
+    // `crop`, `drawtext` and `zoompan` have none and are the most
+    // expression-shaped filters there are — but whether an expression that is
+    // there is read again per frame. Asked of the option table, both spellings of
+    // the constants included: `once`/`frame` on volume, `init`/`frame` on the
+    // other eight.
+    same(X.evalMode('crop', {}).has, false, 'crop has no eval option at all');
+    same(X.evalMode('scale', {}).per, false,
+         'scale’s default eval is init, so an expression in it is evaluated once');
+    same(X.evalMode('scale', { eval: 'frame' }).per, true, 'and eval=frame is per frame');
+    same(X.evalMode('volume', {}).value, 'once',
+         'an unset enum is reported by name rather than as the number libav defaults it to');
+    same(X.evalMode('volume', { eval: 'frame' }).per, true,
+         'and volume’s own spelling of the per-frame constant is found the same way');
+}
+
+// The same thing on a real node: what the printed chain carries, what the card
+// says, and that it survives both of the overlay's reads. Needs media — a node
+// has to be somewhere before any of that is drawn.
+if (!media) {
+    console.log('\nan expression on a node — skipped, no media file given');
+} else {
+    console.log('\nan expression on a node');
+    const A = globalThis.__ffmpegBro;
+    const X = A.graph.expr;
+    overlay.clear();
+    if (!A.project.clips.length) dropFiles(400, 300, [media]);
+    waitFor('a clip on the timeline', () => A.project.clips.length >= 1);
+    ok(A.shell.goTo('graph'), 'the Graph stage opens');
+    pump(300);
+
+    const clip = A.project.clips[0];
+    const text = X.printPoints([{ t: 0, v: 0 }, { t: 2, v: 160 }]);
+    const rec = overlay.insert(`clip:${clip.id}/after-scale`, 'crop',
+                               { pos: ['320', '240', text, '0'] });
+    pump(400);
+
+    // **The expression goes through verbatim**, which is the property that was
+    // here before any of this was built and must not have been broken by it.
+    // Off `buildSpec().filterGraph`, which is the string the command bar prints
+    // *and* the string `avfilter_graph_parse2` is handed — one fact, so a chain
+    // that runs here is the chain that runs when it is pasted into a shell. Run,
+    // both ways, before this was written: the printed invocation renders under
+    // ffmpeg 8.0.1 and the same graph renders through `render.start`.
+    same(A.exporter.buildSpec().filterGraph.indexOf(`crop=320:240:${text}:0`) >= 0, true,
+         'the printed chain carries the expression exactly as stored, quotes and all');
+
+    // The card says what moves and between what, which is the one line a card
+    // has room for. Read off the drawn card rather than computed here.
+    const card = document.querySelector(`[data-node="${rec.id}"]`);
+    ok(!!card, 'the node is on the canvas');
+    if (card) {
+        const bar = card.querySelector('.gn-curve');
+        ok(!!bar, 'the card says the node has a value that moves');
+        if (bar)
+            ok(bar.textContent.indexOf('0') >= 0 && bar.textContent.indexOf('160') >= 0,
+               'and says between what');
+    }
+
+    // **The column, as a gesture.** The control and the text are one mechanism —
+    // the same claim the When strip makes — so what is checked is the *stored
+    // value* after a press, not what the screen says about it.
+    {
+        A.graph.draw();
+        pump(200);
+        const c = document.querySelector(`#gr-nodes [data-key="${rec.id}"]`);
+        ok(!!c, 'the node can be selected');
+        c.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+
+        ok(!!document.querySelector('#gr-panel .curve-canvas'),
+           'the column draws the curve');
+        same(document.querySelectorAll('#gr-panel [data-point]').length, 4,
+             'and two points, each a moment and a value');
+
+        // The fourth positional argument is `y`, left at 0 — a constant, which is
+        // where an animation starts. One press turns it into a flat two-point
+        // ramp at the value it already had, so nothing moves until an end is
+        // dragged.
+        const vary = document.querySelectorAll('#gr-panel [data-f^="vary:"]');
+        ok(vary.length >= 1, 'a value that does not move is offered a way to');
+        vary[vary.length - 1].dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+        const wrote = overlay.inserts()[0].pos[3];
+        ok(/^'lerp\(0,0,clip\(/.test(wrote),
+           `one press writes a flat ramp at the value that was there: ${wrote}`);
+        same(X.read('crop', wrote).state, 'varies',
+             'and libav reads it back as an expression that moves');
+        same(X.parsePoints(wrote).length, 2, 'which the editor reads back as two points');
+
+        // And back to a number, which is what a value that does not move is.
+        document.querySelectorAll('#gr-panel [data-f^="flatten:"]')[1]
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(200);
+        same(overlay.inserts()[0].pos[3], "'0'",
+             'Hold it still puts the number back rather than a lerp to itself');
+    }
+
+    // It is a filter option like any other, so it follows the path every option
+    // follows: the workspace, and a document.
+    {
+        const held = overlay.inserts()[0].pos[2];
+        overlay.remember();
+        overlay.restore();
+        pump(200);
+        same(overlay.inserts()[0].pos[2], held,
+             'an expression comes back out of the workspace');
+        overlay.adopt(JSON.parse(JSON.stringify(overlay.current())));
+        pump(250);
+        same(overlay.inserts()[0].pos[2], held, 'and out of a document');
+    }
+
+    overlay.clear();
+    pump(200);
+}
+
 console.log(`\nPASS ui_graph — ${checks} checks`);

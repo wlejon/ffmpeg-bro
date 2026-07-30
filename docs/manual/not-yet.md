@@ -43,16 +43,52 @@ Honest list of what does not work:
   way to tell those apart from the node alone. Deciding it would mean tracing
   what each generator reaches and what resizes it on the way, which is a real
   piece of work and not a missing line.
-- **Animating a value.** `enable` turns a filter on and off for a span and that
-  is the whole of what it does — there is no interpolation anywhere in ffmpeg's
-  timeline support, so a value cannot be ramped by it. What ffmpeg has instead is
-  **expressions in a filter's own options**, evaluated per frame: `crop`'s `x`
-  and `y`, `overlay`'s, `scale`'s, `drawtext`'s, several of them with an `eval`
-  option choosing between evaluating once and evaluating every frame. Those work
-  here — an option is a string and the string goes through verbatim — but nothing
-  surfaces them: no control writes one, no strip draws one, and the `eval` option
-  is an entry in the table like any other. That is the shape of a real
-  keyframe editor and it is not built.
+- **A value animated against anything but the clock.** Expressions in a filter's
+  own options are surfaced now — see [what a value does over
+  time](graph.md#what-a-value-does-over-time): the value is drawn as a curve over
+  the render, points can be placed and dragged, and what the editor writes it
+  reads back. Two things about that are not what they could be, and both are the
+  same missing number rather than a missing control.
+
+  **`t` is the only variable this application can put a value to.** An expression
+  of `in_w`, `main_h`, `text_w` or `overlay_h` parses perfectly well, goes to the
+  render exactly as written and is refused a curve *by name*, because the picture
+  size part way down a graph is what the chain above it makes and nothing here
+  knows it without running the graph. The node previews do run it — that is what
+  the ▶ on a card is — and joining those two up is what would close this: a size
+  reported by a preview, handed to the evaluator as `in_w`, with the curve saying
+  which run it was drawn from and going away again when the graph changes under
+  it. `n` is refused for a sharper reason and would not be closed by that at all:
+  it counts frames arriving at *that filter*, and there are deliberately two
+  frame rates here — `projectFps()` and `outputFps()` — with a `setpts`, a clip's
+  speed and any `fps` of yours in between, so a curve against a guessed rate
+  would be right at zero and wrong everywhere else in the direction nobody
+  notices.
+
+  **And what a filter means by a variable cannot be asked.** libav publishes
+  nothing: the names are `static const char *const var_names[]` in each filter's
+  own C file, not in the AVOption table and not on the AVFilter, and
+  `av_expr_count_vars` only says which of the names *you supplied* occur. Two
+  consequences are lived with rather than solved. A `t` a filter does not have
+  makes libavfilter refuse the whole graph, which is loud and is the right
+  authority. And a filter that means something else by `t` — `drawbox` and
+  `drawgrid` mean the box thickness, measured: `drawbox=x='t*10':t=3` draws an
+  unmoving box at x=30 at every timestamp — gets no curve, found by the one thing
+  that *is* askable, which is that its own option table has a string option
+  called `t`. That rule holds for those two out of the thirty filters in this
+  build carrying an option of that name, and it is a rule about a habit rather
+  than a published fact.
+
+  Two smaller things sit beside them. The points editor writes one shape and
+  reads that shape back — `lerp`/`clip`, nested in `if(lt(t,…))` past two points
+  — and **an expression of your own, or a hand-edited version of one of its own,
+  comes back as "not points"**. That is the contract rather than a gap: a
+  generator that could not re-read its output would be a one-way door. What is
+  genuinely not here is any *shape* but a straight line between two moments;
+  ffmpeg's evaluator has the arithmetic for an ease, and nothing writes one. And
+  the curve is in the column beside the graph and on the card, and nowhere near
+  the picture: there is no handle on the viewer to drag a crop window along, the
+  way the When lane put a span on the timeline.
 - **Two-pass filters.** The mechanism is there — a render is a list of passes,
   each the render with overrides, run in one job through one slot — and the two
   filters that need it are `vidstabdetect`/`vidstabtransform`, which this build

@@ -168,6 +168,18 @@ AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 - `ui/graph/print.js` — nodes and wires → `-filter_complex` chains.
 - `ui/filtergraph.js` — the one-call facade over both; `command.js` does not know
   a graph exists.
+- `ui/graph/expr.js` + `ui/graph/curve.js` — the other half of that pair, for the
+  other thing ffmpeg has: an option written as an **expression**, re-read per
+  frame. The evaluation is libav's own (`bro.ffmpeg.expr.evaluate` →
+  `av_expr_parse`/`av_expr_eval`, `src/native/bindings_expr.cpp`) and must stay
+  so — a second evaluator would draw a curve the render does not perform.
+  Three facts have one home each and all three are unaskable in libav, which is
+  why they are written down with their provenance: `KNOWN_NAMES` (which variables
+  exist at all, incomplete by construction), `VALUED` (which of them this
+  application can put a number to — `t`, and the comment says why not `n`), and
+  `tIsTime` (which filters mean the timestamp by `t`, decided by the one askable
+  signal there is). `evalMode` is what the `eval` option is genuinely a signal
+  for, which is *re-reading*, not *being an expression*.
 - `ui/graph/enable.js` + `ui/graph/when.js` — `enable=` as a set of spans and as
   the text it is, plus which *clock* a node's `t` is on (`clockOf`) and the map
   between that clock and the timeline's, read in both directions (`onClock`,
@@ -180,7 +192,7 @@ AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 ### The JS surface
 
 `bro.ffmpeg` is `bindings_*.cpp`, one file per part of ffmpeg's model — probe,
-render, capture, capabilities, playback, sequences — each owning its calls, the
+render, capture, capabilities, playback, sequences, expressions — each owning its calls, the
 helpers that build its answers, and the paragraph saying why the calls are
 shaped that way; `bindings_install.h` lists them and `ffmpeg_bindings.cpp` is
 the assembly. Two are shared and neither may be duplicated: `bindings_value.h`

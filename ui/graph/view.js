@@ -53,6 +53,7 @@ import * as panel from './panel.js';
 import * as preview from './preview.js';
 import { measureGraph } from './subgraph.js';
 import { chaseWhen } from './when.js';
+import { chaseCurves } from './curve.js';
 
 /// **`Fit` never crosses the level-of-detail threshold**, and that is what stops
 /// the one loop this design can have: the cards are measured at one detail, the
@@ -913,6 +914,11 @@ export function tickGraph() {
     // readout in place: redrawing the properties column would rebuild every
     // control in it, sixty times a second, under whatever hand was on one.
     chaseWhen();
+    // The same rule for the value curves, plus the one thing they need that a
+    // When strip does not: a `<canvas>` measured while this stage is
+    // `display:none` measures zero, so the curve is drawn when it first has a
+    // width to be drawn at. See `chaseCurves`.
+    chaseCurves();
 }
 
 /// Drive the node that is playing.

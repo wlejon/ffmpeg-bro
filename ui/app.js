@@ -45,6 +45,7 @@ import { supportsTimeline, parseEnable, printEnable, isOnAt,
          shiftSpan } from './graph/enable.js';
 import * as graphSpans from './graph/spans.js';
 import { clockOf, onClock, onTimeline } from './graph/when.js';
+import * as graphExpr from './graph/expr.js';
 import { padsOf } from './graph/filters.js';
 import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
@@ -1944,6 +1945,14 @@ globalThis.__ffmpegBro = {
              // the When lane on the timeline — so a wrong answer here is one they
              // would agree about: the only way to catch that is to ask it
              // directly, rather than to compare two screens that cannot disagree.
-             when: { clockOf, onClock, onTimeline } },
+             when: { clockOf, onClock, onTimeline },
+             // A filter option written as an expression: what libav makes of it,
+             // and the one shape of it this application also writes. On the
+             // surface for the reason `parseEnable` is — the control and the text
+             // are one mechanism, and the only way to check that a generator
+             // reads back what it wrote is to round-trip one through the other
+             // without a screen. It carries the evaluation too, which is the half
+             // that has to be libav's rather than a second opinion.
+             expr: graphExpr },
 };
 globalThis.__ffmpegBroReady = true;

@@ -40,6 +40,7 @@ import { streamWord } from './model.js';
 import { WAVE_ASPECT } from './subgraph.js';
 import { optionOf } from './filters.js';
 import { whenBar } from './when.js';
+import { curveBar } from './curve.js';
 import * as overlay from './overlay.js';
 import * as preview from './preview.js';
 
@@ -276,6 +277,12 @@ function body(n, g) {
     const rows = [];
     const when = whenBar(n, g);
     if (when) rows.push(when);
+    // And what its values do while it is on, in the same one line and for the
+    // same reason: four crop numbers read as four numbers, and one of them being
+    // an expression that sweeps from 0 to 160 over the render is the whole story
+    // of the node. The column is where the curve is.
+    const curve = curveBar(n, g);
+    if (curve) rows.push(curve);
     const names = n.posNames || [];
     n.pos.forEach((v, i) => {
         const label = names[i] || `#${i + 1}`;

@@ -254,6 +254,43 @@ bro.ffmpeg.bsfOptions("h264_metadata")   // and the stage between the two
 // One walk, one shape, seven callers — which is what lets `ui/opttable.js` be a
 // single component and not one editor per kind of thing.
 
+// libavutil's own expression evaluator, so a filter option written as one can
+// be **drawn** as the curve libavfilter will perform. `av_expr_parse` and
+// `av_expr_eval` — the same pair `-force_key_frames expr:` already goes through
+// here — because a second evaluator would draw a shape the render does not
+// perform and would diverge on exactly the cases somebody reaches for an
+// expression to get: integer division, `between`, `mod`, `clip` at its ends.
+bro.ffmpeg.expr.evaluate(text, names, rows)
+bro.ffmpeg.expr.evaluate("lerp(0,160,clip(t/2,0,1))", ["t"], [[0], [1], [2]])
+// → { ok: true, uses: ["t"], values: [0, 80, 160] }
+bro.ffmpeg.expr.evaluate("(in_w-out_w)/2", ["t"], [])
+// → { ok: false, unknown: ["in_w", "out_w"],
+//      reason: "libav's evaluator does not know these here: in_w, out_w" }
+//
+// **`names` is the caller's, because it cannot be asked.** `av_expr_parse` wants
+// the variable names up front and fails on one it was not given, and there is no
+// way to find out what a filter takes: the names are `static const char *const
+// var_names[]` in each filter's own C file, not in the AVOption table and not on
+// the AVFilter. `av_expr_count_vars` answers a different question — which of the
+// names *you supplied* occur, which is what `uses` is — and there is no
+// `av_expr_list_vars`. `ui/graph/expr.js` holds this application's set, with the
+// note saying where it came from and that it cannot be complete.
+//
+// **A refusal names the words libav does not know**, which takes finding, since
+// a parse failure is `AVERROR(EINVAL)` with the token only in a log line. Done
+// without a second parser: identifier-shaped runs are scanned for — a lexical
+// fact, not a grammar — and each is then handed to `av_expr_parse` **on its
+// own** (`zoom`, or `foo(0)` for one used as a call). libav stays the authority
+// on every judgement; the scan only decides which strings to ask about. `unknown`
+// empty means the expression is malformed rather than short of a name.
+//
+// Not a throw: "this string is not an expression" is the ordinary answer for
+// most of a filter's string options — `drawtext`'s `fontfile` is a path — and a
+// caller asking about each option in turn should not have to be wrapped in
+// try/catch. `rows` may be empty, which asks the question without wanting a
+// curve. NaN and ±inf come back as `null`, because JSON has no spelling for
+// either and a caller draws a gap rather than a number.
+
 // The stage of the pipeline that is neither an encoder nor a muxer: bitstream
 // filters work on packets that are already encoded, in between. `codecs` is
 // each filter's own `codec_ids`, and **empty means any** — `setts` and `noise`

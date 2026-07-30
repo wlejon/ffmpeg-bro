@@ -38,6 +38,7 @@ import { optionsOf, infoOf, allFilters, padsOf, isSource, sourceFilters } from '
 import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import { nameOf, isUserOutput } from './check.js';
 import { whenRows } from './when.js';
+import { curveRows } from './curve.js';
 import * as overlay from './overlay.js';
 // The other half of renaming an output. A name is one fact and it is written in
 // two places — the node, and every stream row fed from it — so the two move
@@ -192,7 +193,8 @@ let wanted = null;
 /// control that moves keeps its name. Only fields: a button carries `data-f`
 /// too and refocusing one after a redraw would be taking focus rather than
 /// keeping it.
-const FIELD_ATTRS = ['data-f', 'data-opt', 'data-pos', 'data-edge', 'data-span'];
+const FIELD_ATTRS = ['data-f', 'data-opt', 'data-pos', 'data-edge', 'data-span',
+                     'data-point'];
 
 function fieldName(node) {
     if (!node || !node.getAttribute) return '';
@@ -387,6 +389,27 @@ function nodePanel(node) {
     out.push(...whenRows(node, graph, (value) => {
         noteEdit();
         overlay.edit(node, { params: { enable: value } });
+        changed();
+    }));
+    // **`enable` says when the filter is on; this says what its values do while
+    // it is.** Beside the When section rather than in the option table, and for
+    // the same reason: a value written as an expression is not one more entry to
+    // be typed into, it is a shape over the render, and the answer to a question
+    // about a shape is a picture of it. Only the options that hold one appear —
+    // `curveRows` answers with nothing at all for a filter whose values are
+    // numbers, which is almost every filter on the stage.
+    out.push(...curveRows(node, graph, (slot, value) => {
+        noteEdit();
+        if (slot.kind === 'pos') {
+            const next = node.pos.slice();
+            // A blank positional argument is a parse error rather than an
+            // omission — `crop=iw*0.8::0:0` — so an empty answer keeps what was
+            // there, exactly as `positionalRows` does.
+            next[slot.index] = value || String(node.pos[slot.index]);
+            overlay.edit(node, { pos: next });
+        } else {
+            overlay.edit(node, { params: { [slot.name]: value } });
+        }
         changed();
     }));
     out.push(...namedRows(node, options));

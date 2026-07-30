@@ -385,10 +385,9 @@ beside it. The card carries the answer in one line.
 a real limit and it is worth being plain about, because "keyframes" is the word
 people reach for and this is not that: a blur that comes on at ten seconds comes
 on at full strength. What ffmpeg *does* have for animating a value is expressions
-in a filter's own options — `crop`'s `x` and `y`, `overlay`'s, `drawtext`'s, some
-of them with an `eval` option choosing between once and per-frame — which are
-evaluated every frame and genuinely do move. Those are reachable here as ordinary
-option text and are not surfaced as anything better than that.
+in a filter's own options — `crop`'s `x` and `y`, `overlay`'s, `drawtext`'s —
+evaluated every frame, and those get a strip of their own: see [what a value does
+over time](#what-a-value-does-over-time), below.
 
 The strip is a **reading of the expression, not a copy of it**. It is parsed on
 every draw and nothing is written until you drag or type, which is the same
@@ -501,6 +500,101 @@ no second of the edit its `t=5` corresponds to: it has a strip here and no row
 there. And `enable` set on a filter with no timeline support is a graph that will
 not build, which is reported on its node rather than drawn as a region you could
 drag.
+
+## What a value does over time
+
+`enable` says when a filter is on. This says what its values do while it is.
+
+ffmpeg has no keyframes and no interpolation anywhere in its timeline support.
+What it has instead is **an option written as an expression, re-read for every
+picture** — `crop=x='lerp(0,160,clip(t/2,0,1))'` pans the crop window across the
+shot, `rotate=a='t*PI/6'` turns, `volume='0.5+0.5*sin(2*PI*t)'` breathes. Those
+have always worked here, because an option is a string and a string goes into the
+filtergraph verbatim. What was missing was any way to *see* one: a field saying
+`lerp(0,160,clip(t/2,0,1))` does not tell you where the crop is at four seconds.
+
+So an option that holds an expression gets a **Value over time** section in the
+column beside the graph: the render's range as a ruler, the value drawn as a
+curve on it, the playhead marked, and a line saying what the value is where the
+playhead stands. The card carries the answer in one line — `x 0→160`.
+
+**The curve is libav's own arithmetic.** It is `av_expr_parse` and `av_expr_eval`
+sample by sample, which is the same pair libavfilter calls on the option itself,
+so what is drawn is what the render performs rather than a second opinion about
+it. A JavaScript evaluator would diverge on exactly the cases anybody reaches for
+an expression to get — integer division, `between`, `mod`, `clip` at its ends.
+
+Which options can hold one is libav's answer too, arrived at in the only way that
+is not a list: the option is one libav types as a **string**, and its current
+value is one libav's evaluator will **parse**. `drawtext`'s `fontfile` is a
+string and `C:/fonts/arial.ttf` is not an expression, so nothing is offered
+there; `crop`'s `x` set to `80` is an expression that never moves, so `Vary over
+time` is.
+
+### Points, and reading them back
+
+`Vary over time` writes a two-point ramp holding the value it already had —
+flat, so nothing moves until you move an end. Each point is a moment and a value
+in fields, `⇤` puts a point where the playhead is standing, `Another point` adds
+one, and `Hold it still` takes the whole thing back to a number.
+
+**Anything the editor writes, it reads back.** A generator that could not would
+be a one-way door: edit the text by hand once — which you are meant to be able to
+do, the field is right there — and the handles could never come back. So it
+writes one shape, `lerp`/`clip` for two points and a nest of `if(lt(t,…))` beyond
+that, and parses exactly that shape. Anything else, **including a hand-edited
+version of its own output**, comes back as "not points": the editor stands down
+and says so, the curve carries on being drawn from libav's evaluation, and your
+text is left exactly as you wrote it. That is the same division the When strip
+makes.
+
+Between two points the value holds at its ends rather than shooting off, which is
+what `clip` is there for. Points are sorted before they are printed, so dragging
+one past its neighbour is a curve of the same shape rather than a division by a
+negative span.
+
+### `eval`, and what it is actually a signal for
+
+Nine filters in this build carry an `eval` option — `scale`, `overlay`, `pad`,
+`volume`, `eq`, `fftfilt`, `perspective`, `vignette`, `scale2ref` — choosing
+between evaluating an expression once when the graph is built and evaluating it
+on every frame. It is tempting to read that as "these are the filters whose
+options are expressions", and it is not: `crop`, `drawtext`, `zoompan`, `rotate`
+and `geq` have no `eval` at all and are the most expression-shaped filters there
+are. What `eval` says is whether an expression that *is* there will be read
+again — which is the difference between a curve the render performs and a curve
+it does not. So where a filter has one and it is not per-frame, the section says
+so and offers the press that fixes it, and where it has one and is, it says that
+too. Both out of the filter's own option table: the per-frame constant is
+whichever is called `frame`, which is `once`/`frame` on `volume` and
+`init`/`frame` on the other eight, and neither spelling is written down here.
+
+### What it will not draw, and why
+
+**A variable this application has no number for.** `t` is the only one it
+supplies: seconds on this node's clock, which is [the same clock the When strip
+is drawn against](#when-it-is-on) and comes from the same one place. An
+expression of `in_w`, `main_h` or `text_w` parses perfectly well and is refused a
+curve **by name** — the value of `in_w` part way down a graph is what the chain
+above it makes, which is only known by running it. `n` is refused for a sharper
+reason: it counts frames arriving at that filter, and there are deliberately two
+frame rates here — the timeline's and the encoder's — with a `setpts`, a clip's
+speed and any `fps` of yours in between. A curve against a guessed rate would be
+right at zero and wrong everywhere else.
+
+**A filter that means something else by `t`.** libav publishes no way to ask what
+a filter's variables are, let alone what they mean: they are `static const char
+*const var_names[]` in each filter's own C file. `drawbox` and `drawgrid` expose
+their own string options as expression variables, and there `t` is the **box
+thickness** — `drawbox=x='t*10':t=3` draws an unmoving box at x=30, byte for
+byte, at every timestamp. Those two are found rather than listed: a filter whose
+own option table has a *string* option called `t` is a filter that means its own
+`t` by it, which in this build is exactly those two out of the thirty filters
+carrying an option of that name at all. An expression of `t` on one of them is
+refused a curve and told why.
+
+In every one of those cases the expression still goes to the render exactly as
+written. Refusing to draw a curve is not refusing to run it.
 
 ## Locks
 
