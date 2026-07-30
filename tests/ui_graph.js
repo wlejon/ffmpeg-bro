@@ -962,6 +962,56 @@ console.log('\na generator that is a clip, not a node');
        points.indexOf('clip:7/after-scale') >= 0,
        `and a filter can be put on it at the usual two places: ${points.join(' ')}`);
 
+    // ── which clock a filter on one is written in ───────────────────────────
+    //
+    // `enable=` above the derivation's `setpts` is evaluated on the source's own
+    // timestamps, and a generator clip's chain begins with the *filter* rather
+    // than with an `-i` — so a walk that looked for `kind === 'input'` reported
+    // this as the render's clock, and a span on it was drawn a whole in-point
+    // away from where libavfilter evaluates it. Nothing failed, because the When
+    // strip and the timeline's When lane both read the one answer below: they
+    // agreed with each other while both being wrong, which is why this is asked
+    // of `clockOf` directly and not off either screen.
+    {
+        const { clockOf } = globalThis.__ffmpegBro.graph.when;
+        const cut = oneClip({ generator: { filter: 'testsrc', pos: [],
+                                           params: { size: '1920x1080', rate: '30' } },
+                              input: -1, path: '', start: 1, inPoint: 2, length: 3 });
+        overlay.clear();
+        const above = overlay.insert('clip:7/after-decode', 'hue');
+        const below = overlay.insert('clip:7/after-scale', 'hflip');
+        const g = derive(cut, null, { overlay: overlay.current() }).graph;
+
+        const up = clockOf(g, g.node(above.id));
+        same(up.base, 'source',
+             'a filter at a generator clip’s after-decode point is on the source’s clock, ' +
+             'not the render’s — the head of the chain is what says so, and a generator ' +
+             'has one like any clip');
+        same(String(up.clip), '7',
+             'and it says which clip it reads through, which is what makes the two clocks ' +
+             'invertible');
+        ok(Math.abs(up.start - 2) < 1e-6 && Math.abs(up.length - 3) < 1e-6,
+           `ruled over the window this render touches — the clip's own in-point and ` +
+           `length (${up.start}s for ${up.length}s)`);
+
+        const down = clockOf(g, g.node(below.id));
+        same(down.base, 'render',
+             'and one below the setpts is on the render’s, exactly as over a file');
+
+        // The other half of the same rule: a generator the *graph* made for
+        // itself is on the render's clock, because `testsrc` starts at zero and
+        // so does the render. No clip is cut from it, so there is nothing for a
+        // source clock to be a window into.
+        overlay.clear();
+        const bare = overlay.addNode('testsrc', { params: { size: '640x360' } });
+        const mine = overlay.addNode('hue');
+        overlay.wire(bare.id, 0, mine.id, 0);
+        const lone = derive(oneClip(), null, { overlay: overlay.current() });
+        same(clockOf(lone.graph, lone.graph.node(mine.id)).base, 'render',
+             'a filter fed by a generator nothing is cut from is on the render’s clock');
+        overlay.clear();
+    }
+
     // A generator beside a file: the file keeps `-i` zero, because the numbering
     // counts inputs and a generator is not one.
     const both = oneClip();

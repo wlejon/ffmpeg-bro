@@ -42,6 +42,7 @@ import { problems } from './graph/check.js';
 import { supportsTimeline, parseEnable, printEnable, isOnAt,
          shiftSpan } from './graph/enable.js';
 import * as graphSpans from './graph/spans.js';
+import { clockOf, onClock, onTimeline } from './graph/when.js';
 import { padsOf } from './graph/filters.js';
 import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
@@ -1900,6 +1901,13 @@ globalThis.__ffmpegBro = {
              // write-back are pure, and the way to check that a region on the
              // lane is the span the expression describes is to read one against
              // the other without a screen.
-             spans: graphSpans },
+             spans: graphSpans,
+             // Which clock a node's `t` is on, and the map between that clock and
+             // the timeline's, both ways. On the surface because it is the one
+             // answer *both* readers of it take — the When strip in the column and
+             // the When lane on the timeline — so a wrong answer here is one they
+             // would agree about: the only way to catch that is to ask it
+             // directly, rather than to compare two screens that cannot disagree.
+             when: { clockOf, onClock, onTimeline } },
 };
 globalThis.__ffmpegBroReady = true;

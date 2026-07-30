@@ -58,16 +58,38 @@ import { clock as timecode } from '../format.js';
 ///
 /// Walked rather than assumed: what resets a picture's timestamps is a
 /// `setpts`, and whether there is one between a node and the file it came from
-/// is a fact about this graph. A node fed by nothing but a generator is on the
-/// render's clock too — `color`, `testsrc` and the rest start at zero, which is
-/// where the render starts.
+/// is a fact about this graph.
+///
+/// **The walk looks for the head of the chain, not for an `-i`**, and that is the
+/// whole of what makes it right for a generator clip. It used to stop at
+/// `kind === 'input'`, which asked "is there a file above me" — a question with a
+/// different answer for a `testsrc` laid out on the timeline, whose chain begins
+/// with the filter itself (`derive.js` puts it where the `-i` would go). A filter
+/// at such a clip's `after decode` point was therefore reported as being on the
+/// render's clock when it is on the generator's, and nothing failed, because the
+/// strip and the timeline's When lane both asked the same wrong question and
+/// agreed. Asked of the *chain*, a clip is a clip: the head of a clip's run is
+/// whatever produces its pictures, and `ui/project.js`'s three places where a
+/// generator is genuinely different does not gain a fourth.
+///
+/// So the clock is the head's, and there are only two kinds of head that have one
+/// of their own:
+///
+///   - **an `-i`** — the file's own timestamps, whether a clip is cut from it or
+///     the graph opened it for a watermark of its own;
+///   - **the head of a clip's run** — the seconds of the source that clip is cut
+///     from, which is the same statement for a file and for a generator.
+///
+/// Anything else producing at the head is a source the *graph* made for itself,
+/// and `color`, `testsrc` and the rest start at zero, which is where the render
+/// starts — so that is the render's clock, exactly as it always was.
 ///
 /// A source clock also says **which clip it reads through**, and that is what
 /// makes the mapping between the two clocks invertible. Several clips of one file
 /// are the ordinary case, so "a node on the file's own timestamps" is not enough
 /// to place a moment: `sourceTime` is a different affine map per clip. The clip is
-/// taken off the input node's anchor rather than searched for by path, because a
-/// node is on exactly one clip's chain and the chain is what says which — see
+/// taken off the head's anchor rather than searched for by path, because a node is
+/// on exactly one clip's chain and the chain is what says which — see
 /// `onTimeline`, which would otherwise have several answers and no way to choose.
 export function clockOf(g, node) {
     const r = exportRange();
@@ -77,26 +99,31 @@ export function clockOf(g, node) {
 
     const seen = new Set([node.id]);
     const queue = [node];
-    let input = null;
+    let head = null;
     while (queue.length) {
         const n = queue.shift();
         if (n !== node && n.kind === 'filter' &&
             (n.filter === 'setpts' || n.filter === 'asetpts')) return renderClock;
-        if (n.kind === 'input') { input = input || n; continue; }
-        for (const p of g.producers(n))
+        const up = g.producers(n);
+        // Reads nothing, so this is where the pictures come from. First found
+        // wins, as it always did: a node fed by two chains is on the clock of
+        // whichever the walk reaches first, and the alternative — refusing to
+        // say — would take the ruler off a hand-wired `overlay`'s `enable`.
+        if (!up.length) { head = head || n; continue; }
+        for (const p of up)
             if (!seen.has(p.id)) { seen.add(p.id); queue.push(p); }
     }
-    if (!input) return renderClock;
+    const clip = head ? clipOf(head.anchor) : null;
+    if (!head || (head.kind !== 'input' && clip === null)) return renderClock;
 
-    // A pad read straight off a file. The window is the `trim` the derivation
-    // put downstream of it, which is where the seconds of the source this
-    // render actually touches are written down; without one — a hand-wired
-    // input — the file's own zero is the only honest answer.
-    const cut = trimBelow(g, input);
-    const start = cut ? cut.start : (input.from || 0);
+    // The window is the `trim` the derivation put downstream of the head, which
+    // is where the seconds of the source this render actually touches are written
+    // down; without one — a hand-wired input — the file's own zero is the only
+    // honest answer.
+    const cut = trimBelow(g, head);
+    const start = cut ? cut.start : (head.from || 0);
     const length = cut ? Math.max(0.001, cut.end - cut.start) : renderClock.length;
-    return { base: 'source', start, length, at: start, path: input.path || '',
-             clip: clipOf(input.anchor) };
+    return { base: 'source', start, length, at: start, path: head.path || '', clip };
 }
 
 /// The nearest `trim`/`atrim` downstream of a node, as numbers.
@@ -147,7 +174,10 @@ export function whenRows(node, g, commit) {
     const out = [head('When')];
 
     out.push(div('gp-hint dim', clk.base === 'source'
-        ? 'This node reads the file before the edit’s clock is applied, so t here is ' +
+        // "the source" rather than "the file", because a generator clip's head is
+        // a filter and there is no file — and it is the same statement about the
+        // clock either way. See `clockOf`.
+        ? 'This node reads the source before the edit’s clock is applied, so t here is ' +
           `the source’s own timecode — the window this render touches is ${
               timecode(clk.start)} to ${timecode(clk.start + clk.length)}.`
         : 'Seconds into the render, measured from the start of the range. enable= turns ' +
@@ -558,7 +588,7 @@ export function chaseWhen() {
             ? `⇤ ⇥ place an edge at ${timecode(clk.at + (on - clk.start))} — t=${
                   on.toFixed(2)}`
             : clk.base === 'source'
-                ? 'the playhead is not over a clip of this file, so there is no moment ' +
+                ? 'the playhead is not over a clip of this source, so there is no moment ' +
                   'here to place an edge at'
                 : 'the playhead is outside the render’s range';
         for (const b of strip.querySelectorAll('[data-here]')) b.disabled = !reachable;

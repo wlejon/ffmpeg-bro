@@ -420,6 +420,15 @@ strip says so and rules itself in the source's seconds: on a clip cut from twent
 seconds in, the numbers are the file's twenty-first second and not the render's
 first, because that is what libavfilter will evaluate.
 
+Which of the two it is is worked out from **the head of the chain** rather than
+from whether there is an `-i` above it, and that matters for one case: a
+[generator laid out on the timeline](timeline.md#a-generator-laid-out-like-a-clip)
+has the filter itself where the `-i` would be, so a filter at *its* `after decode`
+point is on the generator's own seconds exactly as one over a shot is on the
+file's. A source the graph made for itself and no clip is cut from — a `color`
+wired straight to the output — is on the render's clock, because `color` starts at
+zero and so does the render.
+
 **The playhead is on the strip, and on the card's line too.** It moves as you
 scrub, in the same accent the timeline's own is drawn in, because the two are
 the same moment and reading them as different things is the confusion the mark
