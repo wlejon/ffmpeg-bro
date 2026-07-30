@@ -9,7 +9,8 @@ suite stacks them:
   that point, so it stays honest as you zoom in. There is always one empty lane
   above the highest one in use: dragging a clip into it is how you add a track,
   and the lanes share a fixed height between them so the waveform never gets
-  pushed off the bottom. A clip stored sideways gets upright, portrait slots:
+  pushed off the bottom. Beside each name is a padlock: the [sync
+  lock](#the-sync-lock). A clip stored sideways gets upright, portrait slots:
   the strip is cut to the *displayed* aspect and the pictures are turned to
   match, which is the one place anything here rotates pixels rather than the
   thing they are drawn on — a strip is a finished image with nothing left
@@ -92,9 +93,8 @@ wrong name. Roll stops when either side runs out of frames, by doing less rather
 than by refusing: a drag that stops moving says where the wall is more clearly
 than a drag that does nothing.
 
-Ripple moves everything later **on the same track**. Not every track: a title on
-V2 is placed against the shot under it, and rippling one track beneath another
-would silently move it off.
+Ripple moves everything later **on the same track**, unless that track is
+[locked](#the-sync-lock) to others.
 
 **Split** (`S`, or the button) cuts every selected clip the playhead is inside —
 one keypress through a whole stack, or through exactly the one you picked. Both
@@ -105,3 +105,40 @@ deleting the other is how you take a piece out of the middle.
 **Select** by clicking a clip or its picture. `Ctrl`/`Shift`-click adds to the
 selection, `Ctrl`+`A` takes everything, `Esc` narrows back to one. `Delete`
 removes the lot. Drag the ruler or A1 to scrub.
+
+## The sync lock
+
+The padlock beside a track's name says whether that track ripples on its own or
+along with the rest of the stack. **Off by default, on every track.**
+
+- **Unlocked** — an `Alt`-drag ripples that track and no other. That is right for
+  a title on V2 placed against the shot under it: rippling one track beneath
+  another would silently move the title off the shot it was cut to.
+- **Locked** — an `Alt`-drag on it moves everything later on *every* locked
+  track, by the same amount. That is right when the tracks are one programme: a
+  cut across a stack, where the sound bed and the overlay are meant to travel
+  with the picture.
+
+Which of the two a given pair of tracks is, only you know, so it is a control
+rather than a rule — and the safe answer is the default. A lock is **part of the
+edit**: it is saved in the [document](document.md), and locking a track is one
+press of `Ctrl`+`Z` to undo, because it changes what the next drag does to the
+clips. It is not part of where you happen to be standing, which is the half of a
+document that an undo deliberately never touches.
+
+**A lock is visible before the drag, never discovered after it.** The padlock
+shuts, the track's name goes to the accent colour, and the whole lane takes a
+faint wash of it — so a locked group is two or three lanes plainly marked as one,
+and a ripple can never quietly move clips on a lane you were not looking at.
+Hovering the padlock says what the press will do, including the case where a track
+is the only locked one and so nothing else moves with it yet.
+
+Locking a lane and then emptying it costs nothing: a lock lasts as long as its
+lane is on the screen, and a lane that has gone takes its lock with it. There is
+no list of tracks anywhere — how many lanes there are is still worked out from the
+clips that exist — so a lock left over from a deleted clip can neither put a lane
+on the screen nor move a clip that is not on one.
+
+Only ripple is affected. Dragging a clip along its lane, trimming, rolling and
+slipping all do exactly what they did: the lock is about the one edit whose whole
+point is that it moves things you are not touching.

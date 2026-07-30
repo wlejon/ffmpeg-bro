@@ -12,7 +12,8 @@ import * as history from './history.js';
 import { project, projectFps, makeClip, addClip, removeClip, duration, clipsAt,
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
-         applyInput, clipsOf, hasPicture,
+         applyInput, clipsOf, hasPicture, retainTracks,
+         isTrackLocked, setTrackLocked, ripplesWith,
          rippleTrim, rollCut, slipClip } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as assemble from './sequence.js';
@@ -314,6 +315,15 @@ onChange((what) => {
     // else in this call would have noticed going away.
     graphOverlay.retain(project.clips.map((c) => c.id),
                         inputsModel.inputs.map((i) => i.id));
+    // And the settings of a track the timeline no longer shows — a sync lock on
+    // V4 after the last clip on it was deleted. Here for the same argument as the
+    // line above and stated where that argument already is: a track can empty out
+    // through a delete, a drag to another lane, a batch drop that clears the
+    // timeline, an undo and an opened document, and the one that gets missed is
+    // the one that leaves a lock nothing on screen accounts for. Before
+    // `history.record` below, so the pruning is part of the step that caused it
+    // rather than a change that arrives on its own afterwards.
+    retainTracks();
     // And the copied rows on the Write stage that follow a clip. Same shape of
     // problem as the line above and answered in the same place for the same
     // reason: a trim, a move, a ripple, an undo and an opened document all arrive
@@ -1728,6 +1738,12 @@ globalThis.__ffmpegBro = {
     // the whole of what it is — and a test that had to synthesise an Alt-drag
     // to reach one would be testing the gesture rather than the edit.
     rippleTrim, rollCut, slipClip,
+    // The sync lock. On the surface for the same reason those three are — which
+    // tracks move together is model arithmetic and `ripplesWith` is the whole of
+    // it — plus one this side has that they do not: the record is deliberately not
+    // a list of tracks, and the way to check that a leftover entry cannot
+    // resurrect a lane is to leave one behind and count the lanes.
+    isTrackLocked, setTrackLocked, ripplesWith, retainTracks,
     showProperties, pending,
     // Burning a track into a clip, minus the panel. On the surface for the
     // reason `parseEnable` is: `si=` counts subtitle streams rather than

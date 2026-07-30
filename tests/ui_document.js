@@ -126,6 +126,12 @@ A.project.width = 640;
 A.project.height = 360;
 A.project.fps = 30;
 A.project.layout = 'grid';
+// A sync lock on V2, which is a setting *for a track* rather than a track. Off is
+// the default on every track, so a document that carries one carries a decision
+// somebody took — and it is the edit, not the session: it decides what an
+// Alt-drag does to the clips, so it round-trips like a trim and it is undoable
+// like one.
+A.setTrackLocked(1, true);
 
 // A third clip, made by splitting the first, because a split is the one edit
 // that hands out a clip id nothing else has seen — and it is the id an anchor
@@ -155,6 +161,14 @@ same(before.clips.length, 3, 'the snapshot has every clip');
 same(before.inputs.length, inputs.length, 'and every input');
 same(before.canvas.width, 640, 'and the canvas, which is not a clip size');
 same(before.canvas.layout, 'grid', 'and the layout');
+// A bag keyed by the track number, holding an entry only where something has
+// been set. Asserted as *both* halves, because the second is the design: an entry
+// for every lane would be a second answer to how many tracks there are, and
+// `trackCount()` is the only one.
+ok(!!before.tracks && before.tracks['1'] && before.tracks['1'].locked === true,
+   'and the sync lock on V2');
+same(Object.keys(before.tracks).join(','), '1',
+     'as an entry for that track alone — not a row of false for every lane');
 same(before.output.chapters.length, 1, 'and the chapters, which the workspace does not keep');
 same(before.output.rangeIn, 0.5, 'and the render range, for the same reason');
 ok(before.graph.inserts.length === 1 && before.graph.nodes.length === 1,
@@ -184,6 +198,8 @@ ok(!('probe' in (raw.clips[0] || {})) && !('name' in (raw.clips[0] || {})),
    'a clip carries no probe and no name — both are its input\'s answer');
 ok(!('src' in (raw.inputs[0] || {})),
    'and an input carries no src, which is a registration this run made');
+ok(raw.tracks && raw.tracks['1'] && raw.tracks['1'].locked === true,
+   'the file names the locked track by its number, readable in a diff');
 
 // ── something else entirely ────────────────────────────────────────────────
 //
@@ -196,6 +212,7 @@ pump(120);
 same(A.project.clips.length, 0, 'New empties the timeline');
 same(A.inputs.inputs.length, 0, 'and the Sources stage');
 ok(A.graph.overlay.isEmpty(), 'and the graph');
+ok(!A.isTrackLocked(1), 'and every track is unlocked again, which is the default');
 same(A.exporter.currentSettings().chapters.length, 0, 'and the chapters, which named this timeline');
 same(doc.documentName(), 'Untitled', 'and it is Untitled again');
 ok(!doc.isModified(), 'and unmodified, because a new document is not an edit');
@@ -224,6 +241,11 @@ same(JSON.stringify(back.clips), JSON.stringify(before.clips),
 same(JSON.stringify(back.inputs), JSON.stringify(before.inputs),
      'and the inputs are the same inputs, in the same order');
 same(JSON.stringify(back.canvas), JSON.stringify(before.canvas), 'and the canvas');
+same(JSON.stringify(back.tracks), JSON.stringify(before.tracks), 'and the locked tracks');
+ok(A.isTrackLocked(1) && !A.isTrackLocked(0),
+   'which reaches the model: V2 ripples with the stack again and V1 does not');
+ok(A.ripplesWith(1).join(',') === '1',
+   'V2 being the only locked track, a ripple on it is still about V2 alone');
 same(back.output.chapters.length, 1, 'and the chapters');
 same(back.output.rangeIn, 0.5, 'and the range');
 same(back.output.title, 'a document test', 'and the title');
@@ -290,6 +312,58 @@ A.documentOpened(nothing);
 pump(120);
 same(A.project.clips.length, 0, 'a document with nothing in it opens as nothing');
 same(A.inputs.inputs.length, 0, 'with no inputs');
+ok(!A.isTrackLocked(0) && !A.isTrackLocked(1), 'and no track locked');
+
+// ── a document whose tracks were written by another version ────────────────
+//
+// Four files that exist, and none of them may throw: one written before there
+// were locks at all, one naming a track this build does not have, one carrying a
+// flag this build has never heard of, and one whose entry is not an object. What
+// has to come out is the locks it does describe and nothing else — an absent
+// `tracks` is *no locks* rather than "leave the last edit's alone", because a
+// lock is the edit and opening one is a replacement of the edit.
+
+console.log('\ntracks a document did not write');
+{
+    const withTracks = (t) => {
+        const d = JSON.parse(JSON.stringify(raw));
+        if (t === null) delete d.tracks;
+        else d.tracks = t;
+        A.documentOpened(doc.open(d));
+        pump(150);
+    };
+
+    withTracks({ 0: { locked: true } });
+    ok(A.isTrackLocked(0), 'a lock on V1 opens as a lock on V1');
+
+    withTracks(null);
+    ok(!A.isTrackLocked(0) && !A.isTrackLocked(1),
+       'a document written before there were locks opens as a timeline that ripples one ' +
+       'track at a time, and does not keep the last edit’s');
+
+    withTracks({ 1: { locked: true, spun: 'sideways' } });
+    ok(A.isTrackLocked(1),
+       'a flag this version has never heard of is ignored rather than refusing the entry');
+
+    // A track number past the ceiling, and one that is not a number. Neither may
+    // reach `setTrackLocked`, and neither may take the good entry beside it down.
+    withTracks({ 1: { locked: true }, 9: { locked: true }, x: { locked: true },
+                 '': { locked: true }, 2: 'yes', 3: null });
+    ok(A.isTrackLocked(1), 'the one entry that means something is read');
+    ok(!A.isTrackLocked(0) && !A.isTrackLocked(2) && !A.isTrackLocked(3),
+       'and a key that is not a track number, or an entry that is not an object, is not');
+
+    // And the claim the whole shape of the record exists for: an entry cannot put
+    // a lane on the screen. Two clips, on V1 and V2 — so three lanes, whatever the
+    // document says about V8.
+    withTracks({ 7: { locked: true } });
+    same(A.timeline.laneOf(7), null,
+         'a lock on V8 in a document does not make a V8 — how many lanes there are is ' +
+         'worked out from the clips');
+    ok(!A.isTrackLocked(7),
+       'and the entry itself is forgotten, being for a lane the timeline does not draw');
+    same(doc.snapshot().tracks['7'], undefined, 'so saving again does not write it back');
+}
 
 // ── the unsaved marker ─────────────────────────────────────────────────────
 
@@ -437,6 +511,34 @@ same(A.graph.overlay.inserts().length, 0, 'and undoing it takes the filter off')
 A.stepHistory(false);
 pump(80);
 same(A.graph.overlay.inserts().length, 1, 'and redoing it puts it back');
+
+// A sync lock is in the document, so it is in the history — and that is the
+// deliberate contrast with the session, which is in the document and is *not*.
+// The test for one and not the other is not whether somebody chose it, it is
+// whether it changes the clips: a lock decides what the next Alt-drag does to
+// everything after the cut, and where the playhead is standing decides nothing.
+{
+    A.setTrackLocked(1, false);
+    A.changed('lock');
+    // Past the coalescing window, so the lock below is its own step rather than
+    // being folded into this one — two presses of the same control inside half a
+    // second are deliberately one gesture everywhere in this application.
+    pump(700);
+    const marks2 = H.depth();
+    A.setTrackLocked(1, true);
+    A.changed('lock');
+    pump(60);
+    same(H.depth(), marks2 + 1, 'locking a track is a step of undo, because it is the edit');
+    ok(A.stepHistory(true), 'and it can be undone');
+    pump(80);
+    ok(!A.isTrackLocked(1), 'which unlocks the track again');
+    A.stepHistory(false);
+    pump(80);
+    ok(A.isTrackLocked(1), 'and redoing it locks it');
+    A.setTrackLocked(1, false);
+    A.changed('lock');
+    pump(60);
+}
 
 // What an undo of the *edit* is deliberately not about. Two tracks, and a press
 // on a stage that is about the timeline must not reach across to the form.

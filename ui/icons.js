@@ -53,6 +53,18 @@ const ICONS = {
     full:   '<path d="M2 2h5v1.7H3.7V7H2zM14 2H9v1.7h3.3V7H14zM2 14h5v-1.7H3.7V9H2z' +
               'M14 14H9v-1.7h3.3V9H14z"/>',
 
+    // A padlock, for the sync lock on a track head. Two icons rather than one
+    // lit and one dim, because "these tracks ripple together" is a claim about
+    // the clips and a colour alone is the sort of state somebody reads past: the
+    // shackle is shut or it is standing open. Drawn at 12px, where the body has
+    // to be a filled rectangle — a stroked one closes up.
+    lock:   '<path d="M3.6 7.2h8.8v6.6H3.6z"/>' +
+            '<path d="M5.6 7.2V5.4a2.4 2.4 0 0 1 4.8 0v1.8" fill="none" ' +
+              'stroke="currentColor" stroke-width="1.5"/>',
+    unlock: '<path d="M3.6 7.2h8.8v6.6H3.6z"/>' +
+            '<path d="M5.6 7.2V5.4a2.4 2.4 0 0 1 4.8 0" fill="none" ' +
+              'stroke="currentColor" stroke-width="1.5"/>',
+
     zoomOut: '<circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
              '<path d="M4.9 7h4.2" fill="none" stroke="currentColor" stroke-width="1.5" ' +
                'stroke-linecap="round"/>' +
@@ -82,8 +94,13 @@ export function paintIcons(root = document) {
 }
 
 /// Swap the icon on a button that has two states.
-export function setIcon(el, name) {
+///
+/// `size` is optional and is the same default `icon()` has, so the two-state
+/// buttons in the markup are unaffected; it is here for a control smaller than
+/// the transport's, which the track heads are — a 15px glyph in a lane 18px high
+/// touches the lane above it.
+export function setIcon(el, name, size) {
     if (el.getAttribute('data-icon') === name) return;
     el.setAttribute('data-icon', name);
-    el.innerHTML = icon(name);
+    el.innerHTML = icon(name, size);
 }

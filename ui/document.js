@@ -18,7 +18,7 @@
 // consumers read it, so the printed command cannot describe a render the
 // application would not perform. Here, one object describes the whole *edit*.
 //
-// Five rules hold it together:
+// Six rules hold it together:
 //
 //   - **Ids are part of the document.** A clip's id and an input's id are
 //     written down, because they are written down elsewhere: the graph overlay
@@ -39,6 +39,12 @@
 //     as an input carrying libav's own message, which is exactly what a Sources
 //     row shows for one; deciding what to do about that is not the document's
 //     business.
+//   - **A track is written as its settings, never as a track.** `trackCount()`
+//     in `ui/project.js` derives how many lanes there are from the clips, so what
+//     is stored here is a bag keyed by track number holding an entry only where
+//     something has been set — today the sync lock. A list of tracks would be a
+//     second answer to how many there are, and an entry left behind by a deleted
+//     clip would open as a lane no clip is on. See `readTracks()`.
 //   - **Nothing derived is written.** A clip's name, size, rate, duration and
 //     probe are its input's answer, and `peaks`, `film`, `video`, `frame` and
 //     `ready` are the running application. Storing an answer that the next
@@ -60,7 +66,7 @@
 // are meaningless carried into the next edit and exactly right carried inside
 // this one, which is the whole distinction between a habit and a document.
 //
-// **And a sixth part that is not the edit at all: the session.** Which clip was
+// **And one part of it is not the edit at all: the session.** Which clip was
 // selected, where the playhead was standing, which stage you were on and how far
 // the timeline was zoomed. It is written and it is put back, because a `.fbro` is
 // a handoff of work in progress rather than an archive of a finished one, and
@@ -80,7 +86,8 @@
 //     is a dot that means nothing.
 
 import { project, makeClip, placeClip, removeClip, sortClips, useClipId, clipById,
-         defaultTransform, applyInput, changed } from './project.js';
+         defaultTransform, applyInput, changed, TRACK_LIMIT,
+         isTrackLocked, setTrackLocked } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as overlay from './graph/overlay.js';
 import { settings } from './export/state.js';
@@ -150,6 +157,7 @@ export function snapshot() {
             volume: c.volume,
             muted: !!c.muted,
         })),
+        tracks: trackBlob(),
         graph: copy(overlay.current()),
         output: outputBlob(),
         session: sessionBlob(),
@@ -255,6 +263,12 @@ export function open(doc) {
     inputsModel.orderInputs(specs.map((s) => s.id));
 
     readCanvas(d.canvas, made);
+    // After the clips, because it is about the tracks they are on. Absent means
+    // *no locks* rather than "leave them alone" — unlike `output` below — because
+    // a lock is the edit and an open is a replacement of the edit: a document
+    // written before there were locks describes a timeline that ripples one track
+    // at a time, and it has to open as one.
+    readTracks(d.tracks);
     // The overlay after the clips, and that ordering is load-bearing. Removing
     // an input fires the model's change channel, which is where `retain()` drops
     // everything pinned to a clip that is no longer open — so an overlay adopted
@@ -282,7 +296,7 @@ export function open(doc) {
 /// clips are *not* made: on an undo of a crop this is the whole of the work, and
 /// the element it is drawn by never learns anything happened.
 function writeClip(clip, saved) {
-    clip.track = clamp(Math.round(num(saved.track)), 0, 7);
+    clip.track = clamp(Math.round(num(saved.track)), 0, TRACK_LIMIT - 1);
     clip.start = Math.max(0, num(saved.start));
     clip.inPoint = clamp(num(saved.inPoint), 0, clip.media);
     // What the file actually has, which is not what the document says it had:
@@ -407,6 +421,66 @@ function readTransform(saved) {
     if (c && typeof c === 'object')
         for (const edge of ['l', 't', 'r', 'b']) x.crop[edge] = clamp(num(c[edge]), 0, 1);
     return x;
+}
+
+// ── the tracks, where any of them has been set to something ────────────────
+//
+// One flag today — the sync lock — and the pair below is written for the shape
+// rather than for the flag, because the two questions this part of the file
+// answers are the ones that made it worth a part of its own.
+//
+// **Keyed by the track number, as a bag.** `{"1": {"locked": true}}`, and
+// nothing for a track nobody has touched. A list would have to say something
+// about every lane up to the last one set, which is a second answer to how many
+// lanes there are — see `trackCount()` in ui/project.js, which is the only
+// answer, and derives it from the clips.
+//
+// **And it is the edit.** A lock changes what an Alt-drag does to the clips, so
+// unlike `session` it stays in a history state and locking a track is an
+// undoable step. That is the contrast worth stating in both places: the playhead
+// is where you are standing and a lock is part of what you have made.
+
+/// Which tracks are locked, as the document holds it.
+///
+/// Asked of `isTrackLocked()` per track rather than by reading
+/// `project.trackSettings` out, so that what a lock *is* has one home — the same
+/// argument `readTransform()` makes for merging onto `defaultTransform()`. The
+/// loop is over `TRACK_LIMIT` because that is the ceiling on a track number and
+/// a second copy of the number 8 here is a second answer to it.
+function trackBlob() {
+    const out = {};
+    for (let track = 0; track < TRACK_LIMIT; track++)
+        if (isTrackLocked(track)) out[track] = { locked: true };
+    return out;
+}
+
+/// And back again — version-tolerant, like every other reader here.
+///
+/// A **replacement**, applied through `setTrackLocked()` for every lane rather
+/// than only for the ones the document mentions: what comes out has to be what
+/// the document says and nothing else, and a lock left over from the edit that
+/// was in hand a moment ago would be a rule about dragging that nobody had set.
+///
+/// Three things this tolerates without complaining, because all three are files
+/// that exist: no `tracks` key at all (a document written before there were
+/// locks), a key naming a track this build does not have (one written by a
+/// version with more of them, or hand-edited), and an entry carrying flags this
+/// version has never heard of (one written by a later version — the unknown keys
+/// are simply not read, and are lost on the next save, which is the same trade
+/// every reader in this file makes). An array is refused rather than read as a
+/// bag with numeric keys: a later version writing a list of `{track, locked}`
+/// entries would otherwise be misread as settings for tracks 0, 1, 2.
+function readTracks(saved) {
+    const t = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+    const wanted = new Set();
+    for (const key of Object.keys(t)) {
+        // A key is a track number, tested rather than coerced: `Number('')` is
+        // zero, so a bag with an empty key would otherwise lock V1.
+        const n = /^[0-9]+$/.test(key) ? Number(key) : -1;
+        const s = t[key];
+        if (n >= 0 && n < TRACK_LIMIT && s && typeof s === 'object' && s.locked) wanted.add(n);
+    }
+    for (let track = 0; track < TRACK_LIMIT; track++) setTrackLocked(track, wanted.has(track));
 }
 
 /// The output canvas. Seeded from the first clip when the document does not say,

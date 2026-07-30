@@ -5,13 +5,31 @@
 // it is. Everything else in the app reads this and nothing else: the viewer
 // draws every clip the playhead is inside, bottom track first; the timeline
 // draws them all in their lanes; the properties panel edits the selection.
+//
+// **A track is not a thing here; it is a number a clip carries.** There is no
+// list of tracks and no "add track" button — `trackCount()` derives how many
+// lanes there are from the clips that exist, and dragging a clip into the spare
+// lane at the top is the whole gesture for making one. `trackSettings` below is
+// the one thing a track has of its own, and it is written so as not to become a
+// second answer to that question.
 
 import { basename } from './format.js';
+
+/// How many video tracks there can be, which is a fact about this file and was
+/// written out at four points of use — `trackCount`'s cap, `moveClip`'s clamp,
+/// the document reader's clamp on a saved clip, and the loop that writes the
+/// per-track settings out. Four copies of a ceiling is four chances for a clip
+/// to be clamped onto a lane the timeline never draws.
+export const TRACK_LIMIT = 8;
 
 export const project = {
     clips: [],              // sorted by track, then start
     selection: [],          // clips, in the order they were picked
     selected: null,         // the primary — the last one picked
+    // Settings for a track, for the tracks any have been set on. See the sync
+    // lock section below: a bag keyed by track number, sparse on purpose, and
+    // deliberately **not** a list of tracks.
+    trackSettings: {},
     // Output canvas. Seeded from the first clip so a single file behaves the
     // way it always did, then editable — that is what "resize the canvas"
     // means here, and it is why a portrait phone capture and a 16:9 clip can
@@ -194,10 +212,121 @@ export function clipsOf(input) {
 /// How many lanes the timeline shows: every track in use, plus one empty one
 /// on top to drag a clip into. That spare lane is the whole gesture for
 /// creating a track — there is no "add track" button to find.
+///
+/// **The one home for how many tracks there are**, and it reads the clips and
+/// nothing else. Anything per-track that gets stored — see `trackSettings` —
+/// has to be arranged so that it cannot answer this question too, because a
+/// record that could would let a leftover entry put a lane on the screen that no
+/// clip is on.
 export function trackCount() {
     let top = 0;
     for (const c of project.clips) top = Math.max(top, c.track);
-    return Math.min(8, top + 2);
+    return Math.min(TRACK_LIMIT, top + 2);
+}
+
+// ── the sync lock ──────────────────────────────────────────────────────────
+//
+// Which tracks move together when one of them ripples. A lock means "ripple
+// this track along with every other locked track"; off — which is the default
+// and stays the default — means a ripple moves its own track alone.
+//
+// **This is a bag of settings for a track, not a list of tracks, and that is the
+// whole design.** `trackCount()` above derives the number of lanes from the
+// clips, so a `tracks` array would immediately be a second answer to it: eight
+// entries would mean eight lanes whether or not anything was on them, and an
+// entry left behind by a deleted clip would put a lane on the screen that no
+// edit asked for. `ui/timeline.js` `laneOf()` states the same objection about
+// the DOM — a per-lane record "would have to be invented per track and would go
+// stale as tracks come and go" — and the three things that answer it here are:
+//
+//   - **Keyed by the track number**, which is the name the model already uses
+//     for a lane. Nothing is invented per track, so nothing can be invented
+//     twice or drift from what a clip's `track` says.
+//   - **Sparse, and pruned.** An entry exists only where something has been set;
+//     `setTrackLocked(t, false)` deletes rather than storing a false, so a
+//     document does not accumulate a row of `{locked:false}` for lanes nobody
+//     touched. `retainTracks()` drops everything above the lanes the timeline
+//     shows, on the same channel and for the same reason
+//     `graph/overlay.js`'s `retain()` drops a filter pinned to a clip that has
+//     gone: there are several ways a track can empty out and the one that gets
+//     missed is the one that grows the stored state forever.
+//   - **Read by the clips, never by the lanes.** A ripple asks which *tracks*
+//     move and then walks `project.clips`, so a lock on a track with nothing on
+//     it matches nothing and moves nothing. A stale entry is at worst a lit
+//     padlock, never a clip that moved.
+//
+// A lock is **part of the edit**, not part of the session: it changes what a
+// drag does to the clips, so it is in `snapshot()` and it is *not* stripped by
+// `ui/history.js` the way the playhead and the selection are. Locking a track is
+// an undoable step.
+
+/// Does this track ripple with the others that are locked?
+export function isTrackLocked(track) {
+    const s = project.trackSettings[Math.round(Number(track))];
+    return !!(s && s.locked);
+}
+
+/// Lock or unlock one track. Answers whether anything changed, so a caller can
+/// decide whether it has an edit to announce.
+///
+/// Off deletes the entry rather than storing `locked: false`. The alternative —
+/// a record per lane, written as the lanes appear — is what the header above
+/// rejects: it accumulates, it survives the track it describes, and the moment
+/// something counts it, it is a second answer to `trackCount()`.
+export function setTrackLocked(track, on) {
+    const t = Math.round(Number(track));
+    if (!(t >= 0 && t < TRACK_LIMIT)) return false;
+    if (isTrackLocked(t) === !!on) return false;
+    if (on) project.trackSettings[t] = Object.assign(project.trackSettings[t] || {},
+                                                    { locked: true });
+    else delete project.trackSettings[t];
+    return true;
+}
+
+/// The tracks a ripple started on `track` moves, lowest first.
+///
+/// Its own track always, and every other locked track when the one it started on
+/// is locked. Answered as a list of track numbers rather than as a set of clips
+/// because two callers want it and they want different things from it: the
+/// ripple walks the clips, and the timeline draws the lanes so that which of
+/// them will move is visible *before* a drag rather than discovered after one.
+export function ripplesWith(track) {
+    const t = Math.round(Number(track));
+    if (!isTrackLocked(t)) return [t];
+    return Object.keys(project.trackSettings)
+                 .map(Number)
+                 .filter((n) => isTrackLocked(n))
+                 .sort((a, b) => a - b);
+}
+
+/// Forget the settings of every track the timeline no longer shows.
+///
+/// **Stated in terms of `trackCount()` rather than beside it**, so there is one
+/// answer to which lanes exist and this is downstream of it. A lock lasts as
+/// long as its lane is on the screen: delete the last clip on V3 and V3 becomes
+/// the spare lane, keeping its lock, because it is still a lane you can see the
+/// padlock on and still the lane a clip dropped there lands on; delete enough
+/// that V3 is not drawn at all and the lock goes with it. What that buys is that
+/// this bag can never hold more entries than there are lanes, so nothing
+/// accumulates and nothing outlives what it describes.
+///
+/// Called from the model's change channel in `ui/app.js` rather than from each
+/// of `removeClip`, `moveClip` and the document reader — same argument as
+/// `graph/overlay.js` `retain()`, which is called from the same place for the
+/// same reason. Announces nothing itself: it runs *inside* the announcement, and
+/// firing another would be a change channel calling itself.
+export function retainTracks() {
+    const lanes = trackCount();
+    let dropped = false;
+    for (const key of Object.keys(project.trackSettings)) {
+        const n = Number(key);
+        const s = project.trackSettings[key];
+        const set = !!(s && s.locked);
+        if (set && n >= 0 && n < lanes) continue;
+        delete project.trackSettings[key];
+        dropped = true;
+    }
+    return dropped;
 }
 
 export function addClip(clip, atEnd = true) {
@@ -280,7 +409,7 @@ export function removeClip(clip) {
 
 export function moveClip(clip, start, track) {
     clip.start = Math.max(0, start);
-    if (track !== undefined) clip.track = Math.max(0, Math.min(7, track | 0));
+    if (track !== undefined) clip.track = Math.max(0, Math.min(TRACK_LIMIT - 1, track | 0));
     sort();
 }
 
@@ -504,10 +633,23 @@ export function trimClip(clip, edge, t) {
 /// which. So this is the second gesture rather than the new behaviour of the
 /// first.
 ///
-/// Everything later *on the same track* moves. Not every track: a title on V2
-/// over a shot on V1 is placed against that shot, and rippling one track under
-/// another silently moves it off. Multi-track ripple is a decision about which
-/// tracks are locked together, and there is nothing here that says.
+/// **Which tracks move is a decision about which are locked together, and now
+/// there is something that says.** Everything later on the clip's own track
+/// moves, plus everything later on every other track carrying a sync lock —
+/// `ripplesWith()` — when the track being trimmed carries one too.
+///
+/// **Unlocked is the default, and the default is one track.** That is not
+/// timidity, it is the case the gesture is usually for: a title on V2 over a shot
+/// on V1 is placed against that shot, and rippling one track under another
+/// silently moves it off. What a lock says is that these tracks are one
+/// programme — a cut across a stack, where the sound bed and the overlay are
+/// meant to travel with the picture — and only the person editing knows which of
+/// the two a given pair of tracks is. So it is a control on the track head
+/// rather than a rule, and it is off until somebody says otherwise.
+///
+/// The rejected alternative was "ripple every track", which is what an NLE with
+/// no lock does: it is right for a programme cut and quietly destroys every
+/// placement in the title case, with nothing on screen having said it would.
 export function rippleTrim(clip, edge, t) {
     const wasStart = clip.start;
     const wasEnd = clip.start + clip.length;
@@ -523,8 +665,12 @@ export function rippleTrim(clip, edge, t) {
     // the head would leave the clip somewhere it was not dragged to.
     const from = edge === 'start' ? wasStart : wasEnd;
     if (edge === 'start') clip.start = wasStart;
+    // The tracks, asked once. A locked track with nothing on it is in this list
+    // and matches no clip, which is exactly why a leftover entry cannot move
+    // anything.
+    const tracks = ripplesWith(clip.track);
     for (const c of project.clips) {
-        if (c === clip || c.track !== clip.track) continue;
+        if (c === clip || tracks.indexOf(c.track) < 0) continue;
         if (c.start >= from - 1e-6) c.start = Math.max(0, c.start + delta);
     }
     sort();

@@ -187,6 +187,16 @@ function track(read, write) {
 /// did; and `Ctrl-Z` starts answering with a playhead somewhere else and possibly
 /// a different stage, which is the one thing the two tracks exist to prevent.
 ///
+/// **And the line the other way round: a sync lock is not taken out.** Which
+/// tracks are locked together is in the snapshot as `tracks`, and it stays there.
+/// The test is not "did anybody choose it" — somebody chooses a stage too — it is
+/// whether it changes *the clips*: a lock decides what an Alt-drag does to
+/// everything after the cut, so an undo that put a trim back while leaving the
+/// lock somewhere else would put back a state this application was never in. So
+/// locking a track is a step, exactly as trimming one is, and reaching for the
+/// `delete` below to make it "not an edit" would be the wrong half of this file
+/// to change.
+///
 /// Stripped **here rather than in `snapshot()`**, and that is the whole point:
 /// `snapshot()` is the document and the document does hold a session. Stripped in
 /// `open()` instead would be the other wrong home — it would make an *Open*

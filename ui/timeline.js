@@ -9,16 +9,25 @@
 //
 // The video lanes are built from the model rather than written in the markup,
 // because how many there are is a property of the edit.
+//
+// A lane's head is where the track is named and so is where the one thing a
+// track has of its own lives: the **sync lock**, which says whether an Alt-drag
+// ripples this track alone or every track locked with it. The state is drawn
+// three times over — the padlock is shut, the name goes to the accent colour and
+// the whole lane carries a wash of it — because a ripple that moved clips on a
+// lane nobody was looking at is the exact failure the lock exists to prevent,
+// and a state you discover after the drag is no better than no control at all.
 
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
          isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
-         hasPicture } from './project.js';
+         hasPicture, isTrackLocked, setTrackLocked, ripplesWith } from './project.js';
 import { rulerLabel, clock } from './format.js';
 import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
+import { setIcon } from './icons.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
-let lanes = [];                 // [{ row, head, lane, canvas }] bottom track first
+let lanes = [];                 // [{ row, head, lock, lane, canvas }] bottom track first
 let onSeek = () => {};
 let playheadTime = () => 0;
 
@@ -218,6 +227,16 @@ function drawVideoLane(track, canvas) {
     const c = laneContext(canvas);
     if (!c) return;
     const { ctx, w, h } = c;
+
+    // A locked track, across the whole lane and under everything. The wash is
+    // faint on purpose — it is a standing fact about the track, not a reading —
+    // but it is on the lane rather than only on the head because the lane is
+    // what somebody watching a drag is looking at, and two washed lanes are two
+    // lanes that will move together.
+    if (isTrackLocked(track)) {
+        ctx.fillStyle = 'rgba(255, 140, 66, 0.07)';
+        ctx.fillRect(0, 0, w, h);
+    }
 
     for (const clip of project.clips) {
         if (clip.track !== track) continue;
@@ -545,6 +564,7 @@ function drawScrollbar() {
 
 export function draw() {
     syncLanes();
+    syncHeads();
     clampView();
     drawRuler();
     for (const l of lanes) drawVideoLane(l.track, l.canvas);
@@ -590,8 +610,9 @@ function syncLanes() {
     for (let track = 0; track < want; track++) {
         const row = document.createElement('div');
         row.className = 'track-row';
+        const lock = lockButton(track);
         const head = el('div', { cls: 'track-head' },
-                        el('span', { cls: 'track-name', text: `V${track + 1}` }));
+                        [el('span', { cls: 'track-name', text: `V${track + 1}` }), lock]);
         const lane = document.createElement('div');
         lane.className = 'track-lane';
         const canvas = document.createElement('canvas');
@@ -600,7 +621,7 @@ function syncLanes() {
         row.appendChild(lane);
         // Prepend so V1 ends up at the bottom of the stack of rows.
         tracksEl.insertBefore(row, tracksEl.firstChild);
-        const entry = { track, row, head, lane, canvas };
+        const entry = { track, row, head, lock, lane, canvas };
         lanes.push(entry);
         wireVideoLane(entry);
     }
@@ -627,9 +648,69 @@ function syncLanes() {
     for (const l of lanes) l.head.classList.toggle('tiny', h < 22);
 }
 
+/// The sync lock on one track head: press it and this track ripples with every
+/// other track that carries one.
+///
+/// **On the head, beside the name**, because that is where the track is named and
+/// a lock is a fact about the track rather than about a clip or about a drag. The
+/// alternatives were a modifier on top of `Alt` — which makes the rule invisible
+/// until the moment it fires, and there is only one hand — and a dialog of
+/// checkboxes, which is a second place the stack is described.
+///
+/// The button carries no state of its own: `syncHeads()` reads the model on every
+/// draw. A control that remembered would be a second answer to whether a track is
+/// locked, and it would be the one on screen while the other was the one a ripple
+/// used — which is precisely the failure mode of a lock you cannot see.
+function lockButton(track) {
+    return el('button', {
+        cls: 'track-lock',
+        on: { click: (e) => {
+            e.preventDefault();
+            // Nothing to announce when nothing changed — `setTrackLocked` says
+            // so — because an announcement is a step of undo and a document
+            // marked unsaved.
+            if (setTrackLocked(track, !isTrackLocked(track))) changed('lock');
+        } },
+    });
+}
+
+/// Put every track head's lock in step with the model.
+///
+/// Called from `draw()` rather than from the press, and that is the load-bearing
+/// half: a lock arrives from four directions — the press, an undo, an opened
+/// document and `retainTracks()` forgetting a lane that has gone — and only the
+/// first of them goes through this file. Drawn from the model on every pass, all
+/// four are the same thing.
+///
+/// The title is written per state rather than being one sentence about the
+/// control, because what the press *does* differs: on a track locked with nothing
+/// else there is no other track to move, and saying so is cheaper than letting
+/// somebody discover it by rippling.
+function syncHeads() {
+    for (const l of lanes) {
+        const on = isTrackLocked(l.track);
+        const name = `V${l.track + 1}`;
+        l.head.classList.toggle('locked', on);
+        l.lock.classList.toggle('on', on);
+        setIcon(l.lock, on ? 'lock' : 'unlock', 12);
+        const others = on ? ripplesWith(l.track).filter((t) => t !== l.track) : [];
+        l.lock.title = !on
+            ? `${name} ripples on its own — lock it to ripple it with other locked tracks`
+            : others.length
+                ? `${name} ripples with ${others.map((t) => `V${t + 1}`).join(', ')}`
+                : `${name} is locked, and is the only locked track — nothing else moves with it yet`;
+    }
+}
+
 /// The DOM for one video track — the lane box and its canvas. Tests and the
 /// app reach lanes through this rather than by id, because the ids would have
 /// to be invented per track and would go stale as tracks come and go.
+///
+/// The same objection is what shapes the sync lock, which is the first per-track
+/// setting there has been: it is kept in the model keyed by the track number,
+/// pruned to the lanes `trackCount()` says exist, and read by the clips rather
+/// than by the lanes — so there is no per-lane record here to go stale, and the
+/// button on the head holds nothing. See the section in `ui/project.js`.
 export function laneOf(track) {
     for (const l of lanes) if (l.track === track) return l;
     return null;

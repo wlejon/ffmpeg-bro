@@ -225,12 +225,6 @@ Honest list of what does not work:
 - **Speed on a render.** `J`/`K`/`L` and the speed selector are transport
   controls, not part of the edit, so a clip exports at its own rate whatever
   the viewer was last playing at.
-- **A ripple that crosses tracks.** Alt-dragging ripples the track it is on and
-  no other, which is right for a title on V2 placed against a shot on V1 and
-  wrong for a programme cut across a stack. Which tracks move together is a
-  decision about locking them, and there is nothing here that says — so the
-  safe half is built and the other half needs a control before it can mean
-  anything.
 - **A meter of the timeline's own mix, during ordinary playback.** There is a
   meter beside the viewer now — see
   [The meter beside the picture](playback.md#the-meter-beside-the-picture) — and

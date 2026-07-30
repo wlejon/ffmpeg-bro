@@ -645,10 +645,15 @@ input[type=range] { width: 130px; }
 /* Track heads line the lanes up under a fixed gutter, the way an edit suite
    stacks V1 over A1. The ruler gets a blank head so it starts at the same x. */
 #ruler-row, .track-row, #tl-scroll-row { display: flex; }
+/* Wide enough for the name and the sync lock beside it. The gutter is one
+   number for the whole timeline — the bar, the ruler, every lane and the
+   scrollbar all use it — so widening it keeps the zoom cluster starting exactly
+   where the ruler does. */
 .track-head {
-    flex: 0 0 44px;
+    flex: 0 0 56px;
     display: flex;
     align-items: center;
+    gap: 3px;
     padding-right: 8px;
     overflow: hidden;
 }
@@ -668,6 +673,24 @@ input[type=range] { width: 130px; }
     border-radius: 3px;
     padding: 2px 6px;
 }
+
+/* The sync lock: which tracks ripple together, said where the track is named.
+   Off is the default and is drawn as an open padlock in the dim colour, so the
+   control is findable without claiming anything; on takes the name with it,
+   because the lane's own wash is faint and the pair of them is what makes a
+   locked group readable at a glance across eight lanes. */
+button.track-lock {
+    width: 16px;
+    min-width: 0;
+    height: 16px;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--dim);
+}
+button.track-lock:hover { background: none; color: var(--text); }
+button.track-lock.on { color: var(--accent); }
+.track-head.locked .track-name { color: var(--accent); border-color: var(--accent-dim); }
 
 #ruler {
     position: relative;
@@ -721,7 +744,7 @@ input[type=range] { width: 130px; }
     position: absolute;
     top: -24px;              /* up through the ruler, like an edit suite */
     bottom: 0;
-    left: 44px;
+    left: 56px;              /* the track-head gutter; setPlayhead writes it after */
     width: 2px;
     margin-left: -1px;
     background: var(--accent);

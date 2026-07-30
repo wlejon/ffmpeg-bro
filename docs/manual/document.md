@@ -22,7 +22,7 @@ unsaved. A document named on the command line opens as one:
 
 A `.fbro` file is indented JSON, on purpose: it describes an edit, it belongs in
 a repository beside the footage, and a diff of one should be readable. It has
-six parts.
+seven parts.
 
 - **`inputs`** — one entry per `-i`, **in order**, because the order is the `-i`
   number that a filtergraph's `[0:v]` counts in. Each is written as *what opens
@@ -35,6 +35,14 @@ six parts.
   rate, duration and probe are all its input's answer, so storing them would be
   storing an answer the next reopen may contradict.
 - **`canvas`** — the output size, the timeline's rate, and stacked or grid.
+- **`tracks`** — the settings of a track, for the tracks any have been set on:
+  today the [sync lock](timeline.md#the-sync-lock), which says whether an
+  `Alt`-drag ripples that track alone or every locked track together. Written as a
+  bag keyed by the track number — `"tracks": { "1": { "locked": true } }` — and
+  **not** as a list of tracks, because how many lanes there are is worked out from
+  the clips and a list would be a second answer to that. A document with no
+  `tracks` at all, one written before there were locks, opens as a timeline that
+  ripples one track at a time, which is what it describes.
 - **`graph`** — everything you inserted, locked, placed and wired on the
   [Graph](graph.md) stage.
 - **`output`** — what [Encode and Write](output.md) are set to, plus the three
@@ -178,6 +186,13 @@ four *are* in the document, and they are taken out of a history state at the one
 place that decides what a step is: a stack that recorded them would fill up with
 states that differ in nothing anybody did, and comparing two of them would stop
 meaning "the edit differs".
+
+A **sync lock** is the same question answered the other way, and the pair is worth
+reading together. It is in the document and it stays in a history state, so
+locking a track is one step of undo — because the test is not whether somebody
+chose it but whether it changes the clips, and a lock decides what the next
+`Alt`-drag does to everything after the cut. Where you are standing is not an edit;
+what a drag will do is.
 
 Applying a state **reconciles** rather than rebuilds: an input the state
 describes exactly as it already is costs nothing, and a clip of one keeps the

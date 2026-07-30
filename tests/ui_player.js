@@ -675,6 +675,240 @@ console.log('\nripple, roll and slip');
     ok(A.project.clips.length === 1, 'back to one clip, where we started');
 }
 
+// ── which tracks a ripple moves ────────────────────────────────────────────
+//
+// The sync lock. A ripple moved its own track and nothing else, which is right
+// for a title on V2 placed against a shot on V1 and wrong for a programme cut
+// across a stack — and only the person editing knows which. So it is a control,
+// and off is the default.
+//
+// Four things are the claim, and the last two are the design rather than the
+// feature:
+//
+//   - unlocked ripples one track, which is exactly what it always did;
+//   - locked ripples every locked track, by the same amount;
+//   - the record is settings *for* a track and is not a second answer to how many
+//     tracks there are — so a lock on a lane nothing is on can neither put a lane
+//     on the screen nor move a clip; and
+//   - the state is on the screen before the drag rather than after it.
+//
+// The arithmetic goes through the model, the way ripple/roll/slip above do, with
+// one press of the real control at the end to show it is wired to any of it.
+
+console.log('\nthe sync lock');
+{
+    const a = A.project.clips[0];
+    a.track = 0;
+    a.start = 0;
+    // Three clips out of one: two butted on V1, and a third lifted onto V2 and
+    // parked over the second. The V2 clip has to start *after* the cut being
+    // rippled, because that is the only place a ripple could reach it.
+    A.setPlayhead(a.start + a.length * 0.4);
+    pump(120);
+    A.splitAtPlayhead();
+    pump(120);
+    const pair = A.project.clips.slice().sort((x, y) => x.start - y.start);
+    A.select(pair[0]);
+    A.setPlayhead(pair[0].start + pair[0].length / 2);
+    A.splitAtPlayhead();
+    pump(120);
+    const three = A.project.clips.slice().sort((x, y) => x.start - y.start);
+    const left = three[0], title = three[1], right = three[2];
+    title.track = 1;
+    title.start = right.start;
+    A.timeline.draw();
+    pump(60);
+    ok(A.project.clips.length === 3 && left.track === 0 && right.track === 0 &&
+       title.track === 1,
+       'a clip to trim on V1, one after it on V1, and one over that on V2');
+
+    // The arrangement, put back before each ripple. Restored rather than
+    // accumulated: every ripple below shortens the same clip, and five in a row
+    // would run it out of footage on a short file and turn a moved-by assertion
+    // into a clamp nobody wrote.
+    const held = { length: left.length, right: right.start, title: title.start };
+    const restore = () => {
+        left.start = 0;
+        left.length = held.length;
+        right.start = held.right;
+        title.start = held.title;
+    };
+    // How far to trim, and the floor a moved clip has to clear. A fraction of the
+    // clip rather than a fixed 0.3 s, because this suite runs against any file.
+    const cut = Math.min(0.3, held.length * 0.4);
+    ok(cut > 0.02, `each ripple trims ${cut.toFixed(3)}s off a ${held.length.toFixed(2)}s clip`);
+
+    // ── off, which is the default ───────────────────────────────────────────
+    ok(!A.isTrackLocked(0) && !A.isTrackLocked(1),
+       'no track is locked to begin with — nothing changes for anybody who never asks');
+    ok(A.ripplesWith(0).length === 1 && A.ripplesWith(0)[0] === 0,
+       'so a ripple on V1 is about V1 and nothing else');
+    {
+        restore();
+        A.rippleTrim(left, 'end', left.start + left.length - cut);
+        const moved = held.right - right.start;
+        ok(moved > cut * 0.5,
+           `the clip after it on the same track came back (${held.right.toFixed(2)} → ` +
+           `${right.start.toFixed(2)}s)`);
+        ok(title.start === held.title,
+           'and the one on V2 did not move at all — a title is placed against the shot ' +
+           'under it, and rippling one track beneath another would move it off');
+    }
+
+    // ── on ──────────────────────────────────────────────────────────────────
+    ok(A.setTrackLocked(0, true) && A.setTrackLocked(1, true),
+       'locking two tracks is a change, and each says so');
+    ok(A.isTrackLocked(0) && A.isTrackLocked(1), 'and both of them report it');
+    ok(A.ripplesWith(0).join(',') === '0,1' && A.ripplesWith(1).join(',') === '0,1',
+       'so a ripple on either of them is about both');
+    {
+        restore();
+        A.rippleTrim(left, 'end', left.start + left.length - cut);
+        const moved = held.right - right.start;
+        ok(moved > cut * 0.5, `rippling V1 moved its own track (${moved.toFixed(3)}s)`);
+        ok(Math.abs((held.title - title.start) - moved) < 1e-6,
+           `and moved V2 by exactly as much (${(held.title - title.start).toFixed(3)}s), ` +
+           'which is what "these tracks are one programme" means');
+    }
+
+    // The rule is about the track the gesture is on: a ripple started on an
+    // unlocked track is one track, whatever else is locked. Otherwise half a
+    // locked stack would be a state in which every drag is a guess.
+    A.setTrackLocked(0, false);
+    {
+        restore();
+        A.rippleTrim(left, 'end', left.start + left.length - cut);
+        ok(title.start === held.title,
+           'a ripple started on an unlocked track moves nothing else, though V2 is still locked');
+    }
+
+    // ── the record is not a list of tracks ──────────────────────────────────
+    //
+    // The objection this design had to answer. `trackCount()` works out how many
+    // lanes there are from the clips; a per-track record that decided it too would
+    // let an entry left behind put a lane on the screen, and a ripple move a clip
+    // that is not on one.
+    {
+        const lanes = () => (A.timeline.laneOf(7) ? 8 : A.timeline.laneOf(2) ? 3 : 2);
+        const was = lanes();
+        ok(A.setTrackLocked(7, true), 'a lock can be set on V8, which nothing is on');
+        A.timeline.draw();
+        pump(40);
+        ok(A.isTrackLocked(7), 'and it is held');
+        ok(lanes() === was && !A.timeline.laneOf(7),
+           `without making a lane — how many there are is still the clips’ answer (${was})`);
+        // V1 and V8 locked and V2 not, so a ripple on V1 takes V8 with it — and
+        // V8 has nothing on it, which is the whole point: a leftover entry is at
+        // worst a lit padlock, never a clip that moved.
+        restore();
+        A.setTrackLocked(1, false);
+        A.setTrackLocked(0, true);
+        ok(A.ripplesWith(0).join(',') === '0,7', 'a ripple on V1 is about V1 and V8');
+        A.rippleTrim(left, 'end', left.start + left.length - cut);
+        ok(right.start < held.right - cut * 0.5 && title.start === held.title,
+           'and it moves no clip on V8, there being none, and none on V2 either');
+        // ...and it is forgotten, on the same change channel that drops a filter
+        // pinned to a clip that has gone.
+        A.changed('edit');
+        pump(40);
+        ok(!A.isTrackLocked(7), 'a lock on a lane the timeline does not draw is forgotten');
+        ok(A.isTrackLocked(0), 'while one on a lane it does draw is kept');
+    }
+
+    // ── and it is visible before the drag ───────────────────────────────────
+    //
+    // A ripple that silently moved clips on a track nobody was looking at is the
+    // failure the whole control exists to prevent, so the state has to be on the
+    // screen with no gesture having been made. Three cues: the padlock, the name,
+    // and a wash across the lane. The draw is forced, because an assertion about a
+    // canvas is about what is on it now.
+    restore();
+    A.setTrackLocked(0, true);
+    A.setTrackLocked(1, true);
+    A.timeline.fitView();
+    A.timeline.draw();
+    pump(40);
+    {
+        const head = (t) => A.timeline.laneOf(t).head;
+        const lockOf = (t) => head(t).querySelector('.track-lock');
+        ok(!!lockOf(0) && !!lockOf(1), 'every track head carries a lock control');
+        ok(lockOf(0).getAttribute('data-icon') === 'lock' &&
+           lockOf(0).className.indexOf('on') >= 0,
+           'a locked track’s padlock is shut and lit');
+        ok(head(0).className.indexOf('locked') >= 0, 'and its name is marked with it');
+        // Laid out, not merely present: the head is a fixed gutter with
+        // `overflow: hidden`, so a control that did not fit would be half a
+        // padlock or none and nothing about the code would say so.
+        const hb = head(0).getBoundingClientRect(), lb = lockOf(0).getBoundingClientRect();
+        ok(lb.width >= 12 && lb.height >= 12 && lb.right <= hb.right + 0.5 &&
+           lb.left >= hb.left,
+           `and it fits the gutter beside the name (${Math.round(lb.width)}x${
+               Math.round(lb.height)} inside ${Math.round(hb.width)}px)`);
+        ok(/ripples with V2/.test(lockOf(0).title),
+           `and it says what a drag will do: "${lockOf(0).title}"`);
+
+        // The lane itself, read on a column V2 has no clip on — the V2 clip sits
+        // over the second half of the edit, so the first is bare but for the wash,
+        // and what this measures is the wash and not a filmstrip. Alpha rather
+        // than brightness: the wash is faint by design and the accent it is drawn
+        // in is bright, so a lit/unlit count would say nothing about how visible
+        // it is either way.
+        const bareX = Math.round(A.timeline.timeToX(title.start / 2));
+        const alphaOf = (t) => {
+            const c = A.timeline.laneOf(t).canvas;
+            if (bareX < 0 || bareX >= c.width) return -1;
+            return c.getContext('2d').getImageData(bareX, Math.floor(c.height / 2), 1, 1).data[3];
+        };
+        A.setTrackLocked(1, false);
+        A.timeline.draw();
+        pump(40);
+        ok(lockOf(1).getAttribute('data-icon') === 'unlock' &&
+           lockOf(1).className.indexOf('on') < 0,
+           'an unlocked one stands open and dim');
+        ok(head(1).className.indexOf('locked') < 0, 'with its name left alone');
+        const bare = alphaOf(1);
+        ok(bare === 0, `a column of an unlocked lane with no clip on it is bare (alpha ${bare})`);
+        A.setTrackLocked(1, true);
+        A.timeline.draw();
+        pump(40);
+        ok(alphaOf(1) > bare,
+           `and locking the track washes the whole lane, not just its head (alpha ${
+               bare} → ${alphaOf(1)})`);
+    }
+
+    // The press reaches the model, which is the half no amount of arithmetic
+    // shows. The control holds nothing of its own — it is redrawn from the model —
+    // so what is on the screen cannot disagree with what a ripple will do.
+    {
+        const lock = A.timeline.laneOf(1).head.querySelector('.track-lock');
+        lock.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(60);
+        ok(!A.isTrackLocked(1), 'pressing the padlock unlocks the track');
+        ok(lock.getAttribute('data-icon') === 'unlock', 'and the control follows the model');
+        lock.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(60);
+        ok(A.isTrackLocked(1), 'and pressing it again locks it');
+    }
+
+    // Back to one clip on one unlocked track, so everything after this is the
+    // timeline it was.
+    A.setTrackLocked(0, false);
+    A.setTrackLocked(1, false);
+    A.selectMany(A.project.clips.filter((c) => c !== left));
+    A.removeSelection();
+    pump(80);
+    left.track = 0;
+    left.start = 0;
+    left.inPoint = 0;
+    left.length = left.media;
+    A.timeline.fitView();
+    A.select(left, 'auto');
+    A.setPlayhead(0);
+    pump(60);
+    ok(A.project.clips.length === 1 && !A.isTrackLocked(0) && !A.isTrackLocked(1),
+       'back to one clip on one unlocked track');
+}
+
 // ── one waveform for the whole timeline ────────────────────────────────────
 //
 // A1 used to paint each clip in turn, so two that overlapped in time drew over
