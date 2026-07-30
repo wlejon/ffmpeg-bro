@@ -129,7 +129,8 @@ import { clock, bytes, basename, shellArg } from './format.js';
 import { dbHeight, dbLabel, ZERO_DBFS } from './levels.js';
 import { optionColumn } from './opttable.js';
 import { qualityRange } from './export/capabilities.js';
-import { schemeOf, protocolLinked } from './export/destination.js';
+import { schemeOf, protocolLinked, teeSpec, newDestination,
+         destinationRows } from './export/destination.js';
 import { changed as projectChanged } from './project.js';
 import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
          asInput as inputSpec } from './inputs.js';
@@ -153,6 +154,16 @@ export const capture = {
     inputs: [],
     path: '',               // where the recording goes
     format: 'matroska',     // the muxer, by name
+    /// Where a `tee` recording goes: `{ id, format, path, options }` each, the
+    /// same shape the Write stage's list holds and edited by the same rows.
+    ///
+    /// **`path` above is not this, and both are kept.** A recording writes
+    /// through one muxer, and when that muxer is `tee` the filename it is opened
+    /// with is the whole `-f tee` argument — built from this list by `teeSpec`,
+    /// never typed. Switching the container back leaves the single path where it
+    /// was, because changing your mind about how many files there are should not
+    /// lose the name of the one.
+    destinations: [],
     videoCodec: '',         // empty asks the muxer for its default
     audioCodec: '',
     quality: 23,
@@ -393,7 +404,34 @@ export function ready() {
     const g = graphOf();
     if (g && !g.ok) return false;
     if (all.length > 1 && !g) return false;
-    return !clashingPath();
+    if (clashingPath()) return false;
+    // A tee with an empty list, which is the one way this can have nowhere to
+    // go: a single blank path becomes `defaultPath()`.
+    return !!recordTarget();
+}
+
+/// The filename the recording's muxer is opened with, which for a `tee` is not
+/// a filename at all.
+///
+/// One place, for the reason `outputTarget()` is one place on the render side:
+/// the spec, the command bar and the button that says where it is going all read
+/// this, and a fourth answer assembled by hand would be a recording going
+/// somewhere the screen does not say.
+export function recordTarget() {
+    return capture.format === 'tee' ? teeSpec(capture.destinations) : capture.path;
+}
+
+/// Every file this recording opens, in the order the command line has them.
+///
+/// **A tee's destinations count individually**, which is the point of the list:
+/// two of them aimed at one path is the same fault as two muxers aimed at one
+/// path, and the argument they come to is one string that would compare equal to
+/// nothing.
+function recordFiles() {
+    const files = capture.format === 'tee'
+        ? (capture.destinations || []).map((d) => d.path)
+        : [capture.path];
+    return files.concat(alsoFiles().map((f) => f.path));
 }
 
 /// A path two of this recording's files are both aimed at, or empty.
@@ -402,7 +440,7 @@ export function ready() {
 /// engine refuses it by name — this is the same refusal made in time to stop
 /// the press, which is the rule every other check on this stage follows.
 export function clashingPath() {
-    const seen = [capture.path].concat(alsoFiles().map((f) => f.path));
+    const seen = recordFiles();
     for (let i = 1; i < seen.length; ++i)
         if (seen[i] && seen.indexOf(seen[i]) < i) return seen[i];
     return '';
@@ -419,9 +457,43 @@ export function clashingPath() {
 /// not a shrug**, on both sides of this: the writer would refuse it and the
 /// command bar would be printing an argument that stops the render.
 function effectiveVideo() {
-    const id = capture.videoCodec ||
-        ((bro.ffmpeg.muxers || []).find((m) => m.name === capture.format) || {}).videoCodec || '';
+    const id = capture.videoCodec || (codecMuxer() || {}).videoCodec || '';
     return (bro.ffmpeg.encoders || []).find((c) => c.id === id) || null;
+}
+
+/// The muxer whose defaults decide what this recording is encoded with.
+///
+/// **Not always the container**, and `tee` is the reason: it does not encode
+/// anything and has no default codec of its own — it opens the muxers in its
+/// argument, and `ffmpeg -f tee` is given a `-c:v` for exactly that reason. So
+/// the question is asked of the first destination, which is the file somebody
+/// named and the one whose defaults they would recognise. Being asked in one
+/// place is what keeps the picker, the `-crf` and the spec agreeing about which
+/// encoder this is.
+function codecMuxer() {
+    const name = capture.format === 'tee'
+        ? ((capture.destinations || []).find((d) => d.format) || {}).format || ''
+        : capture.format;
+    return (bro.ffmpeg.muxers || []).find((m) => m.name === name) || null;
+}
+
+/// The encoders this recording names out loud, which is not always the two
+/// pickers' values.
+///
+/// **Empty means "the muxer's own default" and that is an answer a tee does not
+/// have.** For every other container, saying nothing is right and is what the
+/// picker's first entry means; for `tee` it is leaving the choice to a muxer
+/// that encodes nothing, and the open fails with no encoder named. So there the
+/// default resolved by `codecMuxer()` is written down, exactly as `ffmpeg -f
+/// tee` is given a `-c:v`. One home, because the spec and the command bar must
+/// not disagree about what is being encoded with.
+function effectiveCodecs() {
+    const m = codecMuxer() || {};
+    const decides = capture.format !== 'tee';
+    return {
+        video: capture.videoCodec || (decides ? '' : m.videoCodec || ''),
+        audio: capture.audioCodec || (decides ? '' : m.audioCodec || ''),
+    };
 }
 
 /// Can this device be asked for a region?
@@ -1124,7 +1196,9 @@ export function startRecording() {
                     : 'Activate a device first');
         return;
     }
-    if (!capture.path) capture.path = defaultPath();
+    // Only the single-file case has a name to invent: a tee's destinations are
+    // typed, and a default one of those would be a file nobody asked for.
+    if (!capture.path && capture.format !== 'tee') capture.path = defaultPath();
 
     // The devices go to the recording, not to the previews. A camera is
     // exclusive on Windows and the second open fails; letting a preview keep
@@ -1133,6 +1207,7 @@ export function startRecording() {
     stopPreviews();
 
     const enc = effectiveVideo();
+    const codecs = effectiveCodecs();
     const g = graphOf();
     // **`sources` and not `source`, at one input as much as at several.** The
     // engine reads an absent list as `{source}` and a present one as itself, so
@@ -1140,7 +1215,7 @@ export function startRecording() {
     // step. See src/native/ffmpeg_capture.h.
     const spec = Object.assign({
         sources: asInputs(),
-        path: capture.path,
+        path: recordTarget(),
         format: capture.format,
     }, g && g.ok ? { filterGraph: g.filterGraph } : {},
        enc && enc.crf ? { crf: capture.quality } : {},
@@ -1148,8 +1223,8 @@ export function startRecording() {
        // encodes in real time beside whatever is being recorded, and a preset
        // that cannot keep up drops frames off the front of the queue.
        enc && enc.preset ? { preset: 'veryfast' } : {},
-       capture.videoCodec ? { videoCodec: capture.videoCodec } : {},
-       capture.audioCodec ? { audioCodec: capture.audioCodec } : {});
+       codecs.video ? { videoCodec: codecs.video } : {},
+       codecs.audio ? { audioCodec: codecs.audio } : {});
 
     // **The other files, each mapping the pads it named.** They are not given
     // the graph — there is one, and it belongs to the session — and they are
@@ -1220,11 +1295,20 @@ export function tick() {
     if (p.state === 'running') { drawRecording(); return; }
 
     recording = false;
-    lastFile = p.path || capture.path;
+    // What there is to look at afterwards, which for a tee is not what was
+    // opened: the argument names several places and the ones that are URLs have
+    // gone. The first local destination, for the same reason `openable()` picks
+    // it on the render side — not because it matters more but because the other
+    // is the same bitstream.
+    lastFile = capture.format === 'tee'
+        ? ((capture.destinations || []).find((d) => d.path && !schemeOf(d.path)) || {}).path || ''
+        : p.path || capture.path;
     lastBytes = p.bytes || 0;
     if (hooks.flash)
         hooks.flash(p.state === 'failed' ? `Recording failed: ${p.error}`
-                                         : `Recorded ${basename(lastFile)}`);
+                    : lastFile ? `Recorded ${basename(lastFile)}`
+                               : 'Recording finished — every destination was a stream, so ' +
+                                 'there is nothing here to open');
     if (hooks.changed) hooks.changed();
     // The devices are free again, so the pictures come back.
     for (const c of cards) c.key = '';
@@ -1529,24 +1613,39 @@ function padRows() {
 /// person is already looking.
 function drawSettings() {
     put(refs.settings, () => {
-        const path = el('input', {
-            cls: 'wide', 'data-f': 'cappath', type: 'text', value: capture.path,
-            title: 'A path, or a URL, or a tee argument — a recording is a device into a ' +
-                   'muxer, so anything the Write stage can write to works here',
-            on: { change: () => { capture.path = path.value.trim(); redraw(); } },
-        });
+        const pathField = () => {
+            const path = el('input', {
+                cls: 'wide', 'data-f': 'cappath', type: 'text', value: capture.path,
+                title: 'A path or a URL — a recording is a device into a muxer, so anything ' +
+                       'the Write stage can write to works here. Several at once is the tee ' +
+                       'container, which brings its own list.',
+                on: { change: () => { capture.path = path.value.trim(); redraw(); } },
+            });
+            return path;
+        };
 
         const rows = [head('The recording')];
-        rows.push(row('Save to', path));
-        rows.push(row('Container', muxerPicker()));
         // Where a recording goes is the same question the Write stage asks, and
         // the same answer: a recording is a device into a `Writer`, and a
-        // `Writer` is a muxer, so `-f tee` and a URL work here for the reason
-        // they work there. What is *not* here is the destination editor — one
-        // encode to a file and a stream at once is exactly the case tee exists
-        // for and is two lines to type, and a second copy of that editor would
-        // be a second answer to how the argument is escaped.
-        rows.push(...destinationRows());
+        // `Writer` is a muxer, so a URL and `-f tee` work here for the reason
+        // they work there — including the editor, which is `destination.js`'s
+        // and is drawn from the same rows on both stages rather than copied.
+        if (capture.format === 'tee') {
+            rows.push(row('Container', muxerPicker()));
+            rows.push(row('', el('span', { cls: 'dim', text:
+                'One encode, several muxers. Recording and streaming at once is this: a file ' +
+                'and an RTMP URL off one reading of the devices, which is the whole reason ' +
+                'tee exists.' })));
+            rows.push(...destinationRows({
+                list: capture.destinations,
+                changed: redraw,
+                prefix: 'capdest',
+            }));
+        } else {
+            rows.push(row('Save to', pathField()));
+            rows.push(row('Container', muxerPicker()));
+            rows.push(...protocolRows());
+        }
         rows.push(row('Video', codecPicker(false)));
         rows.push(row('Audio', codecPicker(true)));
         // Only where the encoder has the word. An encoder with no `crf` — a
@@ -1686,48 +1785,29 @@ function redraw() {
     syncPreviews();
 }
 
-/// What the recording's destination turns out to be, when it is not one file.
+/// What a URL in the path field is, which is the one thing about a single
+/// destination somebody cannot see by looking at the field.
 ///
 /// **Stated, not offered.** A recording is a device into a `Writer` and a
-/// `Writer` is a muxer, so a URL and a `-f tee` argument reach one here exactly
-/// as they do from the Write stage. What this adds is the two things somebody
-/// cannot see by looking at the field: whether the protocol a URL names is in
-/// this build — it fails at open with a message about a filename otherwise —
-/// and, for a tee, how many destinations the argument comes to, since a
-/// mistyped separator reads as one destination with a strange name.
-function destinationRows() {
-    const rows = [];
+/// `Writer` is a muxer, so a URL reaches one here exactly as it does from the
+/// Write stage. Whether the protocol it names is in this build is not visible
+/// anywhere else: it fails at open with a message about a filename.
+///
+/// Nothing here about several destinations any more — that is a list now, and a
+/// list says how many it has by being one.
+function protocolRows() {
     const scheme = schemeOf(capture.path);
-    if (scheme) {
-        const linked = protocolLinked(scheme);
-        rows.push(row('Protocol', el('span', {
-            cls: linked ? 'mono' : 'mono src-missing',
-            text: linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
-            title: linked
-                ? 'Sent rather than written, so there is no size and no percentage — what ' +
-                  'it reports is what went out.'
-                : 'This build has no such protocol, so the open will fail with a message ' +
-                  'about a filename',
-        })));
-    }
-    if (capture.format === 'tee') {
-        // Counted by hand rather than with a split, because the separator can
-        // be escaped and a lookbehind is not something to rely on here.
-        const text = String(capture.path || '');
-        let n = text ? 1 : 0;
-        for (let i = 0; i < text.length; i++) {
-            if (text[i] === '\\') { i++; continue; }
-            if (text[i] === '|') n++;
-        }
-        rows.push(row('Writes to', el('span', {
-            cls: 'dim', text: `${n} destination${n === 1 ? '' : 's'}`,
-            title: 'Recording and streaming at once is one encode through tee, written ' +
-                   '[f=matroska]take1.mkv|[f=flv]rtmp://…  The Write stage has an editor ' +
-                   'for the argument; here it is typed, because a second copy of the ' +
-                   'escaping would be a second answer to it.',
-        })));
-    }
-    return rows;
+    if (!scheme) return [];
+    const linked = protocolLinked(scheme);
+    return [row('Protocol', el('span', {
+        cls: linked ? 'mono' : 'mono src-missing',
+        text: linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
+        title: linked
+            ? 'Sent rather than written, so there is no size and no percentage — what ' +
+              'it reports is what went out.'
+            : 'This build has no such protocol, so the open will fail with a message ' +
+              'about a filename',
+    }))];
 }
 
 /// The region, on the card whose picture it is dragged on.
@@ -1775,15 +1855,47 @@ function regionRows(inp) {
     ]))];
 }
 
+/// The container, out of what this build can write a file with.
+///
+/// **`tee` is in the list and is the one entry put there by name.** The filter
+/// is "writes the file it is named with, and has an extension", which is what a
+/// recording is and which `tee` is not — it opens the muxers in its argument
+/// instead. So it would be filtered out, and it is exactly the mechanism for the
+/// thing people come to this stage wanting: a take on disk and a stream going
+/// out at the same time, off one reading of the devices. Named rather than
+/// discovered for the reason `destination.js` gives: there is one such muxer and
+/// a question to find it would have only its name for an answer.
 function muxerPicker() {
     const all = (bro.ffmpeg.muxers || []).filter((m) => m.ext && !m.noFile);
+    const tee = (bro.ffmpeg.muxers || []).find((m) => m.name === 'tee');
     return el('select', {
         cls: 'wide', 'data-f': 'capformat',
-        on: { change: (e) => { capture.format = e.target.value; redraw(); } },
+        on: { change: (e) => { pickMuxer(e.target.value); } },
     }, all.map((m) => el('option', {
         value: m.name, text: `${m.label || m.name} (.${m.ext})`,
         selected: m.name === capture.format,
-    })));
+    })).concat(tee ? [el('option', {
+        value: 'tee', text: 'several destinations (tee)',
+        selected: capture.format === 'tee',
+    })] : []));
+}
+
+/// The container changed, which for one of them changes what a destination is.
+///
+/// Picking `tee` with the take already named makes that file the first
+/// destination, because it is what somebody who has settled on a filename and
+/// then decided to also stream it means. The Write stage does the same on the
+/// same reasoning — an empty list would throw the decision away and make the
+/// obvious next act "type it again".
+function pickMuxer(name) {
+    const was = capture.format;
+    capture.format = name;
+    if (name === 'tee' && !capture.destinations.length)
+        capture.destinations = [
+            newDestination({ format: was === 'tee' ? '' : was, path: capture.path }),
+            newDestination(),
+        ];
+    redraw();
 }
 
 function codecPicker(audio) {
@@ -1794,7 +1906,7 @@ function codecPicker(audio) {
     // left alone for a muxer that has never been taught to answer, because
     // reading its shrug as a refusal is how a picker comes to insist MPEG-TS
     // will not hold H.264.
-    const m = (bro.ffmpeg.muxers || []).find((x) => x.name === capture.format);
+    const m = codecMuxer();
     const ok = m && m.answersCodecs
         ? all.filter((c) => (audio ? m.audioCodecs : m.videoCodecs).indexOf(c.id) >= 0)
         : all;
@@ -1864,6 +1976,10 @@ function blocker() {
     // engine refuses it by name. Short here for the reason above; the sentence
     // is on the press.
     if (clashingPath()) return 'Two files, one path';
+    // A tee with an empty list is a muxer opened with an empty filename, which
+    // libavformat refuses without saying what it wanted. The single-file case
+    // cannot get here: a blank path becomes `defaultPath()`.
+    if (!recordTarget()) return 'Nowhere to write';
     return '';
 }
 
@@ -1873,6 +1989,20 @@ function destinationWhat() {
     const enc = effectiveVideo();
     return [m ? (m.label || m.name) : capture.format, enc && (enc.label || enc.id)]
         .filter(Boolean).join(' · ');
+}
+
+/// What to call the recording's destination on the button, and what to put
+/// behind it.
+///
+/// A tee has no basename — the argument is several of them with brackets in
+/// between — so it is named by how many it is, and the whole argument is the
+/// title. Which is the same answer `openable()` gives on the render side to the
+/// same problem: several destinations is not one thing to point at.
+function destinationName() {
+    if (capture.format !== 'tee')
+        return { text: basename(capture.path) || 'unnamed', title: capture.path };
+    const n = (capture.destinations || []).filter((d) => d.path).length;
+    return { text: `${n} destination${n === 1 ? '' : 's'}`, title: recordTarget() };
 }
 
 /// The act, and what a recording can honestly say about itself.
@@ -1915,16 +2045,16 @@ export function drawRecording() {
             }));
         } else {
             const why = blocker();
+            const dest = destinationName();
             out.push(el('button', {
                 cls: 'cap-go', 'data-f': 'caprecord', disabled: !!why,
-                title: why || `Record to ${capture.path}`,
+                title: why || `Record to ${dest.title}`,
                 on: { click: startRecording },
             }, [div('cap-go-dot'), span('Record')]));
             if (why) out.push(span(why, 'cap-why'));
             else out.push(div('cap-dest', [
                 el('div', {
-                    cls: 'cap-dest-name mono', text: basename(capture.path) || 'unnamed',
-                    title: capture.path,
+                    cls: 'cap-dest-name mono', text: dest.text, title: dest.title,
                 }),
                 div('cap-dest-what dim', destinationWhat()),
             ]));
@@ -2185,15 +2315,16 @@ export function commandParts() {
     // encode settings — see `capture.also`.
     const encoded = () => {
         const bits = [];
-        if (capture.videoCodec) bits.push('-c:v', capture.videoCodec);
-        if (capture.audioCodec) bits.push('-c:a', capture.audioCodec);
+        const codecs = effectiveCodecs();
+        if (codecs.video) bits.push('-c:v', codecs.video);
+        if (codecs.audio) bits.push('-c:a', codecs.audio);
         if (enc && enc.crf && capture.quality) bits.push('-crf', String(capture.quality));
         if (enc && enc.preset) bits.push('-preset', 'veryfast');
         return bits;
     };
     out.push(...encoded());
     if (capture.format) out.push('-f', capture.format);
-    out.push(shellArg(capture.path || 'capture.mkv'));
+    out.push(shellArg(recordTarget() || 'capture.mkv'));
 
     // **Several files is several outputs on one command line**, which is what
     // ffmpeg has always been able to do and this application could not say

@@ -23,6 +23,16 @@
 // one such muxer, and asking a question to discover it would be asking a
 // question whose only possible answer is its name.
 //
+// **The list is edited here too, and that is why the rows are in this file.**
+// A `-f tee` argument is a small language with two layers of escaping over it,
+// so it is built rather than typed — and it is built in two places, because two
+// things in this application open a muxer: a render, and a recording. There is
+// one editor for both (`destinationRows`) for the same reason there is one
+// `teeSpec`: a second copy would be a second answer to how a `|` is escaped,
+// and the two would agree right up until one of them was fixed. Which list it
+// is editing and what to call when it changes are the caller's; everything
+// about what a destination *is* stays here.
+//
 // **Why the tee muxer and not two Writers.** Chunk 12 sketched the second and
 // the seams do allow it — one `FrameSource`, two `Writer`s — but it would be
 // the wrong thing: `tee` means *one encode to several places*, and two Writers
@@ -34,6 +44,8 @@
 
 import { settings } from './state.js';
 import { urlScheme } from '../format.js';
+import { el, span, row, head } from '../dom.js';
+import { btns, note } from './controls.js';
 
 /// The scheme of a destination, or '' for somewhere on the filesystem.
 ///
@@ -170,6 +182,75 @@ export function teeSpec(list = settings.destinations) {
 /// somewhere would be a render going somewhere the screen does not say.
 export function outputTarget() {
     return isTee() ? teeSpec() : settings.path;
+}
+
+/// The list, as rows: one muxer, one target and its own options each, the built
+/// argument underneath, and the button that adds another.
+///
+/// **One editor, two stages.** The Write stage's destinations and a recording's
+/// are the same thing — `tee` is one encode to several muxers, and a recording
+/// is a device into a muxer — so they are edited by the same rows. What differs
+/// is only what the caller owns: `list` is the array, `changed` is what to call
+/// after touching it, `prefix` names the `data-f` handles so two stages' controls
+/// are addressable apart, and `first` is the muxer a first row arrives carrying.
+///
+/// It is shown as well as built, in full, under the list: the whole claim of
+/// this application is that nothing reaches ffmpeg unseen, and an argument
+/// assembled on your behalf is exactly the thing that has to be visible.
+///
+/// **`changed` and not a returned value.** These rows edit the objects in place,
+/// which is what every other list in this application does — a row is a view of
+/// a destination, not a form to be submitted — and the caller redraws.
+export function destinationRows({ list, changed, prefix = 'tee', first = 'matroska' }) {
+    const rows = [];
+    const at = (name, i) => `${prefix}-${name}${i === undefined ? '' : `-${i}`}`;
+
+    (list || []).forEach((d, i) => {
+        const target = el('input', {
+            cls: 'wide', 'data-f': at('path', i), type: 'text', value: d.path,
+            on: { change: () => { d.path = target.value.trim(); changed(); } },
+        });
+        const muxer = el('input', {
+            cls: 'wide', 'data-f': at('format', i), type: 'text', value: d.format,
+            placeholder: 'muxer, by name — mpegts, flv, matroska',
+            on: { change: () => { d.format = muxer.value.trim(); changed(); } },
+        });
+        const scheme = schemeOf(d.path);
+        rows.push(head(`Destination ${i + 1}`, { cls: 'section-head' }));
+        rows.push(row('-f', muxer));
+        rows.push(row('To', target));
+        if (scheme)
+            rows.push(row('', note(protocolLinked(scheme)
+                ? `${scheme} · linked in`
+                : `${scheme} · not in this build, so this destination will fail at open`)));
+        rows.push(row('', btns([
+            el('button', { cls: 'tiny', 'data-f': at('drop', i), text: 'Remove',
+                           on: { click: () => { list.splice(i, 1); changed(); } } }),
+        ])));
+    });
+
+    rows.push(row('', btns([
+        el('button', { cls: 'tiny', 'data-f': at('add'), text: '+ Destination',
+                       // The muxer this stage is set to is the sensible first
+                       // answer for the first destination and a poor one for the
+                       // second, which is usually the whole reason there is a
+                       // second.
+                       on: { click: () => {
+                           list.push(newDestination({
+                               format: list.length ? '' : first, path: '',
+                           }));
+                           changed();
+                       } } }),
+    ])));
+
+    const spec = teeSpec(list);
+    rows.push(row('-f tee', span(spec || 'nothing to write yet', spec ? 'mono ex-tee' : 'dim')));
+    rows.push(row('', note(
+        'Built rather than typed: tee separates its destinations with | and reads each ' +
+        'one’s options out of [ ], so a | or a \\ in a target and a : or a ] in an option ' +
+        'value have to be escaped — and then the shell quotes the lot again, which is a ' +
+        'second and separate layer. The command bar prints what runs.')));
+    return rows;
 }
 
 /// What a person would open to look at the result, or '' when there is nothing

@@ -684,6 +684,124 @@ console.log('\nreleasing one');
     pump(100);
 }
 
+// ── recording and streaming at once ────────────────────────────────────────
+//
+// `-f tee` is one encode written to several muxers, which is what somebody
+// recording a take while pushing it out wants — and the argument is a small
+// escaping language in a filename, so the list is *built*. The claim under test
+// is that it is built by the **Write stage's own rows**: one editor, so there is
+// one answer to how a `|` is escaped. Two files come out of it and both are
+// opened, because "several destinations" is a claim about the disk.
+console.log('\nseveral destinations out of one recording');
+{
+    const D = A.exporter.destination;
+    const a = `${bro.appDir}/../out/ui-capture-tee-a.mkv`;
+    const b = `${bro.appDir}/../out/ui-capture-tee-b.ts`;
+
+    const field = q('[data-f="cappath"]');
+    field.value = a;
+    field.dispatchEvent(new Event('change'));
+    pump(150);
+
+    const picker = q('[data-f="capformat"]');
+    ok(Array.from(picker.options).some((o) => o.value === 'tee'),
+       'tee is in the container picker — the one entry there by name, because a muxer that ' +
+       'does not write the file it is named with would be filtered out');
+
+    picker.value = 'tee';
+    picker.dispatchEvent(new Event('change'));
+    pump(200);
+
+    same(cap.capture.destinations.length, 2,
+         'picking it makes the take the first destination rather than throwing the name away');
+    same(cap.capture.destinations[0].path, a, 'which is the path that was already typed');
+    same(cap.capture.destinations[0].format, 'matroska', 'carrying the container it had');
+    ok(!q('[data-f="cappath"]'), 'and the single path field is gone — the list is where it goes now');
+
+    same(qa('[data-f^="capdest-path"]').length, 2,
+         'the list is edited as a list, by the Write stage’s own rows');
+
+    // Emptied and filled in again through the rows, which is how a person gets
+    // here — and an empty list is worth an assertion of its own: a tee opened
+    // with no destinations is a muxer opened with an empty filename, which
+    // libavformat refuses without saying what it wanted.
+    q('[data-f="capdest-drop-0"]').click();
+    pump(150);
+    q('[data-f="capdest-drop-0"]').click();
+    pump(150);
+    same(cap.capture.destinations.length, 0, 'Remove takes a destination out of the list');
+    ok(!cap.ready() && q('[data-f="caprecord"]').disabled,
+       'and a tee with nothing in it has nowhere to write, which the button says');
+
+    const typeInto = (i, path, format) => {
+        q('[data-f="capdest-add"]').click();
+        pump(150);
+        const p = q(`[data-f="capdest-path-${i}"]`);
+        p.value = path;
+        p.dispatchEvent(new Event('change'));
+        pump(100);
+        const f = q(`[data-f="capdest-format-${i}"]`);
+        f.value = format;
+        f.dispatchEvent(new Event('change'));
+        pump(150);
+    };
+    typeInto(0, a, 'matroska');
+    typeInto(1, b, 'mpegts');
+
+    // Escaped as tee reads it, which on Windows means every backslash in a
+    // path — the same function the render side uses, because it is the same
+    // argument.
+    same(cap.recordTarget(),
+         `[f=matroska]${D.escapeTarget(a)}|[f=mpegts]${D.escapeTarget(b)}`,
+         'the muxer is opened with the built argument and not with anything typed');
+    ok(text('.ex-tee').indexOf('[f=mpegts]') >= 0,
+       'which is shown in full under the list, because an argument assembled on your behalf ' +
+       'is the thing that has to be visible');
+
+    const line = text('#cmd-line');
+    ok(line.indexOf('-f tee') >= 0, `the command bar says -f tee (${line})`);
+    ok(/"[^"]*\|[^"]*"/.test(line), 'and quotes it, so the | is tee’s and not the shell’s');
+    same(text('.cap-dest-name'), '2 destinations',
+         'the button names how many there are — a tee has no basename to show');
+
+    // The same refusal the Also-write list gets, and now it can be made inside
+    // one argument: two destinations at one path is two muxers at one path.
+    cap.capture.destinations[1].path = a;
+    pump(150);
+    ok(!!cap.clashingPath() && !cap.ready(),
+       'two destinations aimed at one path is caught before the press, not inside one string');
+    cap.capture.destinations[1].path = b;
+    pump(150);
+    ok(cap.ready(), 'moved apart again, it is ready');
+
+    const secs = q('[data-f="capseconds"]');
+    secs.value = '2';
+    secs.dispatchEvent(new Event('change'));
+    pump(200);
+
+    q('[data-f="caprecord"]').click();
+    pump(200);
+    ok(waitFor('the tee recording to end', () => !cap.isRecording(), 40000),
+       'a recording through tee ends on its own, because -t belongs to the input');
+
+    const pa = bro.ffmpeg.probe(a);
+    const pb = bro.ffmpeg.probe(b);
+    ok(!!pa.video && !!pb.video, 'both destinations are on the disk with a picture in each');
+    same(pa.video.width, pb.video.width,
+         'the same width in both, because tee is one encode and not two');
+    screenshot('out/ui-capture-tee.png');
+
+    // Back to one file, and the name it had is still there — changing your mind
+    // about how many files there are must not lose the name of the one.
+    picker.value = 'matroska';
+    picker.dispatchEvent(new Event('change'));
+    pump(200);
+    same(q('[data-f="cappath"]').value, a, 'switching back keeps the single path it had');
+    secs.value = '';
+    secs.dispatchEvent(new Event('change'));
+    pump(100);
+}
+
 // ── the levels a session is running at ─────────────────────────────────────
 //
 // The picture a session makes has been on this stage since its pad was

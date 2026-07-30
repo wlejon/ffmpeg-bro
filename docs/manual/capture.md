@@ -211,6 +211,38 @@ and that is the label the writer maps. Delete the output and the recording drops
 to video out — the panel says what it is mapped as now, which is the whole of what
 changed.
 
+## Recording and streaming at once
+
+**Container** offers *several destinations (tee)* under the containers, and picking it
+turns **Save to** into a list. A row is a muxer and somewhere to go, so a take on disk
+and an RTMP push out of the building is two rows — one reading of the devices, one
+encode, two wrappers.
+
+The `-f tee` argument is **built rather than typed**, which is the whole reason the list
+is here. That argument is a small language inside a filename: destinations separated by
+`|`, each optionally preceded by `[key=value:key=value]`, and libavformat unescapes it
+before it looks at it — so a `|` or a `\` in a path has to be escaped, a `:` or a `]`
+inside a bracket does too, and then the shell quotes the lot again. Hand-writing one
+correctly is a party trick. It is shown as well as built, in full, under the list.
+
+These are **the same rows the Write stage draws**, out of the same file, because they
+are the same question: a recording is a device into a muxer, and a render is a timeline
+into a muxer. One editor, so there is one answer to how a `|` is escaped.
+
+`tee` is in the picker by name and is the only entry that is. Everything else on this
+stage is asked of libav, and the filter is "writes the file it is named with, and has
+an extension" — which is what a recording is and which `tee` is not: it opens the
+muxers in its argument instead. So it would have been filtered out, and it is exactly
+the mechanism for the thing people arrive at this stage wanting.
+
+Picking it with the take already named makes that file the first destination. Switching
+back leaves the single path where it was — changing your mind about how many files
+there are should not lose the name of the one.
+
+Afterwards there is one thing to point at rather than a filename: the button names how
+many destinations there are, and *Add to timeline* offers the first one that is a local
+path, because the others are the same bitstream and a URL has gone.
+
 ## More than one file out of one recording
 
 **Also write** is a list under the recording's own settings, and each row is another
@@ -223,7 +255,7 @@ stage has the other two and they are worth telling apart:
 
 | | |
 |---|---|
-| `-f tee` | one encode, several places — same packets, different wrappers |
+| `-f tee`, above | one encode, several places — same packets, different wrappers |
 | Also write, on the Write stage | several encodes of one edit, run one after another |
 | Also write, here | several encodes of one *moment*, running at once |
 

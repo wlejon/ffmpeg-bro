@@ -28,8 +28,8 @@ import { cutPoints } from './options.js';
 import { isHardwareEncoder, deviceOfEncoder, encodeCost } from '../hardware.js';
 import { optionColumn } from '../opttable.js';
 import { setAudioIncluded } from './streams.js';
-import { kindOf, describeKind, schemeOf, protocolLinked, teeSpec,
-         newDestination } from './destination.js';
+import { kindOf, describeKind, schemeOf, protocolLinked,
+         newDestination, destinationRows } from './destination.js';
 import { newVersion, versionSize } from './versions.js';
 
 let panes = {};
@@ -126,7 +126,13 @@ function outputRows() {
         row('', note(describeKind(kind, muxer))),
     ];
 
-    if (kind === 'several') rows.push(...teeRows());
+    // One encode, several places. The rows live in `destination.js` beside the
+    // escaping they are built to avoid, because a recording writes through a
+    // muxer too and edits the same list with the same rows.
+    if (kind === 'several')
+        rows.push(...destinationRows({ list: settings.destinations,
+                                       changed: () => hooks.changed(),
+                                       first: 'matroska' }));
     else rows.push(...oneTargetRows(kind));
 
     rows.push(...formatRows());
@@ -204,75 +210,6 @@ function oneTargetRows(kind) {
     }
 
     rows.push(...numberingRows(path));
-    return rows;
-}
-
-// ── several destinations ───────────────────────────────────────────────────
-//
-// One encode, several places. The list is edited as a list — each row a muxer,
-// a target and its own options — and the `-f tee` argument is *built* from it
-// rather than typed, because that argument is a small language with two layers
-// of escaping over it and hand-writing one correctly is a party trick.
-//
-// It is shown as well as built, in full, under the list: the whole claim of
-// this application is that nothing reaches ffmpeg unseen, and an argument
-// assembled on your behalf is exactly the thing that has to be visible.
-
-function teeRows() {
-    const list = settings.destinations;
-    const rows = [];
-
-    list.forEach((d, i) => {
-        const target = el('input', {
-            cls: 'wide', 'data-f': `tee-path-${i}`, type: 'text', value: d.path,
-            on: { change: () => { d.path = target.value.trim(); hooks.changed(); } },
-        });
-        const muxer = el('input', {
-            cls: 'wide', 'data-f': `tee-format-${i}`, type: 'text', value: d.format,
-            placeholder: 'muxer, by name — mpegts, flv, matroska',
-            on: { change: () => { d.format = muxer.value.trim(); hooks.changed(); } },
-        });
-        const scheme = schemeOf(d.path);
-        rows.push(head(`Destination ${i + 1}`, {
-            cls: 'section-head',
-        }));
-        rows.push(row('-f', muxer));
-        rows.push(row('To', target));
-        if (scheme)
-            rows.push(row('', note(protocolLinked(scheme)
-                ? `${scheme} · linked in`
-                : `${scheme} · not in this build, so this destination will fail at open`)));
-        rows.push(row('', btns([
-            el('button', { cls: 'tiny', 'data-f': `tee-drop-${i}`, text: 'Remove',
-                           on: { click: () => {
-                               settings.destinations.splice(i, 1);
-                               hooks.changed();
-                           } } }),
-        ])));
-    });
-
-    rows.push(row('', btns([
-        el('button', { cls: 'tiny', 'data-f': 'tee-add', text: '+ Destination',
-                       on: { click: () => {
-                           // The muxer the Encode stage is set to is the
-                           // sensible first answer for the first destination
-                           // and a poor one for the second, which is usually
-                           // the whole reason there is a second.
-                           settings.destinations.push(newDestination({
-                               format: list.length ? '' : 'matroska',
-                               path: '',
-                           }));
-                           hooks.changed();
-                       } } }),
-    ])));
-
-    const spec = teeSpec();
-    rows.push(row('-f tee', span(spec || 'nothing to write yet', spec ? 'mono ex-tee' : 'dim')));
-    rows.push(row('', note(
-        'Built rather than typed: tee separates its destinations with | and reads each ' +
-        'one’s options out of [ ], so a | or a \\ in a target and a : or a ] in an option ' +
-        'value have to be escaped — and then the shell quotes the lot again, which is a ' +
-        'second and separate layer. The command bar prints what runs.')));
     return rows;
 }
 

@@ -181,13 +181,6 @@ Honest list of what does not work:
   makes its own frames and nothing has to pull one. A graph whose filters want a
   graphics card is refused the same way, because `-filter_hw_device` has nowhere
   to be said on this stage.
-- **A destination editor on the Capture stage.** Recording and streaming the
-  same capture works — it is `-f tee` and the same `Writer` — but the argument
-  is typed into the path field there rather than built from a list. The Write
-  stage has the editor, and a second copy of the escaping would be a second
-  answer to it. **Also write** is a list on that stage and is not this: it is
-  several encodes running at once, one muxer each, and every row of it has a
-  path field of its own that a tee argument can be typed into.
 - **Variable frame rate out.** `-fps_mode` has one honest value here and the
   command says it: `cfr`. Both render paths walk the range forward at the output
   rate and stamp each frame with its number — the compositor because it samples

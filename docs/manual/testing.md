@@ -337,6 +337,18 @@ The session behind it is asked directly too — three pads over two `-i`s, two o
 devices — which is the assertion that one open per device is what is actually
 happening rather than what is intended.
 
+**Several destinations** is driven through the picker and the rows and asserted off
+the disk. `tee` has to be *in* the container list — it would be filtered out, being a
+muxer that does not write the file it is named with — and picking it has to turn the
+take already named into destination one rather than throwing the name away. The list
+is then emptied through Remove, which is the one state that has nowhere to go and
+must reach the button rather than the open; refilled through **+ Destination** and the
+two fields; and the argument the muxer is opened with is compared against
+`escapeTarget` on both paths, because it is the render side's own function on the same
+kind of argument. Then a real recording, and both files are probed: **the same width
+in each**, which is what makes it one encode rather than two. Switching the container
+back has to leave the single path where it was.
+
 The **meters** are checked against arithmetic rather than against a file. `aevalsrc`
 puts the amplitude in the expression, so a sine at 0.5 must read exactly `-6.0` dBFS
 on the number, put its bar at the RMS — which for a sine is peak over root two — and
