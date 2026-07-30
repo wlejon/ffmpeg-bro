@@ -73,29 +73,37 @@ Honest list of what does not work:
   4K, and so nothing could decide to re-measure the cheap one and leave the
   expensive one alone. That is a cost model of a render, which the A/B stage's
   numbers are the beginning of and no part of this reads.
-- **Writing to a URL while it fails, and opening a device while it hangs.**
-  Reading a slow URL is built — see [While it is
-  connecting](sources.md#while-it-is-connecting): a URL is opened on a thread of
-  its own with a deadline and a Stop that reaches libav's own interrupt
-  callback, so nothing about a far end that will not answer reaches the window.
-  Two things around it are not.
+- **Reading a URL that keeps failing, and opening a device that hangs.** Both
+  ends of *going wrong* on a network are built now. Reading: a URL is opened on a
+  thread of its own with a deadline and a Stop that reaches libav's own interrupt
+  callback — see [While it is connecting](sources.md#while-it-is-connecting).
+  Writing: `Keep trying` wraps the muxer in ffmpeg's `fifo`, and a render that
+  reconnected says so and counts the times — see [When the destination goes
+  away](output.md#when-the-destination-goes-away). Three things around them are
+  not.
 
-  A **destination that drops mid-render** still arrives as a failed render with
-  libav's own message in the report, and nothing retries, reconnects or buffers.
-  That is what `-reconnect` (an `http` protocol option, and on the reading side
-  only) and the **`fifo` muxer** exist for — the second wraps another muxer with
-  a queue and its own recovery, and it is in this build. Both are reachable as
-  ordinary options today, in the muxer's and the protocol's own columns, and
-  neither is surfaced as anything better than that: nothing turns "keep trying
-  if it drops" into the wrapping it means, and — the part that matters more —
-  nothing would **count the recoveries and say so**, so a file with a gap in it
-  would be reported as a plain success.
+  **Nothing turns the *reading* end's reconnection into a decision.**
+  `-reconnect`, `-reconnect_streamed`, `-reconnect_at_eof` and
+  `-reconnect_delay_max` are `http` protocol options and appear in the protocol
+  column like any other, which is where they can be set — but "keep reading if
+  the source drops" is the same shape of question the writing end now answers
+  with one control, and it has no control of its own. It is a smaller piece of
+  work than the writing end was, because there is no muxer to wrap: it is four
+  keys in a bag the Sources stage already edits. What it needs is the same
+  honesty about *counting* — an input that reconnected mid-render has a gap in
+  it too, and `http` says so in the log the same way `fifo` does.
+
+  **A recovery is counted out of what the muxer says**, because `fifo` keeps no
+  counter and publishes nothing: the three strings matched are
+  libavformat/fifo.c's own. A libav that reworded them would make the count read
+  zero, which is the safe direction and is stated where it is done — but it is
+  still a string match, and the alternative is a patch to libavformat.
 
   A **device** is still opened synchronously, on the UI thread, by both the
   Sources stage and the Capture stage. A camera another application is holding
   blocks `avformat_open_input` for as long as its driver takes, and the window
   waits with it. The mechanism that fixed the URL case is exactly the mechanism
-  this one wants — the deadline is meaningless for a local file and not for a
+  this one wants — a deadline is meaningless for a local file and not for a
   device — and what is missing is only the decision about which opens go through
   it, which is a rule this application should state rather than discover.
 - **A soft subtitle track in the viewer.** Cues burned into a clip are on the

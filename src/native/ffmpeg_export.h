@@ -429,6 +429,55 @@ struct ExportSettings {
     /// is called `matroska`.
     std::string format;
 
+    /// `-f fifo` in front of `format`: keep trying when the destination drops.
+    ///
+    /// **This is a decision, not a bag of options.** "Keep going if the stream
+    /// drops" means, in ffmpeg, wrapping the muxer in the `fifo` pseudo-muxer —
+    /// a queue, a thread, and a reconnect loop around whatever it is told to
+    /// wrap. There is one such muxer and it is named here for the reason `tee`
+    /// is named in ui/export/destination.js: it *is* the mechanism, and asking a
+    /// question to discover it would be asking a question with one possible
+    /// answer. Everything about *what one takes* is still libav's — the option
+    /// table, the ranges and the defaults are read out of `muxerOptions("fifo")`
+    /// and nothing here writes one down.
+    ///
+    /// **Three things follow from the wrapping and none of them is optional.**
+    /// The destination is opened on fifo's own thread, so a URL that cannot be
+    /// reached at all is no longer a refusal at start — it is the first thing to
+    /// recover from, which is what was asked for. Everything the writer records
+    /// about the files it opened is therefore written from two threads and
+    /// guarded (`Writer::piecesMu_`). And the muxer that decides *what the file
+    /// is* stops being `oc_->oformat`; see `Writer::format_`.
+    struct FifoSettings {
+        bool on = false;
+
+        /// Every one of these means "leave it to the muxer" at its sentinel, so
+        /// that libav's own default is the only default there is. A number
+        /// written down here would be a second answer to a question
+        /// `muxerOptions("fifo")` already reports.
+        int queueSize = 0;              ///< 0: fifo's own `queue_size`
+        double waitSeconds = -1;        ///< <0: fifo's own `recovery_wait_time`
+        int maxAttempts = 0;            ///< 0 is fifo's own "keep trying forever"
+
+        /// Drop rather than block when the queue fills.
+        ///
+        /// **False is fifo's own default and this application never asks for
+        /// it**, which is a refusal with a measured reason rather than a
+        /// preference. `fifo_thread_recover` loops on `AVERROR(EAGAIN)` while
+        /// `!drop_pkts_on_overflow`, so a destination that never comes up leaves
+        /// the consumer thread retrying for ever while the render thread blocks
+        /// inside `av_interleaved_write_frame` on a full queue — and `Stop` is
+        /// checked once per *output frame*, so it never arrives. Measured: a
+        /// four-second render to a closed port with `max_recovery_attempts 2`
+        /// ran for twenty seconds without ending and was still running after a
+        /// cancel. Blocking is right for a destination that is merely slow and
+        /// is left reachable for a spec written by hand; the Write stage offers
+        /// only the two dropping modes and says so.
+        bool dropOnOverflow = false;
+        bool restartWithKeyframe = false;
+    };
+    FifoSettings fifo;
+
     int width = 1920;
     int height = 1080;
     double fps = 30.0;

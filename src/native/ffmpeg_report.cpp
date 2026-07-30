@@ -99,6 +99,11 @@ struct Channel {
     uint64_t job = 0;
     uint64_t jobs = 0;
 
+    /// What the fifo muxer said about losing and regaining its destination.
+    /// Under the same lock as everything else here, because it is written from
+    /// fifo's own thread and read from the render's. See `WriteRecovery`.
+    WriteRecovery recovery;
+
     // libav writes some lines in pieces — `av_dump_format` is the worst
     // offender, and an encoder's summary is not much better. A chunk with no
     // trailing newline is a line that is not finished, which
@@ -194,6 +199,26 @@ void capture(void* ptr, int level, const char* fmt, va_list vl) {
 
     const char* src = sourceOf(ptr);
 
+    // **The one place a recovery can be counted**, because the fifo muxer keeps
+    // no counter and publishes nothing. These three strings are
+    // libavformat/fifo.c's own, verbatim: `Recovery successful` and
+    // `Recovery failed: <err>` at AV_LOG_INFO, `FIFO queue full` at
+    // AV_LOG_WARNING. Matched on the front of the line so the error text and any
+    // future suffix do not matter, and only for a line the fifo muxer itself
+    // said — an AVFormatContext's `item_name` is its format's name, so `src` is
+    // exactly "fifo" and a filter or an encoder using the same word cannot be
+    // mistaken for one. The prefixes are the fragile part of this and they are
+    // the only fragile part: a libav that reworded them makes the count read
+    // zero, which is the safe direction and is what the render's note says when
+    // there is nothing to report.
+    if (src && std::strcmp(src, "fifo") == 0) {
+        Channel& c = channel();
+        std::lock_guard<std::mutex> lock(c.mu);
+        if (std::strncmp(line, "Recovery successful", 19) == 0) ++c.recovery.recovered;
+        else if (std::strncmp(line, "Recovery failed", 15) == 0) ++c.recovery.failed;
+        else if (std::strncmp(line, "FIFO queue full", 15) == 0) ++c.recovery.overflowed;
+    }
+
     if (print) {
         if (level <= AV_LOG_ERROR)        LOG_ERROR("ffmpeg: %s", line);
         else if (level <= AV_LOG_WARNING) LOG_WARN("ffmpeg: %s", line);
@@ -239,6 +264,9 @@ uint64_t beginRenderReport() {
     // Whatever was half-said belongs to whoever was speaking, not to the render
     // about to start.
     flushPending(c);
+    // Zeroed with the job number rather than at the end of one, so that a render
+    // reading its own tally reads what happened during *it*.
+    c.recovery = WriteRecovery{};
     c.job = ++c.jobs;
     return c.job;
 }
@@ -248,6 +276,12 @@ void endRenderReport() {
     std::lock_guard<std::mutex> lock(c.mu);
     flushPending(c);
     c.job = 0;
+}
+
+WriteRecovery writeRecovery() {
+    Channel& c = channel();
+    std::lock_guard<std::mutex> lock(c.mu);
+    return c.recovery;
 }
 
 uint64_t currentRenderJob() {

@@ -137,6 +137,7 @@ function outputRows() {
                                        first: 'matroska' }));
     else rows.push(...oneTargetRows(kind));
 
+    rows.push(...keepTryingRows(kind));
     rows.push(...formatRows());
     rows.push(...versionRows());
     rows.push(head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
@@ -144,6 +145,132 @@ function outputRows() {
         cls: 'section-head ex-toggle',
         on: { click: () => { showFormatOptions = !showFormatOptions; drawForm(); } },
     }));
+    return rows;
+}
+
+// ── a destination that is allowed to go away ───────────────────────────────
+//
+// **One decision with four dials, not eleven checkboxes.** What somebody
+// streaming to an RTMP endpoint wants is "keep going if it drops"; what that is
+// in ffmpeg is the `fifo` pseudo-muxer wrapped around the muxer they picked.
+// The app's job is to know that, so `Keep trying if it drops` is the control and
+// `-f fifo -fifo_format flv -attempt_recovery 1` is what it means — printed in
+// full by the command bar, which is where the claim that nothing reaches ffmpeg
+// unseen is kept.
+//
+// Everything a dial *says about itself* is libav's. The help text, the range and
+// the number a blank field means are read out of `muxerOptions('fifo')`, so a
+// build whose fifo grew a bigger default queue says so here with no edit.
+
+/// One option of the fifo muxer, as libav describes it. Cached for the reason
+/// every other option table on this stage is: the panel is rebuilt on every
+/// keystroke in a search box.
+let fifoTable = null;
+function fifoOption(name) {
+    if (!fifoTable) {
+        try { fifoTable = bro.ffmpeg.muxerOptions('fifo') || []; } catch (e) { fifoTable = []; }
+    }
+    return fifoTable.find((o) => o.name === name) || null;
+}
+
+/// Is there a `fifo` muxer in this build at all?
+///
+/// Asked rather than assumed, like every other capability here: it is compiled
+/// in with threads and a build without them has no such muxer, and a control
+/// that offered one would fail at `avformat_alloc_output_context2`.
+const hasFifo = () => !!(bro.ffmpeg.muxers || []).some((m) => m.name === 'fifo');
+
+/// A number field whose blank value means "whatever the muxer's own default is",
+/// with that default in the placeholder so the blank is not a mystery.
+function fifoNum(name, optionName, value, sentinel, apply, unit) {
+    const o = fifoOption(optionName);
+    const shown = value === sentinel ? '' : String(value);
+    const field = el('input', {
+        cls: 'num', 'data-f': name, type: 'number', value: shown,
+        placeholder: o && o.default !== '' ? o.default : 'default',
+        title: o ? `${optionName} — ${o.help}` : optionName,
+        on: { change: () => {
+            const v = field.value.trim();
+            apply(v === '' ? sentinel : Number(v));
+            hooks.changed();
+        } },
+    });
+    return btns([field, unit ? span(unit, 'dim') : null]);
+}
+
+function keepTryingRows(kind) {
+    if (!hasFifo()) return [];
+    const k = settings.keepTrying;
+
+    // A tee is refused rather than quietly given one, and the refusal names the
+    // form that does work. See `keepTrying()` in spec.js for the argument; it is
+    // stated here because this is where somebody would look for the control.
+    if (kind === 'several')
+        return [row('If it drops', note(
+            'One fifo in front of several destinations is one queue and one recovery for ' +
+            'all of them, so a single flaky endpoint would take the others down and back ' +
+            'with it. Per destination it works and is what ffmpeg’s own documentation ' +
+            'writes: set that destination’s -f to fifo and give it fifo_format=<muxer> in ' +
+            'its options.'))];
+    // A file on this machine does not drop and come back. Said rather than
+    // hidden only where it is nearly relevant — a set of segments going to a
+    // local folder is not what this is about either.
+    if (kind !== 'stream') return [];
+
+    const rows = [
+        row('If it drops', btns(el('button', {
+            cls: 'tiny' + (k.on ? ' on' : ''), 'data-f': 'keeptrying',
+            text: k.on ? 'Keep trying' : 'Fail the render',
+            title: 'Wrap the muxer in ffmpeg’s fifo, which queues packets and reconnects ' +
+                   'rather than ending the render when the destination goes away',
+            on: { click: () => { k.on = !k.on; hooks.changed(); } },
+        }))),
+    ];
+    if (!k.on) {
+        rows.push(row('', note(
+            'The render ends when the destination stops accepting it, with libav’s own ' +
+            'message in the report and whatever had been sent already closed properly.')));
+        return rows;
+    }
+
+    rows.push(row('Queue', fifoNum('fifoqueue', 'queue_size', k.queueSize, 0,
+                                   (v) => { k.queueSize = Math.max(0, Math.round(v) || 0); },
+                                   'packets')));
+    rows.push(row('Wait', fifoNum('fifowait', 'recovery_wait_time', k.waitSeconds, -1,
+                                  (v) => { k.waitSeconds = Number.isFinite(v) && v >= 0 ? v : -1; },
+                                  'seconds between attempts')));
+    rows.push(row('Give up after', fifoNum('fifoattempts', 'max_recovery_attempts',
+                                           k.maxAttempts, 0,
+                                           (v) => { k.maxAttempts = Math.max(0, Math.round(v) || 0); },
+                                           'attempts — blank never gives up')));
+    // **Two choices where ffmpeg has three, and the missing one is fifo's own
+    // default.** `drop_pkts_on_overflow` off means the render *blocks* on a full
+    // queue, and `fifo_thread_recover` loops on EAGAIN while it is off — so a
+    // destination that never comes up leaves the consumer retrying for ever
+    // while the render thread waits inside `av_interleaved_write_frame`, and
+    // Stop, which is checked once per output frame, never arrives. Measured: a
+    // four-second render to a closed port with two recovery attempts ran for
+    // twenty seconds and ignored a cancel. Blocking is right for a destination
+    // that is merely slow and stays reachable to a spec written by hand; nothing
+    // on this stage produces one. The note below says so rather than leaving a
+    // control that is quietly absent.
+    rows.push(row('When it fills', segmented('fifofull', [
+        { v: 'drop', l: 'Drop', title: 'drop_pkts_on_overflow — the render keeps its own ' +
+                                       'pace and the oldest packets are thrown away' },
+        { v: 'keyframe', l: 'Drop, resume on a keyframe',
+          title: 'restart_with_keyframe — the same, and after a drop nothing is sent until ' +
+                 'a keyframe, so the far end has a picture to start from' },
+    ], k.restartWithKeyframe ? 'keyframe' : 'drop', (v) => {
+        k.restartWithKeyframe = v === 'keyframe';
+        hooks.changed();
+    })));
+    rows.push(row('', note(
+        'This is -f fifo in front of the muxer, with -fifo_format naming it. A render that ' +
+        'reconnected says so in the report and counts how many times — what was happening ' +
+        'while the destination was gone is not in the file, so a recovered render is not the ' +
+        'same as one that never dropped. A blank field is the fifo muxer’s own default. ' +
+        'fifo’s third mode, blocking until the queue drains, is not offered: a blocked ' +
+        'render whose destination never comes up cannot be stopped.')));
     return rows;
 }
 

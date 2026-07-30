@@ -71,6 +71,7 @@ extern "C" {
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -475,8 +476,38 @@ private:
     /// instead of knowing about suffixes.
     void resolveRenames();
 
+    /// Put the `fifo` in front of the muxer and tell it what to wrap. Only when
+    /// `ExportSettings::fifo.on`; see the note there for what a wrapping means.
+    bool applyFifo(const ExportSettings& s, std::string* err);
+
+    /// Was every protocol option taken by something? Asked right after the
+    /// header for an ordinary render and at the end of one behind a fifo, whose
+    /// destination is not opened until its own thread gets to it.
+    bool checkProtocolOptions(std::string* err);
+
     ExportSettings settings_;
     AVFormatContext* oc_ = nullptr;
+
+    /// **The muxer that decides what the file is**, which is not always the one
+    /// being written through.
+    ///
+    /// `oc_->oformat` is the context's — the thing `av_interleaved_write_frame`
+    /// is called on, whose flags say whether *it* opens the destination. With a
+    /// `fifo` in front (see `ExportSettings::fifo`) those are two different
+    /// muxers, and every question in this file is about exactly one of them:
+    /// what codec a container will hold, which fourcc it has a name for, what
+    /// its default encoder is and whether `+faststart` means anything are all
+    /// about *this* one, while whether to `avio_open` is about the context's.
+    /// Asking the wrong one is not a subtle bug — `fifo` answers
+    /// AVERROR_PATCHWELCOME to every `query_codec`, has no default codecs and no
+    /// tag tables, so a render through it would silently lose every fourcc and
+    /// have no encoder to fall back on.
+    ///
+    /// Equal to `oc_->oformat` for every render that is not wrapped.
+    const AVOutputFormat* format_ = nullptr;
+
+    /// True while `oc_` is a `fifo` in front of `format_`.
+    bool wrapped_ = false;
     AVPacket* pkt_ = nullptr;
     std::vector<std::unique_ptr<Out>> outs_;
     int64_t bytes_ = 0;
@@ -496,6 +527,16 @@ private:
 
     std::vector<Piece> wrote_;              ///< in the order they were opened
     std::map<AVIOContext*, std::string> live_;   ///< open right now, by handle
+
+    /// The three above, and nothing else.
+    ///
+    /// **A `fifo` wrapping opens the destination on a thread of its own**, which
+    /// is the whole point of it: `fifo_write_header` starts a thread and returns,
+    /// and every `io_open`, `io_close` and reconnection after that happens there
+    /// while this thread is still handing packets in. Without a wrapping there is
+    /// one thread and this is never contended, so it costs a lock per file opened
+    /// and per status read — which is nothing beside opening a file.
+    mutable std::mutex piecesMu_;
 
     /// The pool the composite arrives in, borrowed from the frame source for
     /// the life of `open()`. Not owned: the source outlives the writer.

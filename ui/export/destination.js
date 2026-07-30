@@ -149,6 +149,25 @@ export const escapeTarget = (s) => String(s || '').replace(/([\\|])/g, '\\$1');
 /// and `]` ends the list.
 export const escapeOption = (s) => String(s || '').replace(/([\\|:\]])/g, '\\$1');
 
+/// A key or a value inside an `AV_OPT_TYPE_DICT` argument — `fifo`'s
+/// `format_opts`, and every other option in libav whose value is itself a bag.
+///
+/// **The third escaping grammar in this file and deliberately not one of the
+/// other two.** libavutil reads a dict option with `av_dict_parse_string(…,
+/// "=", ":", 0)`, so `=` separates a key from its value and `:` separates one
+/// pair from the next, and `av_get_token` unescapes a backslash — which is a
+/// different set of characters from `tee`'s slave list (`|` and `\`) and from
+/// its bracket (`:`, `]` and `\`). Collapsing the three into one escaper would
+/// mean escaping characters that are ordinary in two of the three grammars, and
+/// a backslash that arrives where nothing was going to split is a backslash in
+/// somebody's filename.
+///
+/// **The renderer never uses this**, and that is the point of saying so here:
+/// `Writer::open` hands `format_opts` an `AVDictionary` through
+/// `av_opt_set_dict_val`, where there is no string to escape. This exists for
+/// the *printed* command, which has no such call and has to spell the bag out.
+export const escapeDictArg = (s) => String(s || '').replace(/([\\:=])/g, '\\$1');
+
 let nextId = 1;
 export const newDestination = (over = {}) =>
     Object.assign({ id: nextId++, format: '', path: '', options: {} }, over);

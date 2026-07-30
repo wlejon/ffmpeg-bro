@@ -35,7 +35,7 @@ import { freshSpec, specSources, needsGraph } from './export/spec.js';
 import { parseCopy } from './export/copy.js';
 import { parseDecode, defaultSubtitleCodec } from './export/subtitles.js';
 import { parsePad } from './export/pads.js';
-import { kindOf } from './export/destination.js';
+import { kindOf, escapeDictArg } from './export/destination.js';
 import { muxerInfo } from './export/capabilities.js';
 import { current as overlayState, isEmpty as noUserNodes } from './graph/overlay.js';
 import { commandParts as captureParts } from './capture.js';
@@ -475,19 +475,27 @@ export function parts() {
         return out;
     }
 
+    // Whatever the muxer was told beyond its defaults, gathered before it is
+    // written because *where* it goes on the line depends on whether the muxer
+    // is wrapped. These reach it through the same `av_opt_set`-with-children
+    // route the encoder options take, so they are as exact as the rest of this
+    // line — and a `-hls_time` the file was written with but the command did not
+    // mention is the sort of omission this bar exists to make impossible.
+    const muxerArgs = [];
     if (settings.faststart && spec.format === 'mp4')
-        out.push('-movflags', '+faststart');
+        muxerArgs.push(['movflags', '+faststart']);
+    for (const k of Object.keys(spec.formatOptions || {}))
+        if (spec.formatOptions[k] !== '' && spec.formatOptions[k] !== undefined)
+            muxerArgs.push([k, String(spec.formatOptions[k])]);
+
+    // `-metadata` is not one of them and stays where it always was: ffmpeg
+    // writes it into the output context's own dictionary rather than through an
+    // option table, and `fifo_mux_init` copies that dictionary into the muxer it
+    // wraps — so a wrapped render's title reaches the file by the same route.
     if (settings.title) out.push('-metadata', arg(`title=${settings.title}`));
     for (const k of Object.keys(spec.metadata || {}))
         if (spec.metadata[k] !== '') out.push('-metadata', arg(`${k}=${spec.metadata[k]}`));
-    // Whatever the muxer was told beyond its defaults. These reach it through
-    // the same `av_opt_set`-with-children route the encoder options take, so
-    // they are as exact as the rest of this line — and a `-hls_time` the file
-    // was written with but the command did not mention is the sort of omission
-    // this bar exists to make impossible.
-    for (const k of Object.keys(spec.formatOptions || {}))
-        if (spec.formatOptions[k] !== '' && spec.formatOptions[k] !== undefined)
-            out.push(`-${k}`, arg(spec.formatOptions[k]));
+
     // `-f` last before the path, where ffmpeg wants it, and always — not only
     // when the extension disagrees. The render is told which muxer by name, so
     // a command that left it to be guessed from the filename would be a
@@ -497,7 +505,47 @@ export function parts() {
     // invocations genuinely part company — and a bar that printed the master's
     // filename twice would be printing a command that writes one file.
     const format = (pass && pass.format) || spec.format;
-    if (format) out.push('-f', format);
+    // A destination that is allowed to go away is written the way ffmpeg writes
+    // one: `-f fifo` is the muxer on the command line and the real muxer is
+    // `-fifo_format`'s argument. Exactly what the render does — `Writer::open`
+    // allocates a `fifo` context and sets the same keys with `av_opt_set` — so
+    // this belongs in the exact half of the bar and the line runs as printed.
+    //
+    // **A pass writes its own file and answers for itself.** A version at
+    // another size is another output with another path, and only a pass whose
+    // path is the URL gets the wrapping; the spec's `keepTrying.on` was already
+    // decided against the path this spec is writing to (see `keepTrying()` in
+    // export/spec.js), so a pass that overrides the path overrides this with it.
+    const fifo = (pass && pass.keepTrying) || spec.keepTrying;
+    if (fifo && fifo.on && !(pass && pass.path && pass.path !== spec.path)) {
+        out.push('-f', 'fifo');
+        if (format) out.push('-fifo_format', format);
+        out.push('-attempt_recovery', '1');
+        if (fifo.queueSize > 0) out.push('-queue_size', String(fifo.queueSize));
+        // Seconds here and on the stage; a bare number in an ffmpeg duration is
+        // microseconds, so it is printed the way libav reads it.
+        if (fifo.waitSeconds >= 0)
+            out.push('-recovery_wait_time', String(Math.round(fifo.waitSeconds * 1e6)));
+        if (fifo.maxAttempts > 0)
+            out.push('-max_recovery_attempts', String(fifo.maxAttempts));
+        if (fifo.dropOnOverflow) out.push('-drop_pkts_on_overflow', '1');
+        if (fifo.restartWithKeyframe) out.push('-restart_with_keyframe', '1');
+        // **The wrapped muxer's own options cannot be written as flags**, and
+        // that is not a stylistic choice: the muxer on the command line is
+        // `fifo`, ffmpeg applies its output options to *that* context, and
+        // `-movflags` on a fifo is "Option movflags not found" and an exit. They
+        // travel in fifo's `format_opts`, which is a dictionary spelt as one
+        // argument — see `escapeDictArg`. The renderer does the same thing
+        // without the string, through `av_opt_set_dict_val`.
+        if (muxerArgs.length)
+            out.push('-format_opts',
+                     arg(muxerArgs
+                             .map(([k, v]) => `${escapeDictArg(k)}=${escapeDictArg(v)}`)
+                             .join(':')));
+    } else {
+        for (const [k, v] of muxerArgs) out.push(`-${k}`, arg(v));
+        if (format) out.push('-f', format);
+    }
     out.push(arg((pass && pass.path) || spec.path || `out.${outputExt()}`));
     return out;
     };
@@ -744,6 +792,14 @@ function notes(p) {
                     'protocol’s options are the ones the muxer did not recognise, printed ' +
                     'in the same place — libavformat hands them down to the AVIO layer, ' +
                     'which is the same route they take at the reading end.']);
+    if (p.spec.keepTrying && p.spec.keepTrying.on)
+        lines.push([span('Wrapped in a fifo: ', 'lead'),
+                    'the muxer on the line is fifo and the real one is -fifo_format’s ' +
+                    'argument, which is exactly what the render allocates. Its own options ' +
+                    'go in -format_opts rather than as flags, because ffmpeg applies output ' +
+                    'options to the muxer it was named with and fifo has never heard of ' +
+                    'them. A render that reconnects has a gap in the file where the ' +
+                    'destination was gone, and the report says how many times.']);
     if (kind === 'files')
         lines.push([span('A set of files: ', 'lead'),
                     'this muxer writes more than the file it is named with. What the ' +

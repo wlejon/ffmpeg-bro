@@ -34,6 +34,14 @@ const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     // forgotten destination list is a workspace that opens
                     // saying it will write to several places and naming none.
                     'destinations',
+                    // And whether the destination is allowed to go away, for
+                    // exactly the same reason: "keep trying if it drops" is a
+                    // fact about where somebody streams to and not about this
+                    // edit, and it is set once. **This is the shape the hazard
+                    // note in the sanitiser is about** — it is settings for one
+                    // muxer, remembered in a workspace that is next used for a
+                    // local file.
+                    'keepTrying',
                     // And the versions, for the same reason: "always cut a 720p
                     // proxy beside the master" is a house rule, not a fact
                     // about this timeline, and it is exactly the sort of thing
@@ -92,6 +100,18 @@ export function adopt(blob, keys) {
     sanitise();
 }
 
+/// A stored `recovery_wait_time`, or the sentinel meaning "the muxer's own".
+///
+/// Absence is tested for before the number is coerced, because zero is a real
+/// answer — fifo reads it as "try again at once" — and every one of `null`,
+/// `undefined` and `''` becomes zero on the way through `Number()`.
+function waitOrDefault(v) {
+    if (typeof v === 'string' && v.trim() === '') return -1;
+    if (typeof v !== 'number' && typeof v !== 'string') return -1;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : -1;
+}
+
 /// What is in `settings` now, made safe to use.
 function sanitise() {
     // The remembered container and codec may not exist in this build — and
@@ -117,6 +137,36 @@ function sanitise() {
         if (!settings[k] || typeof settings[k] !== 'object' || Array.isArray(settings[k]))
             settings[k] = {};
     if (!Array.isArray(settings.destinations)) settings.destinations = [];
+    // **The workspace is shared and a stored blob is not a promise**, and this
+    // one is exactly the shape that has poisoned it before: numbers for one
+    // muxer, written once and read back for a render that has nothing to do
+    // with it. Coerced rather than trusted — a `queueSize` that came back as
+    // `"60"` reaches `av_opt_set` as a string that happens to work and a
+    // `waitSeconds` of `null` reaches it as `0`, which is a different decision
+    // from the one the blank field meant. The sentinels are restated here
+    // because this is the reader, and a reader that trusted them would be
+    // trusting the writer of an older version of this file.
+    {
+        const k = settings.keepTrying && typeof settings.keepTrying === 'object'
+                      ? settings.keepTrying : {};
+        settings.keepTrying = {
+            on: !!k.on,
+            queueSize: Math.max(0, Math.round(Number(k.queueSize) || 0)),
+            // `Number(null)` is 0 and `Number('')` is 0, and zero is a real
+            // answer here — "retry immediately" — so absence has to be tested
+            // for before the coercion rather than after it. This is the whole
+            // reason the sentinel is −1 and not 0.
+            waitSeconds: waitOrDefault(k.waitSeconds),
+            maxAttempts: Math.max(0, Math.round(Number(k.maxAttempts) || 0)),
+            // Not read back from the blob at all: blocking is unstoppable
+            // here — see `settings.keepTrying` in state.js for the measurement
+            // — and a workspace written by some other version of this code is
+            // exactly where a `false` would come from. `fpsMode` above is
+            // repaired on the same argument.
+            dropOnOverflow: true,
+            restartWithKeyframe: !!k.restartWithKeyframe,
+        };
+    }
     // **Two words and no others.** `-fps_mode` reaches the renderer as a string
     // and anything but `cfr` or `vfr` is refused there by name — which is right
     // for a spec somebody wrote and wrong for a workspace, where it would be a

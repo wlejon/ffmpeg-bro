@@ -689,6 +689,34 @@ render writes both and reports two; and that the progress panel says something
 different and true for each shape — the count of files for a set, "sent" and no
 offer to open anything for a stream.
 
+**Keep trying if it drops** is asserted without streaming anywhere, which is most
+of what there is to say about it: that a local file gets no `fifo` however the
+setting is left and a URL does; that the printed command names `fifo` with the
+real muxer as `-fifo_format`'s argument and the wait in the microseconds libav
+reads a bare duration as; that the wrapped muxer's own options come out as one
+`-format_opts` bag and **never as flags**, because ffmpeg applies output options
+to the muxer it was named with and `-flvflags` on a fifo is an exit; that a tee
+is refused with a warning naming the per-destination form that does work; and
+that a stored workspace with `queueSize: "90"` and `waitSeconds: null` comes back
+as a number and as the sentinel, since zero is a real answer there and `Number()`
+turns absence into it. Then the one half that can be *rendered* without a
+network: a fifo around a local file, whose output has to come back the same codec,
+the same size and the same length as the render that was not wrapped — which is
+worth a file because the wrapping changes which muxer answers every question
+about the container, and `fifo` answers `AVERROR_PATCHWELCOME` to every
+`query_codec`, has no default codecs and no fourcc tables. What is *not* tested
+is a destination that actually drops and comes back: that needs a server to take
+away.
+
+That section puts the **whole stored blob** back when it is done rather than the
+fields it named. `ui/.storage.json` is one workspace shared by every suite and
+every run, and changing the container rewrites the stream rows' codecs on the way
+past — which is remembered. Left behind, it broke an assertion four thousand
+lines earlier on the *next* run of this suite, and then a subtitle row in
+`ui_subtitles.js`, which had never heard of any of it. Restoring the bytes is the
+only repair that covers what a setting quietly changed on its way past; restoring
+the *fields* is what did not.
+
 It also drives everything on the encode side that is not an encoder option: that
 two-pass is a *mode* of the rate control and that choosing it makes the spec say
 the range is walked twice with both passes naming one statistics file and the

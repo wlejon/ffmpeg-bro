@@ -918,6 +918,33 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
     job::release();
     setStatus(st);
 
+    // **A render that had to reconnect is not a render that did not.** Said
+    // before the "wrote …" line and again inside it, because the failure this
+    // exists to prevent is a file with a gap in it reported as a plain success —
+    // and the line somebody reads is the one that says what was written. The
+    // same shape as the paced walk's count of pictures it dropped: a number, at
+    // the end, from the one place that has it. Zero for every render that is not
+    // wrapped in a `fifo`, because nothing else says those words. See
+    // `WriteRecovery` in ffmpeg_report.h for why this is counted out of the log.
+    char recovery[320];
+    recovery[0] = 0;
+    {
+        const WriteRecovery r = writeRecovery();
+        if (r.recovered > 0 || r.overflowed > 0) {
+            std::snprintf(recovery, sizeof(recovery),
+                          "the destination dropped and was reconnected %lld time%s"
+                          "%s%s — what was written while it was gone is not in the "
+                          "output, so this file has %s in it",
+                          static_cast<long long>(r.recovered),
+                          r.recovered == 1 ? "" : "s",
+                          r.failed > 0 ? " (after failed attempts)" : "",
+                          r.overflowed > 0 ? ", and the queue filled" : "",
+                          r.recovered == 1 ? "a gap" : "gaps");
+            LOG_WARN("export: %s", recovery);
+            reportNote(AV_LOG_WARNING, "render", recovery);
+        }
+    }
+
     // The report's last word about this render, said after the file is closed
     // and the slot is free, so that a surface reading the channel sees the same
     // ordering a surface reading the status does.
@@ -926,10 +953,11 @@ void runExport(ExportSettings s, std::vector<ExportClip> clips) {
         LOG_INFO("export: wrote %s (%lld frames, %.1f s, %.1f MB)", st.path.c_str(),
                  static_cast<long long>(st.framesDone), st.elapsedSec,
                  st.bytesWritten / 1048576.0);
-        std::snprintf(said, sizeof(said), "wrote %s — %lld frames in %.1f s, %.1f MB%s",
+        std::snprintf(said, sizeof(said), "wrote %s — %lld frames in %.1f s, %.1f MB%s%s",
                       st.path.c_str(), static_cast<long long>(st.framesDone), st.elapsedSec,
                       st.bytesWritten / 1048576.0,
-                      st.passCount > 1 ? " (the last of its passes)" : "");
+                      st.passCount > 1 ? " (the last of its passes)" : "",
+                      recovery[0] ? ", with a reconnection in it" : "");
         reportNote(AV_LOG_INFO, "render", said);
     } else if (st.state == ExportStatus::State::Failed) {
         LOG_ERROR("export failed: %s", st.error.c_str());

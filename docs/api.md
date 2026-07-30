@@ -553,6 +553,33 @@ bro.ffmpeg.render.start({ path,
                           videoOptions: { crf: 20, preset: "slow" },
                           audioOptions: { b: "192k" },
                           formatOptions: {},
+                          // `-f fifo` in front of the muxer: keep going when
+                          // the destination drops. One decision, because that
+                          // is what somebody asks for — the app knows it means
+                          // wrapping their muxer in ffmpeg's `fifo`, with
+                          // `-fifo_format` naming it and the muxer's own
+                          // options travelling in fifo's `format_opts`.
+                          //
+                          // Every number's sentinel means **leave it to the
+                          // muxer**, so a spec that says only `on` gets
+                          // `muxerOptions("fifo")`'s own answers. `waitSeconds`
+                          // is in seconds here and microseconds to libav.
+                          // `restartWithKeyframe` without `dropOnOverflow` is
+                          // refused by name, because fifo refuses the pair.
+                          //
+                          // Three consequences: the destination is opened on
+                          // fifo's own thread, so one that cannot be reached is
+                          // no longer a refusal at start; an option nothing took
+                          // is therefore reported at the *end* of the render
+                          // rather than before it; and a render that
+                          // reconnected says so and how many times, because the
+                          // file has a gap in it.
+                          keepTrying: { on: false,
+                                        queueSize: 0,        // 0: fifo's own
+                                        waitSeconds: -1,     // <0: fifo's own
+                                        maxAttempts: 0,      // 0: never gives up
+                                        dropOnOverflow: false,
+                                        restartWithKeyframe: false },
                           metadata: { comment: "…" },   // the container's own
                           // None of these five is an encoder option, which is
                           // why each is a named field rather than a key in the

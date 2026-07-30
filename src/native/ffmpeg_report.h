@@ -134,6 +134,31 @@ void reportNote(int level, const char* source, const std::string& text);
 /// no metadata and this is one null check per frame.
 void reportFrameMetadata(bool audio, double at, const AVDictionary* meta);
 
+/// How often the writing end lost its destination and got it back.
+///
+/// **The `fifo` muxer has no API for this and there is nowhere else to ask.**
+/// It recovers on a thread of its own, exposes no counter, and the only trace a
+/// recovery leaves is what it says — `Recovery successful`, `Recovery failed: …`
+/// and `FIFO queue full`, from libavformat/fifo.c, at info and warning level.
+/// So it is counted where every line libav emits already passes, which is the
+/// log callback, and it is counted there rather than by draining the ring
+/// because the ring holds 512 records and a stream render is far longer than
+/// that.
+///
+/// **A render that recovered is not a render that did not**, which is the whole
+/// reason this is counted at all: the file has a gap in it and the report has to
+/// say so. Reported the way the paced walk reports the pictures it dropped —
+/// a note at the end, with the number in it.
+struct WriteRecovery {
+    int64_t recovered = 0;   ///< times the destination came back
+    int64_t failed = 0;      ///< attempts that did not, each followed by a wait
+    int64_t overflowed = 0;  ///< times the queue filled — packets dropped or blocked
+};
+
+/// The tally since `beginRenderReport()`, which resets it. Zero for every render
+/// that is not wrapped in a fifo, because nothing else says these words.
+WriteRecovery writeRecovery();
+
 struct ReportDrain {
     std::vector<LogRecord> logs;
     std::vector<MetaRecord> meta;

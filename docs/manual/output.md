@@ -304,6 +304,85 @@ whatever a muxer does not recognise, exactly as the Sources stage does at the
 reading end. A key neither of them has stops the render rather than being
 ignored.
 
+## When the destination goes away
+
+A file on this machine does not stop existing half way through a render. A URL
+does: a socket is closed by the far end, a stream key is rejected once the
+connection is up, a network goes away. Without anything said about it that is a
+**failed render** — libav's own message in the report, whatever had been sent
+already closed properly, and nothing to do but start again.
+
+`If it drops · Keep trying` is the other answer, and it appears only where the
+destination is a URL. What it means in ffmpeg is the **`fifo` pseudo-muxer**
+wrapped around the muxer you chose: a queue, a thread of its own, and a
+reconnect loop. There is exactly one such muxer, so the app knows its name for
+the same reason it knows `tee`'s — it *is* the mechanism, and a question to
+discover it would have one possible answer. Everything about what one *takes* is
+still libav's: the four dials read their help, their ranges and the number a
+blank field means out of `muxerOptions('fifo')`, so a build whose fifo has a
+bigger default queue says so here with nothing edited.
+
+- **Queue** — how many packets may be waiting. Blank is the muxer's own.
+- **Wait** — how long between attempts, in seconds. Blank is the muxer's own.
+- **Give up after** — a number of attempts. Blank never gives up.
+- **When it fills** — *Drop* (the render keeps its pace and the oldest packets
+  go) or *Drop, resume on a keyframe* (the same, and nothing is sent after a drop
+  until there is a picture the far end can start from).
+
+**fifo's third mode is not offered, and that is a refusal with a measurement
+behind it.** Its own default is to *block* until the queue drains, and
+`fifo_thread_recover` loops on `EAGAIN` for as long as blocking is on — so a
+destination that never comes up leaves the muxing thread retrying for ever while
+the render thread waits inside `av_interleaved_write_frame` on a full queue. Stop
+is checked once per output frame, so it never arrives: a four-second render to a
+closed port, with two recovery attempts asked for, ran for twenty seconds and
+ignored a cancel. Blocking is the right answer for a destination that is merely
+*slow*, and it stays reachable to a spec written by hand — nothing on this stage
+produces one.
+
+**A render that reconnected is not a render that did not, and the report says
+so.** The file has a gap in it exactly as long as the destination was gone, and
+the failure this is designed against is that gap arriving as a plain success.
+The recoveries are counted and the count is in the note that says what was
+written — "with a reconnection in it", and a line above it saying how many times
+and that the output has a gap. It is counted out of what the muxer *says*
+(`Recovery successful`, from libavformat/fifo.c), because `fifo` keeps no
+counter and publishes nothing; the log callback is the one place every line
+libav emits passes through, and that is where it is done.
+
+Three things change about *when* you find out, and each is the trade being asked
+for:
+
+- **A destination that cannot be reached at all is no longer a refusal.** The
+  fifo opens it on its own thread, so the render starts, queues, and reports at
+  the end that it never connected. That is the point — a URL that is not there
+  *yet* is the first thing to recover from. The *reporting* is this
+  application's, not libav's: `fifo_write_trailer` hands back whatever its
+  consumer thread's trailer returned, which for a header that was never written
+  is zero, so a render that reached nothing at all would otherwise come back
+  **done**. The writer knows what it opened and says "never reached" instead.
+- **An option nothing took is reported at the end** rather than before the first
+  frame, for the same reason. It is still an error and it still names the key.
+- **The command bar prints `-f fifo`**, with the real muxer as `-fifo_format`'s
+  argument and its own options in `-format_opts`. Not as flags: ffmpeg applies
+  output options to the muxer it was named with, and `-movflags` on a fifo is
+  "Option not found" and an exit. The printed line runs.
+
+**It does not apply to a tee**, and the stage says so rather than dropping it
+quietly. One fifo in front of several destinations is one queue and one recovery
+for all of them, so a single flaky endpoint would take every other destination
+down and back with it. The per-destination form is what ffmpeg's own
+documentation writes — `[f=fifo:fifo_format=flv]rtmp://…` — and the destination
+rows can already say exactly that: set that destination's `-f` to `fifo` and give
+it `fifo_format=<muxer>` in its options. A **version** is a different output with
+its own muxer and its own path, so it gets its own wrapping when its own
+destination is a URL, and none when it is a file.
+
+The reading end has its own three options — `-reconnect`,
+`-reconnect_streamed`, `-reconnect_delay_max`, which are `http`'s and appear in
+the protocol column on the Sources stage — and nothing here turns those into a
+decision. They are an ordinary option and setting one is an ordinary thing to do.
+
 ## Several destinations at once
 
 `-f tee` is **one encode written to several places**. That is worth being exact

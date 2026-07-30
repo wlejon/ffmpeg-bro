@@ -498,8 +498,7 @@ bool Writer::hasAudio() const {
 /// at `write_header` with "Invalid data found when processing input" and no
 /// mention of extradata anywhere in it.
 bool Writer::wantsGlobalHeader() const {
-    return oc_ && oc_->oformat &&
-           (oc_->oformat->flags & (AVFMT_GLOBALHEADER | AVFMT_NOFILE)) != 0;
+    return format_ && (format_->flags & (AVFMT_GLOBALHEADER | AVFMT_NOFILE)) != 0;
 }
 
 int Writer::ioOpen(AVFormatContext* s, AVIOContext** pb, const char* url, int flags,
@@ -513,6 +512,8 @@ int Writer::ioOpen(AVFormatContext* s, AVIOContext** pb, const char* url, int fl
     // to consume.
     AVDictionary* merged = nullptr;
     if (options && *options) av_dict_copy(&merged, *options, 0);
+    // `protocolOpts_` is written once in `open()` and only read after that, so
+    // it needs no lock even when fifo's thread is the one calling this.
     if (self && self->protocolOpts_) av_dict_copy(&merged, self->protocolOpts_, 0);
 
     const int rc = avio_open2(pb, url, flags, &s->interrupt_callback, &merged);
@@ -541,6 +542,7 @@ int Writer::ioClose(AVFormatContext* s, AVIOContext* pb) {
     std::string url;
     int64_t sent = 0;
     if (self && pb) {
+        std::lock_guard<std::mutex> guard(self->piecesMu_);
         const auto it = self->live_.find(pb);
         if (it != self->live_.end()) {
             url = it->second;
@@ -557,6 +559,7 @@ int Writer::ioClose(AVFormatContext* s, AVIOContext* pb) {
 }
 
 void Writer::noteOpened(const std::string& url, AVIOContext* pb, AVDictionary* leftover) {
+    std::lock_guard<std::mutex> guard(piecesMu_);
     live_[pb] = url;
 
     // A file opened twice is one file. `hls` rewrites its playlist every
@@ -584,6 +587,7 @@ void Writer::noteOpened(const std::string& url, AVIOContext* pb, AVDictionary* l
 }
 
 void Writer::noteClosed(const std::string& url, int64_t sent) {
+    std::lock_guard<std::mutex> guard(piecesMu_);
     for (auto& p : wrote_) {
         if (p.url != url) continue;
         if (p.file) {
@@ -599,12 +603,18 @@ void Writer::noteClosed(const std::string& url, int64_t sent) {
 }
 
 int64_t Writer::piecesWritten() const {
+    // Read from the render thread while a fifo wrapping may be opening files on
+    // its own; see `piecesMu_`.
+    std::lock_guard<std::mutex> guard(piecesMu_);
     int64_t n = 0;
     for (const auto& p : wrote_) if (p.url != settings_.path) ++n;
     return n;
 }
 
-std::vector<Writer::Piece> Writer::pieces() const { return wrote_; }
+std::vector<Writer::Piece> Writer::pieces() const {
+    std::lock_guard<std::mutex> guard(piecesMu_);
+    return wrote_;
+}
 
 // A muxer may write the file it was named with under a working name and rename
 // it into place. hlsenc does exactly that with its playlist — `out/hls.m3u8` is
@@ -622,6 +632,10 @@ std::vector<Writer::Piece> Writer::pieces() const { return wrote_; }
 // thing that exists.
 void Writer::resolveRenames() {
     if (settings_.path.empty()) return;
+    // From `finish()`, after fifo's thread has been joined by
+    // `avformat_write_trailer` — but taken anyway, because "the thread has
+    // certainly gone by here" is exactly the reasoning that stops being true.
+    std::lock_guard<std::mutex> guard(piecesMu_);
     std::error_code ec;
     if (!std::filesystem::exists(std::filesystem::path(localPathOf(settings_.path)), ec) || ec)
         return;
@@ -649,6 +663,93 @@ void Writer::resolveRenames() {
     if (!ec) missing->bytes = static_cast<int64_t>(size);
 }
 
+/// Put the `fifo` in front of the muxer, told what to wrap and how to recover.
+///
+/// **Named options, libav's own defaults.** The five keys here are the
+/// mechanism — `fifo` is one muxer with one option table and there is nothing to
+/// discover — but every *value* is either what the caller asked for or nothing
+/// at all, so that what a field is left blank means is `muxerOptions("fifo")`'s
+/// answer and not a number written down twice. `attempt_recovery` is the one
+/// that is always set, because a fifo with it off is a queue and not a recovery
+/// and this whole setting is spelt "keep trying".
+bool Writer::applyFifo(const ExportSettings& s, std::string* err) {
+    auto set = [&](const char* key, const std::string& value) {
+        const int rc = av_opt_set(oc_, key, value.c_str(), AV_OPT_SEARCH_CHILDREN);
+        if (rc < 0 && err->empty())
+            *err = std::string("the fifo muxer would not take ") + key + "=" + value +
+                   ": " + avErr(rc);
+        return rc >= 0;
+    };
+    *err = std::string();
+
+    // What it wraps. Named rather than left to `fifo_init`'s own
+    // `av_guess_format`, although that is the same call `format_` was resolved
+    // by: a render that says `-f flv` means flv, and a fifo guessing from the
+    // URL would quietly write something else the moment a stream key ended in
+    // `.m3u8`.
+    set("fifo_format", format_->name);
+    set("attempt_recovery", "1");
+    if (s.fifo.queueSize > 0) set("queue_size", std::to_string(s.fifo.queueSize));
+    // In seconds here and in microseconds to libav, which is what an
+    // AV_OPT_TYPE_DURATION takes as a bare number.
+    if (s.fifo.waitSeconds >= 0)
+        set("recovery_wait_time",
+            std::to_string(static_cast<int64_t>(s.fifo.waitSeconds * 1e6)));
+    if (s.fifo.maxAttempts > 0)
+        set("max_recovery_attempts", std::to_string(s.fifo.maxAttempts));
+    if (s.fifo.dropOnOverflow) set("drop_pkts_on_overflow", "1");
+    // fifo refuses `restart_with_keyframe` unless something can be dropped, so
+    // this is stated the way the muxer states it rather than silently ignored.
+    if (s.fifo.restartWithKeyframe) {
+        if (!s.fifo.dropOnOverflow) {
+            *err = "restarting on a keyframe needs the queue to be allowed to drop "
+                   "packets — a fifo that blocks instead has nothing to skip past";
+            return false;
+        }
+        set("restart_with_keyframe", "1");
+    }
+    return err->empty();
+}
+
+/// The protocol half of the option bag, checked against what was actually
+/// opened. One place, because it is asked at two different moments now: right
+/// after `write_header` for an ordinary render, and at the end of one behind a
+/// fifo, whose destination is opened on a thread of its own.
+bool Writer::checkProtocolOptions(std::string* err) {
+    std::lock_guard<std::mutex> guard(piecesMu_);
+    if (!protocolErr_.empty()) { *err = protocolErr_; return false; }
+
+    // A key that reached nothing at all is the same failure one step earlier:
+    // the muxer did not know it, and there was no destination to hand it down
+    // to — which is what `-f null -` is, and what `-movflags` on it would be.
+    // Silence here is the "succeeded while ignoring what it was told" outcome
+    // that every other option bag in this binary refuses.
+    //
+    // **Behind a fifo, "nothing was opened" is its own failure and a worse
+    // one.** It is not evidence about options — saying "the muxer has no option
+    // 'timeout'" about a render that spent a minute failing to reach an address
+    // would name the wrong thing entirely — it is a render that produced no
+    // output at all. And libav will not say so: `fifo_write_trailer` hands back
+    // whatever the consumer thread's trailer returned, which for a header that
+    // was never written is zero, so a render whose destination never came up
+    // **reports success**. That is precisely the outcome this whole setting is
+    // arranged against, so it is caught here, where the one thing that knows
+    // whether anything was ever opened is written down.
+    if (wrapped_ && wrote_.empty()) {
+        *err = "never reached '" + settings_.path +
+               "' — the fifo went on trying and the destination did not come up, so "
+               "nothing was written";
+        return false;
+    }
+    if (wrote_.empty() && protocolOpts_) {
+        const AVDictionaryEntry* e = av_dict_iterate(protocolOpts_, nullptr);
+        *err = std::string("the ") + format_->name + " muxer has no option '" + e->key +
+               "', and it opens nothing for a protocol to have one";
+        return false;
+    }
+    return true;
+}
+
 bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
                   CopyStreams* copies, SubtitleStreams* subs, AVBufferRef* hwFrames,
                   AVRational frameClock) {
@@ -662,15 +763,33 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // every device), and several share one. Empty falls back to guessing from
     // the filename, which is what every render before there was a muxer picker
     // did and what a spec written by hand still expects.
-    int rc = avformat_alloc_output_context2(&oc_, nullptr,
-                                            s.format.empty() ? nullptr : s.format.c_str(),
-                                            s.path.c_str());
+    wrapped_ = s.fifo.on;
+    int rc = avformat_alloc_output_context2(
+        &oc_, nullptr,
+        wrapped_ ? "fifo" : (s.format.empty() ? nullptr : s.format.c_str()),
+        s.path.c_str());
     if (rc < 0 || !oc_) {
         *err = s.format.empty()
                    ? "cannot work out what to write '" + s.path + "' as: " + avErr(rc)
                    : "this build has no '" + s.format + "' muxer: " + avErr(rc);
         return false;
     }
+
+    // **Which muxer decides what the file is.** Without a wrapping the two are
+    // the same object; with one, `oc_->oformat` is `fifo` and this is what is
+    // actually being written — see `Writer::format_`. `av_guess_format` is
+    // exactly what `fifo_init` itself calls to work the same thing out, so the
+    // two cannot disagree about what an empty `-f` and a filename mean.
+    format_ = wrapped_ ? av_guess_format(s.format.empty() ? nullptr : s.format.c_str(),
+                                         s.path.c_str(), nullptr)
+                       : oc_->oformat;
+    if (!format_) {
+        *err = s.format.empty()
+                   ? "cannot work out what to write '" + s.path + "' as"
+                   : "this build has no '" + s.format + "' muxer";
+        return false;
+    }
+    if (wrapped_ && !applyFifo(s, err)) return false;
 
     // Everything libavformat opens goes through this pair, from now until the
     // context is freed. Installed here rather than at the first write because
@@ -695,12 +814,29 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // once, by asking the format context which keys it has: `av_opt_find` with
     // AV_OPT_SEARCH_CHILDREN reaches libavformat's generic table and the
     // muxer's own private one, and what it does not know is the protocol's.
+    //
+    // **The question is put to `format_` and not to `oc_`**, which are the same
+    // object unless there is a `fifo` in front. `movflags` is not an option of
+    // the fifo muxer and is very much an option of the render, so asking the
+    // context would send every one of the real muxer's own options down to the
+    // protocol and refuse the render naming the first of them.
+    AVFormatContext* asker = oc_;
+    AVFormatContext* probe = nullptr;
+    if (wrapped_) {
+        if (avformat_alloc_output_context2(&probe, format_, nullptr, s.path.c_str()) < 0 ||
+            !probe) {
+            *err = std::string("cannot ask the ") + format_->name + " muxer what it takes";
+            return false;
+        }
+        asker = probe;
+    }
     for (const auto& o : s.formatOptions) {
         if (o.key.empty()) continue;
-        const bool muxers = av_opt_find(oc_, o.key.c_str(), nullptr, 0,
+        const bool muxers = av_opt_find(asker, o.key.c_str(), nullptr, 0,
                                         AV_OPT_SEARCH_CHILDREN) != nullptr;
         if (!muxers) av_dict_set(&protocolOpts_, o.key.c_str(), o.value.c_str(), 0);
     }
+    if (probe) avformat_free_context(probe);
 
     // Streams are created in list order, so the list *is* the muxer's
     // numbering: `-map` order, `-metadata:s:a:1`, and what a player shows in
@@ -812,7 +948,7 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // finished downloading, and so this app can open it while it is still
     // the thing you just made. It costs a second pass over the file at the
     // end, which is why it can be turned off.
-    if (s.faststart && oc_->oformat->name && std::strstr(oc_->oformat->name, "mp4"))
+    if (s.faststart && format_->name && std::strstr(format_->name, "mp4"))
         av_dict_set(&opts, "movflags", "+faststart", 0);
     // The muxer's half only. The other half went to `protocolOpts_` at the top
     // and has already been handed to every `avio_open2` this render did; left
@@ -822,9 +958,31 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     for (const auto& o : s.formatOptions)
         if (!o.key.empty() && !av_dict_get(protocolOpts_, o.key.c_str(), nullptr, 0))
             av_dict_set(&opts, o.key.c_str(), o.value.c_str(), 0);
+    if (wrapped_) {
+        // Wrapped, those are the *wrapped* muxer's and the context has never
+        // heard of them: they travel in fifo's `format_opts`, which is an
+        // AV_OPT_TYPE_DICT and takes a dictionary directly. Set as a value and
+        // not as a `k=v:k=v` string on purpose — that string has its own
+        // escaping rules for `:` and `=`, and a second escaper here would be a
+        // second answer to a question `tee`'s argument already asks in the UI.
+        if (av_opt_set_dict_val(oc_, "format_opts", opts, AV_OPT_SEARCH_CHILDREN) < 0) {
+            *err = "cannot hand the " + std::string(format_->name) +
+                   " muxer's options to the fifo in front of it";
+            av_dict_free(&opts);
+            return false;
+        }
+        av_dict_free(&opts);
+        opts = nullptr;
+    }
     rc = avformat_write_header(oc_, &opts);
     // Whatever the muxer did not consume, it did not understand. Saying so
     // beats writing a file that quietly ignored half the request.
+    //
+    // Wrapped, this bag is empty and the refusal has already happened one step
+    // earlier: every key was found on the real muxer's own class by `av_opt_find`
+    // above, and a key that was not went to `protocolOpts_` like any other. The
+    // *check* on that half moves to `finish()`, because a fifo opens its
+    // destination on its own thread and nothing has been tried yet by here.
     if (rc >= 0 && av_dict_count(opts) > 0) {
         const AVDictionaryEntry* e = av_dict_iterate(opts, nullptr);
         *err = std::string("the ") + oc_->oformat->name + " muxer has no option '" +
@@ -845,7 +1003,7 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
         // beside this rather than in the error a person actually reads.
         for (const auto& out : outs_)
             if (out->desc.kind == "data") {
-                *err += " — the " + std::string(oc_->oformat->name) + " muxer may hold no " +
+                *err += " — the " + std::string(format_->name) + " muxer may hold no " +
                         "data stream, which '" + out->desc.source + "' is: mp4, mov and " +
                         "MPEG-TS carry one and Matroska does not";
                 break;
@@ -857,19 +1015,16 @@ bool Writer::open(const ExportSettings& s, bool wantAudio, std::string* err,
     // opened. A segmenter opens its first file during `write_header`, so by
     // here every destination this render is going to have has been tried at
     // least once and a key nothing took is a key nothing will ever take.
-    if (!protocolErr_.empty()) { *err = protocolErr_; return false; }
-
-    // A key that reached nothing at all is the same failure one step earlier:
-    // the muxer did not know it, and there was no destination to hand it down
-    // to — which is what `-f null -` is, and what `-movflags` on it would be.
-    // Silence here is the "succeeded while ignoring what it was told" outcome
-    // that every other option bag in this binary refuses.
-    if (wrote_.empty() && protocolOpts_) {
-        const AVDictionaryEntry* e = av_dict_iterate(protocolOpts_, nullptr);
-        *err = std::string("the ") + oc_->oformat->name + " muxer has no option '" + e->key +
-               "', and it opens nothing for a protocol to have one";
-        return false;
-    }
+    //
+    // **Except behind a fifo, where nothing has been tried yet.**
+    // `fifo_write_header` starts a thread and returns; the destination is
+    // opened on that thread, which is the whole point — a URL that is not there
+    // yet is the first thing to recover from rather than a refusal. So both
+    // checks move to `finish()`, which runs after `av_write_trailer` has joined
+    // that thread. The option is still an error and still names itself; it is
+    // reported at the end of the render instead of before it, which is the
+    // honest cost of asking for a destination that is allowed to be absent.
+    if (!wrapped_ && !checkProtocolOptions(err)) return false;
 
     headerWritten_ = true;
     return true;
@@ -1085,6 +1240,13 @@ bool Writer::finish(std::string* err) {
     if (headerWritten_) {
         int rc = av_write_trailer(oc_);
         if (rc < 0) note(std::string("cannot finish the file: ") + avErr(rc));
+        // Behind a fifo the trailer is what joins the muxing thread, so this is
+        // the first moment at which "was every option taken?" has an answer at
+        // all. See the note where the unwrapped render asks it.
+        if (wrapped_) {
+            std::string why;
+            if (!checkProtocolOptions(&why)) note(why);
+        }
     }
     const std::string path = settings_.path;
     // Asked of the muxer while it still exists, because a numbered output does
@@ -1211,7 +1373,7 @@ bool Writer::openVideoStream(Out& o, std::string* err) {
     }
 
     const AVCodec* codec = o.desc.codec.empty()
-                               ? avcodec_find_encoder(oc_->oformat->video_codec)
+                               ? avcodec_find_encoder(format_->video_codec)
                                : avcodec_find_encoder_by_name(o.desc.codec.c_str());
     if (!codec) {
         *err = "this build has no '" + o.desc.codec + "' encoder";
@@ -1487,7 +1649,7 @@ bool Writer::openAudioStream(Out& o, bool* skipped, std::string* err) {
     }
 
     const AVCodec* codec = o.desc.codec.empty()
-                               ? avcodec_find_encoder(oc_->oformat->audio_codec)
+                               ? avcodec_find_encoder(format_->audio_codec)
                                : avcodec_find_encoder_by_name(o.desc.codec.c_str());
     if (!codec) {
         // A container that cannot hold sound, or a name this build lacks:
@@ -1614,8 +1776,8 @@ bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
     // worse outcome than either carrying it or refusing.
     const bool isData = src->codecpar->codec_type == AVMEDIA_TYPE_DATA;
     if (src->codecpar->codec_tag &&
-        (isData || (oc_->oformat->codec_tag &&
-                    av_codec_get_id(oc_->oformat->codec_tag, src->codecpar->codec_tag) ==
+        (isData || (format_->codec_tag &&
+                    av_codec_get_id(format_->codec_tag, src->codecpar->codec_tag) ==
                         src->codecpar->codec_id)))
         o.st->codecpar->codec_tag = src->codecpar->codec_tag;
 
@@ -1649,11 +1811,11 @@ bool Writer::openCopyStream(Out& o, CopyStreams& copies, std::string* err) {
     // name — and the `write_header` failure path in `open()` above names the
     // row, because what reaches it from libav is only `EINVAL`.
     const int holds = isData ? 1
-                             : avformat_query_codec(oc_->oformat, o.st->codecpar->codec_id,
+                             : avformat_query_codec(format_, o.st->codecpar->codec_id,
                                                     FF_COMPLIANCE_NORMAL);
     if (holds == 0) {
         const AVCodecDescriptor* d = avcodec_descriptor_get(o.st->codecpar->codec_id);
-        *err = std::string("the ") + oc_->oformat->name + " muxer will not hold " +
+        *err = std::string("the ") + format_->name + " muxer will not hold " +
                (d && d->name ? d->name : "that codec") +
                ", so this stream cannot be copied into it — encode it, or write " +
                "another container";
@@ -1920,10 +2082,10 @@ bool Writer::openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err)
             return false;
         }
     } else {
-        codec = avcodec_find_encoder(oc_->oformat->subtitle_codec);
-        if (!codec) codec = defaultSubtitleEncoder(oc_->oformat->name);
+        codec = avcodec_find_encoder(format_->subtitle_codec);
+        if (!codec) codec = defaultSubtitleEncoder(format_->name);
         if (!codec) {
-            *err = std::string("the ") + oc_->oformat->name +
+            *err = std::string("the ") + format_->name +
                    " muxer will not hold any subtitle codec this build can write";
             return false;
         }
@@ -1936,13 +2098,13 @@ bool Writer::openSubtitleStream(Out& o, SubtitleStreams* subs, std::string* err)
     // `write_header` — after the whole file has been described — that mp4 does
     // not hold `subrip`. Only an actual no stops it: the third answer,
     // AVERROR_PATCHWELCOME, means the muxer was never taught to answer.
-    if (avformat_query_codec(oc_->oformat, codec->id, FF_COMPLIANCE_NORMAL) == 0) {
+    if (avformat_query_codec(format_, codec->id, FF_COMPLIANCE_NORMAL) == 0) {
         // What it *does* hold, asked rather than read off the declaration —
         // "mp4 will not hold subrip, it holds no subtitles at all" is what the
         // declaration says and it is false: what mp4 holds is `mov_text`, and
         // naming that is the difference between a refusal and a dead end.
-        const AVCodec* instead = defaultSubtitleEncoder(oc_->oformat->name);
-        *err = std::string("the ") + oc_->oformat->name + " muxer will not hold " +
+        const AVCodec* instead = defaultSubtitleEncoder(format_->name);
+        *err = std::string("the ") + format_->name + " muxer will not hold " +
                codec->name + " subtitles" +
                (instead ? std::string(" — it holds ") + instead->name
                         : std::string(" — it holds no subtitles at all"));
@@ -2160,8 +2322,8 @@ bool Writer::encode(Out& o, AVFrame* frame, std::string* err) {
 std::string Writer::writeFailure(int rc) const {
     // A `tee` argument is a list and not a path, so it is never the first of
     // these however local its destinations happen to be.
-    const bool several = oc_ && oc_->oformat && oc_->oformat->name &&
-                         std::strcmp(oc_->oformat->name, "tee") == 0;
+    const bool several = format_ && format_->name &&
+                         std::strcmp(format_->name, "tee") == 0;
     if (!several && isLocalPath(settings_.path))
         return "cannot write to the file: " + avErr(rc);
     return "the destination stopped accepting the render — '" + settings_.path + "': " +

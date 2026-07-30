@@ -14,7 +14,7 @@ import { muxerInfo, muxerForExtension } from './capabilities.js';
 import { activeVersions, versionSize } from './versions.js';
 import { videoOptions, audioOptions, forceKeyFrames } from './options.js';
 import { streamSpecs } from './streams.js';
-import { outputTarget } from './destination.js';
+import { outputTarget, schemeOf, isTee } from './destination.js';
 import { renderGraph } from '../filtergraph.js';
 import { deviceForRender } from '../hardware.js';
 import { parseCueTrack } from './subtitles.js';
@@ -275,6 +275,50 @@ function formatFor(path) {
     return (ext && muxerForExtension(ext)) || mine || '';
 }
 
+/// Whether *this* destination gets a `fifo` in front of its muxer, and with
+/// what.
+///
+/// **Three refusals, and each of them is a statement rather than a guard.**
+///
+///   - **Only a URL.** A `fifo` around a file on this machine is a queue and a
+///     thread and nothing else: a local disk does not drop and come back, so the
+///     wrapping would buy a second thread, an asynchronous open and a render
+///     whose option errors arrive at the end instead of the start, in exchange
+///     for nothing. Read off the path this spec is writing to, which is what
+///     makes a preview to a temp file and a version to a local proxy answer
+///     honestly without either being told about the other.
+///   - **Not a `tee`.** One fifo in front of several destinations is one queue
+///     and one recovery for all of them, so a single flaky endpoint would take
+///     every other destination down and back with it — which is not what
+///     "keep trying" means and is not what anybody asking for it wants. The
+///     per-destination form is what ffmpeg's own documentation writes,
+///     `[f=fifo:fifo_format=flv]rtmp://…`, and the destination rows can already
+///     say exactly that: `-f fifo` on the row and `fifo_format` in its options.
+///     Stated in the warnings rather than silently dropped.
+///   - **The queue always drops rather than blocks.** fifo's own default is to
+///     block, and a blocking fifo whose destination never comes up cannot be
+///     stopped: its recovery loop spins on `EAGAIN` while
+///     `!drop_pkts_on_overflow`, so the render thread waits inside
+///     `av_interleaved_write_frame` on a full queue and the job's Stop — which
+///     is checked once per output frame — never arrives. Measured: twenty
+///     seconds of a four-second render, and a cancel that did nothing. Blocking
+///     is right for a destination that is merely *slow* and stays reachable to a
+///     spec written by hand; nothing this stage can do produces one.
+///     `restart_with_keyframe` then always has something to drop, which is the
+///     pair fifo refuses to have half-set.
+function keepTrying(path) {
+    const k = settings.keepTrying || {};
+    const on = !!k.on && !!schemeOf(path) && !isTee();
+    return {
+        on,
+        queueSize: k.queueSize || 0,
+        waitSeconds: k.waitSeconds >= 0 ? k.waitSeconds : -1,
+        maxAttempts: k.maxAttempts || 0,
+        dropOnOverflow: true,
+        restartWithKeyframe: !!k.restartWithKeyframe,
+    };
+}
+
 /// Does this render have to go through libavfilter rather than the internal
 /// compositor?
 ///
@@ -459,6 +503,12 @@ export function buildSpec(over = {}) {
         colorspace: settings.colorspace === 'auto' ? '' : settings.colorspace,
         colorRange: settings.colorRange,
         faststart: settings.faststart,
+        // Whether this destination is allowed to go away and come back. Decided
+        // from the path this spec is actually writing to rather than from the
+        // settings alone, which is what makes a preview to a temp file, a
+        // version at another size and the master all get the honest answer
+        // without any of them being told about the others.
+        keepTrying: keepTrying(over.path || outputTarget() || defaultPath()),
         title: settings.title,
         // None of these four is an encoder option, which is why each is a named
         // field: `-force_key_frames` sets a frame's picture type before the

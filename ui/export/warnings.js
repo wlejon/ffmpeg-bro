@@ -317,6 +317,15 @@ function destinationWarnings() {
         if (usable.length === 1)
             out.push('one destination through tee is one destination with a layer of ' +
                      'escaping over it — pick that muxer directly unless a second is coming');
+        // The setting is remembered across renders and this is where it stops
+        // meaning anything, so it is said rather than silently dropped: one fifo
+        // in front of several destinations is one queue and one recovery for all
+        // of them.
+        if ((settings.keepTrying || {}).on)
+            out.push('“keep trying if it drops” does not apply to a tee — one fifo in ' +
+                     'front of several destinations takes all of them through the recovery ' +
+                     'of any one. Set a destination’s -f to fifo and give it ' +
+                     'fifo_format=<muxer> to protect that destination alone');
     }
 
     // The versions, which are destinations too — and the one thing that can go
@@ -344,6 +353,19 @@ function destinationWarnings() {
     if (kind === 'stream' && scheme && !protocolLinked(scheme))
         out.push(`this build has no ${scheme} output protocol — the render will fail at ` +
                  'open, with a message about a filename rather than about the protocol');
+
+    // Two things a fifo changes about *when* things go wrong, both of which
+    // would otherwise be discovered rather than known. Said as warnings and not
+    // as refusals: each is the trade somebody asked for when they turned it on.
+    if (kind === 'stream' && (settings.keepTrying || {}).on) {
+        out.push('with “keep trying” on, a destination that cannot be reached at all is ' +
+                 'not a refusal any more — the fifo opens it on its own thread, so the ' +
+                 'render starts, queues, and reports at the end that it never connected');
+        out.push('the queue drops rather than blocks, so a destination slower than the ' +
+                 'encode loses packets instead of holding it up — which is right for a ' +
+                 'live stream and is the only mode offered, because a fifo that blocks ' +
+                 'cannot be stopped when the destination never comes up');
+    }
 
     // An index at the front needs the file rewound after the trailer, and
     // nothing that goes down a socket can be rewound. It fails at the end of

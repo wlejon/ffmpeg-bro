@@ -86,6 +86,12 @@ const qq = (sel, root) => (root || document).querySelectorAll(sel);
 /// two stages — what the picture is put through, and where it goes — and a
 /// data-f name is unique whichever stage is holding it.
 const f = (name) => q(`[data-f="${name}"]`);
+// The workspace's one key, named once. `ui/.storage.json` is shared by every
+// suite and every run, and a section that leaves it changed breaks a section it
+// has never heard of — see the two places below that put the whole blob back
+// rather than the fields they touched.
+const EXPORT_STORE_KEY = 'ffmpeg-bro.export';
+
 let checks = 0;
 function ok(cond, what) {
     checks++;
@@ -2567,7 +2573,7 @@ ok(!!p.video, 'the output probes as media with a video track');
 // is the named counterpart of.
 {
     let blob = {};
-    try { blob = JSON.parse(localStorage.getItem('ffmpeg-bro.export') || '{}'); } catch (e) {}
+    try { blob = JSON.parse(localStorage.getItem(EXPORT_STORE_KEY) || '{}'); } catch (e) {}
     same(blob.title, 'Programme one',
          'and the title is remembered for the next edit, as a codec or a language is');
 }
@@ -4105,12 +4111,12 @@ console.log('\nwhat survives a restart, and what does not');
     // are worth a test: `metadata: null` reaches `Object.keys()` on the Write
     // stage and takes the whole stage down at boot, where nothing on the screen
     // says which key did it.
-    const raw = JSON.parse(localStorage.getItem('ffmpeg-bro.export'));
+    const raw = JSON.parse(localStorage.getItem(EXPORT_STORE_KEY));
     raw.metadata = null;
     raw.extraVideo = 'not an object';
     raw.destinations = 7;
     raw.container = 'mkv';           // what this field held before muxers had names
-    localStorage.setItem('ffmpeg-bro.export', JSON.stringify(raw));
+    localStorage.setItem(EXPORT_STORE_KEY, JSON.stringify(raw));
     A.exporter.restoreSettings();
     ok(S3.metadata && typeof S3.metadata === 'object', 'a null bag comes back as an empty one');
     ok(S3.extraVideo && typeof S3.extraVideo === 'object', 'and so does one that is a string');
@@ -4118,10 +4124,167 @@ console.log('\nwhat survives a restart, and what does not');
     same(S3.container, 'matroska',
          'and a container written as an extension is the muxer libavformat guesses from it');
 
+    // The `keepTrying` block is exactly the shape this repair exists for:
+    // numbers for one muxer, written into a workspace that is next used for a
+    // local file. A `queueSize` that came back as a string reaches `av_opt_set`
+    // as one, and a `waitSeconds` of `null` reaches it as zero — which is a
+    // different decision from the one a blank field meant.
+    const raw2 = JSON.parse(localStorage.getItem(EXPORT_STORE_KEY));
+    raw2.keepTrying = { on: 1, queueSize: '90', waitSeconds: null,
+                        dropOnOverflow: false, restartWithKeyframe: true };
+    localStorage.setItem(EXPORT_STORE_KEY, JSON.stringify(raw2));
+    A.exporter.restoreSettings();
+    same(S3.keepTrying.queueSize, 90, 'a stored queue size comes back a number');
+    same(S3.keepTrying.waitSeconds, -1,
+         'and a null wait comes back as the sentinel meaning “the muxer’s own default”');
+    // A stored `dropOnOverflow: false` is not read back at all. fifo's own
+    // default is to block, and a blocking fifo whose destination never comes up
+    // retries for ever while the render waits on a full queue — where Stop,
+    // checked once per output frame, never arrives. A workspace written by some
+    // other version of this code is exactly where a `false` would come from.
+    ok(S3.keepTrying.dropOnOverflow,
+       'a stored “block instead of dropping” is not read back — a fifo that blocks ' +
+       'cannot be stopped when the destination never comes up');
+    S3.keepTrying.on = false;
+
     Object.assign(S3, kept);
     A.exporter.rememberSettings();
     A.exporter.redraw();
     pump(40);
+}
+
+// ── a destination that is allowed to go away ───────────────────────────────
+//
+// **Nothing here streams anywhere.** What is asserted is the wrapping: that the
+// decision reaches the spec only where it means something, that the printed
+// command is the one the renderer performs, and that a render through a fifo to
+// a *local* file comes out the same file — which is the only half of this that
+// can be checked without a network, and is worth checking because the wrapping
+// changes which muxer answers every question about the container.
+
+console.log('\nkeep trying if it drops');
+{
+    const S = A.exporter.currentSettings();
+    // **The whole blob, not the fields this section touches.** `ui/.storage.json`
+    // is one workspace shared by every suite and every run, and changing the
+    // container here rewrites the stream rows' codecs as a side effect — which
+    // is remembered, and which broke an assertion four thousand lines earlier on
+    // the *next* run, where nothing looked wrong. Putting the bytes back is the
+    // only restore that covers what a setting quietly changed on its way past.
+    const blobBefore = localStorage.getItem(EXPORT_STORE_KEY);
+    const was = { path: S.path, container: S.container, keepTrying: S.keepTrying };
+    S.keepTrying = { on: true, queueSize: 90, waitSeconds: 2, maxAttempts: 0,
+                     dropOnOverflow: false, restartWithKeyframe: false };
+
+    ok((bro.ffmpeg.muxers || []).some((m) => m.name === 'fifo'),
+       'this build has a fifo muxer — asked of the registry, not assumed');
+
+    // A file is not a destination that drops and comes back, so it gets no
+    // queue however the setting is left.
+    S.path = `${bro.appDir}/../out/ui-export-keep.mkv`;
+    S.container = 'matroska';
+    A.exporter.redraw();
+    pump(20);
+    ok(!A.exporter.buildSpec().keepTrying.on,
+       'a local file gets no fifo, whatever the setting says');
+    ok(A.command.currentCommand().indexOf('-f fifo') < 0, 'and the command does not print one');
+
+    // A URL does.
+    S.path = 'rtmp://192.0.2.1/live/key';
+    S.container = 'flv';
+    A.exporter.redraw();
+    pump(20);
+    const spec = A.exporter.buildSpec();
+    ok(spec.keepTrying.on, 'a URL does');
+    same(spec.keepTrying.queueSize, 90, 'with the queue it was given');
+
+    const line = A.command.currentCommand();
+    ok(line.indexOf('-f fifo') >= 0, `the command names the fifo: ${line.slice(-120)}`);
+    ok(line.indexOf('-fifo_format flv') >= 0,
+       'and the muxer it wraps, which is where the real -f went');
+    ok(line.indexOf('-attempt_recovery 1') >= 0, 'a fifo that does not recover is only a queue');
+    ok(line.indexOf('-queue_size 90') >= 0, 'the queue is stated');
+    // Seconds on the stage, microseconds on the line, because that is what an
+    // ffmpeg duration reads a bare number as.
+    ok(line.indexOf('-recovery_wait_time 2000000') >= 0,
+       'and the wait in the units libav reads it in');
+
+    // **The wrapped muxer's own options cannot be flags.** ffmpeg applies
+    // output options to the muxer it was named with, and `-flvflags` on a fifo
+    // is "Option not found" and an exit — so they go in `-format_opts`, which is
+    // what the renderer hands over as a dictionary.
+    S.extraFormat = { flvflags: 'no_duration_filesize' };
+    A.exporter.redraw();
+    pump(20);
+    const withOpts = A.command.currentCommand();
+    ok(withOpts.indexOf('-format_opts') >= 0,
+       `the wrapped muxer's options travel in -format_opts: ${withOpts.slice(-140)}`);
+    ok(withOpts.indexOf('flvflags=no_duration_filesize') >= 0, 'spelt as one bag');
+    ok(!/-flvflags\s/.test(withOpts),
+       'and never as a flag, which would be an option fifo has never heard of');
+    S.extraFormat = {};
+
+    // A tee is refused rather than quietly given one, and the refusal names the
+    // form that does work.
+    S.container = 'tee';
+    A.exporter.redraw();
+    pump(20);
+    ok(!A.exporter.buildSpec().keepTrying.on, 'a tee gets none');
+    ok(A.exporter.currentWarnings().some((w) => w.indexOf('does not apply to a tee') >= 0),
+       'and the stage says so rather than dropping it silently');
+
+    // The half that can be rendered: a fifo around a local file. The point is
+    // not the queue — it is that every question about the *container* is still
+    // answered by the container, because `fifo` answers AVERROR_PATCHWELCOME to
+    // every `query_codec`, has no default codecs and no fourcc tables.
+    //
+    // **The container is whatever this test had reached**, not a name written
+    // here: the stream list at this point was built against it, and a section
+    // that forced `matroska` on a list carrying the telemetry fixture's data row
+    // rendered nothing at all — matroska holds no data stream, which is a real
+    // refusal and not this feature's.
+    Object.assign(S, was);
+    const ext = /\.([A-Za-z0-9]+)$/.exec(String(S.path) || '');
+    const here = (name) => `${bro.appDir}/../out/${name}.${ext ? ext[1] : 'mkv'}`;
+    S.path = here('ui-export-keep');
+    A.exporter.redraw();
+    pump(20);
+    const runIt = (spec, what) => {
+        const job = bro.ffmpeg.render.start(spec);
+        ok(job > 0, `${what} starts`);
+        waitFor(what, () => !bro.ffmpeg.render.poll().running, 60000);
+        const st = bro.ffmpeg.render.poll();
+        same(st.state, 'done', `${what} finishes: ${st.error || 'no error'}`);
+    };
+    runIt(A.exporter.buildSpec(), 'a plain render');
+
+    S.path = here('ui-export-keep-fifo');
+    A.exporter.redraw();
+    pump(20);
+    // Forced past `keepTrying()`'s "only a URL" rule by handing the renderer the
+    // spec directly: what is being checked here is the writer, and a URL it
+    // could actually reach is the thing a test may not have.
+    const forced = A.exporter.buildSpec();
+    forced.keepTrying = { on: true, queueSize: 60, waitSeconds: -1, maxAttempts: 0,
+                          dropOnOverflow: false, restartWithKeyframe: false };
+    runIt(forced, 'a render wrapped in a fifo');
+
+    const a = bro.ffmpeg.probe(here('ui-export-keep'));
+    const b = bro.ffmpeg.probe(here('ui-export-keep-fifo'));
+    same(b.video.codec, a.video.codec, 'the wrapped file has the same codec');
+    same(b.video.width, a.video.width, 'the same size');
+    ok(Math.abs(b.format.duration - a.format.duration) < 0.1,
+       'and the same length as the render that was not wrapped');
+
+    Object.assign(S, was);
+    if (blobBefore !== null) {
+        localStorage.setItem(EXPORT_STORE_KEY, blobBefore);
+        A.exporter.restoreSettings();
+    }
+    A.exporter.redraw();
+    pump(20);
+    // Last, because a redraw is a change and a change is remembered.
+    if (blobBefore !== null) localStorage.setItem(EXPORT_STORE_KEY, blobBefore);
 }
 
 console.log(`\n${checks} checks passed`);

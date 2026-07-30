@@ -119,6 +119,44 @@ export const settings = {
     // argument and owns the escaping.
     destinations: [],
 
+    // ── a destination that is allowed to go away ───────────────────────────
+    //
+    // **One decision, not a checkbox per option.** Somebody writing to an RTMP
+    // endpoint wants "keep going if it drops", and what that means in ffmpeg is
+    // the `fifo` pseudo-muxer wrapped around the muxer they chose — a queue, a
+    // thread and a reconnect loop. There is one such muxer, so it is named here
+    // the way `tee` is named in destination.js: it *is* the mechanism, and a
+    // question to discover it would have one possible answer. Everything about
+    // what one *takes* is still libav's; the option table, the ranges and the
+    // defaults are read out of `muxerOptions('fifo')` and none of them is
+    // written down.
+    //
+    // The sentinels mean **leave it to the muxer**, which is why they are not
+    // zero: a blank field has to reach the render as "libav's own answer" and
+    // not as a number this file made up. See `ExportSettings::FifoSettings`.
+    //
+    // It only means anything when the destination is a URL, and `buildSpec()`
+    // is where that is decided — a preview renders to a temp file and must not
+    // quietly acquire a queue, and a `tee` is refused outright because one fifo
+    // in front of several destinations would take all of them through the
+    // recovery of any one.
+    keepTrying: {
+        on: false,
+        queueSize: 0,          // 0: fifo's own `queue_size`
+        waitSeconds: -1,       // <0: fifo's own `recovery_wait_time`
+        maxAttempts: 0,        // 0: fifo's own "keep trying forever"
+        // **Always true while `on`, and that is a refusal rather than a
+        // default.** fifo's own default is to block, and blocking is
+        // unstoppable here: its recovery loop spins on EAGAIN while
+        // `!drop_pkts_on_overflow`, so a destination that never comes up leaves
+        // the render thread waiting inside `av_interleaved_write_frame` on a
+        // full queue — and Stop is checked once per output frame, so it never
+        // arrives. Measured at twenty seconds and a cancel that did nothing.
+        // See `ExportSettings::FifoSettings`.
+        dropOnOverflow: true,
+        restartWithKeyframe: false,
+    },
+
     // ── the same edit, written twice ───────────────────────────────────────
     //
     // The other half of the question above, and the one it is constantly

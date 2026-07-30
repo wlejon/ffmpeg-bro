@@ -499,6 +499,24 @@ bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::s
     s.colorRange = strProp(ctx, spec, "colorRange", "");
     s.faststart = boolProp(ctx, spec, "faststart", true);
     s.title = strProp(ctx, spec, "title", "");
+    // `keepTrying` — one decision, read here as one object, because "keep going
+    // if the destination drops" is a thing somebody asks for and `-f fifo
+    // -fifo_format flv -attempt_recovery 1 -recovery_wait_time 2` is what it
+    // means. Every number defaults to a sentinel meaning "leave it to libav",
+    // so a spec that says nothing but `on` gets the `fifo` muxer's own answers
+    // and this file writes none of them down. See `ExportSettings::FifoSettings`.
+    {
+        JSValue f = JS_GetPropertyStr(ctx, spec, "keepTrying");
+        if (JS_IsObject(f)) {
+            s.fifo.on = boolProp(ctx, f, "on", false);
+            s.fifo.queueSize = static_cast<int>(numProp(ctx, f, "queueSize", 0));
+            s.fifo.waitSeconds = numProp(ctx, f, "waitSeconds", -1);
+            s.fifo.maxAttempts = static_cast<int>(numProp(ctx, f, "maxAttempts", 0));
+            s.fifo.dropOnOverflow = boolProp(ctx, f, "dropOnOverflow", false);
+            s.fifo.restartWithKeyframe = boolProp(ctx, f, "restartWithKeyframe", false);
+        }
+        JS_FreeValue(ctx, f);
+    }
     // The defaults every video stream takes. Named fields rather than option
     // bag entries because none of them is an encoder option: `-force_key_frames`
     // sets a frame's picture type, `-shortest` ends the loop, and the field

@@ -4007,6 +4007,65 @@ int main(int argc, char* argv[]) {
                   "and says it could not be reached rather than could not be opened");
         }
 
+        // **A destination that is allowed to go away.** The same closed port,
+        // with the muxer wrapped in a `fifo` — which is a real test of the
+        // recovery loop and needs nothing listening anywhere, because what is
+        // asserted is what happens while the far end is *not* there.
+        //
+        // Bounded on purpose, and both bounds matter. **`dropOnOverflow` is
+        // what makes this end at all**, and it is the only mode the Write stage
+        // offers for exactly this reason: `fifo_thread_recover` loops on
+        // `AVERROR(EAGAIN)` while it is off, so a blocking fifo whose
+        // destination never comes up retries for ever while the render thread
+        // waits inside `av_interleaved_write_frame` on a full queue — and Stop
+        // is checked once per output frame, so it never arrives. Measured at
+        // twenty seconds of a four-second render, with a cancel that did
+        // nothing. And the protocol's own `timeout` is set because on this
+        // platform libav does not learn quickly that a port is closed:
+        // `ff_poll_interrupt` sits until tcp's own `open_timeout`, five seconds.
+        {
+            ExportSettings keep = baseSettings("tcp://127.0.0.1:45999");
+            keep.format = "mpegts";
+            keep.faststart = false;
+            keep.fifo.on = true;
+            keep.fifo.maxAttempts = 2;
+            keep.fifo.waitSeconds = 0.1;
+            keep.fifo.dropOnOverflow = true;
+            keep.formatOptions.push_back({"timeout", "300000"});   // µs, tcp's own
+            const ExportStatus k = render(keep, {leftHalf(first, srcDuration)});
+            // It fails — nothing was ever there — but not at the *start*: the
+            // fifo opens the destination on its own thread, so the render runs,
+            // queues, retries and reports at the end. That change of moment is
+            // the trade the setting asks for and is stated in the manual.
+            //
+            // **libav will not say this on its own.** `fifo_write_trailer` hands
+            // back whatever its consumer thread's trailer returned, which for a
+            // header that was never written is zero — so without the writer's
+            // own account of what it opened, a render that reached nothing at all
+            // comes back `Done`. That is the exact failure this whole setting is
+            // arranged against, which is why it is asserted rather than assumed.
+            checkf(k.state == ExportStatus::State::Failed,
+                   "a wrapped render to a closed port still fails in the end (%s)",
+                   k.error.c_str());
+            checkf(k.error.find("never reached") != std::string::npos,
+                   "and says it never reached the destination rather than reporting success");
+            // **The recovery loop ran**, which is the whole claim, and it is
+            // counted out of what the muxer said rather than out of anything
+            // libav publishes — see `WriteRecovery` in ffmpeg_report.h. Nothing
+            // else in this binary says those words, so a non-zero count here
+            // cannot have come from anywhere but the fifo.
+            const WriteRecovery r = writeRecovery();
+            checkf(r.failed >= 1,
+                   "and the fifo's own attempts are counted: %lld failed, %lld recovered",
+                   (long long)r.failed, (long long)r.recovered);
+            // The unwrapped render of the same URL above was refused before a
+            // frame was made; this one was not, and that difference is the
+            // feature rather than a detail of it.
+            checkf(k.error.find("no_such") == std::string::npos,
+                   "and the failure is about the destination rather than about an option (%s)",
+                   k.error.c_str());
+        }
+
         // An option nothing takes is an error, at this end too. The muxer did
         // not know it and neither did the protocol, and a render that wrote a
         // file while ignoring what it was told is the outcome every option bag
