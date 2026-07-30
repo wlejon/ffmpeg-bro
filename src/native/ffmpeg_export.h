@@ -785,6 +785,39 @@ std::vector<ExportStream> outputStreams(const ExportSettings& s, bool wantAudio)
 /// than reading out of bounds.
 MediaInput resolveInput(const ExportSettings& s, int index, const std::string& path);
 
+/// The first clip in this render whose `-i` is a **live device**, or -1.
+///
+/// `TimelineSource` asks a source what it looks like at `inPoint + (t - start) *
+/// speed`, and `SourceVideo::rgbaAt` answers by seeking and walking. A device
+/// answers neither half of that question: `av_seek_frame` on a libavdevice
+/// demuxer returns `Invalid argument` — there is no `read_seek` — and the moment
+/// a trim asks for has not happened yet or has gone.
+///
+/// **Pacing is not the reason, which is worth writing down because it is the
+/// obvious guess.** A compositor walk over a device is already on the wall
+/// clock, because `av_read_frame` blocks until the device has a frame: measured
+/// here with `-f lavfi -i testsrc=…,realtime`, three seconds of output take 3043
+/// ms against 80 ms off the same device without the `realtime`, and a clip
+/// starting two seconds along the timeline costs 2096 ms for four seconds of
+/// output because the reader is opened lazily at the frame the clip appears. So
+/// there is no clock to add. What is wrong is the *seek*: the same walk with the
+/// clip trimmed one second in takes 3040 ms for two seconds of output, and
+/// trimmed three seconds in takes 5061 ms — a trim on a device is a **wait**,
+/// exactly its own length, and nothing is written during it. Two seconds of
+/// output either way, so the file says nothing about what it cost.
+///
+/// Refused here rather than approximated, for the reason every refusal in this
+/// renderer is: the failure would be a file that plays. A device *feeding the
+/// graph* is a different thing and is not this — a `filterInputs` pad is pulled
+/// forward and never asked for an instant — so this asks about `clips` alone.
+int deviceClip(const ExportSettings& s, const std::vector<ExportClip>& clips);
+
+/// What to say about the clip `deviceClip` found. One sentence for both callers
+/// — the render and the preview of it — because two wordings for one clip would
+/// read as two different faults.
+std::string deviceClipRefusal(const ExportSettings& s, const std::vector<ExportClip>& clips,
+                              int at);
+
 /// A snapshot of the running job. Copied under the lock, so the caller can
 /// read it at leisure.
 struct ExportStatus {

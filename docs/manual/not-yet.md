@@ -247,13 +247,52 @@ Honest list of what does not work:
 - **`pattern_type=glob` on this build.** Globbing is compiled into libavformat or
   it is not, and this build's is not. The control says so instead of offering a
   pattern type that fails at open.
-- **A live device on the timeline.** A device never ends, so nothing can be cut
-  from it: there is no length for a clip to have and no seeking back to a
-  moment that has gone. Forcing `-f dshow` on the Sources stage describes one
-  correctly and refuses to lay it out, and the Capture stage is where one is
-  watched and recorded. Live *through* the edit — a camera composited with a
-  title and streamed out — is a different thing again and needs the render loop
-  to run on the wall clock.
+- **A live device on the timeline.** This entry used to name two things and was
+  wrong about both. It said a device has no length for a clip to have, and it
+  said that a camera composited with a title and streamed out "needs the render
+  loop to run on the wall clock". Neither survived being measured.
+
+  **The named case is built, and it is the Capture stage.** A device, a title
+  over it in a `movie` node, an `overlay`, and a destination that is a URL: one
+  recording, and every part of it was already here. A recording *is* the wall
+  clock — one tick per output frame, every feed sampled at the tick — and a
+  `Writer` is a muxer, so `udp://`, `rtmp://` and `srt://` reach one for the
+  reason they do on the Write stage. `tests/capture_test.cpp` records exactly
+  that against a UDP listener bound on the loopback in the same process and gets
+  29140 bytes back, beginning with an MPEG-TS sync byte. Nothing had to be built;
+  what was missing was anybody having tried it.
+
+  **And the render loop is already on the wall clock wherever a device is in
+  it**, which is the part that is worth knowing rather than the part that is
+  missing: `av_read_frame` blocks until the device has a frame, so a render that
+  reads one is paced by it and no clock is consulted. Measured with `-f lavfi -i
+  testsrc=…,realtime`, which is a device that produces in real time: two seconds
+  of a graph render take **2024 ms** against 65 ms off the same device without
+  the `realtime`, and a device feeding a `filterInputs` pad is not refused for
+  that reason. There is no loop to write.
+
+  What is genuinely refused, at both ends, is a device as a **clip** — and the
+  reason is the *seek*, not the length. `Stop at` gives a device a length, the
+  same way it gives a `-loop 1` still one; that is why the refusal is now keyed
+  on what the input **is** rather than on what it measures, which is a hole this
+  entry's own wording hid. The compositor asks a source for the picture at
+  `inPoint + (t − start) × speed`; a libavdevice demuxer has no `read_seek`, so
+  the answer is `Invalid argument` and the moment asked for has either not
+  happened or has gone. Measured before it was refused: two seconds of output off
+  the real-time device cost 2038 ms untrimmed, **3040 ms trimmed one second in
+  and 5061 ms trimmed three seconds in**, and the file was two seconds long every
+  time — a trim on a device is a *wait* of exactly its own length, and nothing in
+  the file says so.
+
+  So what remains is one thing and it is not a mechanism: **a device inside the
+  timeline compositor** — with a rectangle, in and out points, a track under
+  another one and a transition into the next shot. Closing it does not want a
+  clock. It wants an answer to what a trim, a scrub, a second render and an undo
+  *mean* when the source cannot be asked twice: a `.fbro` is a description that
+  can be rendered again, and a device clip renders different content every time
+  it is run, which is the thing an edit is not. The honest route is the one the
+  application already takes — record it, and then it is a file, and a file can be
+  cut.
 - **A monitor on a second interface, and a monitor of a mix that is not a pad.**
   Hearing a session is built — `Listen` beside a meter, see
   [Capture](capture.md) — and it plays out of bro's mixer, which is this

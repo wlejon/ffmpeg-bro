@@ -825,20 +825,36 @@ function openInput(input, opts = {}) {
         return null;
     }
 
-    // There are three ways for an input to have no length, and this is where
-    // they are told apart, because the answer to each is somewhere different.
-    // A single picture *is* no time at all: libavformat says so, and bro's
-    // `<video>` agrees, since it drives its clock from decoded pictures and one
-    // picture is nothing to advance through. An endless input — a `-loop` or a
+    // **A live device is refused first, and on what it is rather than on what
+    // it measures.** This used to be one of three answers to "no length", which
+    // let a device through the moment somebody set `Stop at` on it: `-t` is what
+    // gives an endless input a length — the same rule `-loop 1` follows — so the
+    // length question stopped asking, and a camera landed on the timeline as an
+    // ordinary clip. It very nearly worked, which is the reason it has to be
+    // refused rather than left: the compositor asks a source for the picture at
+    // `inPoint + (t − start) × speed`, and a device answers only for now. Every
+    // seek the viewer makes comes back `Invalid argument` — a libavdevice
+    // demuxer has no `read_seek` — and a trim on one costs its own length in
+    // real time with nothing written (3040 ms for two seconds trimmed one second
+    // in, 5061 ms trimmed three seconds in; see `deviceClip` in
+    // src/native/ffmpeg_export.h, which is the other end of this refusal).
+    if (inputsModel.kindOf(input) === 'device') {
+        flash(`${input.name} is a live device — Stop at gives it a length and does not ` +
+              'make it a clip: there is no seeking back to a moment that has gone, so a ' +
+              'trim on one is a wait. Record it on the Capture stage, and the recording ' +
+              'is a file.');
+        return null;
+    }
+
+    // Two ways left for an input to have no length, and this is where they are
+    // told apart, because the answer to each is somewhere different. A single
+    // picture *is* no time at all: libavformat says so, and bro's `<video>`
+    // agrees, since it drives its clock from decoded pictures and one picture is
+    // nothing to advance through. An endless input — a `-loop` or a
     // `-stream_loop` — is the other way round and is fixed on the input's own
-    // window. And a **live device** has no length that a number could give it:
-    // nothing has happened yet, so there is nothing to cut. Its answer is not
-    // "set -to", it is "record it, and then this is a file".
+    // window.
     if (inputsModel.lengthOf(input) <= 0) {
-        flash(inputsModel.kindOf(input) === 'device'
-                  ? `${input.name} is a live device — it has no end, so there is nothing to ` +
-                    'lay out. Record it on the Capture stage and the recording is a file.'
-              : inputsModel.endless(input)
+        flash(inputsModel.endless(input)
                   ? `${input.name} never ends — set -to on the Sources stage to say how ` +
                     'long it is'
                   : `${input.name} is one picture and no time at all — Sources ▸ Still ` +

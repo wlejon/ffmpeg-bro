@@ -47,7 +47,7 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   description of the file as libavformat's defaults see it.
 
 **And under the column, the act.** `Use on the timeline`, pinned, with the reason
-beside it where it is dead — `A device has no end`, `One picture, no time at all`,
+beside it where it is dead — `A device cannot be cut`, `One picture, no time at all`,
 `Never ends — set Stop at`, `Nothing to play`, `Will not open`, `Still connecting`,
 `Still opening`.
 Those mirror `openInput()` exactly, so the button is never alive and then refusing.
@@ -245,8 +245,24 @@ deadline and Stop *do* reach the stream analysis that follows the open, which is
 they are worth having and are not the whole story. There is no timeout to set
 instead: no device demuxer in this build has one.
 
-Where a device is watched and recorded is still [Capture](capture.md); this
-stage is where the same `-i` is described.
+**What a device cannot be is a clip, and the reason is the seek rather than the
+length.** `Use on the timeline` is dead for one and stays dead when you give it a
+**Stop at**, which is worth saying because everywhere else here `-t` is exactly
+what gives an endless input a length — a `-loop 1` still, a `-stream_loop -1`. A
+device has the other half missing: a libavdevice demuxer has no `read_seek`, so
+every scrub comes back `Invalid argument`, and the compositor asks a source for
+the picture at a *moment* — which for a live input is either one that has not
+happened or one that has gone. Measured on the renderer before it was refused: two
+seconds of output off a device paced to real time cost 2038 ms untrimmed, **3040
+ms trimmed one second in and 5061 ms trimmed three seconds in**, and the file was
+two seconds long every time. A trim on a device is a wait of its own length with
+nothing written during it. Pacing was never the problem — `av_read_frame` blocks,
+so a walk over a device is already on the wall clock.
+
+Where a device is watched, composed and written is [Capture](capture.md), and it
+goes the whole way there: several devices on one graph, a file over them in a
+`movie` node, and a destination that is a URL. This stage is where the same `-i`
+is described.
 
 ## An input that is not one file
 

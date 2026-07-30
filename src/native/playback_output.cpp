@@ -255,6 +255,16 @@ bool OutputReader::open(const OutputView& v, bool wantSound, std::string* err) {
     ExportSettings s = v.settings;
     if (!(s.fps > 0.0)) s.fps = 25.0;
 
+    // The same refusal `startExport` makes, in the same words, because this is
+    // that render with the writer taken off the end — and it arrives *earlier*
+    // here, which is the point: `settleOutput` is called the moment somebody
+    // asks for the picture, so a clip the render would refuse is refused before
+    // an element is pointed at anything. See `deviceClip` in ffmpeg_export.h.
+    if (const int at = deviceClip(s, v.clips); at >= 0) {
+        if (err) *err = deviceClipRefusal(s, v.clips, at);
+        return false;
+    }
+
     int w = 0, h = 0;
     bool graph = false;
     source_ = sourceFor(s, v.clips, wantSound, &w, &h, &graph, err);

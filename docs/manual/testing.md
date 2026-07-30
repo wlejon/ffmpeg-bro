@@ -523,6 +523,30 @@ accepting it, one `-i` in the command bar because a `movie` is not one, and a re
 recording that comes out at the device's own size. Its file is the one the suite
 recorded a section earlier, so that half still needs no fixture.
 
+**A device with a title on it, streamed out** is the whole of what [Not
+yet](not-yet.md) used to call inexpressible, checked in one recording.
+`capture_test.cpp` binds a **UDP listener on the loopback in its own process**
+first — writing to a port nobody is on succeeds silently, whatever is wrong with
+the plumbing, so a check without one proves nothing — then records `testsrc` with
+`movie=still.png` overlaid to `udp://127.0.0.1:45233` as MPEG-TS, and requires
+that the job is Done, that it reports what it sent, and that the listener received
+it beginning with a `0x47` sync byte. Nothing reaches a network. `ui_capture.js`
+does the stage half: a URL in **Save to** draws the `udp · linked in` row, the
+command bar prints the URL where a filename goes, and nothing about it is refused.
+
+**A device is not a clip, and `Stop at` does not change that**, which is asserted
+at both ends because the refusal used to be keyed on the wrong question.
+`ui_capture.js` lays a `lavfi` device on the timeline and requires the refusal,
+then sets `-to 3`, requires that the input now *has* a length of 3 — the same rule
+a `-loop 1` follows — and requires the refusal again. `export_test.cpp` asks
+`startExport` for the same clip and requires a failure naming the device and
+saying what a trim on one would cost, with and without a `-t`; and then renders
+the same device through `filterInputs` and requires that one to **succeed**,
+because a pad is pulled forward and never asked for an instant. The numbers behind
+those two — 3040 ms for two seconds trimmed one second in against 2038 ms
+untrimmed, and 2024 ms for a graph render paced by the device — are in `deviceClip`
+in `src/native/ffmpeg_export.h`.
+
 The session half adds a second input and follows what changes: the card and the
 column that say which input they are about, the refusal at two inputs with no graph
 asserted **twice** — once as the disabled button and once from `record.start`, so

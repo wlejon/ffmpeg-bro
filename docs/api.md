@@ -1233,6 +1233,18 @@ is what the compositor reads as "this one is in the mix and nowhere else". It is
 the same statement `viewer.placement()` makes on screen, which is why there is no
 separate field for it.
 
+**A clip of a live device is refused**, by name, before a file is opened — and so
+is the same spec handed to `output.define`/`output.settle`, in the same words,
+because that is the render with the writer taken off the end. The source time
+above is the reason: a libavdevice demuxer has no `read_seek`, so `inPoint + (t -
+start) * speed` is a question it answers with `Invalid argument`, and a trim on
+one is a *wait* of exactly its own length rather than a jump (3040 ms for two
+seconds trimmed one second in, against 2038 ms untrimmed). A `-t` on the input
+does not change it: that gives a device a *length*, which was never the missing
+half. A device feeding a **`filterInputs` pad** is a different thing and is not
+refused — a pad is pulled forward and never asked for an instant, so such a render
+is simply paced by the device.
+
 `displayWidth`/`displayHeight` account for the rotation in the container's
 display matrix — a phone video is 1920×1080 on disk and 1080×1920 on screen, and
 only that side-datum says so. `rotation` is the angle itself, in degrees

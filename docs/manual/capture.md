@@ -313,6 +313,29 @@ separates a filter's arguments, so a Windows path inside a `movie` has to be
 written `'D\:/shots/card.png'` — quoted, with the drive colon escaped. That is
 ffmpeg's own escaping and the same thing `subtitles=` needs.
 
+## Streaming it out
+
+**Save to** takes a URL as readily as a path, because a recording is a device into a
+`Writer` and a `Writer` is a muxer — so `rtmp://`, `srt://` and `udp://` reach one
+here for the reason they reach one on the [Write](output.md) stage, and nothing was
+widened to carry one. A **Protocol** row appears under the field saying whether the
+scheme it names is linked into this build, which is the one thing a path field cannot
+show: a URL naming a protocol that is absent fails at open with a message about a
+filename.
+
+That is what closes *live through the edit*, and it is worth saying plainly because
+[Not yet](not-yet.md) used to say it was open: **a camera composited with a title and
+streamed out is this stage**. The camera is a card, the title is a
+[`movie` node](#a-file-in-the-graph) wired into an `overlay`, and the destination is
+the URL. A recording already runs on the wall clock — one tick per output frame,
+every feed sampled at the tick — so there is no clock to add and there never was.
+What is *not* here is a device on the [timeline](timeline.md) as a clip, which is a
+different thing and is refused for a reason of its own: see [Sources](sources.md).
+
+A stream has no size and no percentage while it runs, and nothing to open when it
+stops: what went out has gone. The bar says what it can — elapsed, frames and bytes
+sent — and *Add to timeline* is offered only for a destination that is a local file.
+
 ## Recording and streaming at once
 
 **Container** offers *several destinations (tee)* under the containers, and picking it

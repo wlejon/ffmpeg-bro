@@ -1371,6 +1371,96 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── a device, a file over it, and a URL on the end ─────────────────────
+    //
+    // **The whole of what docs/manual/not-yet.md used to call inexpressible**,
+    // in one recording: "a camera composited with a title and streamed out". It
+    // said that needed the render loop to run on the wall clock. It does not
+    // need anything — a recording *is* the wall clock (one tick per output
+    // frame, every feed sampled at the tick), a `movie` node is the title, and
+    // a `Writer` is a muxer, so the destination is a URL for the reason it is
+    // one on the Write stage.
+    //
+    // **Against a real listener, in this process**, which is the same rule
+    // tests/export_test.cpp's URL section follows and for the same reason:
+    // writing to a port nobody is on succeeds silently, whatever is wrong with
+    // the plumbing. So this binds a UDP socket on the loopback first and
+    // asserts that the bytes arrived and begin with an MPEG-TS sync byte —
+    // nothing here reaches a network.
+    std::printf("\nA device with a title on it, streamed out\n");
+    if (!avcodec_find_encoder_by_name("libx264")) {
+        std::printf("  SKIP  no libx264 in this build\n");
+    } else if (!haveFilter("movie")) {
+        std::printf("  SKIP  this build has no movie filter\n");
+    } else if (fixtures.empty() || !std::filesystem::exists(fixtures + "/still.png")) {
+        std::printf("  SKIP  no still.png: there is no title to lay over the device\n");
+    } else {
+        bool haveUdp = false;
+        {
+            void* it = nullptr;
+            const char* name = nullptr;
+            while ((name = avio_enum_protocols(&it, 1)))
+                if (std::string(name) == "udp") haveUdp = true;
+        }
+        checkf(haveUdp, "this build has the udp output protocol");
+        if (haveUdp) {
+            const std::string url = "udp://127.0.0.1:45233";
+            AVIOContext* rx = nullptr;
+            AVDictionary* ropt = nullptr;
+            // Microseconds, and it is what stops the reader thread outliving
+            // the recording: a datagram socket has no end of stream, so the
+            // read has to give up on its own.
+            av_dict_set(&ropt, "timeout", "2000000", 0);
+            av_dict_set(&ropt, "buffer_size", "1048576", 0);
+            const int ro = avio_open2(&rx, url.c_str(), AVIO_FLAG_READ, nullptr, &ropt);
+            av_dict_free(&ropt);
+            checkf(ro >= 0, "a listener binds on the loopback (%s)",
+                   ro >= 0 ? "bound" : "could not bind");
+
+            if (ro >= 0) {
+                size_t got = 0;
+                uint8_t firstByte = 0;
+                std::thread reader([&] {
+                    uint8_t buf[4096];
+                    for (;;) {
+                        const int n = avio_read(rx, buf, sizeof(buf));
+                        if (n <= 0) break;
+                        if (!got && n > 0) firstByte = buf[0];
+                        got += static_cast<size_t>(n);
+                    }
+                });
+
+                CaptureSettings s = recording(
+                    lavfi("testsrc=size=320x240:rate=25", 2.0), url,
+                    "movie=" + filterArg(fixtures + "/still.png") +
+                        "[card];[0:v][card]overlay=0:0[vout]");
+                s.output.format = "mpegts";
+                s.output.faststart = false;
+                s.output.includeAudio = false;
+                std::string err;
+                if (!startCapture(s, &err)) {
+                    checkf(false, "a device with a title on it streams out: %s", err.c_str());
+                } else {
+                    const ExportStatus st = waitForJob(60.0);
+                    checkf(st.state == ExportStatus::State::Done,
+                           "a recording whose destination is a URL finishes%s%s",
+                           st.error.empty() ? "" : ": ", st.error.c_str());
+                    // There is no file to stat: what a socket can say is what
+                    // went through it.
+                    checkf(st.bytesWritten > 4096,
+                           "and reports what it sent (%lld bytes)",
+                           (long long)st.bytesWritten);
+                }
+
+                reader.join();
+                avio_closep(&rx);
+                checkf(got > 4096, "and the listener received it (%zu bytes)", got);
+                check(firstByte == 0x47,
+                      "starting with an MPEG-TS sync byte, which is what was asked for");
+            }
+        }
+    }
+
     // ── what a session refuses, and in what words ──────────────────────────
     std::printf("\nWhat a session refuses\n");
     {

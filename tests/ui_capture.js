@@ -364,6 +364,38 @@ console.log('\na file laid over the device, by the graph');
     pump(150);
 }
 
+console.log('\nand the destination can be a URL');
+{
+    // **The other half of "a camera composited with a title and streamed
+    // out"**, which docs/manual/not-yet.md used to call a thing this
+    // application could not express. The composition is the section above; this
+    // is the end of it. A recording is a device into a `Writer` and a `Writer`
+    // is a muxer, so a URL reaches one here for the reason it does on the Write
+    // stage — nothing was widened to carry one.
+    //
+    // Nothing here reaches a network: what is checked is the *stage*, which is
+    // the half a person touches. That the bytes actually go out through the
+    // protocol is tests/capture_test.cpp's, against a listener bound on the
+    // loopback in the same process.
+    const was = cap.capture.path;
+    const field = q('[data-f="cappath"]');
+    field.value = 'udp://127.0.0.1:45233';
+    field.dispatchEvent(new Event('change'));
+    pump(150);
+
+    ok(text('#cap-settings').indexOf('udp · linked in') >= 0,
+       'the stage says whether the protocol the URL names is in this build, which is the ' +
+       `one thing a path field cannot show: ${text('#cap-settings').slice(0, 120)}`);
+    ok(text('#cmd-line').indexOf('udp://127.0.0.1:45233') >= 0,
+       'and the command bar prints the URL where the filename goes');
+    ok(!q('[data-f="caprecord"]').disabled,
+       'and nothing about a URL destination is refused');
+
+    field.value = was;
+    field.dispatchEvent(new Event('change'));
+    pump(150);
+}
+
 console.log('\na second device is a second -i, not a second recording');
 {
     same(cap.capture.inputs.length, 1, 'one input to start with');
@@ -1196,6 +1228,28 @@ console.log('\na live input cannot be laid on a timeline');
     ok(clip === null, 'laying it on the timeline is refused');
     same(A.project.clips.length, before, 'and nothing was added');
 
+    // **And `Stop at` does not change the answer**, which is the whole of this
+    // section rather than a corollary of it. `-t` is what gives an endless
+    // input a length everywhere else here — a `-loop 1` still, a
+    // `-stream_loop -1` — so a refusal that asked about the *length* let a
+    // camera through the moment somebody set one, and it very nearly worked:
+    // the compositor is already on the wall clock, because `av_read_frame`
+    // blocks. What it cannot do is go back. Measured on the renderer before it
+    // was refused: two seconds of a `realtime`-paced device cost 2038 ms
+    // untrimmed, 3040 ms trimmed one second in and 5061 ms trimmed three
+    // seconds in — a trim on a device is a wait of its own length, and the file
+    // is two seconds long either way. See `deviceClip` in
+    // src/native/ffmpeg_export.h, which is the other end of this.
+    A.inputs.updateInput(input, { to: 3 });
+    pump(400);
+    same(A.inputs.lengthOf(input), 3,
+         'Stop at gives a device a length, the same way it gives a -loop one');
+    ok(A.openInput(input) === null,
+       'and it is still refused, because a length was never the half that was missing');
+    same(A.project.clips.length, before, 'still nothing on the timeline');
+    A.inputs.updateInput(input, { to: 0 });
+    pump(300);
+
     A.shell.goTo('sources');
     pump(200);
     A.drawSources();
@@ -1204,8 +1258,14 @@ console.log('\na live input cannot be laid on a timeline');
     // `-f dshow` by hand is a legitimate thing to do.
     q(`[data-input="${input.id}"]`).click();
     pump(150);
-    ok(text('#src-detail').indexOf('never ends') >= 0,
+    ok(text('#src-detail').indexOf('cannot be cut') >= 0,
        'the Sources stage says what a device is rather than showing a file that will not open');
+    // The strip's `why` is its title, which is where the long form of every one
+    // of these lives — the visible half is one line by design.
+    const why = (q('#src-detail .src-strip-v') || {}).title || '';
+    ok(why.indexOf('Stop at gives one a length') >= 0,
+       'and says which half is missing, because the other half is settable and it is ' +
+       `the seek that is not: ${why.slice(0, 120)}`);
     // Where to go instead is a door rather than a sentence naming a stage, for
     // the reason the Capture stage's graph strip carries one: telling somebody
     // to go somewhere is worse than taking them.

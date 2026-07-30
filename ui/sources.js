@@ -749,22 +749,35 @@ function burnIn(input) {
     goTo('graph');
 }
 
-/// A live device, which is an input this stage can describe and cannot use.
+/// A live device, which is an input this stage can describe and cannot lay out.
 ///
 /// It is here because a device *is* an `-i` and this is where an `-i` is
 /// edited: forcing `-f dshow` by hand is a legitimate thing to do and the
 /// result should be understood rather than shown as a file that will not open.
-/// What it says is what is different about it — no end, so no clip — and where
-/// to go instead.
+///
+/// **It used to say "no end, so no clip", and that was the wrong half.** `Stop
+/// at` gives a device an end — it is `-t`, and `-t` is exactly what gives an
+/// endless input a length everywhere else in this application — so the sentence
+/// was answerable and the refusal it was standing in for was not. The half that
+/// cannot be given is the seek: a libavdevice demuxer has no `read_seek`, every
+/// scrub comes back `Invalid argument`, and a trim measured on the render is a
+/// *wait* of exactly its own length (see `deviceClip` in
+/// src/native/ffmpeg_export.h for the numbers). So this says the true thing and
+/// points at the two places a live input does work.
 function deviceRows(input) {
     return [
-        strip('Live', 'never ends, so nothing can be cut from it',
-              'A device has no length for a clip to have and no way to seek back to a ' +
-              'moment that has already gone. That is not a gap in this stage — it is what ' +
-              'a live input is.\n\n' +
-              'The Capture stage is where one is watched and recorded. What it writes is a ' +
-              'file, and a file is an input like any other.',
-              doorTo('Capture', 'capture', 'Watch it, and record it into a file')),
+        strip('Live', 'plays now and cannot be cut',
+              'A device has no way back to a moment that has gone. Stop at gives one a ' +
+              'length, and a length was never what was missing: seeking a device is an ' +
+              'error, so a trim on one would be a wait of its own length rather than a ' +
+              'jump, and the picture on the monitor could never be the moment under the ' +
+              'playhead. That is what a live input is, not a gap in this stage.\n\n' +
+              'Live goes through the Capture stage instead, and it goes all the way ' +
+              'through: several devices on one graph, a file over them in a movie node, ' +
+              'and a destination that is a URL — so a camera with a title on it, streamed ' +
+              'out, is that stage rather than this one. What it writes to a file is an ' +
+              'input like any other, and that one can be cut.',
+              doorTo('Capture', 'capture', 'Watch it, compose it, record or stream it')),
     ];
 }
 
@@ -1073,8 +1086,9 @@ function windowRows(input) {
 /// **`blocked()` mirrors `openInput()` in app.js exactly**, which is the rule
 /// the Capture stage's record bar follows for the same reason: a button that is
 /// alive and then refuses is a button that has told you nothing, and a button
-/// that is dead for a reason the model does not hold is worse. Both sides state
-/// the same three ways an input can have no length, in the same order.
+/// that is dead for a reason the model does not hold is worse. Both sides refuse
+/// a device on what it is, and then state the two ways an input can have no
+/// length, in the same order.
 function blocked(input) {
     // Still opening is not "will not open", and the difference is the whole
     // point of the asynchronous path: one is a fault and the other is a wait.
@@ -1083,9 +1097,12 @@ function blocked(input) {
     if (input.error || !input.probe) return 'Will not open';
     const p = input.probe;
     if (!p.video && !p.audio) return 'Nothing to play';
+    // Before the length, and not as one of its answers: `Stop at` gives a device
+    // a length, and a length was never the half that was missing. See the note
+    // in `openInput()` and `deviceRows()` below.
+    if (kindOf(input) === 'device') return 'A device cannot be cut';
     if (lengthOf(input) <= 0)
-        return kindOf(input) === 'device' ? 'A device has no end'
-             : endless(input) ? 'Never ends — set Stop at'
+        return endless(input) ? 'Never ends — set Stop at'
              : 'One picture, no time at all';
     return '';
 }

@@ -20,6 +20,7 @@
 #include "export_timeline.h"
 #include "export_writer.h"
 
+#include "ffmpeg_capabilities.h"  // isInputDevice, for the clip a device cannot be
 #include "ffmpeg_job.h"
 #include "ffmpeg_report.h"
 
@@ -41,6 +42,29 @@ MediaInput resolveInput(const ExportSettings& s, int index, const std::string& p
     MediaInput in;
     in.path = path;
     return in;
+}
+
+int deviceClip(const ExportSettings& s, const std::vector<ExportClip>& clips) {
+    for (size_t i = 0; i < clips.size(); ++i)
+        if (isInputDevice(resolveInput(s, clips[i].input, clips[i].path).format))
+            return static_cast<int>(i);
+    return -1;
+}
+
+/// What to say about one, in the words both callers use.
+///
+/// Two of them — `startExport` and the output preview — and one sentence,
+/// because the second is the render read by an element and a person who saw two
+/// different refusals for one clip would be right to think they were two
+/// different faults.
+std::string deviceClipRefusal(const ExportSettings& s, const std::vector<ExportClip>& clips,
+                              int at) {
+    const MediaInput in = resolveInput(s, clips[at].input, clips[at].path);
+    return "clip " + std::to_string(at + 1) + " is a live device (-f " + in.format + " -i " +
+           in.path + "), and the compositor asks a source what it looks like at an instant. "
+           "A device answers only for now: seeking one is Invalid argument, and a trim on "
+           "one is a wait of its own length rather than a seek. Record it — a recording is "
+           "a file, and a file can be cut";
 }
 
 namespace {
@@ -1018,6 +1042,16 @@ bool startExport(const ExportSettings& settings, const std::vector<ExportClip>& 
     }
     if (s.endTime <= s.startTime && !copiesAnything) {
         if (error) *error = "the range to render is empty";
+        return false;
+    }
+
+    // **A device is not a clip**, and this is the end of the seam that says so.
+    // A `-t` gives a device a *length* — that is the same rule `-loop 1` and
+    // `-stream_loop -1` follow, and it is why the length question above does not
+    // catch this one — but a length is not the half that is missing. See
+    // `deviceClip` for what is, and for the numbers.
+    if (const int at = deviceClip(s, clips); at >= 0) {
+        if (error) *error = deviceClipRefusal(s, clips, at);
         return false;
     }
 

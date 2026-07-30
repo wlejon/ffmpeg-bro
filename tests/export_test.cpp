@@ -2081,6 +2081,90 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ── a device where a clip goes, and a device where an input goes ───────
+    //
+    // These two sit together because the difference between them is the whole
+    // of what "a live device on the timeline" turned out to mean.
+    //
+    // A **clip** is refused. `TimelineSource` asks a source for the picture at
+    // `inPoint + (t − start) × speed`, and `SourceVideo::rgbaAt` answers by
+    // seeking and walking — a libavdevice demuxer has no `read_seek`, so the
+    // seek is `Invalid argument`, and the moment a trim names has either not
+    // happened or has gone. Measured before it was refused, on `-f lavfi -i
+    // testsrc=…,realtime`, which is a device that produces at the wall clock:
+    // two seconds of output cost 2038 ms untrimmed, **3040 ms trimmed one
+    // second in and 5061 ms trimmed three seconds in** — a trim is a wait of
+    // exactly its own length with nothing written during it, and the file that
+    // comes out is two seconds long either way and says nothing about it.
+    //
+    // A device **feeding the graph** is not that and is not refused. A
+    // `filterInputs` pad is pulled forward and never asked for an instant, so a
+    // graph render off a device is an ordinary render that happens to be paced
+    // by its source: measured at 2024 ms for two seconds off the `realtime`
+    // device against 65 ms off the same device without it. There is no wall
+    // clock to add here — `av_read_frame` is the clock.
+    //
+    // `lavfi` is a device on every machine, which is what makes both halves
+    // testable with no camera.
+    {
+        std::printf("\na device where a clip goes\n");
+
+        // At the render's own size, so that the graph half below is about the
+        // device and not about a scaler nobody asked for.
+        char devText[128];
+        std::snprintf(devText, sizeof(devText), "testsrc=size=%dx%d:rate=%g", kW, kH, kFps);
+        const std::string devArgs = devText;
+        MediaInput dev;
+        dev.format = "lavfi";
+        dev.path = devArgs;
+        dev.duration = 1.0;   // `-t`, which is what gives an endless input a length
+
+        ExportSettings asClip = baseSettings("out/export-device-clip.mp4");
+        asClip.endTime = 0.4;
+        asClip.inputs = {dev};
+        ExportClip c;
+        c.input = 0;
+        c.start = 0;
+        c.length = 1.0;
+        c.w = kW;
+        c.h = kH;
+        st = render(asClip, {c});
+        checkf(st.state == ExportStatus::State::Failed,
+               "a clip of a live device is refused (%s)", st.error.c_str());
+        checkf(st.error.find("live device") != std::string::npos &&
+                   st.error.find(devArgs) != std::string::npos,
+               "naming the device rather than failing at the first seek (%s)",
+               st.error.c_str());
+        checkf(st.error.find("wait") != std::string::npos,
+               "and saying what a trim on one would cost (%s)", st.error.c_str());
+
+        // **A `-t` is not the missing half.** The refusal above has one on it;
+        // this is the same clip with none, to say that the answer does not
+        // change — the length question and the seek question are different
+        // questions and only one of them a number can settle.
+        MediaInput noEnd = dev;
+        noEnd.duration = 0.0;
+        ExportSettings without = asClip;
+        without.inputs = {noEnd};
+        st = render(without, {c});
+        checkf(st.state == ExportStatus::State::Failed,
+               "and so is one with no -t, which is the same refusal and not a length (%s)",
+               st.error.c_str());
+
+        // The other half: the same device, feeding the graph. Nothing is
+        // refused, because nothing asks it for an instant.
+        ExportSettings asFeed = baseSettings("out/export-device-graph.mp4");
+        asFeed.endTime = 0.4;
+        asFeed.inputs = {dev};
+        asFeed.filterGraph = "[0:v]null[vout]";
+        asFeed.filterInputs = {{"0:v", devArgs, "v", 0.0, 0}};
+        asFeed.includeAudio = false;
+        st = render(asFeed, {});
+        checkf(st.state == ExportStatus::State::Done,
+               "the same device feeding the graph renders (%s)",
+               st.error.empty() ? "no error" : st.error.c_str());
+    }
+
     // ── the graph's own frame times, kept ──────────────────────────────────
     //
     // `-fps_mode vfr`. Both render paths used to stamp every frame with its
