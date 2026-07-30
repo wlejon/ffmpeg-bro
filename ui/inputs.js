@@ -28,6 +28,21 @@
 // The probe is kept here rather than on the clip because it is the input's
 // answer: run the file through a different demuxer or a different `-probesize`
 // and it says something else, which is exactly what the Sources stage is for.
+//
+// **A URL is opened off this thread, and a path is not.** `probe()` is
+// in-process and synchronous, which is right for the overwhelmingly common case
+// — a file on disk answers in a few hundred microseconds and every caller wants
+// the answer before it can lay anything out. It is wrong for a URL: an open
+// that waits four seconds for a handshake waits on *this* thread, and this
+// thread is the whole application, because stage views are never unmounted and
+// the viewer's `<video>` elements are the decoders. So a scheme goes through
+// `bro.ffmpeg.probes.start` and is watched from the frame loop; anything else
+// takes the call it always took and costs exactly what it always cost.
+//
+// **What decides is a string parse.** `schemeOf` reads the first characters of
+// the path and nothing else — it opens nothing, asks libav nothing and cannot
+// itself block, which was the other way of getting this wrong. A `file:` URL
+// comes back as no scheme, because that is the long way of writing a path.
 
 import { basename, urlScheme } from './format.js';
 import { changed } from './project.js';
@@ -127,6 +142,11 @@ export function addInput(spec) {
         // `probe()` reports what image2 read, and image2 stops at the first
         // gap, so the two are different facts and both are worth showing.
         sequence: spec.sequence || null,
+        // The open in flight, when there is one: `{ id, elapsed, timeout }`.
+        // Null the rest of the time, which is every input on a path — see
+        // `reopen`. Nothing outside this file may write it; `tickInputs` is
+        // what clears it, and it clears it by *settling* the input.
+        opening: null,
         // The files a `concat` list was written out of, for the same reason:
         // the list is a file on disk and the input is the list, so without
         // this nothing on screen could say what is being joined.
@@ -171,20 +191,100 @@ function reopen(input) {
     input.key = openingKey(input);
     input.error = '';
     input.probe = null;
+    // Whatever was already in flight is answering about the input this one no
+    // longer is, and nobody is going to be told: forgotten rather than
+    // cancelled, so the thread is reaped and no stale answer can land on top of
+    // the new one.
+    dropOpening(input);
     if (!input.path) { input.error = 'no path or URL'; return; }
-    try {
-        input.probe = bro.ffmpeg.probe(asInput(input));
-    } catch (e) {
-        input.error = String((e && e.message) || e);
-    }
-    // Registered even when the probe failed: the token is stable, and a `<video>`
-    // pointed at a broken input should fail as that input rather than as a
-    // string nothing recognises.
+    // Registered even when the probe failed or has not finished: the token is
+    // stable, and a `<video>` pointed at a broken input should fail as that
+    // input rather than as a string nothing recognises. First, too, because a
+    // URL's answer is minutes of network away and the token must exist before
+    // anything asks for it.
     try {
         input.src = bro.ffmpeg.inputs.define(input.id, asInput(input));
     } catch (e) {
+        input.error = String((e && e.message) || e);
+    }
+    if (schemeOf(input.path)) {
+        // No timeout named, so the native side's own applies — one number, in
+        // one place (`kProbeTimeoutSec`), rather than a second one here that
+        // could disagree with the deadline actually being measured.
+        try {
+            input.opening = { id: bro.ffmpeg.probes.start(asInput(input)), elapsed: 0, timeout: 0 };
+        } catch (e) {
+            input.error = input.error || String((e && e.message) || e);
+        }
+        return;
+    }
+    try {
+        input.probe = bro.ffmpeg.probe(asInput(input));
+    } catch (e) {
         input.error = input.error || String((e && e.message) || e);
     }
+}
+
+/// Cancel an open nobody is waiting for any more, and forget it.
+function dropOpening(input) {
+    if (!input.opening) return;
+    try { bro.ffmpeg.probes.forget(input.opening.id); } catch (e) { /* already gone */ }
+    input.opening = null;
+}
+
+/// Is this input still waiting on something that answers over a network?
+export function opening(input) { return !!(input && input.opening); }
+
+/// Give up on the open in flight. The press behind `Stop`.
+///
+/// **It reaches the open**, which is the whole reason this exists: `cancel`
+/// sets the `AVIOInterruptCB` the native side installed before the first byte
+/// was read, and libav abandons the connect, the handshake or the read it is
+/// inside. A button that only hid a spinner while the thread stayed blocked
+/// would be worse than no button, because it would be a lie about what the
+/// machine is doing. The answer still arrives through `tickInputs`, saying
+/// `stopped`, so the press is visibly what ended it.
+export function stopOpening(input) {
+    if (!input || !input.opening) return false;
+    try { bro.ffmpeg.probes.cancel(input.opening.id); } catch (e) { /* already gone */ }
+    return true;
+}
+
+/// Take in whatever the opens in flight have to say. Called once a frame.
+///
+/// Returns true when at least one input **settled** — got its probe, its
+/// refusal or its stop — which is a redraw. It deliberately does not return
+/// true merely because a clock moved: a card that redrew sixty times a second
+/// for four seconds to move one number would relay out every panel on the
+/// stage. The elapsed seconds are on `input.opening` for whoever wants to draw
+/// them, and the Sources stage writes that one text node itself.
+export function tickInputs() {
+    let settled = false;
+    for (const input of inputs) {
+        if (!input.opening) continue;
+        let p = null;
+        try { p = bro.ffmpeg.probes.poll(input.opening.id); } catch (e) { p = null; }
+        // Nothing knows the id: the answer was taken already, or the process
+        // lost it. Either way this input is not opening any more, and leaving
+        // it that way would be a card that says "connecting" for ever.
+        if (!p) {
+            input.opening = null;
+            input.error = input.error || 'the open went away before it answered';
+            settled = true;
+            continue;
+        }
+        if (p.opening) {
+            input.opening.elapsed = p.elapsed;
+            input.opening.timeout = p.timeout;
+            continue;
+        }
+        input.opening = null;
+        settled = true;
+        if (p.state === 'done') input.probe = p.result;
+        else input.error = p.error || (p.state === 'stopped' ? 'stopped' : 'will not open');
+    }
+    if (settled) changed('inputs');
+    return settled;
 }
 
 /// Open it again with exactly what it says now — the button beside a URL that
@@ -201,6 +301,7 @@ export function removeInput(input) {
     const i = inputs.indexOf(input);
     if (i < 0) return false;
     inputs.splice(i, 1);
+    dropOpening(input);
     try { bro.ffmpeg.inputs.forget(input.id); } catch (e) { /* already gone */ }
     changed('inputs');
     return true;

@@ -17,13 +17,20 @@
 //     where the input starts and not where the file does — the difference
 //     between an input seek and a clip's in-point, made in pixels;
 //   - a registered input resolves through a token, which is how the same
-//     options reach playback through a `<video src>` that is only a string.
+//     options reach playback through a `<video src>` that is only a string;
+//   - an open that is going nowhere **ends by itself and can be stopped**,
+//     which is the one thing a synchronous probe could never do. Both halves
+//     are checked against a closed port on the loopback address, so the test
+//     needs no network and cannot reach one: what it asserts is the *deadline*
+//     and the *refusal*, which are facts about this code, and never that
+//     something answered.
 //
 // Usage: ffmpeg-bro-inputtest <media-file>
 
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_input.h"
+#include "probe_async.h"
 #include "export_frame.h"
 #include "export_source.h"
 #include "playback_filter.h"
@@ -42,8 +49,10 @@ extern "C" {
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ffmpegbro;
@@ -702,6 +711,71 @@ int main(int argc, char* argv[]) {
                "because the frames come out already turned: %dx%d", turned.width,
                turned.height);
         forgetView("fx-4");
+    }
+
+    // ── an open that is going nowhere ──────────────────────────────────────
+    //
+    // Port 9 on the loopback address: nothing is listening and nothing can be.
+    // On this platform libav does not learn that quickly — a refused connect
+    // sits in the poll until the protocol's own `open_timeout` — so this is a
+    // genuine blocking open, which is exactly the thing being tested. It is
+    // also why nothing here needs a server: what is asserted is that the
+    // deadline fires and that a stop lands, not that anything answered.
+    std::printf("\nan open that goes nowhere ends by itself, and can be stopped\n");
+    {
+        MediaInput nowhere;
+        nowhere.path = "tcp://127.0.0.1:9";
+
+        const auto began = std::chrono::steady_clock::now();
+        const uint64_t id = startProbe(nowhere, 1.0);
+        const double startCost =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+        checkf(startCost < 0.25,
+               "starting one returns at once (%.0f ms) — the open is on a thread of its own",
+               startCost * 1000);
+
+        ProbeProgress p;
+        while (probeProgress(id, &p) && p.state == ProbeProgress::State::Opening)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const double waited =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+        checkf(p.state == ProbeProgress::State::Failed && waited < 4.0,
+               "a deadline of one second ends it in %.2fs, not when libav gives up", waited);
+        // The message says which of the two interruptions it was. Both come
+        // back from libav as AVERROR_EXIT — "Immediate exit requested" — which
+        // names the mechanism and not the reason.
+        checkf(p.result.error == "no answer in time",
+               "and says the far end did not answer rather than quoting libav: '%s'",
+               p.result.error.c_str());
+        check(!probeProgress(id, &p), "a terminal answer is handed over once, then forgotten");
+
+        const auto pressed = std::chrono::steady_clock::now();
+        const uint64_t id2 = startProbe(nowhere, 60.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        stopProbe(id2);
+        while (probeProgress(id2, &p) && p.state == ProbeProgress::State::Opening)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const double toStop =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - pressed).count();
+        // **The stop reaches the open**, which is the whole claim: libav polls
+        // the interrupt callback roughly every 100ms while it is inside a
+        // connect, so a press lands in a fraction of a second against a
+        // deadline of a minute. A cancel that only hid a spinner would time out
+        // here at sixty seconds.
+        checkf(p.state == ProbeProgress::State::Stopped && toStop < 3.0,
+               "a stop aborts the connect in %.2fs, against a deadline of 60s", toStop);
+        checkf(p.result.error == "stopped", "and is reported as a stop, not as a fault: '%s'",
+               p.result.error.c_str());
+
+        // A local file is not routed through any of this — it is the same
+        // synchronous call it always was — but the machinery has to work for
+        // one anyway, or the split would be the only thing keeping it correct.
+        MediaInput here = of(file);
+        const uint64_t id3 = startProbe(here, 10.0);
+        while (probeProgress(id3, &p) && p.state == ProbeProgress::State::Opening)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        checkf(p.state == ProbeProgress::State::Done && p.result.ok,
+               "and an ordinary file probed this way answers with the same result");
     }
 
     {

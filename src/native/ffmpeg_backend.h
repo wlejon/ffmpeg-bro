@@ -102,8 +102,12 @@ struct ProbeResult {
 // demuxer options exist, so the answer a source card shows has to be the answer
 // *those options* produce. A probe that always used libavformat's defaults
 // would disagree with the render the moment anybody set one.
+///
+/// `watch` is null for everything that probes on a thread it owns. Passed, the
+/// open behind it can be given up on and stopped — see `OpenWatch` in
+/// ffmpeg_input.h and `probe_async.h`, which is the only caller that passes one.
 ProbeResult probeMedia(const std::string& path);
-ProbeResult probeMedia(const MediaInput& in);
+ProbeResult probeMedia(const MediaInput& in, OpenWatch* watch = nullptr);
 
 // Version/capability strings for the about panel.
 std::string libavVersion();

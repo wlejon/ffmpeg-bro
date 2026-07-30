@@ -1071,6 +1071,9 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     word-break: break-word;
 }
 .src-missing { color: var(--bad); }
+/* An open still running. Not `--bad`: a wait is not a fault, and colouring it
+   as one would make an ordinary slow connection look like a broken URL. */
+.src-waiting { color: var(--blue); }
 
 /* ── Capture ─────────────────────────────────────────────────────────────
    A device, what it can see, and the recording it becomes. Three columns, in

@@ -1647,13 +1647,13 @@ ProbeResult probeMedia(const std::string& path) {
     return probeMedia(in);
 }
 
-ProbeResult probeMedia(const MediaInput& in) {
+ProbeResult probeMedia(const MediaInput& in, OpenWatch* watch) {
     ProbeResult r;
     r.path = in.path;
 
     AVFormatContext* fmt = nullptr;
     std::string why;
-    if (!openInput(&fmt, in, &why)) {
+    if (!openInput(&fmt, in, &why, watch)) {
         // Without the path in front of it, because the caller already knows
         // which file it asked about and `openInput` prefixes it for the log.
         const std::string prefix = in.path + ": ";

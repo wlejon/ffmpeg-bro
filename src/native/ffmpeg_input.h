@@ -28,6 +28,8 @@
 // `bro.ffmpeg.inputs` section of docs/api.md.
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -223,6 +225,70 @@ bool hwFramesStayUp(const MediaInput& in);
 /// not allocate per picture.
 bool downloadFrame(AVFrame** frame, AVFrame** scratch, std::string* err);
 
+/// A blocking open, made stoppable and given a deadline.
+///
+/// **`AVIOInterruptCB` is the only way to interrupt an open in progress**, and
+/// that is why this exists rather than a thread somebody kills. libav polls the
+/// callback from inside every wait it does — `ff_network_wait_fd_timeout` calls
+/// `ff_check_interrupt` every 100ms while a `connect()`, a TLS handshake or a
+/// read is outstanding — and a non-zero answer aborts the operation with
+/// `AVERROR_EXIT`. Nothing else reaches a socket libav is sitting on: killing
+/// the thread would leave the descriptor, the SSL context and libavformat's own
+/// allocations behind.
+///
+/// **The deadline and the stop are the same mechanism**, deliberately, because
+/// a timeout that expired and a person who pressed Stop have to abort the open
+/// in the same way or the two would behave differently in exactly the case
+/// nobody can reproduce. `expired()` and `stopped()` then say which it was, so
+/// the message can.
+///
+/// **A protocol's own timeout option is not what this is.** Asked of libav
+/// rather than assumed — `avio_protocol_get_class(name)`, the same walk
+/// `bro.ffmpeg.protocolOptions` reports — the answer in this build is that
+/// `tcp`, `udp`, `udplite`, `rtp`, `ftp` and the six `rtmp` protocols carry a
+/// `timeout`, `srt` carries `connect_timeout`/`timeout`/`listen_timeout`, and
+/// **`http`, `https` and `tls` carry none at all**: they open a `tcp`
+/// URLContext underneath and pass their dictionary down to it. `rw_timeout` is
+/// on the URLContext class rather than on any protocol, so it appears in no
+/// option table here and covers transfers after a connect rather than the
+/// connect. So a timeout written as an option would be absent for the protocol
+/// a URL in this application overwhelmingly names, and would still not cover
+/// `avformat_find_stream_info`. The deadline covers the whole open, for every
+/// protocol, and there is one of it.
+///
+/// **What it cannot interrupt is name resolution.** `getaddrinfo` is a blocking
+/// call in the C library with no callback in it, so a host that resolves slowly
+/// blocks until the resolver gives up whatever this says. That is the reason
+/// the open is on a thread of its own as well as behind a deadline: the
+/// deadline is what makes it end, and the thread is what stops it taking the
+/// window with it.
+class OpenWatch {
+public:
+    /// Give up `seconds` from now. Zero or less is no deadline, which is what
+    /// every caller that is not opening a URL wants.
+    void expireIn(double seconds);
+
+    /// Ask the open in progress to abort. Safe from any thread, which is the
+    /// point — the UI thread presses it while the open thread is inside libav.
+    void stop();
+
+    bool stopped() const { return stop_.load(std::memory_order_relaxed); }
+
+    /// True once the deadline has passed *and the callback has seen it*. Read
+    /// after a failed open to say why it failed; a deadline that expired while
+    /// nothing was blocking is not what stopped anything.
+    bool expired() const { return expired_.load(std::memory_order_relaxed); }
+
+    /// What libav polls. Public because `openInput` hands it over; there is no
+    /// reason for anything else to call it.
+    static int poll(void* opaque);
+
+private:
+    std::atomic<bool> stop_{false};
+    std::atomic<bool> expired_{false};
+    std::atomic<int64_t> deadline_{0};   ///< av_gettime_relative() µs, 0 for none
+};
+
 /// Open one input, the way its `-f` and its option bag say to.
 ///
 /// Everything that opens a demuxer in this binary goes through here, so there
@@ -232,8 +298,18 @@ bool downloadFrame(AVFrame** frame, AVFrame** scratch, std::string* err);
 /// run too, because every caller then does it and a probe that has not run it
 /// answers about a container rather than about a file.
 ///
-/// On failure `*err` says what and `*out` is left null.
-bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err);
+/// `watch` is optional and null for every caller that is already off the UI
+/// thread — a render, a recording, a playback source. Passed, the context is
+/// allocated here rather than by `avformat_open_input` so that
+/// `interrupt_callback` is set *before* the first byte is read, and the same
+/// callback then covers `avformat_find_stream_info`, which is the half of an
+/// open that reads from the network for as long as it likes.
+///
+/// On failure `*err` says what and `*out` is left null. An open that was
+/// stopped or that ran out of time says so in place of libav's `Immediate exit
+/// requested`, which names the mechanism rather than the reason.
+bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err,
+               OpenWatch* watch = nullptr);
 
 /// The window `openInput` did not apply: the reader's own clock, in seconds.
 ///

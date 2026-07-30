@@ -390,7 +390,23 @@ and every one of those printed by the command bar **in front of** its `-i`,
 because the same words after it are output options meaning something else. It
 also adds a URL, to check that it survives as written rather than being resolved
 against the document, that the protocol is named, and that its own option table
-is offered.
+is offered — and then that **adding it returned at once**, that the card says
+`Connecting` with a `Stop`, and that pressing Stop settles the input as `stopped`.
+
+**Nothing in either suite reaches a network, and neither needs one.** The address
+is `192.0.2.1`, which RFC 5737 reserves for documentation and which is therefore
+never assigned to anything, so what is asserted is what this code does while an
+open is going nowhere. `input_test.cpp` does the same at the native level against
+a closed port on the loopback address — which on this platform is a genuinely
+blocking open, since libav sits in the poll until the protocol's own
+`open_timeout` — and checks the two halves that matter: a one-second deadline
+ends the open in about a second rather than when libav gives up, and a stop
+against a *sixty*-second deadline lands in a tenth of one, which is only possible
+if the press actually reached the interrupt callback. A machine with no route at
+all answers immediately, and the UI half then says so and skips the part that
+needs something to stop, the way every suite here skips what its fixture cannot
+provide. What is not tested is a URL that *works*: that needs a server, and a
+test that needs a server does not belong here.
 
 `ui_capture.js` follows a device the length of the stage: chosen out of
 libavdevice's list, its option set from its own table and printed in front of its

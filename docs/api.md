@@ -92,6 +92,49 @@ bro.ffmpeg.probe({ path, format, options, decoderOptions,
 //                //        draw from, which only a bitmap track has.
 //               }, ...],
 //     video, audio }          // shortcuts to the first of each
+
+// The same probe, on a thread of its own, for the case where the wait is not
+// measured in microseconds: **a URL**. `probe()` above is synchronous because a
+// container on disk answers in about a millisecond and every caller wants the
+// answer before it can lay anything out; a network open can wait for as long as
+// the far end likes, and on this architecture that would be the whole window —
+// the UI's stage views are never unmounted and the viewer's `<video>` elements
+// are the decoders, so a blocked frame loop is a frozen application.
+//
+// The result is built by the same function `probe()` returns, so a path and a
+// URL cannot come back described differently. Which of the two calls to use is
+// decided by parsing the string for a scheme, which opens nothing and therefore
+// cannot itself block.
+bro.ffmpeg.probes.start(path | input, { timeout })   // → id, at once
+// `timeout` is in seconds and defaults to 10. It is **not** an option and never
+// reaches libav: it is a deadline on the `AVIOInterruptCB` the open is given,
+// which is the only mechanism that covers every protocol and the whole open.
+// Asked of libav rather than assumed: in this build `tcp`, `udp`, `udplite`,
+// `rtp`, `ftp` and the six `rtmp` protocols carry a `timeout`, `srt` carries
+// `connect_timeout`, and **`http`, `https` and `tls` carry none at all** — they
+// hand their dictionary down to a `tcp` URLContext. `rw_timeout` is on the
+// URLContext class rather than on any protocol, appears in no `protocolOptions`
+// table, and covers transfers after a connect rather than the connect itself.
+// So a timeout written as an option would be absent for the protocol a URL
+// here overwhelmingly names, and would still not cover
+// `avformat_find_stream_info`.
+bro.ffmpeg.probes.poll(id)
+// → { state: "opening" | "done" | "failed" | "stopped", opening,
+//     elapsed, timeout,      // seconds, so "3.4s of 10" needs no second clock
+//     error,                 // "" until it has one; "no answer in time" for a
+//                            // deadline, "stopped" for a cancel — both of which
+//                            // libav reports as "Immediate exit requested"
+//     result }               // exactly what `probe()` returns, or null
+// → null once a terminal state has been read: **a terminal answer is handed
+//   over once** and the entry forgotten with it, so nothing accumulates behind
+//   a caller that walked away.
+bro.ffmpeg.probes.cancel(id)   // abort the open; the poll after it says "stopped"
+bro.ffmpeg.probes.forget(id)   // abort it and throw the answer away
+// `cancel` is a real stop rather than a hidden spinner: it sets the interrupt
+// callback libav is polling — roughly every 100ms while it is inside a connect,
+// a handshake or a read — and the operation is abandoned. The one thing it
+// cannot cut short is `getaddrinfo`, which has no callback in it; that is why
+// the open is on a thread as well as behind a deadline.
 ```
 
 ```js

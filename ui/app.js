@@ -56,7 +56,7 @@ import * as graphOverlay from './graph/overlay.js';
 import * as graphPlayback from './graph/playback.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
-import { initSources, drawSources } from './sources.js';
+import { initSources, drawSources, tickSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
          applyAudioAll, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
@@ -779,6 +779,14 @@ function openSpec(spec, opts = {}) {
                          ? null
                          : inputsModel.plainInputFor(spec.path);
     const input = existing || inputsModel.addInput(spec);
+    // A URL is opened on a thread of its own and has no answer yet, so there is
+    // nothing to cut a clip from — and *nothing has gone wrong*. It stays on
+    // the Sources stage, where the open is visible and `Use on the timeline` is
+    // waiting for it, rather than being removed as a file that would not read.
+    if (inputsModel.opening(input)) {
+        flash(`connecting to ${input.name} — it will be on the Sources stage when it answers`);
+        return null;
+    }
     const clip = openInput(input, opts);
     // An input that was made here and turned out to be unusable goes away
     // again; one that was already on the list stays, because somebody put it
@@ -1484,6 +1492,13 @@ function frame(now) {
     // exactly where somebody went to look at something.
     report.tick();
     report.chaseReport();
+    // An input opened over a network answers on a thread of its own, and this
+    // is the only thing that looks at it — from here rather than from the
+    // Sources stage's own code for the reason the render's poll is here: a URL
+    // typed on that stage goes on connecting while you walk to the timeline,
+    // and a watcher that only ran while one panel was up would leave the card
+    // saying "connecting" until somebody went back to look at it.
+    tickSources();
 
     requestAnimationFrame(frame);
 }

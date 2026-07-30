@@ -12,6 +12,7 @@ extern "C" {
 #include <libavutil/dict.h>
 #include <libavutil/frame.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/time.h>
 }
 
 #include <algorithm>
@@ -121,9 +122,49 @@ bool attachDevice(AVCodecContext* ctx, const AVCodec* codec, const MediaInput& i
     return true;
 }
 
+/// Why the open failed, in the caller's terms rather than libav's.
+///
+/// An interrupted open comes back as `AVERROR_EXIT`, whose message is
+/// "Immediate exit requested" — which names the mechanism and says nothing
+/// about the reason. There are two reasons and they are different answers to
+/// what to do next: a deadline that expired means the far end is not answering,
+/// and a stop means somebody said so. Anything else is libav's own message,
+/// unchanged.
+std::string openFailure(int rc, const OpenWatch* watch) {
+    if (watch && watch->stopped()) return "stopped";
+    if (watch && watch->expired()) return "no answer in time";
+    return avErr(rc);
+}
+
 } // namespace
 
-bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err) {
+void OpenWatch::expireIn(double seconds) {
+    deadline_.store(seconds > 0 ? av_gettime_relative() +
+                                      static_cast<int64_t>(seconds * 1e6)
+                                : 0,
+                    std::memory_order_relaxed);
+}
+
+void OpenWatch::stop() { stop_.store(true, std::memory_order_relaxed); }
+
+int OpenWatch::poll(void* opaque) {
+    auto* self = static_cast<OpenWatch*>(opaque);
+    if (!self) return 0;
+    if (self->stop_.load(std::memory_order_relaxed)) return 1;
+    const int64_t deadline = self->deadline_.load(std::memory_order_relaxed);
+    // The flag is set here and not merely computed, because "did the deadline
+    // stop this?" is asked after the open has failed and by then the clock has
+    // gone past it either way. Only a callback that actually answered "give up"
+    // may claim to be the reason.
+    if (deadline && av_gettime_relative() >= deadline) {
+        self->expired_.store(true, std::memory_order_relaxed);
+        return 1;
+    }
+    return 0;
+}
+
+bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err,
+               OpenWatch* watch) {
     if (!out) return false;
     *out = nullptr;
     if (in.path.empty()) {
@@ -147,11 +188,27 @@ bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err) {
     for (const auto& o : in.options)
         if (!o.key.empty()) av_dict_set(&opts, o.key.c_str(), o.value.c_str(), 0);
 
+    // The context is ours to allocate when somebody is watching, because
+    // `interrupt_callback` has to be set before the first byte is read and
+    // `avformat_open_input` allocates one too late for that. It frees whatever
+    // it was given on failure, so there is nothing to clean up here that is not
+    // cleaned up either way.
+    if (watch) {
+        *out = avformat_alloc_context();
+        if (!*out) {
+            av_dict_free(&opts);
+            if (err) *err = in.path + ": out of memory";
+            return false;
+        }
+        (*out)->interrupt_callback.callback = &OpenWatch::poll;
+        (*out)->interrupt_callback.opaque = watch;
+    }
+
     const int rc = avformat_open_input(out, in.path.c_str(), forced, &opts);
     if (rc < 0) {
         av_dict_free(&opts);
         *out = nullptr;
-        if (err) *err = in.path + ": " + avErr(rc);
+        if (err) *err = in.path + ": " + openFailure(rc, watch);
         return false;
     }
 
@@ -180,7 +237,7 @@ bool openInput(AVFormatContext** out, const MediaInput& in, std::string* err) {
     const int info = avformat_find_stream_info(*out, nullptr);
     if (info < 0) {
         avformat_close_input(out);
-        if (err) *err = in.path + ": " + avErr(info);
+        if (err) *err = in.path + ": " + openFailure(info, watch);
         return false;
     }
     return true;

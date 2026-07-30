@@ -22,6 +22,9 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   `srt`, `rtmp`, `udp`, `tcp`, thirty-six of them. A URL gets an **Over** row naming
   its protocol and saying whether it is one of them, because a URL naming a protocol
   that is absent otherwise fails at open with a message about a filename.
+- **Opening**, only while a URL is being opened, with the seconds against the
+  deadline and a **Stop**. See [While it is
+  connecting](#while-it-is-connecting) below.
 - **Read as** — the demuxer. What it probed as, `Change…` for a search over all three
   hundred and fifty, and `Auto` to hand the choice back to libavformat. Searched
   rather than listed for the reason the muxer picker and the filter palette are:
@@ -44,8 +47,9 @@ hidden or collected: opening a file to see what is in it is a thing people do.
 
 **And under the column, the act.** `Use on the timeline`, pinned, with the reason
 beside it where it is dead — `A device has no end`, `One picture, no time at all`,
-`Never ends — set Stop at`, `Nothing to play`, `Will not open`. Those five mirror
-`openInput()` exactly, so the button is never alive and then refusing. `Re-probe` and
+`Never ends — set Stop at`, `Nothing to play`, `Will not open`, `Still connecting`.
+Those mirror `openInput()` exactly, so the button is never alive and then refusing.
+`Re-probe` and
 `Remove` sit at the other end of the same bar; `Remove` says who is holding the input
 instead of going dead silently.
 
@@ -93,6 +97,63 @@ exists. Underneath the list, **Opened by the graph** accounts for the one way a
 file can be opened without being an `-i`: a `movie` filter, which opens its file
 inside libavfilter with none of this stage's options reaching it. It is listed
 rather than left off, with the offer to make it an input instead.
+
+## While it is connecting
+
+A file on disk answers in about a millisecond. A URL answers when the far end
+feels like it, and until it does the open is sitting inside libavformat with a
+socket in its hand. **That wait used to be this application's wait**: `probe()`
+is synchronous, and this program's UI thread is the whole program — stage views
+hide each other rather than being unmounted and the viewer's `<video>` elements
+*are* the decoders, so a four-second open was a four-second frozen window with
+no cursor, no timeline and nothing to press.
+
+A URL is now opened **on a thread of its own**, and the card says what is
+happening while it is:
+
+- **Opening · 3.4s of 10** — how long it has been waiting, and against what. The
+  seconds are counted where the deadline is measured, so the readout cannot
+  drift from the thing that will act on it.
+- **Stop** — abandon the open now. This is a real stop and not a hidden spinner:
+  it sets libav's `AVIOInterruptCB`, which is the only thing in libav that can
+  abort an operation already in progress, and the connect, the TLS handshake or
+  the read is given up inside a tenth of a second. The card then says `stopped`,
+  which is a different word from a failure because a press is not a fault.
+- **The deadline** ends it by itself after ten seconds if nothing answers. There
+  is no way to ask for no deadline, deliberately — an open with no timeout is
+  exactly the hang this is about.
+
+Both of those are one mechanism, which is why they behave the same. A protocol's
+own timeout option is *not* that mechanism, and asking libav why is instructive:
+`tcp`, `udp`, `rtp`, `ftp` and the `rtmp` family carry a `timeout`, `srt` carries
+`connect_timeout`, and **`http`, `https` and `tls` carry none at all** — they
+open a `tcp` URLContext underneath and pass their dictionary down to it.
+`rw_timeout` lives on the URLContext class rather than on any protocol, so it is
+in none of the tables this stage shows, and it covers transfers *after* a connect
+rather than the connect. A deadline written as an option would therefore be
+missing for the protocol a URL here overwhelmingly names, and would still not
+cover `avformat_find_stream_info` — which is the half of an open that reads from
+the network for as long as it likes. Those options are all still reachable in the
+protocol's own column, and setting one is an ordinary thing to do; they are just
+not what makes this stage responsive.
+
+**What neither the deadline nor Stop can cut short is name resolution.**
+`getaddrinfo` is a blocking call in the C library with no callback in it, so a
+host whose DNS is slow holds the *probe thread* until the resolver gives up.
+That is the second reason there is a thread and not only a deadline: the window
+keeps running either way.
+
+**A path is not routed through any of this**, and that is the point. The
+overwhelmingly common input is a file that probes in under a millisecond, and
+sending it round a thread and a poll would cost every user a round trip to fix a
+case few hit. What decides is a parse of the string for a scheme — it opens
+nothing and asks libav nothing, so the decision cannot itself be the thing that
+blocks. A `file:` URL counts as a path, because that is the long way of writing
+one.
+
+**A device is still opened synchronously**, and a camera another application is
+holding can block for as long as its driver takes. That is a different open on a
+different stage; see [Capture](capture.md).
 
 ## An input that is not one file
 

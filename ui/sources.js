@@ -61,7 +61,7 @@ import { div, span, el, put, row, head, fromTemplate, show, segmented,
 import { devicesFor, deviceNamed, decodeCost } from './hardware.js';
 import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
-         lengthOf, kindOf, endless } from './inputs.js';
+         lengthOf, kindOf, endless, opening, stopOpening, tickInputs } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 // Which inputs a recording reads. The same question `graphReads()` asks of the
 // overlay, asked of the other thing that reads an `-i` without a clip being cut
@@ -69,6 +69,10 @@ import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 // list rather than in a private one on that stage.
 import { capture } from './capture.js';
 import { optionColumn } from './opttable.js';
+// The same note the Write stage's rows are written with. Imported rather than
+// written again: a second one would be a second answer to how a paragraph under
+// a control is styled, and the two would drift on the first change to either.
+import { note } from './export/controls.js';
 import * as graph from './graph/overlay.js';
 import { COMPOSITE_POINT } from './graph/derive.js';
 import { streamsOf } from './export/streams.js';
@@ -138,6 +142,41 @@ export function drawSources() {
     if (!refs.list) return;
     drawList();
     drawDetail();
+}
+
+// The `<span>`s showing how long an open has been waiting, by input id. Held
+// rather than redrawn, because the alternative is relaying out this stage sixty
+// times a second to move one number — and most of the window is `display:none`
+// at any moment, so a redraw here is not a redraw of a card.
+const waitingText = new Map();
+
+/// Take in whatever the opens in flight have said, and keep the clocks moving.
+///
+/// From the frame loop, for the reason the render's poll is: nothing calls back
+/// into JS, so this is the only way an answer that arrived on another thread
+/// reaches the screen. It runs wherever you are standing — an input typed on
+/// this stage goes on connecting while you walk to the timeline, exactly as a
+/// render goes on rendering.
+export function tickSources() {
+    const settled = tickInputs();
+    if (settled) {
+        waitingText.clear();
+        drawSources();
+        if (hooks.changed) hooks.changed();
+        return;
+    }
+    for (const [id, node] of waitingText) {
+        const input = inputs.find((i) => i.id === id);
+        if (input && input.opening) node.textContent = waitingLabel(input);
+    }
+}
+
+/// "Connecting · 3.4s of 10", or the same without the deadline until the first
+/// poll has said what the deadline is.
+function waitingLabel(input) {
+    const o = input.opening || {};
+    const secs = `${(o.elapsed || 0).toFixed(1)}s`;
+    return o.timeout > 0 ? `Connecting · ${secs} of ${o.timeout.toFixed(0)}` : `Connecting · ${secs}`;
 }
 
 // ── the list ───────────────────────────────────────────────────────────────
@@ -215,13 +254,15 @@ function drawList() {
             const recorded = capture.inputs.indexOf(input.id) >= 0;
             const use = node.querySelector('.src-used');
             use.textContent =
-                input.error ? 'unreadable'
+                opening(input) ? 'connecting'
+                : input.error ? 'unreadable'
                 : [used ? `${used} clip${used === 1 ? '' : 's'}` : '',
                    recorded ? 'recording' : '',
                    written ? 'written' : '',
                    inGraph ? 'in the graph' : ''].filter(Boolean).join(' · ') || 'unused';
             use.title =
-                input.error ? input.error
+                opening(input) ? 'the open is on a thread of its own — nothing here is blocked'
+                : input.error ? input.error
                 : [used ? `${used} clip${used === 1 ? ' is' : 's are'} cut from it` : '',
                    recorded ? 'activated for a recording on the Capture stage' : '',
                    written ? 'a stream row on the Write stage reads it' : '',
@@ -448,7 +489,37 @@ function whereRows(input) {
                   'about a filename',
         })));
     }
+    if (opening(input)) rows.push(...waitingRows(input));
     return rows;
+}
+
+/// What is happening while a URL is being opened, and the way to stop it.
+///
+/// **The Stop is real.** It reaches the `AVIOInterruptCB` the open was started
+/// with, so libav abandons the connect, the handshake or the read it is inside
+/// and the card says `stopped` a frame or two later. A button that hid the row
+/// while the thread stayed blocked would be worse than no button — it would say
+/// the machine had stopped doing something it was still doing.
+///
+/// The elapsed figure is written into `waitingText` and updated from the frame
+/// loop rather than redrawn, which is why it is built as its own node here.
+function waitingRows(input) {
+    const readout = span(waitingLabel(input), 'mono src-waiting');
+    waitingText.set(input.id, readout);
+    return [
+        row('Opening', readout),
+        row('', el('button', {
+            cls: 'tiny', 'data-f': 'srcstop', text: 'Stop',
+            title: 'Abandon the open. This reaches libav’s interrupt callback, which is ' +
+                   'the only thing that can abort a connect that is already in progress.',
+            on: { click: () => { stopOpening(input); } },
+        })),
+        row('', note(
+            'The open is on a thread of its own, so the window stays alive while it waits — ' +
+            'and it gives up by itself if nothing answers in time. Name resolution is the ' +
+            'one part neither the deadline nor Stop can cut short: getaddrinfo has no ' +
+            'callback in it.')),
+    ];
 }
 
 /// What it probed as, and what it can be forced to.
@@ -942,6 +1013,9 @@ function windowRows(input) {
 /// that is dead for a reason the model does not hold is worse. Both sides state
 /// the same three ways an input can have no length, in the same order.
 function blocked(input) {
+    // Still opening is not "will not open", and the difference is the whole
+    // point of the asynchronous path: one is a fault and the other is a wait.
+    if (opening(input)) return 'Still connecting';
     if (input.error || !input.probe) return 'Will not open';
     const p = input.probe;
     if (!p.video && !p.audio) return 'Nothing to play';
@@ -991,6 +1065,9 @@ function footRows(input) {
 
 /// What to do about it, for the four things `blocked()` can say.
 function whyAt(input, why) {
+    if (why === 'Still connecting')
+        return 'The open is running on a thread of its own. It will give up by itself if ' +
+               'nothing answers, and Stop above abandons it now.';
     if (why === 'Will not open') return input.error || 'Nothing came back from the probe';
     if (why === 'Nothing to play')
         return 'No picture to lay out and no sound to mix. A file of cues travels as a ' +
@@ -1115,6 +1192,10 @@ function reopened(input) {
 // ── what it turned out to contain ──────────────────────────────────────────
 
 function contentRows(input) {
+    // Nothing has come back yet, and saying "no streams" would be describing a
+    // file nobody has read. The Opening rows above are what this input has to
+    // say about itself right now.
+    if (opening(input)) return [];
     if (input.error)
         return [
             head('Refused', {

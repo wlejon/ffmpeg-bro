@@ -73,16 +73,31 @@ Honest list of what does not work:
   4K, and so nothing could decide to re-measure the cheap one and leave the
   expensive one alone. That is a cost model of a render, which the A/B stage's
   numbers are the beginning of and no part of this reads.
-- **Reading a URL while it is slow, and writing to one while it fails.** A
-  render goes to a URL now, with its protocol's own options beside the muxer's,
-  and reports what it sent rather than a size. What is not built is either end
-  of *going wrong*: `probe()` is synchronous, so a URL that takes four seconds
-  to answer takes the UI with it and nothing says "connecting" or offers to
-  stop; and a destination that drops mid-render arrives as a failed render with
-  libav's own message in the report, with nothing that retries, reconnects or
-  buffers. Both are what `-reconnect`, `-rw_timeout` and the `fifo` muxer exist
-  for, and all three are reachable as ordinary options — none of them is
-  surfaced as anything better than that.
+- **Writing to a URL while it fails, and opening a device while it hangs.**
+  Reading a slow URL is built — see [While it is
+  connecting](sources.md#while-it-is-connecting): a URL is opened on a thread of
+  its own with a deadline and a Stop that reaches libav's own interrupt
+  callback, so nothing about a far end that will not answer reaches the window.
+  Two things around it are not.
+
+  A **destination that drops mid-render** still arrives as a failed render with
+  libav's own message in the report, and nothing retries, reconnects or buffers.
+  That is what `-reconnect` (an `http` protocol option, and on the reading side
+  only) and the **`fifo` muxer** exist for — the second wraps another muxer with
+  a queue and its own recovery, and it is in this build. Both are reachable as
+  ordinary options today, in the muxer's and the protocol's own columns, and
+  neither is surfaced as anything better than that: nothing turns "keep trying
+  if it drops" into the wrapping it means, and — the part that matters more —
+  nothing would **count the recoveries and say so**, so a file with a gap in it
+  would be reported as a plain success.
+
+  A **device** is still opened synchronously, on the UI thread, by both the
+  Sources stage and the Capture stage. A camera another application is holding
+  blocks `avformat_open_input` for as long as its driver takes, and the window
+  waits with it. The mechanism that fixed the URL case is exactly the mechanism
+  this one wants — the deadline is meaningless for a local file and not for a
+  device — and what is missing is only the decision about which opens go through
+  it, which is a rule this application should state rather than discover.
 - **A soft subtitle track in the viewer.** Cues burned into a clip are on the
   screen now — see [Burning them in](subtitles.md#burning-them-in) — and a track written
   *beside* the picture still is not: bro's `<video>` decodes pictures and

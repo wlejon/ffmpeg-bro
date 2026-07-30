@@ -288,28 +288,66 @@ delete input.options.no_such_option;
 A.inputs.reprobe(input);
 ok(!!input.probe && !input.error, 'and taking it out again opens the file');
 
-// ── a URL is an ordinary input ─────────────────────────────────────────────
+// ── a URL is an ordinary input, opened off this thread ─────────────────────
 //
-// Nothing is fetched: the point is that a URL can *be* an input at all — that
-// it is not turned into a path under ui/, that the protocol is recognised, and
-// that its own option table is offered beside the demuxer's. What it would
-// take to open one is a server, which a test has no business needing.
+// **Nothing here reaches a network and nothing here needs one.** The address is
+// 192.0.2.1, which RFC 5737 reserves for documentation and which is therefore
+// never assigned to anything — so what this section asserts is what this
+// application does while an open is going nowhere, which is a fact about this
+// code. It never asserts that something answered; a test that needed a server
+// would be a suite that fails on a train.
+//
+// Three claims, in order of what they are worth:
+//
+//   - **Adding a URL returns at once.** It did not before: `probe()` is
+//     synchronous, and this thread is the whole application — stage views are
+//     never unmounted and the viewer's `<video>` elements are the decoders — so
+//     a four-second open was a four-second frozen window.
+//   - **The stage says it is connecting, and offers to stop.**
+//   - **The stop reaches the open.** `bro.ffmpeg.probes.cancel` sets the
+//     `AVIOInterruptCB` libav polls, which is the only thing that can abort a
+//     connect already in progress; the input then settles as `stopped` rather
+//     than as a fault nobody caused.
 
-console.log('\na URL is an input like any other');
+console.log('\na URL is an input like any other, opened off this thread');
 const protocols = bro.ffmpeg.protocols.input;
 ok(protocols.indexOf('https') >= 0, `https is linked in (${protocols.length} input protocols)`);
 
-type(el('src-path'), 'https://example.invalid/clip.mp4');
+const nowhere = 'https://192.0.2.1/clip.mp4';
+type(el('src-path'), nowhere);
+const beforeAdd = Date.now();
 click(el('src-add'));
-pump(60);
+const addMs = Date.now() - beforeAdd;
 const url = A.inputs.inputs[A.inputs.inputs.length - 1];
-same(url.path, 'https://example.invalid/clip.mp4',
-     'the URL is kept as written, not resolved against the document');
+
+ok(addMs < 500, `adding it returns in ${addMs}ms — the open is on a thread of its own`);
+same(url.path, nowhere, 'the URL is kept as written, not resolved against the document');
 ok(/^\/@input\//.test(url.src), 'and it gets a token, which is what makes it playable at all');
+ok(A.inputs.opening(url), 'the input is opening rather than probed');
 ok(el('src-detail').textContent.indexOf('https') >= 0,
    'the panel names the protocol it will go through');
 ok(!!f('protooptsearch'), 'and offers the protocol’s own options beside the demuxer’s');
-ok(!url.probe && !!url.error, `it cannot be reached from here, and says so: ${url.error}`);
+
+pump(200);
+// A machine with no route at all answers "network unreachable" at once, and
+// then there is nothing left to stop — a real outcome and not a failure, so the
+// half that needs a *blocked* open is skipped rather than failed, the way every
+// suite here skips what its fixture cannot provide. The claim above it, that
+// adding one did not block, holds either way.
+if (A.inputs.opening(url)) {
+    ok(el('src-detail').textContent.indexOf('Connecting') >= 0,
+       'while it waits the panel says Connecting, with the seconds against the deadline');
+    ok(!!f('srcstop'), 'and offers to stop');
+    ok(A.project.clips.length === 1,
+       'and the rest of the application kept running — the timeline is untouched');
+    click(f('srcstop'));
+    waitFor('the open to give up', () => !A.inputs.opening(url), 5000);
+    same(url.error, 'stopped',
+         'Stop aborts the open itself and the input says so, rather than reporting a fault');
+} else {
+    console.log(`  SKIP  nothing to stop: this machine answered at once (${url.error})`);
+    ok(!url.probe && !!url.error, `and the input says why: ${url.error}`);
+}
 
 A.inputs.removeInput(url);
 pump(40);
