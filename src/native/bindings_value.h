@@ -20,6 +20,8 @@
 // UI keep a blank control in its model without it reaching libav.
 #pragma once
 
+#include "sound_meter.h"
+
 #include <quickjs.h>
 
 #include <string>
@@ -54,5 +56,13 @@ bool takeName(JSContext* ctx, JSValueConst v, std::string* out);
 
 JSValue stringsToJs(JSContext* ctx, const std::vector<std::string>& v);
 JSValue intsToJs(JSContext* ctx, const std::vector<int>& v);
+
+/// A meter's reading, one object per channel of whatever was measured.
+///
+/// Here rather than in either of the two files that hand one back, because a
+/// capture session's pads and the output preview's mix are read by the same meter
+/// in the UI (`ui/meter.js`) and a shape that differed between them by a key name
+/// would be two meters. `name` is libav's own — see `ChannelLevel`.
+JSValue channelsToJs(JSContext* ctx, const std::vector<ChannelLevel>& v);
 
 } // namespace ffmpegbro

@@ -228,6 +228,9 @@ JSValue js_livePads(JSContext* ctx, JSValue idArg) {
 /// What each sound pad has been doing since the last call. **Clears as it
 /// reads** — see `liveLevels` — so this is called once a frame by the meter and
 /// by nothing else.
+///
+/// A reading per *channel* of each pad, in the shape `bro.ffmpeg.output.levels`
+/// hands back its own — one meter draws both, so one shape.
 JSValue js_liveLevels(JSContext* ctx, JSValue idArg) {
     int64_t id = 0;
     JS_ToInt64(ctx, &id, idArg);
@@ -237,8 +240,7 @@ JSValue js_liveLevels(JSContext* ctx, JSValue idArg) {
         JSValue o = JS_NewObject(ctx);
         setStr(ctx, o, "name", l.name);
         JS_SetPropertyStr(ctx, o, "heard", JS_NewBool(ctx, l.heard));
-        JS_SetPropertyStr(ctx, o, "peak", JS_NewFloat64(ctx, l.peak));
-        JS_SetPropertyStr(ctx, o, "rms", JS_NewFloat64(ctx, l.rms));
+        JS_SetPropertyStr(ctx, o, "channels", channelsToJs(ctx, l.channels));
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;

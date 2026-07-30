@@ -234,13 +234,31 @@ Honest list of what does not work:
   decision about locking them, and there is nothing here that says — so the
   safe half is built and the other half needs a control before it can mean
   anything.
-- **A meter, as opposed to a waveform.** A1 is drawn in dB with a line where
-  clipping is, so an over can be *found* on the timeline — but it is the
-  analysis's peaks, which is a bucket's worth of samples at a time and not a
-  true-peak reading, and it is per clip rather than per output channel. What is
-  not here is a level meter beside the viewer showing what is leaving *now*,
-  which is the same missing piece as monitoring a capture below and would be
-  the same mechanism.
+- **A meter of the timeline's own mix, during ordinary playback.** There is a
+  meter beside the viewer now — see
+  [The meter beside the picture](playback.md#the-meter-beside-the-picture) — and
+  with `O` on it is everything the entry this replaces asked for: the render's own
+  mix, one bar per channel of the *output* at the count the encoder would be
+  opened with, a **true** peak 4× oversampled rather than a bucket's loudest
+  sample, measured off every block rather than sampled. The same meter draws the
+  Capture stage's pads, on the same scale A1 is drawn on.
+
+  With `O` **off** it is reading something weaker, and says so on the strip: bro's
+  own metering of its master mix bus, which is a **sample** peak sampled once a
+  frame, and **two** channels because that is the device's mix rather than the
+  output's. That is where the remaining gap is, and it is not a missing line here.
+  During ordinary playback the compositor is not running — the clips' `<video>`
+  elements are, and bro's mixer is summing them — so there is no `mixInto` to
+  measure and no tap to read one from. bro has no per-element meter either: the
+  element's JS surface carries no level, `ElVideo` keeps its playback id private,
+  and every element lands on bus 0, so `Bus::peakL/rmsL` on the master is the only
+  place the question has an answer at all. Closing it means metering a playback
+  instance in bro, or routing each element to a bus of its own so that the
+  existing `getBusPeak*` could be asked per clip and summed — and then deciding
+  what "the output's channels" means when the thing making the sound is a stereo
+  device mix. Faking it from here — summing the clips' analysed peaks and drawing
+  that — would be the waveform wearing a meter's name, which is exactly what the
+  old entry was complaining about.
 - **Finding things by sound.** Reviewing wildlife footage, the birds are
   audible long before anything is visible; nothing yet marks where a call
   happens so you can jump between them. bro has the parts — `bro.sense` for

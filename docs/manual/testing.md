@@ -235,6 +235,18 @@ it without complaint — and a
 `testsrc` with nothing on the timeline at all, which is a picture where the
 viewer has no element to put one in.
 
+The **level strip** beside the viewer is asserted for the one thing a strip of bars
+cannot say about itself, which is *which* of two things it is reading — see
+[The meter beside the picture](playback.md#the-meter-beside-the-picture). With the
+preview off it has to say `monitor`, because bro's mixer is what is summing the clips
+and nothing else has a mix to measure; with it on, `output`, and the loudest-so-far
+number has to come off the floor, which is the assertion that a reading is arriving
+rather than that the bars exist. Then the channel count: two bars for a stereo output
+and **one** for an output written in mono, which is the half of the old Not-yet entry
+that said the meter was per clip rather than per output channel. That the peak is a
+*true* peak is asserted on the Capture stage instead, where the signal can be written
+down as an expression.
+
 `captest` is what this build can write, read, reach and capture, and it prints
 as much as it asserts: how many muxers, which of them write pictures, which
 protocols are in and out, what capture devices the machine has. The numbers
@@ -375,6 +387,19 @@ which is a source past full scale:
 the light latches, the bar changes colour, the number goes above zero rather than
 pinning to it, one click forgets both latches, and both fill again from what is
 actually arriving.
+
+Two claims about what *kind* of reading it is are checked the same way. Two
+expressions twelve decibels apart is **a bar per channel** reading its own number,
+which a mono summary of the two could not produce — and the two are named `FL` and
+`FR` out of libav's own layout. Then a **true** peak: 12 kHz at 48 kHz with a
+quarter-cycle offset puts every sample on ±sin 45°, so the loudest *sample* is 3 dB
+below the loudest *point*, and the meter reads `-0.1` where a sample-peak meter would
+read `-3.1`. The latch is cleared first, because a signal that starts abruptly is a
+step and an oversampling filter rings on a step — what is being measured is the steady
+state after it. Every sine source here carries `arealtime` for a related reason: a
+`lavfi` device left to generate as fast as it can overflows the reader's sound queue,
+whose oldest blocks are then dropped, and a meter handed a signal with cuts in it reads
+the cuts.
 
 **Monitoring is asserted at bro's mixer and not at the element.** An element with a
 src on it says nothing about whether anything is audible, so `Listen` is checked by

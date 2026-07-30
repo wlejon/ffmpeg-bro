@@ -1,5 +1,6 @@
 // The render, on playback. See playback_output.h — in particular why the caller
-// owns the seek and why there is no sound here.
+// owns the seek, why the sound is the authoritative half, and why a run is shared
+// by token rather than built per open.
 
 #include "playback_output.h"
 
@@ -19,6 +20,7 @@ extern "C" {
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -440,6 +442,15 @@ void OutputRun::loop() {
             av_frame_free(&tick.picture);
         }
         if (tick.sound && sound) {
+            // **Measured whether or not anybody is listening, and that is what
+            // makes a meter beside the viewer possible at all.** `putSound` queues
+            // the block only while an element is playing this pad; `heard` reads it
+            // every time, on the thread that made it, so the level exists for the
+            // same reason a capture session's does — see `LivePadTap::heard`. This
+            // is the render's own mix at the output's own channel count, which is
+            // the one place in this application that number can be read off
+            // something rather than assumed.
+            sound->heard(tick.sound);
             sound->putSound(tick.sound, when);
             av_frame_free(&tick.sound);
         }
@@ -447,6 +458,52 @@ void OutputRun::loop() {
     }
 
     tap_->finishAll();
+}
+
+OutputLevels outputLevels(const std::string& id) {
+    OutputLevels out;
+    // **Found by scanning for the id rather than by rebuilding the token, and the
+    // newest definition wins.** The key a run is filed under carries the range and
+    // the definition number, and both of those change a frame before the element is
+    // re-pointed — so a lookup that reconstructed the current token would go dark
+    // for one frame on every rebuild, which under a dragged slider is a meter that
+    // flickers. What is wanted is "whatever render of this id is running".
+    //
+    // The definition number is what makes that unambiguous, and taking the highest
+    // is the whole of it: a run lives while something holds it, so the *previous*
+    // render of an id can still be alive for a moment after the element let go of
+    // it — and reading a spec's levels off the render it superseded is exactly the
+    // kind of wrong that looks like the meter working. Ordering the map's keys as
+    // strings would not do it either: `@9` sorts after `@10`.
+    const std::string want = std::string(kPrefix) + id + "/";
+    std::shared_ptr<OutputRun> run;
+    uint64_t newest = 0;
+    {
+        std::lock_guard<std::mutex> g(runLock());
+        for (auto it = runs().begin(); it != runs().end();) {
+            const std::string key = it->first;
+            if (key.compare(0, want.size(), want) != 0) { ++it; continue; }
+            auto have = it->second.lock();
+            if (!have) { it = runs().erase(it); continue; }
+            ++it;
+            const size_t mark = key.rfind('@');
+            const uint64_t version =
+                mark == std::string::npos
+                    ? 0
+                    : std::strtoull(key.c_str() + mark + 1, nullptr, 10);
+            if (version < newest) continue;
+            auto pad = have->tap()->pad("vout");
+            if (pad && pad->ended()) continue;
+            newest = version;
+            run = std::move(have);
+        }
+    }
+    if (!run) return out;
+    out.running = true;
+    out.rate = run->facts().audioRate;
+    if (out.rate <= 0) return out;   // a render with no soundtrack, said as one
+    if (auto pad = run->tap()->pad("aout")) out.heard = pad->level(&out.channels);
+    return out;
 }
 
 std::shared_ptr<OutputRun> attachOutput(const std::string& src, std::string* err) {

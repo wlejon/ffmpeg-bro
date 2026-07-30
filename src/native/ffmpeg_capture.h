@@ -145,6 +145,7 @@
 
 #include "ffmpeg_export.h"
 #include "ffmpeg_input.h"
+#include "sound_meter.h"
 
 #include <string>
 #include <vector>
@@ -359,8 +360,11 @@ struct LiveLevel {
     /// A device that has stopped delivering would otherwise read as one
     /// delivering quiet.
     bool heard = false;
-    float peak = 0.0f;   ///< loudest sample since the last read, 0…1 and beyond
-    float rms = 0.0f;    ///< and the RMS over the same stretch
+    /// One reading per channel of the pad, named as libav names them, with a true
+    /// peak and a sample peak in each. **Not a mono summary**: a stereo microphone
+    /// with a dead side reads perfectly healthy as one number, which is exactly the
+    /// fault a meter is there to catch. See `ChannelLevel` in sound_meter.h.
+    std::vector<ChannelLevel> channels;
 };
 
 /// Open a session and start reading. Zero with a reason when a device will not

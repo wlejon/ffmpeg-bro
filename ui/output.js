@@ -126,6 +126,23 @@ export function ended() { return !!(on && el && el.ended); }
 /// whole claim this feature makes about itself.
 export function currentFacts() { return facts; }
 
+/// How loud the render on the screen is, right now — `{ running, heard, rate,
+/// channels }` per `bro.ffmpeg.output.levels`, or null when the preview is off.
+///
+/// **Here rather than in the meter, because the id is this file's.** There is one
+/// program monitor and one render registered under one id; a meter that spelled
+/// that id itself would be a second place that knew it. What the meter is entitled
+/// to is "how loud is the thing on the screen", and this is that question asked of
+/// the only thing that knows which render it is.
+///
+/// **Reading clears it**, so there is exactly one caller — `ui/monitor.js`, once a
+/// frame. A second would halve this one's window and draw a meter that disagreed
+/// with it.
+export function levels() {
+    if (!on) return null;
+    try { return bro.ffmpeg.output.levels(ID); } catch (e) { return null; }
+}
+
 // ── turning it on ──────────────────────────────────────────────────────────
 
 /// Show the render instead of the clips, or stop.

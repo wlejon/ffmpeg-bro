@@ -99,6 +99,7 @@
 #pragma once
 
 #include "ffmpeg_export.h"
+#include "sound_meter.h"
 
 #include <condition_variable>
 #include <cstdint>
@@ -296,5 +297,36 @@ private:
 /// — the same two refusals `OutputReader::open` has, answered here because this
 /// is where a source is built.
 std::shared_ptr<OutputRun> attachOutput(const std::string& src, std::string* err);
+
+// ── What the render's soundtrack is doing ──────────────────────────────────
+
+/// How loud the render being previewed is, right now.
+///
+/// **The point of this call is that it is the render's own answer.** A meter beside
+/// the viewer could be got at three ways and two of them are wrong: summing the
+/// clips' analysed peaks is a waveform with a meter's name on it, and reading bro's
+/// master bus gives the *machine's* stereo mix through whatever the monitoring
+/// volume is set to. The run above already makes the mix `-af`, `loudnorm` and
+/// `amix` produce, at the channel count the encoder will be opened with, and it
+/// already publishes it into a `LiveTap`; so it measures it on the way past and
+/// this reads the reading. Nothing extra is decoded, and a preview nobody is
+/// playing costs what it always cost.
+struct OutputLevels {
+    /// Is there a render behind this id at all? False is the ordinary answer while
+    /// the preview is off, and is not the same as a silent one.
+    bool running = false;
+    /// Has any sound been through since the last call? False for a render with no
+    /// soundtrack *and* for one whose thread is between blocks — told apart by
+    /// `rate`, which is zero only for the first.
+    bool heard = false;
+    int rate = 0;         ///< the mix's sample rate, or 0 for a silent render
+    std::vector<ChannelLevel> channels;
+};
+
+/// Read it, **and reading clears it** — the rule every level in this binary
+/// follows, so there is exactly one caller and it is the meter. Empty for an id
+/// nothing is registered under, which is what the UI sees the moment the preview
+/// is turned off.
+OutputLevels outputLevels(const std::string& id);
 
 } // namespace ffmpegbro

@@ -814,23 +814,39 @@ console.log('\nseveral destinations out of one recording');
 // is arithmetic rather than a property of a file. A sine's RMS is its peak over
 // root two, and both numbers are asserted, because the two halves of a meter
 // are measured differently and a meter that showed peak twice would look right.
+//
+// Two of the claims below are about *what kind of reading it is*, and both are
+// checkable here for the same reason the levels are — the signal is written down:
+//
+//   - **a bar per channel**, which is what catches a stereo pair with a dead side;
+//     two expressions twelve decibels apart is a pair of readings twelve decibels
+//     apart, and a mono summary of it would be neither of them;
+//   - **a true peak and not a sample peak.** A sine at a quarter of the sample rate
+//     with its samples on the zero crossings has a loudest *sample* three decibels
+//     below its loudest *point*; a meter reading the first cannot be told from one
+//     reading the second until you hand it exactly that.
 console.log('\nwhat the sound is doing');
 {
     const source = q('[data-f="capsource"]');
     const wasPath = CI()[0].path;
-    const sine = (amp) => `aevalsrc=${amp}*sin(1000*2*PI*t):s=48000`;
+    // **`arealtime` is not decoration.** Without it a `lavfi` source generates as
+    // fast as the machine can, the device reader's sound queue overflows and the
+    // *oldest blocks are dropped* — which leaves the meter a signal with cuts in it,
+    // and an oversampling filter rings on a cut by more than a decibel. A real
+    // device delivers in real time; this makes the fixture one.
+    const sine = (amp) => `aevalsrc=${amp}*sin(1000*2*PI*t):s=48000,arealtime`;
     const setSource = (v) => {
         source.value = v;
         source.dispatchEvent(new Event('change'));
         pump(400);
     };
-    const readOf = () => text('.cap-m-read');
+    const readOf = () => text('#cap-meters .m-read');
     const dbOf = () => parseFloat(readOf());
 
     setSource(sine(0.5));
     ok(waitFor('the meter to read', () => /^-\d/.test(readOf()), 12000),
        `a sound pad gets a meter, and it reads (${readOf()} dBFS)`);
-    same(text('.cap-m-name'), 'in0:a',
+    same(text('#cap-meters .m-name'), 'in0:a',
          'named the way ffmpeg names that stream — 0:a is the sound of input 0, and it ' +
          'cannot be confused with in0, which is the picture');
 
@@ -861,8 +877,8 @@ console.log('\nwhat the sound is doing');
     const atMost = (got, want, what) =>
         ok(got <= want + 0.05 && got > want - 1.1,
            `${what} — ${got.toFixed(1)}% against ${want.toFixed(1)}%`);
-    const bar = () => parseFloat(q('.cap-m-bar').style.width);
-    const peak = () => parseFloat(q('.cap-m-peak').style.left);
+    const bar = () => parseFloat(q('#cap-meters .m-bar').style.width);
+    const peak = () => parseFloat(q('#cap-meters .m-peak').style.left);
     // The body is the RMS and the mark is the peak, and for a sine they differ
     // by exactly 3.01 dB. A meter drawing the same number twice would put them
     // on top of each other.
@@ -890,22 +906,22 @@ console.log('\nwhat the sound is doing');
     // Over. `aevalsrc` will hand out 1.5 quite happily, which is a mix that has
     // gone past what any encoder can write — the one reading a meter exists to
     // catch, and the one a scale that stopped at full scale could not show.
-    ok(!q('.cap-m-over.on'), 'nothing has clipped yet');
+    ok(!q('#cap-meters .m-over.on'), 'nothing has clipped yet');
     setSource(sine(1.5));
-    ok(waitFor('the over light', () => !!q('.cap-m-over.on'), 12000),
+    ok(waitFor('the over light', () => !!q('#cap-meters .m-over.on'), 12000),
        'a pad that goes past full scale says so');
-    ok(!!q('.cap-m-bar.cap-m-hot'), 'and the bar is drawn in its own colour while it is over');
+    ok(!!q('#cap-meters .m-bar.m-hot'), 'and the bar is drawn in its own colour while it is over');
     ok(dbOf() > 0, `with the reading above zero rather than pinned to it (${readOf()})`);
 
     // And both latches can be cleared, because one that could not would be a
     // light on for the rest of the session after one accident. Cleared while
     // the source is still over, so what is asserted is that the mechanism
     // resets and starts measuring again rather than that it went quiet.
-    ok(!!q('.cap-m-over.on') && dbOf() > 0, 'both latches are set');
-    q('.cap-m-over').click();
-    ok(!q('.cap-m-over.on'), 'one click forgets both at once');
+    ok(!!q('#cap-meters .m-over.on') && dbOf() > 0, 'both latches are set');
+    q('#cap-meters .m-over').click();
+    ok(!q('#cap-meters .m-over.on'), 'one click forgets both at once');
     pump(500);
-    ok(!!q('.cap-m-over.on') && readOf() === '+3.5',
+    ok(!!q('#cap-meters .m-over.on') && readOf() === '+3.5',
        `and they fill again from what is actually arriving (${readOf()} dBFS, which is ` +
        'what an amplitude of 1.5 is)');
 
@@ -916,7 +932,57 @@ console.log('\nwhat the sound is doing');
     ok(waitFor('the new session to read', () => /^-1\d/.test(readOf()), 12000),
        `a new session is a new reading rather than the last one's high-water mark ` +
        `(${readOf()} dBFS)`);
-    ok(!q('.cap-m-over.on'), 'and the over light starts clear with it');
+    ok(!q('#cap-meters .m-over.on'), 'and the over light starts clear with it');
+
+    // ── a bar per channel ──────────────────────────────────────────────────
+    //
+    // Two expressions is two channels, and `aevalsrc` takes them separated by a
+    // pipe. Twelve decibels apart, because a pair that agreed would be a pair a
+    // mono summary could have produced.
+    const reads = () => {
+        const out = [];
+        for (const n of document.querySelectorAll('#cap-meters .m-read'))
+            out.push(n.textContent.trim());
+        return out;
+    };
+    setSource('aevalsrc=0.5*sin(1000*2*PI*t)|0.125*sin(1000*2*PI*t):s=48000,arealtime');
+    ok(waitFor('two channels to read', () => reads().length === 2 &&
+                                            reads().every((r) => /^-\d/.test(r)), 12000),
+       `a stereo pad gets a bar per channel (${reads().join(', ')} dBFS)`);
+    same(reads()[0], '-6.0', 'the left channel reads its own amplitude');
+    same(reads()[1], '-18.1',
+         'and the right reads its own, twelve decibels down — which a summary of the ' +
+         'two could not say and is the whole reason a meter is per channel');
+    // And they are named as libav names them rather than counted out here: the
+    // question "which channel is over" is about FL and FR.
+    const names = [];
+    for (const n of document.querySelectorAll('#cap-meters .m-cn')) names.push(n.textContent);
+    same(names.join(','), 'FL,FR',
+         'named by libav’s own layout rather than by index');
+    // The one state on this stage worth a picture: two channels of one pad reading
+    // two different levels, which is the whole argument for a bar per channel.
+    screenshot('out/ui-capture-levels.png');
+
+    // ── a true peak, not a sample peak ─────────────────────────────────────
+    //
+    // 12 kHz at 48 kHz with a quarter-cycle offset puts every sample on ±sin 45°,
+    // so the loudest sample is 3 dB below the loudest point of the wave. A
+    // sample-peak meter reads -3.1 here and a true-peak meter reads -0.1, and there
+    // is no way to be both.
+    //
+    // **Cleared first, and that is not tidying.** A signal that starts abruptly is a
+    // step, and an oversampling filter rings on a step by about a decibel — every
+    // meter of this kind does, because a step has no true peak to be wrong about.
+    // This one starts at 0.7 of full scale, so the latch catches the ring; what is
+    // being measured is the steady state after it.
+    setSource('aevalsrc=0.99*sin(12000*2*PI*t+PI/4):s=48000,arealtime');
+    ok(waitFor('the meter to read', () => /^[-+]\d/.test(readOf()), 12000),
+       'a signal whose peaks fall between its samples reads');
+    q('#cap-meters .m-over').click();
+    pump(500);
+    ok(dbOf() > -0.8 && dbOf() < 0.3,
+       `and it reads the peak between them: ${readOf()} dBFS, where the loudest sample ` +
+       'in this signal is -3.1 — 4× oversampled, so an inter-sample over is caught');
 
     setSource(wasPath);
     pump(300);

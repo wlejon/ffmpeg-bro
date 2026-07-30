@@ -381,6 +381,25 @@ bro.ffmpeg.output.settle(spec)
 // `views.define`: an output view is a whole render, and the caller redefines one
 // every time the playhead moves, so building is asked for separately and only
 // when the graph itself has changed.
+bro.ffmpeg.output.levels("edit")
+// → { running: true, heard: true, rate: 48000,
+//     channels: [{ name: 'FL', truePeak: 0.71, peak: 0.70, rms: 0.28 },
+//                { name: 'FR', truePeak: 0.69, peak: 0.69, rms: 0.27 }] }
+//
+// How loud the render being previewed is *right now*, per channel of the output,
+// in exactly the shape `live.levels` hands back — one meter draws both, so one
+// shape. **The call clears it**, so there is one caller, once a frame.
+//
+// The point of it being the render's own answer: the mix is made at the channel
+// count the encoder would be opened with, and an `-af` chain, a `loudnorm` or an
+// `amix` is in it. Summing the clips' analysed peaks instead would be a waveform
+// with a meter's name on it, and reading bro's master bus gives the *machine's*
+// stereo mix through whatever the monitoring volume is set to.
+//
+// Three states, not two. `running: false` is "nothing is registered under that
+// id", which is the ordinary answer while the preview is off. `running` with
+// `rate: 0` is a render with no soundtrack at all. `heard: false` with a rate is
+// a render whose thread is between blocks.
 bro.ffmpeg.output.forget("edit")
 
 bro.ffmpeg.tempPath("candidate.mp4")   // somewhere to put a preview render
@@ -627,8 +646,11 @@ bro.ffmpeg.live.pads(7)
 //    { name: 'aout',  device: false, sound: true,  src: '/@live/7/aout' }]
 
 bro.ffmpeg.live.levels(7)
-// → [{ name: 'in1:a', heard: true, peak: 0.51, rms: 0.19 },
-//    { name: 'aout',  heard: true, peak: 0.63, rms: 0.24 }]
+// → [{ name: 'in1:a', heard: true,
+//      channels: [{ name: 'FL', truePeak: 0.53, peak: 0.51, rms: 0.19 },
+//                 { name: 'FR', truePeak: 0.12, peak: 0.12, rms: 0.04 }] },
+//    { name: 'aout',  heard: true,
+//      channels: [{ name: 'FL', truePeak: 0.63, peak: 0.63, rms: 0.24 }, …] }]
 
 bro.ffmpeg.live.close(7)     // and `live.close()` with no id closes every one
 
@@ -657,14 +679,28 @@ bro.ffmpeg.live.close(7)     // and `live.close()` with no id closes every one
 // costs nothing and is what a meter is for — which is why these are two
 // separate answers about one pad rather than one.
 //
-// `levels` is where the numbers are, and **the call clears them**: `peak` and
-// `rms` cover the stretch since the last call, scaled so that full scale is
-// 1.0, mono across the channels. So there is exactly one caller, once a
-// frame. Two would halve each other's windows and draw two meters that
-// disagree, and a peak left standing would make a moment of clipping look
-// permanent. `heard: false` means nothing arrived in that window at all, which
-// is a device that has stopped rather than one delivering silence — said,
-// because a zero cannot tell them apart.
+// `levels` is where the numbers are, and **the call clears them**: each reading
+// covers the stretch since the last call, scaled so that full scale is 1.0. So
+// there is exactly one caller, once a frame. Two would halve each other's
+// windows and draw two meters that disagree, and a peak left standing would make
+// a moment of clipping look permanent. `heard: false` means nothing arrived in
+// that window at all, which is a device that has stopped rather than one
+// delivering silence — said, because a zero cannot tell them apart.
+//
+// **One reading per channel, named as libav names them.** A mono summary of a
+// stereo pair with a dead side is a perfectly healthy-looking number, which is
+// the fault a meter is there to catch that nothing else is; the names come from
+// `av_channel_name` on the frame's own layout, and are `1`, `2`, … for a device
+// that never said what its channels mean.
+//
+// **`truePeak` is 4× oversampled and `peak` is the loudest sample**, and the
+// distance between them is a reading of its own — a mix with a decibel of
+// inter-sample peak in it has been through something that squared its waveform
+// off. A meter should draw `truePeak`, which is the one that says whether an
+// encoder or a converter will clip; both are here so that whichever is drawn can
+// be labelled honestly. Sound that starts abruptly reads about a decibel over on
+// `truePeak`, because a step is not a band-limited signal and every oversampling
+// meter rings on one.
 //
 // A peak above 1.0 is not an error and not clamped: a mix is a sum, sums exceed
 // full scale, and that is the reading a meter exists for.

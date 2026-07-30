@@ -200,6 +200,31 @@ JSValue js_outputSettle(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     return o;
 }
 
+/// How loud the render being previewed is, right now — per channel of the
+/// *output*, with a true peak in each.
+///
+/// **Clears as it reads**, which is the rule every level in this binary follows
+/// and the reason this is a call rather than a field on `settle`: a peak left
+/// standing would make one moment of clipping look permanent, and two callers
+/// would halve each other's windows and draw two meters that disagree. So there is
+/// one caller — the meter beside the viewer, once a frame.
+JSValue js_outputLevels(JSContext* ctx, JSValue idArg) {
+    std::string name;
+    if (!takeName(ctx, idArg, &name))
+        return JS_ThrowTypeError(ctx, "output.levels(id) requires an id");
+    const OutputLevels l = outputLevels(name);
+    JSValue o = JS_NewObject(ctx);
+    // Three states and not two: no render behind this id, a render with no
+    // soundtrack at all, and a render whose sound is being measured. A meter that
+    // could not tell the first two apart would draw silence where it should be
+    // saying there is nothing to draw.
+    JS_SetPropertyStr(ctx, o, "running", JS_NewBool(ctx, l.running));
+    JS_SetPropertyStr(ctx, o, "heard", JS_NewBool(ctx, l.heard));
+    JS_SetPropertyStr(ctx, o, "rate", JS_NewInt32(ctx, l.rate));
+    JS_SetPropertyStr(ctx, o, "channels", channelsToJs(ctx, l.channels));
+    return o;
+}
+
 } // namespace
 
 void installPlayback(Table& ns) {
@@ -242,6 +267,8 @@ void installPlayback(Table& ns) {
         Table output(ns, "output");
         output.function("define", js_outputDefine, 2);
         output.function("settle", js_outputSettle, 1);
+        output.function("levels",
+                        [](JSContext* ctx, JSValue id) { return js_outputLevels(ctx, id); });
         output.function("forget", [](JSContext* ctx, JSValue id) {
             std::string name;
             if (!takeName(ctx, id, &name))

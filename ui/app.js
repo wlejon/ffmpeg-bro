@@ -19,6 +19,7 @@ import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as output from './output.js';
+import * as monitor from './monitor.js';
 import * as timeline from './timeline.js';
 import * as levels from './levels.js';
 import * as exporter from './export.js';
@@ -115,6 +116,11 @@ graphPlayback.initPlayback({
 // The other thing that can be on the program monitor: the render itself, made
 // while you watch it, instead of one element per clip. See ui/output.js.
 output.initOutput({ stage }, { changed: () => drawOutput() });
+
+// And how loud what is leaving is, beside the picture. It reads the render's own
+// mix while the preview is on and bro's master bus while it is not, which are two
+// different claims and are labelled as such — see ui/monitor.js.
+monitor.initMonitor({ levels: el('levels') });
 
 initSources({
     list: el('src-list'),
@@ -1269,6 +1275,10 @@ function frame(now) {
     // re-pointing it opens every input the render reads. Here rather than on the
     // change channel for exactly that reason — see ui/output.js.
     output.chase();
+    // How loud what is leaving is. Every frame and from here rather than from a
+    // change channel, because a level is what is happening *now* — and it is the
+    // one caller of either reading, both of which clear as they are read.
+    monitor.tick();
     // Watch the video lanes, not the waveform: the waveform is in the markup
     // and laid out from the first frame, so it never notices a lane that was
     // built a moment ago and has not been measured yet.
@@ -1621,6 +1631,10 @@ globalThis.__ffmpegBro = {
     // relayout, and a test that pressed only half of that would be testing a
     // state the application never reaches.
     output, setOutputPreview,
+    // The meter beside the viewer. On the surface because *which* of the two
+    // things it is reading is the whole claim it makes about itself — the render's
+    // own mix or bro's master bus — and that cannot be read off the bars.
+    monitor,
     splitAtPlayhead, splitAt, setLayout, select, selectMany,
     // The three edits that are about a cut rather than a clip. On the surface
     // because they are pure model arithmetic — what each one holds constant is

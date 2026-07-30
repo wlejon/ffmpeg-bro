@@ -211,6 +211,124 @@ console.log('\nthe sound of the render');
     }
 }
 
+// ── the meter beside the viewer ────────────────────────────────────────────
+//
+// A1 on the timeline is the analysis's buckets, per clip, made before anything
+// played. The strip beside the picture is the other question — how loud is what is
+// leaving *now* — and it has two different answers depending on what is making the
+// sound, which is the whole of what is asserted here.
+//
+// With `O` on it is the render's own mix, measured off every block by the run
+// behind the preview: **per channel of the output**, at the channel count the
+// encoder would be opened with, and a **true peak** rather than a sample peak. Both
+// of those are claims that can be checked — the first by changing the output's
+// channel count and counting the bars, the second on the Capture stage where the
+// signal is arithmetic (see tests/ui_capture.js).
+//
+// With `O` off there is no render: bro's mixer is summing the clip elements, so
+// the strip reads bro's master bus instead and says so. What is checked is that it
+// *says which*, because the two readings are not the same claim and a strip that
+// quietly swapped between them would be the dishonest version of this feature.
+console.log('\nhow loud what is leaving is');
+{
+    const strip = () => document.getElementById('levels');
+    const bars = () => strip().querySelectorAll('.m-bar').length;
+    const probe = bro.ffmpeg.probe(media);
+    const hasSound = !!probe.streams && probe.streams.some((s) => s.kind === 'audio');
+
+    ok(!!strip(), 'there is a level strip beside the viewer');
+
+    A.setOutputPreview(false);
+    A.setPlayhead(0);
+    pump(200);
+    // The mixer half of this needs bro to have one; the render half does not, since
+    // a render is made whether or not anything can be played out of it.
+    const engine = A.monitor.why() !== 'no audio engine in this build';
+
+    if (!hasSound) {
+        console.log('  (skipped: the file has no sound)');
+    } else {
+        if (!engine) {
+            console.log('  (the mixer half skipped: no audio engine in this build)');
+        } else {
+            // Off, and nothing playing. The mixer is the answer because there is no
+            // render — and it is named, with its own weaker guarantee beside it.
+            same(A.monitor.reading(), 'monitor',
+                 'with the preview off the strip reads bro’s mixer, because the clips are ' +
+                 'what is making the sound and nothing else has a mix to measure');
+            same(A.monitor.channelCount(), 2,
+                 'as a stereo pair, which is the device’s channels and not the output’s');
+
+            A.play();
+            pump(600);
+            ok(A.monitor.reading() === 'monitor',
+               'and it stays the mixer while the clips play');
+            A.pause();
+            pump(200);
+        }
+
+        // On. Now there *is* a mix of the whole programme, made at the output's own
+        // channel count, and that is what the strip should be reading instead.
+        A.setPlayhead(0);
+        A.setOutputPreview(true);
+        opened('the preview to open');
+        A.play();
+        waitFor('the strip to pick up the render', () => A.monitor.reading() === 'output');
+        same(A.monitor.reading(), 'output',
+             'with the preview on it reads the render’s own mix rather than the speakers');
+        same(A.monitor.why(), '', 'with nothing to explain, because there is something to draw');
+        // The number a meter shows is only a measurement if something drove it, so
+        // this is the assertion that the reading is *arriving* rather than that the
+        // bars exist: the loudest-so-far latch is above the floor.
+        const top = () => {
+            let best = -Infinity;
+            for (const n of strip().querySelectorAll('.m-read')) {
+                const v = parseFloat(n.textContent);
+                if (isFinite(v)) best = Math.max(best, v);
+            }
+            return best;
+        };
+        waitFor('a reading off the render', () => top() > A.levels.DB_FLOOR);
+        ok(top() > A.levels.DB_FLOOR,
+           `the render’s mix reads on the strip (${top().toFixed(1)} dBFS)`);
+        A.pause();
+        pump(200);
+
+        // **The channel count is the output's, asked rather than assumed.** One bar
+        // per channel of the mix, so an output written in mono is one bar — which is
+        // the half of the Not-yet entry that said the old meter was per clip rather
+        // than per output channel.
+        same(bars(), 2, 'two bars for a stereo output');
+        const s = A.exporter.currentSettings();
+        const wasChannels = s.channels;
+        s.channels = 1;
+        A.setOutputPreview(false);
+        pump(200);
+        A.setPlayhead(0);
+        A.setOutputPreview(true);
+        opened('the mono preview');
+        A.play();
+        waitFor('the strip to follow the output down to one channel',
+                () => A.monitor.reading() === 'output' && bars() === 1);
+        same(bars(), 1, 'and one bar for an output written in mono');
+        A.pause();
+        s.channels = wasChannels;
+        A.setOutputPreview(false);
+        pump(300);
+        A.setPlayhead(0);
+        A.setOutputPreview(true);
+        opened('the preview back at the output’s own channel count');
+        A.play();
+        waitFor('two bars again', () => bars() === 2);
+        same(bars(), 2, 'putting the setting back puts the bar back');
+        A.pause();
+        pump(200);
+        // The one state worth a picture on this stage: the render playing with a
+        // meter of its own mix beside it.
+        screenshot('out/ui-output-levels.png');
+    }
+}
+
 console.log('\nmoving the playhead');
 {
     // A filter graph pulls: it produces the frames it produces, in order, and

@@ -346,6 +346,28 @@ button.st.warn .st-name::after {
     color: #fff;
 }
 
+/* How loud what is leaving is, right now. A strip of its own between the picture
+   and the inspector: narrow enough that it costs the viewer almost nothing, and
+   beside the picture because that is what it is about — see ui/monitor.js. */
+.levelstrip {
+    width: 92px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 6px 6px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    min-height: 0;
+}
+/* Which of the two things is being measured, or why nothing is. A strip of empty
+   bars is indistinguishable from silence and the two are different answers. */
+.m-why {
+    font-size: 9px;
+    line-height: 1.3;
+    flex-shrink: 0;
+}
+
 #inspector {
     width: 290px;
     flex-shrink: 0;
@@ -1157,21 +1179,37 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     margin-bottom: 4px;
 }
 
-/* The levels a session is running at. One row per sound pad: what it is called,
-   the bar, the held peak as a number, and a light that latches when it has been
-   over. Laid out as a grid rather than a flex row so that the bars of two pads
-   line up with each other — a meter you have to compare across a ragged left
-   edge is a meter you read wrong. */
-.cap-meters { flex-shrink: 0; }
-.cap-m-row {
-    display: grid;
-    grid-template-columns: 46px 1fr 52px 30px 62px;
+/* ── a level meter, wherever one is drawn ──────────────────────────────────
+
+   One set of classes, because there are two places and they are answering the
+   same question: what a capture session's pads are doing, and what is leaving
+   the output right now. Two implementations that drew the clipping line in two
+   places would make comparing them a quiet lie — see ui/meter.js, which owns
+   the decay, the hold and the latch, and levels.js, which owns the scale.
+
+   **A row per channel, not per pad.** The fault a meter catches that nothing
+   else can is one channel of several, so the pad's name and whatever controls
+   belong to it are a head row and the bars are under it, one per channel. */
+.m-pad { margin-bottom: 5px; }
+.m-head {
+    display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 3px;
+    margin-bottom: 2px;
 }
-.cap-m-name { font-size: 10.5px; color: var(--dim); }
-.cap-m-track {
+.m-name { font-size: 10.5px; color: var(--dim); flex: 1; min-width: 0; }
+/* Laid out as a grid rather than a flex row so that the bars of two pads line
+   up with each other — a meter you have to compare across a ragged left edge is
+   a meter you read wrong. */
+.m-ch {
+    display: grid;
+    grid-template-columns: 30px 1fr 52px 30px;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 2px;
+}
+.m-cn { font-size: 9.5px; color: #4a5160; }
+.m-track {
     position: relative;
     height: 12px;
     background: #0b0d11;
@@ -1179,34 +1217,35 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     border-radius: 2px;
     overflow: hidden;
 }
-/* Left to right rather than bottom to top: the stage is a column of wide
-   panels, and a vertical meter here would be twelve pixels of information in a
-   box the width of the picture above it. */
-.cap-m-bar {
+/* Left to right on the Capture stage, which is a column of wide panels where a
+   vertical meter would be twelve pixels of information in a box the width of the
+   picture above it — and bottom to top beside the viewer, where the strip is
+   tall and narrow and that is the shape a meter has always been. */
+.m-bar {
     position: absolute;
     left: 0; top: 0; bottom: 0;
     width: 0;
     background: var(--good, #7ed6a0);
 }
-.cap-m-bar.cap-m-hot { background: #ff7a5c; }
-.cap-m-peak {
+.m-bar.m-hot { background: #ff7a5c; }
+.m-peak {
     position: absolute;
     top: 0; bottom: 0;
     width: 2px;
     margin-left: -1px;
     background: #e8eef6;
 }
-.cap-m-zero {
+.m-zero {
     position: absolute;
     top: 0; bottom: 0;
     width: 1px;
     background: rgba(255, 140, 66, 0.55);
 }
-.cap-m-read { font-size: 10.5px; color: var(--dim); text-align: right; }
+.m-read { font-size: 10.5px; color: var(--dim); text-align: right; }
 /* Off is not hidden: an empty column would move the reading beside it the first
    time anything clipped, and a control that jumps as it fires is one nobody
    trusts. */
-.cap-m-over {
+.m-over {
     font-size: 9.5px;
     text-align: center;
     border-radius: 2px;
@@ -1214,7 +1253,45 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     color: #4a5160;
     border: 1px solid transparent;
 }
-.cap-m-over.on { color: #0b0d11; background: #ff7a5c; }
+.m-over.on { color: #0b0d11; background: #ff7a5c; }
+
+/* The same meter stood on end. The channels sit side by side and each carries
+   its own name, number and light, so a six-channel output is six columns and
+   scrolls rather than being folded down to two. */
+.m-pad.vert { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.m-chs.vert {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    gap: 5px;
+    flex: 1;
+    min-height: 0;
+    overflow-x: auto;
+}
+.m-ch.vert {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-height: 0;
+    margin-bottom: 0;
+}
+.m-track.vert { width: 14px; height: auto; flex: 1; min-height: 40px; }
+.m-track.vert .m-bar {
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: auto; height: 0;
+}
+.m-track.vert .m-peak {
+    left: 0; right: 0; top: auto;
+    width: auto; height: 2px;
+    margin-left: 0; margin-bottom: -1px;
+}
+.m-zero.vert {
+    left: 0; right: 0; top: auto;
+    width: auto; height: 1px;
+}
+.m-ch.vert .m-read { font-size: 9px; text-align: center; }
+.m-ch.vert .m-over { font-size: 8.5px; padding: 0 3px; }
 /* Listening, which is a state and not a moment — so it is lit while it is on,
    the way a record button is, rather than being a button that looks pressed for
    as long as the mouse is down. The width is fixed on the row above so that

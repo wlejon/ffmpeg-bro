@@ -59,6 +59,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_report.cpp
     src/native/playback_filter.cpp
     src/native/playback_output.cpp
+    src/native/sound_meter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
     src/native/export_copy.cpp

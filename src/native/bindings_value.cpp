@@ -74,4 +74,21 @@ JSValue intsToJs(JSContext* ctx, const std::vector<int>& v) {
     return arr;
 }
 
+JSValue channelsToJs(JSContext* ctx, const std::vector<ChannelLevel>& v) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const ChannelLevel& c : v) {
+        JSValue o = JS_NewObject(ctx);
+        setStr(ctx, o, "name", c.name);
+        // Both peaks, because the distance between them is itself a reading and
+        // because a meter has to be able to say which one it is drawing. See
+        // sound_meter.h.
+        JS_SetPropertyStr(ctx, o, "truePeak", JS_NewFloat64(ctx, c.truePeak));
+        JS_SetPropertyStr(ctx, o, "peak", JS_NewFloat64(ctx, c.peak));
+        JS_SetPropertyStr(ctx, o, "rms", JS_NewFloat64(ctx, c.rms));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
 } // namespace ffmpegbro

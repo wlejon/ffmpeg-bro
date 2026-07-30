@@ -125,13 +125,30 @@ falling about 20 dB a second so a transient is readable rather than a flicker. T
 **mark** is what it just did, falling five times slower. The **number** is the loudest
 it has been since you last cleared it, which is the one somebody setting a gain wants
 and the only one of the three that is a measurement rather than a drawing. The **over**
-light latches when a pad has gone past full scale; clicking it forgets both latches at
-once, because they are the same question at two resolutions.
+light latches when a channel has gone past full scale; clicking it forgets every latch
+on the stage, because they are the same question about one take.
+
+**A bar per channel of the pad, not one for the pad.** A stereo microphone with a dead
+side reads perfectly healthy as a single number, and that is the fault a meter is here
+to catch that nothing else on the stage can. The channels are named as libav names them
+— `FL`, `FR`, `FC`, `LFE` — asked of the sound rather than assumed, so a device that
+hands over four gets four bars. A device with one channel gets one bar and no name,
+because there would be nothing to tell it apart from.
+
+**It is a true peak.** The loudest *sample* of a block is not its loudest *moment*: the
+samples are points on a waveform that exists between them, and a signal every sample of
+which is inside full scale can pass through +1.5 dBFS on the way. So each block is
+oversampled four times — the rate ITU-R BS.1770 specifies — and the reading is the top
+of the interpolated signal. The one place it reads high is sound that starts *abruptly*:
+a hard-gated take, or the first block of a session, is a step for the filter to ring on
+and reads about a decibel over. Every oversampling meter does that, because a step is
+not a band-limited signal and has no true peak to be wrong about.
 
 It is drawn on the same scale as A1 — see [The timeline](timeline.md)
-— from -60 dBFS to +6, with a line where full scale is. Somebody looking at one and
-then the other is comparing them, and two scales disagreeing by a decibel would make
-that comparison a quiet lie.
+— from -60 dBFS to +6, with a line where full scale is, by the same meter the
+[program monitor](playback.md#the-meter-beside-the-picture) draws beside the picture.
+Somebody looking at one and then the other is comparing them, and two scales
+disagreeing by a decibel would make that comparison a quiet lie.
 
 **And you can hear it, which is a different thing from reading it.** `Listen` beside a
 meter plays that pad through this machine's speakers. It starts off, always: sound that

@@ -81,6 +81,47 @@ saved, and a `filter_complex` slower than real time gaps its sound instead.
 A graph libavfilter will not have says so on the stage, in libavfilter's own
 words, rather than showing black.
 
+## The meter beside the picture
+
+A1 on the timeline is drawn in decibels with a line where clipping is, so an over
+can be *found* — but it is the analysis's buckets, per clip, measured before
+anything was played. The strip down the right of the viewer answers the other
+question: **how loud is what is leaving now.** It is drawn on the same scale A1 is,
+so a reading there and a mark there are comparable.
+
+What it is reading depends on what is making the sound, and the strip says which:
+
+**`output`, while the preview is on.** The render publishes its mix for the element
+to play, and it is measured on the way past — so what the bars show is:
+
+- **one bar per channel of the output**, at the channel count the encoder would be
+  opened with, named as libav names them (`FL`, `FC`, `LFE`…). An output written in
+  mono is one bar; a 5.1 output is six. Nothing here assumes two.
+- a **true peak**, oversampled four times, which is the loudest point on the
+  *signal* and not merely the loudest sample. A waveform whose every sample is
+  inside full scale can pass through +1.5 dBFS between two of them, and that is
+  what clips a converter and what makes a limiter set by a sample-peak meter
+  distort anyway. Four times is what ITU-R BS.1770 specifies; the filter's
+  overshoot on a steady tone measures under 0.001 dB, and a 4× grid cannot see
+  more than 0.3 dB under the top of a 16 kHz sine, which is arithmetic rather than
+  a fault.
+- **every block**, because reading the level clears it — so a transient between two
+  frames of the UI is caught rather than missed.
+
+**`monitor`, while it is off.** There is no render then: bro's mixer is summing the
+clips' elements, so the strip reads bro's own metering of its master mix bus. It is
+a weaker reading and is labelled as one — **sample peak**, sampled once a frame
+rather than accumulated, and **two channels** because that is the device's mix and
+not the output's. The monitoring volume is divided back out of it, so turning the
+speakers down does not hide an over; a clip's own level stays in, because that is
+part of the edit. Press `O` for the reading to trust.
+
+The number beside each bar is the loudest that channel has been since the latches
+were cleared, and the `over` light latches when it has passed full scale. Click
+either to forget both — one accident should not leave a light on for the rest of
+the session. It is the same meter the [Capture](capture.md) stage draws below its
+pictures, on the same scale, for the same reason.
+
 **A file with no picture in it is an ordinary clip.** Drop an `.mp3`, a `.wav` or
 an `.m4a` on the timeline and it lays out with the length of its audio track,
 plays, moves the playhead and goes into the mix. What it does not do is take up

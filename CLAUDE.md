@@ -204,8 +204,11 @@ measured whether or not anybody is listening; and — only while something *is* 
 the blocks themselves, in a bounded queue per listener, because two readers
 popping one queue would each play half the sound. Registering that listener is
 what monitoring *is*: `ui/capture.js` creates one element for the pad somebody
-pressed `Listen` on and destroys it again, so there is nothing to mute. The scale
-every meter is drawn on is `ui/levels.js`.
+pressed `Listen` on and destroys it again, so there is nothing to mute. The level
+is measured by the *pad* (`sound_meter.h`, per channel, 4× oversampled true peak),
+which is what stops the two things publishing into a tap from measuring
+differently; the scale every meter is drawn on is `ui/levels.js` and the drawn
+meter itself is `ui/meter.js`.
 
 An **output preview** (`playback_output.h`, `ui/output.js`) is the third use of
 the same idea and the second of the same registry trick: the render with the
@@ -226,7 +229,11 @@ heard twice, once as itself and once through the mix); and bro opens a media
 element's source *twice* — once for the pipeline, once for the audio ring it
 keeps ahead of the mixer — so a run is shared by token and published into the
 same `LiveTap` monitoring reads, or the same edit would be rendered twice and the
-two raced for one set of decoders. `playback_filter.h` is the same registry one
+two raced for one set of decoders. Because it publishes into a tap, its mix is
+*metered* by the same mechanism a microphone is, which is what `output.levels(id)`
+reads and what puts a meter of the output's own channels beside the viewer
+(`ui/monitor.js`); with the preview off there is no render and no tap, and the
+strip says so by reading bro's master bus instead. `playback_filter.h` is the same registry one
 turn earlier — one input with one chain — and the two prefixes (`/@fx/`, `/@out/`)
 are deliberately distinct.
 
@@ -243,7 +250,13 @@ are deliberately distinct.
   (`swsSpaceFor`) live in `export_frame.h`; `ui/graph/derive.js` states the same
   rule in filter vocabulary. If one changes, the other must. Same for
   `projectFps()` (timeline rate) vs `outputFps()` (encoder rate) — genuinely two
-  questions, deliberately not merged.
+  questions, deliberately not merged. Sound is metered in exactly one place at
+  each level: `sound_meter.h` is *how loud is this block* (per channel, true peak,
+  4× oversampled — called by `LivePadTap::heard` and by nothing else, so a capture
+  pad and the output preview's mix cannot come to be measured differently),
+  `ui/levels.js` is the dB scale, and `ui/meter.js` is the drawn meter. A second
+  meter that put the clipping line a decibel elsewhere would make comparing two
+  stages a quiet lie.
 - **Persistence is a version-tolerant read.** Two homes, two meanings: the
   *workspace* is `localStorage` (`ui/.storage.json`, gitignored) holding export
   settings and the graph overlay, and a *document* is `ui/document.js` holding

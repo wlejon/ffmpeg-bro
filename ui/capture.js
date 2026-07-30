@@ -126,7 +126,7 @@
 
 import { div, span, el, put, row, head } from './dom.js';
 import { clock, bytes, basename, shellArg } from './format.js';
-import { dbHeight, dbLabel, ZERO_DBFS } from './levels.js';
+import { createMeter } from './meter.js';
 import { optionColumn } from './opttable.js';
 import { qualityRange } from './export/capabilities.js';
 import { schemeOf, protocolLinked, teeSpec, newDestination,
@@ -944,30 +944,21 @@ let compKey = '';
 // every sound pad of the session whether or not anything is being played, which
 // is what makes it the thing you glance at.
 //
-// Drawn on the same scale as A1, from `levels.js`, because somebody looking at
-// one and then the other is comparing them.
+// Drawn by `ui/meter.js`, which is the one meter in this application — the
+// Compose stage has one too now, of what is leaving the output, and two
+// implementations of a decay and a clipping line would come apart. What is left
+// here is what belongs to *this* stage: which pads there are, `Listen`, and the
+// sentence about feedback.
+//
+// **A bar per channel of each pad**, which is what asking the sound rather than
+// assuming gets you: a stereo microphone with a dead side reads perfectly healthy
+// as one number, and that is the one fault this meter exists to catch that nothing
+// else on the stage can.
 
-/// What each meter is showing, between readings: the falling bar, the held
-/// peak, the loudest it has been, and whether it has been over — the last two
-/// since the latches were cleared rather than since the session opened.
-///
-/// Held here rather than read off the DOM, because a decay is a value with a
-/// history and `style.width` is a rounded string.
+/// One meter per sound pad, by pad name.
 const meters = new Map();
 
-/// How fast the bar falls, per tick, as a multiplier on amplitude — which is a
-/// *fixed number of decibels* per tick, since the scale is logarithmic, and is
-/// what makes the fall look even. About 20 dB a second at sixty ticks, which is
-/// the rate a peak-programme meter falls at and slow enough to read a transient
-/// off rather than watch it flicker.
-const FALL = 0.962;
-
-/// And the peak mark, held five times as long. A peak that fell with the bar
-/// would tell you nothing the bar did not; one that never fell would be a
-/// high-water mark for the whole session, which is what the over light is for.
-const PEAK_FALL = 0.992;
-
-/// One row per sound pad, then written by `tickMeters` and never rebuilt.
+/// One meter per sound pad, then written by `tickMeters` and never rebuilt.
 ///
 /// Rebuilt only when the *pads* change — a session reopening, a wire moved on
 /// the Graph stage. Redrawing a meter's markup sixty times a second to move a
@@ -984,35 +975,25 @@ function syncMeters() {
     meters.clear();
     if (!pads.length) { put(refs.meters, () => []); return; }
 
+    for (const p of pads) {
+        meters.set(p.name, createMeter({
+            // `aout` is what the graph calls its mix and what `-map` names, so it
+            // is what the meter is called: a friendlier word here would be a
+            // second name for the pad the command bar prints.
+            name: p.name,
+            title: `What ${p.name} is doing, measured off every block whether or ` +
+                   'not anything is playing it. True peak, 4× oversampled.',
+            // The pad's own controls sit on its head row, which is how `Listen`
+            // gets beside a meter without `ui/meter.js` knowing what monitoring is.
+            trailing: () => [listenButton(p)],
+            // One press clears every latch on the stage, not just this pad's: the
+            // question "has anything been too loud" is asked of the take.
+            onClear: clearHolds,
+        }));
+    }
     put(refs.meters, () => [
         div('cap-comp-head dim', 'What the sound is doing'),
-        ...pads.map((p) => {
-            const bar = div('cap-m-bar');
-            const peak = div('cap-m-peak');
-            const read = span('', 'cap-m-read mono');
-            const over = el('div', {
-                cls: 'cap-m-over', text: 'over', 'data-f': `over-${p.name}`,
-                title: 'Lit when this pad has gone past full scale. Click to forget ' +
-                       'it, and the loudest-so-far reading beside it with it.',
-                on: { click: clearHolds },
-            });
-            meters.set(p.name, { bar, peak, read, over,
-                                 level: 0, held: 0, top: 0, clipped: false });
-            return div('cap-m-row', [
-                // `aout` is what the graph calls its mix and what `-map` names,
-                // so it is what the row is called: a friendlier word here would
-                // be a second name for the pad the command bar prints.
-                span(p.name, 'cap-m-name mono'),
-                div('cap-m-track', [
-                    bar, peak,
-                    // Full scale, at the fraction `levels.js` puts it — the one
-                    // mark on the meter that does not depend on the session.
-                    el('div', { cls: 'cap-m-zero',
-                                style: { left: `${(ZERO_DBFS * 100).toFixed(2)}%` } }),
-                ]),
-                read, over, listenButton(p),
-            ]);
-        }),
+        ...pads.map((p) => meters.get(p.name).root),
         ...feedbackNote(),
     ]);
 }
@@ -1153,60 +1134,29 @@ function feedbackNote() {
                 'stop listening while you take.')];
 }
 
-/// Read every level once and move every bar. **Once**, because the read clears
-/// what it read — see `liveLevels` — and a second caller would halve this one's
-/// window and draw a meter that disagreed with it.
+/// Read every level once and write it to every meter. **Once**, because the read
+/// clears what it read — see `liveLevels` — and a second caller would halve this
+/// one's window and draw a meter that disagreed with it.
 function tickMeters() {
     if (!meters.size || !session.id) return;
     let levels = [];
     try { levels = bro.ffmpeg.live.levels(session.id); } catch (e) { return; }
     const seen = new Map();
     for (const l of levels) seen.set(l.name, l);
-
-    for (const [name, m] of meters) {
-        const l = seen.get(name);
-        // **Nothing heard is not silence.** A device that has stopped
-        // delivering would otherwise read as one delivering quiet, so the bar
-        // falls from where it was rather than being driven to zero: what you
-        // see is a meter going still, which is what has happened.
-        const now = l && l.heard ? l.rms : 0;
-        const hit = l && l.heard ? l.peak : 0;
-        m.level = Math.max(now, m.level * FALL);
-        m.held = Math.max(hit, m.held * PEAK_FALL);
-        if (hit > m.top) m.top = hit;
-        if (hit > 1) m.clipped = true;
-
-        m.bar.style.width = `${(dbHeight(m.level) * 100).toFixed(2)}%`;
-        m.peak.style.left = `${(dbHeight(m.held) * 100).toFixed(2)}%`;
-        m.peak.classList.toggle('hidden', m.held <= 0);
-        m.bar.classList.toggle('cap-m-hot', m.held > 1);
-        m.over.classList.toggle('on', m.clipped);
-        // **The number is the high-water mark, not the falling mark.** Three
-        // readings and three questions: the bar is what it is doing, the mark
-        // is what it just did, and this is the loudest it has been since you
-        // last cleared it — which is the one a person setting a gain wants,
-        // and the only one of the three that is a *measurement* rather than a
-        // drawing. Put on the decaying hold instead it read -6.2 for a source
-        // that was exactly -6.02, because a decay sampled at an arbitrary
-        // moment is a number with a tick count in it.
-        m.read.textContent = dbLabel(m.top);
-    }
+    // A pad with nothing in `seen` is written a null, which is not the same as
+    // silence: the bars fall from where they were rather than being driven to
+    // zero, so a device that has stopped delivering looks like a meter going
+    // still. See `ui/meter.js`.
+    for (const [name, m] of meters) m.write(seen.get(name) || null);
 }
 
-/// Forget both latches: the over light and the high-water number beside it.
+/// Forget every latch on the stage, on all of its pads at once.
 ///
-/// One gesture for the two because they answer the same question at different
-/// resolutions — "has this been too loud, and how loud" — and clearing one
-/// without the other would leave a reading nobody could place. A latch that
-/// could not be cleared is a light on for the rest of the session after one
-/// accident, which stops being a reading of anything.
+/// The meter forgets its own when its light is clicked; this is what makes the
+/// *other* pads forget theirs at the same time, because "has anything been too
+/// loud" is a question about the take rather than about one microphone in it.
 function clearHolds() {
-    for (const m of meters.values()) {
-        m.clipped = false;
-        m.top = 0;
-        m.over.classList.remove('on');
-        m.read.textContent = dbLabel(0);
-    }
+    for (const m of meters.values()) m.clear();
 }
 
 /// Let one card's device go.
