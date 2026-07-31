@@ -53,6 +53,36 @@ scrolling the timeline never re-reads a file. On a large document they fill in
 over the following seconds while everything else works normally, and the
 readout beside the clip count says how many are still being read.
 
+**Pressing play watches the render.** The picture on the monitor is normally one
+`<video>` per clip laid out inside the output canvas, which is exact and free —
+but playing an edit that way means crossing from one decoder to the next at every
+cut, and each crossing is a file being opened and seeked on the thread that
+draws. On a montage of 1.6 s clips that is about one visible hitch a second. So
+playback asks for the *render* instead: one source for the whole edit, with the
+cuts done by the compositor, where there is nothing to cross. Measured on a
+75-clip montage, the same fifteen seconds went from 23 stuttering frames to 8,
+and the median frame from 19 ms to 13.
+
+Three things follow, and you are meant to notice only the last.
+
+Building a render opens every input it reads — over a second on an edit that
+size — so the button answers immediately and the clips carry playback until the
+render exists, which is generally before you have looked away from the mouse.
+
+It is kept for twenty seconds after you stop, so stopping to look at something
+and starting again is instant. It costs about a gigabyte on a large edit, which
+is why it is not kept for ever. **Scrubbing does not rebuild it**: a filter graph
+cannot seek — moving the playhead means building a source that begins there — so
+while it is merely being kept, the clips answer the scrub and the render is left
+alone. That is why dragging the playhead is as quick as it ever was, and why
+playing from a new position takes a moment to start.
+
+And what you see while it plays is the *render*, which for most edits is the same
+picture the clips make. Where it differs it differs because the clips cannot show
+that thing at all — a generated source, a filter over the whole canvas — so the
+difference is always in the direction of the truth. None of this touches the `O`
+button below: playback borrows the same machinery, it does not turn the mode on.
+
 ## The output, instead of the clips
 
 `O`, or **Output** on the timeline bar, puts the *render* on the program monitor

@@ -190,4 +190,47 @@ assert(added === 0,
        `${added} undo steps arrived while the clips were being read — ` +
        'a measurement is being recorded as an edit');
 
+// ── 6. playback runs on the render, not on the clips ───────────────────────
+//
+// Crossing from one decoder to the next at every cut is ~65 ms of the drawing
+// thread, and on a montage of short clips that is about one visible hitch a
+// second. The render has no crossings in it. What has to be true of the swap is
+// four things, and none of them is visible in a frame time:
+//
+//   - **the press is answered now.** Building a render opens every input it
+//     reads — 1.2 s on a 75-clip edit — so `play()` must return and let the
+//     clips carry playback rather than freezing on the button.
+//   - **it takes over.** Otherwise this is all cost and no benefit.
+//   - **the mode is not touched.** `O` is a thing somebody chooses; playback
+//     borrowing the same render must not light its button, or pressing play
+//     would appear to switch a mode nobody asked for.
+//   - **a kept render does not answer for a moment nobody is at.** It is held
+//     after playback stops so that stop-and-go is free, and while it is held it
+//     is neither the picture nor the clock — the bug this caught was a scrub
+//     being dragged back to wherever the render had been paused.
+
+A.setPlayhead(0);
+const pressed = Date.now();
+A.play();
+const pressMs = Date.now() - pressed;
+assert(pressMs < 250, `play() blocked for ${pressMs} ms — the render is being built in the press`);
+
+waitFor('the render to take the picture', () => A.output.isShowing(), 60000);
+assert(!A.output.isWanted(),
+       'playing turned the preview mode on — it should borrow the render, not switch a mode');
+console.log(`play() returned in ${pressMs} ms, render took the picture`);
+
+// Kept across a pause, and silent while it is kept: neither the picture nor the
+// clock, so a scrub is answered by the clips and lands where it was aimed.
+A.pause();
+pump(200);
+assert(!A.output.isShowing(), 'a kept render is still the picture after pausing');
+const aim = clips[Math.floor(COUNT / 2)].start + 0.25;
+A.setPlayhead(aim);
+pump(200);
+assert(Math.abs(A.transport.t - aim) < 0.5,
+       `scrubbing to ${aim.toFixed(2)}s landed at ${A.transport.t.toFixed(2)}s — ` +
+       'a render nobody is watching is driving the playhead');
+console.log('a kept render is neither the picture nor the clock');
+
 console.log('ui_load: ok');

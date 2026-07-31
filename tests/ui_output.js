@@ -259,10 +259,24 @@ console.log('\nhow loud what is leaving is');
             same(A.monitor.channelCount(), 2,
                  'as a stereo pair, which is the device’s channels and not the output’s');
 
+            // **And pressing play moves it to the render, with the preview
+            // button still off.** This assertion used to be the opposite one —
+            // that the strip stayed on the mixer while the clips played — and it
+            // was true right up until playback stopped running on the clips.
+            // Playing now engages a render of its own, because one source has no
+            // cut in it to hitch on (see `play()` in ui/transport.js), and when
+            // it takes over it is the render's mix that is being heard. A strip
+            // that went on reading bro's speakers would be metering the clips,
+            // which by then are parked and silent.
+            //
+            // The mode is untouched by any of that: `O` is still off, the button
+            // is still unlit, and `isWanted()` below is what says so.
             A.play();
-            pump(600);
-            ok(A.monitor.reading() === 'monitor',
-               'and it stays the mixer while the clips play');
+            waitFor('playback to reach the render',
+                    () => A.monitor.reading() === 'output');
+            ok(!A.output.isWanted(),
+               'and the preview button is still off — playback borrowed the render, ' +
+               'it did not turn the mode on');
             A.pause();
             pump(200);
         }

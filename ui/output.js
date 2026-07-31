@@ -73,6 +73,19 @@ let stage = null;
 let hooks = {};
 let el = null;
 
+/// Who wants the preview open, by name — `'user'` for the press, `'play'` for
+/// the transport.
+///
+/// **Two reasons for one mechanism, and they must not cancel each other.** The
+/// program monitor is a mode somebody turns on to look at the render; playback
+/// wants the same source for a different reason, which is that it is *one*
+/// source with no cut in it and therefore does not hitch where the clips do
+/// (measured on a 75-clip montage: 10 slow frames in a thousand against 23).
+/// Held as a set rather than a flag because the failure otherwise is silent and
+/// annoying in both directions — pausing would close a preview somebody had
+/// opened to study, and pressing `O` during playback would close it the moment
+/// playback stopped.
+const holders = new Set();
 let on = false;
 let reason = '';          ///< why there is no picture, when there is none
 let showing = 0;          ///< where the current source's first frame sits
@@ -97,6 +110,49 @@ export function initOutput(refs, h) {
 const tell = () => { if (hooks.changed) hooks.changed(); };
 
 export function isOn() { return on; }
+
+/// Is the user looking at the render, as opposed to playback merely using it?
+///
+/// The distinction the viewer and the meter need: when playback opened this, the
+/// picture on the canvas *is* the render and the clips are hidden exactly as in
+/// the mode — but the mode's button is not on, because nobody pressed it.
+export function isWanted() { return holders.has('user'); }
+
+/// Is there a source open and producing, so that it can be the clock?
+///
+/// Separate from `isOn()` because engaging one is not instantaneous: building it
+/// opens every input the render reads, which on a 75-clip edit is 1.2 s. Between
+/// the two the transport goes on driving from the clips, so pressing play is
+/// answered now and gets smooth a moment later rather than freezing first.
+export function ready() { return on && at() !== null; }
+
+/// Is the render *the picture* — as opposed to merely being kept warm?
+///
+/// **The distinction a cache forces, and leaving it out was a bug worth naming.**
+/// Playback keeps a render for a while after it stops, so that stopping to look
+/// at something and starting again is free (see `KEEP_MS` in ui/transport.js).
+/// A kept render is `ready()` — it has an element with a duration — but nobody
+/// is watching it, and while it sat there `at()` went on answering: the clips
+/// stayed hidden behind a still picture of a moment nobody was at, and scrubbing
+/// dragged the playhead back to wherever the render had stopped.
+///
+/// So: it is the picture when somebody asked for it, or when the transport is
+/// running on it. `running` is exactly that second thing and is already kept.
+export function isShowing() { return ready() && current() && (holders.has('user') || running); }
+
+/// Is the source in the element the one that is currently wanted?
+///
+/// **A stale render is worse than no render, because it answers.** A graph
+/// cannot seek, so moving the playhead means building a new source and there is
+/// a gap — `QUIET_MS` and then the build itself — in which the element still
+/// holds the *previous* range and `at()` still reports a position inside it.
+/// Left to answer, it took the clock: scrubbing to 70 s and pressing play showed
+/// the render at 20 s and then dragged the playhead there to match it.
+///
+/// `showing` is where the source in the element begins and `want` is where it
+/// should; while they differ the render is of a moment nobody asked for, and the
+/// clips are the truth until the rebuild lands.
+function current() { return !dirty && Math.abs(showing - want) < 1e-6; }
 
 /// Why the preview has no picture, or '' when it has one. Shown on the stage,
 /// so it is libavfilter's own sentence where libavfilter is the one refusing.
@@ -150,8 +206,16 @@ export function levels() {
 /// Returns true when the mode changed, which is the caller's cue to re-place
 /// everything: the clips have to be hidden and the preview sized to the canvas,
 /// and both of those are the viewer's business rather than this file's.
-export function setOn(value, t) {
-    const next = !!value;
+export function setOn(value, t, who = 'user') {
+    // **Turning it off by hand turns it off, whoever else was holding it.** The
+    // press means "stop showing me the render", and a preview that stayed up
+    // because playback happened to have one cached would be a button that did
+    // not do what it says. Playback simply carries on from the clips and asks
+    // again the next time it is started.
+    if (!value && who === 'user') holders.clear();
+    else if (value) holders.add(who);
+    else holders.delete(who);
+    const next = holders.size > 0;
     if (next === on) return false;
     on = next;
     reason = '';
@@ -161,12 +225,16 @@ export function setOn(value, t) {
         tell();
         return true;
     }
-    // Straight away rather than after the quiet period: this is a press, so
-    // there is nothing to wait for and a blank canvas for a third of a second
-    // would read as the mode not working.
+    // **Marked, not built, and `since = 0` is what says "there is nothing to
+    // wait for".** `chase()` builds it on the very next frame rather than after
+    // the quiet period, so this is still a press being answered rather than a
+    // gesture being settled — but it is not built *inside the press*, because
+    // building opens every input the render reads and that is 1.2 s on a 75-clip
+    // edit. Playback engages this itself now, and a play button that did not
+    // come back for over a second would be worse than the stutter it is curing.
     want = Number(t) || 0;
     dirty = true;
-    apply();
+    since = 0;
     tell();
     return true;
 }

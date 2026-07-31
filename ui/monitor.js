@@ -161,8 +161,12 @@ function engine() {
 }
 
 /// The render's own reading, or null when there is no render to read.
+///
+/// `isShowing`, not `isOn`: playback keeps a render for a while after it stops,
+/// and a meter reading the mix of a render nobody is listening to would be a
+/// strip showing sound while the room is silent.
 function fromRender() {
-    if (!output.isOn()) return null;
+    if (!output.isShowing()) return null;
     const r = output.levels();
     if (!r || !r.running) return null;
     if (!(r.rate > 0)) return { silent: true };

@@ -92,7 +92,10 @@ export function setPlayhead(t, seek = true) {
     // carries the render's own soundtrack now, so a clip playing underneath it
     // would be that clip heard twice — once as itself and once through the mix,
     // a third of a second apart.
-    const shown = !output.isOn();
+    // `isShowing`, not `isOn`: a render kept warm but not watched leaves the
+    // clips as the picture, and a clip that is the picture while playing is a
+    // clip that has to be playing.
+    const shown = !output.isShowing();
     for (const clip of here) {
         applyAudio(clip);
         // **A generator is not sent anywhere.** libavfilter's sources produce
@@ -108,26 +111,91 @@ export function setPlayhead(t, seek = true) {
         }
         if (transport.playing && shown && clip.video.paused) clip.video.play();
     }
-    if (seek) output.moveTo(transport.t);
+    // **Only when somebody is actually watching the render.** A graph cannot
+    // seek — moving the playhead means building a source that begins there — so
+    // telling a preview about a scrub costs a rebuild, and a rebuild is over a
+    // second on a large edit. While playback merely has one cached and is not
+    // running, the scrub is answered by the clips and the render is left alone
+    // to go stale; the next `play()` is what moves it, at the moment it is worth
+    // paying for.
+    if (seek && (output.isWanted() || transport.playing)) output.moveTo(transport.t);
     if (here.length) selectFollow(here[here.length - 1]);
     tell();
 }
 
+/// **Playback runs on the render, not on the clips.**
+///
+/// The viewer composites by placing an element per clip, so playing an edit
+/// means crossing from one decoder to the next at every cut — and each crossing
+/// is an element being opened and seeked, which is ~65 ms of the thread that
+/// draws. Measured on a 75-clip montage of 1.6 s clips: 23 frames over 40 ms in
+/// fifteen seconds, about one visible hitch a second, and half of them were the
+/// crossings themselves. The render has no crossings in it. It is one source for
+/// the whole edit, cuts are the compositor's business, and the same fifteen
+/// seconds cost 10 slow frames in a thousand.
+///
+/// So this asks for one and starts it. Three things follow and each is here
+/// rather than in `ui/output.js` because each is the transport's business.
+///
+/// **The clips carry it until the render exists.** Building one opens every
+/// input it reads, which is over a second on an edit that size, so playback
+/// starts the way it always did and `advance()` moves the clock across the frame
+/// the picture arrives. Waiting instead would be a play button that did nothing
+/// for a second and a half.
+///
+/// **It is asked for under playback's own name.** A preview somebody opened to
+/// study is the same mechanism for a different reason, and `pause()` below must
+/// not close it — see `holders` in ui/output.js.
+///
+/// **It is not dropped on pause.** A paused element resumes where it stopped and
+/// its range still covers that moment, so keeping it is what makes stop-and-go
+/// instant instead of a second and a half each way. It costs ~1 GB on that
+/// montage, which is why `tick()` lets it go once nobody has played for a while.
 export function play() {
     if (!project.clips.length) return;
     if (transport.t >= duration() - 1e-4) setPlayhead(0);
     transport.playing = true;
-    if (output.isOn()) output.play(true);
-    else for (const c of viewer.activeClips()) { applyAudio(c); c.video.play(); }
+    idleSince = 0;
+    output.setOn(true, transport.t, 'play');
+    // **Resume rather than rebuild when the cached render is already sitting
+    // here**, which is exactly what a pause is: the element stopped, its range
+    // still covers where it stopped, and starting it again costs nothing.
+    // Anything else — a scrub taken while it was cached, an edit — is a
+    // different moment, and a different moment is a different source because a
+    // graph cannot seek. Half a frame of tolerance, since what the element
+    // reports is where a picture is rather than where one was asked for.
+    const here = output.at();
+    if (here === null || Math.abs(here - transport.t) > 0.05)
+        output.moveTo(transport.t);
+    output.play(true);
+    // Not `else`: while the render is still being built there is nothing else to
+    // hear or see, and `advance()` parks these the moment it takes over.
+    if (!output.isShowing())
+        for (const c of viewer.activeClips()) {
+            if (!c.video) continue;
+            applyAudio(c);
+            try { c.video.play(); } catch (e) { /* not open yet */ }
+        }
     tell();
 }
 
 export function pause() {
     transport.playing = false;
+    idleSince = Date.now();
     output.play(false);
-    for (const c of viewer.activeClips()) c.video.pause();
+    for (const c of viewer.activeClips()) if (c.video) c.video.pause();
     tell();
 }
+
+/// When playback stopped, for the release below. Zero while it is running.
+let idleSince = 0;
+
+/// How long a render is kept after playback stops, in milliseconds.
+///
+/// It is a cache, and this is its only eviction rule. Long enough that stopping
+/// to look at something and starting again is free; short enough that a gigabyte
+/// is not held by an application somebody walked away from twenty seconds ago.
+const KEEP_MS = 20000;
 
 export function togglePlay() { transport.playing ? pause() : play(); }
 
@@ -145,7 +213,11 @@ export function step(frames) {
     // averaged frame rate for the seconds round trip to miss a boundary by —
     // and a step backwards is a preview of the moment before this one, which is
     // a new range rather than a step. `output.js` says so.
-    if (output.isOn()) {
+    //
+    // `isShowing`, not `isOn`: `pause()` above has just released playback's claim
+    // on any render it was using, so unless somebody pressed `O` the picture is
+    // the clips again and it is the clips that have to step.
+    if (output.isShowing()) {
         if (output.step(frames)) {
             const t = output.at();
             if (t !== null) { transport.t = t; tell(); }
@@ -216,6 +288,13 @@ const DRIFT_LIMIT = 0.12;
 export function tick(dt) {
     if (transport.playing) advance(dt);
     else adoptDecoderTime();
+    // Let a render go once nobody has played for a while — see `KEEP_MS`. Only
+    // playback's own claim on it: a preview somebody is looking at is not idle
+    // just because the playhead is still.
+    if (idleSince && !transport.playing && Date.now() - idleSince > KEEP_MS) {
+        idleSince = 0;
+        output.setOn(false, transport.t, 'play');
+    }
 }
 
 /// A seek asks for a time; what comes back is the frame whose interval
@@ -224,7 +303,10 @@ export function tick(dt) {
 /// than a fact, and a frame step from a scrubbed position appears to move by
 /// some odd fraction of a frame because the step really started somewhere else.
 function adoptDecoderTime() {
-    if (output.isOn()) {
+    // `isShowing`, not `isOn`: a render kept warm after playback stopped is not
+    // what anybody is looking at, and letting it answer here dragged the
+    // playhead back to wherever it had been paused every time somebody scrubbed.
+    if (output.isShowing()) {
         const t = output.at();
         if (t === null || Math.abs(t - transport.t) < 1e-6) return;
         transport.t = t;
@@ -253,7 +335,14 @@ function advance(dt) {
     // the honest reading: a preview that ran the playhead at real time past a
     // picture arriving at half of it would be a timecode describing something
     // nobody is looking at.
-    if (output.isOn()) {
+    // **`ready` rather than `isOn`, and that is the whole of the handover.**
+    // Engaging a preview builds a render, which opens every input it reads —
+    // 1.2 s on a 75-clip edit — and playback now engages one itself (see
+    // `play()`). Waiting for it would mean pressing play and watching nothing
+    // move for over a second. So while it is warming the clips go on driving,
+    // exactly as they always did, and the clock moves across the moment there is
+    // a picture to take it.
+    if (output.isShowing()) {
         // **It stops where its own range stops**, which is not always the end
         // of the timeline: a render of seconds 10 to 20 runs out at 20 with
         // half the edit still to come. `handOver` is the wrong end of that —
@@ -266,7 +355,13 @@ function advance(dt) {
             return;
         }
         const t = output.at();
-        if (t === null) return;             // not open yet; nothing has moved
+        if (t === null) return;             // it was open a moment ago
+        // The clips were carrying playback until this frame and are now a second
+        // soundtrack under an authoritative one — the preview carries the
+        // render's own mix. Parked rather than left running, which is the same
+        // rule `setPlayhead` follows and the reason it asks `isOn`.
+        if (transport.playing) for (const c of viewer.activeClips())
+            if (c.video && !c.video.paused) { try { c.video.pause(); } catch (e) {} }
         transport.t = Math.max(0, Math.min(d, t));
         if (transport.t >= d - 1e-6) { handOver(d); return; }
         if (hooks.reveal) hooks.reveal(transport.t);

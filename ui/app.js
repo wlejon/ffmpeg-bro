@@ -596,15 +596,44 @@ function refreshPlayback() {
 // on the screen that have to follow it.
 
 function setOutputPreview(on) {
-    if (!output.setOn(on, transport.t)) return;
-    viewer.setOutputMode(output.isOn());
-    viewer.layout();
-    output.place();
+    if (!output.setOn(on, transport.t, 'user')) return;
     // The preview is the clock while it is on and the clips are while it is not,
     // so both directions are a handover: whichever is taking over has to be put
     // where the playhead already is.
     setPlayhead(transport.t);
     if (transport.playing) { if (on) output.play(true); else play(); }
+    // The picture itself follows from the frame loop — see `syncOutputPicture`,
+    // which is the one place that decides it now that a press is no longer the
+    // only thing that can put a render on the canvas.
+    syncOutputPicture();
+    drawOutput();
+}
+
+/// Which picture is on the canvas: the render, or the clips.
+///
+/// **Asked rather than pushed, because there are two ways to get a render onto
+/// it and only one of them is a press.** `O` is somebody choosing to look at the
+/// output; playback engages the same source because one source has no cut in it
+/// to hitch on (see `play()` in ui/transport.js). Driving the viewer from the
+/// press alone would leave the clips on screen underneath a render that
+/// playback had built.
+///
+/// **`isShowing`, not `isOn` and not `ready`.** Engaging a render takes over a
+/// second on a large edit and the clips are what is being watched for the whole
+/// of that, so `isOn` would black the canvas on the play button. And a render
+/// kept warm after playback stopped is `ready` without being watched, so that
+/// would leave the clips hidden behind a still picture nobody is at.
+let showingRender = false;
+function syncOutputPicture() {
+    const want = output.isShowing();
+    if (want === showingRender) return;
+    showingRender = want;
+    viewer.setOutputMode(want);
+    viewer.layout();
+    output.place();
+    // The strip beside the picture meters whichever mix is authoritative, and
+    // that has just changed hands.
+    needs('readouts');
     drawOutput();
 }
 
@@ -624,8 +653,16 @@ function setSoftCues(on) {
 }
 
 function drawOutput() {
-    el('btn-output').classList.toggle('on', output.isOn());
+    // **`isWanted`, not `isOn`.** The button is the *mode* — did somebody choose
+    // to watch the output — and playback engaging the same render for its own
+    // reasons must not light it up, or pressing play would appear to have
+    // switched a mode nobody asked for and pausing would appear to switch it
+    // back.
+    el('btn-output').classList.toggle('on', output.isWanted());
     const note = el('out-note');
+    // The complaint, though, is about whatever is on the canvas whoever put it
+    // there: a render that will not build is worth saying so about while
+    // playback is the one that asked for it.
     const why = output.isOn() ? output.why() : '';
     note.textContent = why;
     note.classList.toggle('hidden', !why);
@@ -1713,6 +1750,9 @@ function frame(now) {
     // re-pointing it opens every input the render reads. Here rather than on the
     // change channel for exactly that reason — see ui/output.js.
     output.chase();
+    // Which picture is on the canvas. After `chase()`, because that is what
+    // builds a render, and the answer is "is there one" — see the note there.
+    syncOutputPicture();
     // Which cues are on screen now. Every frame and from here rather than from
     // the change channel, because what it draws is a function of the playhead
     // and the playhead moves without anything changing — and it writes to the

@@ -176,6 +176,29 @@ not priced in the project's size (7 ms at 75 inputs, because the list is one row
 each and the detail column is the selected input only), so it is drawn directly
 and a dropped file's card does not arrive a frame late.
 
+**Playback runs on the render rather than on the clips**, and that is the other
+half of the same measurement. Compositing with an element per clip means crossing
+from one decoder to the next at every cut, and a crossing is a file opened and
+seeked on the drawing thread — on the same montage, 23 frames over 40 ms in
+fifteen seconds against 10 for the render, and a median frame of 19 ms against
+13. So `play()` asks `ui/output.js` for a render under the name `'play'` and
+`advance()` moves the clock across the frame one appears. Four things about it
+are load-bearing, and three were bugs first. The **press must return** — building
+one opens every input it reads, 1.2 s on that edit — so the clips carry playback
+until it exists rather than the button freezing. It is **kept for `KEEP_MS` after
+playback stops**, because a paused element resumes where it stopped and its range
+still covers that moment, which makes stop-and-go free; it costs ~1 GB, which is
+why it is not kept for ever. **`isShowing()` is not `isOn()` and not `ready()`**:
+a kept render exists and answers `at()` without anybody watching it, and letting
+it answer put a still picture over the clips and dragged every scrub back to
+wherever playback had stopped. A **stale** one is the same trap one layer down —
+a graph cannot seek, so a moved playhead is a new source, and between the two the
+element still holds the old range — which is what `current()` is for. And
+`holders` is a set because `O` and playback are two reasons for one mechanism:
+pausing must not close a preview somebody opened, pressing `O` during playback
+must not close it when playback ends, and turning it off *by hand* must turn it
+off whoever else was holding it.
+
 `tests/ui_load.js` is the suite for all of it, and it asserts the worst *frame*
 rather than a total, because the same total spread over a hundred frames and
 delivered in one are completely different to use.
