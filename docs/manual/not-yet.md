@@ -237,13 +237,30 @@ Honest list of what does not work:
   size the cues are painted at is the one the file says, which is ffmpeg's own
   rule and is right until somebody has a file whose subtitle dimensions are
   wrong.
-- **A still in the viewer without `-loop 1`.** One picture is one picture: bro's
-  `<video>` drives its clock from decoded pictures, so a file with exactly one
-  has nothing to advance through, and the element shows the frame and reports
-  itself ended. Held with `-loop 1` and a `-t` it plays like anything else, which
-  is why that is what a dropped picture becomes — but an input somebody has taken
-  the loop off is refused with a sentence rather than laid out as a clip of
-  nothing. The same is true of `-stream_loop -1`.
+- **A still in the viewer without `-loop 1`.** This entry described a limitation
+  that was not one, and the wording hid a real hole underneath it. Both are now
+  settled and what is left is a decision rather than a gap, so it is written down
+  in [Sources](sources.md) instead of here.
+
+  It said bro's `<video>` could not advance through a single picture and that
+  this was why a de-looped still was refused. The engine's behaviour is real
+  enough — a bare `-i picture.png` reads duration 0, and an element on a resource
+  whose end is its beginning shows the frame and reports itself ended, which is
+  what the HTMLMediaElement contract says such an element does — but it is not
+  what the viewer sees, because a clip's `<video>` is pointed at a *token naming
+  its input* and never at the file. The loop and the `-t` reach playback with
+  everything else on the `-i`. The refusal was never about the engine; it is
+  about ffmpeg's own model, in which a picture has no length and `-loop 1` with a
+  `-t` is the decision that gives it one.
+
+  Underneath that wording the refusal was not firing. It was keyed on the length
+  the input measured, and only a picture opened *bare* measures zero: this
+  application forces `image2` for a still, and `image2` reports one frame at the
+  declared rate — 0.04 s at 25 fps, a full second at `-framerate 1`. So a still
+  whose `-loop` had been cleared from the option column was laid out as a clip of
+  one frame, which is the clip of nothing the sentence claimed to be preventing.
+  It is now keyed on what the input **is**, which is the same correction the
+  device refusal went through one entry above.
 - **`pattern_type=glob` on this build.** Globbing is compiled into libavformat or
   it is not, and this build's is not. The control says so instead of offering a
   pattern type that fails at open.

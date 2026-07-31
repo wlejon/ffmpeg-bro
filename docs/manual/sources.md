@@ -48,8 +48,8 @@ hidden or collected: opening a file to see what is in it is a thing people do.
 
 **And under the column, the act.** `Use on the timeline`, pinned, with the reason
 beside it where it is dead — `A device cannot be cut`, `One picture, no time at all`,
-`Never ends — set Stop at`, `Nothing to play`, `Will not open`, `Still connecting`,
-`Still opening`.
+`Never ends — set Stop at`, `No length to cut`, `Nothing to play`, `Will not open`,
+`Still connecting`, `Still opening`.
 Those mirror `openInput()` exactly, so the button is never alive and then refusing.
 `Re-probe` and
 `Remove` sit at the other end of the same bar; `Remove` says who is holding the input
@@ -383,15 +383,23 @@ it. This one does not: globbing is a compile-time feature of libavformat, report
 "Function not implemented" from `read_header` and from nowhere else, so it is asked by
 trying and the control is shown disabled with the reason rather than failing at open.
 
-**A still is a decision about how long it is.** A single picture is no time at all —
-libavformat says so, and bro's `<video>` agrees, because it drives its clock from
-decoded pictures and one picture is nothing to advance through. So a still is opened
-as `-loop 1` with a `-t`: the loop makes the input go on producing the same picture,
-and the `-t` is the only thing that can say how long it lasts. Both are **Hold for**,
-which is one field because they are one decision, and the command bar prints the pair
-of them in front of the `-i`. Take the loop away and the input has no length; the
-application says so — on the pinned bar, where the act it refuses is — rather than
+**A still is a decision about how long it is.** A single picture is no time at all: a
+picture is a picture, and any number of seconds you can see it for is something
+somebody chose. So a still is opened as `-loop 1` with a `-t`: the loop makes the input
+go on producing the same picture, and the `-t` is the only thing that can say how long
+it lasts. Both are **Hold for**, which is one field because they are one decision, and
+the command bar prints the pair of them in front of the `-i`. Take the loop away and
+the application says so — on the pinned bar, where the act it refuses is — rather than
 putting a clip of nothing on the timeline.
+
+That refusal is keyed on **what the input is**, not on the length it measures, and the
+difference is not academic: it is the same correction the device refusal went through,
+and it was hiding the same kind of hole. Only a picture opened *bare* measures zero,
+through `png_pipe`; `image2` — the demuxer this application forces for a still —
+measures one frame at the declared rate. That is 0.04 s at 25 fps, and a full second at
+`-framerate 1`. A length test therefore let a de-looped still straight through and laid
+it out as a clip forty milliseconds long, which is exactly the clip of nothing it was
+written to prevent.
 
 **Several files as one input.** `Join…` writes a list file and adds it as
 `-f concat -safe 0`. **Three things here are called concat and they are not each

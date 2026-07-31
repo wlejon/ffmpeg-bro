@@ -854,19 +854,35 @@ function openInput(input, opts = {}) {
         return null;
     }
 
-    // Two ways left for an input to have no length, and this is where they are
-    // told apart, because the answer to each is somewhere different. A single
-    // picture *is* no time at all: libavformat says so, and bro's `<video>`
-    // agrees, since it drives its clock from decoded pictures and one picture is
-    // nothing to advance through. An endless input — a `-loop` or a
-    // `-stream_loop` — is the other way round and is fixed on the input's own
-    // window.
+    // **A still is refused on what it is, not on what it measures** — the same
+    // correction the device refusal above went through, and it was hiding the
+    // same kind of hole. A picture has no length of its own; `-loop 1` with a
+    // `-t` is the decision that gives it one, and that is what a dropped
+    // picture becomes (see `stillSpec` in ui/sequence.js). Take the loop away
+    // and the length test was supposed to catch it — but it only did for a
+    // picture opened *bare*, which libavformat reads through `png_pipe` and
+    // reports as 0. This application forces `image2` for a still, and `image2`
+    // measures one frame at the declared rate: 0.04 s at 25 fps, which is
+    // greater than zero. So a still whose loop had been cleared from the option
+    // column laid out as a clip forty milliseconds long — precisely the clip of
+    // nothing this refusal exists to prevent. `blocked()` in ui/sources.js
+    // states the same rule for the button.
+    if (inputsModel.kindOf(input) === 'still' && !inputsModel.endless(input)) {
+        flash(`${input.name} is one picture and no time at all — Sources ▸ Still ` +
+              'holds it for a chosen length');
+        return null;
+    }
+
+    // What is left is an input that genuinely does not say how long it is, and
+    // the two reasons are answered in different places: an endless one — a
+    // `-loop`, a `-stream_loop` — is fixed on the input's own window, and
+    // anything else is a file libavformat could put no duration on at all.
     if (inputsModel.lengthOf(input) <= 0) {
         flash(inputsModel.endless(input)
                   ? `${input.name} never ends — set -to on the Sources stage to say how ` +
                     'long it is'
-                  : `${input.name} is one picture and no time at all — Sources ▸ Still ` +
-                    'holds it for a chosen length');
+                  : `nothing in ${input.name} says how long it is — set -to on the ` +
+                    'Sources stage to say where to stop reading');
         return null;
     }
 

@@ -67,11 +67,13 @@ export function sequenceSpec(seq, opts = {}) {
 /// One `-i` for a single picture, held.
 ///
 /// `-loop 1` and `-t` are one gesture and are written together. Without the
-/// loop the input is one picture and no time at all — libavformat says so and
-/// bro's `<video>` agrees, since it drives its clock from decoded pictures and
-/// one picture is nothing to advance through. Without the `-t` the loop never
-/// ends and nothing knows how long the input is. Either on its own is a clip
-/// that cannot be laid out.
+/// loop the input is one picture and no time at all — any number of seconds you
+/// can see a picture for is a decision somebody took. Without the `-t` the loop
+/// never ends and nothing knows how long the input is. Either on its own is a
+/// clip that cannot be laid out, and `openInput()` refuses one on what the
+/// input *is* rather than on the length it measures: `image2` reports a still
+/// as one frame at the declared rate — 0.04 s at 25 fps, never zero — so a
+/// length test let a de-looped still through as a clip of one frame.
 export function stillSpec(path, opts = {}) {
     return {
         path,

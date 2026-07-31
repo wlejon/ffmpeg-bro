@@ -188,6 +188,30 @@ console.log('\na still is a decision about how long it is');
     ok(A.openInput(bare) === null,
        'and is refused rather than laid out as a clip of nothing');
     A.inputs.removeInput(bare);
+
+    // **And with the demuxer this application actually forces**, which is the
+    // case the refusal was missing. Only a picture opened bare measures zero:
+    // `image2` reports one frame at the declared rate — 0.04 s at 25 fps, a
+    // whole second at `-framerate 1` — so a length test let a de-looped still
+    // straight through and laid it out as a clip of one frame. The refusal is
+    // keyed on what the input *is*, so both of these are refused and the
+    // measured length is not consulted.
+    const delooped = A.inputs.addInput({ path: still, format: 'image2',
+                                         options: { framerate: '25' }, to: 5 });
+    ok(A.inputs.lengthOf(delooped) > 0,
+       `a de-looped still measures more than zero (${A.inputs.lengthOf(delooped)} s), ` +
+       'which is why the length was never the question');
+    ok(!A.inputs.endless(delooped), 'and nothing about it says it goes on');
+    ok(A.openInput(delooped) === null,
+       'it is refused anyway, on being a picture that is not held');
+    A.inputs.removeInput(delooped);
+
+    const slow = A.inputs.addInput({ path: still, format: 'image2',
+                                     options: { framerate: '1' } });
+    ok(Math.abs(A.inputs.lengthOf(slow) - 1) < 0.01,
+       `at -framerate 1 the same picture measures a whole second (${A.inputs.lengthOf(slow)})`);
+    ok(A.openInput(slow) === null, 'and is still refused');
+    A.inputs.removeInput(slow);
 }
 
 // ── a sequence, played ─────────────────────────────────────────────────────

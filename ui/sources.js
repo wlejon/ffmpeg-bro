@@ -1106,9 +1106,17 @@ function blocked(input) {
     // a length, and a length was never the half that was missing. See the note
     // in `openInput()` and `deviceRows()` below.
     if (kindOf(input) === 'device') return 'A device cannot be cut';
+    // A still on the same rule, and for the same reason it was moved: the
+    // length test let one through. `image2` — the demuxer this application
+    // forces for a picture — measures a still as one frame at the declared
+    // rate, 0.04 s at 25 fps, so only a picture opened *bare* through
+    // `png_pipe` measured zero. A still whose `-loop` had been cleared from the
+    // option column was laid out as a forty-millisecond clip. See `openInput()`
+    // in ui/app.js, which is the other end of this.
+    if (kindOf(input) === 'still' && !endless(input)) return 'One picture, no time at all';
     if (lengthOf(input) <= 0)
         return endless(input) ? 'Never ends — set Stop at'
-             : 'One picture, no time at all';
+             : 'No length to cut';
     return '';
 }
 
@@ -1149,7 +1157,7 @@ function footRows(input) {
     ];
 }
 
-/// What to do about it, for the four things `blocked()` can say.
+/// What to do about it, for the things `blocked()` can say.
 function whyAt(input, why) {
     if (why === 'Still connecting')
         return 'The open is running on a thread of its own. It will give up by itself if ' +
@@ -1164,6 +1172,13 @@ function whyAt(input, why) {
     if (why === 'A device has no end')
         return 'A clip is an in-point and a length, and a live input has neither. Record it ' +
                'on the Capture stage, and the recording is a file.';
+    if (why === 'One picture, no time at all')
+        return 'A picture has no length of its own — Still above is where it is given one, ' +
+               'and -loop 1 with a -t is what that writes. Neither half alone is a clip: the ' +
+               'loop with no -t never ends, and a -t with no loop is a window on one frame.';
+    if (why === 'No length to cut')
+        return 'Nothing in this input says how long it is, so there is no window for a clip ' +
+               'to be cut from. Stop at says where to stop reading.';
     return why;
 }
 
