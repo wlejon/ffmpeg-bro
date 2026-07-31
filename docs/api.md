@@ -284,11 +284,11 @@ bro.ffmpeg.data.reads.forget(id)   // abort it and throw the answer away
 //   sound  a run above an adaptive noise floor. bro's own snapshot calls that
 //          flag `voice`; it is **not** called that here, because an energy gate
 //          decided nothing about a voice.
-bro.ffmpeg.marks.available()   // → true, unless built -DBRO_WITH_SOUNDML=OFF
-// A fact about how the binary was configured, so it is a constant. Ask it before
-// offering a control: `reads.start` in such a build **throws with the flag
-// named** rather than answering with an empty list, because an empty list is
-// what a silent file gives back and a missing feature is not a measurement.
+// **There is no `available()`.** There was, and it answered whether the binary
+// had been configured `-DBRO_WITH_SOUNDML=OFF`. That configuration is now
+// refused at configure time, so the answer was the constant `true` — a call
+// every consumer had to make and none could learn anything from. The sensors are
+// linked into this binary; nothing has to ask.
 
 bro.ffmpeg.marks.reads.start(path | input, {
     onsetRatio, onsetAbs,                          // bro's own key names …

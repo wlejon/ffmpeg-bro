@@ -33,9 +33,7 @@
 // different facts.
 //
 // Everything is skipped rather than failed when its fixture is absent, which is
-// the property every suite here has, and the whole thing is skipped with a
-// sentence in a build configured `-DBRO_WITH_SOUNDML=OFF` — where what is
-// asserted instead is that the call *refuses by name*.
+// the property every suite here has.
 //
 // Usage: ffmpeg-bro-markstest <marks.m4a> [<silent.mp4>] [<sound.m4a>]
 
@@ -123,25 +121,6 @@ int main(int argc, char** argv) {
     const std::string fixture = argv[1];
     const std::string silent = argc >= 3 ? argv[2] : std::string();
     const std::string tone = argc >= 4 ? argv[3] : std::string();
-
-    section("is there anything to look with");
-    std::printf("  brosoundml is %s in this build\n",
-                soundMarksAvailable() ? "linked" : "NOT linked");
-
-    if (!soundMarksAvailable()) {
-        // The supported configuration nobody uses by default. What is required
-        // of it is that it *says so*: an empty list would be indistinguishable
-        // from a file in which nothing happens, and the whole point of the
-        // refusal is that those are different answers.
-        section("a build without the sensors refuses by name");
-        const SoundMarks m = readSoundMarks(inputFor(fixture), {});
-        check(!m.ok, "it does not answer with a result");
-        check(m.marks.empty(), "and it does not answer with marks");
-        checkf(m.error.find("BRO_WITH_SOUNDML") != std::string::npos,
-               "and the refusal names the flag: \"%s\"", m.error.c_str());
-        std::printf("\n%d checks, %d failed\n", checks, failures);
-        return failures == 0 ? 0 : 1;
-    }
 
     if (!have(fixture)) {
         std::printf("  %s is not there — skipping everything about a soundtrack\n",

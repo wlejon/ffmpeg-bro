@@ -1410,11 +1410,11 @@ function dataRows(input, stream) {
 /// screen where a stream is described, a soundtrack is a stream, and the control
 /// that reads one belongs beside the line that says what it is.
 ///
-/// **Only where it will work.** `marks.worthReading` asks two things — whether
-/// this build has brosoundml in it at all, and whether the input has a
-/// soundtrack — so a build configured `-DBRO_WITH_SOUNDML=OFF` draws no control
-/// rather than one that throws at the press. Same rule as the parser list one
-/// function up.
+/// **Only where it will work.** `marks.worthReading` is the question — does this
+/// input carry a soundtrack — so a file with no audio stream gets no control
+/// rather than one that fails at the press. Same rule as the parser list one
+/// function up. It is asked of the marks model rather than of the input, because
+/// what counts as worth reading is that module's to decide.
 ///
 /// **The words on it are the whole of what stops this being a lie.** Nothing
 /// here says "birds", "speech" or "events": the button says what it does, and

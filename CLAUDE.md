@@ -16,7 +16,10 @@ which is what makes `bro.sense` a working namespace here rather than the
 chain pulls `BRO_WITH_LM` and `BRO_WITH_TENSOR` in behind it, so this is four
 features and 684 more source files — and 27 s of build and 2.7 MB of binary,
 because the linker takes what is referenced. The reasoning, the alternatives and
-the measurements are in the block itself. Two things about that namespace are
+the measurements are in the block itself. **`-DBRO_WITH_SOUNDML=OFF` is a
+`FATAL_ERROR`**: bro declares the flag with `option()`, so a command-line
+setting beats the cache entry this file writes, and without the refusal that is
+a silently different build. Two things about that namespace are
 easy to get wrong and are written down here because nothing else states them:
 **the real binding does not set `available`** — only the stub does, so the
 feature test is `bro.sense.available !== false` and never `typeof
@@ -321,10 +324,15 @@ thread". So `readSoundMarks` takes a lock and re-arms the deadline once it has
 it, because a read that queued behind another must not be failed for somebody
 else's file.
 
-**`-DBRO_WITH_SOUNDML=OFF` is a refusal that names itself**, not an empty result:
-the link and the `#if` are conditional, the call throws with the flag and the fix
-in it, and `bro.ffmpeg.marks.available()` is what stops the UI offering a control
-that would fail. An empty list is what a *silent file* gives back.
+**brosoundml is required, and that replaced a branch nothing ever ran.**
+`-DBRO_WITH_SOUNDML=OFF` was once a supported configuration — a conditional
+link, an `#if` compiling `sound_marks.cpp` to a refusal, a runtime throw in the
+binding, `bro.ffmpeg.marks.available()` answering false, and a second path in two
+suites — and it was never configured, built or run. Now the configure refuses it
+with a sentence, the link and the sources are unconditional, and there is no
+`available()` on `bro.ffmpeg.marks` because its answer could not vary. What is
+left is the distinction that was always the point: a *silent file* gives back an
+empty list, and a file with no soundtrack at all is refused by name.
 
 Marks are derived, so they are not in the document, not in `ui/.storage.json` and
 not on the undo track — `peaks`'s rule. They reach the timeline per clip through

@@ -72,8 +72,13 @@ working `bro.sense` — the acoustic sensors behind `Find sounds` on Sources,
 which mark a soundtrack where something happens in it.
 bro's own preflight only checks three of its
 submodules, so an unrecursed clone fails by naming a missing `CMakeLists.txt`
-rather than a missing submodule; `-DBRO_WITH_SOUNDML=OFF` is the way out if you
-would rather not have them.
+rather than a missing submodule.
+
+There is no way out of them: `-DBRO_WITH_SOUNDML=OFF` stops the configure with a
+sentence saying so. `Find sounds` is an ordinary part of this application rather
+than an extra, and a build without it would be one whose difference from every
+other build shows up nowhere until somebody presses something. Fix the clone
+rather than the flag.
 
 `x264`/`x265` are encoders, needed for export; playback works with the plain
 `ffmpeg` port too. Two binaries are built: `ffmpeg-bro` (the application) and

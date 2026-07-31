@@ -240,8 +240,10 @@ document comes to disagree with the file it describes. They are not on the undo
 stack either — undo answers "does this change the clips", and a detected onset
 does not.
 
-In a build configured `-DBRO_WITH_SOUNDML=OFF` there is no control at all, rather
-than one that fails at the press.
+The control is drawn under a soundtrack and nowhere else — a file with no audio
+stream is offered nothing, rather than a button that fails at the press. There is
+no build of this application without the sensors in it: `-DBRO_WITH_SOUNDML=OFF`
+stops the configure and says so.
 
 ## While it is connecting
 

@@ -242,17 +242,6 @@ struct SoundMarks {
     std::vector<SoundMark> marks;
 };
 
-/// Whether this build can do any of it.
-///
-/// False when `BRO_WITH_SOUNDML` is off, which is a supported configuration:
-/// somebody may pass `-DBRO_WITH_SOUNDML=OFF` and get a binary with no
-/// brosoundml in it. Then `readSoundMarks` **refuses by name** rather than
-/// answering with an empty list — an empty list is indistinguishable from a
-/// silent file, and "the feature is not compiled in" is not a measurement. The
-/// same distinction the rest of this surface draws: an unknown option is an
-/// error, not a shrug.
-bool soundMarksAvailable();
-
 /// Decode one input's best audio stream to mono 16 kHz and read the sensors
 /// over it.
 ///

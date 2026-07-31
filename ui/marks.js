@@ -94,31 +94,24 @@ export const MARK_WORDS = {
     sound: 'a run louder than the noise floor around it',
 };
 
-/// Whether this build can look at all.
-///
-/// Cached because it cannot change while the process runs — it is a fact about
-/// how the binary was configured, the same kind of answer as `bro.ffmpeg.muxers`
-/// — and because the Sources stage asks it once per card per redraw. A build
-/// with `-DBRO_WITH_SOUNDML=OFF` answers false and the control is not drawn,
-/// which is `data.parsers()`'s rule: offer an affordance where it will work.
-let canLook = null;
-export function available() {
-    if (canLook === null) {
-        try { canLook = !!bro.ffmpeg.marks.available(); } catch (e) { canLook = false; }
-    }
-    return canLook;
-}
-
 /// Is there anything here to listen to?
 ///
-/// Two questions, because the control has to be absent for either answer: can
-/// this build look at all, and does this input carry a soundtrack. The second is
-/// `hasSound` in ui/inputs.js — the one-word form of `streamKinds`, which exists
-/// precisely so that `indexOf('a') >= 0` is not written out at each of the
-/// places that ask. An input with no probe yet answers false, which keeps a card
-/// that is still opening from offering a button.
+/// One question — does this input carry a soundtrack — and it used to be two.
+/// The other was `bro.ffmpeg.marks.available()`, whether the binary had
+/// brosoundml in it at all, and there is no longer a build of this application
+/// without it: `-DBRO_WITH_SOUNDML=OFF` is refused at configure time, so the
+/// call answered a constant and both it and this module's cache of it are gone.
+///
+/// It stays a function *here* rather than `hasSound` at the call site because
+/// what it answers is this module's policy — whether offering a read is worth
+/// it — and ui/sources.js should not be the place that knows what the marks
+/// model will accept. `hasSound` is ui/inputs.js's one-word form of
+/// `streamKinds`, which exists precisely so that `indexOf('a') >= 0` is not
+/// written out at each of the places that ask. An input with no probe yet
+/// answers false, which keeps a card that is still opening from offering a
+/// button.
 export function worthReading(input) {
-    return available() && hasSound(input);
+    return hasSound(input);
 }
 
 /// The read for one input, whatever state it is in, or null.

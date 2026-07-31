@@ -7,12 +7,18 @@
 // exactly once" means the same thing in both, and a UI that has written the poll
 // for one has written it for the other.
 //
-// **`available()` is the affordance's whole basis**, exactly as `data.parsers()`
-// is: a control that would fail is a control that should not be offered, so the
-// UI asks first. It answers `false` only in a build configured with
-// `-DBRO_WITH_SOUNDML=OFF`; `reads.start` in such a build **throws** with the
-// flag named rather than answering with an empty list, because an empty list is
-// what a silent file gives back and a missing feature is not a measurement.
+// **There is no `available()` here, and there was.** It answered one question —
+// was this binary configured with `-DBRO_WITH_SOUNDML=OFF` — and that
+// configuration is now refused at configure time (see CMakeLists.txt), so the
+// answer was the constant `true`. A call whose answer cannot vary is a call
+// every consumer has to make and none can learn anything from, and a UI that
+// asked it was written as though the control might not be drawable. The sensors
+// are linked into this binary unconditionally; nothing has to ask.
+//
+// What survives is the distinction that was always the point, and it is a fact
+// about the *file* rather than about the build: a soundtrack in which nothing
+// happens answers with an empty list, and an input with no soundtrack at all is
+// refused by name on the read. Those must not be the same answer.
 //
 // **This is not ffmpeg.** Every other file in this family is a part of ffmpeg's
 // own model — probe, data, render, capture, capabilities, playback, sequences,
@@ -181,23 +187,11 @@ bool readArgs(JSContext* ctx, int argc, JSValueConst* argv, MediaInput* in,
 // to keep; and `timeout`, which is not a demuxer option and never reaches libav
 // — it is the deadline on the interrupt callback, the one mechanism that covers
 // every protocol.
-//
-// **Throws in a build without brosoundml**, naming the flag. See the top.
 JSValue js_marksStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     MediaInput in;
     SoundMarkOptions opts;
     double timeout = 0;
     if (!readArgs(ctx, argc, argv, &in, &opts, &timeout)) return JS_EXCEPTION;
-    if (!soundMarksAvailable()) {
-        // The one call on this surface that can be missing altogether, so it is
-        // the one that has to say so out loud rather than starting a read that
-        // will answer "failed" a frame later with the same sentence buried in a
-        // poll. A caller that asked `available()` first never sees this.
-        return JS_ThrowInternalError(
-            ctx, "marks.reads.start: this build has no acoustic sensors in it "
-                 "(brosoundml was left out by -DBRO_WITH_SOUNDML=OFF). Ask "
-                 "bro.ffmpeg.marks.available() before offering this.");
-    }
     return JS_NewInt64(ctx, int64_t(startMarksRead(in, opts, timeout)));
 }
 
@@ -244,15 +238,6 @@ JSValue js_marksPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
 
 void installMarks(Table& ns) {
     Table marks(ns, "marks");
-
-    /// Whether this build can look at all.
-    ///
-    /// Not a probe of anything and not cached anywhere: it is a fact about how
-    /// this binary was configured, so it is a constant. The UI asks it before
-    /// drawing the control, exactly as it asks `data.parsers()` before drawing
-    /// the other one — offering an affordance where it will work is the same
-    /// rule in both places.
-    marks.function("available", [](JSContext*) { return soundMarksAvailable(); });
 
     Table reads(marks, "reads");
     reads.function("start", js_marksStart, 2);

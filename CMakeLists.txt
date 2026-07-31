@@ -50,21 +50,19 @@ if(NOT EXISTS "${BRO_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "bro not found at ${BRO_DIR}. Clone it beside this repo or pass -DBRO_DIR=<path>.")
 endif()
 
-# ── bro's acoustic sensors ────────────────────────────────────────────────
+# ── bro's acoustic sensors, which this application requires ───────────────
 #
 # `bro.sense` is bro's model-free acoustic sensor bus — level, voice,
 # spectral-flux onset and autocorrelation tonality, one reading per 10 ms frame
-# over a shared PCEN mel front-end — and `bro.sense.analyze()` is the one call
-# in it that runs offline over a buffer rather than off a live microphone, which
-# is what a soundtrack needs. Nothing in `ui/` reads it yet; this turns it on so
-# that something can. bro installs that namespace as *unavailable*
+# over a shared PCEN mel front-end. `src/native/sound_marks.cpp` drives the same
+# `brosoundml::SensorHub` over a decoded soundtrack, which is what `Find sounds`
+# on the Sources stage *is*. bro installs that namespace as *unavailable*
 # (`src/js/feature_stubs.cpp`) unless `BRO_WITH_SOUNDML` is on, and it is off in
 # bro's default `app` profile, so a plain `cmake -B build` used to produce a
 # binary in which the call threw "built without BRO_WITH_SOUNDML".
 #
 # **The cache entry has to exist before `add_subdirectory`.** bro declares the
-# flag with `option()`, which leaves an existing cache entry alone — which is
-# also exactly why `-DBRO_WITH_SOUNDML=OFF` on the command line still wins.
+# flag with `option()`, which leaves an existing cache entry alone.
 #
 # **One flag rather than `-DBRO_PROFILE=full`.** bro's `_bro_require` chain
 # forces `BRO_WITH_LM` (brolm) and `BRO_WITH_TENSOR` (brotensor) on from this
@@ -93,6 +91,41 @@ endif()
 # where it shows and none of that is shipped: 163 MB -> 196 MB of `.lib`,
 # 677 MB -> 752 MB in all.
 set(BRO_WITH_SOUNDML ON CACHE BOOL "brosoundml — the sensors behind bro.sense")
+
+# ── and OFF is not a configuration this application has ───────────────────
+#
+# `option()` leaving an existing cache entry alone is exactly why the line above
+# is not the last word: `-DBRO_WITH_SOUNDML=OFF` on the command line writes the
+# cache entry before this file is read, so `set(... CACHE ...)` stands aside and
+# the flag really is off. Without this refusal that is a *build* — one whose
+# `Find sounds` is gone and whose difference from every other build of this
+# application shows up nowhere until somebody presses something.
+#
+# It used to be a supported configuration, described in six places: a conditional
+# link, an `#if` compiling `sound_marks.cpp` to a refusal, a runtime throw in the
+# binding, `bro.ffmpeg.marks.available()` answering false so Sources drew no
+# control, a second path in two test suites, and paragraphs in README.md,
+# CLAUDE.md, docs/api.md and two parts of the manual. It was never once
+# configured, built or run — only checked by compiling two translation units with
+# the macro forced off — so what all of that documented was a claim with nothing
+# behind it. Requiring the flag deletes an untested branch and replaces a
+# half-behaviour scattered over six files with one sentence at the one moment
+# somebody can act on it.
+#
+# The cost it buys out of is real and small: 27 s of build and 2.7 MB of binary,
+# measured below. Nobody sensibly declines that for an ordinary part of the
+# application, which is what `Find sounds` now is.
+if(NOT BRO_WITH_SOUNDML)
+    message(FATAL_ERROR
+        "BRO_WITH_SOUNDML is OFF, and this application does not build without it.\n"
+        "brosoundml is bro's acoustic sensor bus, and src/native/sound_marks.cpp "
+        "drives it directly — it is what `Find sounds` on the Sources stage is, "
+        "and it is an ordinary part of this application rather than an optional "
+        "extra. It costs 27 s of build and 2.7 MB of binary, downloads nothing "
+        "and adds no vcpkg port.\n"
+        "Remove -DBRO_WITH_SOUNDML=OFF, or clear it from the cache with "
+        "-DBRO_WITH_SOUNDML=ON.")
+endif()
 
 # bro builds as static libraries; BRO_BUILD_EXECUTABLES defaults OFF when bro
 # is not the top-level project, so this does NOT produce a second bro.exe.
@@ -176,28 +209,26 @@ target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 # front-end is composed of its ops. So this adds no source, no download and no
 # port — only a link line and a name on the include path.
 #
-# **`-DBRO_WITH_SOUNDML=OFF` is a supported configuration and stays one.** The
-# link and the compile definition are both conditional, sound_marks.cpp compiles
-# to a refusal that names the flag, and `bro.ffmpeg.marks.available()` answers
-# false so the UI does not offer a control that would fail. PUBLIC on both counts
-# because ffmpeg-bro-core is a static library: its consumers need brosoundml's
-# archive at link time, and the tests need the macro to know which of the two
-# behaviours to assert.
-if(BRO_WITH_SOUNDML)
-    if(NOT TARGET brosoundml::brosoundml)
-        message(FATAL_ERROR
-            "BRO_WITH_SOUNDML is ON but no brosoundml target was created. bro "
-            "resolves ../brosoundml against ${CMAKE_CURRENT_SOURCE_DIR} and "
-            "falls back to its own submodule, so a `git clone` of bro without "
-            "--recursive and no sibling checkout has neither.")
-    endif()
-    target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
-    # bro's own flag name rather than a second one for the same fact. bro
-    # declares it with `option()`, which makes it a cache variable and not a
-    # compile definition — bro's own `src/js` does exactly this for the same
-    # reason, and `#if BRO_WITH_SOUNDML` in sound_marks.cpp reads it.
-    target_compile_definitions(ffmpeg-bro-core PUBLIC BRO_WITH_SOUNDML=1)
+# **Unconditional, because the flag is refused above rather than branched on.**
+# There is no build of this library without brosoundml in it, so there is no `if`
+# here and no compile definition either: nothing in `src/native/` asks whether
+# the sensors are there, which is the whole gain of requiring them. (bro's own
+# sources do read `BRO_WITH_SOUNDML` as a macro, and bro's CMake defines it for
+# bro's own targets; defining it again here would only claim that something in
+# this repository reads it.) PUBLIC because ffmpeg-bro-core is a static library
+# and its consumers need brosoundml's archive at link time.
+#
+# The `--recursive` check stays, and it is the one that fires in practice: bro
+# resolves the target from a checkout beside *this* repo or from its own
+# submodule, and a clone with neither leaves the flag ON and the target absent.
+if(NOT TARGET brosoundml::brosoundml)
+    message(FATAL_ERROR
+        "BRO_WITH_SOUNDML is ON but no brosoundml target was created. bro "
+        "resolves ../brosoundml against ${CMAKE_CURRENT_SOURCE_DIR} and "
+        "falls back to its own submodule, so a `git clone` of bro without "
+        "--recursive and no sibling checkout has neither.")
 endif()
+target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
 
 add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
 target_link_libraries(ffmpeg-bro PRIVATE ffmpeg-bro-core bro_engine)
@@ -291,8 +322,7 @@ target_include_directories(ffmpeg-bro-datatest
 # A soundtrack, read for where things happen in it: does the sensor bus find a
 # moment, and is it *the* moment. Almost every assertion is a number of seconds
 # against the fixture that was written with events at known ones — plus the one
-# physical measurement in the feature, the dominant frequency of a tonal run,
-# and the refusal a build with no brosoundml in it gives instead.
+# physical measurement in the feature, the dominant frequency of a tonal run.
 add_executable(ffmpeg-bro-markstest tests/marks_test.cpp)
 target_link_libraries(ffmpeg-bro-markstest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-markstest

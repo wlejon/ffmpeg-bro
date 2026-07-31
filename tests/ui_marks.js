@@ -6,9 +6,10 @@
 //
 //   - **the affordance is offered exactly where it works.** A `Find sounds`
 //     button appears under an audio stream and under no other kind, and not at
-//     all in a build with no brosoundml in it — `bro.ffmpeg.marks.available()`
-//     is asked of the binary rather than assumed, which is `data.parsers()`'s
-//     rule.
+//     all under a file with no soundtrack — which is `data.parsers()`'s rule:
+//     offer an affordance where it will work rather than everywhere with a
+//     refusal behind it. There is no build question left to ask; brosoundml is
+//     required at configure time.
 //   - **the read is off the UI thread.** It is started, polled from the frame
 //     loop and answered, and the application keeps drawing while it is in
 //     flight — checked by drawing during it rather than by trusting the word
@@ -75,29 +76,6 @@ const type = (node, value) => {
 
 waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
 const A = globalThis.__ffmpegBro;
-
-// ── can this build look at all ─────────────────────────────────────────────
-
-console.log('\nwhether this build carries the sensors');
-{
-    const there = A.marks.available();
-    console.log(`  bro.ffmpeg.marks.available() = ${there}`);
-    ok(typeof there === 'boolean', 'the question has a yes/no answer');
-    if (!there) {
-        // A supported configuration: `-DBRO_WITH_SOUNDML=OFF`. What is required
-        // of it is that the control is absent rather than present and failing,
-        // and that the call says why rather than answering with an empty list.
-        let threw = '';
-        try { bro.ffmpeg.marks.reads.start(media); } catch (e) { threw = String(e.message || e); }
-        ok(threw.indexOf('BRO_WITH_SOUNDML') >= 0,
-           `and starting a read refuses by name: "${threw}"`);
-        console.log('\n  -- skipped: this build has no acoustic sensors. Everything ' +
-                    'below is about reading a soundtrack with them.');
-        console.log(`\n${checks} checks passed`);
-    }
-}
-
-if (A.marks.available()) {
 
 // ── the words, which are the whole of the honesty ──────────────────────────
 
@@ -419,5 +397,4 @@ if (noSound) {
 }
 
 console.log(`\n${checks} checks passed`);
-}
 }

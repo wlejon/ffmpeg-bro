@@ -7,10 +7,8 @@
 #include "async_open.h"
 #include "export_source.h"
 
-#if BRO_WITH_SOUNDML
 #include <brosoundml/sensor_hub.h>
 #include <brotensor/runtime.h>
-#endif
 
 #include <algorithm>
 #include <exception>
@@ -26,41 +24,6 @@ SoundMarks fail(const std::string& why) {
     m.error = why;
     return m;
 }
-
-} // namespace
-
-#if !BRO_WITH_SOUNDML
-
-// ── the refusal ───────────────────────────────────────────────────────────
-//
-// A whole second implementation rather than an `if` inside the first, because
-// what is missing is a *header*: `brosoundml/sensor_hub.h` is not on the include
-// path at all in this configuration, so nothing below the `#if` can be compiled
-// and there is no shared body to guard a branch inside.
-//
-// It refuses rather than answering with an empty list, which is decision three
-// of this feature and is the same rule as everywhere else on this surface: an
-// empty list is what a silent file gives back, and "nothing was found" and "this
-// build cannot look" must not be the same answer. The sentence names the flag
-// and how to get it back, because the person reading it configured this build
-// themselves: `CMakeLists.txt` turns `BRO_WITH_SOUNDML` on and `option()` leaves
-// an existing cache entry alone, so the only way to be here is to have passed
-// `-DBRO_WITH_SOUNDML=OFF` on purpose.
-
-bool soundMarksAvailable() { return false; }
-
-SoundMarks readSoundMarks(const MediaInput&, const SoundMarkOptions&, OpenWatch*,
-                          double) {
-    return fail("this build has no acoustic sensors in it: brosoundml was left "
-                "out by -DBRO_WITH_SOUNDML=OFF. Reconfigure with "
-                "-DBRO_WITH_SOUNDML=ON (the default here) to find sounds.");
-}
-
-#else
-
-bool soundMarksAvailable() { return true; }
-
-namespace {
 
 /// Only one analysis at a time, process-wide.
 ///
@@ -358,8 +321,6 @@ SoundMarks readSoundMarks(const MediaInput& in, const SoundMarkOptions& opts,
     out.ok = true;
     return out;
 }
-
-#endif  // BRO_WITH_SOUNDML
 
 // ── the same read, on a thread ────────────────────────────────────────────
 

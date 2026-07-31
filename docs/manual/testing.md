@@ -384,11 +384,12 @@ they are *distinguishable* — flux 0.055 and 0.077 against 3.4–3.5 for a real
 transient — because filtering them out here would make this and
 `bro.sense.analyze()` disagree about the same file.
 
-A build configured `-DBRO_WITH_SOUNDML=OFF` runs a different suite entirely, in
-both halves: what is asserted there is that the call **refuses and names the
-flag**, and that no control is drawn. An empty list is what a silent file gives
-back, so "found nothing" and "this build cannot look" must not be the same
-answer.
+Both halves of this suite used to carry a second path, for a build configured
+`-DBRO_WITH_SOUNDML=OFF`, and both are gone: that configuration is refused at
+configure time now, so there is one behaviour to assert. It was worth removing
+for a reason worth remembering — the branch was never once configured, built or
+run, only checked by compiling two files with the macro forced off, so the suite
+that asserted it was asserting a claim nothing had ever exercised.
 
 `ui_marks.js` adds the four seams around it — that the control appears under a
 soundtrack and nowhere else, that the read is started and polled while the
