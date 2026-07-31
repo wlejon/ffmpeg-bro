@@ -19,6 +19,50 @@ if(NOT EXISTS "${BRO_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "bro not found at ${BRO_DIR}. Clone it beside this repo or pass -DBRO_DIR=<path>.")
 endif()
 
+# ── bro's acoustic sensors ────────────────────────────────────────────────
+#
+# `bro.sense` is bro's model-free acoustic sensor bus — level, voice,
+# spectral-flux onset and autocorrelation tonality, one reading per 10 ms frame
+# over a shared PCEN mel front-end — and `bro.sense.analyze()` is the one call
+# in it that runs offline over a buffer rather than off a live microphone, which
+# is what a soundtrack needs. Nothing in `ui/` reads it yet; this turns it on so
+# that something can. bro installs that namespace as *unavailable*
+# (`src/js/feature_stubs.cpp`) unless `BRO_WITH_SOUNDML` is on, and it is off in
+# bro's default `app` profile, so a plain `cmake -B build` used to produce a
+# binary in which the call threw "built without BRO_WITH_SOUNDML".
+#
+# **The cache entry has to exist before `add_subdirectory`.** bro declares the
+# flag with `option()`, which leaves an existing cache entry alone — which is
+# also exactly why `-DBRO_WITH_SOUNDML=OFF` on the command line still wins.
+#
+# **One flag rather than `-DBRO_PROFILE=full`.** bro's `_bro_require` chain
+# forces `BRO_WITH_LM` (brolm) and `BRO_WITH_TENSOR` (brotensor) on from this
+# one, and `BRO_WITH_AUDIO` is on in every profile — so this is four features,
+# and they are the four this application has a use for. `full` would add
+# brovisionml and brodiffusion on top, 240 source files nothing here asks
+# anything of.
+#
+# **Nothing is downloaded and no port is added.** brotensor, brolm and
+# brosoundml want nothing from vcpkg beyond what the `app` profile already
+# installs, and all three are MIT like bro: what makes this binary GPL is still
+# libav* and nothing else. Where bro finds them is worth knowing, because it is
+# not where it reads: it resolves `../<name>` against `CMAKE_SOURCE_DIR`, which
+# is *this* project rather than bro, so a standalone checkout beside **this**
+# repo wins and bro's own git submodule is the fallback. A `git clone` of bro
+# without `--recursive` has neither, and bro's submodule preflight only covers
+# quickjs/SDL/jolt — so that failure names a missing `CMakeLists.txt`.
+#
+# **What it costs is much less than the source count suggests**, and the reason
+# is worth writing down: those 684 files (bro's own count, docs/build-options.md)
+# build into static libraries and the linker takes what is referenced. Nothing
+# here calls a language model, so
+# nothing of brolm past what `bro_js` names is in the binary. From an empty
+# build directory on this machine: configure 62 s -> 62 s (unchanged), build
+# 431 s -> 458 s, `ffmpeg-bro.exe` 26.35 MB -> 29.07 MB. The build tree is
+# where it shows and none of that is shipped: 163 MB -> 196 MB of `.lib`,
+# 677 MB -> 752 MB in all.
+set(BRO_WITH_SOUNDML ON CACHE BOOL "brosoundml — the sensors behind bro.sense")
+
 # bro builds as static libraries; BRO_BUILD_EXECUTABLES defaults OFF when bro
 # is not the top-level project, so this does NOT produce a second bro.exe.
 add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")

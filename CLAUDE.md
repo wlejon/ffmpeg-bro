@@ -6,8 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Requires Visual Studio 2022, vcpkg (`VCPKG_ROOT` set, or pass the toolchain
 yourself), and a checkout of [bro](https://github.com/wlejon/bro) beside this
-repo — or `-DBRO_DIR=<path>`. The vcpkg `ffmpeg[...]` feature list is in
-README.md; `x264`/`x265` are needed for export, not for playback.
+repo — or `-DBRO_DIR=<path>`, **cloned `--recursive`**. The vcpkg `ffmpeg[...]`
+feature list is in README.md; `x264`/`x265` are needed for export, not for
+playback.
+
+`CMakeLists.txt` turns bro's `BRO_WITH_SOUNDML` on before `add_subdirectory`,
+which is what makes `bro.sense` a working namespace here rather than the
+*unavailable* stub bro's default `app` profile installs. bro's `_bro_require`
+chain pulls `BRO_WITH_LM` and `BRO_WITH_TENSOR` in behind it, so this is four
+features and 684 more source files — and 27 s of build and 2.7 MB of binary,
+because the linker takes what is referenced. The reasoning, the alternatives and
+the measurements are in the block itself. Two things about that namespace are
+easy to get wrong and are written down here because nothing else states them:
+**the real binding does not set `available`** — only the stub does, so the
+feature test is `bro.sense.available !== false` and never `typeof
+bro.sense.analyze`, which is a function on the stub too (it is a `Proxy` whose
+every other property is a thrower). And `bro.sense` is **not installed in worker
+realms**: bro's `worker.cpp` builds its context from an explicit list and
+`installSenseBindings` is called only from `Engine::initAppRealm`, exactly as
+`bro.ffmpeg` is only installed by `installHostBindings`.
 
 ```
 cmake -B build

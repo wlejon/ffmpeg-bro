@@ -50,7 +50,7 @@ Requires Visual Studio 2022, [vcpkg](https://vcpkg.io), and a checkout of
 
 ```
 git clone <this repo>
-git clone https://github.com/wlejon/bro
+git clone --recursive https://github.com/wlejon/bro
 
 vcpkg install "ffmpeg[core,gpl,version3,avcodec,avdevice,avfilter,avformat,swresample,swscale,x264,x265,nvcodec,amf,dav1d,aom,vpx,opus,mp3lame,vorbis,theora,webp,openjpeg,zlib,bzip2,lzma,xml2,soxr,speex,snappy,ass,freetype,fontconfig,fribidi,drawtext,openssl,srt,iconv]:x64-windows"
 
@@ -58,6 +58,17 @@ cmake -B build
 cmake --build build --config Release
 ./build/Release/ffmpeg-bro [media-file]
 ```
+
+`--recursive` matters: this build turns bro's `BRO_WITH_SOUNDML` on, which
+reaches brotensor, brolm and brosoundml in bro's tree. They are MIT like bro,
+nothing is downloaded at configure or build time, and they add no vcpkg port —
+they cost 27 s of build and 2.7 MB of binary here, because the linker takes what
+is referenced and nothing here calls a language model. What they buy is a
+working `bro.sense` — the acoustic sensors, which nothing in the UI reads yet.
+bro's own preflight only checks three of its
+submodules, so an unrecursed clone fails by naming a missing `CMakeLists.txt`
+rather than a missing submodule; `-DBRO_WITH_SOUNDML=OFF` is the way out if you
+would rather not have them.
 
 `x264`/`x265` are encoders, needed for export; playback works with the plain
 `ffmpeg` port too. Two binaries are built: `ffmpeg-bro` (the application) and
@@ -135,4 +146,7 @@ x265, …) are GPL, so a build that can actually do the work is GPL; rather than
 restrict itself to an LGPL subset, this application takes the license that
 ffmpeg's full feature set requires. The underlying bro engine is MIT and contains
 no ffmpeg: libav* is linked into this binary alone and reaches the engine only
-through bro's codec-agnostic media interfaces.
+through bro's codec-agnostic media interfaces. So are the three libraries the
+acoustic sensors bring in — brotensor, brolm and brosoundml are MIT, ship no
+model weights, and change nothing here: linking libav* is still the whole of why
+this binary is GPL.
