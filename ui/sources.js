@@ -64,6 +64,9 @@ import { clock, bytes, kbps } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless, opening, stopOpening, tickInputs } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
+// A stream site's page URL is not something libavformat opens; one request turns
+// it into one this build already can. See ui/vod.js.
+import { looksLikePage, resolve as resolveVod } from './vod.js';
 // Which inputs a recording reads. The same question `graphReads()` asks of the
 // overlay, asked of the other thing that reads an `-i` without a clip being cut
 // from it — and it is only answerable at all because a device now lands in this
@@ -107,19 +110,58 @@ export function initSources(nodes, h) {
     hooks = h || {};
 
     if (refs.add && refs.addPath) {
-        const add = () => {
-            const path = refs.addPath.value.trim();
-            if (!path) return;
-            // Typing `shot_%04d.png` means a sequence in exactly the way
-            // dropping the folder does, and a path that is one picture means a
-            // still. Anything else is a file or a URL and nothing is added to
-            // it — see ui/sequence.js.
-            const input = addInput(typedSpec(path));
+        const added = (input) => {
             refs.addPath.value = '';
             chosenId = input.id;
             if (input.error && hooks.flash) hooks.flash(input.error);
             if (hooks.changed) hooks.changed();
             drawSources();
+        };
+        const add = () => {
+            const path = refs.addPath.value.trim();
+            if (!path) return;
+            // **A page from a stream site is opened by resolving it first.**
+            // `https://www.twitch.tv/videos/…` is HTML, and handing it to
+            // libavformat gets "Invalid data found when processing input" —
+            // which is true and useless. One request turns it into an HLS URL
+            // this build can already open, so the application does that rather
+            // than sending somebody away for a downloader. Nothing is fetched
+            // but the playlist: what comes back is a URL and it is opened as
+            // one. See ui/vod.js.
+            if (looksLikePage(path)) return addPage(path);
+            // Typing `shot_%04d.png` means a sequence in exactly the way
+            // dropping the folder does, and a path that is one picture means a
+            // still. Anything else is a file or a URL and nothing is added to
+            // it — see ui/sequence.js.
+            added(addInput(typedSpec(path)));
+        };
+
+        /// Resolve a page and add what it names.
+        ///
+        /// Asynchronous, and the field is left holding what was typed until it
+        /// lands: the request is one round trip but it is a *network* round
+        /// trip, and a field that emptied itself before the answer came back
+        /// would leave somebody looking at an empty stage wondering whether
+        /// they had pressed the button.
+        const addPage = (page) => {
+            if (hooks.flash) hooks.flash('Asking the site about that link…');
+            resolveVod(page).then((vod) => {
+                added(addInput({
+                    path: vod.url,
+                    // The readable half. The URL it is opening is a signed
+                    // playlist that expires; this is what it came from.
+                    name: vod.label,
+                    origin: vod.page,
+                }));
+                if (hooks.flash)
+                    hooks.flash(`${vod.label} — ${vod.renditions.length} renditions, ` +
+                                `opened at ${vod.renditions[0].name}`);
+            }).catch((e) => {
+                // Named rather than swallowed: a VOD that is deleted, private
+                // or subscriber-only is a different answer from a link that was
+                // mistyped, and only the site can tell them apart.
+                if (hooks.flash) hooks.flash(String((e && e.message) || e));
+            });
         };
         refs.add.addEventListener('click', add);
         // Enter in the field is the same act. A path typed and then abandoned

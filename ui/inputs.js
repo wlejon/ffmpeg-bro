@@ -169,7 +169,19 @@ export function addInput(spec) {
         src: '',
         key: '',
     };
-    input.name = basename(input.path) || input.path;
+    // **A name the caller gave, where there is one.** Every input on a path is
+    // named by its basename and that is right; a VOD resolved from a page URL is
+    // the case where it is not, because what `basename` has to work with is
+    // `index-dvr.m3u8?sig=…&token=…` — five hundred characters of signature
+    // naming a stream nobody typed. `ui/vod.js` knows the page it came from and
+    // hands the readable name over with it.
+    input.name = String((spec && spec.name) || '') ||
+                 basename(input.path) || input.path;
+    // Where a resolved input came *from*, when it was resolved rather than
+    // typed. Kept because the signed URL expires and the page does not, so this
+    // is the half worth writing into a document — see the note on `resolve` in
+    // ui/vod.js.
+    input.origin = String((spec && spec.origin) || '');
     inputs.push(input);
     reopen(input);
     return input;
