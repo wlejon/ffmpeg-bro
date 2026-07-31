@@ -540,19 +540,40 @@ Honest list of what does not work:
   is the same event for a blackbird and a fridge. Reviewing an afternoon of
   wildlife footage, that gets you to every candidate and leaves you to listen.
 
-  **Searching for a word is the other half, and it is not merely unimplemented —
-  it is unshippable as things stand.** bro has `bro.kws`, an open-vocabulary
-  phoneme spotter, and it is genuinely the right mechanism: type "kestrel", get
-  the moments somebody said it. But `bro.kws.load({ weights: '….bpm' })` wants a
-  PhonemeNet checkpoint, and that file is in none of these repositories. A
-  control built on it would work on the machine that trained the weights and fail
-  on every other one, which is worse than an absent control: the failure arrives
-  at the press, after the file is open and the wait has been spent. Closing this
-  is therefore not a piece of UI work at all. It needs a checkpoint that ships —
-  either small enough to check in beside the code, or fetched on demand with
-  everything that implies (a download somebody consented to, a place to put it, a
-  hash to check it against, and an answer for a machine that is offline). Until
-  one of those exists there is nothing here to offer.
+  **Searching for a word is the other half, and what stops it is a licence
+  rather than a missing file.** bro has `bro.kws`, an open-vocabulary phoneme
+  spotter, and it is genuinely the right mechanism: type "kestrel", get the
+  moments somebody *said* it — narration and to-camera, not the bird itself,
+  which no phoneme model is looking for.
+
+  The checkpoint exists, and so does a working wiring of it. `english.bpm` is
+  the `BPM1` PhonemeNet posterior model `brosoundml::PhonemeSpotter::load` takes
+  — 1.1 MB, 284K parameters, the class map embedded — and it sits both in
+  `brosoundml/weights/phoneme/` and in the `brosoundml-data` dataset repository.
+  At that size it is well inside "small enough to ship". `broworkshop`'s
+  `demos/listen-lab` drives the whole surface against it — `bro.kws.load`,
+  `templates`, `inspect`, and a `listen` with an `onSpot` — and handles an absent
+  checkpoint the way this repository would want to: a list of candidate paths, a
+  status line naming every one it tried, the controls disabled, and the rest of
+  the application carrying on. So neither the delivery question this entry used
+  to be about nor the shape of the code is the obstacle.
+
+  **The obstacle is what it was trained on.** Its own README puts the corpora at
+  Kokoro-82M (Apache 2.0), LibriSpeech and VCTK (CC BY 4.0) — and ESD, which is
+  distributed for academic and non-commercial research use, and which taints the
+  result: the weights are research-use-only unless ESD's terms are cleared or the
+  model is retrained without that shard. This application is distributed, and
+  GPL-3.0-or-later at that. Wiring a shipped control to weights nobody may ship
+  is not a smaller version of the problem, it is a different and worse one, and
+  it is the kind that stays invisible until somebody else is holding it.
+
+  So closing this needs a decision that is not a coding decision: retrain the
+  checkpoint without ESD, or clear ESD's terms, or keep the feature behind
+  something that says out loud that it is not for commercial work. Worth knowing
+  before anyone spends that: the model reports CAMEO keyword recall at 1% false
+  accept of 39.2% raw and 45.3% with the spotter's competition-normalised
+  confidence. That is a search aid over an afternoon of rushes, not a transcript,
+  and the interface would have to say so.
 
   There is a smaller thing in between that *is* only work: a mark carries the
   measurement that produced it — the flux of a transient, the periodicity and
