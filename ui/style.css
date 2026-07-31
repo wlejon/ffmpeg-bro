@@ -234,6 +234,70 @@ button.st.warn .st-name::after {
     object-fit: fill;
 }
 
+/* The output's soft subtitle tracks, drawn as the cues they are. Over the whole
+   canvas, because that is where a player puts them — which is why this is a
+   child of the stage and has no rectangle of its own to work out. Deliberately
+   plain: what a soft track *looks* like belongs to whatever player opens the
+   file, and an imitation of one player's styling would be a claim nothing here
+   is in a position to make. See ui/softcues.js. */
+#cuelayer {
+    position: absolute;
+    left: 6%;
+    right: 6%;
+    bottom: 6%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    pointer-events: none;
+    z-index: 920;
+}
+/* An id beats a class, so the `display: flex` above would win over `.hidden`
+   without this — the same reason `#dropzone.hidden` is written out. */
+#cuelayer.hidden { display: none; }
+.cueline {
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.62);
+    color: #fff;
+    font-size: var(--fs-sm);
+    text-align: center;
+    white-space: pre-wrap;
+}
+/* A cue that is a picture of characters has no text to show, so what is drawn
+   is that it is there. In the interface's own colour, because this line is this
+   application talking and the ones above it are the file. */
+.cueline.pic {
+    background: rgba(0, 0, 0, 0.45);
+    color: var(--dim);
+}
+/* What the overlay is, and what it is not. At the other end of the canvas from
+   the cues so that it can never be read as one of them — and on a chip of its
+   own rather than as bare text, because this is the sentence that stops the
+   words below being read as an appearance and it has to be legible over
+   whatever picture it lands on. Dim grey on a bright frame is not. */
+#cuenote {
+    position: absolute;
+    left: 6%;
+    right: 6%;
+    top: 6%;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 930;
+}
+#cuenote.hidden { display: none; }
+.cuenote-say {
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.62);
+    color: var(--dim);
+    font-size: var(--fs-xs);
+    text-align: center;
+}
+
 /* Why the preview has no picture. Over the middle of the stage, because what it
    is explaining is the blank rectangle underneath it. */
 #out-note {

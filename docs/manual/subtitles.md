@@ -14,7 +14,9 @@ that quietly does one of the three.
 | **A file on its own** | a render whose only stream is subtitles: extracting one, and converting the format |
 
 Any of the three can read a file you added — and the first can also read cues
-this document *holds*, which is [Cues of your own](#cues-of-your-own).
+this document *holds*, which is [Cues of your own](#cues-of-your-own). The first
+is on the monitor too, as the cues it is and not as a look nobody can promise:
+[A soft track on the monitor](#a-soft-track-on-the-monitor-as-the-cues-it-is).
 
 The second of those is libass drawing characters, so it is for text tracks. A
 track of *pictures* — `dvdsub`, `hdmv_pgs_subtitle` — is drawn the other way, by
@@ -338,27 +340,52 @@ track is, and it is also what converting one is: `.srt` in, `.vtt` out, with
 converts between — SubRip, WebVTT and ASS — are all muxers this build links,
 and the picker shows them among the other hundred and eighty.
 
-## What the viewer cannot do
+## A soft track on the monitor, as the cues it is
 
-**A soft subtitle track is invisible in the viewer, and always will be until
-playback grows a path of its own.** bro's `<video>` decodes pictures and sound,
-and a track a player can switch off is neither. The track is in the file and
-plays in any player; what this application can show you is the render, not the
-timeline.
+**`Cues` on the program monitor (`T`) draws the output's soft subtitle tracks
+over the picture — the words, plainly, and never an imitation of how they will
+look.** It is not a decode path in the engine and it is not the burn-in filter:
+it is this application reading the cues it is about to write and putting them on
+the screen at the moment they are on screen.
 
-That is said on the Write stage, out loud, with the reason. Somebody who adds a
-subtitle row, looks at the viewer, sees nothing and concludes the track was not
-written is the failure this is against — and a fake overlay would be worse,
-because it would then disagree with the render in every detail of position,
-font and line breaking. Those details belong to the *player*, which is the
-whole point of writing the track soft.
+**What it claims is exactly the cues, and the interface says so while it is on.**
+A soft track is styled by whatever player opens the file. The font, the size, the
+position, the outline and the margin are that player's; an ASS track carries a
+`[V4+ Styles]` block that libass reads and a `mov_text` track in a phone's player
+does not. This application cannot know which player, so a styled preview would be
+a claim nobody is in a position to make. Unstyled text at the bottom of the
+canvas, with a line above it saying that this is what the cues *say* and not how
+they will *look*, is a claim that is true. It is the rule the [sound
+marks](timeline.md#the-marks-lane) shipped under — a label never claims more than
+was measured — applied to a picture instead of a number.
 
-What the viewer does show is a track **burned into a clip**, because that is a
-`subtitles` filter on the clip's own chain and the program monitor runs a clip's
-filters. It is on the same stage as the warning, one sentence along, and it is
-deliberately not offered as a fix: burning cues into the picture and writing
-them beside it are two different files, and the one you meant is not something
-this can infer.
+**It turns off, and that is the feature rather than a convenience.** A soft track
+is precisely the thing a player can switch off, so an overlay that switches off
+is a faithful preview of one and an overlay that cannot is not.
+
+**All three ways a row reads its cues are drawn, and none of the clocks is
+worked out twice.** A row reads the document's own track (`cues:3`), carries a
+file's packets (`copy:0:2`) or converts them (`decode:1:0`). The first is already
+in timeline seconds. For the other two the map is the one in the table under [A
+track beside the picture](#a-track-beside-the-picture) — a conversion's zero is
+the in-point exactly, a copy's is the stamp of the cue it begins on — and the
+output's zero is where the render range begins. Cues outside that range are not
+drawn, for the same reason they are not written.
+
+**A cue that is a picture gets a line saying so, not a picture.** `dvdsub` and
+`hdmv_pgs_subtitle` carry bitmaps of characters; there is nothing in one to draw
+as text, and `cueTimes` still says when it is on screen. Drawing the rects
+themselves is a real piece of work and is in [Not yet](not-yet.md) as one — a
+blank overlay would read as a track that failed, which is the failure the line
+exists against.
+
+**The other thing the viewer shows is a track burned into a clip**, and it is a
+different statement about the finished file. That is a `subtitles` filter on the
+clip's own chain, so the program monitor shows exactly what will be in the
+picture — position, font and line breaking included, because libass is doing all
+three. Neither is offered as a fix for the other: burning cues into the picture
+and writing them beside it are two different files, and the one you meant is not
+something this can infer.
 
 ## A font travelling with the text
 

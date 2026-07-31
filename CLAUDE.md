@@ -155,7 +155,16 @@ file; `attachCueFiles` in `ui/export/spec.js` names it (turning `cues:3` into
 `ui/export.js` writes it at the one moment a render starts. `cueTextOf` answers
 with `raw` and `header` beside `text` for exactly one reason — a fork through the
 words alone would silently flatten somebody's styled subtitles, which is the one
-failure on this path that loses work. `ui/graph/overlay.js`
+failure on this path that loses work. `ui/softcues.js` is the *reader* of all
+three ways a subtitle row reads its cues, drawing them over the program monitor
+(`Cues`, `T`), and the one thing it must never grow is a **style**: a soft track
+is styled by whatever player opens the file, so it draws `text`, says on the
+canvas that this is what the cues say and not how they will look, and switches
+off the way the thing it previews does. It computes no rectangle — the layer is a
+child of `#stage`, which *is* the canvas, so `viewer.placement()` (a *clip's*
+rectangle) is not asked and no second one exists to drift from it. The clocks are
+not restated either: `cueWindow()` says where a file's cues land and the output's
+zero is where the render range begins. `ui/graph/overlay.js`
 has two reads for exactly this reason: `restore()` (localStorage, drops input
 nodes because the inputs are not coming back) and `adopt()` (a document, keeps
 them because they are).

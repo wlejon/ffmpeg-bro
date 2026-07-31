@@ -152,6 +152,15 @@
                     <div class="ch" data-h="s"></div>
                     <div class="ch" data-h="se"></div>
                 </div>
+                <!-- The output's soft subtitle tracks, as the cues they are.
+                     Inside the stage because a soft track goes over the whole
+                     picture the way a player puts it there — so the canvas is
+                     the rectangle and there is none to work out. The note is
+                     what the overlay claims and what it does not: unstyled cue
+                     text, because a soft track is styled by whatever player
+                     opens the file. See ui/softcues.js. -->
+                <div id="cuelayer" class="hidden"></div>
+                <div id="cuenote" class="hidden"></div>
             </div>
             <div id="dropzone">
                 <div class="dz-icon">&#9654;</div>
@@ -249,6 +258,7 @@
                     <button id="btn-split" class="text" title="Split at the playhead (S)">Split</button>
                     <button id="btn-grid" class="text" title="Lay every clip out as a grid (G)">Grid</button>
                     <button id="btn-output" class="text" title="Show the render itself instead of the clips (O)">Output</button>
+                    <button id="btn-cues" class="text" title="Show the output's soft subtitle tracks over the picture as the cues they are, unstyled — a soft track is styled by whatever player opens the file, so this is what the cues say and not how they will look. It turns off, which is what a soft track does (T)">Cues</button>
                     <button id="btn-export" class="text" title="Render the timeline to a file (E)">Export</button>
                 </div>
                 <!-- Something to lay out that is not a file. Every filter

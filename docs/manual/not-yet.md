@@ -161,16 +161,44 @@ Honest list of what does not work:
   to the call that asked for the recording, with the name that was wrong still
   on screen — so making that one asynchronous is a decision about where a
   refusal arrives and not only a thread.
-- **A soft subtitle track in the viewer.** Cues burned into a clip are on the
-  screen now — see [Burning them in](subtitles.md#burning-them-in) — and a track written
-  *beside* the picture still is not: bro's `<video>` decodes pictures and
-  sound, and a stream a player can switch off is neither. Faking one with the
-  same filter would be the wrong answer rather than a partial one, because the
-  two are different statements about the finished file and the whole value of
-  the burn-in control is that it says which you meant. What is left is either
-  a subtitle path through bro's renderer, or an overlay drawn by this
-  application over the program monitor — and the second has the harder half of
-  the problem in it, which is that a soft track is styled by the *player*.
+- **A bitmap cue drawn as the picture it is, over the monitor.** A soft track is
+  on the screen now — `Cues`, or `T`, draws the output's subtitle streams over
+  the picture as the cues they are, see [A soft track on the
+  monitor](subtitles.md#a-soft-track-on-the-monitor-as-the-cues-it-is) — and the
+  words are the whole of what it can draw. `dvdsub` and `hdmv_pgs_subtitle`
+  carry *pictures* of characters, so `cueText` answers `textSub: false` by name
+  and there is nothing to put on the screen as text; what the overlay draws for
+  one is a line saying a picture cue is there, off `cueTimes`, which is true and
+  is not the picture.
+
+  **The rects exist and there is no JS surface for them.** `export_sub2video.h`
+  already decodes a bitmap track and paints its cues into frames — that is
+  ffmpeg's own sub2video, and it is what puts a `dvdsub` track through an
+  `overlay` on the Graph stage today. What is missing is a call that hands one
+  of those rects to the UI as pixels, and a place to composite it: the overlay
+  is DOM over the canvas, and a decoded RGBA rect is not something a `<div>`
+  takes. Neither half is hard and neither is small, and the honest thing in the
+  meantime is a line that says which codec is on screen rather than a blank
+  rectangle that reads as a track that failed.
+
+  What is **not** missing, and was the reason this entry used to name bro: a
+  subtitle path through the engine. bro's `<video>` decodes pictures and sound
+  and a stream a player can switch off is neither — and it does not need to
+  become one, because the cues this application draws are never in the file the
+  element is playing. A `cues:3` track is typed on the timeline's own clock and
+  is materialised into a subtitle file only at the moment a render starts, so
+  there would be nothing there for an engine decoder to decode. Drawing them
+  engine-side would also put the styling claim one level below where the
+  interface can label it, which is the one thing this must not do.
+
+- **Any styling of a soft track at all, and that is permanent.** The overlay
+  draws the words. What a soft track *looks like* — font, size, position,
+  outline, line breaking — belongs to the player that opens the file, and an ASS
+  track's `[V4+ Styles]` block is read by libass and ignored by a phone's
+  built-in player. There is no answer this application could give that would be
+  right for the file rather than for one guess about who opens it, so it gives
+  none and says so on the monitor while the overlay is on. `Burn in` is where a
+  guaranteed appearance lives, because then the cues are the picture.
 - **A graph preview that keeps its sound when it cannot keep up.** The program
   monitor carries the render's soundtrack now — see
   [the output instead of the clips](playback.md#the-output-instead-of-the-clips)

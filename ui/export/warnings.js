@@ -217,13 +217,13 @@ function subtitleWarnings(list) {
                  'will stop the render — burn them into the picture instead, with a ' +
                  'subtitles filter on the Graph stage');
     else
-        out.push('the viewer cannot show a soft subtitle track — bro’s <video> decodes ' +
-                 'pictures and sound, and a track a player can switch off is neither. It ' +
-                 'is in the file; open the result to see it. What the viewer does show is ' +
-                 'a track burned in: Burn in, on the clip’s properties panel, puts a ' +
-                 'subtitles filter on that clip and the picture changes in front of you — ' +
-                 'which is a different statement about the finished file, not a preview ' +
-                 'of this one');
+        out.push('the viewer shows a soft track as the cues it is — Cues on the monitor ' +
+                 '(T) draws them over the picture, unstyled, and turns off the way a soft ' +
+                 'track does. What it cannot show is how they will *look*: a soft track is ' +
+                 'styled by whatever player opens the file, so the words are a preview and ' +
+                 'their appearance is not one. Burn in, on the clip’s properties panel, is ' +
+                 'the other thing and shows exactly what will be there — because then the ' +
+                 'cues are the picture, which is a different statement about the file');
     return out;
 }
 

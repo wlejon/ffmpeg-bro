@@ -17,6 +17,7 @@
 | `S` | split the selection at the playhead |
 | `G` | grid / stacked layout |
 | `O` | the output on the monitor instead of the clips |
+| `T` | the output's [soft subtitle tracks](subtitles.md#a-soft-track-on-the-monitor-as-the-cues-it-is) over the picture, as the cues they are |
 | `E` | the Encode stage (`Esc` goes back to the edit) |
 | `D` | the Capture stage — a device, watched and recorded |
 | `I` | the Sources stage — what is actually in the files |

@@ -17,11 +17,15 @@
 //   - **Out on its own.** A render whose only stream is subtitles, which is
 //     what "extract them" and "convert the format" both are.
 //
-// And one thing that is deliberately *not* here: the viewer never shows a
-// **soft** subtitle track. bro's `<video>` decodes pictures and sound, and a
-// track a player can switch off is neither — so the honest answer is a sentence
-// on the stage, and a way to make the cues part of the picture if that is what
-// was meant.
+// And a fourth thing, which is about the first: the **monitor** draws a soft
+// track as the cues it is. Not through the engine — bro's `<video>` decodes
+// pictures and sound and a stream a player can switch off is neither, and the
+// cues a `cues:3` row holds are never in the file the element is playing anyway
+// — but as an overlay this application draws over the picture from what it is
+// about to write. What it must never claim is an *appearance*: a soft track is
+// styled by whatever player opens the file, so the words are a preview and their
+// look is not one, and the interface says so while the overlay is on. The
+// section at the end drives that.
 //
 // Usage: ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-directory>
 
@@ -359,14 +363,16 @@ pump(60);
 
 // ── the honesty ────────────────────────────────────────────────────────────
 
-console.log('\nwhat cannot be shown');
+console.log('\nwhat can and cannot be shown');
 const warned = A.exporter.currentWarnings().join(' | ');
-ok(warned.indexOf('viewer cannot show') >= 0,
-   'the stage says out loud that the viewer will not show the track');
-ok(warned.indexOf('decodes pictures and sound') >= 0,
-   'and says why, rather than leaving it looking like the track was not written');
+ok(warned.indexOf('shows a soft track as the cues it is') >= 0,
+   'the stage says the viewer does draw the track, so nobody concludes it was not written');
+ok(warned.indexOf('cannot show is how they will') >= 0,
+   'and states the half it cannot claim, which is the appearance');
+ok(warned.indexOf('styled by whatever player opens the file') >= 0,
+   'naming whose decision that is, rather than leaving it as a limitation');
 ok(warned.indexOf('Burn in') >= 0,
-   'and where the viewer *will* show cues, which is a different statement about the file');
+   'and where an appearance *is* guaranteed, which is a different statement about the file');
 
 // The one thing an attachment is for, said where the ASS row was added. A
 // styled track that carries no font looks different on every machine, and an
@@ -1055,6 +1061,173 @@ console.log('\ncues the document holds');
         console.log(`  SKIP  no picture-cues.mkv in ${dir} — the refusal needs one`);
     }
 
+    A.doc.reset();
+    pump(200);
+}
+
+// ── the soft track, on the monitor ─────────────────────────────────────────
+//
+// The overlay is a claim about two things and both are checked here: *which*
+// cues are on screen at a moment, which is arithmetic across two clocks, and
+// *what it says it is*, which is the sentence that stops the words being read as
+// an appearance. `showingAt(t)` is asked directly rather than read off the
+// stage — the drawing is the answer rendered, and rendered text is a poor way to
+// check arithmetic — and the DOM is checked once, for the switch.
+
+console.log('\nthe soft track on the monitor');
+{
+    A.open(media);
+    pump(400);
+    A.openInput(A.inputs.addInput({ path: cues }));
+    pump(300);
+
+    const S = A.exporter.currentSettings();
+    const rangeWas = { in: S.rangeIn, out: S.rangeOut };
+    S.streams = A.exporter.defaultStreams();
+    const fileRow = { id: 9001, kind: 'subtitle', source: 'decode:1:0', codec: '',
+                      language: '', title: '', disposition: '', copyFrom: 0, copyTo: 0,
+                      options: {} };
+    S.streams.push(fileRow);
+
+    // Off is off: nothing is drawn and nothing is even read, which is why the
+    // first call is the one that opens a decoder.
+    ok(!A.softcues.isOn(), 'the overlay starts off');
+    A.setSoftCues(true);
+    pump(60);
+    ok(A.softcues.isOn(), 'and T turns it on');
+
+    // The fixture's cues are "first cue" at 1–2 and a two-line one at 3–5.
+    same(A.softcues.showingAt(0.5).lines.length, 0, 'before the first cue, nothing is drawn');
+    const at1 = A.softcues.showingAt(1.2).lines;
+    same(at1.length, 1, 'inside the first cue, one line');
+    same(at1[0].kind, 'text', 'and it is the words');
+    same(at1[0].text, 'first cue', 'which are the words the cue says');
+    same(A.softcues.showingAt(2.5).lines.length, 0, 'between the cues, nothing again');
+    ok(A.softcues.showingAt(4).lines[0].text.indexOf('\n') > 0,
+       'a two-line cue is two lines, because \\N is a break the author asked for');
+
+    // **The words and not the dialogue line.** `raw` carries the override codes
+    // and drawing them would put `{\i1}` on the screen as characters; drawing
+    // them *interpreted* would be the imitation this whole overlay refuses.
+    ok(A.softcues.showingAt(1.2).lines[0].text.indexOf('{\\') < 0,
+       'no override code reaches the screen as text');
+
+    // ── and it is drawn, and it says what it is ──
+    A.setPlayhead(1.2);
+    pump(120);
+    A.softcues.tick(1.2);
+    const layer = el('cuelayer');
+    ok(!layer.classList.contains('hidden'), 'the layer is on the canvas');
+    ok(layer.textContent.indexOf('first cue') >= 0, 'with the cue in it');
+    ok(el('cuelayer').parentNode === el('stage'),
+       'inside the stage, because the canvas is the rectangle and there is none to work out');
+    const note = el('cuenote');
+    ok(!note.classList.contains('hidden'), 'and the note is up while the overlay is');
+    ok(note.textContent.indexOf('what they say and not how they will look') >= 0,
+       `saying what this is and what it is not (${note.textContent.slice(0, 48)}…)`);
+    ok(note.textContent.indexOf('styled by whatever player') >= 0,
+       'and whose decision the appearance is');
+
+    // **Off, which is the feature.** A soft track is precisely the thing a
+    // player can switch off, so an overlay that switches off is a faithful
+    // preview of one.
+    A.setSoftCues(false);
+    pump(60);
+    ok(layer.classList.contains('hidden'), 'turning it off empties the canvas');
+    ok(note.classList.contains('hidden'), 'and takes the note with it');
+    same(A.softcues.showingAt(1.2).lines.length, 1,
+         'the arithmetic is unchanged by the switch — only the drawing stops');
+    A.setSoftCues(true);
+
+    // ── the render range, and the two rows are on two different clocks ──
+    //
+    // This is the one thing about the overlay that is easy to get wrong, and
+    // getting it wrong looks right: a file's cues are **not** on the timeline.
+    // The stream is an `-i` mapped from the output's zero, so a cue one second
+    // into the file is one second into the *output* — which on the timeline is
+    // the range's start plus one. Only the cut at the far end is the range's,
+    // because the output stops there and the muxer stops with it.
+    S.rangeIn = 1.5;
+    S.rangeOut = 4;
+    same(A.softcues.showingAt(1.7).lines.length, 0,
+         'a file’s cue is not at its file time on the timeline — the stream starts at the ' +
+         'output’s zero, and the output starts where the range does');
+    same(A.softcues.showingAt(3).lines[0].text, 'first cue',
+         'it is at the range’s start plus its own time, which is where the render puts it');
+    same(A.softcues.showingAt(5).lines.length, 0,
+         'and a cue past the end of the output is not in the file, so it is not drawn');
+    S.rangeIn = rangeWas.in;
+    S.rangeOut = rangeWas.out;
+
+    // ── the document's own cues, which are already on this clock ──
+    S.streams = A.exporter.defaultStreams();
+    const mine = A.cues.makeCueTrack({ name: 'Mine' });
+    A.cues.addCue(mine, 1, 3, 'typed here');
+    S.streams.push({ id: 9002, kind: 'subtitle', source: `cues:${mine.id}`, codec: '',
+                     language: '', title: '', disposition: '', copyFrom: 0, copyTo: 0,
+                     options: {} });
+    same(A.softcues.showingAt(2).lines[0].text, 'typed here',
+         'a row reading the document’s own track needs no map: it is already on this clock');
+    same(A.softcues.showingAt(3.5).lines.length, 0, 'and ends where it was typed to end');
+
+    // And *this* is the row the range clamps, because this is the one the render
+    // writes a file for: `cueFileText` drops what is outside it and clamps a cue
+    // straddling the start, which on the timeline's own ruler is the same
+    // statement said as "from the range's start onwards".
+    S.rangeIn = 2;
+    S.rangeOut = 2.5;
+    same(A.softcues.showingAt(1.5).lines.length, 0,
+         'before the range there is no output, so a typed cue is not on the monitor either');
+    same(A.softcues.showingAt(2.2).lines[0].text, 'typed here',
+         'inside it, the part of the cue that will be written is drawn where it will be');
+    same(A.softcues.showingAt(2.7).lines.length, 0, 'and past it, nothing');
+    S.rangeIn = rangeWas.in;
+    S.rangeOut = rangeWas.out;
+
+    // ── nothing at all is a sentence, not a blank ──
+    S.streams = A.exporter.defaultStreams();
+    const empty = A.softcues.showingAt(1);
+    same(empty.lines.length, 0, 'with no subtitle row there is nothing to draw');
+    ok(empty.why.indexOf('no soft subtitle track') >= 0,
+       'and the overlay says so — a blank one reads as a track that failed');
+
+    // ── a cue that is a picture ──
+    const pics2 = `${dir}/picture-cues.mkv`;
+    let hasPics2 = false;
+    try { hasPics2 = !!bro.ffmpeg.probe(pics2); } catch (e) { hasPics2 = false; }
+    if (!hasPics2) {
+        console.log(`  SKIP  no picture-cues.mkv in ${dir} — the bitmap marker needs one`);
+    } else {
+        const shot = A.inputs.addInput({ path: pics2 });
+        pump(250);
+        const at = A.inputs.inputs.indexOf(shot);
+        const bs = shot.probe.streams.find((s) => s.kind === 'subtitle');
+        const times = bro.ffmpeg.cueTimes(pics2).cues;
+        S.streams = A.exporter.defaultStreams();
+        S.streams.push({ id: 9003, kind: 'subtitle', source: `copy:${at}:${bs.index}`,
+                         codec: '', language: '', title: '', disposition: '',
+                         copyFrom: 0, copyTo: 0, options: {} });
+        const mark = A.softcues.showingAt(times[1].start + 0.1).lines;
+        same(mark.length, 1, 'a bitmap cue on screen puts one line up');
+        same(mark[0].kind, 'picture', 'marked as a picture rather than as words');
+        ok(mark[0].text.indexOf('dvd_subtitle') >= 0,
+           `naming the codec libavcodec was asked about (${mark[0].text.slice(0, 40)}…)`);
+        ok(mark[0].text.indexOf('no text to show') >= 0,
+           'and saying why there are no words, rather than drawing none');
+        same(A.softcues.showingAt(times[1].end + 0.2).lines.length, 0,
+             'and it goes when the picture does — the times are read off the packets');
+
+        // **A copy's zero is the cue it begins on**, which is the rule
+        // `cueWindow` states and this must not restate. Asked for a window
+        // opening after the second cue starts, the copy begins on that cue and
+        // it comes out at the output's zero — so it is on screen at 0.
+        S.streams[S.streams.length - 1].copyFrom = times[1].start + 0.2;
+        same(A.softcues.showingAt(0.05).lines.length, 1,
+             'a copy asked to start mid-cue begins on that cue, so it is on screen at zero');
+    }
+
+    A.setSoftCues(false);
+    S.streams = A.exporter.defaultStreams();
     A.doc.reset();
     pump(200);
 }

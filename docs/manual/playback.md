@@ -97,6 +97,22 @@ saved, and a `filter_complex` slower than real time gaps its sound instead.
 A graph libavfilter will not have says so on the stage, in libavfilter's own
 words, rather than showing black.
 
+## The cues, over whichever picture it is
+
+`T`, or **Cues** on the same bar, draws the output's [soft subtitle
+tracks](subtitles.md#a-soft-track-on-the-monitor-as-the-cues-it-is) over the
+picture. It is a separate switch from `O` and not a part of it, because the two
+answer different questions: `O` is *which picture* is on the monitor, and this is
+whether the stream written beside that picture is drawn over it. A soft track is
+a fact about the finished file whether you are watching the clips or the render,
+so it is over both.
+
+What it draws is the cue text, unstyled, with a line saying so while it is on —
+because a soft track is styled by whatever player opens the file, and this
+application cannot know which. And it turns off, which is the point rather than a
+convenience: a soft track is exactly the thing a player can switch off, so an
+overlay that switches off is a faithful preview of one.
+
 ## The meter beside the picture
 
 A1 on the timeline is drawn in decibels with a line where clipping is, so an over

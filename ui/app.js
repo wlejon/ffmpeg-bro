@@ -24,6 +24,7 @@ import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
 import * as output from './output.js';
+import * as softcues from './softcues.js';
 import * as monitor from './monitor.js';
 import * as timeline from './timeline.js';
 import * as levels from './levels.js';
@@ -128,6 +129,12 @@ graphPlayback.initPlayback({
 // The other thing that can be on the program monitor: the render itself, made
 // while you watch it, instead of one element per clip. See ui/output.js.
 output.initOutput({ stage }, { changed: () => drawOutput() });
+
+// And the third thing that can be over it: the output's soft subtitle tracks,
+// drawn as the cues they are. Over the picture whichever picture it is — the
+// clips or the render — because a soft track is a statement about the finished
+// file either way. See ui/softcues.js for what it does and does not claim.
+softcues.initSoftCues({ layer: el('cuelayer'), note: el('cuenote') });
 
 // And how loud what is leaving is, beside the picture. It reads the render's own
 // mix while the preview is on and bro's master bus while it is not, which are two
@@ -486,6 +493,21 @@ function setOutputPreview(on) {
     setPlayhead(transport.t);
     if (transport.playing) { if (on) output.play(true); else play(); }
     drawOutput();
+}
+
+/// The soft tracks over the picture, or not.
+///
+/// A separate switch from `O` and not a part of it, because the two answer
+/// different questions: `O` is *which picture* is on the monitor, and this is
+/// whether the stream written beside that picture is drawn over it. A soft track
+/// is a fact about the finished file whether you are watching the clips or the
+/// render, so it is over both.
+function setSoftCues(on) {
+    if (!softcues.setOn(on)) return;
+    // Immediately rather than on the next frame: this is a press, and a third of
+    // a second of nothing reads as the mode not working.
+    softcues.tick(transport.t);
+    el('btn-cues').classList.toggle('on', softcues.isOn());
 }
 
 function drawOutput() {
@@ -1424,6 +1446,9 @@ document.addEventListener('keydown', (e) => {
         case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
         // `o` for output — the render on the monitor rather than the clips.
         case 'o':          setOutputPreview(!output.isOn()); break;
+        // `t` for the text track. A soft track is the one thing in an output a
+        // player can switch off, so the preview of one switches off too.
+        case 't':          setSoftCues(!softcues.isOn()); break;
         case 'e':          shell.goTo('encode'); break;
         case 'i':          shell.goTo('sources'); break;
         // `d` for device: `c` is the crop handles and `r` is the report.
@@ -1542,6 +1567,11 @@ function frame(now) {
     // re-pointing it opens every input the render reads. Here rather than on the
     // change channel for exactly that reason — see ui/output.js.
     output.chase();
+    // Which cues are on screen now. Every frame and from here rather than from
+    // the change channel, because what it draws is a function of the playhead
+    // and the playhead moves without anything changing — and it writes to the
+    // DOM only when the answer differs from the one already on the screen.
+    softcues.tick(transport.t);
     // How loud what is leaving is. Every frame and from here rather than from a
     // change channel, because a level is what is happening *now* — and it is the
     // one caller of either reading, both of which clear as they are read.
@@ -1642,6 +1672,7 @@ el('btn-split').addEventListener('click', splitAtPlayhead);
 el('btn-grid').addEventListener('click',
     () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
 el('btn-output').addEventListener('click', () => setOutputPreview(!output.isOn()));
+el('btn-cues').addEventListener('click', () => setSoftCues(!softcues.isOn()));
 el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 
 // ── the generator picker ───────────────────────────────────────────────────
@@ -1950,6 +1981,13 @@ globalThis.__ffmpegBro = {
     // relayout, and a test that pressed only half of that would be testing a
     // state the application never reaches.
     output, setOutputPreview,
+    // The output's soft subtitle tracks, over the picture. On the surface whole
+    // because the claim it makes is `showingAt(t)` — which cues are on screen at
+    // a moment, and which of them are pictures nothing can draw — and that is a
+    // pure answer about two clocks. Reading it off the stage would mean reading
+    // rendered text to check arithmetic. `setSoftCues` beside it for
+    // `setOutputPreview`'s reason: the press also redraws the button.
+    softcues, setSoftCues,
     // The meter beside the viewer. On the surface because *which* of the two
     // things it is reading is the whole claim it makes about itself — the render's
     // own mix or bro's master bus — and that cannot be read off the bars.
