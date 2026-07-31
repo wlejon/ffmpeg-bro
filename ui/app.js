@@ -23,6 +23,8 @@ import * as cuesModel from './cues.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
+import { initResidency, tick as tickResidency,
+         pending as decodersPending, resident } from './residency.js';
 import * as output from './output.js';
 import * as softcues from './softcues.js';
 import * as monitor from './monitor.js';
@@ -194,7 +196,7 @@ capture.initCapture({
     // What is set on this stage changes the two things that state it — the
     // spine's card, and the command underneath, which prints the capture as
     // the capture rather than the render.
-    changed: () => { shell.drawSpine(); command.draw(); },
+    changed: () => needs('spine', 'command'),
 });
 
 // What was inserted and locked last time, before anything asks for a graph.
@@ -236,8 +238,7 @@ initGraphView({
     // stopped applying. The picture too — not because it can show a filter, but
     // because it has to say that it cannot.
     changed: () => {
-        shell.drawSpine();
-        command.draw();
+        needs('spine', 'command');
         showProperties();
         viewer.refreshAll();
     },
@@ -308,7 +309,7 @@ exporter.initExport({
     leave: () => shell.goTo('encode'),
     // Anything that changes what will be written changes the two things that
     // state it: the spine's cards and the command underneath them.
-    described: () => { shell.drawSpine(); command.draw(); },
+    described: () => needs('spine', 'command'),
     // The preview starts where you were looking, which is nearly always the
     // part of the render worth checking.
     playhead: () => transport.t,
@@ -330,7 +331,124 @@ exporter.initExport({
 
 let resumeAfterScrub = false;
 
+// ── what has to be redrawn, drawn once a frame ─────────────────────────────
+//
+// Every one of these restates the *whole* edit: the timeline draws a lane per
+// clip, the spine and the command bar each build a render spec out of all of
+// them, and `refreshPlayback` settles a filter chain per clip. Each is therefore
+// priced in the size of the project: at seventy-five clips they are 0.6 s,
+// 0.5 s, 0.8 s and 2.3 s.
+//
+// That is affordable once and ruinous several times, and opening a document did
+// it several times: the overlay a document brings says so on its own channel,
+// the document says so on the model's, the session restores a selection which
+// says so again, and the stage it walks to draws itself on the way in. Measured
+// on a 75-clip montage, that was 8.0 s inside `doc.load()` alone — with no
+// decoders built and no analysis started, so none of it was the files.
+//
+// So a change *marks* what is now out of date and the frame loop draws it, which
+// collapses any number of changes in one turn into one redraw. It is the same
+// move the derived channels make one paragraph down, and it has the same second
+// benefit: an edit on a large project is one redraw per frame rather than one
+// per gesture, which is the difference between a timeline that drags and one
+// that stutters.
+//
+// **`refreshPlayback` is in here and is not only drawing** — it re-points
+// elements at their filtered sources — so putting it off by a frame is a real
+// change and not a cosmetic one. It is the change this file already argued for
+// in the other direction: a drag deliberately skips it entirely, because "a clip
+// whose filters are a frame out of date is a trade nobody notices, and one that
+// stalls under the cursor is a trade everybody does".
+//
+// **The Sources stage is deliberately not in here.** It is the one whole-edit
+// redraw that is not priced in the size of the project: seventy-five inputs draw
+// in 7 ms, because the list is one row each and the detail column is the
+// *selected* input only. Marking it would buy nothing and would make a drop's
+// card arrive a frame after the drop, which is a real thing to be able to
+// assert.
+const dirty = {
+    playback: false, timeline: false, readouts: false, spine: false,
+    command: false, document: false, graph: false,
+};
+
+/// Mark one or more of them out of date.
+function needs(...what) { for (const k of what) dirty[k] = true; }
+
+/// The five that are priced in the size of the edit, and how to draw one.
+///
+/// Playback is first because settling a chain can resize a picture and move the
+/// playhead, and every one below it draws one or the other. The graph is last
+/// because it is the only one that is usually not on the screen at all.
+const HEAVY = [
+    ['playback', () => refreshPlayback()],
+    ['timeline', () => timeline.draw()],
+    ['spine',    () => shell.drawSpine()],
+    ['command',  () => command.draw()],
+    // Only while it is up: everything the layout measures is zero behind a
+    // `display:none`, and it is rebuilt on the way in anyway.
+    ['graph',    () => { if (shell.currentStage() === 'graph') drawGraph(); }],
+];
+let turn = 0;
+
+/// Draw whatever is out of date: the cheap ones always, and **one** of the
+/// expensive ones. Called once a frame, from the frame loop.
+///
+/// Marking instead of drawing collapsed a document's several redraws into one —
+/// and then that one landed in a single frame of 5.6 s, which is the same freeze
+/// one level up and wants the same answer. So the burst is spread: the window
+/// keeps taking input while a large edit finishes drawing itself, and a
+/// seventy-five-clip document arrives over a handful of frames instead of
+/// stopping the world for one.
+///
+/// **Round-robin rather than in priority order**, and that is the load-bearing
+/// part. Straight priority starves: readings landing off the analysis worker
+/// mark the timeline on *every* frame for as long as a large document is being
+/// read, so a command bar below it in a fixed order would go minutes without
+/// being drawn — and a command bar that does not say what will be rendered is
+/// the one failure this application refuses to have. Starting each pass where
+/// the last one stopped means every marked thing is drawn within a turn of the
+/// wheel, whatever else is being marked.
+function drawPending() {
+    // The cheap two, always and in full: a readout is a line of text and the
+    // document's name is two words.
+    if (dirty.readouts) { dirty.readouts = false; syncUI(); }
+    if (dirty.document) { dirty.document = false; drawDocument(); }
+    for (let i = 0; i < HEAVY.length; i++) {
+        const [key, draw] = HEAVY[(turn + i) % HEAVY.length];
+        if (!dirty[key]) continue;
+        dirty[key] = false;
+        turn = (turn + i + 1) % HEAVY.length;
+        draw();
+        return;
+    }
+}
+
 onChange((what) => {
+    // ── the three channels that are not edits ──
+    //
+    // A waveform or a filmstrip arriving off the analysis worker, a telemetry
+    // track parsed on its thread, a run of sound marks measured on another.
+    // Everything below this line is about *an edit having happened* — pruning
+    // what an edit can orphan, marking the file unsaved, restating the render —
+    // and none of it is true of a measurement landing. The rest of this function
+    // already knew that and said so three times over, in the three places it
+    // excluded them one at a time; what it did not do was stop early, so each
+    // one still rebuilt the Sources cards, the spine, the command bar, the
+    // export rows and every element's source.
+    //
+    // That is what froze the window on a large document. Seventy-five clips
+    // answer with a hundred and fifty of these, they arrive in one drain, and at
+    // twenty-two clips the drain was a **single frame of 12.9 s** against a
+    // median frame of 1 ms. The only thing on the screen that draws any of the
+    // three is the timeline, and even that is marked rather than drawn, because
+    // a hundred and fifty redraws of the same lanes in one frame is the same
+    // mistake one level down.
+    if (what === 'analysis' || what === 'telemetry' || what === 'marks') {
+        // ...and the readouts, which count how many clips are still being read.
+        needs('timeline', 'readouts');
+        return;
+    }
+
     // Nodes pinned to a clip that is no longer open. Here rather than in each
     // place a clip can go away — delete, a batch drop that clears the timeline,
     // a project reset — because there are several and the one that is missed is
@@ -390,7 +508,7 @@ onChange((what) => {
     // clips".
     if (what !== 'selection' && what !== 'analysis' && what !== 'document' &&
         what !== 'telemetry' && what !== 'marks')
-        { doc.touch(); history.record(what); drawDocument(); }
+        { doc.touch(); history.record(what); needs('document'); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
         // The selection ring lives on the picture, so a change of selection is
@@ -398,22 +516,20 @@ onChange((what) => {
         if (what === 'selection') viewer.refreshAll();
         else setPlayhead(transport.t);
     }
-    timeline.draw();
-    syncUI();
     // The spine states the whole render and the command states it exactly, so
     // both are downstream of every change to the model — not just the ones
-    // made on the encode side. Here rather than in syncUI() because that runs
-    // from the frame loop, and rebuilding a spec sixty times a second to
-    // discover it has not changed is work for nothing. The Sources stage is
-    // downstream of the same thing: which files are on the timeline.
-    shell.drawSpine();
-    command.draw();
+    // made on the encode side. The Sources stage is downstream of the same
+    // thing: which files are on the timeline. And so is the graph, which is the
+    // same statement as the command bar's drawn as the shape it is.
+    //
+    // All of them are *marked* rather than drawn — see `needs` above. They used
+    // to be drawn here, which is what made one change to a large edit cost a
+    // second and a document's several changes cost eight.
+    needs('timeline', 'readouts', 'spine', 'command', 'graph');
+    // Drawn rather than marked — see `dirty`: it is cheap, and a card that
+    // arrived a frame after the file did would be a worse thing to explain than
+    // the 7 ms it costs.
     drawSources();
-    // And so is the graph, which is the same statement as the command bar's
-    // drawn as the shape it is. Only while it is up: everything the layout
-    // measures is zero behind a `display:none`, and it is rebuilt on the way
-    // in anyway.
-    if (shell.currentStage() === 'graph') drawGraph();
     // And so is what the viewer is playing: a clip's filters are part of the
     // graph, and a clip moved along the timeline changes which moment its
     // filters think they are looking at.
@@ -435,7 +551,7 @@ onChange((what) => {
     // the time and nothing should be rebuilding a spec behind it — see
     // `editMoved()`, which notes the moment and waits for the edit to hold still.
     report.editMoved();
-    if (what !== 'move') refreshPlayback();
+    if (what !== 'move') needs('playback');
 });
 
 /// Point the viewer's elements at the filtered inputs, where a clip has
@@ -465,11 +581,7 @@ function refreshPlayback() {
     // *before* this does — a view settles here — so a resize restates them
     // rather than leaving them a gesture out of date. Not `changed()`, which
     // would be an edit: nothing here is in the document.
-    if (resized.length) {
-        shell.drawSpine();
-        command.draw();
-        if (shell.currentStage() === 'graph') drawGraph();
-    }
+    if (resized.length) needs('spine', 'command', 'graph');
     // And the output preview is a render of the edit that has just changed, so
     // what is on the screen is of a render that no longer exists. It waits for
     // the edit to hold still before rebuilding — see `chase()` — so this is a
@@ -527,7 +639,7 @@ function drawOutput() {
 // brought with it, so it is the one change on this channel that does not make
 // the document unsaved.
 graphOverlay.onChange((what) => {
-    if (what !== 'adopt') { doc.touch(); history.record(what); drawDocument(); }
+    if (what !== 'adopt') { doc.touch(); history.record(what); needs('document'); }
     // The graph is half of what a measurement's subject *is* — `renderSubject()`
     // keeps the printed chain — so a filter inserted or edited moves the edit under
     // every finding in the drawer exactly as dragging a clip does.
@@ -537,9 +649,10 @@ graphOverlay.onChange((what) => {
     // lane exists exactly when there are spans. This is the one channel every way
     // of changing that arrives on — the column beside the graph, the lane itself,
     // an undo, and a document being opened — so it is the one place the redraw
-    // belongs.
-    timeline.draw();
-    refreshPlayback();
+    // belongs. Marked rather than drawn, for the reason `needs` gives: `adopt` is
+    // a document arriving, and drawing here made that 3.5 s of the open on a
+    // 75-clip edit whose graph was empty.
+    needs('timeline', 'playback');
 });
 
 // ── the document ───────────────────────────────────────────────────────────
@@ -551,7 +664,23 @@ graphOverlay.onChange((what) => {
 // decided.
 
 doc.initDocument({
-    attach: (clip) => { viewer.attachClip(clip); analyzeClip(clip); },
+    // **Not an attach any more, and the name is the document's rather than the
+    // viewer's.** What the document is saying is that this clip's source has
+    // changed under it — a new clip, a reopened input, a generator with new
+    // arguments — and the two things that follow from that are read again. The
+    // *element* is not one of them: which clips hold a decoder is the playhead's
+    // business now (ui/residency.js), and a document that built one per clip is
+    // what made opening this montage 26 s of frozen window and 9.1 GB.
+    //
+    // A clip that already has an element does get it rebuilt, because a src that
+    // has changed under a live decoder is the one case `refreshSources` cannot
+    // reach: the token is the same string.
+    attach: (clip) => {
+        if (clip.video) { viewer.detachClip(clip); viewer.attachClip(clip); }
+        // Read once, when the source changes, and kept on the clip rather than on
+        // the element — so the lanes survive the decoder being evicted.
+        analyzeClip(clip);
+    },
     detach: (clip) => viewer.detachClip(clip),
     // Where you were in the edit, which is the one part of a document that lives
     // in four different modules and in none of the model. Asked here because this
@@ -757,8 +886,7 @@ onSettingsChange(() => history.recordOutput());
 // back in exactly the way a test that writes into `settings` does.
 history.onOutputRestored(() => {
     exporter.redraw();
-    shell.drawSpine();
-    command.draw();
+    needs('spine', 'command');
 });
 
 el('doc-open').addEventListener('click', openDocument);
@@ -1144,6 +1272,14 @@ function setControlsEnabled(on) {
     rateSel.disabled = !on;
 }
 setControlsEnabled(false);
+
+// Which clips hold a decoder. The two presses are the viewer's own, handed over
+// whole — `ui/residency.js` decides *when*, and deliberately knows nothing about
+// how an element is built or what it costs to place one.
+initResidency({
+    attach: (clip) => viewer.attachClip(clip),
+    detach: (clip) => viewer.detachClip(clip),
+});
 
 initTransport({
     changed: () => syncUI(),
@@ -1540,12 +1676,21 @@ document.addEventListener('drop', (e) => {
 
 let lastTick = 0;
 let lastViewerW = -1, lastViewerH = -1, lastLaneW = -1;
+let lastWaiting = -1;
 
 function frame(now) {
     const dt = lastTick ? Math.min(0.25, (now - lastTick) / 1000) : 0;
     lastTick = now;
 
     tickTransport(dt);
+
+    // Open the clips the playhead is about to reach and close the ones it has
+    // left. After the transport, so it works from where the playhead is *now*
+    // rather than a frame behind — and from here rather than from `setPlayhead`,
+    // because playback inside a long clip moves the playhead without seeking and
+    // a look-ahead computed only on seeks would go stale exactly where the next
+    // cut is.
+    tickResidency(transport.t);
 
     // A panel that changed size (window resize, fullscreen) has to be redrawn
     // from the analysis rather than stretched — a stretched waveform lies
@@ -1586,6 +1731,17 @@ function frame(now) {
         timeline.draw();
     }
     if (transport.playing) syncUI();
+    // How many clips are still being read. It changes without the playhead
+    // moving and without the model changing — a document of seventy-five arrives
+    // over the best part of a minute while nothing is playing — so nothing else
+    // on this list would notice, and it is the only thing on the screen saying
+    // that an edit which is already laid out is not yet fully drawn.
+    const waiting = pending();
+    if (waiting !== lastWaiting) { lastWaiting = waiting; needs('readouts'); }
+    // And everything a change since the last frame marked out of date, drawn
+    // once however many times it was marked. See `needs` for why this is here
+    // rather than at each of the places that change something.
+    drawPending();
     // The wires are drawn in screen coordinates against a canvas the size of
     // the viewport, so a stage that changed size has to redraw them. Same rule
     // as everything above: a measurement of zero is a hidden stage, not a
@@ -1775,7 +1931,7 @@ shell.initShell({
             graphPreview.setRange(transport.t, transport.t + graphPreview.previewSeconds);
             drawGraph();
         }
-        command.draw();
+        needs('command');
         // Which stack the buttons are about has just changed, even though
         // neither stack has.
         drawHistory();
@@ -1922,10 +2078,15 @@ function stageState(id) {
 /// Kept because the export module still calls it when its job state changes:
 /// the spine has to know a render is holding the slot on the frame that
 /// becomes true, not the next time something redraws.
-function syncWorkspace() {
-    shell.drawSpine();
-    command.draw();
-}
+/// What the render will be has changed, so the two things that state it are out
+/// of date: the spine's cards and the command underneath them.
+///
+/// **Marked rather than drawn** — see `needs`. Both restate the whole render out
+/// of a spec built from every clip, which on a 75-clip edit is 0.8 s and 2.3 s,
+/// and this is called from `closeExport()`, which every walk *away* from the
+/// encode side goes through. Walking to the Sources stage drew both of them
+/// twice, once here and once from the stage hook, for 6.5 s of the open.
+function syncWorkspace() { needs('spine', 'command'); }
 
 function flash(message) {
     osd.textContent = message;
@@ -2013,6 +2174,12 @@ globalThis.__ffmpegBro = {
     // resurrect a lane is to leave one behind and count the lanes.
     isTrackLocked, setTrackLocked, ripplesWith, retainTracks,
     showProperties, pending,
+    // How many clips hold a decoder, and how many are waiting for one. On the
+    // surface because the fact `ui/residency.js` exists to establish — that a
+    // document opens with a bounded number of elements rather than one per clip
+    // — is not visible in the model, the document or the screen. Counting the
+    // elements is the only way to check it.
+    resident, decodersPending,
     // Burning a track into a clip, minus the panel. On the surface for the
     // reason `parseEnable` is: `si=` counts subtitle streams rather than
     // streams, which is a rule about shapes of file no fixture here has, and

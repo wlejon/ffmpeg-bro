@@ -42,7 +42,7 @@ One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
 `sequences`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
 `ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
 `ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
-`ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`):
+`ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`, `ui-load`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -122,6 +122,63 @@ Stage views hide each other with `display:none` and are **never unmounted** —
 the viewer's `<video>` elements *are* the decoders. Consequence that keeps
 biting: anything in the frame loop that measures a panel must ignore a
 measurement of zero, because most of the window is `display:none` at any moment.
+
+**How many of those elements exist is `ui/residency.js`'s and nothing else's.**
+The rule used to be one per clip, built when the clip arrived and never taken
+back, which is right at a handful of clips and ruinous past a few dozen: opening
+a 75-clip montage of 1080p60 segments cost 26 s of frozen window and 9.1 GB, and
+the same open with the elements suppressed was 17 ms with every part of the apply
+under 10 ms — so the elements were not *a* cost of opening a large document, they
+were all of it. So a decoder is held by a clip **near the playhead**: memory is a
+property of the window rather than of the project, the same statement
+`ffmpeg_data.h` makes about a telemetry reading and its grid. Two halves of it
+are load-bearing and are easy to undo by accident. The clips *under* the playhead
+are attached synchronously and are never capped — `setPlayhead` reads
+`clip.video.currentTime` on the line after it asks for them, and a composite of
+twelve clips genuinely needs twelve decoders — so what is bounded is only the
+look-ahead. And **analysis is not residency**: peaks and filmstrips belong to the
+clip rather than to the element, so evicting a decoder leaves the timeline lanes
+exactly as they were, and tying the two together would make scrolling re-decode
+files.
+
+The same document exposed a second cost that was never about the elements. A
+measurement landing — a waveform or filmstrip off `ui/analysis.js`'s worker, a
+telemetry track, a run of sound marks — arrives on the model's change channel,
+and that channel's listener rebuilds the Sources cards, the spine, the command
+bar, the export rows and every element's source. Seventy-five clips answer with a
+hundred and fifty of those and they arrive in one drain: at 22 clips it was a
+**single frame of 12.9 s** against a median frame of 1 ms. Those three channels
+are *derived*, not edits — they are already excluded from the undo track and the
+unsaved marker for the same reason — so the listener now returns early and marks
+the timeline, which is the only thing that draws any of them, for one redraw on
+the next frame.
+
+That last move is the general one and `needs()`/`drawPending()` in `ui/app.js`
+is where it lives. Five redraws restate the *whole* edit — `refreshPlayback`
+settles a filter chain per clip, the timeline draws a lane per clip, the spine
+and the command bar each build a render spec out of all of them, and the graph
+lays out a node per filter — so all five are priced in the size of the project
+(0.6 s, 0.5 s, 0.8 s and 2.3 s at 75 clips). Opening a document ran them several
+times over: the overlay a document brings says so on its own channel, the
+document says so on the model's, restoring the session's selection says so
+again, and `closeExport()` — which every walk away from the encode side goes
+through — is *itself* a spine-and-command redraw, so walking to the Sources
+stage drew both twice. So a change **marks** what is out of date and the frame
+loop draws it, which took `doc.load()` on that montage from 8.0 s to 1.0 s and
+the whole blocking open from 25.9 s to 3.6 s. Two things about it are easy to get
+wrong. The frame loop draws **one** of the five per frame and rotates, starting
+where the last pass stopped — straight priority order starves, because readings
+landing off the analysis worker mark the timeline on every frame for as long as a
+large document is being read, and a command bar that goes minutes without being
+drawn is the one failure this application refuses to have. And the **Sources
+stage is deliberately not among them**: it is the one whole-edit redraw that is
+not priced in the project's size (7 ms at 75 inputs, because the list is one row
+each and the detail column is the selected input only), so it is drawn directly
+and a dropped file's card does not arrive a frame late.
+
+`tests/ui_load.js` is the suite for all of it, and it asserts the worst *frame*
+rather than a total, because the same total spread over a hundred frames and
+delivered in one are completely different to use.
 
 ### The document is the other seam
 

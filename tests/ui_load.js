@@ -1,0 +1,193 @@
+// Opening a large edit without opening every file in it.
+//
+// The viewer's `<video>` elements *are* the decoders, and the rule used to be
+// one per clip, built when the clip arrived and never taken back. That is right
+// at a handful of clips and ruinous at seventy-five: measured on a montage of 75
+// 1080p60 segments, opening it cost 26 s of frozen window and 9.1 GB resident,
+// and with the elements suppressed the same open was 17 ms. `ui/residency.js` is
+// the narrowing of that rule — a decoder is held by a clip *near the playhead* —
+// and this is the suite for it, plus the second thing the same document
+// exposed, which was not the elements at all.
+//
+// Five facts, none of which is visible in the model, the document or a
+// screenshot:
+//
+//   - **an edit of many clips opens holding few decoders.** Counted, because
+//     that is the only way to say it: nothing else on screen differs between an
+//     edit with one element per clip and an edit with three.
+//   - **every clip under the playhead has one.** `setPlayhead` reads
+//     `clip.video.currentTime` on the line after it asks for them, so an element
+//     that arrived a frame late would be a crash and not a hitch. This is the
+//     bound that must never be traded for a smaller number.
+//   - **moving the playhead brings in what it lands on**, wherever it lands and
+//     without playing through the gap, which is what a scrub is.
+//   - **the lanes survive eviction.** A waveform and a filmstrip belong to the
+//     clip rather than to the element, so a decoder closing must leave the
+//     timeline exactly as it was — otherwise scrolling would re-decode files,
+//     which is the cost this is meant to remove rather than move.
+//   - **a measurement landing is not an edit.** A waveform arriving off the
+//     worker used to run the whole model-change cascade — the Sources cards, the
+//     spine, the command bar, the export rows, every element's source — a
+//     hundred and fifty times in one drain. At 22 clips that was a single frame
+//     of 12.9 s against a median of 1 ms, which is the freeze this suite exists
+//     to keep from coming back. Checked as a frame time, because "it does less
+//     work now" has no other honest form.
+//
+// The edit is built from one file cut many times rather than from many files:
+// residency is about how many decoders are open, and a decoder per clip is a
+// decoder per clip whether or not two of them read the same path.
+//
+// Usage: ffmpeg-bro-headless ui/ tests/ui_load.js -- <media-file>
+
+const A = globalThis.__ffmpegBro;
+const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
+const media = args[0];
+assert(media, 'pass a media file: ... tests/ui_load.js -- <file>');
+
+function pump(ms) {
+    const steps = Math.max(1, Math.ceil(ms / 20));
+    for (let i = 0; i < steps; i++) { wallSleep(20); advanceTime(20); flush(); }
+}
+
+function waitFor(what, predicate, timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) return true;
+        pump(60);
+    }
+    throw new Error(`timed out waiting for ${what}`);
+}
+
+// ── an edit of many clips ──────────────────────────────────────────────────
+//
+// Thirty is well past the look-ahead and small enough to build in a test.
+// They are laid end to end, which is the montage shape and the one that makes
+// "near the playhead" mean something.
+
+const COUNT = 30;
+
+A.shell.goTo('sources');
+pump(200);
+const input = A.inputs.addInput({ path: media });
+waitFor('the file to open', () => !!input.probe || !!input.error);
+assert(!input.error, `opening ${media}: ${input.error}`);
+
+for (let i = 0; i < COUNT; i++) A.openInput(input, { quiet: true });
+pump(300);
+assert(A.project.clips.length === COUNT,
+       `expected ${COUNT} clips, laid out ${A.project.clips.length}`);
+
+const clips = A.project.clips.slice().sort((a, b) => a.start - b.start);
+const span = clips[clips.length - 1].start + clips[clips.length - 1].length;
+assert(span > 0, 'the edit has no length');
+
+// ── 1. few decoders, not one per clip ──────────────────────────────────────
+
+A.setPlayhead(0);
+pump(400);
+const held = A.resident();
+assert(held < COUNT,
+       `${held} decoders open for ${COUNT} clips — residency is not bounding anything`);
+// The look-ahead plus whatever is under the playhead. Generous, because the
+// point is the *shape* — bounded rather than per-clip — and the constants in
+// ui/residency.js are explicitly not precious.
+assert(held <= 10, `${held} decoders open at the head of a ${COUNT}-clip edit`);
+// And the queue behind it has drained rather than grown: a look-ahead that is
+// refilled faster than it is emptied is a list of every clip in the edit under
+// another name.
+assert(A.decodersPending() <= 10,
+       `${A.decodersPending()} clips still queued for a decoder after settling`);
+console.log(`${COUNT} clips, ${held} decoders open`);
+
+// ── 2. everything under the playhead has one ───────────────────────────────
+//
+// Checked at every clip in the edit rather than at one, because the failure this
+// guards against is a clip the window happened to miss — and it is a crash in
+// `setPlayhead`, not a blank picture.
+
+for (const c of clips) {
+    const mid = c.start + c.length / 2;
+    A.setPlayhead(mid);
+    for (const under of A.project.clips)
+        if (mid >= under.start && mid < under.start + under.length)
+            assert(under.video,
+                   `no decoder for the clip at ${mid.toFixed(2)}s, which the playhead is inside`);
+}
+console.log(`every clip under the playhead held a decoder, across all ${COUNT}`);
+
+// ── 3. a scrub to the far end, without playing through it ──────────────────
+
+A.setPlayhead(0);
+pump(400);
+const last = clips[clips.length - 1];
+A.setPlayhead(last.start + last.length / 2);
+pump(200);
+assert(last.video, 'a scrub to the last clip left it with no decoder');
+// And the first one is let go again, once the frame loop has had a look. It is
+// the whole edit away, which is well past `FAR`.
+waitFor('the first clip to be let go', () => !clips[0].video, 20000);
+assert(A.resident() <= 10,
+       `${A.resident()} decoders open after scrubbing to the far end — nothing is being evicted`);
+console.log(`scrubbed to the far end: ${A.resident()} decoders open, the first let go`);
+
+// ── 4. the lanes survive the decoder going ─────────────────────────────────
+//
+// The clip that was just evicted is the one to ask, and what it must still have
+// is what the timeline draws. `peaks` is the waveform; a filmstrip may still be
+// in flight on a slow machine, so it is only checked when it arrived at all.
+
+waitFor('the first clip to be read', () => !!clips[0].peaks, 120000);
+assert(!clips[0].video, 'the clip under test is not evicted, so this proves nothing');
+// The two fields `columnsOf` refuses to draw without, rather than "is truthy":
+// an envelope with no buckets in it is a lane that says "reading…" forever.
+assert(clips[0].peaks.buckets && clips[0].peaks.duration,
+       'the waveform went with the decoder — analysis is being driven by residency');
+console.log('the evicted clip kept its waveform' +
+            (clips[0].film ? ' and its filmstrip' : ''));
+
+// ── 5. a measurement landing is not an edit ────────────────────────────────
+//
+// The drain is where the freeze was: every result fired the whole cascade, and
+// they all arrive in one frame. So the edit is read again from scratch and the
+// frames it takes are timed — what is asserted is the *worst* one, because a
+// total spread evenly over a hundred frames and a total in one frame are the
+// same number and completely different to use.
+
+for (const c of A.project.clips.slice()) { A.select(c); A.removeSelection(); }
+pump(200);
+assert(A.project.clips.length === 0, 'the edit did not clear');
+
+for (let i = 0; i < COUNT; i++) A.openInput(input, { quiet: true });
+A.setPlayhead(0);
+// Where the undo track stands once the edit is made and before the readings
+// land, so what the drain adds to it can be counted.
+const stepsBefore = A.history.depth('edit');
+
+let worst = 0;
+let frames = 0;
+const deadline = Date.now() + 180000;
+while (Date.now() < deadline) {
+    const at = Date.now();
+    wallSleep(0); advanceTime(16); flush();
+    const took = Date.now() - at;
+    if (took > worst) worst = took;
+    frames++;
+    if (frames > 20 && A.pending() === 0) break;
+}
+console.log(`read ${COUNT} clips over ${frames} frames, worst frame ${worst} ms`);
+// One second is far above anything this should reach and far below the 12.9 s
+// that provoked the change — a threshold that fails on the bug and passes on a
+// slow machine, which is the only kind worth asserting.
+assert(worst < 1000,
+       `a single frame took ${worst} ms while the clips were being read — ` +
+       'a measurement landing is running the edit cascade again');
+
+// And it is not an edit in the other sense either: sixty readings landing must
+// not put sixty steps on the undo track, or a `Ctrl-Z` after opening a large
+// document would walk back through the waveforms instead of the edit.
+const added = A.history.depth('edit') - stepsBefore;
+assert(added === 0,
+       `${added} undo steps arrived while the clips were being read — ` +
+       'a measurement is being recorded as an edit');
+
+console.log('ui_load: ok');

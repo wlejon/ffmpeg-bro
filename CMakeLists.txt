@@ -527,12 +527,19 @@ add_test(NAME ui-marks COMMAND ffmpeg-bro-headless
 add_test(NAME ui-output COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_output.js"
          -- "${FIXTURE_A}")
+# Opening an edit of many clips without opening every file in it. One file, cut
+# thirty times: what this is about is how many decoders are open, and that is the
+# same question whether or not two clips read the same path.
+add_test(NAME ui-load COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_load.js"
+         -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences hardware telemetry marks
                      PROPERTIES FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
                      ui-measure ui-subtitles ui-document ui-output ui-telemetry ui-marks
+                     ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the

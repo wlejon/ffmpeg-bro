@@ -33,6 +33,26 @@ master clock for that reason — with a file clip under the playhead the file dr
 the transport whichever is on top, and a timeline of nothing but generators runs on
 the wall clock the way a gap does. `O` below shows the moment exactly.
 
+**Only the clips near the playhead are open.** A clip's `<video>` element *is* a
+decoder — a demuxer, a codec context, an audio ring — and holding one for every
+clip in the edit is what made a 75-clip montage take 26 seconds to open and 9.1
+GB to hold. So an element is built as the playhead approaches and taken down once
+it is well past: a few seconds either side are open, everything under the
+playhead is open whatever that costs, and the rest of the edit is model and
+nothing more. You are meant not to notice, and the two things that would make you
+notice are exactly the two the window is shaped around — a clip is opened *before*
+the playhead reaches it, so a cut does not stutter, and it is not closed until it
+is three times further away than the distance at which it was opened, so
+scrubbing back and forth across a cut does not tear the same decoder down twice a
+second.
+
+What does **not** go with the decoder is what the timeline draws. A clip's
+waveform and filmstrip are read once, when it joins the edit, and they belong to
+the clip — so a lane stays drawn for a clip whose decoder has been closed, and
+scrolling the timeline never re-reads a file. On a large document they fill in
+over the following seconds while everything else works normally, and the
+readout beside the clip count says how many are still being read.
+
 ## The output, instead of the clips
 
 `O`, or **Output** on the timeline bar, puts the *render* on the program monitor

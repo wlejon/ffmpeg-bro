@@ -59,6 +59,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_marks.js -- <marks.m4a> [<no-audio>]
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last four sections

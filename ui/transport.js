@@ -48,6 +48,7 @@ import { project, duration, clipsAt, nextClipAfter, sourceTime, timelineTime,
          speedOf, selectFollow, isGenerator } from './project.js';
 import * as viewer from './viewer.js';
 import * as output from './output.js';
+import * as residency from './residency.js';
 
 /// Where the playhead is and how it is being watched. One object, exported by
 /// reference: the frame loop, the readouts and the tests all read it, and a
@@ -78,6 +79,10 @@ export function setPlayhead(t, seek = true) {
     const d = duration();
     transport.t = Math.max(0, Math.min(d, t));
     const here = clipsAt(transport.t);
+    // Before the active set, and before the loop below reads `clip.video`: a
+    // clip only holds a decoder while the playhead is near it (ui/residency.js),
+    // and the ones it has just landed on may not have had one a moment ago.
+    residency.retain(transport.t);
     const changedSet = viewer.setActiveSet(here);
     // A clip that has just come into view has its decoder parked wherever it
     // was left, so it always needs the seek even when the caller said not to.
