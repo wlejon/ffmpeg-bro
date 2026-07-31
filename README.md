@@ -48,6 +48,10 @@ cut it on a timeline, filter it through a node graph, and export it.
 Requires Visual Studio 2022, [vcpkg](https://vcpkg.io), and a checkout of
 [bro](https://github.com/wlejon/bro) beside this one (or `-DBRO_DIR=<path>`).
 
+`cmake -B build` finds vcpkg through **`VCPKG_ROOT`**; set it, or pass
+`-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake` yourself.
+With neither, the configure stops and says so.
+
 ```
 git clone <this repo>
 git clone --recursive https://github.com/wlejon/bro
@@ -64,7 +68,8 @@ reaches brotensor, brolm and brosoundml in bro's tree. They are MIT like bro,
 nothing is downloaded at configure or build time, and they add no vcpkg port —
 they cost 27 s of build and 2.7 MB of binary here, because the linker takes what
 is referenced and nothing here calls a language model. What they buy is a
-working `bro.sense` — the acoustic sensors, which nothing in the UI reads yet.
+working `bro.sense` — the acoustic sensors behind `Find sounds` on Sources,
+which mark a soundtrack where something happens in it.
 bro's own preflight only checks three of its
 submodules, so an unrecursed clone fails by naming a missing `CMakeLists.txt`
 rather than a missing submodule; `-DBRO_WITH_SOUNDML=OFF` is the way out if you

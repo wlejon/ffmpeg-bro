@@ -7,6 +7,37 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
         CACHE STRING "vcpkg toolchain")
 endif()
 
+# ── and say so here if it does not ────────────────────────────────────────
+#
+# Nothing above is required to succeed, so without a toolchain the configure
+# carries happily on and dies two hundred lines later inside vcpkg's own
+# `GameNetworkingSocketsConfig.cmake`, whose `find_dependency(Protobuf)` is
+# unqualified and therefore searches the system. What a contributor is then
+# told, verbatim, is `Could NOT find Protobuf` — a package this repository does
+# not use, does not name anywhere, and cannot install. The one thing actually
+# missing, vcpkg, appears nowhere in the message. This cost a session here on a
+# machine where `VCPKG_ROOT` was simply never set, and both the README and
+# CLAUDE.md document `cmake -B build` as if it were unconditional.
+#
+# So refuse, with the sentence bro's own absence gets twenty lines down. The
+# guard is deliberately the widest thing that is still true: any of a toolchain,
+# `VCPKG_ROOT`, or a prefix path means *something* has told CMake where the
+# dependencies are, and that is not this file's business to second-guess — a
+# system-libav build passing `-DCMAKE_PREFIX_PATH=...` is a legitimate way to
+# build this and must not be blocked by a check about vcpkg.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
+   AND NOT DEFINED ENV{VCPKG_ROOT}
+   AND NOT CMAKE_PREFIX_PATH
+   AND NOT DEFINED ENV{CMAKE_PREFIX_PATH})
+    message(FATAL_ERROR
+        "No vcpkg toolchain, and nothing else saying where the dependencies are.\n"
+        "ffmpeg and bro's services come from vcpkg here. Either set VCPKG_ROOT, or pass\n"
+        "  -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake\n"
+        "See README.md for the `vcpkg install ffmpeg[...]` feature list this build needs.\n"
+        "If the dependencies are genuinely somewhere else, pass -DCMAKE_PREFIX_PATH=<dir>\n"
+        "and this check will stand aside.")
+endif()
+
 project(ffmpeg-bro VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
