@@ -221,6 +221,8 @@ bool cueTimesOf(const MediaInput& in, int stream, double from, double to, int ma
 
 CopyStreams::Reader::~Reader() {
     if (pending) av_packet_free(&pending);
+    for (AVPacket* p : primed) av_packet_free(&p);
+    primed.clear();
     if (fmt) avformat_close_input(&fmt);
 }
 
@@ -333,10 +335,91 @@ double CopyStreams::outSecondsOf(const Reader& r, const AVPacket* pkt) const {
     return stampOf(pkt) * av_q2d(tb) - r.epochUs / double(AV_TIME_BASE);
 }
 
+/// How far `prime` will read to settle the epoch.
+///
+/// A bound rather than a certainty, because a tapped stream may simply have no
+/// packets left — a subtitle track whose last cue was an hour ago, a data track
+/// that ended — and waiting for one would read the rest of the file into memory.
+/// Two hundred packets is several times more than the interleave of any sane
+/// container and is a few hundred kilobytes at worst.
+static constexpr size_t kPrimePackets = 200;
+
+void CopyStreams::prime(Reader& r) {
+    if (r.haveEpoch) return;
+
+    // **The zero is the earliest thing this copy will emit, and no single packet
+    // knows what that is.** A seek lands at or before the in-point on the stream
+    // it was measured against, and the other streams of the same input land
+    // wherever their own interleave puts them — routinely a few milliseconds
+    // *earlier* than the video keyframe that was sought to. Taking the epoch
+    // from whichever packet arrived first therefore shifted every one of those
+    // to a negative timestamp, and a muxer refuses them:
+    //
+    //   Application provided invalid, non monotonically increasing dts
+    //     to muxer in stream 1: -16 >= -34
+    //
+    // Whether a given file tripped it was a matter of where its GOPs fell, which
+    // is why this survived so long: of the three renditions of one recording,
+    // the 480p and the audio-only copied cleanly and the 1080p60 could not be
+    // windowed at all.
+    //
+    // So the first packet of *every* tapped stream is looked at before the epoch
+    // is chosen, and the earliest of them wins. What is read to find out is kept
+    // in `r.primed` — those packets are the start of the copy, not a probe.
+    double earliest = 0.0;
+    bool any = false;
+
+    // The moment asked for still takes part, and still only moves the zero
+    // earlier — a keyframe found at 4.0 for a cut asked at 4.2 comes out at
+    // zero, and an untrimmed subtitle track whose first cue is a minute in
+    // stays a minute in. With several taps it is the earliest of them, because
+    // that is the one `open()` seeked to.
+    for (const auto& t : r.taps) {
+        if (t.finished) continue;
+        const double asked = t.from + t.zero;
+        if (!any || asked < earliest) { earliest = asked; any = true; }
+    }
+
+    std::vector<int> want;
+    for (const auto& t : r.taps)
+        if (!t.finished &&
+            std::find(want.begin(), want.end(), t.stream) == want.end())
+            want.push_back(t.stream);
+
+    for (size_t read = 0; read < kPrimePackets && !want.empty(); ++read) {
+        AVPacket* pkt = av_packet_alloc();
+        if (!pkt) break;
+        if (av_read_frame(r.fmt, pkt) < 0) { av_packet_free(&pkt); break; }
+        r.primed.push_back(pkt);
+        if (!haveStamp(pkt)) continue;
+        const auto at = std::find(want.begin(), want.end(), pkt->stream_index);
+        if (at == want.end()) continue;
+        want.erase(at);
+        const AVRational tb = r.fmt->streams[pkt->stream_index]->time_base;
+        const double raw = stampOf(pkt) * av_q2d(tb);
+        if (!any || raw < earliest) { earliest = raw; any = true; }
+    }
+
+    r.haveEpoch = true;
+    r.epochUs = any ? static_cast<int64_t>(std::llround(earliest * AV_TIME_BASE)) : 0;
+}
+
+bool CopyStreams::readOne(Reader& r, AVPacket* into) {
+    if (!r.primed.empty()) {
+        AVPacket* head = r.primed.front();
+        r.primed.pop_front();
+        av_packet_move_ref(into, head);
+        av_packet_free(&head);
+        return true;
+    }
+    return av_read_frame(r.fmt, into) >= 0;
+}
+
 void CopyStreams::fill(Reader& r) {
+    prime(r);
     while (!r.havePending && !r.eof) {
         av_packet_unref(r.pending);
-        if (av_read_frame(r.fmt, r.pending) < 0) { r.eof = true; break; }
+        if (!readOne(r, r.pending)) { r.eof = true; break; }
         if (!haveStamp(r.pending)) continue;
 
         // Every tap this packet is for, not one of them. Two output streams may
@@ -360,35 +443,10 @@ void CopyStreams::fill(Reader& r) {
             continue;
         }
 
-        // **Where the copy was asked to begin is this input's zero, and the
-        // first packet only ever moves it earlier.** One zero per input rather
-        // than one per stream is the whole of A/V sync across a copy: taken per
-        // stream, a soundtrack would move by however far the picture's first
-        // keyframe was from it.
-        //
-        // The first packet alone is not that zero, and the difference is
-        // invisible on a picture and glaring on a track of cues. A seek lands
-        // at or before the in-point, so the packet it finds *is* the zero and
-        // has to be — a keyframe found at 4.0 for a cut asked at 4.2 must come
-        // out at zero rather than at −0.2. But `streamOrigin` says a stream
-        // begins where its index or its `start_time` says, and a subtitle track
-        // has neither: its first *packet* is its first cue, a minute into the
-        // programme if that is where somebody speaks. Taken as the zero, an
-        // untrimmed copy of that track came out a minute early — against a
-        // picture that is encoded rather than copied, and so has no say in this
-        // input's epoch at all. Which is the ordinary shape of "re-encode the
-        // video, keep the subtitles".
-        //
-        // So: the moment asked for, in the same container terms the packet is
-        // in, and the packet where it is earlier.
-        if (!r.haveEpoch) {
-            const AVRational tb = r.fmt->streams[r.pending->stream_index]->time_base;
-            const Tap* t = r.pendingTaps.front();
-            const double raw = stampOf(r.pending) * av_q2d(tb);
-            const double asked = t->from + t->zero;
-            r.haveEpoch = true;
-            r.epochUs = static_cast<int64_t>(std::llround(std::min(raw, asked) * AV_TIME_BASE));
-        }
+        // The epoch is `prime()`'s, settled before any of this ran. One zero per
+        // input rather than one per stream is the whole of A/V sync across a
+        // copy: taken per stream, a soundtrack would move by however far the
+        // picture's first keyframe was from it.
         r.havePending = true;
     }
 }

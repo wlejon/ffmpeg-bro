@@ -51,6 +51,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -233,10 +234,24 @@ private:
         std::vector<Tap*> pendingTaps;
         bool eof = false;
         bool haveEpoch = false;
-        int64_t epochUs = 0;        ///< the first packet's dts, container clock
+        int64_t epochUs = 0;        ///< the input's zero, container clock
+
+        /// Packets read while settling the epoch, waiting to be handed out.
+        ///
+        /// The epoch cannot be chosen from the first packet alone (see `prime`),
+        /// so the ones read to find it have to be kept rather than dropped —
+        /// they are the beginning of the copy.
+        std::deque<AVPacket*> primed;
+
         std::vector<Tap> taps;
         ~Reader();
     };
+
+    /// Settle `r.epochUs` before a single packet is written. Reads ahead.
+    void prime(Reader& r);
+
+    /// The next packet off this reader, from `primed` first. False at the end.
+    bool readOne(Reader& r, AVPacket* into);
 
     /// Leave `r.pending` holding the next packet that belongs to a live tap.
     void fill(Reader& r);
