@@ -44,6 +44,12 @@ void installSequences(Table& ns);
 /// how to read. bindings_data.cpp.
 void installData(Table& ns);
 
+/// `marks.*` — where something happens in a soundtrack, read by bro's acoustic
+/// sensors over a soundtrack libav decoded. The one entry here that is not a
+/// part of ffmpeg's model; bindings_marks.cpp says why it lives on this surface
+/// anyway.
+void installMarks(Table& ns);
+
 /// `expr.evaluate` — libavutil's expression evaluator, so a filter option
 /// written as an expression can be drawn as the curve libavfilter will perform.
 /// bindings_expr.cpp.

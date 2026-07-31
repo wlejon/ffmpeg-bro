@@ -165,11 +165,19 @@ public:
     /// Add `frames` samples of this clip, scaled by `gain`, into `dst`.
     /// Past the end of the file it adds nothing, which is silence.
     ///
+    /// Answers how many frames it actually reached, which is fewer than asked
+    /// for exactly at the end of the file. The mixer ignores it and always did —
+    /// it is compositing into a canvas of a known length and silence is the
+    /// right thing there — but a reader walking a whole soundtrack has no other
+    /// way to know it has finished (`sound_marks.cpp`), and the alternative was
+    /// that reader opening the container a second time to ask a duration the
+    /// decoder is already in a position to demonstrate.
+    ///
     /// There is no `skip()` beside this and there does not need to be: a muted
     /// clip is never given a `SourceAudio` at all (see `TimelineSource`), and
     /// every clip that is given one has its own reader — so there is no second
     /// clip in the same file whose position a skipped run would have to keep.
-    void mixInto(float* dst, int frames, float gain);
+    int mixInto(float* dst, int frames, float gain);
 
     /// The next frame as decoded, in the file's own sample format and rate,
     /// timestamped in `timeBase()` units from zero. See the note at the top of
@@ -177,6 +185,13 @@ public:
     const AVFrame* nextRaw();
 
     AVRational timeBase() const { return timeBase_; }
+
+    /// Which stream in the container this turned out to be, or -1 before
+    /// `open`. `av_find_best_stream`'s answer — the same one `[0:a]` means on a
+    /// command line — reported because a reading *about* a soundtrack has to be
+    /// able to say which one it was about, exactly as a `DataReading` names its
+    /// track.
+    int stream() const { return stream_; }
 
 private:
     /// What rate to tell `swr` the samples arrived at: the file's, times the clip's

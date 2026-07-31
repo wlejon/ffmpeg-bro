@@ -55,6 +55,7 @@ import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
 import * as telemetry from './telemetry.js';
+import * as marks from './marks.js';
 import * as graphPlayback from './graph/playback.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
@@ -337,6 +338,10 @@ onChange((what) => {
     // for the same reason: the row on the Telemetry lane would otherwise name a
     // file nothing answers to.
     telemetry.retain(inputsModel.inputs.map((i) => i.id));
+    // And the marks read off an input's soundtrack, for the same reason again:
+    // a tick on the Marks lane naming a file nothing answers to, and a `.` that
+    // jumps to it.
+    marks.retain(inputsModel.inputs.map((i) => i.id));
     // And the settings of a track the timeline no longer shows — a sync lock on
     // V4 after the last clip on it was deleted. Here for the same argument as the
     // line above and stated where that argument already is: a track can empty out
@@ -372,8 +377,11 @@ onChange((what) => {
     // opened. `telemetry` is the fourth and joins `analysis`: a reading is what
     // a file says, it is not in the document for that reason, and a track
     // parsed a minute after the cut that used it did not change the edit.
+    // `marks` is the fifth and joins it exactly: a detected onset is a
+    // measurement of a soundtrack, and undo answers "does this change the
+    // clips".
     if (what !== 'selection' && what !== 'analysis' && what !== 'document' &&
-        what !== 'telemetry')
+        what !== 'telemetry' && what !== 'marks')
         { doc.touch(); history.record(what); drawDocument(); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
@@ -1409,6 +1417,13 @@ document.addEventListener('keydown', (e) => {
         case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
                            else return;
                            break;
+        // `,` and `.` — the two keys that sit under the transport ones and are
+        // the same gesture at a different scale: `←` `→` step a frame and these
+        // step to the next thing that *happened*. Free before this and free of
+        // any modifier, which matters because the gesture is repeated: reviewing
+        // an hour of footage is pressing `.` fifty times.
+        case ',':          goToMark(-1); break;
+        case '.':          goToMark(1); break;
         case 'Delete':     removeSelection(); break;
         case '+': case '=': timeline.zoomBy(1 / 1.5, transport.t); break;
         case '-':          timeline.zoomBy(1.5, transport.t); break;
@@ -1420,6 +1435,34 @@ document.addEventListener('keydown', (e) => {
     }
     e.preventDefault();
 });
+
+/// Go to the mark before or after the playhead.
+///
+/// **It says what it landed on.** A jump that moved the playhead silently would
+/// leave you looking at a picture with no idea why this moment and not the one
+/// before it — and the whole risk of this feature is somebody reading a mark as
+/// a classification, so the flash says what was actually measured
+/// (`markLabel`, whose words are `ui/marks.js`'s single home for them).
+///
+/// **Nothing to jump to is said out loud too**, and the two cases are told
+/// apart: an edit nobody has listened to yet gets the sentence that names the
+/// press that would fix it, and one already at the last mark gets a shorter one.
+/// A key that does nothing and says nothing is a key people decide is broken.
+function goToMark(dir) {
+    // Once, and both answers come out of it: `markNear` takes the rows for this
+    // reason, because building the list twice for one press is two walks of the
+    // whole edit at key-repeat rate.
+    const rows = marks.markRows(project.clips);
+    const next = marks.markNear(rows, transport.t, dir);
+    if (next) {
+        setPlayhead(next.at);
+        flash(marks.markLabel(next));
+        return;
+    }
+    flash(rows.length
+              ? (dir < 0 ? 'No mark before this one' : 'No mark after this one')
+              : 'Nothing has been listened to yet — Find sounds on the Sources stage');
+}
 
 // J/L shuttle: each press moves one step through the speed list, playing
 // forward. (Reverse playback needs backwards decode, which is a later job.)
@@ -1941,6 +1984,16 @@ globalThis.__ffmpegBro = {
     // is a canvas, so `timeline.telemetryLane()` is the reader for the drawn
     // half and this is the reader for the claim.
     telemetry,
+    // Where something happens in a soundtrack, and which of it is on the lane.
+    // On the surface for `telemetry`'s reason exactly, plus one this side has
+    // that it does not: the map from a mark to the timeline is what makes a
+    // mark follow a trim, and the way to check a map is to trim something and
+    // ask where the mark went. `timeline.marksLane()` is the reader for the
+    // drawn half.
+    marks,
+    // The jump, so a test can check where `,` and `.` land without synthesising
+    // a key press — the press is the shell's and the arithmetic is this.
+    goToMark,
     exporter, capture,
     // What this machine turned out to have, and the rule applied to it. On the
     // surface because the rule is a *pure* answer — a decision plus the sentence

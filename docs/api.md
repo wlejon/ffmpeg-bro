@@ -262,6 +262,114 @@ bro.ffmpeg.data.reads.forget(id)   // abort it and throw the answer away
 ```
 
 ```js
+// **Where something happens in a soundtrack.** The one call on this surface that
+// is not a part of ffmpeg's model: libav decodes an input's best audio stream to
+// mono 16 kHz through `swr`, and *bro's* acoustic sensor bus
+// (`brosoundml::SensorHub`, the same class and the same configuration
+// `bro.sense.analyze()` runs) reads it. It lives here because the seam it needs
+// is libav's — an `-i` with its forced demuxer, its option bag and its window,
+// read exactly as this application reads every other input.
+//
+// **What a mark claims, and what it does not.** This is the part to read before
+// anything else, because the failure mode is a label that sounds like a
+// classification the DSP never made:
+//
+//   onset  a spectral-flux transient. Something in the spectrum changed sharply
+//          between two 25 ms windows. Not a bird, a word or a door — "something
+//          happened here".
+//   tonal  a run of sustained normalized-autocorrelation periodicity, with the
+//          dominant frequency of the winning period in hertz. A whistle, a hum,
+//          an engine and a bird call all read as one. Not a pitch track and not
+//          a species.
+//   sound  a run above an adaptive noise floor. bro's own snapshot calls that
+//          flag `voice`; it is **not** called that here, because an energy gate
+//          decided nothing about a voice.
+bro.ffmpeg.marks.available()   // → true, unless built -DBRO_WITH_SOUNDML=OFF
+// A fact about how the binary was configured, so it is a constant. Ask it before
+// offering a control: `reads.start` in such a build **throws with the flag
+// named** rather than answering with an empty list, because an empty list is
+// what a silent file gives back and a missing feature is not a measurement.
+
+bro.ffmpeg.marks.reads.start(path | input, {
+    onsetRatio, onsetAbs,                          // bro's own key names …
+    tonalMinPeriodicity, tonalFminHz, tonalFmaxHz, // … and bro's own defaults
+    minRunSec,          // shortest run that becomes a mark; default 0.1
+    onsets, tonal, sound,   // which sensors to keep; all true by default
+    timeout })          // seconds, default 600; a deadline on the interrupt
+                        // callback rather than an option — see `probes.start`
+// → id, at once. `data.reads`'s shape exactly, sharing `async_open.h`'s table,
+// because it is the same problem. No synchronous twin.
+//
+// The five sensor knobs carry bro's key names so that somebody who has read
+// `bro.sense.start({...})` does not learn a second vocabulary for the same
+// number, and an unset one is left exactly as `SensorHubConfig` constructs it —
+// so brosoundml keeps the only copy of its own defaults. The VAD's four knobs
+// are deliberately not exposed: they interact, and "louder than the room" is
+// what the defaults already say.
+//
+// **The DSP is native rather than `bro.sense.analyze()` from JS**, and the
+// reason is the measurement: that call is synchronous on the UI thread at ~58x
+// realtime (16 kHz, win 400, hop 160 — 10 s → 173 ms, 60 s → 1033 ms, 300 s →
+// 5434 ms), so a five-minute clip is a 5.4-second frozen window and half an hour
+// is thirty-one seconds of one, for exactly the long recordings this is for. It
+// also wants the whole clip as one Float32Array — about 230 MB per hour. And
+// chunking it is **not** the fix: each call builds a private `SensorHub`, so a
+// chunk boundary resets the flux EMA and the VAD's noise floor and manufactures
+// an onset at every boundary.
+//
+// Only one read runs at a time, process-wide. brotensor's CPU thread pool is a
+// single-caller singleton and the mel front-end reaches it, so a second read
+// waits — and is given its whole timeout once it starts, rather than spending it
+// in the queue.
+
+bro.ffmpeg.marks.reads.poll(id)
+// → { state, reading, elapsed, timeout, error, result }, and null once a
+//   terminal state has been read — `data.reads.poll` exactly.
+//
+// result = { streamIndex,      // which audio stream, av_find_best_stream's answer
+//            t0, t1,           // the span analysed, on the input's own clock
+//            rate, win, hop,   // 16000 / 400 / 160 — the front-end that measured it
+//            frames,
+//            onsets, tonalRuns, soundRuns,  // exact totals over the whole track,
+//                                           // before minRunSec and before the cap
+//            truncated,        // did the cap (20000) stop the list short?
+//            marks: [ … ] }
+//
+// mark = { kind,          // "onset" | "tonal" | "sound"
+//          at,            // seconds on the input's own clock — after its `-ss`,
+//                         // which is the clock a clip's in-point is on
+//          length,        // 0 for an onset; the run's length otherwise
+//          db,            // the loudest frame in it, dBFS over raw PCM
+//          hz,            // tonal only, else 0
+//          periodicity,   // tonal only, [0,1] — the run's own evidence
+//          flux }         // onset only — the measurement the mark *is*
+//
+// **`at` is the start of the analysis window the sensor fired on, not its end.**
+// A frame is 25 ms and the hub timestamps the end of it, so this subtracts the
+// window: a jump lands up to 25 ms *early*, which plays the whole of what was
+// detected. Landing late would clip its front, and the front is what an onset is
+// about.
+//
+// **The totals are exact and the list may not be.** `onsets` counts every
+// transient the sensor fired on; `marks` is what survived `minRunSec` and the
+// cap. A truncated list must not be able to understate what the file held.
+//
+// **The first half-second of any file usually carries a mark or two that are not
+// in it**, and they are not filtered out. The flux baseline is an EMA starting
+// at zero with a ~0.5 s time constant, so the earliest frames clear the bar
+// trivially and only `onsetAbs` holds most of them back — measured at flux
+// 0.055 and 0.077 against 3.4–3.5 for a real transient. A warm-up window here
+// would make this and `bro.sense.analyze()` disagree about the same file, which
+// is the one divergence this must not have; the flux is reported instead.
+
+bro.ffmpeg.marks.reads.cancel(id)   // abort it; the poll after it says "stopped"
+bro.ffmpeg.marks.reads.forget(id)   // abort it and throw the answer away
+// Real inside the arithmetic as well as inside the decode: the flag is checked
+// every hundred frames — once a second of audio — as well as by libav's own
+// interrupt callback, which a minutes-long DSP loop would otherwise never reach.
+```
+
+```js
 // What this build can write — asked of libavcodec, not hardcoded.
 bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
                           //    codecName: "h264",   // the codec, not the encoder

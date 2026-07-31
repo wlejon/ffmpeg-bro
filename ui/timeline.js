@@ -49,6 +49,7 @@ import { spanRows, placeSpans, editEdge, editBody, commitSpans } from './graph/s
 import { cueTracks, addCue, removeCue, splitCue, mergeCue, setCueText, setCueTime,
          hasOverrides, cuesChanged } from './cues.js';
 import { telemetryRows, bucketAt, shortLabelOf } from './telemetry.js';
+import { markRows, MARK_COLORS, MARK_WORDS } from './marks.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
 let cueBar, cueBarRow;
@@ -111,6 +112,15 @@ const CUE_SECONDS = 2;
 const TEL_ROW = 26;
 const TEL_BUDGET = 84;
 const TEL_FLOOR = 12;
+
+// The Marks lane is one row and a fixed height, which is the whole difference
+// between it and the three above. Those grow with what the edit holds — a row
+// per span, per cue track, per picked series — because each of those is a thing
+// you can point at separately. A mark is not: every mark in the edit is on one
+// row, told apart by colour, because what you do with one is *jump to it* and a
+// list of moments is a ruler rather than a stack. Fourteen pixels is the tick
+// plus room for a band under it.
+const MARK_LANE_H = 14;
 
 // The colours a row is told apart by. Six, because the label is what actually
 // names a node and this is what makes two rows readable as two at a glance; a
@@ -1417,7 +1427,15 @@ function drawTelemetryLane() {
         }
 
         for (const clip of project.clips) {
-            if (!clip.input || clip.input !== row.inputId) continue;
+            // `clip.input` is the input *object* — `clipsOf()` in ui/project.js
+            // compares against one and `ui/document.js` writes `c.input.id` —
+            // so the id is a step down. This line compared the object to the id
+            // and was therefore always false, which drew no series at all: the
+            // lane appeared, took its height, drew its labels and its reach, and
+            // left the plot empty. It survived because the reader this stage is
+            // tested through (`telemetryLane().rows`) is the *picked* list and
+            // not what was drawn.
+            if (!clip.input || clip.input.id !== row.inputId) continue;
             const l = Math.max(0, Math.floor(timeToX(clip.start)));
             const r = Math.min(w, Math.ceil(timeToX(clip.start + clip.length)));
             if (r <= l) continue;
@@ -1506,6 +1524,127 @@ export function telemetryLane() {
     return { lane: telRow ? telRow.lane : null, rows: telList, rowHeight: telRowH };
 }
 
+// -- the Marks lane ---------------------------------------------------------
+//
+// Where something happens in the sound, drawn against the same ruler as
+// everything else. This is the entry in "Not yet" that said nothing marked where
+// a bird call was so you could jump between them, and beside the waveform is
+// where it goes: a mark is an answer about *when*, which is a question about the
+// timeline rather than about a file.
+//
+// **One row for every mark, and colour is the only thing that separates them.**
+// The other three lanes here grow a row per span, per cue track, per picked
+// series, because each of those is a thing you point at on its own. A mark is
+// not: what you do with one is jump to it, and `,` / `.` walk every mark in the
+// edit in time order whatever kind it is. Three stacked rows would make the
+// commonest gesture -- go to the next thing -- a question about which row you
+// were on.
+//
+// **It sits above the Data lane rather than under it.** The Data lane re-appends
+// itself last on every sync so a plot stays next to the waveform it is read
+// against; this one syncs before it and so lands above it. Both are next to A1
+// when only one of them exists, which is the case that matters.
+//
+// **A mark is drawn per clip, exactly as a telemetry series is.** `markRows`
+// does that mapping through `timelineTime`, so a mark follows a trim, a move and
+// a speed for free, and a mark outside the clip's window is dropped rather than
+// clamped to its edge -- a moment the edit does not contain is not a moment.
+//
+// The lane has **no hit test and no drag**: there is nothing here to edit. A
+// mark is what a soundtrack says. The gestures are scrubbing, which it shares
+// with A1, and the two keys.
+
+/// The lane's own DOM, or null when nothing has been read.
+let markRow = null;
+/// The rows as of the last sync -- held for `spanList`'s reason: the draw and
+/// the readout have to be about the same list.
+let markList = [];
+/// Pixels the lane and the gap above it come to, for `fitHeights()`.
+let markStack = 0;
+
+/// Build or drop the lane so that it is there exactly when there are marks.
+///
+/// `trackCount()`'s idiom, the third time: the timeline shows lanes for what the
+/// edit has, so an edit whose inputs have never been listened to carries no
+/// empty one. That is also what makes turning every kind off on the Sources
+/// stage take the lane away rather than leave a blank strip.
+function syncMarksLane() {
+    markList = markRows(project.clips);
+    if (!markList.length) {
+        if (markRow) { tracksEl.removeChild(markRow.row); markRow = null; }
+        markStack = 0;
+        return;
+    }
+    if (!markRow) {
+        const row = el('div', { cls: 'track-row mark-row' });
+        // **The kinds are described out of `MARK_WORDS`, never written out
+        // here.** That object is the one home of the sentences saying what a
+        // mark actually measured, and `tests/ui_marks.js` reads it and refuses
+        // any that names a *source* of sound — so a copy on this tooltip would
+        // be the one string the guard cannot see, on the surface a person reads
+        // first.
+        const head = el('div', { cls: 'track-head tiny',
+            title: 'Where something happens in the sound, found by bro\'s acoustic ' +
+                   'sensors. None of them is a classification: nothing here ' +
+                   'decided what made a sound.\n' +
+                   Object.keys(MARK_COLORS)
+                         .map((k) => `${k}: ${MARK_WORDS[k]}`).join('\n') +
+                   '\n"," and "." jump between them.' },
+            [el('span', { cls: 'track-name', text: 'Marks' })]);
+        const lane = el('div', { cls: 'track-lane', id: 'lane-marks' });
+        const canvas = document.createElement('canvas');
+        lane.appendChild(canvas);
+        row.appendChild(head);
+        row.appendChild(lane);
+        tracksEl.appendChild(row);
+        tracksEl.appendChild(playhead);
+        // No `head`, unlike the other three: they keep theirs to re-style it as
+        // the pitch changes, and this lane has one row at a fixed height and
+        // nothing to re-style.
+        markRow = { row, lane, canvas };
+        scrubOn(lane);
+        rebuilt = true;
+    }
+    markRow.lane.style.height = MARK_LANE_H + 'px';
+    markRow.row.style.height = MARK_LANE_H + 'px';
+    markStack = 4 + MARK_LANE_H;
+}
+
+function drawMarksLane() {
+    if (!markRow) return;
+    const c = laneContext(markRow.canvas);
+    if (!c) return;
+    const { ctx, w, h } = c;
+
+    for (const m of markList) {
+        const x = timeToX(m.at);
+        if (x < -4 || x > w + 4) continue;
+        const color = MARK_COLORS[m.kind] || '#9aa3ad';
+        // A run gets a band under the tick showing how long it lasted, and an
+        // onset does not -- because an onset *has* no length, and a band of some
+        // minimum width drawn for one would be this lane inventing a duration
+        // the detector never measured.
+        if (m.end > m.at) {
+            const r = Math.min(w, timeToX(m.end));
+            if (r > x) {
+                ctx.globalAlpha = 0.25;
+                ctx.fillStyle = color;
+                ctx.fillRect(x, h - 4, Math.max(1, r - x), 3);
+                ctx.globalAlpha = 1;
+            }
+        }
+        // The tick. Full height and one pixel wide, because what it says is
+        // "here", and anything wider is a claim about how long.
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.round(x), 1, 1, h - 6);
+    }
+}
+
+/// The lane, for tests -- `telemetryLane()`'s reader, for its reason.
+export function marksLane() {
+    return { lane: markRow ? markRow.lane : null, rows: markList };
+}
+
 function drawRuler() {
     const w = laneWidth();
     if (w <= 0) return put(ruler, () => []);
@@ -1547,6 +1686,10 @@ export function draw() {
     syncHeads();
     syncSpanLane();
     syncCueLane();
+    // Before the Telemetry lane, which re-appends itself last so a plot stays
+    // beside the waveform it is read against — so this lands directly above it,
+    // and directly above A1 when there is no plot.
+    syncMarksLane();
     syncTelemetryLane();
     fitHeights();
     clampView();
@@ -1555,6 +1698,7 @@ export function draw() {
     drawAudioLane();
     drawSpanLane();
     drawCueLane();
+    drawMarksLane();
     drawTelemetryLane();
     drawCueBar();
     drawScrollbar();
@@ -1641,16 +1785,16 @@ let laneStack = 0;
 /// How tall the box of lanes is, and how tall the timeline is around it.
 ///
 /// **Written on every draw and from four numbers now**, which is the change the
-/// When lane forced and the Cues and Telemetry lanes confirmed: the video lanes
-/// divide a budget when the track count moves, and the other three appear and
-/// disappear on channels of their own, so no one of those events can be the only
-/// place the total is stated. One function, called from `draw()`, and the
+/// When lane forced and the Cues, Marks and Telemetry lanes confirmed: the video
+/// lanes divide a budget when the track count moves, and the other four appear
+/// and disappear on channels of their own, so no one of those events can be the
+/// only place the total is stated. One function, called from `draw()`, and the
 /// contributions are added.
 ///
 /// The words strip is outside the box of lanes — it is a form and not a lane —
 /// so it is a term on the timeline's own height rather than on `#tracks`'s.
 function fitHeights() {
-    const stack = laneStack + spanStack + cueStack + telStack;
+    const stack = laneStack + spanStack + cueStack + markStack + telStack;
     tracksEl.style.height = stack + 'px';
     // Everything above and below the box of lanes: the zoom bar, the ruler, the
     // waveform, the words strip when there is one, the scrollbar and the gaps.

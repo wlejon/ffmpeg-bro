@@ -49,6 +49,7 @@ void installFfmpegBindings(JSContext* ctx) {
 
         installProbe(ns);
         installData(ns);
+        installMarks(ns);
         installCapabilities(ns);
         installExpression(ns);
         installSequences(ns);

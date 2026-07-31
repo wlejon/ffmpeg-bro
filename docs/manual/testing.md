@@ -46,6 +46,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-capturetest out [<fixture-dir>]  # devices: an endless input, recording one, a session of several, a file laid over one
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
 ./build/Release/ffmpeg-bro-datatest <telemetry.mp4> [<real-gopro.MP4>]  # a data track: which parser, what GPMF says, and a payload it may not trust
+./build/Release/ffmpeg-bro-markstest <marks.m4a> [<silent.mp4>] [<sound.m4a>]  # a soundtrack: is a transient found, is it at the right second, is the tone the frequency it was written at
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>] [<rotated>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>
@@ -57,6 +58,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_marks.js -- <marks.m4a> [<no-audio>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last four sections
@@ -347,6 +349,56 @@ directly above the waveform and follows the clips through a trim without the
 track being read again, and that reading a file does **not** mark the document
 unsaved, which is the rule a waveform follows and the reason a reading is not in
 the document.
+
+## Finding things by sound
+
+`markstest` is the measurement and `ui_marks.js` is everything around it.
+
+The measurement is almost entirely **a number of seconds**, because that is what
+the feature is: a mark is a place, and a detector that finds a transient a second
+late is worse than useless. `marks.m4a` is the only fixture here in which
+anything ever *happens* — three broadband transients at 1, 3 and 5 seconds, a
+1000 Hz tone from 6.0 to 7.5, and two seconds of quiet after it — and each of
+those parts is there for one assertion. The clicks are two seconds apart, which
+is forty times the detector's own refractory period, so a mark near one is
+unambiguously about that one. The tolerance is 120 ms and it is arithmetic
+rather than tuning: a 25 ms analysis window, a mark stamped at its start so it
+lands early rather than late, and an AAC transform of 1024 samples on top. The
+tone's frequency is the one *physical* measurement in the whole feature — a
+detector that reports a run and gets the pitch wrong is the failure that still
+looks plausible — and the two seconds of bed after it are what separates a
+detector from one that marks everything.
+
+The bed being **stationary** noise rather than a quiet tone is not a detail. The
+first version of the fixture used a 137 Hz tone amplitude-modulated at 3.1 Hz,
+and PCEN — which divides each mel channel by its own smoothed energy — turned
+that swell into real spectral flux: eight onsets came out of the first second of
+"silence", and the refractory period of the last of them swallowed the genuine
+transient at 1.0 s. The suite passed, on a spurious mark. Anything added to that
+file has to be stationary or has to be one of the things being detected.
+
+Two onsets in the first quarter-second survive even with a stationary bed, and
+they are asserted rather than suppressed: the flux baseline is an EMA starting
+at zero, so the earliest frames clear the bar trivially. What is required is that
+they are *distinguishable* — flux 0.055 and 0.077 against 3.4–3.5 for a real
+transient — because filtering them out here would make this and
+`bro.sense.analyze()` disagree about the same file.
+
+A build configured `-DBRO_WITH_SOUNDML=OFF` runs a different suite entirely, in
+both halves: what is asserted there is that the call **refuses and names the
+flag**, and that no control is drawn. An empty list is what a silent file gives
+back, so "found nothing" and "this build cannot look" must not be the same
+answer.
+
+`ui_marks.js` adds the four seams around it — that the control appears under a
+soundtrack and nowhere else, that the read is started and polled while the
+application goes on drawing, that a mark reaches the timeline through the clip it
+belongs to and follows a trim without the soundtrack being read again, and that
+`,` and `.` walk the marks in time order from either end. It also asserts the
+thing that cannot be seen in a screenshot and would make the whole feature a lie:
+that **none of the three kinds is named after a source of sound**. The words come
+from one object in `ui/marks.js`, and the test reads them and looks for "bird",
+"speech", "voice", "word", "music" and the rest.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).

@@ -484,10 +484,39 @@ Honest list of what does not work:
   device mix. Faking it from here — summing the clips' analysed peaks and drawing
   that — would be the waveform wearing a meter's name, which is exactly what the
   old entry was complaining about.
-- **Finding things by sound.** Reviewing wildlife footage, the birds are
-  audible long before anything is visible; nothing yet marks where a call
-  happens so you can jump between them. bro has the parts — `bro.sense` for
-  onset and tonality, `bro.kws` for open-vocabulary spotting.
+- **Finding things by sound, by *what* the sound was.** Finding *where* one is
+  works now — see [Finding things by
+  sound](sources.md#finding-things-by-sound): a soundtrack is read for spectral
+  transients, runs of steady pitch with the frequency they were measured at, and
+  runs above the noise floor, and `,` and `.` walk between them. What none of
+  that does is say what made a sound, and the honest version of this entry is
+  that it never will from these sensors: spectral flux crossing a threshold is
+  the same event for a wingbeat, a car door and a footstep, and a periodicity run
+  is the same event for a blackbird and a fridge. Reviewing an afternoon of
+  wildlife footage, that gets you to every candidate and leaves you to listen.
+
+  **Searching for a word is the other half, and it is not merely unimplemented —
+  it is unshippable as things stand.** bro has `bro.kws`, an open-vocabulary
+  phoneme spotter, and it is genuinely the right mechanism: type "kestrel", get
+  the moments somebody said it. But `bro.kws.load({ weights: '….bpm' })` wants a
+  PhonemeNet checkpoint, and that file is in none of these repositories. A
+  control built on it would work on the machine that trained the weights and fail
+  on every other one, which is worse than an absent control: the failure arrives
+  at the press, after the file is open and the wait has been spent. Closing this
+  is therefore not a piece of UI work at all. It needs a checkpoint that ships —
+  either small enough to check in beside the code, or fetched on demand with
+  everything that implies (a download somebody consented to, a place to put it, a
+  hash to check it against, and an answer for a machine that is offline). Until
+  one of those exists there is nothing here to offer.
+
+  There is a smaller thing in between that *is* only work: a mark carries the
+  measurement that produced it — the flux of a transient, the periodicity and
+  frequency of a run — and nothing filters on them. "Only transients stronger
+  than this" and "only runs between 2 and 6 kHz" are a slider and two fields over
+  numbers that are already in the answer, and they would turn a dawn chorus's
+  three hundred marks into the twenty worth listening to. `tonalFminHz` and
+  `tonalFmaxHz` already reach the sensor through `bro.ffmpeg.marks`; nothing in
+  the interface sets them.
 - **Two renders at once, one per card.** The second card is *chosen* now — see
   [A second card](card.md#a-second-card): this application asks libav how many
   devices of each type there are, `Which one` on Sources is a picker of them

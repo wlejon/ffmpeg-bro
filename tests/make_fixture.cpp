@@ -16,6 +16,12 @@
 //   - **The sound is audible and is a known tone.** -6 dBFS at a frequency
 //     that divides the sample rate evenly, so a peak-RMS check means what it
 //     says and a resampler that went wrong is audible in the result.
+//   - **One soundtrack in which something happens.** Every other one here is a
+//     continuous tone, which is what a mix check and a resampler check want and
+//     is useless for a detector: in a tone nothing ever happens, so "found
+//     nothing" and "was never called" are the same answer. `marks.m4a` carries
+//     transients at 1, 3 and 5 seconds and a 1000 Hz tone from 6.0 to 7.5, over
+//     a bed too quiet to be either — see `writeMarkable`.
 //   - **The image fixtures are about the shape of a *drop*, not about the
 //     picture.** A padded run, a file beside it that is not part of one, and
 //     an unpadded run whose numbers cross from one digit to two — because what
@@ -69,6 +75,7 @@ extern "C" {
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -199,7 +206,9 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
 /// Written through the same `Writer` as everything else, with a stream list of
 /// exactly one audio stream — which is the whole of how you say "no picture" to
 /// it, since an empty list is the renderer's sentinel for the usual two.
-bool writeSoundOnly(const std::filesystem::path& path, double seconds, double toneHz) {
+bool writeSoundTrack(const std::filesystem::path& path, double seconds,
+                     const char* what,
+                     const std::function<float(int64_t, double)>& sampleAt) {
     ExportSettings s;
     s.path = path.string();
     s.format = "mp4";
@@ -235,7 +244,7 @@ bool writeSoundOnly(const std::filesystem::path& path, double seconds, double to
         samples.assign(static_cast<size_t>(count) * s.audioChannels, 0.0f);
         for (int i = 0; i < count; ++i) {
             const double t = double(at + i) / s.audioSampleRate;
-            const float v = static_cast<float>(0.5 * std::sin(2.0 * kPi * toneHz * t));
+            const float v = sampleAt(at + i, t);
             for (int c = 0; c < s.audioChannels; ++c)
                 samples[static_cast<size_t>(i) * s.audioChannels + c] = v;
         }
@@ -248,10 +257,93 @@ bool writeSoundOnly(const std::filesystem::path& path, double seconds, double to
         std::fprintf(stderr, "%s: %s\n", path.string().c_str(), err.c_str());
         return false;
     }
-    std::printf("  %s  no video stream, %.0f Hz %.1fs  %lld bytes\n",
-                path.filename().string().c_str(), toneHz, seconds,
+    std::printf("  %s  no video stream, %s %.1fs  %lld bytes\n",
+                path.filename().string().c_str(), what, seconds,
                 static_cast<long long>(writer.bytesSoFar()));
     return true;
+}
+
+/// The mirror above, as it was: one continuous tone and nothing else.
+bool writeSoundOnly(const std::filesystem::path& path, double seconds, double toneHz) {
+    char what[32];
+    std::snprintf(what, sizeof(what), "%.0f Hz", toneHz);
+    return writeSoundTrack(path, seconds, what, [toneHz](int64_t, double t) {
+        return static_cast<float>(0.5 * std::sin(2.0 * kPi * toneHz * t));
+    });
+}
+
+/// A soundtrack in which things **happen at particular seconds**.
+///
+/// Every other soundtrack here is a continuous tone, which is exactly right for
+/// what those fixtures are about — a peak-RMS check, a resampler that went
+/// wrong, a mix that has something in it — and is useless for the one question
+/// this one exists for: does the acoustic sensor bus (`src/native/sound_marks.h`)
+/// find a moment, and is the moment it finds *the* moment. In a continuous tone
+/// nothing ever happens, so a detector that reported nothing and a detector that
+/// was never called are the same result.
+///
+/// Four facts are built in, and none can be faked with content:
+///
+///   - **A quiet bed of stationary white noise, at about -60 dBFS.** Not digital
+///     silence: an energy VAD measures a noise floor and gates against it, and a
+///     floor of -120 dB makes every sound above it infinitely loud. -60 is also
+///     below the VAD's own absolute floor (-55 dB), so the bed itself is never a
+///     run of sound and the runs that *are* reported are the things put here on
+///     purpose. Stationary is the load-bearing word — see the lambda.
+///   - **Three transients, at 1, 3 and 5 seconds.** A 5 ms full-scale burst with
+///     an exponential decay — broadband, so it is a step in the spectrum rather
+///     than in one bin, which is what spectral flux measures. Spaced by two
+///     seconds, which is forty times the detector's refractory period, so each
+///     is unambiguously its own.
+///   - **A tone at 1000 Hz from 6.0 to 7.5 s**, at -6 dBFS with 20 ms raised-
+///     cosine edges. 1000 Hz sits well inside the tonality search range
+///     (80..4000 Hz) and is a whole number of the analysis window, and the fades
+///     are what stop the tone's own start being a transient so loud that the
+///     run and the onset cannot be told apart. A detector that reports the run
+///     but gets the frequency wrong is the failure this catches: 1000 is
+///     nowhere near a harmonic or a subharmonic of anything else in the file.
+///   - **Nothing between 7.5 s and the end.** Two seconds of bed, so that "the
+///     last run ended" is a thing the file demonstrates rather than a thing the
+///     end of the file forces.
+bool writeMarkable(const std::filesystem::path& path) {
+    const double clicks[] = { 1.0, 3.0, 5.0 };
+    const double toneFrom = 6.0, toneTo = 7.5, toneHz = 1000.0, edge = 0.02;
+    return writeSoundTrack(
+        path, 9.5, "clicks at 1/3/5 s, 1000 Hz from 6.0 to 7.5 s",
+        [&](int64_t i, double t) {
+            // **Stationary** noise, not a quiet tone and not a modulated one.
+            // The first bed tried here was a 137 Hz tone amplitude-modulated at
+            // 3.1 Hz, and it made the fixture lie: PCEN divides each mel channel
+            // by its own smoothed energy, so a bed that swells and fades is a
+            // bed whose *normalised* spectrum moves, which is exactly what
+            // spectral flux measures — eight onsets came out of the first
+            // second of "silence", and the refractory period of the last of them
+            // swallowed the real transient at 1.0 s. A test that then passed
+            // would have been passing on a spurious mark. White noise at a
+            // constant level has no flux once PCEN has settled.
+            //
+            // Keyed on the sample index rather than on `t` so the bytes are the
+            // same however the writer blocks them, and by a hash rather than a
+            // PRNG so no state crosses a block boundary. The constants are
+            // xorshift's.
+            uint64_t h = static_cast<uint64_t>(i) * 0x9E3779B97F4A7C15ull;
+            h ^= h >> 29; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 32;
+            double v = 0.001 * (double(int32_t(uint32_t(h))) / 2147483648.0);
+            for (double c : clicks) {
+                const double d = t - c;
+                if (d >= 0.0 && d < 0.005)
+                    v += 0.95 * std::exp(-d * 900.0) * std::sin(2.0 * kPi * 2500.0 * d);
+            }
+            if (t >= toneFrom && t < toneTo) {
+                double a = 0.5;
+                if (t - toneFrom < edge)
+                    a *= 0.5 - 0.5 * std::cos(kPi * (t - toneFrom) / edge);
+                if (toneTo - t < edge)
+                    a *= 0.5 - 0.5 * std::cos(kPi * (toneTo - t) / edge);
+                v += a * std::sin(2.0 * kPi * toneHz * t);
+            }
+            return static_cast<float>(v > 1.0 ? 1.0 : (v < -1.0 ? -1.0 : v));
+        });
 }
 
 /// A file whose pictures are stored one way up and meant to be seen another —
@@ -887,6 +979,10 @@ int main(int argc, char* argv[]) {
     // one that is stored sideways, and one with no picture in it at all. See
     // the functions themselves for why neither can be faked with content.
     if (!writeSoundOnly(dir / "sound.m4a", 6.0, 330.0)) return 1;
+    // The one soundtrack here in which anything ever *happens*. See
+    // `writeMarkable` for what is in it and why each part of it cannot be
+    // replaced by content.
+    if (!writeMarkable(dir / "marks.m4a")) return 1;
     if (!writeRotated(dir / "landscape.mp4", dir / "rotated.mp4", 90)) return 1;
     if (!writeTelemetry(dir / "landscape.mp4", dir / "telemetry.mp4")) return 1;
 

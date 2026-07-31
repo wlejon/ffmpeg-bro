@@ -263,6 +263,17 @@ console.log('\npicking a series puts a row on the timeline');
     const kids = Array.from(tracks.children).filter((n) => n.className.indexOf('track-row') >= 0);
     same(kids[kids.length - 1], lane.lane.parentNode,
          'and it is the last row in the box, which puts it against A1');
+
+    // **A row is drawn per clip, so a row has to find its clips.** `clip.input`
+    // is the input *object* — `clipsOf()` compares against one and
+    // `ui/document.js` writes `c.input.id` — and the lane's own filter compared
+    // it to a row's `inputId`, which is the id. Always false, so the lane drew
+    // its labels and its reach and no line at all. Asserted here because it is
+    // the one thing about this lane a reader of `rows` cannot see: `rows` is the
+    // picked list and says nothing about what reached a pixel.
+    ok(A.project.clips.some((c) => c.input && c.input.id === lane.rows[0].inputId),
+       'and the row finds the clips it belongs to — the id off the input object, ' +
+       'not the object against the id');
 }
 
 console.log('\nsix at once, because that is how many colours there are');

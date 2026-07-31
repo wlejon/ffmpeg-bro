@@ -287,7 +287,7 @@ void SourceAudio::seekTo(double srcSeconds) {
     awaitingSeek_ = true;
 }
 
-void SourceAudio::mixInto(float* dst, int frames, float gain) {
+int SourceAudio::mixInto(float* dst, int frames, float gain) {
     int done = 0;
     while (done < frames) {
         if (available() == 0 && !fill()) break;
@@ -300,6 +300,7 @@ void SourceAudio::mixInto(float* dst, int frames, float gain) {
         done += n;
         compact();
     }
+    return done;
 }
 
 void SourceAudio::close() {

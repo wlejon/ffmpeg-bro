@@ -81,6 +81,10 @@ import { readsInput, filterPath } from './export/subtitles.js';
 import { goTo } from './shell.js';
 import { streamsWorthReading, readingOf, readStream, dropReading, tickTelemetry,
          isPicked, pick, labelOf } from './telemetry.js';
+// Whole, unlike the line above: this module reads eight things off it and a
+// namespace keeps `marksModel.MARK_WORDS` visibly the *one* home of the
+// sentences that say what a mark claims.
+import * as marksModel from './marks.js';
 
 let refs = {};
 let hooks = {};
@@ -161,13 +165,14 @@ const waitingText = new Map();
 /// this stage goes on connecting while you walk to the timeline, exactly as a
 /// render goes on rendering.
 export function tickSources() {
-    // Both polls run, and neither is allowed to skip the other: a probe
-    // settling and a data read settling are different answers arriving on
-    // different threads, and `||` would leave one of them unpolled for a frame
-    // whenever the other went first.
+    // Every poll runs, and none is allowed to skip another: a probe settling, a
+    // data read settling and a soundtrack read settling are three answers
+    // arriving on three threads, and `||` would leave one of them unpolled for a
+    // frame whenever another went first.
     const opened = tickInputs();
     const read = tickTelemetry();
-    const settled = opened || read;
+    const heard = marksModel.tickMarks();
+    const settled = opened || read || heard;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1314,7 +1319,8 @@ function fileRows(p, input) {
                   p.format.bitRate ? kbps(p.format.bitRate) : ''].filter(Boolean).join(' · '),
                  'dim'),
         ]),
-        ...p.streams.flatMap((s) => [streamLine(s), ...dataRows(input, s)]),
+        ...p.streams.flatMap((s) => [streamLine(s), ...dataRows(input, s),
+                                     ...soundRows(input, s)]),
     ];
 }
 
@@ -1381,6 +1387,114 @@ function dataRows(input, stream) {
     rows.push(div('src-data-series',
         r.series.map((sv) => seriesChip(input, stream.index, sv))));
     return rows;
+}
+
+/// Where something happens in this soundtrack, for the audio streams.
+///
+/// **Under the stream's own line**, for `dataRows`'s reason exactly: this is the
+/// screen where a stream is described, a soundtrack is a stream, and the control
+/// that reads one belongs beside the line that says what it is.
+///
+/// **Only where it will work.** `marks.worthReading` asks two things — whether
+/// this build has brosoundml in it at all, and whether the input has a
+/// soundtrack — so a build configured `-DBRO_WITH_SOUNDML=OFF` draws no control
+/// rather than one that throws at the press. Same rule as the parser list one
+/// function up.
+///
+/// **The words on it are the whole of what stops this being a lie.** Nothing
+/// here says "birds", "speech" or "events": the button says what it does, and
+/// the three legends say what was measured. They come from `MARK_WORDS` in
+/// ui/marks.js so there is one copy of them.
+function soundRows(input, stream) {
+    if (!input || stream.kind !== 'audio') return [];
+    // The best audio stream is what is read — `av_find_best_stream`, which is
+    // what `[0:a]` means on a command line — so the control goes under one line
+    // and not under every audio stream of a file that has three. Which one it
+    // actually was comes back on the reading and is shown below.
+    if (!marksModel.worthReading(input)) return [];
+    const p = input.probe && input.probe.streams || [];
+    if (p.find((s) => s.kind === 'audio') !== stream) return [];
+
+    const e = marksModel.readOf(input.id);
+    if (!e) {
+        return [div('src-data', [
+            el('button', { cls: 'btn tiny', text: 'Find sounds',
+                           // What it finds is listed out of `MARK_WORDS` rather
+                           // than written here, for the reason that object
+                           // exists: it is the one home of the sentences saying
+                           // what a mark measured, and `tests/ui_marks.js` reads
+                           // it and refuses any that names a *source* of sound.
+                           // A copy on this tooltip would be the one the guard
+                           // cannot see.
+                           title: 'Decode this soundtrack and mark where something ' +
+                                  'happens in it. It reads the whole track -- about ' +
+                                  'a minute per hour of sound -- on a thread, so ' +
+                                  'nothing here stops while it does. Nothing is ' +
+                                  'classified: a mark says when, never what.\n' +
+                                  MARK_KINDS.map((k) => `${k}: ${marksModel.MARK_WORDS[k]}`)
+                                            .join('\n'),
+                           on: { click: () => { marksModel.findSounds(input);
+                                                drawSources(); } } }),
+            span('nothing has listened to this soundtrack yet', 'dim'),
+        ])];
+    }
+    if (e.state === 'reading')
+        return [div('src-data', [span('Listening' + (e.elapsed > 0.4
+            ? ' · ' + e.elapsed.toFixed(1) + 's' : '') + '…', 'dim')])];
+    if (e.state !== 'done')
+        return [div('src-data', [
+            span(e.error || 'will not read', 'src-error'),
+            el('button', { cls: 'btn tiny', text: 'Again',
+                           on: { click: () => { marksModel.dropMarks(input.id);
+                                                marksModel.findSounds(input);
+                                                drawSources(); } } }),
+        ])];
+
+    const rows = [div('src-data', [
+        span(marksModel.summaryOf(e), 'dim'),
+        el('button', { cls: 'btn tiny', text: 'Forget',
+                       title: 'Drop these marks and take them off the timeline.',
+                       on: { click: () => { marksModel.dropMarks(input.id);
+                                            drawSources(); } } }),
+    ])];
+    // Which kinds are on the lane. Three chips rather than a list of every
+    // mark: a mark is a *place* and the place to look at one is the timeline,
+    // so what belongs here is the decision about which of them to draw and jump
+    // between. Each chip's tooltip is the sentence saying what that kind
+    // actually measures, because a colour on a lane cannot say it.
+    const kept = countByKind(e);
+    rows.push(div('src-data-series', MARK_KINDS.map((kind) =>
+        el('button', {
+            cls: 'src-series' + (marksModel.isShown(kind) ? ' on' : ''),
+            title: marksModel.MARK_WORDS[kind],
+            on: { click: () => {
+                marksModel.showKind(kind, !marksModel.isShown(kind));
+                drawSources();
+            } },
+        }, [
+            span(kind, 'mono'),
+            span(String(kept[kind] || 0), 'dim'),
+        ]))));
+    return rows;
+}
+
+/// The three kinds, in the order the chips go in. Taken off `MARK_WORDS` so that
+/// a fourth sensor is a row there and no edit here.
+const MARK_KINDS = Object.keys(marksModel.MARK_WORDS);
+
+/// How many marks of each kind a finished read holds, in one pass.
+///
+/// The **kept** ones, which is what a chip's number has to be: it is what would
+/// appear on the lane if the chip were turned on, and the totals before the
+/// minimum run length are already in the sentence above it. One walk rather than
+/// one per chip, because the list runs to twenty thousand and this is redrawn on
+/// every press on this stage.
+function countByKind(entry) {
+    const out = {};
+    const r = entry && entry.result;
+    if (!r) return out;
+    for (const m of r.marks) out[m.kind] = (out[m.kind] || 0) + 1;
+    return out;
 }
 
 /// One series, as a thing to put on the timeline or take off it.

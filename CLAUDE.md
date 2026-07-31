@@ -36,10 +36,10 @@ ctest --test-dir build -C Release
 ```
 
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
-`sequences`, `capture`, `hardware`, `telemetry`, `ui-player`, `ui-sources`,
-`ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`, `ui-measure`,
-`ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`, `ui-document`,
-`ui-output`, `ui-telemetry`):
+`sequences`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
+`ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
+`ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
+`ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -67,7 +67,11 @@ alone, since every data stream probes as `bin_data`, and carrying **real GPMF**
 now that there is a parser, because `SCAL` is a divisor and a value reported
 without it is off by orders of magnitude while still looking plausible
 (`tests/gpmf_write.h` builds the payload for the fixture and for the parser test
-both) — and `picture-cues.mkv`
+both) — `marks.m4a` is the only soundtrack here in which anything ever
+*happens* (transients at 1, 3 and 5 s, a 1000 Hz tone from 6.0 to 7.5, over a bed
+of **stationary** noise, because a bed that swells is a bed with spectral flux in
+it and the first version of it manufactured eight onsets in the first second of
+"silence") — and `picture-cues.mkv`
 carries a `dvdsub` track, whose cues are *pictures* of characters and are the
 only thing here that reaches the refusals a bitmap subtitle earns.
 Every suite also runs against any real file, and skips the sections whose
@@ -268,6 +272,56 @@ and `ui/timeline.js`'s Data lane draws it, per clip, through `sourceTime` — th
 same map `columnsOf` uses for a waveform, which is what makes a series follow a
 trim without being re-read. A reading is derived, so it is not in the document,
 for the reason `peaks` is not.
+
+### The sensors that are not libav's
+
+`sound_marks.h` is the one call on this surface that is not a part of ffmpeg's
+model: libav decodes an input's soundtrack to mono 16 kHz through `SourceAudio`
+and **bro's** acoustic sensor bus reads it — `brosoundml::SensorHub`, the same
+class and the same configuration `bro.sense.analyze()` runs, linked into
+`ffmpeg-bro-core`. Five things about it are load-bearing.
+
+**A mark is named after the measurement, never after what made it.** An `onset`
+is a spectral-flux transient, a `tonal` run is sustained autocorrelation
+periodicity with a real frequency in hertz, and a `sound` run is an energy gate
+against a measured noise floor — bro calls that flag `voice` and this
+deliberately does not, because nothing in a gate decided anything about a voice.
+The words have one home (`MARK_WORDS` in `ui/marks.js`) and `tests/ui_marks.js`
+asserts none of them names a *source* of sound. A label claiming a
+classification the DSP never made is the one failure that would make the whole
+feature a lie.
+
+**The DSP is native because `bro.sense.analyze()` is synchronous on the UI
+thread** at ~58× realtime — 5.4 s of frozen window for a five-minute clip, ~31 s
+for half an hour, for exactly the long recordings this is for — and wants the
+whole clip as one `Float32Array` (~230 MB/hour). Chunking it is **not** the fix:
+each call builds a private `SensorHub`, so a boundary resets the flux EMA and the
+VAD floor and manufactures an onset there. `bro.sense` is not installed in worker
+realms either, so this is a thread and not a job for `ui/analyze-worker.js`.
+
+**The prime-then-hop framing loop is a second home for a fact bro owns** — bro's
+`js_analyze` is the other — and the two must agree on `sample_rate`, `win_length`
+and `hop_length`. The comment on the loop says so by name; `tests/marks_test.cpp`
+asserts the three numbers so a change to bro's recipe fails loudly instead of
+moving every mark quietly.
+
+**Only one analysis runs at a time, process-wide, and that is brotensor's rule.**
+The mel front-end reaches `matmul`, and brotensor's CPU pool is a singleton whose
+`run()` "assumes it is not re-entered from a second concurrent application
+thread". So `readSoundMarks` takes a lock and re-arms the deadline once it has
+it, because a read that queued behind another must not be failed for somebody
+else's file.
+
+**`-DBRO_WITH_SOUNDML=OFF` is a refusal that names itself**, not an empty result:
+the link and the `#if` are conditional, the call throws with the flag and the fix
+in it, and `bro.ffmpeg.marks.available()` is what stops the UI offering a control
+that would fail. An empty list is what a *silent file* gives back.
+
+Marks are derived, so they are not in the document, not in `ui/.storage.json` and
+not on the undo track — `peaks`'s rule. They reach the timeline per clip through
+`timelineTime` (`ui/project.js`), the same map the waveform and the Data lane
+use, which is what makes them follow a trim. `ui/marks.js` is the model,
+`ui/timeline.js`'s Marks lane draws them, and `,`/`.` walk them.
 
 ### The native encode side
 

@@ -369,6 +369,43 @@ twenty seconds or two hours — and the reach is not.
 the When lane and the Cues lane follow. Nothing on it can be edited: a reading is
 what a file says. Pressing it moves the playhead, as on every other lane.
 
+## The Marks lane
+
+Where something happens in the sound — see [Finding things by
+sound](sources.md#finding-things-by-sound) — drawn against the same ruler,
+between the Data lane and the waveform.
+
+One row for every mark in the edit, and colour is the only thing that separates
+them:
+
+| | |
+|---|---|
+| yellow | an `onset` — a sharp change in the spectrum |
+| blue | a `tonal` run, drawn with a band showing how long it lasted |
+| green | a `sound` run, likewise |
+
+**One row, not three.** The other three lanes here grow a row per span, per cue
+track, per picked series, because each of those is a thing you point at on its
+own. A mark is not: what you do with one is *jump to it*, and `,` and `.` walk
+every mark in the edit in time order whatever kind it is. Three stacked rows
+would turn the commonest gesture — go to the next thing — into a question about
+which row you were on.
+
+A tick is one pixel wide because what it says is "here". A run gets a band under
+the tick and an onset does not: an onset *has* no length, and a band of some
+minimum width drawn for one would be this lane inventing a duration nobody
+measured.
+
+Marks are drawn **per clip**, exactly as a telemetry series is: they belong to
+the input and the lane is the edit, so they follow every trim, move and speed
+change without the soundtrack being read again. A mark in a part of the file the
+clip does not cover is simply absent, rather than drawn at the edge — a moment
+the edit does not contain is not a moment.
+
+Nothing here can be edited: a mark is what a soundtrack says. Pressing the lane
+moves the playhead, as on every other lane. Which kinds are drawn is decided on
+the Sources stage, where the reading was asked for.
+
 ## The sync lock
 
 The padlock beside a track's name says whether that track ripples on its own or

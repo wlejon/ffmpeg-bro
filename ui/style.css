@@ -769,6 +769,12 @@ button.track-lock.on { color: var(--accent); }
    box the When lane wears, for the same reason: it is a lane of things you wrote
    rather than of shots you cut, and its height is the timeline's to write. */
 #lane-cues { background: #13151a; }
+/* The Marks lane, one row for every mark in the edit. The same darker box again,
+   and for a third variation on the same reason: it is a lane of things a file
+   turned out to contain rather than of shots you cut. The Telemetry lane wears
+   the default because a plot needs the contrast for its own line; a tick does
+   not, and against the default background a one-pixel tick disappears. */
+#lane-marks { background: #13151a; }
 
 /* The strip under the waveform where the selected cue's words are typed. A row
    of the same shape as a lane so the head gutter lines up, but a form rather

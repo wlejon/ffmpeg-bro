@@ -93,6 +93,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/bindings_capabilities.cpp
     src/native/bindings_expr.cpp
     src/native/bindings_data.cpp
+    src/native/bindings_marks.cpp
     src/native/bindings_playback.cpp
     src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
@@ -108,6 +109,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/playback_filter.cpp
     src/native/playback_output.cpp
     src/native/probe_async.cpp
+    src/native/sound_marks.cpp
     src/native/sound_meter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
@@ -126,6 +128,45 @@ target_include_directories(ffmpeg-bro-core
 )
 target_link_libraries(ffmpeg-bro-core PRIVATE bro_video qjs qjsbind ${FFMPEG_LIBRARIES})
 target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
+
+# ── bro's acoustic sensors, linked rather than called through JS ───────────
+#
+# `src/native/sound_marks.cpp` drives `brosoundml::SensorHub` directly — the same
+# class, the same configuration and the same framing loop `bro.sense.analyze()`
+# runs — because that call is synchronous on the UI thread and was measured at
+# ~58x realtime, which is a 5.4-second frozen window for a five-minute clip and
+# about thirty-one seconds for half an hour. The reasoning in full, including why
+# chunking `analyze` is not the fix, is at the top of src/native/sound_marks.h.
+#
+# `brosoundml` is a target in this build tree already: the `BRO_WITH_SOUNDML`
+# cache entry set above makes bro's `third_party/CMakeLists.txt` add it, from the
+# standalone `../brosoundml` beside *this* repo where there is one and from bro's
+# submodule otherwise. `brotensor` comes with it, PUBLIC, because the mel
+# front-end is composed of its ops. So this adds no source, no download and no
+# port — only a link line and a name on the include path.
+#
+# **`-DBRO_WITH_SOUNDML=OFF` is a supported configuration and stays one.** The
+# link and the compile definition are both conditional, sound_marks.cpp compiles
+# to a refusal that names the flag, and `bro.ffmpeg.marks.available()` answers
+# false so the UI does not offer a control that would fail. PUBLIC on both counts
+# because ffmpeg-bro-core is a static library: its consumers need brosoundml's
+# archive at link time, and the tests need the macro to know which of the two
+# behaviours to assert.
+if(BRO_WITH_SOUNDML)
+    if(NOT TARGET brosoundml::brosoundml)
+        message(FATAL_ERROR
+            "BRO_WITH_SOUNDML is ON but no brosoundml target was created. bro "
+            "resolves ../brosoundml against ${CMAKE_CURRENT_SOURCE_DIR} and "
+            "falls back to its own submodule, so a `git clone` of bro without "
+            "--recursive and no sibling checkout has neither.")
+    endif()
+    target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
+    # bro's own flag name rather than a second one for the same fact. bro
+    # declares it with `option()`, which makes it a cache variable and not a
+    # compile definition — bro's own `src/js` does exactly this for the same
+    # reason, and `#if BRO_WITH_SOUNDML` in sound_marks.cpp reads it.
+    target_compile_definitions(ffmpeg-bro-core PUBLIC BRO_WITH_SOUNDML=1)
+endif()
 
 add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
 target_link_libraries(ffmpeg-bro PRIVATE ffmpeg-bro-core bro_engine)
@@ -216,6 +257,16 @@ target_include_directories(ffmpeg-bro-datatest
                            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                                    "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# A soundtrack, read for where things happen in it: does the sensor bus find a
+# moment, and is it *the* moment. Almost every assertion is a number of seconds
+# against the fixture that was written with events at known ones — plus the one
+# physical measurement in the feature, the dominant frequency of a tonal run,
+# and the refusal a build with no brosoundml in it gives instead.
+add_executable(ffmpeg-bro-markstest tests/marks_test.cpp)
+target_link_libraries(ffmpeg-bro-markstest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-markstest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # The GPU: what this machine has, whether a hardware decode is the same
 # picture, and what each path costs. Most of it is a measurement rather than an
 # assertion, and every assertion has to pass on a machine with no card at all.
@@ -272,6 +323,12 @@ set(FIXTURE_ROTATED "${FIXTURE_DIR}/rotated.mp4")
 # identity — a copy that drops the tag still writes a data track of the right
 # length at the right times that the reader it was carried for cannot find.
 set(FIXTURE_DATA "${FIXTURE_DIR}/telemetry.mp4")
+# The one soundtrack here in which something happens: transients at 1, 3 and 5
+# seconds and a 1000 Hz tone from 6.0 to 7.5, over a bed too quiet to be either.
+# Every other fixture's sound is a continuous tone, which is exactly what a mix
+# check wants and is useless for a detector — in a tone nothing ever happens, so
+# "found nothing" and "was never called" are the same result.
+set(FIXTURE_MARKS "${FIXTURE_DIR}/marks.m4a")
 
 # A real camera file, if this machine has one. Nothing in the suite requires it
 # — every section that uses it says what it found and skips otherwise — but a
@@ -310,6 +367,14 @@ add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
 # `-DGOPRO_FILE=<path>` at configure time is how a machine that has one passes
 # it in without checking a 4 GB file into anything.
 add_test(NAME telemetry COMMAND ffmpeg-bro-datatest "${FIXTURE_DATA}" "${GOPRO_FILE}")
+# Where things happen in a soundtrack. The first file is the only fixture here
+# in which anything *does* — a continuous tone cannot separate a detector that
+# found nothing from one that was never called. The second and third are the
+# controls: a file with no audio stream at all, which has to be refused rather
+# than answered with an empty list, and a six-second tone, which has to be one
+# run and no transients.
+add_test(NAME marks COMMAND ffmpeg-bro-markstest "${FIXTURE_MARKS}"
+         "${FIXTURE_SILENT}" "${FIXTURE_SOUND}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
 # The device it records from is `lavfi`, which produces its own pictures, so
 # most of this needs no fixture at all. What does is the half about a file laid
@@ -388,19 +453,26 @@ add_test(NAME ui-document COMMAND ffmpeg-bro-headless
 add_test(NAME ui-telemetry COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_telemetry.js"
          -- "${FIXTURE_DATA}")
+# Where something happens in a soundtrack, from the press to the lane to the two
+# keys that walk it. The second file has no audio stream at all, which is what
+# says the control is drawn where it will work rather than everywhere with a
+# refusal behind it.
+add_test(NAME ui-marks COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_marks.js"
+         -- "${FIXTURE_MARKS}" "${FIXTURE_SILENT}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
 add_test(NAME ui-output COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_output.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export capabilities inputs sequences hardware telemetry PROPERTIES
-                     FIXTURES_REQUIRED media TIMEOUT 900)
+set_tests_properties(decode export capabilities inputs sequences hardware telemetry marks
+                     PROPERTIES FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document ui-output ui-telemetry PROPERTIES
-                     FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
+                     ui-measure ui-subtitles ui-document ui-output ui-telemetry ui-marks
+                     PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
 # translation into a filter graph is a pure function of it. ui-graph is the
