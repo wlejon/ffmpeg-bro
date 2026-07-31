@@ -273,10 +273,46 @@ encoder follows the filename through `av_guess_codec`, which is what `ffmpeg` it
 does; without it every picture render lands on mjpeg, which is what image2 declares as
 its default whatever the file is called.
 
+## The shape of the stage
+
+`Write` is three zones and they are the sentence it is: **where it goes**, a
+band across the top; **what is in it**, the list under the band; **what will
+come out, and go**, the rail down the right. Read top to bottom and then left to
+right, that is the order the decision is actually taken in.
+
+The band is the file and the columns under it are what is in it — container
+above contents. It was a column down the left for a while, and three things were
+wrong with that. The path is the widest value on this stage and the only one
+that has to be read all the way to the end, and 320px showed
+`D:\obs-recording\2026-07-30_04-48-25-exp` and stopped. A destination is five
+one-line controls, so a full-height column for it was eight hundred pixels of
+nothing beside the one list here that can grow. And it put the first decision at
+the far left and the button that acts on it at the far right, with the
+specialist's list between them.
+
+The rail is sized to its sentences rather than to a fraction of the window, and
+has no spacer in it, so `Export` sits directly under the last line of the
+read-back it is the conclusion of. Held open to the full height with a spacer
+above the buttons — which is what it was — the one thing the rail exists to put
+under the pointer ended up eight hundred pixels below it.
+
+Nothing on the stage is drawn to the width of the window: prose is capped at a
+measure, the list is capped where an open row wants to be, and the path is
+narrower again, because that is the difference between a section and a field.
+
 ## Where it goes
 
-The other half of `Write` is the destination, and it stopped being a path.
-There are four shapes and each says which it is:
+The band's left cell is the destination. The path itself is the width of the
+cell, above everything else and outside the labelled rows the rest of the panel
+is made of — it is read all the way to the end, and a folder elided in the
+middle of `D:\obs-recording\2026-07-…` is the part you were checking. Under it
+are `Choose…` and the name the render will actually write, and then everything
+that is about *this destination* rather than about the muxer: another version,
+what happens if it drops. In the right cell, over the read-back and sharing its
+rule, the muxer and the shape of destination it makes, on one line, because
+between them they say a single thing.
+
+There are four such shapes and the line says which it is:
 
 | | |
 |---|---|
@@ -480,6 +516,17 @@ sentence:
 | **a set of files** | all of that, and **how many files have arrived** — the only number that says a segmenter is segmenting |
 | **a stream** | elapsed, frames, bytes **sent** and the bitrate they come to — no size, no percentage, no bar |
 
+The panel that says so is **built once and written into afterwards**, keyed on
+which rows it has rather than on what they say. It used to be rebuilt on every
+frame — six elements torn down and six made, sixty times a second, for as long
+as the render ran, to change four numbers — and under the compositor that is
+what made a running render smear its own lines over each other.
+
+**`Stop` is on that panel**, which is the only place it can be. It used to be
+the Write stage's own `Back` button retitled, and the call that retitles it is
+the call that hides the rail the button is in — so a running export had a Stop
+nobody could press and no other way to end one.
+
 How many files is asked of libavformat rather than counted off the disk.
 `AVFormatContext::io_open` is the callback every output goes through — the
 primary file, each segment, each DASH chunk, each `tee` slave, each numbered
@@ -552,3 +599,71 @@ packets, going into the file exactly as they came out, which is `-map 0:1`
 and `-c:v copy`. Picking one changes the rest of the sentence, because a
 copied stream has no encoder to choose: the codec in the file is the codec that
 was in the input, so it is stated rather than offered.
+
+### Opening one
+
+`▸` opens a row, and what opens is **one part of the stream at a time**. A
+stream has five kinds of thing to say about it and they are independent —
+nobody sets a language and a bitstream filter in the same breath — so they are
+tabs rather than a column:
+
+| | |
+|---|---|
+| **Span** / **Cues** | what part of the source this takes, and where a copy is allowed to begin |
+| **Naming** | the language, the name a track menu shows, and the fourcc the muxer writes |
+| **Flags** | the dispositions, as `+forced+comment` |
+| **Metadata** | `-metadata:s:` on this stream |
+| **Packets** | the bitstream-filter chain |
+
+A row only gets the tabs it can have: a composed stream has no span, because it
+takes the whole render range; a data stream has no packet chain, because a
+bitstream filter reworks a *codec's* packets and a track nothing decodes has no
+codec for one to be written against; an attachment has none of them, because it
+is a stream with no packets in it and one field to set.
+
+**A closed tab says how much is on it** — `Flags · 2`, `Packets · 1` — which is
+what makes the strip a summary rather than a hiding place. Between that and the
+row's own tail, everything set on a stream is legible without opening anything.
+
+**Chapters and file metadata follow the same rule one level up.** Both are empty
+on nearly every render, and drawn open they were headings of exactly the same
+weight as `What is in the file`, each with one empty control under it — four
+equal peers, of which one is what the stage is for. So each is a line carrying
+its count until there is something in it, which is the shape `Also write · 0`
+has in the band above. A list with anything in it is always open, and its
+heading is then not a control at all: a chapter that folded itself away would be
+the application hiding what you just did.
+
+Changing a row's source puts the strip back to its first tab, because the source
+is what decides which tabs there are: moving a row onto a copy is exactly what
+gives it a span to trim and a keyframe list to trim against.
+
+### ⓘ
+
+Every section of this stage can explain itself, and none of them does unless
+asked. `ⓘ` on a heading puts that section's reasoning back — what a copied
+stream is, why `tee` and `Also write` are different questions, why an attachment
+is what makes a styled subtitle look the same on somebody else's machine — and
+`ⓘ Explain`, at the top of the stream list, turns on every section at once. What
+you choose is remembered, so the application can be as talkative as you want it
+and stays that way.
+
+What is **never** folded is anything that is true of *this* render: what a
+setting has cost, which cues a window drops, why a control is missing, that a
+stream will not be written. Those change with the settings and are the answer to
+a question somebody is holding right now. The line between the two is drawn
+sentence by sentence in `ui/export/explain.js`, which is also where the fold
+lives.
+
+### What will be written
+
+The right-hand rail is the read-back: the size, the rate, the length and the
+frame count, and then **the stream list again as statements** — one line each,
+in the words a track menu would use, with no control on any of them. It is the
+last thing under the pointer before `Export`, which is the whole reason it is on
+that side, and it says what the file will be rather than restating how big it
+is. A stream the render is going to drop is drawn as one that will not be there,
+and says so.
+
+`Export` is directly under it, full width, and `Back` under that — they are not
+two of the same thing and the weight says which is which.

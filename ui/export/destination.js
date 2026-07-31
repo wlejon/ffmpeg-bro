@@ -46,6 +46,7 @@ import { settings } from './state.js';
 import { urlScheme } from '../format.js';
 import { el, span, row, head } from '../dom.js';
 import { btns, note } from './controls.js';
+import { why } from './explain.js';
 
 /// The scheme of a destination, or '' for somewhere on the filesystem.
 ///
@@ -264,11 +265,11 @@ export function destinationRows({ list, changed, prefix = 'tee', first = 'matros
 
     const spec = teeSpec(list);
     rows.push(row('-f tee', span(spec || 'nothing to write yet', spec ? 'mono ex-tee' : 'dim')));
-    rows.push(row('', note(
+    rows.push(why('tee',
         'Built rather than typed: tee separates its destinations with | and reads each ' +
         'one’s options out of [ ], so a | or a \\ in a target and a : or a ] in an option ' +
         'value have to be escaped — and then the shell quotes the lot again, which is a ' +
-        'second and separate layer. The command bar prints what runs.')));
+        'second and separate layer. The command bar prints what runs.'));
     return rows;
 }
 

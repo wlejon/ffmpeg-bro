@@ -390,28 +390,69 @@
          progress wants the window rather than a strip under a form it has
          stopped being about.
 
-         The middle column is the output's stream list: one row per stream the
-         muxer will number. A file is not a picture and a soundtrack, and
-         everything this application could not say — a second audio track, a
-         language, a forced flag, a fourcc, a font travelling with a subtitle —
-         followed from that list not existing. -->
+         Three zones, and they are the sentence the stage is: **where it goes**
+         (the band), **what is in it** (the list), **what will come out, and go**
+         (the rail). The list is the only one of the three that can grow, so it
+         is the only one given room to.
+
+         The list is the output's streams: one row per stream the muxer will
+         number. A file is not a picture and a soundtrack, and everything this
+         application could not say — a second audio track, a language, a forced
+         flag, a fourcc, a font travelling with a subtitle — followed from that
+         list not existing. -->
     <section id="st-write" class="stage-view hidden">
         <div id="ex-write" class="ex-write">
-            <div id="ex-dest" class="ex-col ex-dest"></div>
-            <!-- The muxer's own option table, in a column for the same reason
-                 the encoder's is: `hls` has thirty options and reading them
-                 through a fold under the picker is not reading them. Hidden
-                 rather than unmounted, like every other pane here. -->
-            <div id="ex-format-opts" class="ex-col ex-right hidden"></div>
-            <div id="ex-streams" class="ex-col ex-streams"></div>
-            <div id="ex-verdict" class="ex-verdict">
-                <div class="section-head">What will be written</div>
-                <div id="ex-summary" class="ex-summary mono dim"></div>
-                <div id="ex-warnings" class="ex-warnings"></div>
-                <span class="spacer"></span>
-                <div class="ex-foot">
-                    <button id="ex-cancel" class="text">Back</button>
-                    <button id="ex-go" class="text primary">Export</button>
+            <!-- The destination, as a band across the top rather than as a
+                 column down the side, and the shape says the thing: **the band
+                 is the file and the columns under it are what is in it** —
+                 container above contents, which is also the order the decision
+                 is taken in.
+
+                 It was a column, and three things were wrong with that. The
+                 path is the widest value on this stage and the only one that
+                 has to be read all the way to the end, and 320px showed
+                 `D:\obs-recording\2026-07-30_04-48-25-exp` and stopped — the
+                 exact failure the comment on `.ex-target` says it exists to
+                 prevent. A destination is five one-line controls, so a
+                 full-height column for it was eight hundred pixels of nothing
+                 beside the one list on this stage that can grow. And it put the
+                 first decision at the far left and the button that acts on it at
+                 the far right, with the specialist's list between them. -->
+            <div id="ex-dest" class="ex-dest"></div>
+            <div class="ex-write-body">
+                <div id="ex-streams" class="ex-col ex-streams"></div>
+                <!-- The muxer's own option table, in a column for the same
+                     reason the encoder's is: `hls` has thirty options and
+                     reading them through a fold under the picker is not reading
+                     them. Hidden rather than unmounted, like every other pane
+                     here — and opened from the band above it, exactly as
+                     Advanced is opened from the Encode stage's left column. -->
+                <div id="ex-format-opts" class="ex-col ex-right hidden"></div>
+                <!-- The rail that says what the click does, and it has to *say*
+                     it: for a long time this was two lines about the picture
+                     over eight hundred pixels of nothing, while the answer to
+                     "what will be in this file" was a hundred controls in the
+                     column beside it. The manifest is that list read back as
+                     statements — one line per stream, in the words a track menu
+                     would use.
+
+                     **Sized to its content and with no spacer in it**, which is
+                     the other half of that fix. Held open to the full height of
+                     the stage with a `.spacer` above the buttons, the one thing
+                     it was arranged to put under the pointer ended up eight
+                     hundred pixels below the sentences it is the conclusion of.
+                     Export now sits directly under the last line of the
+                     read-back, and Back sits under Export, because they are not
+                     two of the same thing. -->
+                <div id="ex-verdict" class="ex-verdict">
+                    <div class="section-head">What will be written</div>
+                    <div id="ex-summary" class="ex-summary mono dim"></div>
+                    <div id="ex-manifest" class="ex-manifest"></div>
+                    <div id="ex-warnings" class="ex-warnings"></div>
+                    <div class="ex-foot">
+                        <button id="ex-go" class="ex-go" title="Write the file">Export</button>
+                        <button id="ex-cancel" class="text ex-back">Back</button>
+                    </div>
                 </div>
             </div>
         </div>

@@ -295,6 +295,7 @@ exporter.initExport({
     intentCustom: el('ex-intent-custom'),
     strip: el('ex-strip'),
     summary: el('ex-summary'),
+    manifest: el('ex-manifest'),
     warnings: el('ex-warnings'),
     progress: el('ex-progress'),
     cancel: el('ex-cancel'),

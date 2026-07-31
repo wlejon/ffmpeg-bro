@@ -36,7 +36,7 @@
 //     encoder lists. A stream row cannot offer something the render will then
 //     refuse.
 
-import { el, div, span, put, select, row, head, fromTemplate, show } from '../dom.js';
+import { el, div, span, put, select, row, segmented, fromTemplate, show } from '../dom.js';
 import { basename } from '../format.js';
 import { project, hasPicture } from '../project.js';
 import { inputs, hasSound, lengthOf as inputLength } from '../inputs.js';
@@ -56,7 +56,8 @@ import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCod
 import { cueTracks, trackById as cueTrackById, makeCueTrack, forkFrom, forkRefusal,
          hasOverrides, fileExtension, cueFilePath, cuesChanged } from '../cues.js';
 import { goTo } from '../shell.js';
-import { isPad, padChoices } from './pads.js';
+import { isPad, parsePad, padChoices } from './pads.js';
+import { explained, why, whyButton, explainAllButton, onExplainChange } from './explain.js';
 import { wires as overlayWires } from '../graph/overlay.js';
 
 let host = null;
@@ -67,12 +68,29 @@ let hooks = {};
 // fold, and holding the row object itself would not survive `restore()`.
 let openDetail = 0;
 
+// And which *part* of that row. One fold used to mean one row unfolding into
+// everything it has — a span, two names, fifteen flags, a metadata bag and a
+// packet chain, four hundred and fifty pixels of it — which is the forty
+// controls on one screen that the fold exists to prevent, moved one level down
+// rather than avoided. So the detail is faceted: the strip says which parts of
+// this stream carry anything, and one of them is open.
+//
+// Module-level and not per row, because only one row is open at a time and
+// carrying a facet per stream would mean remembering which tab somebody last
+// used on a stream they may since have deleted. Cleared when a different row is
+// opened, so a facet a row does not have cannot be inherited from the last one.
+let openFacet = '';
+
 let nextId = 100;
 const newId = () => ++nextId;
 
 export function initStreams(node, h) {
     host = node;
     hooks = h || {};
+    // Pressing an ⓘ anywhere on the stage redraws this column, because the ⓘ on
+    // a stream row's facet strip is drawn by this module and the master one puts
+    // paragraphs back into every section of it at once.
+    onExplainChange(() => drawStreams());
 }
 
 // ── the model ──────────────────────────────────────────────────────────────
@@ -198,6 +216,50 @@ export function codecOf(s) {
     return s.kind === 'video' ? activeVideoCodec()
          : s.kind === 'audio' ? activeAudioCodec()
          : s.kind === 'subtitle' ? defaultSubtitleCodec(settings.container) : '';
+}
+
+/// The stream list as the file will have it: one plain line each, in words.
+///
+/// **The verdict column's job, and it was not doing it.** That column exists so
+/// that the last thing under the pointer before the click is a description of
+/// what the click does — and what it described was the picture, in two lines,
+/// while the answer to "what will be in this file" was a hundred controls in the
+/// column beside it. So this is the same list said as statements: what a stream
+/// is, where it comes from, what it comes out as, and the words a track menu
+/// would show. `says()` is the editable version of the same sentence and this is
+/// deliberately not built out of it — one is controls and one is text, and a
+/// shared builder would be a `<select>` with no listener on it.
+///
+/// It is derived on every restate, like the summary above it, so nothing here is
+/// remembered and there is no second copy of the list to fall out of step.
+export function manifest() {
+    const list = settings.streams || [];
+    return list.map((s, i) => {
+        const label = labelOf(list, i);
+        const codec = codecOf(s);
+        const copied = copiedStream(s);
+        let from = '';
+        if (s.kind === 'attachment') from = s.path ? basename(s.path) : 'no file yet';
+        else if (copied) {
+            const input = copiedInput(s);
+            from = `copied${input ? ` from ${input.name}` : ''}`;
+        } else if (isCueRow(s)) from = 'cues in this document';
+        else if (s.kind === 'subtitle') from = readsInput(s) ? 'read from an input' : 'no source';
+        else if (isPad(s)) from = `the graph’s [${parsePad(s.source)}]`;
+        else from = s.kind === 'video' ? 'the composite' : 'the mix';
+        // The one thing here that is a *refusal* rather than a description: a
+        // row the render will drop is a row the file will not have, and the
+        // column that says what will be written is exactly where that belongs.
+        const dropped = (madeOfTheMix(s) && !hasAudibleSound()) ||
+                        (madeOfTheComposite(s) && !hasVisiblePicture());
+        // A data stream is named by its **fourcc** and not by its codec, the
+        // same way `copyChoices` names one: `gpmd`, `tmcd` and `mebx` all probe
+        // as `bin_data`, so the tag is the whole identity of the track and is
+        // what the application it is being carried for looks for.
+        const named = copied && copied.kind === 'data' ? (copied.tag || codec) : codec;
+        return { label, kind: s.kind, codec: copied ? `${named}, as it is` : named,
+                 from, tail: tailOf(s), dropped };
+    });
 }
 
 export function addStream(kind) {
@@ -412,21 +474,117 @@ export function drawStreams() {
     if (!host) return;
     const list = settings.streams;
     put(host, () => [
-        head('What is in the file'),
+        // The stage's master ⓘ rides on this column's heading rather than on
+        // the first one's, because this is the column with the room in it and
+        // the one somebody is looking at when they want to know what a control
+        // is for. It is a stage-level control on a column-level heading, which
+        // is a compromise and is better than a bar of chrome above three
+        // columns that would then be there on every stage that has none.
+        el('div', { cls: 'section-head ex-head' },
+           [span('What is in the file', 'ex-head-t'), explainAllButton()]),
         div('ex-streams-list', list.map((s, i) => streamRow(list, s, i))),
+        ...addRow(),
+        ...rewrapRow(),
+        ...listSection('chapters', 'Chapters', settings.chapters.length, chapterRows,
+            'Beside the streams rather than among them, because a chapter is not one: it has ' +
+            'no index, nothing is mapped to it, no player shows it in a track menu and there ' +
+            'is no -metadata:s: for one. It is a table in the container — marks on the ' +
+            'output’s own timeline.',
+            'Drawn as a row in the list above it would invite the question “what is chapter ' +
+            '2’s language”, which has no answer.'),
+        // Its own key rather than the stream facet's: they are the same idea one
+        // level apart, and an ⓘ pressed on a stream's metadata should not put a
+        // paragraph at the bottom of the column about the container's.
+        ...listSection('file-metadata', 'File metadata', Object.keys(settings.metadata).length,
+            () => pairRows(settings.metadata, 'file', () => hooks.restated()),
+            '-metadata key=value, on the container rather than on a stream — a title, an ' +
+            'author, a comment. Two fields rather than one line to be parsed, because a ' +
+            'value is free to contain anything and a single field holding a=b;c=d would need ' +
+            'an escaping rule this application has nowhere else.'),
+    ]);
+}
+
+// Which of the two lists at the bottom of this column somebody has opened while
+// it is empty. Not in `settings` and not in the workspace, for the reason the
+// muxer picker's own state is not: it is where you are, not what will be
+// written, and a document carrying it would be a document that reformatted
+// somebody else's stage.
+const unfolded = { chapters: false, 'file-metadata': false };
+
+/// A section that is a list, drawn as one line while there is nothing in it.
+///
+/// **The stream list is the subject of this column and the other two are not.**
+/// Drawn open, `Chapters` and `File metadata` were headings of exactly the same
+/// weight as `What is in the file`, each with one empty control under it: four
+/// equal peers, of which one is what the stage is for and two are empty on
+/// nearly every render. Closed they carry their count, which is what makes the
+/// line a summary rather than a hiding place — the rule a stream row's facet
+/// tabs already follow, and the shape `Also write · 0` has in the band above.
+///
+/// **A list with anything in it is always open, and its heading is then not a
+/// control at all** — which is `versionRows`'s rule, and is why there is no
+/// third state to hold. A chapter you have just added that folded itself away
+/// would be the application hiding what you did; a heading that still offered
+/// the press and did nothing with it would be worse, being a control that looks
+/// like one. So the disclosure is there only while there is something to
+/// disclose.
+function listSection(key, title, count, build, ...prose) {
+    const empty = count === 0;
+    const open = !empty || unfolded[key];
+    const opts = { cls: 'section-head ex-head', 'data-f': key };
+    if (empty) {
+        opts.cls += ' ex-toggle';
+        opts.on = { click: () => { unfolded[key] = !unfolded[key]; drawStreams(); } };
+    }
+    return [
+        explained(key, `${empty ? (open ? '▾ ' : '▸ ') : ''}${title} · ${count}`, opts),
+        ...(open ? build() : []),
+        why(key, ...prose),
+    ];
+}
+
+/// The four kinds of stream that can be added, and the reason a kind is missing.
+///
+/// **A refusal goes under the buttons and never among them.** `.ex-add` is a
+/// flex row, so a paragraph returned in place of a button became a *flex item* —
+/// three lines of prose wedged between `+ Subtitle` and `+ Attachment`, shoving
+/// the last button to the far margin. It looked like a rendering fault and it
+/// was a shape mismatch: a button and a sentence are not two of the same thing
+/// and cannot be laid out as though they were.
+function addRow() {
+    const sub = holdsSubtitles(settings.container);
+    const data = copyChoices('data').length > 0;
+    // Said only where somebody has opened something, so an empty stage is not
+    // lectured about a stream kind it has no file to have one of.
+    const opened = inputs.some((i) => i && i.probe);
+    return [
         div('ex-add', [
             addButton('Video', 'video'),
             addButton('Audio', 'audio'),
-            ...subtitleAdd(),
-            ...dataAdd(),
+            // **A subtitle button that is absent is worth a sentence**, for the
+            // reason it always was: a stage with no subtitle control on it reads
+            // as an application that cannot write subtitles at all.
+            sub ? addButton('Subtitle', 'subtitle') : null,
+            // **A data stream cannot be made**, only carried, so the only
+            // question is whether one of the open inputs has one. A button that
+            // added a row with nowhere to point would offer a stream that
+            // cannot exist.
+            data ? addButton('Data', 'data') : null,
             addButton('Attachment', 'attachment'),
         ]),
-        ...rewrapRow(),
-        head('Chapters'),
-        ...chapterRows(),
-        head('File metadata'),
-        ...pairRows(settings.metadata, 'file', () => hooks.restated()),
-    ]);
+        // Both of these are cut to the refusal itself, which is the part that
+        // is true of *this* stage right now. Where each stream kind can come
+        // from instead is in the manual, and a paragraph of it under a row of
+        // buttons was the largest block of text on the screen.
+        sub ? null : div('ex-note dim',
+            `The ${settings.container} muxer holds no subtitle codec this build can write. ` +
+            'Matroska holds ass, subrip and webvtt; mp4 holds mov_text — or burn them into ' +
+            'the picture with a subtitles filter on the Graph stage, which any container ' +
+            'takes.'),
+        (data || !opened) ? null : div('ex-note dim',
+            'No open input has a data stream — telemetry, timecode, timed metadata — so ' +
+            'there is none to carry through, and one cannot be made here.'),
+    ];
 }
 
 /// "Just rewrap this" and "cut this without re-encoding", which is what most
@@ -470,9 +628,9 @@ function rewrapRow() {
             }));
     }
     return [
-        head('Copy it instead'),
+        explained('rewrap', 'Copy it instead'),
         div('ex-add', buttons),
-        div('ex-note dim',
+        why('rewrap',
             'A copied stream is the packets that are already in the file: instant, ' +
             'lossless, and untouched by anything on the Compose or Graph stages. ' +
             'A cut can only start at a keyframe — open a row to see where they are. ' +
@@ -492,48 +650,6 @@ function rewrap(index, span) {
     openDetail = rows[0].id;
     syncAudioFlag();
     hooks.changed();
-}
-
-/// `+ Subtitle`, and the one reason it might not be offered.
-///
-/// **It used to be two, and the second one has gone.** "You have not added a
-/// subtitle file yet" was a real refusal for as long as every cue in an output
-/// had to come out of one; now a row can read cues this document holds, so a
-/// person with no subtitle file and a line to write has somewhere to start, and
-/// the button says so rather than sending them to the Sources stage for a file
-/// they do not have.
-///
-/// The remaining refusal is worth saying rather than hiding, for the reason it
-/// always was: a stage with no subtitle button on it reads as an application
-/// that cannot write subtitles at all.
-function subtitleAdd() {
-    if (holdsSubtitles(settings.container)) return [addButton('Subtitle', 'subtitle')];
-    return [div('ex-note dim',
-                `The ${settings.container} muxer holds no subtitle codec this build ` +
-                'can write, so there is no subtitle stream to add. Matroska holds ass, ' +
-                'subrip and webvtt; mp4 holds mov_text. Burning them into the picture ' +
-                'is a subtitles filter on the Graph stage and works in any container.')];
-}
-
-/// `+ Data`, offered only when there is a data stream to copy.
-///
-/// **Silence is the wrong answer here and a permanent button is too.** Unlike a
-/// subtitle track there is no second reason it might be missing — a data stream
-/// cannot be made, converted or encoded, so the only question is whether one of
-/// the open inputs has one. Most files do not, and a button that adds a row
-/// with nowhere to point would be offering a stream that cannot exist; a stage
-/// with no mention of it at all reads as an application that throws telemetry
-/// away, which is what it used to do and no longer does.
-function dataAdd() {
-    if (copyChoices('data').length) return [addButton('Data', 'data')];
-    // Said only where somebody has opened something, so an empty stage is not
-    // lectured about a stream kind it has no file to have one of.
-    if (!inputs.some((i) => i && i.probe)) return [];
-    return [div('ex-note dim',
-                'None of the open inputs has a data stream — timed metadata, a camera’s ' +
-                'timecode, an action camera’s telemetry — so there is none to carry ' +
-                'through. One cannot be made here: a data stream is packets whose meaning ' +
-                'belongs to whatever reads them.')];
 }
 
 function addButton(label, kind) {
@@ -569,6 +685,11 @@ function streamRow(list, s, i) {
     show(detail, opened);
     more.addEventListener('click', () => {
         openDetail = opened ? 0 : s.id;
+        // A different row is a different set of facets — a data stream has no
+        // packet chain and an attachment has none of them — so the strip starts
+        // at its own first entry rather than at whichever one the last row was
+        // left on.
+        openFacet = '';
         drawStreams();
     });
     if (opened) put(detail, () => detailRows(s, tail));
@@ -798,6 +919,11 @@ function setSource(s, source) {
         s.copyTo = 0;
     }
     openDetail = s.id;
+    // **And back to the first facet, because the source is what decides there is
+    // one.** Moving a row onto a copy is what gives it a span to trim and a
+    // keyframe list to trim against; leaving the strip on whichever tab the last
+    // row was open at would hide the one thing this press just made relevant.
+    openFacet = '';
     syncAudioFlag();
     hooks.changed();
 }
@@ -834,9 +960,75 @@ function tailOf(s) {
     return bits.join(' · ');
 }
 
+// ── the facets of one stream ───────────────────────────────────────────────
+//
+// A stream has five kinds of thing to say about it and they are independent:
+// what part of the source it takes, what it is called, what a player should do
+// with it, what travels beside it, and what happens to its packets on the way
+// to the muxer. Nobody edits two of them at once — a language and a bitstream
+// filter have nothing to do with each other — so they are drawn one at a time.
+//
+// **The strip says which of them carry anything**, which is the half of this
+// that is worth more than the height it saves: `Flags · 2` on a closed facet is
+// the answer to "what has been set on this row" without opening any of them,
+// and the row's own tail already says *what* those two are.
+
+/// The facets this row has, in the order they are decided in.
+///
+/// A kind that cannot have one does not get an empty tab: a data stream has no
+/// packet chain, because a bitstream filter reworks a *codec's* packets and a
+/// track nothing decodes has no codec for one to be written against.
+function facetsOf(s) {
+    const out = [];
+    const span = spanFacet(s);
+    if (span) out.push(span);
+    out.push({ v: 'naming', l: 'Naming', title: 'Language, the name a track menu shows, ' +
+                                                 'and the fourcc the muxer writes' });
+    out.push({ v: 'flags', l: 'Flags', title: 'What a player should do with this stream ' +
+                                              'without being asked' });
+    out.push({ v: 'metadata', l: 'Metadata', title: '-metadata:s: on this stream' });
+    if (s.kind !== 'data')
+        out.push({ v: 'packets', l: 'Packets', title: 'Bitstream filters — the one stage ' +
+                                                      'that is neither an encoder nor a muxer' });
+    return out.map((f) => {
+        const n = facetCount(s, f.v);
+        return n ? Object.assign({}, f, { l: `${f.l} · ${n}` }) : f;
+    });
+}
+
+/// The first facet, which is a window on the source and is not always there: a
+/// composed stream takes the whole render range and has nothing to trim.
+function spanFacet(s) {
+    if (s.kind === 'subtitle') {
+        if (isCueRow(s)) return { v: 'span', l: 'Cues',
+                                  title: 'The cues this document holds, and what is written' };
+        if (!readsInput(s)) return null;
+        return { v: 'span', l: 'Cues', title: 'What part of the track is read, and which ' +
+                                              'cues survive it' };
+    }
+    if (!isCopy(s)) return null;
+    return { v: 'span', l: 'Span', title: 'What part of the input is copied, and where a ' +
+                                          'copy is allowed to begin' };
+}
+
+/// How many things are set on a facet, for the badge on its tab.
+function facetCount(s, id) {
+    switch (id) {
+        case 'naming': return [s.language, s.title, s.tag].filter(Boolean).length;
+        case 'flags': return (s.disposition || '').split(/[+, ]+/).filter(Boolean).length;
+        case 'metadata': return Object.keys(s.metadata || {}).length;
+        case 'packets': return (s.bsf || []).filter((b) => b.name).length;
+        default: return 0;
+    }
+}
+
 function detailRows(s, tail) {
     const restate = () => { tail.textContent = tailOf(s); hooks.restated(); };
 
+    // **An attachment is not faceted**, because it has one control. It is a
+    // stream with no packets in it — nothing to trim, nothing to filter, and a
+    // disposition on a font is a disposition nothing reads — so a strip of five
+    // tabs over one field would be the shape of the thing lying about it.
     if (s.kind === 'attachment') {
         const mime = el('input', {
             cls: 'wide', 'data-f': 'attach-mime', type: 'text', value: s.mimeType || '',
@@ -844,12 +1036,12 @@ function detailRows(s, tail) {
             on: { change: (e) => { s.mimeType = e.target.value.trim(); restate(); } },
         });
         return [
+            div('ex-facets', [span('Attachment', 'ex-facet-one'), whyButton('attachment')]),
             row('Mime type', mime),
-            div('ex-note dim',
+            why('attachment',
                 'An attachment is a stream with no packets in it: the muxer writes the whole ' +
                 'file out of the stream at header time, which is what ffmpeg’s -attach does. ' +
-                'Matroska holds them; mp4 does not.'),
-            div('ex-note dim',
+                'Matroska holds them; mp4 does not.',
                 'The reason to embed one is an ASS subtitle track: it names its fonts by ' +
                 'name and carries none of them, so a player without that font substitutes ' +
                 'and every line of text moves. A font travelling in the file is the only ' +
@@ -857,6 +1049,43 @@ function detailRows(s, tail) {
         ];
     }
 
+    const facets = facetsOf(s);
+    const cur = facets.find((f) => f.v === openFacet) || facets[0];
+    return [
+        div('ex-facets', [
+            segmented('facet', facets, cur.v, (v) => { openFacet = v; drawStreams(); }),
+            whyButton(cur.v),
+        ]),
+        ...facetRows(s, cur.v, restate),
+    ];
+}
+
+function facetRows(s, id, restate) {
+    switch (id) {
+        case 'span': return copyRows(s, restate);
+        case 'naming': return namingRows(s, restate);
+        case 'flags': return [
+            row('Flags', dispositionToggles(s, restate)),
+            why('flags',
+                'libavformat’s own vocabulary, walked bit by bit with av_disposition_to_string ' +
+                'rather than written down here. Several at once, because a stream can be ' +
+                'forced *and* a commentary — what is stored is +forced+comment, which is ' +
+                'exactly what -disposition takes.'),
+        ];
+        case 'metadata': return [
+            ...pairRows(s.metadata, `s${s.id}`, restate),
+            why('metadata',
+                '-metadata:s: on this stream. Two fields rather than one line to be parsed, ' +
+                'because a value is free to contain anything and a single field holding ' +
+                'a=b;c=d would need an escaping rule this application has nowhere else.'),
+        ];
+        case 'packets': return bsfRows(s, restate);
+    }
+    return [];
+}
+
+/// What the stream is called, and what the muxer writes as its fourcc.
+function namingRows(s, restate) {
     const lang = el('input', {
         cls: 'num', 'data-f': 'stream-lang', type: 'text', value: s.language || '',
         placeholder: 'eng', maxlength: 3,
@@ -867,16 +1096,18 @@ function detailRows(s, tail) {
         placeholder: 'what a track menu shows',
         on: { change: (e) => { s.title = e.target.value; restate(); } },
     });
-
     return [
-        ...copyRows(s, restate),
         row('Language', [lang, span('ISO 639-2', 'dim')]),
         row('Name', title),
-        row('Flags', dispositionToggles(s, restate)),
         ...tagRow(s, restate),
-        head('Metadata'),
-        ...pairRows(s.metadata, `s${s.id}`, restate),
-        ...bsfRows(s, restate),
+        why('naming',
+            'The name is what a track menu shows and the language is what a player picks by, ' +
+            'so a file with two soundtracks and neither of them named is a file whose track ' +
+            'menu reads “Audio 1, Audio 2”.',
+            'The fourcc is offered as the muxer’s own vocabulary rather than as four ' +
+            'characters nobody knows to type — hvc1 and hev1 are the same HEVC bitstream and ' +
+            'only the first plays on Apple hardware. A container with nothing to say about ' +
+            'this codec shows no such control at all.'),
     ];
 }
 
@@ -905,16 +1136,15 @@ function copyRows(s, restate) {
         if (!readsInput(s)) return [];
         const input = readInput(s);
         return [
-            head('What is read'),
             row('From', [subNum(s, 'copyFrom', restate),
                          span('seconds into the file', 'dim')]),
             row('To', [subNum(s, 'copyTo', restate), span('0 is the end of it', 'dim')]),
             ...cueRows(s, restate),
-            div('ex-note dim',
+            ...forkRow(s),
+            why('span',
                 'The start is also the output’s zero: a subtitle file written against a ' +
                 'whole programme, read from ten seconds in, comes out ten seconds earlier ' +
                 'than it went in.' + (input ? ` Read out of ${input.name}.` : '')),
-            ...forkRow(s),
         ];
     }
     if (!isCopy(s)) return [];
@@ -949,14 +1179,13 @@ function copyRows(s, restate) {
     });
 
     const out = [
-        head('What is copied'),
         row('From', [num('copyFrom', '0'), span('seconds into the input', 'dim')]),
         row('To', [num('copyTo', '0'), span('0 is the end of it', 'dim')]),
         ...followRow(s, restate),
     ];
 
     if (isData) {
-        out.push(div('ex-note dim',
+        out.push(why('span',
             'Every sample of a data stream stands on its own, so this starts exactly where ' +
             'it is asked to. What the samples mean is the reading application’s business — ' +
             'they are carried through untouched and nothing here interprets them, which is ' +
@@ -965,7 +1194,7 @@ function copyRows(s, restate) {
     }
 
     if (stream && stream.kind === 'audio') {
-        out.push(div('ex-note dim',
+        out.push(why('span',
             'Every packet of a sound stream stands on its own, so a copied soundtrack ' +
             'starts exactly where it is asked to.'));
         return out;
@@ -992,11 +1221,16 @@ function copyRows(s, restate) {
             title: 'Move the in-point to the keyframe the copy would start on anyway',
             on: { click: () => { s.copyFrom = land; restate(); drawStreams(); } },
         })));
+    // The count is a fact about *this* stream and stays; why it constrains
+    // anything is the same sentence on every file and folds.
     out.push(div('ex-note dim',
         `${list.times.length} keyframe${list.times.length === 1 ? '' : 's'}, from the ` +
         `${list.how === 'index' ? 'demuxer’s own index' : 'packets, read'}` +
-        `${list.complete ? '' : ' — and the list was cut short, so there are more'}. ` +
-        'A copy is packets, so it can only begin on one of them.'));
+        `${list.complete ? '' : ' — and the list was cut short, so there are more'}.`));
+    out.push(why('span',
+        'A copy is packets rather than pictures, so it can only begin on one of them: a ' +
+        'frame between two keyframes is decoded from the one before it and there is nothing ' +
+        'to hand a decoder that starts there.'));
     return out;
 }
 
@@ -1041,7 +1275,7 @@ function followRow(s, restate) {
                     on: { click: () => { unfollow(s); restate(); drawStreams(); } },
                 }),
             ]),
-            div('ex-note dim',
+            why('span',
                 'Trim, move or ripple that clip and this span moves with it — it is the ' +
                 'clip’s in and out points on the input’s own clock, which is the same clock ' +
                 'these two fields are on. Stop following and the numbers stay where they ' +
@@ -1076,16 +1310,19 @@ function followRow(s, restate) {
             on: { click: () => { follow(s, sp.clip); restate(); drawStreams(); } },
         })),
         // What the press is about *now*: the numbers may already be these ones,
-        // and following is still worth pressing, because what it adds is that they
-        // stay these ones.
+        // and following is still worth pressing, because what it adds is that
+        // they stay these ones. A statement about this row's current numbers, so
+        // it stays — cut to the one clause that says why the button is still
+        // worth pressing, which is the whole of what somebody looking at a
+        // button that appears to do nothing needs.
         already
             ? div('ex-note dim',
-                  'These are already the numbers the clip on the timeline says. Following it ' +
-                  'is what keeps them so when it is trimmed again.')
+                  'Already the numbers that clip says — following keeps them so when it ' +
+                  'is trimmed again.')
             : sp.whole
                 ? div('ex-note dim',
-                      'That clip is the whole input, so following it changes nothing today — ' +
-                      'and moves this row the moment it is trimmed.')
+                      'That clip is the whole input — following changes nothing until it ' +
+                      'is trimmed.')
                 : null,
     ];
 }
@@ -1194,16 +1431,21 @@ function cueRows(s, restate) {
         })));
 
     const total = list.cues.length;
+    // What this window does to this track: a count, and how many survive it.
+    // Every clause about *why* the count can be known has gone behind the fold.
     out.push(div('ex-note dim',
         `${total} cue${total === 1 ? '' : 's'}` +
-        `${list.complete ? '' : ' at least — the list was cut short, so there are more'}, ` +
-        'timed off the packets — which is why this can say when a picture track is on ' +
-        'screen as readily as a text one' +
-        (saying ? ', with the words decoded beside them' : '') + '. ' +
+        `${list.complete ? '' : ' at least — the list was cut short, so there are more'}. ` +
         (shown.length < total
-            ? `${shown.length} of them are drawn, the ones the window’s ends fall among. `
+            ? `${shown.length} are drawn, the ones the window’s ends fall among. `
             : '') +
         `This window keeps ${w.kept.length === total ? 'all of them' : w.kept.length}.`));
+    out.push(why('span',
+        'The times are off the packets, which is why this can say when a picture track is ' +
+        'on screen as readily as a text one' +
+        (saying ? ', with the words decoded beside them' : '') + '. Each is a button: ' +
+        'moving the in-point onto a cue is the fix for nearly everything this section has ' +
+        'to report.'));
 
     // mp4 fills the gaps between its cues with samples of its own, so a count
     // of packets is not a count of lines. Said where it is true rather than
@@ -1211,7 +1453,7 @@ function cueRows(s, restate) {
     // carries them and one of them can be what the window opens on.
     const st = readStream(s);
     if (st && st.codec === 'mov_text')
-        out.push(div('ex-note dim',
+        out.push(why('span',
             'An mp4 writes an empty sample between one cue and the next, so some of these ' +
             'are the gaps rather than the lines.'));
     return out;
@@ -1263,15 +1505,15 @@ function editedCueRows(s) {
     const ext = fileExtension(track);
     const name = basename(cueFilePath(track, settings.path || ''));
     const out = [
-        head('What is written'),
         div('ex-note',
-            `${track.cues.length} cue${track.cues.length === 1 ? '' : 's'} this document ` +
-            'holds. They are edited on the timeline, in the Cues lane under the waveform — ' +
-            'which is where a subtitle’s timing is judged, because it is judged by listening.'),
+            `${track.cues.length} cue${track.cues.length === 1 ? '' : 's'} this document holds.`),
         div('ex-add', el('button', {
             cls: 'tiny', text: 'Edit them on the timeline', 'data-f': 'cue-edit',
             on: { click: () => goTo('compose') },
         })),
+        why('span',
+            'They are edited on the timeline, in the Cues lane under the waveform — which is ' +
+            'where a subtitle’s timing is judged, because it is judged by listening.'),
     ];
     if (track.from)
         out.push(div('ex-copy-note dim',
@@ -1280,18 +1522,23 @@ function editedCueRows(s) {
     // **The render writes a file, and saying so is what keeps the printed command
     // honest.** ffmpeg has no way to receive cues except as one, so this is not a
     // detail of the implementation — it is what the `-i` in the command bar is.
+    // **The name of the file the render writes is a statement and stays**, for
+    // the reason it was written down at all: ffmpeg has no way to receive cues
+    // except as a file, so this is what the `-i` in the command bar *is*, and a
+    // printed command naming a file nothing had said would be written is the one
+    // thing on this path that would read as a lie.
     out.push(div('ex-note dim',
-        `The render writes these into ${name ? `${name}, ` : 'a .' + ext + ' file '}beside ` +
-        `the output, and reads it back as an ordinary -i. So the command the bar prints ` +
-        'runs: it names a file this application actually wrote. ' +
-        (ext === 'ass'
+        `The render writes these into ${name || 'a .' + ext + ' file'} beside the output ` +
+        `and reads it back as an ordinary -i, so the command the bar prints runs.`));
+    out.push(why('span',
+        ext === 'ass'
             ? 'ASS, because that is the format these cues are already in — every text ' +
               'decoder in libavcodec hands over ASS, so the styles and each cue’s own ' +
               'layout came with them and .srt could not carry them back out.'
             : 'SubRip, because a track typed here is words and times and nothing else; ' +
-              'wrapping them in a script header would be claiming a look nobody chose.') +
-        ` What the stream in the output comes out as is the container’s question, not ` +
-        'this one.'));
+              'wrapping them in a script header would be claiming a look nobody chose.',
+        'What the stream in the output comes out as is the container’s question, not this ' +
+        'one.'));
     if (styled)
         out.push(div('ex-copy-note warn',
             `${styled} of these cue${styled === 1 ? ' still carries' : 's still carry'} ` +
@@ -1401,7 +1648,9 @@ function bsfRows(s, restate) {
     const changed = () => { restate(); drawStreams(); };
     const choices = bsfsFor(codecOf(s));
 
-    const rows = [head('Bitstream filters')];
+    // No heading: the facet strip above already says this is the packet chain,
+    // and a `.section-head` under it would be the same word twice.
+    const rows = [];
     s.bsf.forEach((b, i) => {
         const pick = select({ cls: 'ex-bsf-name', 'data-f': `bsf-${i}`,
                               on: { change: (e) => { b.name = e.target.value;
@@ -1445,9 +1694,14 @@ function bsfRows(s, restate) {
     })));
     rows.push(div('ex-note dim',
         `${choices.length} of ${(bro.ffmpeg.bitstreamFilters || []).length} run on ` +
-        `${codecOf(s) || 'this stream'} — the rest declare a codec list this stream is ` +
-        'not in. They work on packets the encoder has already written, so nothing here ' +
-        'costs a re-encode.'));
+        `${codecOf(s) || 'this stream'}.`));
+    rows.push(why('packets',
+        'The rest declare a codec list this stream is not in, asked of each filter’s own ' +
+        'codec_ids rather than written down here. They work on packets the encoder has ' +
+        'already written, so nothing here costs a re-encode.',
+        'The order is the whole of the meaning: h264_mp4toannexb,dump_extra and the same ' +
+        'two the other way round are different files. That is why this is a list with arrows ' +
+        'rather than a bag of checkboxes.'));
     return rows;
 }
 

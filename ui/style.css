@@ -1678,25 +1678,189 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
    again, so the answer is what is on screen and the pattern is not. */
 .ex-filenames { display: flex; flex-direction: column; gap: 1px; }
 
-/* Write: what the file is made of, where it goes, and the act of going. Three
-   columns — the destination on the left, the stream list in the middle where
-   the room is, and on the right the statement of what is about to happen with
-   the button that makes it happen underneath, so the last thing under the
-   pointer before the click is the description of what the click does. */
+/* Write: what the file is made of, where it goes, and the act of going.
+   A band and two columns, which is the sentence the stage is — where it goes,
+   what is in it, what comes out — read top to bottom and then left to right.
+
+   It was three columns of equal height, and the shape was fighting the
+   content. A destination is five one-line controls and got 320 × 900; the
+   read-back is six short lines and got 870 × 900 with a `.spacer` pushing
+   Export into the corner; the stream list, which is the only thing here that
+   can grow, got what was left. So the two that do not grow are now sized to
+   what they hold — a band as wide as the window, a rail as wide as a sentence
+   — and the list gets the rest. */
 .ex-write {
     flex: 1;
     display: flex;
+    flex-direction: column;
     min-height: 0;
     overflow: hidden;
 }
 .ex-write.hidden { display: none; }
-.ex-dest { width: 380px; flex-shrink: 0; padding: 4px 12px 16px; }
+
+/* The band. Capped and scrolling rather than free to grow, because three things
+   inside it open — the muxer picker, a version, a tee's destination list — and a
+   band that took half the window for a list of 180 muxers would be taking it
+   from the stream list, which is what somebody opening the picker is on their
+   way back to. */
+.ex-dest {
+    flex-shrink: 0;
+    max-height: 44%;
+    overflow-y: auto;
+    padding: 2px 0 8px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+}
+/* Two cells, and each holds its own question: where it goes on the left, with
+   the path at the full width of the cell and everything that is about the
+   *destination* under it — a version, a reconnection; what it is written as on
+   the right, with the muxer's own options opening from the bottom of it.
+
+   **The right cell is the width of the read-back rail below it, and carries the
+   same rule.** So one line runs the height of the stage with the format over
+   what will be written and the path over what is in the file — two columns
+   rather than two unrelated splits at two different fractions of the window. */
+.ex-band { display: flex; align-items: flex-start; }
+.ex-band-where { flex: 1; min-width: 0; padding: 0 16px; }
+/* The same cap the stream list under it has, so the left of the stage is one
+   column at one width all the way down: a heading rule that ran six hundred
+   pixels past the widest thing beneath it is the band claiming room it has
+   nothing to put in. The path is narrower again — see `.ex-target` — which is
+   the difference between a section and a field and is meant to show. */
+.ex-band-where > * { max-width: 1080px; }
+.ex-band-what {
+    width: 360px;
+    flex-shrink: 0;
+    padding: 0 16px;
+    border-left: 1px solid var(--line);
+    align-self: stretch;
+}
+/* Nothing in the band is a labelled row against a 92px key column, so the
+   headings line up with the controls rather than with a gutter that is not
+   there. */
+.ex-band .section-head { padding-left: 0; padding-right: 0; }
+.ex-band .row { padding-left: 0; padding-right: 0; }
+
+.ex-write-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
 .ex-streams {
     flex: 1;
     min-width: 0;
-    padding: 4px 12px 16px;
-    border-left: 1px solid var(--line);
+    padding: 4px 16px 16px;
+    overflow-y: auto;
 }
+/* The list is the widest thing on the stage now that the band has taken the
+   destination out of the row, and a bordered card stretched to sixteen hundred
+   pixels to hold two selects reads as a fault rather than as a row. Capped at a
+   width an *open* row wants — five facet tabs and their controls — which is the
+   widest this column is ever legitimately asked for. */
+.ex-streams > * { max-width: 1080px; }
+
+/* The destination path, which is the one control everybody comes to this stage
+   to set. Full column width and outside `.row`, because a path is read all the
+   way to the end and eliding the middle of one is eliding the folder it is
+   going to. */
+/* Wide, but not the width of an ultrawide window: 920px is about 115 monospace
+   characters, which is longer than any path anybody types and is where a text
+   field stops reading as a field. The band gave this control four times the
+   room it had; there is a point past which more of it is not more legible. */
+.ex-target, .ex-target-under { max-width: 920px; }
+.ex-target { padding: 4px 0 3px; }
+.ex-target-path {
+    display: block;
+    width: 100%;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: var(--fs-base);
+}
+.ex-target-under {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 0 6px;
+    min-width: 0;
+}
+.ex-target-under .ex-dir { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+/* The muxer and the shape of destination it makes, on one line. */
+.ex-fmt-kind { color: var(--text); font-size: var(--fs-sm); white-space: nowrap; }
+
+/* ── the fold over the reasoning ───────────────────────────────────────────
+
+   Every section of this stage used to carry its explanation permanently, which
+   made the prose the page and the controls the thing you hunted through it
+   for. The words are all still here and one press away — see
+   ui/export/explain.js, which also draws the line between an explanation
+   (folds) and a statement (never does). */
+.ex-head { display: flex; align-items: center; gap: 6px; }
+/* **Shrink to the title, so the ⓘ stays beside it.** `flex: 1` put the control
+   at the far end of whatever held the heading, which was a few pixels away in a
+   320px column and fourteen hundred away once the destination became a band —
+   a disclosure that far from the thing it discloses is not a disclosure of it.
+   It still ellipses, because a heading is one line. */
+.ex-head-t {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Dim until it is on, because a row of twenty bright ⓘs down a column would be
+   the thing it was added to prevent. */
+.ex-why-b {
+    flex-shrink: 0;
+    min-width: 0;
+    height: 16px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 3px;
+    background: none;
+    color: var(--dim);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+.ex-why-b:hover { color: var(--accent); background: var(--panel-hi); }
+.ex-why-b.on { color: var(--accent); }
+/* The master, at the far end of the heading it rides on rather than beside the
+   title — it is a control over the whole stage and the section ⓘs are not, and
+   an `auto` margin is what keeps that difference legible now that a section's
+   own ⓘ hugs its words. */
+.ex-why-all {
+    margin-left: auto;
+    min-width: 0;
+    height: 18px;
+    padding: 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: none;
+    color: var(--dim);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.4px;
+    text-transform: none;
+    cursor: pointer;
+}
+.ex-why-all:hover { color: var(--accent); border-color: var(--accent-dim); }
+.ex-why-all.on { color: var(--accent); border-color: var(--accent-dim); }
+
+/* The reasoning itself. Indented against a rule so that it reads as an aside
+   about the section rather than as another row of it — with the fold open the
+   distinction between what the application is telling you and what it is
+   asking you is the whole of what keeps the column legible. */
+/* **A measure, because a column is not one.** These were written to be read and
+   were then laid out at the width of whatever held them: in an 850px column a
+   sentence came out at around 140 characters a line, which is twice what anyone
+   tracks back across, and it is the paragraphs that lose by it — a control at
+   that width is still a control, but prose stops being read. Capped in ch so it
+   follows the type rather than a pixel guess, and it binds only where a column
+   is wide enough for it to matter. */
+.ex-why {
+    max-width: 68ch;
+    margin: 3px 0 5px;
+    padding: 1px 0 1px 8px;
+    border-left: 2px solid var(--line);
+    font-size: var(--fs-sm);
+    line-height: 1.6;
+    color: var(--dim);
+}
+.ex-why + .ex-why { margin-top: -2px; }
 
 /* One stream, as the sentence it is. The head is a line you read left to
    right — which stream, where from, through what, and then in words what a
@@ -1739,25 +1903,113 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
    oval — the same trap the graph stage's + hit. */
 .ex-stream-head button.tiny { min-width: 0; padding: 0 6px; }
 
+/* Which part of a stream is being edited. One open fold used to mean one row
+   unfolding into everything it has — a span, two names, fifteen flags, a
+   metadata bag and a packet chain, four hundred and fifty pixels of it — which
+   is the forty controls on one screen the fold exists to prevent, moved a level
+   down rather than avoided. The badge on a closed tab (`Flags · 2`) is what
+   makes it a summary rather than a hiding place. */
+.ex-facets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 0 5px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+}
+.ex-facets .seg { flex: 1; min-width: 0; flex-wrap: wrap; }
+.ex-facets .seg button { font-size: var(--fs-sm); }
+/* An attachment has one control and no facets, so its strip is a word rather
+   than a row of buttons — five tabs over one field would be the shape of the
+   panel lying about what is in it. */
+.ex-facet-one {
+    flex: 1;
+    font-size: var(--fs-sm);
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
 .ex-flags { display: flex; flex-wrap: wrap; gap: 3px; }
 .ex-flags button { font-size: 10px; padding: 0 5px; min-width: 0; }
-.ex-add { display: flex; gap: 6px; padding: 2px 0 8px; }
+.ex-add { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .ex-pair, .ex-chapter { display: flex; align-items: center; gap: 5px; padding: 1px 0; }
 .ex-pair .wide, .ex-chapter .wide { flex: 1; min-width: 0; }
 .ex-chapter .num { width: 64px; }
 .ex-chapter button.tiny { min-width: 0; padding: 0 6px; }
+/* The read-back, as wide as the sentences in it and no wider. `flex: 1` gave it
+   eight hundred pixels to hold "V1 the composite · libx264" in, which is how a
+   column that is six lines of content came to be a third of the window — and it
+   was the third of the window the primary button was then parked at the bottom
+   corner of. */
 .ex-verdict {
-    flex: 1;
-    min-width: 0;
+    width: 360px;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    padding: 4px 16px 12px;
+    padding: 4px 16px 16px;
     border-left: 1px solid var(--line);
+    background: #191c22;
+    overflow-y: auto;
 }
 .ex-verdict .section-head { padding-left: 0; padding-right: 0; }
+
+/* The stream list read back as statements — see the comment on #ex-verdict in
+   index.html. One row per stream, in the words a track menu would use, so the
+   last thing under the pointer before Export is the file rather than a
+   restatement of its size. */
+.ex-manifest { padding: 6px 0 2px; }
+.ex-man {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+}
+.ex-man-n {
+    flex-shrink: 0;
+    min-width: 22px;
+    font-weight: 600;
+    color: var(--accent);
+    font-family: Consolas, "Courier New", monospace;
+}
+.ex-man-says { min-width: 0; flex: 1; }
+.ex-man-what { color: var(--text); }
+.ex-man-tail { font-size: var(--fs-xs); line-height: 1.5; }
+.ex-man-tail.warn { color: var(--accent); }
+/* A row the render will drop is drawn as one that is not going to be there. */
+.ex-man.out .ex-man-n, .ex-man.out .ex-man-what { color: var(--dim); }
+
 .ex-warnings { padding: 6px 0; }
 .ex-warnings .warn { color: var(--accent); font-size: var(--fs-base); line-height: 1.7; }
-.ex-verdict .ex-foot { border: 0; background: none; padding: 8px 0 0; justify-content: flex-end; }
+
+/* The act, directly under the last line of the read-back it is the conclusion
+   of — which is the whole reason the read-back is on this side, and which a
+   `.spacer` above these two buttons had been quietly undoing.
+
+   Stacked rather than side by side, and Export first, because they are not two
+   of the same thing. Back is the way out of a stage; Export is what the stage
+   is for, and the width says so — the same distinction `button.src-go` draws at
+   the bottom of the Sources column. */
+.ex-verdict .ex-foot {
+    display: block;
+    border: 0;
+    background: none;
+    padding: 14px 0 0;
+    flex-shrink: 0;
+}
+button.ex-go {
+    display: block;
+    width: 100%;
+    height: 32px;
+    font-size: var(--fs-base);
+    font-weight: 600;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a1206;
+}
+button.ex-go:hover:not(:disabled) { background: #ffa063; }
+button.ex-back { display: block; width: 100%; margin-top: 6px; }
 
 /* What the settings cost, as a number. It leads the stats under the wipe
    because it is the answer to the question the whole stage exists for, and
@@ -1837,7 +2089,16 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
 /* Made, or copied. The decision is a picker rather than a word because it is
    the first thing a row says about itself and the second half of the sentence
    changes shape with it. */
-.ex-stream-src { max-width: 210px; }
+/* 210 was narrower than what it holds. `copy — landscape.mp4 · 0: h264` ran
+   under its own dropdown arrow, on the control that says the first and most
+   important thing about the row — which stream this is going to be. It grows
+   to what the row can spare and elides at the end rather than under the
+   chevron. */
+.ex-stream-src {
+    max-width: 320px;
+    min-width: 0;
+    text-overflow: ellipsis;
+}
 .ex-stream-copied { color: var(--accent); }
 /* A row the render will drop, said on the row rather than in the warnings
    list: the decision it is about was taken here. */
@@ -2194,8 +2455,19 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
    picture rather than with a gutter that is not there. */
 .ex-stage-col .section-head { padding-left: 0; padding-right: 0; }
 
-.ex-progress { flex: 1; overflow-y: auto; padding: 16px 14px; }
+/* A render in progress takes the stage, and for a while took it literally: a
+   progress bar nineteen hundred pixels wide for a percentage, and a "Back to
+   settings" centred in the middle of the window because bro stretches an
+   `inline-flex` button to a block parent's width. Given a measure it reads as
+   what it is — one short report, at the left margin every other zone on this
+   stage starts at. */
+.ex-progress { flex: 1; overflow-y: auto; padding: 20px 16px; }
+.ex-progress > * { max-width: 560px; }
 .ex-progress.hidden { display: none; }
+/* The rows of this panel that hold buttons rather than words. A flex row,
+   because that is what stops a lone button being stretched — see the note
+   above; every other button in this application is already inside one. */
+.ex-acts { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 6px; }
 
 .ex-strip-bar {
     flex-shrink: 0;
@@ -2224,7 +2496,12 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
 .ex-foot .ex-summary { flex: 1; min-width: 0; }
 
 #ex-settings input.wide, #ex-advanced input.wide,
-#src-detail input.wide, #src-options input.wide { width: 100%; box-sizing: border-box; }
+#src-detail input.wide, #src-options input.wide,
+/* A version's `-f` and `To`, and a tee destination's — both of which hold a
+   path, and both of which came out 175px wide showing "the render's, unless
+   this says" and stopping, because this rule named the columns those controls
+   used to live in and the band is not one of them. */
+#ex-dest input.wide { width: 100%; box-sizing: border-box; }
 #ex-settings select, #ex-advanced select, #src-options select { max-width: 100%; }
 #ex-settings input[type=range] { width: 140px; }
 .ex-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2245,7 +2522,9 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
 
 .ex-toggle { cursor: pointer; user-select: none; }
 .ex-toggle:hover { color: var(--accent); }
-.ex-note { font-size: 11px; line-height: 1.6; padding: 4px 2px; }
+/* A statement about *this* render, which never folds — and which wants the same
+   measure an explanation does, for the same reason. See `.ex-why`. */
+.ex-note { max-width: 68ch; font-size: 11px; line-height: 1.6; padding: 4px 2px; }
 
 /* The muxer picker. A hundred and eighty entries, so it is the filter
    palette's shape rather than a <select>: what is chosen stated on one line,

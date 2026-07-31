@@ -21,7 +21,7 @@
 // them, and the only thing that knows the workspace as a whole.
 
 import { project, duration } from './project.js';
-import { el, div, put, byId, show } from './dom.js';
+import { el, div, span, put, byId, show } from './dom.js';
 import { bytes, clock } from './format.js';
 
 import { settings, preview, currentJob, setJob, onJobChange, isRendering,
@@ -35,7 +35,7 @@ import { intents, activeIntent, applyIntent, clampToEncoder } from './export/pre
 import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
 import { initForm, drawForm } from './export/form.js';
-import { initStreams, drawStreams, defaultStreams } from './export/streams.js';
+import { initStreams, drawStreams, defaultStreams, manifest } from './export/streams.js';
 import { initPreview, drawPreview, drawPreviewStats, chasePreview, startPreview,
          previewFinished, previewRange, invalidatePreview, invalidateCandidate,
          stopPreviewPlayback, renderCandidate, startQuality, togglePreviewPlay,
@@ -122,6 +122,10 @@ export function initExport(refs, h) {
     });
     initProgress(el_.progress, {
         back: () => { showPanel('form'); drawAll(); },
+        // The panel that is up while a render runs is the only place a Stop can
+        // be — see `running()`. It used to be the Write stage's Back button
+        // retitled, which the same call that retitles it had just hidden.
+        stop: () => { if (isRendering()) bro.ffmpeg.render.cancel(); },
         addToTimeline: (path) => { closeExport(); if (hooks.open) hooks.open(path); },
     });
 
@@ -200,6 +204,13 @@ export function closeExport() {
     if (hooks.workspace) hooks.workspace();
 }
 
+/// What the one job slot is being used for, in the words the button that ends
+/// one has to say. An export is not in the list on purpose: it is never what
+/// this button is about — see `showPanel`.
+const JOB_WORDS = {
+    preview: 'the preview', quality: 'the comparison', measure: 'the measurement',
+};
+
 /// Within the Write stage: the destination and the verdict, or the render in
 /// progress. Not a stage of its own — a render is the Write stage happening,
 /// not a fifth thing.
@@ -207,10 +218,16 @@ function showPanel(which) {
     show(el_.write, which === 'form');
     show(el_.progress, which === 'progress');
     show(el_.go, which === 'form');
-    // The button is Stop only while there is something to stop. A finished
-    // render leaving "Stop" under a green bar reads as though it is still
-    // going.
-    el_.cancel.textContent = isRendering() ? 'Stop' : 'Back';
+    // **It never meant the export, and saying "Stop" made it look as though it
+    // did.** This button lives in the Write stage's own rail, and the line above
+    // hides that rail the moment a render starts — so the Stop it was being
+    // retitled to could not be pressed, and there was no other one. The export's
+    // Stop is on the progress panel now, where the render is.
+    //
+    // What can still be holding the one job slot with this panel up is a render
+    // with no output in it, so the word names which: press it once to end that,
+    // once more to leave.
+    el_.cancel.textContent = isRendering() ? `Stop ${JOB_WORDS[currentJob()] || 'it'}` : 'Back';
 }
 
 function drawAll() {
@@ -286,13 +303,37 @@ function updateSummary() {
 
     // No command line here any more. It runs under every stage now, in full and
     // in two colours, which is the whole of what this line was gesturing at.
+    //
+    // **Three lines rather than two, because the rail is a sentence wide.** It
+    // was written for a column that was a third of the window and held six lines
+    // of text in it; sized to what it actually says, two long lines wrap
+    // wherever they happen to run out. Broken by what each one answers instead —
+    // how big, how long, what of — so a wrap is a wrap inside one answer and
+    // never between two.
     put(el_.summary, () => [
-        div('mono', `${settings.width}×${settings.height} · ${fps.toFixed(3)} fps · ` +
-                    `${clock(r.length)} · ${frames} frames${size}`),
+        div('mono', `${settings.width}×${settings.height} · ${fps.toFixed(3)} fps`),
+        div('mono', `${clock(r.length)} · ${frames} frames${size}`),
         div('mono dim', `${codec || '?'}` +
             (settings.audio && acodec ? ` + ${acodec}` : ' · silent') +
             ` · ${settings.container} · ${clips} clip${clips === 1 ? '' : 's'} flattened`),
     ]);
+    // The streams as the file will have them, under the two lines about the
+    // picture. Every row is one sentence and none of it is a control: this is
+    // the read-back of the column beside it, and the one thing it adds is the
+    // note on a row the render is going to drop.
+    put(el_.manifest, () => manifest().map((m) => div('ex-man' + (m.dropped ? ' out' : ''), [
+        span(m.label, 'ex-man-n'),
+        div('ex-man-says', [
+            div('ex-man-what', [
+                span(m.from),
+                m.codec ? span(' · ', 'dim') : null,
+                m.codec ? span(m.codec, 'mono') : null,
+            ]),
+            m.tail ? div('ex-man-tail dim', m.tail) : null,
+            m.dropped ? div('ex-man-tail warn', 'nothing on the timeline feeds this, so it ' +
+                                                'will not be written') : null,
+        ]),
+    ])));
     put(el_.warnings, () => warnings().map((t) => div('warn', t)));
     if (hooks.described) hooks.described();
 }

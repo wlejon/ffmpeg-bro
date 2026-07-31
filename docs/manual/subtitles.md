@@ -149,12 +149,12 @@ where the line is spoken.
 
 ### Taking a file's cues, which is a fork
 
-`Edit these cues`, in a subtitle row's fold, copies that track's cues into the
-document. From that press onwards **the document is what renders and the file is
-not read by this row**: the row is repointed in place, so there is never a state
-where both copies reach the output without somebody having added a second row
-for the second one. The fold says which file the cues came out of and that it
-has stopped being read.
+`Edit these cues`, on a subtitle row's **Cues** tab, copies that track's cues
+into the document. From that press onwards **the document is what renders and
+the file is not read by this row**: the row is repointed in place, so there is
+never a state where both copies reach the output without somebody having added a
+second row for the second one. The tab says which file the cues came out of and
+that it has stopped being read.
 
 **The file itself is never written to.** Not on save, not on render, not ever.
 An editor that rewrites its input is one that loses work, and here the inputs are
@@ -182,7 +182,7 @@ Retyping a cue's words replaces that one text field, so:
 | **kept** | its style, its layer, its margins, its effect — and every other cue's everything |
 | **lost** | that cue's own override codes |
 
-Which is said in the fold, with a count of how many cues still carry any, and
+Which is said on the row's Cues tab, with a count of how many still carry any, and
 the count goes down as they do. Reassembling `{\k40}`-style codes around retyped
 words would mean guessing which syllable each belongs to, and a karaoke line put
 back together by guesswork is worse than one plainly reset.

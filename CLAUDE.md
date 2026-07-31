@@ -192,6 +192,24 @@ past the compositor is **exact** (those keys are literally what `av_opt_set(...,
 AV_OPT_SEARCH_CHILDREN)` is called with), the composition is **equivalent**
 (the renderer composites RGBA rather than building a graph). Do not blur them.
 
+`ui/export/explain.js` draws a second distinction that is the same shape and is
+just as easy to blur. This application explains itself in prose, and the Write
+stage had reached eight paragraphs against twelve controls — the reasoning was
+the page and the controls were what you hunted through it for, which is how
+prose that good stops being read. So an **explanation** is folded behind an ⓘ,
+off by default and remembered: it says how a thing works and is the same
+sentence on every render (`why(key, …)`, and `explained(key, title)` for the
+heading that carries the control). A **statement** is never folded: what *this*
+row's numbers do, why a control is absent, what a setting has cost — those
+change with the settings and are the answer to a question somebody is holding
+right now, and they stay `ex-note`/`ex-copy-note`. Folding one would be an
+application that knew something and did not say it. The line is drawn by hand,
+note by note, because it is a judgement about each sentence and no class name
+could make it. A stream row's detail is faceted for the related reason
+(`facetsOf` in `ui/export/streams.js`): one fold that opened onto forty controls
+is the thing the fold exists to prevent, moved a level down rather than avoided,
+and a closed tab carries a count so it summarises rather than hides.
+
 ### The graph
 
 - `ui/graph/model.js` — the graph the app *holds*. One node kind, because ffmpeg

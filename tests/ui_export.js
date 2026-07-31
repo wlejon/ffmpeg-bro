@@ -86,6 +86,19 @@ const qq = (sel, root) => (root || document).querySelectorAll(sel);
 /// two stages — what the picture is put through, and where it goes — and a
 /// data-f name is unique whichever stage is holding it.
 const f = (name) => q(`[data-f="${name}"]`);
+/// Open a facet of the stream row whose detail is showing.
+///
+/// An open row draws one part of its stream at a time — the span, the naming,
+/// the flags, the metadata bag, the packet chain — so a test that wants a
+/// control has to say which part it is in, exactly as a person does. Returns
+/// whether the tab was there at all, since the facets a row has depend on what
+/// kind of stream it is: a data stream has no packet chain and an attachment
+/// has none of them.
+function facet(name, root) {
+    const tab = q(`[data-seg="facet"][data-v="${name}"]`, root);
+    if (tab) { tab.click(); pump(60); }
+    return !!tab;
+}
 // The workspace's one key, named once. `ui/.storage.json` is shared by every
 // suite and every run, and a section that leaves it changed breaks a section it
 // has never heard of — see the two places below that put the whole blob back
@@ -750,6 +763,12 @@ console.log('\nthe Write stage is the output’s stream list');
     // otherwise be forty controls on one screen — and a row you just added
     // arrives with it open, because adding a stream and saying what it is are
     // one gesture with a pause in it.
+    //
+    // Inside the fold it is faceted, so that one open row is not the forty
+    // controls again a level down. A row fed from the mix has nothing to trim,
+    // so its first facet is the naming one and these two fields are already on
+    // screen.
+    ok(!!q('#ex-streams [data-seg="facet"]'), 'the detail is faceted rather than all of it');
     const lang = q('#ex-streams [data-f="stream-lang"]');
     ok(!!lang, 'a row you just added opens on its detail');
     ok(qq('#ex-streams [data-f="stream-lang"]').length === 1,
@@ -768,12 +787,17 @@ console.log('\nthe Write stage is the output’s stream list');
     ok(Array.isArray(bro.ffmpeg.dispositions) && bro.ffmpeg.dispositions.length > 5,
        `libavformat names its dispositions (${bro.ffmpeg.dispositions.length}: ` +
        `${bro.ffmpeg.dispositions.slice(0, 4).join(' ')}…)`);
+    ok(facet('flags'), 'the flags are a facet of the row');
     const forced = q('#ex-streams [data-disp="forced"]');
-    ok(!!forced, 'and each is a toggle on the row');
+    ok(!!forced, 'and each is a toggle on it');
     forced.click();
     pump(60);
     q('#ex-streams [data-disp="comment"]').click();
     pump(60);
+    // The tab counts what is set on it, which is what makes a closed facet a
+    // summary rather than a hiding place.
+    ok(q('[data-seg="facet"][data-v="flags"]').textContent.indexOf('2') > 0,
+       `and the tab says how many are on (${q('[data-seg="facet"][data-v="flags"]').textContent})`);
 
     // The row states what a player will show, so the sentence has to be the
     // one that will be written.
@@ -812,6 +836,7 @@ console.log('\nthe Write stage is the output’s stream list');
        `the mp4 muxer names its h264 tags (${bro.ffmpeg.codecTags('mp4', 'libx264').join(' ')})`);
     q('[data-f="detail"]', qq('#ex-streams .ex-stream')[0]).click();
     pump(60);
+    facet('naming');
     const tag = q('#ex-streams [data-f="stream-tag"]');
     ok(!!tag && tag.options.length > 1, 'the video row offers them as a menu');
     if (tag) {
@@ -901,9 +926,24 @@ console.log('\nthe Write stage is the output’s stream list');
     // Chapters are beside the streams, not among them: no index, nothing
     // mapped to them, and no way to say one on an ffmpeg command line at all —
     // which the bar has to admit rather than quietly drop.
+    //
+    // **And they are a line until there are any.** This column has one subject
+    // and it is the stream list; chapters and file metadata are empty on nearly
+    // every render, so each is a counted disclosure rather than a heading of the
+    // same weight with one empty control under it — `listSection` in
+    // ui/export/streams.js. Closed, the count is what makes the line a summary.
+    ok(!q('#ex-streams [data-add="chapter"]'),
+       'an empty chapter list is a line rather than a section');
+    const chFold = q('#ex-streams [data-f="chapters"]');
+    ok(chFold.textContent.indexOf('· 0') >= 0,
+       `and the line carries its count (${chFold.textContent.trim()})`);
+    chFold.click();
+    pump(40);
     q('#ex-streams [data-add="chapter"]').click();
     pump(60);
     ok(qq('#ex-streams .ex-chapter').length === 1, 'a chapter mark can be added');
+    ok(q('#ex-streams [data-f="chapters"]').textContent.indexOf('· 1') >= 0,
+       'and the heading counts it');
     const chTitle = q('#ex-streams [data-ch="0:title"]');
     chTitle.value = 'Opening';
     chTitle.dispatchEvent(new Event('change'));
@@ -921,6 +961,61 @@ console.log('\nthe Write stage is the output’s stream list');
        `the spine's card counts them (${q('#spine [data-stage="write"]').textContent
            .replace(/\s+/g, ' ').trim()})`);
     screenshot('out/export-07-stream-list.png');
+
+    // ── the column that says what the click does ───────────────────────────
+    //
+    // Two lines about the picture over eight hundred pixels of nothing is not a
+    // description of what is about to be written, so the stream list is read
+    // back beside it as statements — which is the one place on this stage where
+    // every stream is legible at once without opening any of them.
+    {
+        const man = qq('#ex-manifest .ex-man');
+        same(man.length, qq('#ex-streams .ex-stream').length,
+             'the verdict column says every stream the file will have');
+        const text = el('ex-manifest').textContent.replace(/\s+/g, ' ');
+        ok(text.indexOf('the mix') >= 0 && text.indexOf('Commentary') >= 0,
+           `each as a sentence rather than as a control (${text.trim().slice(0, 90)}…)`);
+        ok(!q('#ex-manifest select') && !q('#ex-manifest input'),
+           'and nothing in it is editable, because it is the read-back and not a second editor');
+    }
+
+    // ── the reasoning, one press away ─────────────────────────────────────
+    //
+    // Every section of this stage can explain itself and none of them does
+    // until asked. What must never fold is a statement about *this* render —
+    // see ui/export/explain.js, which draws that line.
+    {
+        const all = f('explain-all');
+        ok(!!all, 'the stage offers to explain every one of its sections at once');
+        // **Quieted first rather than assumed quiet.** Whether somebody wants
+        // the prose is remembered in the workspace — deliberately, it is the
+        // whole point of the fold — so a run inheriting a real session's
+        // `{"all":true}` starts with every paragraph on the screen, and an
+        // assertion about the *default* would be an assertion about whoever ran
+        // the application last. What is being tested is that the fold works.
+        if (all.classList.contains('on')) { all.click(); pump(60); }
+        ok(!q('#ex-streams .ex-why'), 'and with them put away no section explains itself');
+        all.click();
+        pump(60);
+        ok(qq('#ex-streams .ex-why').length > 0 && qq('#ex-dest .ex-why').length > 0,
+           `one press puts the reasoning back in both columns ` +
+           `(${qq('#ex-streams .ex-why').length} + ${qq('#ex-dest .ex-why').length})`);
+        all.click();
+        pump(60);
+        same(qq('#ex-streams .ex-why').length, 0, 'and takes it away again');
+
+        // One section at a time, which is the press people actually make.
+        const one = q('#ex-streams [data-why="chapters"]');
+        ok(!!one, 'each heading carries its own ⓘ');
+        one.click();
+        pump(60);
+        ok(qq('#ex-streams .ex-why').length > 0, 'which explains that section');
+        ok(el('ex-streams').textContent.indexOf('what is chapter 2') >= 0,
+           'in the words that were there before the fold was');
+        one.click();
+        pump(60);
+        same(qq('#ex-streams .ex-why').length, 0, 'and puts it away');
+    }
 
     // A preview must not inherit an eight-stream output. Both halves of the
     // A/B comparison exist to show what the encoder costs one picture, and a
@@ -1999,6 +2094,7 @@ console.log('\na bitstream filter on a stream');
     const video = rows[0];
     video.querySelector('[data-f="detail"]').click();
     pump(60);
+    ok(facet('packets'), 'the video row has a packet-chain facet');
     ok(!!q('[data-add="bsf"]'), 'the video row offers a packet chain');
     q('[data-add="bsf"]').click();
     pump(60);

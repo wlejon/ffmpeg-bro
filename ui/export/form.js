@@ -33,6 +33,7 @@ import { setAudioIncluded } from './streams.js';
 import { kindOf, describeKind, schemeOf, protocolLinked,
          newDestination, destinationRows } from './destination.js';
 import { newVersion, versionSize } from './versions.js';
+import { explained, why, onExplainChange } from './explain.js';
 
 let panes = {};
 let hooks = {};
@@ -56,6 +57,9 @@ let fileLabel = null;
 export function initForm(refs, h) {
     panes = refs;
     hooks = h || {};
+    // The Destination column has ⓘs of its own and the master button is in the
+    // column beside it, so both have to reach this draw.
+    onExplainChange(() => drawForm());
 }
 
 const RATE_LABELS = {
@@ -78,7 +82,12 @@ export function drawForm() {
     // Where it goes belongs to the Write stage, not to this one. Encode is
     // about what the picture is put through, and a filename at the top of that
     // column was the first thing asked for and the last thing decided.
-    put(panes.dest, () => [head('Destination'), ...outputRows()]);
+    //
+    // The heading is inside `outputRows()` now rather than in front of it,
+    // because there are two of them: the band has a cell each for where it goes
+    // and what it is written as, and a single "Destination" over both would be
+    // one word claiming to name two questions.
+    put(panes.dest, () => outputRows());
 
     // The muxer's own option table, in a column of its own, for the same reason
     // the encoder's is: `hls` has thirty options and `matroska` twenty, and a
@@ -118,34 +127,60 @@ export function drawForm() {
 /// can reach its protocol at all, and a tee wants the list. None of that is a
 /// mode somebody picks — see ui/export/destination.js, where the shape is asked
 /// of the muxer and the path rather than declared.
+///
+/// **A band of two cells rather than a column of rows**, and the division is by
+/// question rather than by size: *where it goes* on the left, *what it is
+/// written as* on the right. Everything else sorts itself under one of the two
+/// without being told to — a version and a reconnection are things that happen
+/// to a destination, and the muxer's option table belongs to the muxer.
+///
+/// The left cell is the wide one because the path is in it. That control is the
+/// reason the band exists: it is the widest value on this stage, it is the one
+/// value that has to be read all the way to the end, and a 320px column showed
+/// `D:\obs-recording\2026-07-30_04-48-25-exp` and stopped — the exact failure
+/// the note on `.ex-target` was written against, reintroduced one level up.
 function outputRows() {
     const muxer = muxerInfo(settings.container) || { name: settings.container };
     const kind = kindOf(muxer);
     const all = formatOptionsOf(settings.container);
 
-    const rows = [
-        row('Goes to', span(KIND_LABELS[kind], 'mono')),
-        row('', note(describeKind(kind, muxer))),
-    ];
+    // **The path is the width of the cell and the cell is most of the window.**
+    // It used to be the third row of a key/value grid, which gave the single
+    // control everybody walks to this stage to set a 140px box showing
+    // `D:\obs-recording\2026-07-3(` — the one field on the stage whose whole
+    // value has to be legible, elided in the middle. What it was under was a
+    // labelled row saying "Goes to: one file" and a paragraph explaining what a
+    // file is; both are still here, in the cell beside it, where an answer
+    // belongs relative to the thing it is about.
+    const where = [explained('destination', 'Write to')];
 
     // One encode, several places. The rows live in `destination.js` beside the
     // escaping they are built to avoid, because a recording writes through a
     // muxer too and edits the same list with the same rows.
     if (kind === 'several')
-        rows.push(...destinationRows({ list: settings.destinations,
-                                       changed: () => hooks.changed(),
-                                       first: 'matroska' }));
-    else rows.push(...oneTargetRows(kind));
+        where.push(...destinationRows({ list: settings.destinations,
+                                        changed: () => hooks.changed(),
+                                        first: 'matroska' }));
+    else where.push(...oneTargetRows(kind));
 
-    rows.push(...keepTryingRows(kind));
-    rows.push(...formatRows());
-    rows.push(...versionRows());
-    rows.push(head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ${all.length}`, {
-        'data-f': 'formatopts',
-        cls: 'section-head ex-toggle',
-        on: { click: () => { showFormatOptions = !showFormatOptions; drawForm(); } },
-    }));
-    return rows;
+    // Both of these are about the destination rather than about the muxer — one
+    // is another destination and one is what happens when this one goes away —
+    // so they go under it rather than under the format.
+    where.push(...keepTryingRows(kind));
+    where.push(...versionRows());
+
+    const what = [head('Format'),
+                  ...formatRows(kind),
+                  why('destination', describeKind(kind, muxer)),
+                  head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ` +
+                       `${all.length}`, {
+                      'data-f': 'formatopts',
+                      cls: 'section-head ex-toggle',
+                      on: { click: () => { showFormatOptions = !showFormatOptions;
+                                           drawForm(); } },
+                  })];
+
+    return [div('ex-band', [div('ex-band-where', where), div('ex-band-what', what)])];
 }
 
 // ── a destination that is allowed to go away ───────────────────────────────
@@ -264,13 +299,13 @@ function keepTryingRows(kind) {
         k.restartWithKeyframe = v === 'keyframe';
         hooks.changed();
     })));
-    rows.push(row('', note(
+    rows.push(why('keep-trying',
         'This is -f fifo in front of the muxer, with -fifo_format naming it. A render that ' +
         'reconnected says so in the report and counts how many times — what was happening ' +
         'while the destination was gone is not in the file, so a recovered render is not the ' +
         'same as one that never dropped. A blank field is the fifo muxer’s own default. ' +
         'fifo’s third mode, blocking until the queue drains, is not offered: a blocked ' +
-        'render whose destination never comes up cannot be stopped.')));
+        'render whose destination never comes up cannot be stopped.'));
     return rows;
 }
 
@@ -284,7 +319,9 @@ const KIND_LABELS = {
 /// The ordinary case, and the two that are nearly it: a path, or a URL.
 function oneTargetRows(kind) {
     const path = el('input', {
-        cls: 'wide', 'data-f': 'path', type: 'text', value: settings.path,
+        cls: 'ex-target-path', 'data-f': 'path', type: 'text', value: settings.path,
+        placeholder: kind === 'stream' ? 'a URL to push the render to'
+                                       : 'where the file goes',
         on: { change: () => {
             settings.path = path.value.trim();
             // **A filename is not a picture.** `referenceKey()` deliberately
@@ -312,7 +349,10 @@ function oneTargetRows(kind) {
     fileLabel.classList.add('ex-dir');
     refreshFileLabel();
 
-    const rows = [row(kind === 'stream' ? 'URL' : 'File', path)];
+    // Outside the key/value grid, so it is the width of the column: a path is
+    // the one value on this stage that is read left to right and all the way to
+    // the end, and a label beside it would be a word costing a third of it.
+    const rows = [div('ex-target', path)];
 
     const scheme = schemeOf(settings.path);
     if (scheme) {
@@ -324,18 +364,18 @@ function oneTargetRows(kind) {
         rows.push(row('Protocol', span(
             linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
             linked ? 'mono' : 'mono src-missing')));
-        rows.push(row('', note(
-            'Its own options are in the column beside the muxer’s. They travel in one bag, ' +
-            'which is what libavformat does with what a muxer does not recognise — and a ' +
-            'key neither takes stops the render rather than being ignored.')));
+        rows.push(why('destination',
+            'A protocol’s own options are in the column beside the muxer’s. They travel in ' +
+            'one bag, which is what libavformat does with what a muxer does not recognise — ' +
+            'and a key neither takes stops the render rather than being ignored.'));
     } else {
         // Only where there is a file to choose. A dialog for a URL would be a
         // dialog that cannot say what is being asked for.
-        rows.push(row('', btns([
+        rows.push(div('ex-target-under', [
             el('button', { cls: 'tiny', 'data-f': 'browse', text: 'Choose…',
                            on: { click: () => browse(path) } }),
             fileLabel,
-        ])));
+        ]));
     }
 
     rows.push(...numberingRows(path));
@@ -352,9 +392,9 @@ function oneTargetRows(kind) {
 
 function versionRows() {
     const list = settings.versions || [];
-    const rows = [head(`${list.length ? '▾' : '▸'} Also write · ${list.length}`, {
+    const rows = [explained('versions', `${list.length ? '▾' : '▸'} Also write · ${list.length}`, {
         'data-f': 'versions',
-        cls: 'section-head ex-toggle',
+        cls: 'section-head ex-head ex-toggle',
         // No fold of its own: the list *is* the disclosure. Empty it is one
         // line, and a render with a proxy configured is a render where that is
         // worth seeing without opening anything.
@@ -362,10 +402,10 @@ function versionRows() {
     })];
 
     if (!list.length) {
-        rows.push(row('', note(
+        rows.push(why('versions',
             'One encode to several places is the tee muxer, above. This is the other one: ' +
             'the same edit encoded again at another size — a 1080p master and a 720p proxy, ' +
-            'which no single encoder can produce, because an encoder has one frame size.')));
+            'which no single encoder can produce, because an encoder has one frame size.'));
         return rows;
     }
 
@@ -428,11 +468,11 @@ function versionRows() {
         el('button', { cls: 'tiny', 'data-f': 'ver-add', text: '+ Version',
                        on: { click: addVersion } }),
     ])));
-    rows.push(row('', note(
+    rows.push(why('versions',
         'Another whole encode of the same edit: the muxer, the codec, the rate control, ' +
         'the streams and the range are this render’s, and only the size and where it goes ' +
         'are its own. CRF is a quality target rather than a bitrate, so the smaller one ' +
-        'comes out smaller without being told to.')));
+        'comes out smaller without being told to.'));
     return rows;
 }
 
@@ -645,18 +685,34 @@ function inFacet(m, facet) {
     }
 }
 
-function formatRows() {
+/// The muxer, and what shape of destination it makes.
+///
+/// **One line, because they are one answer.** "mp4" and "one file" were two
+/// labelled rows a paragraph apart, and between them they say a single thing:
+/// what is about to be written. Read together they also catch the case that used
+/// to need reading twice — `hls` beside "a set of files" is the muxer telling
+/// you it will not write the file you named it with.
+function formatRows(kind) {
     const m = muxerInfo(settings.container) || { name: settings.container, label: '', extensions: [] };
     const stated = div('ex-fmt-current', [
         span(m.name, 'mono'),
-        span(m.longName || '', 'dim'),
+        span(KIND_LABELS[kind] || '', 'ex-fmt-kind'),
         el('button', {
             cls: 'tiny', 'data-f': 'container-open', text: formatOpen ? 'Close' : 'Change',
             on: { click: () => { formatOpen = !formatOpen; formatSearch = ''; drawForm(); } },
         }),
     ]);
 
-    const rows = [row('Format', stated), row('', note(describeMuxer(m)))];
+    // The muxer's own long name goes on the line under it rather than beside
+    // it. Three things and a button on one line in a 320px column is how "MP4
+    // (MPEG-4 Part 14)" came out as "MP4 (MP" — and the long name is the half
+    // somebody unsure which muxer they are looking at is reading.
+    //
+    // **Not in a labelled row, because the heading over the cell is the label.**
+    // `Format: mp4` under a heading reading FORMAT is the word twice and a 92px
+    // key gutter indenting everything under it for the sake of the repetition.
+    const rows = [stated,
+                  div('ex-note dim', [m.longName, describeMuxer(m)].filter(Boolean).join(' · '))];
     if (formatOpen) rows.push(formatPicker());
     return rows;
 }

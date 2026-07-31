@@ -26,9 +26,16 @@ export function initProgress(node, h) {
     hooks = h || {};
 }
 
+// The nodes of the running panel while one is up, so that a frame can write
+// numbers into them instead of building them again. Null the moment the render
+// is not running, which is what makes the three states below unable to inherit
+// each other's elements.
+let live = null;
+
 export function drawProgress(p) {
     const pct = Math.round((p.progress || 0) * 100);
-    if (p.state === 'running') return put(pane, () => running(p, pct));
+    if (p.state === 'running') return runningPanel(p, pct);
+    live = null;
     if (p.state === 'done') return put(pane, () => done(p));
     return put(pane, () => stopped(p, pct));
 }
@@ -59,7 +66,7 @@ function said() {
     const bits = [];
     if (v.errors) bits.push(`${v.errors} error${v.errors === 1 ? '' : 's'}`);
     if (v.warnings) bits.push(`${v.warnings} warning${v.warnings === 1 ? '' : 's'}`);
-    return div('ex-line', [
+    return div('ex-line ex-acts', [
         el('button', {
             cls: 'tiny', 'data-f': 'report',
             text: `${bits.join(' and ')} — what the render said`,
@@ -79,56 +86,107 @@ function said() {
 /// A bar creeping towards an end nobody chose is the failure this avoids, and
 /// it is the same rule a recording already follows — `openEnded`, and zero
 /// meaning nobody knows.
+///
+/// **The words, not the element.** What the running panel wants from this is the
+/// sentence to write into a row it already has — see `writeRunning` — and ''
+/// where this shape has nothing extra to say, which is also what decides whether
+/// the row exists at all.
 function shapeLine(p, kind) {
     if (kind === 'stream') {
         const rate = p.elapsed > 0 ? (p.bytes * 8) / p.elapsed : 0;
-        return line(`${bytes(p.bytes)} sent · ${(rate / 1e6).toFixed(2)} Mb/s`, 'mono');
+        return `${bytes(p.bytes)} sent · ${(rate / 1e6).toFixed(2)} Mb/s`;
     }
-    if (p.pieces > 0)
-        return line(`${p.pieces} file${p.pieces === 1 ? '' : 's'} written so far`, 'mono');
-    return null;
+    if (p.pieces > 0) return `${p.pieces} file${p.pieces === 1 ? '' : 's'} written so far`;
+    return '';
 }
 
-function running(p, pct) {
+/// Which of the running panel's rows exist at all, as one string.
+///
+/// Everything in it is a question about *shape* rather than about a number: is
+/// there a bar, is there a pass line, does this destination count pieces, is it
+/// packets or frames being counted. All of them can change part way through a
+/// render — pass one becomes pass two, the first segment lands — and none of
+/// them changes on the ordinary frame where only the numbers moved.
+const runningKey = (p, kind, open) =>
+    [open, (p.passes || 1) > 1, kind, p.pieces > 0, !!p.packets, !p.totalFrames].join('|');
+
+/// The panel for a render that is happening, **built once and written into
+/// afterwards.**
+///
+/// It used to be `put()` on every frame, which tore six elements down and built
+/// six more sixty times a second for the length of the render — to change four
+/// numbers. That is the thing this codebase already refuses to do to the stream
+/// list on a drag, and it is worse here: this is the one panel somebody watches
+/// for minutes at a time, and rebuilding it under the compositor is what made a
+/// running render smear its own lines over each other.
+function runningPanel(p, pct) {
     const kind = destinationKind();
     const open = p.openEnded || kind === 'stream';
-    const left = !open && p.fps > 0 && p.totalFrames
-        ? Math.max(0, (p.totalFrames - p.frames) / p.fps) : 0;
+    const key = runningKey(p, kind, open);
+    if (!live || live.key !== key) live = buildRunning(p, kind, open, key);
+    writeRunning(live, p, pct, kind, open);
+}
+
+function buildRunning(p, kind, open, key) {
+    const it = { key };
+    // A render with no end has no fraction to draw, and a bar at zero for ten
+    // minutes says "stuck" rather than "streaming".
+    it.bar = open ? null : bar(0);
+    it.fill = it.bar ? it.bar.querySelector('.ex-fill') : null;
     // Which walk over the range this is, and what it is for. A render that is
     // going to do the whole thing again must not report "43%" and leave the
     // rest to be discovered — the percentage already spans the job, and this is
     // what says why it is moving at half the rate it looks like it should.
-    const twoPass = (p.passes || 1) > 1
-        ? line(`pass ${p.pass} of ${p.passes}` + (p.passLabel ? ` — ${p.passLabel}` : ''),
-               'dim')
-        : null;
-    return [
-        // A render with no end has no fraction to draw, and a bar at zero for
-        // ten minutes says "stuck" rather than "streaming".
-        open ? null : bar(pct),
-        twoPass,
-        // **Four shapes, because the count and the total are two questions.** A
-        // render that copies packets has no output frames at all — what it writes
-        // is packets and how many there are is not a thing anybody knows before
-        // reading them. A job with no end counts frames and has no total. And a
-        // paced render (`-fps_mode vfr`) counts frames, has no total either — the
-        // graph decides how many it makes — and still has an honest percentage,
-        // because that one is computed against the range's *length*. So
-        // `totalFrames == 0` no longer says which of the three it is and `packets`
-        // is what tells them apart: "frame 40 of 0" looks like a bug in the
-        // progress bar, and "40 packets copied" about a render encoding pictures
-        // is worse, being wrong and reading as right.
-        line(p.packets ? `${p.frames} packets copied`
-                       : open ? `frame ${p.frames}`
-                       : !p.totalFrames ? `${pct}% · frame ${p.frames}`
-                                        : `${pct}% · frame ${p.frames} of ${p.totalFrames}`,
-             'mono'),
-        shapeLine(p, kind),
-        line(`${p.fps.toFixed(1)} fps · ${elapsed(p.elapsed)} so far` +
-             (left > 0.5 ? ` · about ${elapsed(left)} left` : '') +
-             (kind === 'stream' ? '' : ` · ${bytes(p.bytes)}`), 'mono dim'),
-        line(p.path, 'dim'),
-    ].filter(Boolean);
+    it.pass = (p.passes || 1) > 1 ? line('', 'dim') : null;
+    it.count = line('', 'mono');
+    it.shape = shapeLine(p, kind) ? line('', 'mono') : null;
+    it.rate = line('', 'mono dim');
+    it.path = line(p.path, 'dim');
+    put(pane, () => [
+        it.bar, it.pass, it.count, it.shape, it.rate, it.path,
+        // **The way out of a render, and it was not on the screen.** `Stop` was
+        // the Write stage's own Back button retitled — and the panel that
+        // retitles it is the panel that hides the column the button is in, so a
+        // running export had a Stop nobody could reach and no other way to end
+        // one. It belongs here regardless: what you stop is the thing in front
+        // of you, and a render in progress is what this panel is.
+        div('ex-line ex-acts', el('button', {
+            cls: 'tiny', 'data-f': 'stop', text: 'Stop',
+            title: 'End the render — what it has written so far still gets its trailer ' +
+                   'and is playable',
+            on: { click: hooks.stop },
+        })),
+    ].filter(Boolean));
+    return it;
+}
+
+function writeRunning(it, p, pct, kind, open) {
+    const left = !open && p.fps > 0 && p.totalFrames
+        ? Math.max(0, (p.totalFrames - p.frames) / p.fps) : 0;
+    if (it.fill) it.fill.style.width = `${pct}%`;
+    if (it.pass)
+        it.pass.textContent = `pass ${p.pass} of ${p.passes}` +
+                              (p.passLabel ? ` — ${p.passLabel}` : '');
+    // **Four shapes, because the count and the total are two questions.** A
+    // render that copies packets has no output frames at all — what it writes is
+    // packets and how many there are is not a thing anybody knows before reading
+    // them. A job with no end counts frames and has no total. And a paced render
+    // (`-fps_mode vfr`) counts frames, has no total either — the graph decides
+    // how many it makes — and still has an honest percentage, because that one is
+    // computed against the range's *length*. So `totalFrames == 0` no longer says
+    // which of the three it is and `packets` is what tells them apart: "frame 40
+    // of 0" looks like a bug in the progress bar, and "40 packets copied" about a
+    // render encoding pictures is worse, being wrong and reading as right.
+    it.count.textContent =
+        p.packets ? `${p.frames} packets copied`
+      : open ? `frame ${p.frames}`
+      : !p.totalFrames ? `${pct}% · frame ${p.frames}`
+                       : `${pct}% · frame ${p.frames} of ${p.totalFrames}`;
+    if (it.shape) it.shape.textContent = shapeLine(p, kind);
+    it.rate.textContent = `${p.fps.toFixed(1)} fps · ${elapsed(p.elapsed)} so far` +
+                          (left > 0.5 ? ` · about ${elapsed(left)} left` : '') +
+                          (kind === 'stream' ? '' : ` · ${bytes(p.bytes)}`);
+    it.path.textContent = p.path;
 }
 
 function done(p) {
@@ -166,7 +224,7 @@ function done(p) {
         kind === 'stream'
             ? line('nothing was kept — a stream is gone once it has been sent', 'dim') : null,
         said(),
-        div('ex-line', buttons),
+        div('ex-line ex-acts', buttons),
     ].filter(Boolean);
 }
 
@@ -183,7 +241,7 @@ function stopped(p, pct) {
                          ', and the part it got to is playable', 'mono dim') : null,
         cancelled ? line(p.path, 'dim') : null,
         said(),
-        div('ex-line', el('button', { cls: 'tiny', 'data-f': 'back', text: 'Back to settings',
+        div('ex-line ex-acts', el('button', { cls: 'tiny', 'data-f': 'back', text: 'Back to settings',
                                       on: { click: hooks.back } })),
     ];
 }
