@@ -278,11 +278,15 @@ bool downloadFrame(AVFrame** frame, AVFrame** scratch, std::string* err);
 /// `avformat_find_stream_info` *is* covered, because libavformat checks the
 /// callback between reads there: 520 ms of the dshow open, 92 ms of the
 /// gdigrab one, 6 ms of the lavfi one, and it aborts in 0.04 ms when told to.
-/// So for a device the deadline and the Stop cover the second half of an open
-/// and not the first — 57% of a `dshow` open and 99.9% of a `gdigrab` one, on
-/// those numbers — and **a Stop that arrives during `read_header` stops the
-/// waiting rather than the open**. `probe_async.h` reports which of the two a
-/// caller is holding, so nothing on screen may claim more than this does.
+/// That check is at the *top* of its loop, before it asks whether anything is
+/// still unknown, so it happens at least once however little there is to
+/// analyse — counted on `lavfi testsrc`, whose codec parameters are known
+/// before a packet is read, it is two polls on every run. So for a device the
+/// deadline and the Stop cover the second half of an open and not the first —
+/// 57% of a `dshow` open and 99.9% of a `gdigrab` one, on those numbers — and
+/// **a Stop that arrives during `read_header` stops the waiting rather than the
+/// open**. `probe_async.h` reports which of the two a caller is holding, so
+/// nothing on screen may claim more than this does.
 ///
 /// No device demuxer in this build offers a timeout to put in the option bag
 /// instead: asked of libav rather than assumed, the only option with "time" in
@@ -292,6 +296,15 @@ class OpenWatch {
 public:
     /// Give up `seconds` from now. Zero or less is no deadline, which is what
     /// every caller that is not opening a URL wants.
+    ///
+    /// **"Now" is `av_gettime_relative()`, which is the system tick and not a
+    /// microsecond clock.** Measured on this platform it steps in 0.5–1.5 ms —
+    /// it is `GetSystemTimeAsFileTime` underneath — so a deadline shorter than
+    /// one step may be read back inside the same tick it was armed in and be,
+    /// truthfully, not yet passed. Every real caller asks for seconds and none
+    /// of this can matter to one; it is written down because a *test* that
+    /// asked for a microsecond found out the hard way, and because "expired"
+    /// below is defined in terms of what this clock says.
     void expireIn(double seconds);
 
     /// Ask the open in progress to abort. Safe from any thread, which is the
@@ -303,6 +316,14 @@ public:
     /// True once the deadline has passed *and the callback has seen it*. Read
     /// after a failed open to say why it failed; a deadline that expired while
     /// nothing was blocking is not what stopped anything.
+    ///
+    /// **What that guarantees is a conjunction, and the second half is the one
+    /// that surprises.** A deadline may pass during a stretch libav never polls
+    /// — a device's `read_header`, `getaddrinfo` — and it may pass between two
+    /// polls of a stretch that is over before the next one, which is what a
+    /// deadline shorter than the clock's own step amounts to. Both are the same
+    /// answer: nothing was interrupted, so nothing here claims to have
+    /// interrupted it, and the open reports whatever it actually did.
     bool expired() const { return expired_.load(std::memory_order_relaxed); }
 
     /// What libav polls. Public because `openInput` hands it over; there is no

@@ -537,11 +537,25 @@ test that needs a server does not belong here.
 a device in this build and exists on every machine. `input_test.cpp` probes one
 through `startProbe` and asserts two things about it: that the answer comes back
 like any other input's, and that it reports `stoppable: false` — a stop would not
-reach a libavdevice open, which is measured rather than assumed. It then expires a
-deadline inside the stream analysis and requires the probe to *fail*, because
-`avformat_find_stream_info` answers success when the callback cuts it short and a
-successful probe of a half-analysed file is worse than the hang the deadline is
-there to end. `ui_capture.js` asserts the route from the other side: activating a
+reach a libavdevice open, which is measured rather than assumed. It then puts a
+watch that has already given up — once because its deadline is past, once because
+somebody pressed Stop — through the same device's open and requires the probe to
+*fail* both times, because `avformat_find_stream_info` answers success when the
+callback cuts it short and a successful probe of a half-analysed file is worse
+than the hang the deadline is there to end.
+
+**Already past, rather than expiring part-way through, and that is the whole of
+what is deterministic here.** The deadline is armed and then slept out before the
+probe begins. Arming one for a microsecond and probing at once — which is what
+this used to do — failed five runs in six, not because a device goes unpolled
+(counted, `find_stream_info` polls the callback twice on every run of this
+source) but because `av_gettime_relative()` is the system tick and steps in
+0.5–1.5 ms on this platform, which is longer than the whole open: a deadline read
+back inside the tick it was armed in has genuinely not passed, and the probe
+genuinely succeeds. So the suite asserts the rule that exists — `openInput` asks
+the watch as well as libav's return code — and not a claim about when a clock
+ticks. The stop half of the pair carries no clock at all and is the same rule
+proved twice. `ui_capture.js` asserts the route from the other side: activating a
 device returns at once, the input is `opening` the instant the click does, no
 preview session is opened over the top of it and Record is held while it is
 outstanding. What no suite here can exercise is a device that genuinely hangs —

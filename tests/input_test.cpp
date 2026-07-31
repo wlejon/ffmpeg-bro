@@ -826,13 +826,49 @@ int main(int argc, char* argv[]) {
         // well as the return code. Without that line an expired deadline here
         // produced a *successful* probe of a half-analysed file, which is worse
         // than the hang it was put in to end.
+        //
+        // **The deadline is waited out before the probe starts, and that is not
+        // a convenience.** This section used to arm a deadline of a microsecond
+        // and probe immediately, and it failed five runs in six. The reason is
+        // not that a device goes unpolled — counted here, `find_stream_info` on
+        // this source polls the callback **twice on every run**, because
+        // libavformat checks it at the top of its loop before it checks whether
+        // anything is left to learn. The reason is the *clock*:
+        // `OpenWatch::poll` compares against `av_gettime_relative()`, which on
+        // this platform is the system tick and steps in **0.5–1.5 ms**, and the
+        // whole of this open is shorter than one step — measured at +0 µs on
+        // half the runs and at exactly one tick on the other half. A deadline
+        // armed and read inside the same tick has not passed, so the callback
+        // correctly answers "carry on" and the probe correctly succeeds. Fifty
+        // milliseconds is longer than any tick this platform has (15.625 ms is
+        // the coarse default), so what follows is settled before it starts.
         OpenWatch watch;
-        watch.expireIn(1e-6);
+        watch.expireIn(0.001);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const ProbeResult cut = probeMedia(dev, &watch);
-        check(!cut.ok, "a deadline that expires inside the stream analysis fails the probe");
+        check(!cut.ok, "a deadline already past when the analysis begins fails the probe");
         checkf(cut.error == "no answer in time",
                "and says so in the deadline's own words rather than libav's: '%s'",
                cut.error.c_str());
+        // Nothing but the callback sets that flag, so this is the assertion that
+        // `find_stream_info` polls one even for a device — which is the half of
+        // an open a deadline reaches at all, and the reason the two lines above
+        // are worth anything.
+        check(watch.expired(),
+              "because the callback was polled inside it and answered give up");
+
+        // The same rule with the clock taken out of it entirely. A stop is a
+        // flag nothing times, so this holds on any machine whatever its tick:
+        // libav still answers `find_stream_info` with success, and the probe
+        // still fails, which can only be `openInput` asking the watch as well as
+        // the return code.
+        OpenWatch pressed;
+        pressed.stop();
+        const ProbeResult halted = probeMedia(dev, &pressed);
+        checkf(!halted.ok && halted.error == "stopped",
+               "and a watch already stopped fails it as a stop, on no clock at all: '%s'",
+               halted.error.c_str());
+
         check(probeMedia(dev).ok, "while the same device with no deadline on it opens");
     }
 
