@@ -305,6 +305,15 @@ export function syncFollowing(rows) {
 // `how` and `complete` from the native side: an index is exact and instant, a
 // scan costs the window, and a list that was cut short must not be snapped to
 // its last entry as though that were the end of the file.
+//
+// **Cheap is not free and the cache does not make the first call cheap.** This
+// is a synchronous read of a file on the drawing thread, and for an input that
+// is a URL it is a download: a Twitch VOD's video row measured **158 seconds**
+// here with the window frozen, which is what put a deadline on the native walk
+// and what makes it worth asking, at every call site, whether the answer is
+// going to be looked at. Two of them turned out not to look — an audio row that
+// asked and then said every packet stands on its own, and a warning about an
+// in-point of zero, which is a copy that starts where it starts.
 
 const cache = new Map();
 
@@ -329,8 +338,19 @@ export function keyframesFor(row) {
 /// At or *before*, never after: the seek is backward, because landing after
 /// would drop frames the copy was asked for. Null when nothing is known, which
 /// is a different answer from zero and must stay one.
+///
+/// **A moment past the end of an incomplete list is one of the things nothing is
+/// known about**, and it used to answer with the last entry read. That was
+/// harmless while a list was cut short only by `max` at four thousand entries;
+/// it stopped being harmless the moment a scan could also be cut short by its
+/// deadline (`keyframesOf` in export_copy.h), because half a second of a remote
+/// stream is the first minute of a six-hour recording and an in-point an hour in
+/// would have been told, confidently, that its copy begins fifty-nine minutes
+/// early. `complete` is the field that says the list stops before the file does,
+/// and this is the one reader for whom that distinction decides an answer.
 export function keyframeAtOrBefore(list, t) {
     if (!list || !list.times || !list.times.length) return null;
+    if (!list.complete && t > list.times[list.times.length - 1] + 1e-6) return null;
     let best = null;
     for (const k of list.times) {
         if (k <= t + 1e-6) best = k;
@@ -353,6 +373,23 @@ export function inPointNote(row) {
         return 'every packet of a sound stream is a keyframe, so a copy starts exactly here';
     const want = Number(row.copyFrom) || 0;
     const land = keyframeAtOrBefore(list, want);
+    // **The one answer that is worse than this one is a confident wrong one.**
+    // A list that stopped before the in-point knows nothing about where the copy
+    // begins, and saying so is the whole of what `complete` is for; the
+    // alternative — the last keyframe that happened to be read — is a number
+    // that looks exactly like the right one. See `keyframeAtOrBefore`.
+    //
+    // The condition is *past the end of what was read* and not merely "no
+    // answer, and the list was cut short": a truncated list whose first entry is
+    // after an in-point of zero has not run out of anything, and this sentence
+    // over that row would be an alarm about a reading that reached the moment in
+    // question perfectly well.
+    const read = list.times.length ? list.times[list.times.length - 1] : 0;
+    if (land === null && !list.complete && list.times.length && want > read + 1e-6)
+        return `where the keyframes are was read as far as ${read.toFixed(2)} s and ` +
+               `stopped there, so where a copy from ${want.toFixed(2)} s would actually ` +
+               'begin is not known — it will be at or before that moment and no more can ' +
+               'be said';
     if (land === null) return '';
     const slip = want - land;
     if (slip < 0.001)

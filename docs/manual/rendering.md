@@ -90,6 +90,21 @@ the panel says which of the two happened and whether the list was cut short.
 Every packet of a sound stream stands on its own, so a copied soundtrack starts
 exactly where it is asked to and says so instead of drawing a strip.
 
+**The reading is asked for when a row is opened, and it stops after half a
+second.** That is the one place on this stage where a question costs a read of
+the file rather than a look at what has already been read — and for an input that
+is a URL, a read is a download. A six-hour stream pulled off a page has no index
+at all, so half a second buys the first minute of it; the panel then says
+
+> 7 keyframes, from the packets, read — and the reading stopped at 13.97 s, so
+> there are more further in
+
+and an in-point past that point is answered with *not known* rather than with the
+last keyframe that happened to be read, which would look exactly like the right
+answer. Nothing else on the stage asks: a closed row does not, a sound row does
+not, and neither does the warning about an in-point of zero — a copy that starts
+at the beginning starts at the beginning, whatever the keyframes turn out to be.
+
 **A data stream is a row like any other, and it is the one kind that has no
 other way to be.** `+ Data` appears when one of the open inputs has such a
 stream — an action camera's telemetry, a camera's timecode, timed metadata that

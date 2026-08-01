@@ -670,6 +670,15 @@ function rewrap(index, span) {
 /// is returned, so the caller can say what it left out rather than the list
 /// quietly being shorter than the file.
 ///
+/// **Every row arrives closed, which is where this differs from `rewrap` above
+/// and is not a detail.** The open detail of a copied *video* row draws the
+/// keyframe strip, and drawing it means asking where the keyframes are — which
+/// for a container with no index is a read of the file, and for an input that is
+/// a URL is a download (`keyframesFor` in copy.js has the measurement). `Rewrap`
+/// opens the first row because somebody pressed it on this stage and is looking
+/// at the list; this press was made on the Sources stage about a file, and the
+/// stage it lands on should cost what walking to a stage costs.
+///
 /// Returns `{ ok, dropped, rows }` — `ok` false when nothing in the input can be
 /// copied at all, which is an input that failed to open.
 export function copyOfInput(index, span, opts = {}) {
@@ -679,7 +688,7 @@ export function copyOfInput(index, span, opts = {}) {
     settings.streams = kept;
     if (opts.container) settings.container = opts.container;
     if (opts.path) settings.path = opts.path;
-    openDetail = kept.length ? kept[0].id : '';
+    openDetail = 0;
     syncAudioFlag();
     return { ok: true, dropped: rows.length - kept.length, rows: kept.length };
 }
@@ -1183,12 +1192,7 @@ function copyRows(s, restate) {
 
     const stream = copiedStream(s);
     const input = copiedInput(s);
-    // **A data stream is not asked where its keyframes are.** Every sample
-    // stands on its own — there is no prediction in a track nothing decodes —
-    // so the answer is always "all of them" and asking costs a scan of the file
-    // for a strip that would say nothing.
     const isData = !!stream && stream.kind === 'data';
-    const list = isData ? null : keyframesFor(s);
     // `lengthOf`, not a copy of it minus a term: an input's length is its video
     // stream's own duration where there is one and the container's otherwise,
     // and a container that reports none where the stream does gave the keyframe
@@ -1232,6 +1236,13 @@ function copyRows(s, restate) {
         return out;
     }
 
+    // **Asked here and not at the top of the function**, which is where it used
+    // to be: the two branches above return without ever reading the answer, and
+    // the question is a read of the file — the audio row of a remote VOD spent
+    // 3.2 s of frozen window fetching keyframes in order to say that a sound
+    // packet does not have any. The data row already knew not to ask; what it
+    // knew is now simply where the asking happens. See `keyframesFor` in copy.js.
+    const list = keyframesFor(s);
     if (!list || !list.times.length) {
         out.push(div('ex-note dim',
             'Where this stream’s keyframes are could not be read, so the copy will begin ' +
@@ -1255,10 +1266,21 @@ function copyRows(s, restate) {
         })));
     // The count is a fact about *this* stream and stays; why it constrains
     // anything is the same sentence on every file and folds.
+    //
+    // **How far the reading got is part of the fact and not a footnote to it.**
+    // A cut-short list used to say only that there were more, which was fine
+    // while the only thing that cut one short was four thousand entries — the
+    // far end of a strip nobody was reading. A scan now stops on a deadline as
+    // well, and half a second of a remote stream is the first minute of a
+    // six-hour recording: the difference between "there are more" and "this
+    // stops at 63.42 s" is the difference between a strip you can use and a
+    // strip that quietly stands for the wrong file.
+    const last = list.times[list.times.length - 1];
     out.push(div('ex-note dim',
         `${list.times.length} keyframe${list.times.length === 1 ? '' : 's'}, from the ` +
         `${list.how === 'index' ? 'demuxer’s own index' : 'packets, read'}` +
-        `${list.complete ? '' : ' — and the list was cut short, so there are more'}.`));
+        `${list.complete ? '' : ` — and the reading stopped at ${last.toFixed(2)} s, ` +
+                                'so there are more further in'}.`));
     out.push(why('span',
         'A copy is packets rather than pictures, so it can only begin on one of them: a ' +
         'frame between two keyframes is decoded from the one before it and there is nothing ' +

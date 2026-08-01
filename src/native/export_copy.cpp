@@ -12,11 +12,40 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 
 namespace ffmpegbro {
 namespace {
+
+/// A deadline for a packet walk, or no deadline at all.
+///
+/// **Checked every `CHECK_EVERY` packets rather than on each one**, because a
+/// steady-clock read next to an `av_read_frame` that came out of a memory-mapped
+/// local file is a measurable share of the loop, and the granularity this buys —
+/// a few hundred packets, which is a fraction of a second even on a fast disk —
+/// is far finer than any budget worth setting.
+class Deadline {
+  public:
+    explicit Deadline(int ms)
+        : on_(ms > 0),
+          end_(std::chrono::steady_clock::now() + std::chrono::milliseconds(ms > 0 ? ms : 0)) {}
+
+    /// True when the budget is spent. Call once per packet; it does the counting.
+    bool spent() {
+        if (!on_) return false;
+        if (++seen_ < CHECK_EVERY) return false;
+        seen_ = 0;
+        return std::chrono::steady_clock::now() >= end_;
+    }
+
+  private:
+    static constexpr int CHECK_EVERY = 64;
+    bool on_ = false;
+    std::chrono::steady_clock::time_point end_;
+    int seen_ = 0;
+};
 
 /// The timestamp to judge a packet by. `dts` is the decode order and the one
 /// that is always present and always monotonic, which is what both the epoch
@@ -75,7 +104,7 @@ bool parseCopySource(const std::string& source, int* input, int* stream) {
 // ── Where a copy can start ─────────────────────────────────────────────────
 
 bool keyframesOf(const MediaInput& in, int stream, double from, double to, int max,
-                 KeyframeList* out, std::string* err) {
+                 int budgetMs, KeyframeList* out, std::string* err) {
     AVFormatContext* fmt = nullptr;
     if (!openInput(&fmt, in, err)) return false;
 
@@ -132,8 +161,13 @@ bool keyframesOf(const MediaInput& in, int stream, double from, double to, int m
 
     AVPacket* pkt = av_packet_alloc();
     if (!pkt) { *err = "out of memory"; avformat_close_input(&fmt); return false; }
+    Deadline until(budgetMs);
     for (;;) {
         av_packet_unref(pkt);
+        // The deadline is judged on packets *read* and not on keyframes kept:
+        // what costs the time is the reading, and a stream whose keyframes are
+        // far apart is exactly the one that would otherwise run past it.
+        if (until.spent()) break;
         if (av_read_frame(fmt, pkt) < 0) { out->complete = true; break; }
         if (pkt->stream_index != stream || !haveStamp(pkt)) continue;
         const double t = stampOf(pkt) * av_q2d(st->time_base) - epoch;
@@ -151,7 +185,7 @@ bool keyframesOf(const MediaInput& in, int stream, double from, double to, int m
 // ── Where the cues are ─────────────────────────────────────────────────────
 
 bool cueTimesOf(const MediaInput& in, int stream, double from, double to, int max,
-                CueTimes* out, std::string* err) {
+                int budgetMs, CueTimes* out, std::string* err) {
     AVFormatContext* fmt = nullptr;
     if (!openInput(&fmt, in, err)) return false;
 
@@ -193,8 +227,10 @@ bool cueTimesOf(const MediaInput& in, int stream, double from, double to, int ma
 
     AVPacket* pkt = av_packet_alloc();
     if (!pkt) { *err = "out of memory"; avformat_close_input(&fmt); return false; }
+    Deadline until(budgetMs);
     for (;;) {
         av_packet_unref(pkt);
+        if (until.spent()) break;
         if (av_read_frame(fmt, pkt) < 0) { out->complete = true; break; }
         if (pkt->stream_index != stream || !haveStamp(pkt)) continue;
         const double t = stampOf(pkt) * av_q2d(st->time_base) - epoch;

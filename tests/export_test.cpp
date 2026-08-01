@@ -3450,7 +3450,7 @@ int main(int argc, char* argv[]) {
         // mp4, which is what makes this instant rather than a read of the file.
         KeyframeList keys;
         std::string kerr;
-        const bool gotKeys = keyframesOf(in, srcVideo, 0, 0, 0, &keys, &kerr);
+        const bool gotKeys = keyframesOf(in, srcVideo, 0, 0, 0, 0, &keys, &kerr);
         checkf(gotKeys && !keys.times.empty(),
                "the keyframes are reported (%zu, from the %s, %s)", keys.times.size(),
                keys.how.c_str(), keys.complete ? "complete" : "cut short");
@@ -3466,8 +3466,71 @@ int main(int argc, char* argv[]) {
             std::string why;
             MediaInput missing;
             missing.path = "no-such-file.mp4";
-            check(!keyframesOf(missing, -1, 0, 0, 0, &none, &why),
+            check(!keyframesOf(missing, -1, 0, 0, 0, 0, &none, &why),
                   "a file that is not there is refused rather than answered for");
+        }
+
+        // ── the walk stops when it is out of time ──────────────────────────
+        //
+        // The scan is the path a container with no index takes, and until there
+        // was a deadline on it the only bound was `max` at four thousand
+        // keyframes — a bound on the answer and not on the *reading*, which is
+        // what costs the time. A six-hour Twitch VOD asked that question spent
+        // 158 seconds fetching two and a quarter hours of H.264 over HTTPS with
+        // the window not responding, because this call is synchronous and the
+        // Write stage makes it while drawing.
+        //
+        // mpegts because it carries no index at all, which is what makes this
+        // the scan rather than the instant answer an mp4 gives — written here
+        // rather than added to the fixtures, since what is wanted is a shape of
+        // container and not a fact about content.
+        {
+            ExportSettings ts;
+            ts.path = "out/copy-scan.ts";
+            ts.format = "mpegts";
+            ts.inputs = {in};
+            ts.startTime = 0;
+            ts.endTime = 1.0;
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            ts.streams.push_back(v);
+            st = render(ts, {});
+            checkf(st.state == ExportStatus::State::Done, "a copy into mpegts runs (%s)",
+                   st.error.empty() ? "no error" : st.error.c_str());
+
+            MediaInput scanned;
+            scanned.path = ts.path;
+            KeyframeList whole;
+            std::string serr;
+            const bool got = keyframesOf(scanned, -1, 0, 0, 0, 0, &whole, &serr);
+            checkf(got && whole.how == "scan",
+                   "a container with no index is read rather than indexed (%s, %zu keyframes)",
+                   whole.how.c_str(), whole.times.size());
+            check(got && whole.complete,
+                  "and with no deadline it reaches the end of the file");
+
+            // **The contract, not the clock.** How much of a file a millisecond
+            // buys depends on the disk, the cache and the machine, so what is
+            // asserted is what must hold however far it got: never more than the
+            // whole file, and never claiming to be complete while holding less
+            // of it. A test that asserted a particular truncation would be a
+            // test of this machine.
+            KeyframeList clipped;
+            const bool gotFast = keyframesOf(scanned, -1, 0, 0, 0, 1, &clipped, &serr);
+            checkf(gotFast && clipped.times.size() <= whole.times.size(),
+                   "a deadline never buys more than the whole file (%zu of %zu)",
+                   clipped.times.size(), whole.times.size());
+            checkf(!gotFast || clipped.times.size() == whole.times.size() || !clipped.complete,
+                   "and a walk cut short by it says so (%zu keyframes, %s)",
+                   clipped.times.size(), clipped.complete ? "complete" : "cut short");
+
+            // The same bound on the cue walk, which has no index shortcut at
+            // all — every call there is the scan.
+            CueTimes cues;
+            std::string cerr;
+            const bool gotCues = cueTimesOf(scanned, -1, 0, 0, 0, 1, &cues, &cerr);
+            check(!gotCues, "a track with no subtitles in it is still refused by name");
         }
 
         // A rewrap: the same packets, a different container. This is the whole
@@ -4535,7 +4598,7 @@ int main(int argc, char* argv[]) {
                 sub.path = srt.string();
                 CueTimes ct;
                 std::string cerr;
-                const bool got = cueTimesOf(sub, -1, 0, 0, 0, &ct, &cerr);
+                const bool got = cueTimesOf(sub, -1, 0, 0, 0, 0, &ct, &cerr);
                 checkf(got && ct.cues.size() == 3,
                        "the cues are read off the packets, no decoder opened (%zu, %s)",
                        ct.cues.size(), got ? (ct.complete ? "complete" : "cut short")
@@ -4557,13 +4620,13 @@ int main(int argc, char* argv[]) {
                 // variadic call are evaluated in is unspecified, so a size read
                 // in the message alongside the call that fills it printed the
                 // empty list this had before it ran.
-                const bool gotWin = cueTimesOf(sub, -1, 4.5, 0, 0, &win, &cerr);
+                const bool gotWin = cueTimesOf(sub, -1, 4.5, 0, 0, 0, &win, &cerr);
                 checkf(gotWin && win.cues.size() == 1,
                        "a window lists the cues inside it (%zu from 4.5 s)", win.cues.size());
                 CueTimes none;
                 MediaInput noSubs;
                 noSubs.path = first;
-                check(!cueTimesOf(noSubs, -1, 0, 0, 0, &none, &cerr),
+                check(!cueTimesOf(noSubs, -1, 0, 0, 0, 0, &none, &cerr),
                       "and a file with no subtitle stream is refused rather than answered "
                       "with an empty list");
             }

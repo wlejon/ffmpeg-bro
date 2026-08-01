@@ -101,9 +101,23 @@ double streamZero(AVStream* st, const MediaInput& in);
 /// and not something the job hands back. It is asked of the demuxer's index
 /// where there is one — instant, and exact — and by reading packets where there
 /// is not, which costs the window and says so. `complete` is false when the
-/// answer was cut short by `max` or by the scan not reaching `to`, because a
-/// list of keyframes that quietly stops is a list somebody would snap to the
-/// wrong end of.
+/// answer was cut short by `max`, by `budgetMs` or by the scan not reaching
+/// `to`, because a list of keyframes that quietly stops is a list somebody
+/// would snap to the wrong end of.
+///
+/// **`budgetMs` is the only bound that is about the caller rather than about
+/// the file, and it exists because `max` turned out not to bound anything a
+/// person can feel.** A scan is a read, and a read of a *remote* input is a
+/// download: a six-hour Twitch VOD asked for its default 4000 keyframes is two
+/// and a quarter hours of H.264 fetched over HTTPS, which measured **158
+/// seconds** with the window frozen for every one of them — this call is
+/// synchronous and the Write stage makes it while drawing. Bounding the count
+/// harder would not have helped, since what is unbounded is the seconds each
+/// entry costs and that is a property of the connection. So the walk carries a
+/// deadline, stops on it, and says the list was cut short in the one field that
+/// already meant exactly that. Zero or less is no deadline, which is what the
+/// native callers and the tests pass; the JS binding defaults it, because
+/// everything reaching this from JS is on the drawing thread.
 struct KeyframeList {
     int stream = -1;
     std::string how;            ///< "index" or "scan"
@@ -113,7 +127,7 @@ struct KeyframeList {
 };
 
 bool keyframesOf(const MediaInput& in, int stream, double from, double to, int max,
-                 KeyframeList* out, std::string* err);
+                 int budgetMs, KeyframeList* out, std::string* err);
 
 /// Where a subtitle track's cues are, on the input's own clock.
 ///
@@ -169,8 +183,12 @@ struct CueTimes {
     std::vector<Cue> cues;  ///< seconds on the input's clock, in the order read
 };
 
+/// `budgetMs` bounds the read in wall time exactly as `keyframesOf`'s does, and
+/// for the same reason: there is no index shortcut here at all, so *every* call
+/// is the scan, and a subtitle track inside a remote container costs the whole
+/// container's bytes to walk. Zero or less is no deadline.
 bool cueTimesOf(const MediaInput& in, int stream, double from, double to, int max,
-                CueTimes* out, std::string* err);
+                int budgetMs, CueTimes* out, std::string* err);
 
 /// Every copied stream of one render, and the demuxers they read.
 ///

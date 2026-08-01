@@ -122,6 +122,23 @@ JSValue optionsToJs(JSContext* ctx, const std::vector<OptionInfo>& opts) {
     return arr;
 }
 
+/// How long a packet walk may take before it gives back what it has.
+///
+/// **Every one of these calls is synchronous on the JS thread, and two of them
+/// are made while the Write stage is drawing.** `max` bounds the answer and
+/// bounds nothing a person can feel: a six-hour Twitch VOD asked for its 4000
+/// keyframes is two and a quarter hours of video fetched over HTTPS, measured at
+/// **158 seconds** with the window not responding for all of them. So the walk
+/// carries a deadline and the answer says it was cut short — the `complete`
+/// field these three already have, meaning exactly what it always meant.
+///
+/// Half a second because that is roughly the longest a single redraw may take
+/// and still be a redraw rather than a hang, and because a local file with no
+/// index reaches the end of itself well inside it. A caller who genuinely wants
+/// the whole file passes `ms: 0`, which is what the native callers and the tests
+/// do — they are not on this thread.
+constexpr int DEFAULT_WALK_MS = 500;
+
 /// The arguments the three file queries here share: an input (or a bare path)
 /// and a window in it.
 ///
@@ -136,6 +153,7 @@ struct FileQuery {
     int stream = -1;
     double from = 0, to = 0;
     int max = 0;
+    int ms = DEFAULT_WALK_MS;
 };
 
 bool fileQuery(JSContext* ctx, int argc, JSValueConst* argv, FileQuery* q) {
@@ -153,12 +171,13 @@ bool fileQuery(JSContext* ctx, int argc, JSValueConst* argv, FileQuery* q) {
         q->from = numProp(ctx, opts, "from", 0);
         q->to = numProp(ctx, opts, "to", 0);
         q->max = static_cast<int>(numProp(ctx, opts, "max", 0));
+        q->ms = static_cast<int>(numProp(ctx, opts, "ms", DEFAULT_WALK_MS));
     }
     return true;
 }
 
-/// bro.ffmpeg.keyframes(path | input, { stream, from, to, max }) — where a copy
-/// can start.
+/// bro.ffmpeg.keyframes(path | input, { stream, from, to, max, ms }) — where a
+/// copy can start.
 ///
 /// **A copied stream can only begin at a keyframe**, and where they are is a
 /// fact about the input rather than about the render. It is here as a query
@@ -171,7 +190,8 @@ bool fileQuery(JSContext* ctx, int argc, JSValueConst* argv, FileQuery* q) {
 /// instant and exact, or a scan of the window for a container that has none —
 /// and `complete` is false when the walk was cut short, because a list of
 /// keyframes that quietly stops is a list somebody would snap to the wrong end
-/// of.
+/// of — which is now also what a scan says when it ran out of the `ms` it was
+/// given, and `DEFAULT_WALK_MS` is why it has one.
 JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "keyframes(path) requires a path or an input");
@@ -181,7 +201,7 @@ JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
 
     KeyframeList list;
     std::string err;
-    if (!keyframesOf(q.in, q.stream, q.from, q.to, q.max, &list, &err))
+    if (!keyframesOf(q.in, q.stream, q.from, q.to, q.max, q.ms, &list, &err))
         return JS_ThrowTypeError(ctx, "%s", err.c_str());
 
     JSValue out = JS_NewObject(ctx);
@@ -197,7 +217,7 @@ JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
     return out;
 }
 
-/// bro.ffmpeg.cueTimes(path | input, { stream, from, to, max }) — when a
+/// bro.ffmpeg.cueTimes(path | input, { stream, from, to, max, ms }) — when a
 /// subtitle track's cues are on screen.
 ///
 /// The same shape of query as `keyframes` above and for the same reason: a
@@ -219,7 +239,7 @@ JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
 
     CueTimes list;
     std::string err;
-    if (!cueTimesOf(q.in, q.stream, q.from, q.to, q.max, &list, &err))
+    if (!cueTimesOf(q.in, q.stream, q.from, q.to, q.max, q.ms, &list, &err))
         return JS_ThrowTypeError(ctx, "%s", err.c_str());
 
     JSValue out = JS_NewObject(ctx);

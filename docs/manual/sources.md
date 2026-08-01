@@ -89,6 +89,15 @@ Two things about what it sets up:
   own segment metadata, Matroska will not hold a data stream and says so, and the
   track means nothing once the recording is off Twitch. The press says how many
   it dropped rather than the list quietly being shorter than the file.
+- **Every row arrives closed, and the press reads nothing.** Opening a copied
+  video row draws its keyframe strip, and drawing that means reading the file to
+  find out where the keyframes are — over a network, on a container with no
+  index, that is a download. `Rewrap` opens the first row because you pressed it
+  on the stage you were already looking at; this press was made somewhere else,
+  about a file, and lands you on a list you can read without having paid for it.
+  Open a row when you want the strip. See
+  [Rendering](rendering.md) for what the reading costs and what it says when it
+  stops early.
 
 Once it is set up the card offers **`Use the local copy`**, which points the
 input at the file. The clips cut from it keep their times, and that is correct

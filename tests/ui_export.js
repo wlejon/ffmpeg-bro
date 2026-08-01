@@ -2561,6 +2561,119 @@ console.log('\na stream copied rather than encoded');
          'and it goes back to being made');
 }
 
+// ── what a copy does not read the file for ─────────────────────────────────
+//
+// Everything above is about the keyframes being *known*. This is about what
+// asking costs, which for the whole life of that surface was invisible: an mp4
+// carries an index, so `bro.ffmpeg.keyframes` answered instantly and nothing
+// ever noticed that three places were asking without looking at the answer.
+//
+// A stream pulled off a page is the file that noticed. A container with no index
+// is *read* instead, and a read of a URL is a download: `Save a local copy` on a
+// six-hour Twitch VOD spent **274 seconds** with the window not responding, of
+// which 158 s was a warning about an in-point of zero and 3.2 s was a sound row
+// asking where its keyframes were in order to say that a sound packet does not
+// have any.
+//
+// So these are assertions about *calls*, not about milliseconds — the cost is
+// the file's and the machine's, and the bug is that the question was asked at
+// all. The binding is wrapped in a counter, which is the only vantage point from
+// which the claim is visible at all: the answers are cached, so the second ask
+// of anything is free and no timing would ever show it.
+console.log('\nwhat a copy does not read the file for');
+{
+    const real = bro.ffmpeg.keyframes;
+    let asked = 0;
+    bro.ffmpeg.keyframes = function (...a) { asked++; return real.apply(this, a); };
+    ok(bro.ffmpeg.keyframes !== real, 'the keyframe query can be counted');
+    try {
+        // A fresh input, because the cache is per file and per stream and every
+        // section above has warmed the main one. The video-only fixture is the
+        // one whose keyframes nothing here has asked for yet.
+        const cold = videoOnly ? A.inputs.addInput({ path: videoOnly }) : null;
+        if (!cold) {
+            console.log('  (no video-only fixture — the cold-cache checks are skipped)');
+        } else {
+            waitFor('the second input to open', () => !!cold.probe || !!cold.error);
+            ok(!!cold.probe, `a second input opens (${cold.name})`);
+
+            asked = 0;
+            const why = A.exporter.prepareLocalCopy(cold, 'out/ui-local-copy.mkv', null);
+            same(why, '', 'Save a local copy fills the Write stage in');
+            pump(60);
+            // **The whole press, and it reads nothing.** Two things had to be
+            // true at once for this number to be zero: a warning about an
+            // in-point of zero does not ask — the first keyframe of a stream is
+            // at or before the stream's own beginning, so there is no answer
+            // that could change it — and the press leaves every row closed,
+            // because an open video row draws the strip and the strip is the ask.
+            same(asked, 0, `the press asks the file nothing (${asked} reads)`);
+            const rows = A.exporter.currentSettings().streams;
+            ok(rows.length >= 1 && rows.every((s) => /^copy:/.test(s.source)),
+               `and the list is a copy of every stream (${rows.length} rows)`);
+            ok(!q('#ex-streams .ex-kf'), 'with no keyframe strip drawn, because no row is open');
+
+            // Opening one is what asks, and that is the point: it is the answer
+            // to a question somebody has just put.
+            const node = q(`#ex-streams [data-stream="${rows[0].id}"]`);
+            ok(!!node, 'the row is on the stage');
+            q('[data-f="detail"]', node).click();
+            pump(80);
+            ok(asked >= 1, `opening the row is what asks (${asked} reads)`);
+            ok(!!q('#ex-streams .ex-kf'), 'and the strip is drawn from what came back');
+        }
+
+        // A sound row asks nothing, ever. The main input's audio stream is the
+        // one thing above that never had its keyframes asked for, so this is a
+        // cold cache too — and before the fix it was a read of the file for a
+        // note that says a sound packet has no keyframes.
+        const main = A.inputs.inputs[0];
+        const audioIndex = (main.probe.streams || []).findIndex((s) => s.kind === 'audio');
+        if (audioIndex < 0) {
+            console.log('  (the main fixture has no soundtrack — the sound-row check is skipped)');
+        } else {
+            A.exporter.prepareLocalCopy(main, 'out/ui-local-copy-2.mkv', null);
+            pump(60);
+            const rows = A.exporter.currentSettings().streams;
+            const sound = rows.find((s) => s.kind === 'audio');
+            ok(!!sound, 'the main input copies its soundtrack too');
+            const node = q(`#ex-streams [data-stream="${sound.id}"]`);
+            asked = 0;
+            q('[data-f="detail"]', node).click();
+            pump(80);
+            same(asked, 0, `a sound row opened asks nothing (${asked} reads)`);
+            // Open and useful, which is the half that makes the zero mean
+            // something: the row was drawn in full, it simply had no reason to
+            // read the file to draw it.
+            const open = q(`#ex-streams [data-stream="${sound.id}"]`);
+            ok(!!q('[data-f="copy-copyFrom"]', open) && !q('.ex-kf', open),
+               'and is drawn in full, with the two numbers and no strip to put them on');
+        }
+    } finally {
+        bro.ffmpeg.keyframes = real;
+    }
+
+    // And the rule that makes a cut-short list safe to hold. This is pure, and
+    // it has to be: what truncates a list is a deadline against a file too big
+    // to read, and there is no such file on this machine.
+    const whole = { complete: true, times: [0, 2, 4] };
+    const cut = { complete: false, times: [0, 2, 4] };
+    same(A.exporter.keyframeAtOrBefore(whole, 3), 2, 'a complete list answers where it can');
+    same(A.exporter.keyframeAtOrBefore(whole, 99), 4,
+         'and past its end too, because past its end is the end of the file');
+    same(A.exporter.keyframeAtOrBefore(cut, 3), 2,
+         'a cut-short list answers inside what it read');
+    same(A.exporter.keyframeAtOrBefore(cut, 99), null,
+         'and refuses past it — the last keyframe read looks exactly like the right answer');
+
+    // Back to a render, so everything after this is the file it always was.
+    A.exporter.currentSettings().streams = A.exporter.defaultStreams();
+    A.exporter.currentSettings().audio = true;
+    A.exporter.currentSettings().container = 'mp4';
+    A.exporter.redraw();
+    pump(60);
+}
+
 // ── the range ──────────────────────────────────────────────────────────────
 
 console.log('\nwriting part of the timeline');

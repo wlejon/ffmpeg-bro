@@ -70,8 +70,17 @@ function copyWarnings(list) {
                      'another container, or trim it with From and To');
 
         if (s.kind !== 'video') continue;
-        const kf = keyframesFor(s);
+        // **Nothing is asked about a copy that starts at zero**, because there
+        // is no answer that would change this: the first keyframe of a stream is
+        // at or before its own beginning, so the difference this warns about
+        // cannot exist. That is worth a line of its own rather than being left
+        // to fall out of the arithmetic, because the question costs a read of
+        // the file — 158 s of it for a remote six-hour VOD, on the drawing
+        // thread — and zero is what every row starts at and what a whole-file
+        // rewrap keeps. See `keyframesFor` in copy.js.
         const want = Number(s.copyFrom) || 0;
+        if (want <= 0) continue;
+        const kf = keyframesFor(s);
         const land = keyframeAtOrBefore(kf, want);
         if (land !== null && want - land > 0.001)
             out.push(`${where} from ${want.toFixed(2)} s, and the nearest keyframe at or ` +

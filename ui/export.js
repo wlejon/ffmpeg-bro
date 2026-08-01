@@ -655,6 +655,19 @@ export { intents };
 export function redraw() { if (open) drawAll(); }
 export function currentOptions() { return videoOptions(activeVideoCodec()); }
 
+/// Where a copy starting at `t` would actually begin, given a list of
+/// keyframes.
+///
+/// On the surface because the answer that matters most about it is `null` — a
+/// list that stops before the moment being asked about knows nothing, and the
+/// wrong answer is the last keyframe it happened to read, which looks exactly
+/// like the right one. That is a rule about an *incomplete* list, and the only
+/// way to check a rule about incompleteness is to hand it one: a truncated list
+/// cannot be produced from a fixture on this machine, because what truncates one
+/// is a deadline against a file too big to read (see `keyframesOf` in
+/// export_copy.h).
+export { keyframeAtOrBefore } from './export/copy.js';
+
 /// Which objective metrics this build can compare the two halves with. Asked of
 /// libavfilter rather than written down, so a build without libvmaf offers two
 /// numbers instead of promising three.

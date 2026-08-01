@@ -523,20 +523,28 @@ bro.ffmpeg.codecTags("mp4", "libx265")   // → ["hev1", "hvc1"]
 // query, asked before the render rather than explained after it. Read out of
 // the demuxer's own index where there is one, which is instant and exact, and
 // by reading the window where there is not.
-bro.ffmpeg.keyframes(path | input, { stream, from, to, max })
+bro.ffmpeg.keyframes(path | input, { stream, from, to, max, ms })
 // → { stream, how: "index" | "scan", complete, from, to, times: [0, 2, 4, …] }
 // The times are seconds on the stream's own clock, counted from its first
 // packet — which is the clock `ExportStream.copyFrom` is written against and
 // the clock the seek is made on, so a number snapped to here is the number the
-// render lands on. `complete` is false when the walk was cut short by `max` or
-// by the scan not reaching `to`: a list of keyframes that quietly stops is a
-// list somebody would snap to the wrong end of.
+// render lands on. `complete` is false when the walk was cut short by `max`, by
+// `ms`, or by the scan not reaching `to`: a list of keyframes that quietly
+// stops is a list somebody would snap to the wrong end of.
+//
+// `ms` is how long the **scan** may take before it gives back what it has, and
+// it defaults to 500. This call is synchronous, and `max` bounds the answer
+// rather than the reading — a six-hour VOD asked for its default 4000
+// keyframes is two and a quarter hours of H.264 fetched over HTTPS, which
+// measured 158 s with the window frozen. Pass `ms: 0` for no deadline, from
+// somewhere that is not a drawing thread. The index path is unaffected: a
+// container that has one has already answered.
 
 // When a subtitle track's cues are on screen. The same shape of query as the
 // keyframes and for the same reason: a window is typed into two fields on the
 // Write stage, and what it does to the cues is a fact about the input which
 // nothing should have to render to discover.
-bro.ffmpeg.cueTimes(path | input, { stream, from, to, max })
+bro.ffmpeg.cueTimes(path | input, { stream, from, to, max, ms })
 // → { stream, complete, from, to,
 //     cues: [{ start: 1, end: 2, bytes: 9 }, …] }
 // **Times, not text.** This reads packets and never opens a decoder, so it
@@ -553,7 +561,9 @@ bro.ffmpeg.cueTimes(path | input, { stream, from, to, max })
 // start, so a caller working that out asks for the whole track and compares.
 // There is no index shortcut: an index answers which packets are keyframes and
 // every subtitle packet is one, so this reads the file up to `to` with every
-// other stream discarded in the demuxer.
+// other stream discarded in the demuxer — which means `ms` bounds *every* call
+// here rather than only the containers with no index, and it defaults to 500
+// exactly as the keyframes' does.
 
 // And what those cues *say*. The other half of the question above, and a call
 // of its own because it is a second cost rather than two more fields: this
