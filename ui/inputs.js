@@ -182,6 +182,23 @@ export function addInput(spec) {
     // is the half worth writing into a document — see the note on `resolve` in
     // ui/vod.js.
     input.origin = String((spec && spec.origin) || '');
+    // The other streams of the same recording, where this input came out of a
+    // page that named several — `[{ name, url, bandwidth, audioOnly }]`, best
+    // first, exactly as `ui/vod.js` answered.
+    //
+    // **Kept because one VOD is two different jobs.** The picture at 1080p60 is
+    // what the cut is made against and `Audio Only` is a fraction of the bytes
+    // for a transcription pass, and until now every one but the first was
+    // resolved, counted in a flash message and thrown away — so the second job
+    // meant pasting the link into a script. Held in memory and never in a
+    // document: these URLs are signed and expire, which is what `origin` above
+    // is for.
+    input.renditions = Array.isArray(spec && spec.renditions) ? spec.renditions : null;
+    input.rendition = String((spec && spec.rendition) || '');
+    // Where a local copy of this stream was written, once one has been. See
+    // `Save a local copy` on the Sources stage: a word search wants a file on
+    // this machine and not five hours of HLS.
+    input.localCopy = '';
     inputs.push(input);
     reopen(input);
     return input;

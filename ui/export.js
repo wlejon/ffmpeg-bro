@@ -35,7 +35,8 @@ import { intents, activeIntent, applyIntent, clampToEncoder } from './export/pre
 import { warnings } from './export/warnings.js';
 import { restore, remember, isFirstRun, noLongerFirstRun } from './export/store.js';
 import { initForm, drawForm } from './export/form.js';
-import { initStreams, drawStreams, defaultStreams, manifest } from './export/streams.js';
+import { initStreams, drawStreams, defaultStreams, manifest,
+         copyOfInput } from './export/streams.js';
 import { initPreview, drawPreview, drawPreviewStats, chasePreview, startPreview,
          previewFinished, previewRange, invalidatePreview, invalidateCandidate,
          stopPreviewPlayback, renderCandidate, startQuality, togglePreviewPlay,
@@ -49,6 +50,7 @@ import * as destination from './export/destination.js';
 // run. One home for that question; the node previews ask it the same way.
 import { deviceForRender } from './hardware.js';
 import { syncFollowing } from './export/copy.js';
+import { inputs } from './inputs.js';
 import { forgetCueText } from './export/subtitles.js';
 import { trackById as cueTrackById, writeCueFile } from './cues.js';
 
@@ -582,6 +584,47 @@ export function tick() {
 
 export { buildSpec, previewSpec, specSources, range, togglePreviewPlay, stepPreviewBy,
          startPreview };
+
+/// The whole render set up as a local copy of one input, ready to be looked at.
+///
+/// **The one seam between "I pasted a link" and "I have this on disk".** A
+/// stream resolved off a page is an ordinary `-i` and always was, but reading it
+/// is a network read every time — five hours of HLS re-fetched by every scrub,
+/// every filmstrip and every transcription pass. Saving it locally is a stream
+/// copy of that input, which is a render, and this application already has one
+/// place where renders are described, warned about, printed as a command and
+/// run. So this fills that place in and the caller walks to it.
+///
+/// It deliberately stops short of pressing Render. What arrives is an ordinary
+/// stream list, an ordinary container, an ordinary path and the command bar
+/// printing exactly what will happen — including the range, which for a
+/// five-hour VOD is the difference between fetching 0.6% of the bytes and all of
+/// them. Somebody about to spend three quarters of an hour of bandwidth should
+/// see the invocation first.
+///
+/// `span` is `{ from, to }` in the input's own seconds, or null for the whole
+/// file. Returns a sentence when it could not, and '' when the stage is ready.
+export function prepareLocalCopy(input, path, span) {
+    const index = inputs.indexOf(input);
+    if (index < 0) return 'that input is not on the list any more';
+    if (!input.probe) return input.error || 'that input has not opened yet';
+    const out = copyOfInput(index, span || null,
+                            { container: 'matroska', path });
+    if (!out.ok)
+        return 'there is nothing in it that can be copied — a rewrap needs a stream';
+    lastCopy = out;
+    // Everything on the stage restated, the way pressing `Rewrap` there does:
+    // the summary, the warnings and the command bar all read the stream list.
+    drawStreams();
+    updateSummary();
+    redraw();
+    return '';
+}
+
+/// What the last `prepareLocalCopy` came to, so the press that walked here can
+/// say what it left out without this module having to flash anything itself.
+let lastCopy = null;
+export function lastLocalCopy() { return lastCopy; }
 
 /// The last thing poll() reported, for the status line and for tests.
 export function lastStatus() { return lastPoll; }

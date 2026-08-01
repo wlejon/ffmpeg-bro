@@ -166,8 +166,57 @@ initSources({
         return clip;
     },
     clipsOf,
+    // A stream pulled off a page, written to this machine. Here rather than in
+    // `ui/sources.js` because it crosses three things that stage does not own —
+    // the timeline, the Write stage and the shell — and every one of them is a
+    // decision about somebody's edit.
+    //
+    // **A clip, because the Write stage will not open without one.**
+    // `exporter.prepare()` refuses an empty timeline, which is right for every
+    // other render and is exactly wrong for this one: the whole intention is
+    // "copy this input" and the timeline is beside the point. Rather than
+    // loosening that rule for one press, the press lays a clip out — but only
+    // when this input has none *and* the timeline is empty. Appending five hours
+    // of stream to somebody's montage as a side effect of saving a file is worse
+    // than refusing with a sentence.
+    saveLocally: (input) => {
+        if (!clipsOf(input).length) {
+            if (project.clips.length)
+                return flash('Use it on the timeline first — a render needs it in the ' +
+                             'edit, and adding it here would put five hours on the end ' +
+                             'of what you have');
+            openInput(input, { quiet: true });
+        }
+        if (!shell.goTo('write')) return;
+        const why = exporter.prepareLocalCopy(input, localCopyPath(input), null);
+        if (why) return flash(`Cannot copy it: ${why}`);
+        // Where it will land, remembered against the input so the Sources card
+        // can offer to read it once it is written. Not a promise that it exists.
+        input.localCopy = exporter.currentSettings().path;
+        const dropped = (exporter.lastLocalCopy() || {}).dropped || 0;
+        flash(`Copying ${input.name} to ${basename(input.localCopy)}` +
+              (dropped ? ` — leaving out ${dropped} data stream${dropped === 1 ? '' : 's'} ` +
+                         'Matroska will not hold' : '') +
+              '. Set a range on the strip if you want part of it, then Render.');
+    },
     changed: () => { changed('inputs'); },
 });
+
+/// Where a saved stream goes: beside the document if there is one, and beside
+/// the application otherwise, named after the input rather than after the signed
+/// URL — which is five hundred characters of token and is not a filename.
+///
+/// Matroska, because a copy has to go into a container that will hold what is
+/// being copied and Matroska holds very nearly everything. The container is an
+/// ordinary control on the stage this walks to, so this is a starting point and
+/// not a decision taken away from anybody.
+function localCopyPath(input) {
+    const slug = String(input.name || 'stream')
+        .replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'stream';
+    const here = doc.documentPath();
+    const dir = here ? here.replace(/[/\\][^/\\]*$/, '') : '.';
+    return `${dir}/${slug}.mkv`;
+}
 
 capture.initCapture({
     list: el('cap-list'),

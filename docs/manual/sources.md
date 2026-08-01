@@ -39,6 +39,16 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   half of the same question — how much of this input there is — and `-1` is forever,
   which has no length at all, so a looping input is as long as Stop at says and no
   longer.
+- **Stream**, only for an input that came from a *page* rather than from a path.
+  Pasting `https://www.twitch.tv/videos/…` into **From** turns the page into the
+  HLS renditions behind it — nothing is downloaded, and a five-hour VOD costs one
+  HTTP request until something asks for a range of it. All of them are kept, not
+  just the best: one recording is two different jobs, the picture at 1080p60 for
+  the cut and `Audio Only` at a fraction of the bytes for a transcription pass,
+  and picking one is an ordinary change of `-i`. What does **not** carry between
+  two of them is *times* — a Twitch VOD's renditions do not resolve the ad breaks
+  identically and drift apart by seconds — so a cut made against one is a search
+  hint against another and the row says so.
 - **What came back** — the container on one line, then **one line per stream**:
   `V0  h264  1920×1080 · 29.97 fps · yuv420p · bt709`. Everything else the probe
   reported — profile, language, pixel aspect, colour range, per-stream duration — is
@@ -50,6 +60,45 @@ hidden or collected: opening a file to see what is in it is a thing people do.
 beside it where it is dead — `A device cannot be cut`, `One picture, no time at all`,
 `Never ends — set Stop at`, `No length to cut`, `Nothing to play`, `Will not open`,
 `Still connecting`, `Still opening`.
+
+## Saving a stream to this machine
+
+`Save a local copy…` appears beside those for an input that came off a page, and
+it is worth pressing before anything else you plan to do more than once.
+Everything downstream reads an input *repeatedly* — a scrub, a filmstrip, a
+waveform, a transcription pass, a render — and for a URL every one of those is a
+network read of the whole recording. Word searches in particular want the media
+on this machine: finding a phrase means transcribing around it, and doing that
+over HLS is the same segments fetched twice.
+
+What it does is a **stream copy**: the packets already on the CDN written into a
+local container without being decoded, which is what
+[Rewrap](rendering.md) does and is why it runs at whatever the network will give
+rather than at whatever an encoder will. So the press does not start anything —
+it sets the [Write stage](rendering.md) up and takes you there, with the stream
+list written, Matroska chosen, a filename filled in beside your document, and the
+command bar printing exactly what will happen. Read it and press Render.
+
+Two things about what it sets up:
+
+- **The range is yours to set, and it is the whole difference.** HLS is
+  segmented, and `-ss`/`-to` on the copy rows means libavformat fetches the
+  segments the window covers and no others. The whole VOD is three quarters of an
+  hour of bandwidth; forty six-second hits out of five hours is 0.6% of it.
+- **Data streams are left out.** Twitch's HLS carries a `timed_id3` track of its
+  own segment metadata, Matroska will not hold a data stream and says so, and the
+  track means nothing once the recording is off Twitch. The press says how many
+  it dropped rather than the list quietly being shorter than the file.
+
+Once it is set up the card offers **`Use the local copy`**, which points the
+input at the file. The clips cut from it keep their times, and that is correct
+here where it is not correct between renditions: this is a copy of these packets
+and not another transcode of the same stream.
+
+The input must be on the timeline first — a render is of the edit, and this one
+refuses rather than appending five hours to a montage you were in the middle of.
+The same job is available without the window at all: `tools/pull_vod.js` is this
+press written as a script, and takes `--quality`, `--from` and `--to`.
 Those mirror `openInput()` exactly, so the button is never alive and then refusing.
 `Re-probe` and
 `Remove` sit at the other end of the same bar; `Remove` says who is holding the input

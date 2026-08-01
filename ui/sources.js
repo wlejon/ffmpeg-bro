@@ -60,7 +60,7 @@ import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
 import { devicesFor, deviceNamed, decodeCost, deviceIndices,
          unknownDeviceIndex } from './hardware.js';
-import { clock, bytes, kbps } from './format.js';
+import { clock, bytes, kbps, basename } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless, opening, stopOpening, tickInputs } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
@@ -152,6 +152,15 @@ export function initSources(nodes, h) {
                     // playlist that expires; this is what it came from.
                     name: vod.label,
                     origin: vod.page,
+                    // **All of them, not just the one being opened.** One
+                    // recording is two jobs — the picture for the cut, the sound
+                    // alone for a transcription at a fraction of the bytes — and
+                    // a resolver that answered with the best stream and dropped
+                    // the rest made the second one cost the first one's
+                    // bandwidth. They were already being counted in the flash
+                    // message below and then thrown away.
+                    renditions: vod.renditions,
+                    rendition: vod.renditions[0].name,
                 }));
                 if (hooks.flash)
                     hooks.flash(`${vod.label} — ${vod.renditions.length} renditions, ` +
@@ -556,8 +565,55 @@ function whereRows(input) {
                   'about a filename',
         })));
     }
+    rows.push(...renditionRows(input));
     if (opening(input)) rows.push(...waitingRows(input));
     return rows;
+}
+
+/// The other streams of the same recording, where the input came out of a page.
+///
+/// **Switching is a change of path and nothing more.** Every rendition is the
+/// same recording — the same length, the same content, the same page — so
+/// swapping one for another is exactly the edit `From` above already is, and it
+/// goes through the same `change()` so the file is reopened and the clips
+/// reading it are reloaded the way they would be for any other change of `-i`.
+///
+/// Two things it deliberately does not do. It does not re-resolve: the URLs came
+/// back in one answer and are all signed with the same lifetime, so asking again
+/// for the one you picked would be a second round trip for a string already in
+/// hand. And it does not re-cut anything — the clips keep their times, which is
+/// right within one file and is *not* right between two renditions of a Twitch
+/// VOD, where the discontinuities where the ads were leave the clocks up to two
+/// and a half seconds apart. That is why the row says so rather than the
+/// application pretending the swap is free.
+function renditionRows(input) {
+    const list = input.renditions;
+    if (!list || list.length < 2) return [];
+    const at = list.findIndex((r) => r.url === input.path);
+    const pick = el('select', {
+        cls: 'wide', 'data-f': 'srcrendition',
+        title: 'Another stream of the same recording',
+        on: { change: () => {
+            const r = list[Number(pick.value)];
+            if (!r) return;
+            input.rendition = r.name;
+            change(input, { path: r.url });
+        } },
+    }, list.map((r, i) => el('option', {
+        value: String(i),
+        selected: i === at ? true : undefined,
+        text: `${r.name}${r.audioOnly ? ' — sound only' : ''}` +
+              (r.bandwidth ? ` · ${Math.round(r.bandwidth / 1000)} kb/s` : ''),
+    })));
+    return [
+        row('Stream', pick),
+        note(`${list.length} renditions of ${input.origin || 'this recording'}. ` +
+             'They are the same recording at different rates — the sound-only one is a ' +
+             'fraction of the bytes and is what a transcription pass wants. Times do not ' +
+             'carry between two of them: a Twitch VOD’s renditions do not resolve the ' +
+             'ad breaks identically and drift apart by seconds, so a cut made against one ' +
+             'is a search hint against another and not a cut.'),
+    ];
 }
 
 /// What is happening while an input is being opened, and the way to stop it.
@@ -1175,6 +1231,7 @@ function footRows(input) {
         }),
         why ? el('span', { cls: 'src-why', text: why, title: whyAt(input, why) }) : null,
         div('spacer'),
+        ...localCopyButtons(input),
         el('button', {
             cls: 'tiny', 'data-f': 'srcreopen', text: 'Re-probe',
             title: 'Open it again with exactly what it says now',
@@ -1197,6 +1254,52 @@ function footRows(input) {
             } },
         }),
     ];
+}
+
+/// Saving a stream to this machine, and using the file once it is here.
+///
+/// **Offered for a stream and not for a file**, which is the whole distinction:
+/// a path on this machine is already local and a `Save a local copy` beside one
+/// would be an offer to duplicate a file for no reason. What makes it worth
+/// having is that everything downstream reads an input *repeatedly* — a scrub, a
+/// filmstrip, a waveform, a transcription pass, a render — and for a URL every
+/// one of those is a network read of a five-hour recording. `tools/montage.js`
+/// transcribes each hit's window a second time to place the cut on what the
+/// media itself said, and doing that over HLS is the same segments fetched
+/// twice.
+///
+/// It walks to the Write stage rather than starting anything. See
+/// `prepareLocalCopy`: a copy of a whole VOD is three quarters of an hour of
+/// bandwidth, and the range is the difference between that and 0.6% of it, so
+/// the invocation is worth reading before it runs.
+function localCopyButtons(input) {
+    if (!input.origin && !input.renditions) return [];
+    const out = [];
+    // Once a copy has been written, the offer changes to using it. Kept on the
+    // input rather than guessed at from the filesystem, because "a file with
+    // about the right name exists" is not the same claim as "this is the copy
+    // this application wrote of this stream".
+    if (input.localCopy)
+        out.push(el('button', {
+            cls: 'tiny', 'data-f': 'srclocaluse', text: 'Use the local copy',
+            title: `Point this input at ${input.localCopy} — the clips cut from it keep ` +
+                   'their times, which is right because it is a copy of these packets ' +
+                   'and not another rendition',
+            on: { click: () => {
+                change(input, { path: input.localCopy });
+                if (hooks.flash) hooks.flash(`Reading ${basename(input.localCopy)} locally now`);
+            } },
+        }));
+    out.push(el('button', {
+        cls: 'tiny', 'data-f': 'srclocal', text: 'Save a local copy…',
+        disabled: !input.probe,
+        title: input.probe
+            ? 'Set the Write stage up to copy this stream to a file on this machine — ' +
+              'no decode and no encode, so it runs at whatever the network will give'
+            : 'It has not opened yet',
+        on: { click: () => { if (hooks.saveLocally) hooks.saveLocally(input); } },
+    }));
+    return out;
 }
 
 /// What to do about it, for the things `blocked()` can say.

@@ -353,5 +353,99 @@ A.inputs.removeInput(url);
 pump(40);
 ok(A.inputs.inputs.length === 1, 'an input with no clip is removed by asking');
 
+// ── a stream off a page: its other renditions, and saving one locally ──────
+//
+// `ui/vod.js` turns a Twitch page into a list of HLS renditions — the picture at
+// 1080p60 for the cut, `Audio Only` at a fraction of the bytes for a
+// transcription pass — and until now everything but the first was resolved,
+// counted in a flash message and thrown away, so the second job meant leaving
+// the application for a script.
+//
+// **Driven without the network**, which is the only way this can be a test:
+// what `resolve()` produces is `{ path, name, origin, renditions }` and that
+// shape is handed to `addInput` directly, pointed at the fixture. What is
+// checked is everything downstream of the resolve — which is all of the part
+// that is this application's.
+//
+// Three claims:
+//
+//   - **the other renditions are on the card**, and picking one is an ordinary
+//     change of `-i`;
+//   - **`Save a local copy…` sets a render up rather than starting one.** A copy
+//     of a whole VOD is three quarters of an hour of bandwidth and the range is
+//     the difference between that and 0.6% of it, so what somebody lands on is
+//     the Write stage with the invocation printed and nothing running;
+//   - **it is a copy and not a re-encode.** Every row is a `copy:`, or the whole
+//     point of doing it in this application rather than with a downloader is
+//     gone.
+
+A.shell.goTo('sources');
+pump(100);
+{
+    const streamed = A.inputs.addInput({
+        path: media,
+        name: 'Twitch VOD 123 1080p60',
+        origin: 'https://www.twitch.tv/videos/123',
+        renditions: [
+            { name: '1080p60', url: media, bandwidth: 6000000 },
+            { name: 'Audio Only', url: media, bandwidth: 160000, audioOnly: true },
+        ],
+        rendition: '1080p60',
+    });
+    waitFor('the stream to open', () => !!streamed.probe || !!streamed.error);
+    A.drawSources();
+    pump(60);
+    // Chosen by clicking its row, which is how the detail column is pointed at
+    // an input: `addInput` is the model and the stage's own add path is what
+    // normally selects what it just made.
+    const pickRow = () => { click(q(`[data-input="${streamed.id}"]`)); pump(60); };
+    pickRow();
+
+    const pick = f('srcrendition');
+    ok(!!pick, 'an input that came from a page offers its other renditions');
+    ok(pick && pick.options.length === 2, 'both of them, not just the one being read');
+    ok(el('src-detail').textContent.indexOf('Audio Only') >= 0,
+       'the sound-only one is named as such — it is the one a transcription pass wants');
+
+    // Saving it. The timeline already has a clip of the *other* input, so this
+    // is the refusal path: adding five hours to somebody's edit as a side
+    // effect of saving a file is worse than saying so.
+    ok(A.project.clips.length > 0, 'the timeline is not empty, so the refusal applies');
+    click(f('srclocal'));
+    pump(60);
+    same(A.shell.currentStage(), 'sources',
+         'saving a copy of an input that is not in the edit is refused rather than ' +
+         'appending it to whatever is already there');
+
+    // With it on the timeline, the press sets the render up and walks there.
+    A.openInput(streamed, { quiet: true });
+    pump(120);
+    A.shell.goTo('sources');
+    pickRow();
+    click(f('srclocal'));
+    pump(120);
+    same(A.shell.currentStage(), 'write', 'the press walks to the stage that writes files');
+
+    const S = A.exporter.currentSettings();
+    same(S.container, 'matroska',
+         'Matroska, because a copy has to go into a container that will hold what is ' +
+         'being copied');
+    ok(/\.mkv$/.test(S.path || ''), `and a path was filled in: ${S.path}`);
+    ok(S.streams.length > 0, 'the stream list was written');
+    ok(S.streams.every((s) => String(s.source || '').startsWith('copy:')),
+       'every row is a copy — no decode and no encode, which is the whole point');
+    ok(!S.streams.some((s) => s.kind === 'data'),
+       'and no data row, which Matroska will not hold');
+    ok(!A.exporter.isRunning(), 'nothing has been started — the invocation is there to read');
+
+    // And the card now offers to read what will be written.
+    A.shell.goTo('sources');
+    pickRow();
+    ok(!!f('srclocaluse'),
+       'once a copy has been set up the card offers to point the input at it, which is ' +
+       'what makes the word search run on local media');
+    console.log(`  a local copy of ${streamed.name} → ${S.path}`);
+}
+
 screenshot('out/sources.png');
 console.log(`\nPASS ui_sources — ${checks} checks`);

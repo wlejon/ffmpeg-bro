@@ -652,6 +652,38 @@ function rewrap(index, span) {
     hooks.changed();
 }
 
+/// The same rewrap, asked for from somewhere that is not this stage.
+///
+/// **Because a download is a render and this application has one of those.** A
+/// stream pulled off a page is copied to a local file by writing every packet
+/// into a container without decoding it, which is exactly what `Rewrap` above
+/// does — so the press on the Sources stage sets this list up and walks here
+/// rather than growing a second copy path with its own progress, its own job
+/// slot and its own idea of what a container will hold. What you land on is an
+/// ordinary stream list you can read, change and undo before pressing Render.
+///
+/// **The data streams are dropped, and that is not a shortcut.** Twitch's HLS
+/// carries a `timed_id3` track of its own segment metadata; Matroska will not
+/// hold a data stream and says so, and the track means nothing once the
+/// recording is off Twitch. Keeping it would mean choosing a container to suit a
+/// track nobody pulling a VOD came for. They are dropped by *kind* and the count
+/// is returned, so the caller can say what it left out rather than the list
+/// quietly being shorter than the file.
+///
+/// Returns `{ ok, dropped, rows }` — `ok` false when nothing in the input can be
+/// copied at all, which is an input that failed to open.
+export function copyOfInput(index, span, opts = {}) {
+    const rows = rewrapRows(index, newId, span || null);
+    if (!rows.length) return { ok: false, dropped: 0, rows: 0 };
+    const kept = opts.keepData ? rows : rows.filter((s) => s.kind !== 'data');
+    settings.streams = kept;
+    if (opts.container) settings.container = opts.container;
+    if (opts.path) settings.path = opts.path;
+    openDetail = kept.length ? kept[0].id : '';
+    syncAudioFlag();
+    return { ok: true, dropped: rows.length - kept.length, rows: kept.length };
+}
+
 function addButton(label, kind) {
     return el('button', {
         cls: 'tiny', text: `+ ${label}`, 'data-add': kind,
