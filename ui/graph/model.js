@@ -65,10 +65,72 @@ export function makeGraph(opts = {}) {
 
     const idOf = (n) => (typeof n === 'string' ? n : n && n.id);
 
+    // ── the index ──────────────────────────────────────────────────────────
+    //
+    // Every lookup below used to be a walk of the array it looks in, which is
+    // right for the graph this was written for — a handful of clips comes to a
+    // few dozen nodes — and is quadratic in the one it now gets. The derivation
+    // makes about nine nodes per clip, so seventy-five clips is **679 nodes and
+    // 752 edges**, and one `graphSummary()` over that — a `derive()` and a
+    // `print()`, which is what the spine's card costs — walked **12.9 million
+    // nodes and 3.5 million edges** to answer eleven thousand lookups. Measured:
+    // 745 ms for the spine, 1487 ms for the command bar, 1648 ms for the stage,
+    // against 1 ms each at one clip. That is not the graph being big; it is the
+    // lookups being linear.
+    //
+    // **Maintained rather than invalidated, and that is the load-bearing part.**
+    // A derivation interleaves `add` and `node()` all the way down, so an index
+    // dropped on every mutation would be rebuilt once per node and the walk
+    // would still be there under another name. So the two cheap structural
+    // moves — a node arriving, a wire being made — put themselves *into* the
+    // index, and only the five that rewrite or remove something drop it. Those
+    // five are gestures a person makes, one at a time, and a rebuild there is a
+    // walk of a graph that was about to be redrawn anyway.
+    //
+    // **Built on first use, not in `add`.** A graph is often made and thrown
+    // away without anything ever being looked up in it — `derive()` compares two
+    // skeletons — and building an index for one of those is pure cost.
+    let byId = null;
+    let byAnchorId = null;
+    let inBy = null;
+    let outBy = null;
+
+    /// Everything is out of date. The mutations that move an edge from one node
+    /// to another or take a node out call this; the two that only append do not.
+    const reindex = () => { byId = null; byAnchorId = null; inBy = null; outBy = null; };
+
+    const nodeIndex = () => {
+        if (!byId) {
+            byId = new Map();
+            byAnchorId = new Map();
+            // First wins, both times, which is what the walks these replace did:
+            // several user nodes can share one insert point and `byAnchor` has
+            // always answered with the first of them.
+            for (const nd of nodes) {
+                if (!byId.has(nd.id)) byId.set(nd.id, nd);
+                if (nd.anchor && !byAnchorId.has(nd.anchor)) byAnchorId.set(nd.anchor, nd);
+            }
+        }
+        return byId;
+    };
+
+    const edgeIndex = () => {
+        if (!inBy) {
+            inBy = new Map();
+            outBy = new Map();
+            for (const e of edges) {
+                const i = inBy.get(e.to);
+                if (i) i.push(e); else inBy.set(e.to, [e]);
+                const o = outBy.get(e.from);
+                if (o) o.push(e); else outBy.set(e.from, [e]);
+            }
+        }
+        return inBy;
+    };
+
     g.node = (n) => {
         const id = idOf(n);
-        for (const nd of nodes) if (nd.id === id) return nd;
-        return null;
+        return nodeIndex().get(id) || null;
     };
 
     /// A node by the name of what it *is*, rather than by the id it happens to
@@ -81,8 +143,8 @@ export function makeGraph(opts = {}) {
     /// point and each of those is found by its own id.
     g.byAnchor = (anchor) => {
         if (!anchor) return null;
-        for (const nd of nodes) if (nd.anchor === anchor) return nd;
-        return null;
+        nodeIndex();
+        return byAnchorId.get(anchor) || null;
     };
 
     /// Structural, and quiet: building a graph is not an edit to one. Only the
@@ -173,6 +235,13 @@ export function makeGraph(opts = {}) {
         // function of the spec it was derived from.
         if (spec.onDevice !== undefined) node.onDevice = !!spec.onDevice;
         nodes.push(node);
+        // Into the index rather than dropping it — see `reindex`. Appending
+        // keeps "the first wins" without a walk, because anything already there
+        // was already there first.
+        if (byId) {
+            if (!byId.has(node.id)) byId.set(node.id, node);
+            if (node.anchor && !byAnchorId.has(node.anchor)) byAnchorId.set(node.anchor, node);
+        }
         return node;
     };
 
@@ -188,6 +257,12 @@ export function makeGraph(opts = {}) {
     g.connect = (from, to, port = 0, fromPort = 0) => {
         const edge = { from: idOf(from), to: idOf(to), port, fromPort };
         edges.push(edge);
+        if (inBy) {
+            const i = inBy.get(edge.to);
+            if (i) i.push(edge); else inBy.set(edge.to, [edge]);
+            const o = outBy.get(edge.from);
+            if (o) o.push(edge); else outBy.set(edge.from, [edge]);
+        }
         return edge;
     };
 
@@ -195,6 +270,7 @@ export function makeGraph(opts = {}) {
         const a = idOf(from), b = idOf(to);
         for (let i = edges.length - 1; i >= 0; i--)
             if (edges[i].from === a && edges[i].to === b) edges.splice(i, 1);
+        reindex();
     };
 
     /// Whatever arrives at one input pad, taken off it. **An input pad holds
@@ -210,6 +286,7 @@ export function makeGraph(opts = {}) {
                 edges.splice(i, 1);
                 any = true;
             }
+        if (any) reindex();
         return any;
     };
 
@@ -230,14 +307,23 @@ export function makeGraph(opts = {}) {
     ///
     /// The edges rather than the nodes, for anything that has to know which pad
     /// on the far end it is reading — which is the printer, and nothing else.
+    /// A copy, both times, because the list the index holds is the index — a
+    /// caller that sorted or spliced what it was handed would be editing the
+    /// graph's wiring without going through a mutation. The copy is of the wires
+    /// at *one* node, which is one or two of them; what it replaces was a walk
+    /// of every wire in the graph.
     g.inEdges = (n) => {
         const id = idOf(n);
-        return edges.filter((e) => e.to === id).sort((a, b) => a.port - b.port);
+        edgeIndex();
+        const list = inBy.get(id);
+        return list ? list.slice().sort((a, b) => a.port - b.port) : [];
     };
 
     g.outEdges = (n) => {
         const id = idOf(n);
-        return edges.filter((e) => e.from === id);
+        edgeIndex();
+        const list = outBy.get(id);
+        return list ? list.slice() : [];
     };
 
     /// What feeds a node, in port order.
@@ -343,6 +429,7 @@ export function makeGraph(opts = {}) {
                 e.from = node.id;
                 e.fromPort = 0;
             }
+        reindex();
         g.connect(src, node, 0, fromPort);
         g.changed('insert');
         return node;
@@ -365,6 +452,7 @@ export function makeGraph(opts = {}) {
             }
         }
         nodes.splice(nodes.indexOf(node), 1);
+        reindex();
         g.changed('remove');
         return true;
     };

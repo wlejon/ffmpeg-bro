@@ -12,6 +12,19 @@ Nothing on this screen invents a graph; it asks for one on every change and
 draws the answer, which is what makes it a picture of the edit as it is now
 rather than a copy of the edit as it was.
 
+And it is derived a good deal more often than it is drawn. The card on the spine
+says how many filters the render has, and the command bar along the bottom prints
+the `-filter_complex` those filters come to — so every edit you make restates the
+whole graph two or three times whether or not this stage is up. That is
+affordable while the derivation is priced in the size of the edit and ruinous
+while it is priced in the *square* of it, which is what a graph looked up by
+searching through it costs: seventy-five clips derive 679 nodes, and one
+restatement of them walked 12.9 million nodes to answer eleven thousand lookups
+— 0.7 s for the spine's card and 1.5 s for the command bar, on every edit and
+every walk to another stage. The graph is indexed by id and by anchor now and the
+same restatement is 25 ms, which is the difference between an application that
+stutters at seventy-five clips and one that does not.
+
 ## Getting around it
 
 It works the way a node editor works. Nothing here is invented — Blender, Nuke,

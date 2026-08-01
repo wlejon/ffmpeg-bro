@@ -359,4 +359,76 @@ pump(400);
     console.log(`node previews outstanding: ${queued} of ${g.nodes.length} nodes`);
 }
 
+// ── the derivation is priced in the edit, not in its square ────────────────
+//
+// The Graph stage is the least of the graph's cost, because the graph is derived
+// far more often than it is drawn: the spine's card counts the filters and the
+// command bar prints the chains, so **every edit restates the whole graph two or
+// three times whether or not that stage is up**, and so does every walk to
+// another stage. What made the whole application slow at seventy-five clips was
+// not any of those callers — it was that `graph/model.js` answered `node()`,
+// `byAnchor()` and `inEdges()` by searching the array. Nine nodes a clip is 679
+// of them, and one `derive()` plus `print()` over that walked 12.9 million nodes
+// and 3.5 million edges to answer eleven thousand lookups: 0.7 s for the card,
+// 1.5 s for the bar, 2.4 s to change tab.
+//
+// **Asserted as a ratio between two sizes, not as a number of milliseconds.**
+// The claim is about the *shape* of the cost, and the only honest form of "this
+// is not quadratic" is to ask the same question of two edits and compare. A
+// threshold in milliseconds would be a threshold about whichever machine ran it.
+
+A.shell.goTo('compose');
+pump(200);
+{
+    // A `derive()` and a `print()`, which is exactly what the spine's card costs
+    // and what the command bar pays for. Repeated, because one of them at the
+    // small size is under the clock's resolution.
+    const REPEATS = 20;
+    const restate = (times) => {
+        const t = perf.now();
+        for (let i = 0; i < times; i++) A.graph.summary();
+        return perf.now() - t;
+    };
+    const nodesNow = () => {
+        const d = A.graph.derive(A.exporter.buildSpec(), A.exporter.specSources(),
+                                 { overlay: A.graph.overlay.current() });
+        return d.ok ? d.graph.nodes.length : 0;
+    };
+
+    restate(3);
+    const bigNodes = nodesNow();
+    const big = restate(REPEATS);
+
+    // A fifth of the edit, so the two sizes are far enough apart that a linear
+    // cost and a quadratic one cannot be told apart only by the noise.
+    const few = Math.max(4, Math.round(COUNT / 5));
+    while (A.project.clips.length > few) {
+        const c = A.project.clips[A.project.clips.length - 1];
+        A.select(c);
+        A.removeSelection();
+    }
+    pump(200);
+    restate(3);
+    const smallNodes = nodesNow();
+    const small = restate(REPEATS);
+
+    assert(smallNodes > 0 && bigNodes > smallNodes * 2 && small > 0,
+           `the two sizes are not far enough apart to measure: ${smallNodes} nodes ` +
+           `against ${bigNodes}, ${small.toFixed(1)} ms against ${big.toFixed(1)}`);
+
+    // Linear predicts the ratio of the node counts; quadratic predicts its
+    // square. Twice linear passes the first comfortably and fails the second by
+    // a wide margin — at these sizes the two predictions are about 4.5 and 20.
+    const grew = big / small;
+    const linear = bigNodes / smallNodes;
+    assert(grew < linear * 2,
+           `${bigNodes} nodes cost ${grew.toFixed(1)}× what ${smallNodes} nodes cost, ` +
+           `where the graph got ${linear.toFixed(1)}× bigger — the model is being ` +
+           'searched rather than looked up, so every restatement of the graph is ' +
+           'quadratic in the size of the edit');
+    console.log(`restating the graph: ${bigNodes} nodes cost ${grew.toFixed(1)}× ` +
+                `${smallNodes} nodes, for ${linear.toFixed(1)}× the graph ` +
+                `(${(big / REPEATS).toFixed(1)} ms each)`);
+}
+
 console.log('ui_load: ok');
