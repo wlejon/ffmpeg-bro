@@ -317,6 +317,11 @@ that make it affordable are worth knowing, because they are what you will notice
 - **One at a time, and always behind an export.** There is one render slot. A node
   preview is the least important thing in the application and waits for everything
   else, so a nine-node graph fills in over a second or two rather than at once.
+- **Only for the cards on the screen**, plus a margin, so panning brings the rest
+  in as they arrive. A preview is a render, and one per node is a cost priced in
+  the size of the edit rather than in what you are looking at: seventy clips derive
+  over six hundred nodes, and asking each of them for a picture is six hundred
+  renders for a screen that holds about twenty.
 - **Nothing renders until the graph holds still.** Dragging a value walks through
   fifty of them; only the one you stop on is rendered.
 - **Only what the node depends on.** Previewing the first filter of a two-clip edit

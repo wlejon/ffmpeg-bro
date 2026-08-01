@@ -677,6 +677,15 @@ function drawOutput() {
 // the document unsaved.
 graphOverlay.onChange((what) => {
     if (what !== 'adopt') { doc.touch(); history.record(what); needs('document'); }
+    // **A pin is where a card sits on this screen, and stops there.** It is in the
+    // document — a node dragged somewhere deliberate should still be there
+    // tomorrow, and should come back with an undo — but nothing below this line
+    // is about the *edit*, and a node's position cannot reach any of it. Letting
+    // it through cost the two redraws that are priced in the size of the project:
+    // at 75 clips the timeline is 0.5 s and the playback settle is 0.6 s, so
+    // moving one box on the graph queued a second of work about a filter chain
+    // that had not changed and a lane that draws none of this.
+    if (what === 'pin') return;
     // The graph is half of what a measurement's subject *is* — `renderSubject()`
     // keeps the printed chain — so a filter inserted or edited moves the edit under
     // every finding in the drawer exactly as dragging a clip does.

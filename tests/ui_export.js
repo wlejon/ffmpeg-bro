@@ -3427,7 +3427,12 @@ console.log('\na node dragged where you want it');
 {
     const key = `clip:${A.project.clips[0].id}/trim`;
     const card = () => q(`#gr-nodes [data-key="${key}"]`);
-    const before = parseFloat(card().style.left);
+    // Where it is *drawn*, not the property it is placed with: that is a
+    // transform now, since writing an offset per card laid the whole container
+    // out again. What the gesture claims is that the card moved on the screen,
+    // and this is that claim rather than a reading of how the view states it.
+    const at = () => card().getBoundingClientRect().left;
+    const before = at();
     const head = q('.gn-head', card()).getBoundingClientRect();
 
     mouseDown(head.left + head.width / 2, head.top + head.height / 2);
@@ -3438,8 +3443,8 @@ console.log('\na node dragged where you want it');
 
     const pin = A.graph.overlay.pinOf(key);
     ok(!!pin, 'letting go pins it where it was dropped');
-    ok(Math.abs(parseFloat(card().style.left) - before) > 20,
-       `and it is drawn there (${before} → ${card().style.left})`);
+    ok(Math.abs(at() - before) > 20,
+       `and it is drawn there (${Math.round(before)} → ${Math.round(at())})`);
 
     // The whole reason a pin is keyed by anchor: this is what a timeline edit
     // does to the graph, and the node it made is not the node that was dragged.

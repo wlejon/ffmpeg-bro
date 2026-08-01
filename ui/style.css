@@ -2807,6 +2807,14 @@ button.text.primary:hover { background: #ffa063; }
    arriving at nothing in particular, and nothing to take hold of. */
 .gn {
     position: absolute;
+    /* Pinned at the origin because where a card *is* is its transform, and one
+       of the two has to be the answer. An offset is a layout property: moving
+       one card by `left`/`top` lays the whole container out again, which at 634
+       cards is 10.4 ms against 0.8 for the same move as a translate. See
+       `place()` in ui/graph/view.js. */
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 5px;

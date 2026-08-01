@@ -88,6 +88,13 @@ let panX = 0;
 let panY = 0;
 let placed = null;      // the last layout(), for repainting on a pan
 let lastGraph = null;   // ...and the graph it was of, for the keyboard
+/// The cards this redraw built, by key — see the loop in `drawGraph` that fills
+/// it. A list per key because several nodes can share an anchor. Rebuilt with
+/// them, so it cannot outlive the elements it names.
+const byKey = new Map();
+const cardsFor = (key) => byKey.get(key) || [];
+/// A redraw owed to something that was not an edit, drawn by `tickGraph`.
+let wantDraw = false;
 let shape = '';         // what the graph looked like, so a fit happens once per shape
 let bounds = '';        // and how big it came out, so a card that grew is framed
 let userMoved = false;  // ...unless you have panned or zoomed since
@@ -166,7 +173,12 @@ export function initGraphView(r, hooks = {}) {
         // and so is a measurement waiting for the slot — a preview started
         // ahead of one would be the queue never emptying.
         busy: () => (hooks.busy ? hooks.busy() : false) || !!pending,
-        changed: () => drawGraph(),
+        // **A picture arriving is not an edit, so it marks rather than draws.**
+        // The same rule `ui/app.js` states about a waveform landing, and for the
+        // same reason: several can land while one redraw is owed, and a redraw is
+        // priced in the size of the graph. `tickGraph` draws it, once, on the
+        // next frame.
+        changed: () => { wantDraw = true; },
     });
 
     cards.initCards({
@@ -391,49 +403,91 @@ const detail = () => (zoom < cards.LOD_ZOOM ? 'min' : 'full');
 
 /// Dragging a header moves that node — and every other selected node with it,
 /// which is what a multiple selection is for.
+///
+/// **Everything the drag will touch is gathered here, once.** A mouse move used
+/// to find its card with `querySelector` over the whole container, scan every box
+/// for the one with that key, and rebuild a map of every node to reflow every
+/// wire — three passes over the whole graph per selected node per pixel. At 634
+/// nodes that is most of a frame before anything is drawn. What a drag actually
+/// changes is known the moment it starts: these boxes, their elements, and the
+/// wires with an end on one of them.
 function startMove(key, e) {
     if (!key || !placed || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     if (!selection.has(key)) select(key, false);
-    const from = new Map();
+    const parts = [];
+    const ids = new Set();
+    // **Cards and boxes are paired by their order, because a key can name more
+    // than one of each.** Several inserts at one anchor share a key, and `byKey`
+    // is filled by walking `placed.nodes` — this walk — so the n-th card of a key
+    // is the n-th box of it. Taking the first card for every box would drag one
+    // element to the last box's position and leave the others where they were.
+    const nth = new Map();
     for (const box of placed.nodes) {
         const k = panel.keyOf(box.node);
-        if (k && selection.has(k)) from.set(k, { x: box.x, y: box.y });
+        if (!k || !selection.has(k)) continue;
+        const i = nth.get(k) || 0;
+        nth.set(k, i + 1);
+        parts.push({ key: k, el: cardsFor(k)[i] || null, box, x: box.x, y: box.y });
+        ids.add(box.node.id);
     }
-    moving = { x: e.clientX, y: e.clientY, from, at: new Map(), moved: false };
+    const wires = placed.wires.filter((w) => ids.has(w.edge.from) || ids.has(w.edge.to));
+    moving = { x: e.clientX, y: e.clientY, parts, wires, at: new Map(), moved: false };
 }
 
 /// Written straight to the elements, in graph coordinates — the container is
 /// scaled, so a hundred pixels of mouse at 0.5× is two hundred pixels of card.
 /// The wires follow because `placed` is updated with them; nothing is re-derived
 /// and nothing is re-measured until the drag ends.
+///
+/// **A card is moved by its transform and never by `left`/`top`.** They put the
+/// card in the same place and cost differently by an order of magnitude:
+/// measured at 634 cards, writing `left`/`top` on *one* of them and then reading
+/// any geometry costs 10.4 ms, because an offset is a layout property and
+/// htmlayout answers by laying the whole container out again. The same move as a
+/// transform is 0.8 ms — it cannot affect anything else on the screen, so nothing
+/// else is asked. That is the whole difference between a drag at 58 fps and a
+/// drag that keeps up with the mouse, and it is why `place()` writes the same
+/// property: a drag is then a re-write of what is already there rather than a
+/// second way of saying where a card is.
 function dragMove(e) {
     const dx = (e.clientX - moving.x) / Math.max(0.1, zoom);
     const dy = (e.clientY - moving.y) / Math.max(0.1, zoom);
     if (Math.abs(dx) + Math.abs(dy) > 2) moving.moved = true;
-    for (const [key, from] of moving.from) {
-        const at = { x: Math.round(from.x + dx), y: Math.round(from.y + dy) };
-        moving.at.set(key, at);
-        const node = refs.nodes.querySelector(`[data-key="${key}"]`);
-        if (node) { node.style.left = `${at.x}px`; node.style.top = `${at.y}px`; }
-        for (const box of placed.nodes) {
-            if (panel.keyOf(box.node) !== key) continue;
-            box.x = at.x;
-            box.y = at.y;
-        }
+    for (const p of moving.parts) {
+        const x = Math.round(p.x + dx), y = Math.round(p.y + dy);
+        moving.at.set(p.key, { x, y });
+        p.box.x = x;
+        p.box.y = y;
+        if (p.el) place(p.el, x, y);
     }
-    reflowWires();
+    reflowWires(moving.wires);
     paint();
+}
+
+/// Where a card sits, as the one property that says so.
+///
+/// See `dragMove` for why this is a transform. `.gn` pins `left`/`top` at zero in
+/// the stylesheet so that the translate is the whole of the answer and the two
+/// cannot drift.
+function place(el, x, y) {
+    el.style.transform = `translate(${x}px, ${y}px)`;
 }
 
 /// The wire endpoints again, from boxes that have moved. The same arithmetic
 /// `layout()` does, and the reason it is repeated rather than shared is that this
 /// runs on a mouse move and `layout()` needs measured heights it cannot have
 /// mid-drag.
-function reflowWires() {
+///
+/// `only` is the wires with an end on something that moved — everything else has
+/// the endpoints it had. Given none, all of them are done, which is what a
+/// wholesale change wants.
+function reflowWires(only) {
+    const list = only || placed.wires;
+    if (!list.length) return;
     const at = new Map(placed.nodes.map((b) => [b.node.id, b]));
-    for (const w of placed.wires) {
+    for (const w of list) {
         const a = at.get(w.edge.from), b = at.get(w.edge.to);
         if (!a || !b) continue;
         w.x1 = a.x + a.w;
@@ -443,12 +497,46 @@ function reflowWires() {
     }
 }
 
+/// **A node let go of is a pin written down, and nothing else.** This used to end
+/// with `drawGraph()`, which re-derived the model, threw away all 634 cards and
+/// built them again, re-measured every one of them, laid the graph out and
+/// reprinted the whole `-filter_complex` — 1875 ms, measured, at the end of every
+/// drag. None of it can say anything new: a pin is overlay data, the derivation
+/// cannot see it, and the layout it would produce is the one already on the
+/// screen because the drag put it there. So the pin is recorded, the extent is
+/// widened to take in wherever the card went, and the `+` on the wire under the
+/// pointer is re-placed against the boxes as they now are.
 function endMove() {
     const done = moving;
     moving = null;
     if (!done.moved) return;
     for (const [key, at] of done.at) overlay.setPin(key, at.x, at.y);
-    drawGraph();
+    growExtent(done.parts.map((p) => p.box));
+    refreshInsertPoints();
+    paint();
+}
+
+/// The drawn extent, widened by boxes that have moved.
+///
+/// `layout()` computes this from the columns and then takes in every pinned card,
+/// because a card dragged out past the last column is still part of the picture
+/// and a `Fit` that framed the columns would leave it off screen. The columns are
+/// not re-derived here, so this only ever grows — the next derivation is what
+/// tightens it again.
+function growExtent(boxes) {
+    if (!placed) return;
+    let { left, top } = placed;
+    let right = placed.left + placed.width, bottom = placed.top + placed.height;
+    for (const b of boxes) {
+        left = Math.min(left, b.x);
+        top = Math.min(top, b.y);
+        right = Math.max(right, b.x + b.w);
+        bottom = Math.max(bottom, b.y + b.h);
+    }
+    placed.left = left;
+    placed.top = top;
+    placed.width = right - left;
+    placed.height = bottom - top;
 }
 
 // ── wiring by hand ─────────────────────────────────────────────────────────
@@ -738,6 +826,9 @@ export function drawGraph() {
     if (!d.ok) {
         placed = null;
         lastGraph = null;
+        // With the cards, for the reason the index exists: it names elements, and
+        // an element that has been taken out of the tree is not one to move.
+        byKey.clear();
         put(refs.nodes, () => []);
         paint();
         note(d.reason ? `No graph: ${d.reason}.` : 'No graph.');
@@ -784,14 +875,22 @@ export function drawGraph() {
     placed = layout(d.graph, (n) => measured.get(n.id),
                     (n) => overlay.pinOf(panel.keyOf(n)));
     const boxes = new Map();
+    byKey.clear();
     for (const box of placed.nodes) {
         const node = built.get(box.node.id);
         node.classList.add(`gn-${box.stream}`);
         if (box.pinned) node.classList.add('gn-pinned');
-        node.style.left = `${box.x}px`;
-        node.style.top = `${box.y}px`;
+        place(node, box.x, box.y);
         cards.placeSockets(node, box.h);
         boxes.set(box.node.id, box);
+        // The card for a key, kept from the build. A drag used to ask the
+        // container for it with `querySelector` on every mouse move, which is a
+        // walk of two thousand elements to find something this loop is holding.
+        const key = panel.keyOf(box.node);
+        if (key) {
+            const at = byKey.get(key);
+            if (at) at.push(node); else byKey.set(key, [node]);
+        }
     }
 
     drawInsertPoints(d, boxes);
@@ -871,9 +970,18 @@ function insertButton(point, x, y) {
 ///
 /// Asked for after the layout at the width each card actually is, so a card
 /// dragged bigger gets a sharper render rather than a stretched one.
+///
+/// **And only for the cards on the screen.** A preview is an ffmpeg render — the
+/// most expensive thing this stage can ask for — and asking for one per node made
+/// the cost of arriving here a property of the size of the edit: seventy clips
+/// derive 634 nodes, so the stage queued 634 renders, and each one that landed
+/// redrew the whole graph. Measured, that was a *second* of redraw per picture
+/// for as long as the queue lasted. A picture nobody can see answers no question,
+/// and panning brings the rest in.
 function syncPreviews() {
     if (preview.isEnabled())
         preview.sync(placed.nodes
+            .filter(inView)
             .map((b) => ({ key: panel.keyOf(b.node),
                            // Which clip this node belongs to, for deciding *when*
                            // to look at it. A node's key is its anchor only when
@@ -884,6 +992,21 @@ function syncPreviews() {
                            fit: previewFit(cardWidth(panel.keyOf(b.node))) }))
             .filter((w) => w.key));
     cards.dropUnless((key) => !!preview.shotFor(key));
+}
+
+/// Whether a box is where somebody can see it, in graph coordinates.
+///
+/// The margin is a card and a half, so that a preview is already there when a
+/// small pan brings the card in rather than arriving after it. Everything this
+/// gates is priced per node — a render, a `<video>` — which is why the test is
+/// against the *view* and not against the graph: the one number that does not
+/// grow with the edit is how much of it fits on a screen.
+function inView(b, margin = 260) {
+    const { w, h } = port();
+    if (w <= 0 || h <= 0) return false;
+    const x0 = -panX / zoom - margin, x1 = (w - panX) / zoom + margin;
+    const y0 = -panY / zoom - margin, y1 = (h - panY) / zoom + margin;
+    return b.x + b.w >= x0 && b.x <= x1 && b.y + b.h >= y0 && b.y <= y1;
 }
 
 /// The width a preview is rendered at, rounded so that nudging a card by three
@@ -909,6 +1032,10 @@ function shapeOf(g) {
 export function tickGraph() {
     runPending();
     preview.tick();
+    // Whatever asked for a redraw without being an edit — see the `changed` hook
+    // `initPreview` is given. Before the rest of this, so a picture that has just
+    // landed is on the card the clock below is about to be written into.
+    if (wantDraw) { wantDraw = false; drawGraph(); }
     playFrame();
     // One style write per strip, for the reason `playFrame` writes the clock
     // readout in place: redrawing the properties column would rebuild every
@@ -1143,15 +1270,23 @@ function hover(e) {
                                  (p.atPort || 0) === (wire.edge.fromPort || 0)) : null;
     hoverPoint = point ? point.id : null;
     if (was === hoverPoint) return;
-    // The `+` is a DOM element in the card container, so a change of hovered wire
-    // is a small rebuild of just those. Cheaper than it sounds: there are five.
+    refreshInsertPoints();
+    paint();
+}
+
+/// The `+` again, against the boxes as they now are.
+///
+/// It is a DOM element in the card container, so this is a small rebuild of just
+/// those. Cheaper than it sounds: there are five. Two callers — the hovered wire
+/// changing, and a node being let go of somewhere else, which moves the wire the
+/// `+` was sitting on.
+function refreshInsertPoints() {
+    if (!refs.nodes || !placed) return;
     for (const b of Array.from(refs.nodes.querySelectorAll('.gp-plus')))
         refs.nodes.removeChild(b);
-    if (lastPoints) {
-        drawInsertPoints({ points: lastPoints },
-                         new Map(placed.nodes.map((b) => [b.node.id, b])));
-    }
-    paint();
+    if (!lastPoints) return;
+    drawInsertPoints({ points: lastPoints },
+                     new Map(placed.nodes.map((b) => [b.node.id, b])));
 }
 
 let lastPoints = null;

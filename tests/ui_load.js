@@ -280,4 +280,83 @@ assert(Math.abs(A.transport.t - aim) < 0.5,
        'a render nobody is watching is driving the playhead');
 console.log('a kept render is neither the picture nor the clock');
 
+// ── the graph stage, and what a gesture on it costs ────────────────────────
+//
+// The same rule as everything above, one stage along: **what a gesture costs is
+// what the gesture changed**, not how big the edit is. Thirty clips derive about
+// two hundred and seventy nodes and a full redraw of them is most of a second —
+// so a stage that did that on every mouse move, or at the end of every drag, is
+// a stage that is unusable at exactly the size this suite is about. Three
+// claims, and none of them can be seen in a screenshot:
+//
+//   - **moving a node lays nothing out.** A card is placed by its transform, so
+//     the engine has nothing to re-measure; `left`/`top` is a layout property and
+//     writing it on one card laid out the whole container — 10.4 ms a move at 634
+//     nodes, against 0.8. Asserted as *zero layout passes*, which is the exact
+//     form of the claim and does not depend on how fast the machine is.
+//   - **letting go writes a pin down.** It used to end with a full redraw:
+//     re-derive, throw away every card and build it again, re-measure, re-lay
+//     out, reprint the whole `-filter_complex` — 1875 ms, measured, at the end of
+//     every drag, to record two numbers the drag had already put on the screen.
+//   - **a preview is asked for per card on the screen.** A node preview is an
+//     ffmpeg render, and one per node made arriving at this stage cost a render
+//     per node and a redraw per render.
+//
+// The two timing claims are made against a redraw measured *in this run*, so
+// what is being asserted is a ratio and not a number of milliseconds on
+// somebody's laptop.
+
+A.shell.goTo('graph');
+pump(400);
+{
+    const g = A.graph.current();
+    assert(g && g.nodes.length > 60,
+           `expected a graph of the whole edit, got ${g ? g.nodes.length : 0} nodes`);
+
+    const full = (() => { const t = perf.now(); A.graph.draw(); return perf.now() - t; })();
+    console.log(`a full redraw of ${g.nodes.length} nodes: ${full.toFixed(0)} ms`);
+
+    const head = document.querySelector('.gn-head[data-drag]');
+    assert(head, 'no draggable card on the graph stage');
+    const box = head.getBoundingClientRect();
+    const mouse = (target, type, x, y, buttons) => target.dispatchEvent(
+        new MouseEvent(type, { clientX: x, clientY: y, buttons, button: 0, bubbles: true }));
+
+    const MOVES = 40;
+    mouse(head, 'mousedown', box.left + 20, box.top + 8, 1);
+    perf.reset();
+    const began = perf.now();
+    for (let i = 0; i < MOVES; i++)
+        mouse(document.body, 'mousemove', box.left + 20 + (i % 20) * 2, box.top + 8 + i, 1);
+    const perMove = (perf.now() - began) / MOVES;
+    const moved = perf.stats();
+
+    assert(moved.passes === 0 && moved.layoutMs === 0,
+           `${MOVES} mouse moves of one card cost ${moved.passes} layout passes ` +
+           `(${moved.layoutMs.toFixed(0)} ms over ${moved.nodesLaidOut} nodes) — a card is ` +
+           'being moved by an offset rather than by its transform, so the engine is laying ' +
+           'the whole container out again for a card that cannot affect any of it');
+    assert(perMove < full / 10,
+           `a mouse move costs ${perMove.toFixed(1)} ms against ${full.toFixed(0)} ms for a ` +
+           'whole redraw — a drag is doing work priced in the size of the graph');
+    console.log(`dragging a node: ${perMove.toFixed(2)} ms a move, ${moved.passes} layout passes`);
+
+    const up = perf.now();
+    mouse(document.body, 'mouseup', box.left + 60, box.top + 48, 0);
+    const upMs = perf.now() - up;
+    assert(upMs < full / 3,
+           `letting go of a node cost ${upMs.toFixed(0)} ms against ${full.toFixed(0)} ms for a ` +
+           'whole redraw — a pin is being written down by rebuilding the graph');
+    console.log(`letting go: ${upMs.toFixed(0)} ms`);
+
+    // What is left running is what the screen can show. Not zero — the cards in
+    // view are worth a picture and that is the point of the feature — and well
+    // under one per node, which is what it used to be.
+    const queued = A.graph.preview.outstanding();
+    assert(queued < g.nodes.length / 3,
+           `${queued} node previews are queued for a graph of ${g.nodes.length} — a render ` +
+           'is being asked for per node in the edit rather than per card on the screen');
+    console.log(`node previews outstanding: ${queued} of ${g.nodes.length} nodes`);
+}
+
 console.log('ui_load: ok');

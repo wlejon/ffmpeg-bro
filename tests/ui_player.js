@@ -1436,20 +1436,25 @@ console.log('\nthe graph stage');
     // Every card measured. A stage that is display:none measures zero, and a
     // layout built from zeroes is a heap of nodes in the top-left corner that
     // nobody ever sees be wrong.
-    let flat = 0, laid = 0;
+    // Read off the *drawn* rectangle rather than off the property the view
+    // happens to place with — which is a transform now, because an offset is a
+    // layout property and writing one per card laid the whole container out
+    // again. Asking where a card ended up is the same question either way, and
+    // the answer is a stronger one: a stage that had written `left: 0px` on all
+    // of them would have passed the old check and is exactly the heap this is
+    // about.
+    let flat = 0;
+    const spots = new Set();
     for (const c of cards) {
         const r = c.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) flat++;
-        if (c.style.left !== '' && c.style.top !== '') laid++;
+        spots.add(`${Math.round(r.left)},${Math.round(r.top)}`);
     }
     ok(flat === 0, 'every card has a size');
-    ok(laid === cards.length, 'and a place');
-
-    // The nodes are spread out, not stacked: two cards at the same point is
+    // And a place, which no two of them share: cards stacked at one point is
     // what a layout that never ran looks like.
-    const spots = new Set();
-    for (const c of cards) spots.add(`${c.style.left},${c.style.top}`);
-    ok(spots.size === cards.length, 'and no two of them share it');
+    ok(spots.size === cards.length,
+       `and a place no two share — ${spots.size} positions for ${cards.length} cards`);
 
     // The picture and the command are the same statement. If the stage can
     // draw a node the printer does not put in a chain, one of them is wrong.

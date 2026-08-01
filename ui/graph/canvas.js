@@ -75,21 +75,80 @@ export function paintGrid(ctx, w, h, view) {
         for (let x = x0; x < w; x += step) ctx.fillRect(x, y, r, r);
 }
 
+/// Whether any of a wire could land on a canvas this size.
+///
+/// **The one thing on this screen that has to be priced in what is being looked
+/// at rather than in how big the edit is.** A montage of seventy clips derives
+/// seven hundred wires and a window holds a couple of dozen of them; stroking the
+/// rest is a bezier a piece for something off the edge of the canvas, on every
+/// frame of every pan and every drag. The bound is the curve's own: the control
+/// points are horizontal offsets from the ends, so the ends plus `reach` contain
+/// it, and a margin covers the stroke's width.
+///
+/// The test is against the wire *as drawn*, which is why it is here and not in
+/// `view.js` — screen space is what `curve` works in and the only place the pan
+/// and the zoom have already been applied.
+function onScreen(c, w, h) {
+    const reach = Math.max(c.c1 - c.x1, c.x2 - c.c2, 0) + 8;
+    return Math.min(c.x1, c.x2) - reach <= w && Math.max(c.x1, c.x2) + reach >= 0 &&
+           Math.min(c.y1, c.y2) - 8 <= h && Math.max(c.y1, c.y2) + 8 >= 0;
+}
+
 /// `lit(wire)` says whether a wire belongs to what is selected. Everything else
 /// is drawn first and dimmer, so the lit ones are on top rather than merely
 /// brighter.
+///
+/// **Grouped rather than sorted, and one path per group.** This runs on every
+/// frame of every pan and every drag, so what it does per wire is the whole cost:
+/// a `sort` over seven hundred of them allocated a copy and called `lit` twice
+/// per comparison — about fourteen thousand calls to answer a question with two
+/// possible values — and setting `strokeStyle` and `lineWidth` per wire is a
+/// canvas state change per wire for a colour there are six of. Splitting into
+/// dim-then-lit is one pass, and a path per (group, stream) is one state change
+/// per colour and one `stroke` for everything wearing it. Measured at 634 nodes
+/// with all seven hundred wires in view: 2.74 ms a frame to 1.09.
+///
+/// The hovered and chosen wires are drawn on their own afterwards, because they
+/// are one wire each and their whole point is to be on top.
 export function paintWires(ctx, placed, view, lit, hovered, chosen) {
     if (!placed) return;
-    const order = placed.wires.slice().sort((a, b) => (lit(a) ? 1 : 0) - (lit(b) ? 1 : 0));
-    for (const w of order) {
-        const on = lit(w);
+    const W = ctx.canvas ? ctx.canvas.width : 0;
+    const H = ctx.canvas ? ctx.canvas.height : 0;
+    // Keyed by group and stream, built as it goes: an edit with no sound in it
+    // should not pay for the sound colours, and the six that exist are named by
+    // the wires that turn up rather than by a list here.
+    const groups = new Map();
+    for (const w of placed.wires) {
         const c = curve(w, view);
-        ctx.lineWidth = Math.max(1, (on ? 2.2 : 1.4) * view.zoom);
-        ctx.strokeStyle = on ? (WIRE[w.stream] || WIRE.v) : (WIRE_DIM[w.stream] || WIRE_DIM.v);
+        if (W > 0 && H > 0 && !onScreen(c, W, H)) continue;
+        const on = lit(w);
+        const key = `${on ? 1 : 0}:${w.stream}`;
+        let g = groups.get(key);
+        if (!g) {
+            g = { on, stream: w.stream, curves: [] };
+            groups.set(key, g);
+        }
+        g.curves.push(c);
+    }
+    // Dim first, so the lit ones are on top rather than merely brighter.
+    const order = [...groups.values()].sort((a, b) => (a.on ? 1 : 0) - (b.on ? 1 : 0));
+    for (const g of order) {
+        ctx.lineWidth = Math.max(1, (g.on ? 2.2 : 1.4) * view.zoom);
+        ctx.strokeStyle = g.on ? (WIRE[g.stream] || WIRE.v) : (WIRE_DIM[g.stream] || WIRE_DIM.v);
+        ctx.beginPath();
+        for (const c of g.curves) {
+            ctx.moveTo(c.x1, c.y1);
+            ctx.bezierCurveTo(c.c1, c.y1, c.c2, c.y2, c.x2, c.y2);
+        }
+        ctx.stroke();
+    }
+    for (const w of placed.wires) {
+        if (w !== hovered && w !== chosen) continue;
+        const c = curve(w, view);
+        if (W > 0 && H > 0 && !onScreen(c, W, H)) continue;
         ctx.beginPath();
         ctx.moveTo(c.x1, c.y1);
         ctx.bezierCurveTo(c.c1, c.y1, c.c2, c.y2, c.x2, c.y2);
-        ctx.stroke();
 
         // The wire under the pointer is the one a `+` is about to be offered on,
         // so it says which one that is before you click.
@@ -122,6 +181,12 @@ export function wireAt(placed, px, py, view, tol = 7) {
     let best = null, bestD = tol * tol;
     for (const w of placed.wires) {
         const c = curve(w, view);
+        // The seventeen samples are cheap and seven hundred wires of them on
+        // every mouse move are not. A wire whose own box does not reach the
+        // pointer cannot be the nearest one, and the box is four comparisons.
+        const reach = Math.max(c.c1 - c.x1, c.x2 - c.c2, 0) + tol;
+        if (px < Math.min(c.x1, c.x2) - reach || px > Math.max(c.x1, c.x2) + reach ||
+            py < Math.min(c.y1, c.y2) - tol || py > Math.max(c.y1, c.y2) + tol) continue;
         for (let i = 0; i <= 16; i++) {
             const t = i / 16, u = 1 - t;
             const x = u * u * u * c.x1 + 3 * u * u * t * c.c1 + 3 * u * t * t * c.c2 + t * t * t * c.x2;
