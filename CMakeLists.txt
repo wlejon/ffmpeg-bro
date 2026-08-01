@@ -156,6 +156,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/bindings_capture.cpp
     src/native/bindings_capabilities.cpp
     src/native/bindings_expr.cpp
+    src/native/bindings_fetch.cpp
     src/native/bindings_data.cpp
     src/native/bindings_marks.cpp
     src/native/bindings_playback.cpp
@@ -185,6 +186,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/export_subtitle.cpp
     src/native/export_timeline.cpp
     src/native/export_writer.cpp
+    src/native/fetch_queue.cpp
 )
 target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"

@@ -36,6 +36,7 @@
 // Usage: ffmpeg-bro-exporttest <media-file> [<second-file>]
 
 #include "export_copy.h"
+#include "fetch_queue.h"
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
 #include "ffmpeg_capabilities.h"
@@ -3863,6 +3864,160 @@ int main(int argc, char* argv[]) {
                    st.error.find("webm") != std::string::npos,
                "a container that will not hold the copied codec says so (%s)",
                st.error.c_str());
+    }
+
+    // ── the same packets, fetched rather than rendered ─────────────────────
+    //
+    // A fetch is the packet path with the job slot taken off it: several at a
+    // time, cancelable, and running while the application is used. Everything
+    // above is what it copies and this is the mechanism around it — so what is
+    // checked here is the *queue*, not the copy, which has just been asserted
+    // byte for byte.
+    //
+    // What is deliberately not asserted is `soon`'s ordering. It inserts before
+    // the first non-urgent entry of the pending deque, which is a property with
+    // no observation point that is not a race: two workers drain a burst of
+    // ten-second fixtures in microseconds, so any reading of the queue is a
+    // reading of whatever it happens to have left. The flag is exercised and its
+    // effect is documented in fetch_queue.h.
+    {
+        std::printf("\nfetching\n");
+
+        const int srcVideo = streamIndexOf(first, AVMEDIA_TYPE_VIDEO);
+        MediaInput in;
+        in.path = first;
+
+        const auto copySpec = [&](const std::string& path, double from, double to) {
+            ExportSettings s;
+            s.path = path;
+            s.format = "matroska";
+            s.inputs = {in};
+            ExportStream v;
+            v.kind = "video";
+            v.source = "copy:0:" + std::to_string(srcVideo);
+            v.copyFrom = from;
+            v.copyTo = to;
+            s.streams = {v};
+            return s;
+        };
+
+        // The refusals, and each of them is a different mistake. They happen at
+        // the call rather than on a worker, because a fetch that failed a minute
+        // later on a thread is a download somebody watched not happen.
+        {
+            std::string err;
+            // The call is its own statement and the message is read afterwards.
+            // Written as one `checkf(startFetch(…), "…%s", err.c_str())` the
+            // arguments evaluate in an order the standard does not fix, and this
+            // compiler took `c_str()` off the still-empty string before the call
+            // filled it — a pointer into a small-string buffer that the
+            // assignment then abandoned for the heap. It printed two bytes of
+            // rubbish and the assertion passed, which is the worst way for a
+            // test to be wrong.
+            ExportSettings composed = copySpec("out/fetch-no.mkv", 0, 0);
+            composed.streams[0].source = "composite";
+            const uint64_t refusedComposite = startFetch(composed, "", false, &err);
+            checkf(refusedComposite == 0 && err.find("composite") != std::string::npos,
+                   "a composited stream is refused by name (%s)", err.c_str());
+
+            ExportSettings nowhere = copySpec("", 0, 0);
+            const uint64_t refusedPath = startFetch(nowhere, "", false, &err);
+            checkf(refusedPath == 0 && err.find("write") != std::string::npos,
+                   "and a fetch with nowhere to write is refused (%s)", err.c_str());
+
+            ExportSettings nothing = copySpec("out/fetch-no.mkv", 0, 0);
+            nothing.streams.clear();
+            const uint64_t refusedEmpty = startFetch(nothing, "", false, &err);
+            checkf(refusedEmpty == 0 && err.find("composite") != std::string::npos,
+                   "and so is one with no stream list — the usual two are composited (%s)",
+                   err.c_str());
+        }
+
+        // Two at once, one of them a window. Both run outside the job slot, so
+        // this happens while nothing has claimed it and would happen just as
+        // well while something had.
+        std::string err;
+        const uint64_t whole = startFetch(copySpec("out/fetch-whole.mkv", 0, 0),
+                                          "the whole thing", false, &err);
+        const uint64_t part = startFetch(copySpec("out/fetch-part.mkv", 2, 5),
+                                         "a section", true, &err);
+        (void)err;
+        checkf(whole && part, "two fetches are queued and numbered (%llu, %llu)",
+               static_cast<unsigned long long>(whole), static_cast<unsigned long long>(part));
+        check(whole != part, "with numbers of their own, because there can be several");
+
+        waitForFetches();
+        const FetchStatus w = fetchStatus(whole);
+        const FetchStatus p = fetchStatus(part);
+        checkf(w.state == FetchStatus::State::Done && p.state == FetchStatus::State::Done,
+               "both finish (%s, %s)", w.error.empty() ? "ok" : w.error.c_str(),
+               p.error.empty() ? "ok" : p.error.c_str());
+        checkf(w.progress > 0.99 && p.progress > 0.99,
+               "each reporting itself finished (%.2f, %.2f)", w.progress, p.progress);
+
+        // **A window comes out as the window.** This is the claim the whole
+        // feature rests on: a section of a six-hour recording costs the section
+        // rather than the recording, and a copy starts at the keyframe at or
+        // before the in-point, so what comes out is at least what was asked for.
+        {
+            Opened o(p.path);
+            const double got = o ? o.fc->duration / double(AV_TIME_BASE) : 0.0;
+            checkf(o && got >= 2.9 && got < 6.0,
+                   "a fetch of 2 s → 5 s writes the window and not the file "
+                   "(%.2f s of a %.2f s input)", got, srcDuration);
+        }
+        {
+            Opened o(w.path);
+            const double got = o ? o.fc->duration / double(AV_TIME_BASE) : 0.0;
+            checkf(o && got > srcDuration - 0.5,
+                   "and one with no window writes all of it (%.2f s)", got);
+        }
+
+        // Stopped before it starts. A queued fetch has opened nothing, so there
+        // is nothing to notice a flag later and nothing on disk to leave behind.
+        {
+            const std::string never = "out/fetch-never.mkv";
+            std::remove(never.c_str());
+            const uint64_t queued = startFetch(copySpec(never, 0, 0), "not this one",
+                                               false, &err);
+            stopFetch(queued);
+            waitForFetches();
+            const FetchStatus q = fetchStatus(queued);
+            checkf(q.state == FetchStatus::State::Cancelled ||
+                       q.state == FetchStatus::State::Done,
+                   "a fetch stopped the instant it was queued ends terminal (%s)",
+                   q.state == FetchStatus::State::Cancelled ? "cancelled" : "done");
+            // Either it never started, and nothing was written, or it had
+            // already finished — and a finished fetch has a file that opens.
+            // What is not allowed is a cancelled fetch leaving a file nothing
+            // can read, which is what closing the container on the way out is
+            // for.
+            if (q.state == FetchStatus::State::Cancelled) {
+                Opened o(never);
+                check(!o || o.fc->nb_streams >= 1,
+                      "and what is on disk, if anything, is a file that opens");
+            }
+        }
+
+        // The list is everything, which is the whole difference from a render's
+        // "the one running now" — and clearing it leaves nothing that has not
+        // finished.
+        checkf(fetchList().size() >= 3, "the list answers with all of them (%zu)",
+               fetchList().size());
+        clearFinishedFetches();
+        check(fetchList().empty(), "and clearing takes the finished ones away");
+
+        // Shut down and start again: a queue that could not be reused after a
+        // stop would leave a session with no way to fetch anything.
+        stopAllFetches();
+        const uint64_t after = startFetch(copySpec("out/fetch-again.mkv", 0, 1),
+                                          "after the stop", false, &err);
+        checkf(after != 0, "the queue works again after being shut down (%s)",
+               after ? "started" : err.c_str());
+        waitForFetches();
+        check(fetchStatus(after).state == FetchStatus::State::Done,
+              "and what was asked for after it is written");
+        clearFinishedFetches();
     }
 
     // ── where the render goes ──────────────────────────────────────────────

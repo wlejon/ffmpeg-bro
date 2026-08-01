@@ -23,6 +23,11 @@ void installProbe(Table& ns);
 /// spec it is given. bindings_render.cpp.
 void installRender(Table& ns);
 
+/// `fetch.*` — a stream copy pulled into a local file, several at a time, with
+/// its own queue and cancel and none of the render's job slot. bindings_fetch.cpp;
+/// fetch_queue.h is why it is not a render.
+void installFetch(Table& ns);
+
 /// `record.*` and `live.*` — reading devices, with and without a writer on the
 /// end. bindings_capture.cpp.
 void installCapture(Table& ns);

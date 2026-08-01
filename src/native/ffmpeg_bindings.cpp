@@ -55,6 +55,7 @@ void installFfmpegBindings(JSContext* ctx) {
         installSequences(ns);
         installPlayback(ns);
         installRender(ns);
+        installFetch(ns);
         installCapture(ns);
 
         ns.value("openOnStart",

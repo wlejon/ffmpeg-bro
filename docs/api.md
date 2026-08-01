@@ -915,6 +915,44 @@ bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openE
 // not.
 bro.ffmpeg.render.cancel()
 
+// ── fetching, which is a copy that is not a render ────────────────────────
+//
+// The same spec, and none of the job slot. `render.start` claims the one slot
+// this binary has and composites, encodes and writes; `fetch.start` queues a
+// **stream copy** — packets it never decodes, into a muxer — which touches no
+// encoder, no compositor and no filter graph, and so has no business locking
+// out the Render button. Saving a six-hour recording is the thing you start so
+// that you can get on with something else.
+//
+// So there can be several at once, each with its own number, progress and
+// cancel, and a render can be running beside them. A spec with anything in it
+// this loop cannot perform — a composite, a decoded stream, a pad off the graph
+// — is refused **by name** at the call rather than queued to fail on a thread.
+// src/native/fetch_queue.h is the reasoning; the pool is small because every
+// fetch is a download and they share one link.
+bro.ffmpeg.fetch.start(spec, { label, soon })   // → the number it is known by
+// `label` is what a UI calls it — never the signed URL it is reading. `soon`
+// puts it in front of the *queued* ordinary ones and preempts nothing, which is
+// for the case the feature exists for: a cut taken against a transcript needs a
+// few seconds of video now and must not wait behind the whole recording.
+
+bro.ffmpeg.fetch.list()     // → [{ id, label, path, state, progress, position,
+                            //      span, elapsedSec, packets, bytes, error }, …]
+// Every fetch this process knows about, not "the one running now" — which is
+// the whole difference from `render.poll()`. `state` is
+// queued|running|done|failed|cancelled, and terminal entries stay until they
+// are cleared, because "it finished" is an answer somebody reads afterwards.
+// `position`/`span` are seconds on the *output's* clock, so a two-minute window
+// of a six-hour recording is finished at two minutes and not at 0.5%.
+
+bro.ffmpeg.fetch.status(id) // → one of the above; a zero `id` means no such fetch
+bro.ffmpeg.fetch.stop(id)   // queued: dropped. running: answers within half a second
+bro.ffmpeg.fetch.clearFinished()
+// **What is on disk is left there.** A cancelled fetch still closes its
+// container, because the point of stopping a download after ten minutes is to
+// have the ten minutes — and deleting somebody's partial file because they
+// pressed Stop is not a decision this is entitled to take.
+
 // A render that is more than one render. Two things in ffmpeg need a second
 // walk over the same frames, and both hand off through a file on disk:
 // `vidstabdetect` writes a .trf that `vidstabtransform` reads, and `-pass 1`

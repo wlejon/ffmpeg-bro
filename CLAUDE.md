@@ -460,6 +460,19 @@ this one wire is the CLI's mechanism rather than a link libavfilter makes — wh
 is the exact/equivalent distinction, so do not blur it. `ffmpeg_job.h` owns the single job slot shared by renders
 and recordings, and documents the ordering rules around terminal status.
 
+**A `fetch` is the packet path with that slot taken off it** (`fetch_queue.h`,
+`bro.ffmpeg.fetch`): a stream copy into a local file, several at a time, each
+cancelable, running while the application is used and while a render is running.
+It is not in the slot because it is not a render — no compositor, no encoder, no
+graph, no report channel — and putting one there would mean that saving a
+six-hour recording locked out the Render button for forty minutes, which is
+backwards: the download is what you start *so that* you can get on. It takes the
+same `buildSpec()` object every other consumer takes and **refuses by name** a
+spec it cannot perform, so a fetch can never quietly become a render. The pool
+is small on purpose — every fetch is a download and they share one link — and
+`soon` jumps the queue without preempting, because a half-written file is worse
+than a wait.
+
 `ExportPass` is *one run over the frames, as a set of overrides on the render*,
 and it now carries both reasons a render is several: a two-pass encode (two
 walks, one output) and a **version** (another output at another size —
