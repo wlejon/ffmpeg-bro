@@ -371,13 +371,19 @@ ok(A.inputs.inputs.length === 1, 'an input with no clip is removed by asking');
 //
 //   - **the other renditions are on the card**, and picking one is an ordinary
 //     change of `-i`;
-//   - **`Save a local copy…` sets a render up rather than starting one.** A copy
-//     of a whole VOD is three quarters of an hour of bandwidth and the range is
-//     the difference between that and 0.6% of it, so what somebody lands on is
-//     the Write stage with the invocation printed and nothing running;
+//   - **`Save a local copy` pulls both of them, the soundtrack first**, in the
+//     background and without walking anywhere. The order is the claim: the
+//     picture does not begin until the soundtrack is off the link, because the
+//     two sharing it cost the soundtrack a third of its rate — see the
+//     measurement in ui/localcopy.js;
+//   - **the soundtrack landing is said out loud**, since the whole point of
+//     pulling it first is that the work needing only sound can start while the
+//     picture is still arriving;
 //   - **it is a copy and not a re-encode.** Every row is a `copy:`, or the whole
 //     point of doing it in this application rather than with a downloader is
-//     gone.
+//     gone;
+//   - **and `Describe it…` is still the way to take the decisions by hand**,
+//     which is the Write stage and a range on a row.
 
 A.shell.goTo('sources');
 pump(100);
@@ -407,24 +413,93 @@ pump(100);
     ok(el('src-detail').textContent.indexOf('Audio Only') >= 0,
        'the sound-only one is named as such — it is the one a transcription pass wants');
 
-    // Saving it. The timeline already has a clip of the *other* input, so this
-    // is the refusal path: adding five hours to somebody's edit as a side
-    // effect of saving a file is worse than saying so.
-    ok(A.project.clips.length > 0, 'the timeline is not empty, so the refusal applies');
+    // ── the pull ───────────────────────────────────────────────────────────
+    //
+    // The press starts two fetches and stays here. It used to lay a clip out,
+    // walk to the Write stage and fill a render in — right about a copy being a
+    // render, wrong about the machinery, because the render is the one job slot
+    // and a download held it for as long as it took.
+    const wasStage = A.shell.currentStage();
     click(f('srclocal'));
-    pump(60);
-    same(A.shell.currentStage(), 'sources',
-         'saving a copy of an input that is not in the edit is refused rather than ' +
-         'appending it to whatever is already there');
 
-    // With it on the timeline, the press sets the render up and walks there.
+    // **Read before anything is pumped**, which is the only place the ordering
+    // is visible: these renditions are ten-second fixtures on a local disk and
+    // both pulls are over inside one frame. What the press *decides* is decided
+    // synchronously, so this is the state it decided.
+    const job = A.localcopy.copiesOf(streamed);
+    ok(!!job, 'the card knows about this input’s pulls now');
+    ok(!job.sameClock,
+       'and knows the two are different renditions, so a time found in one is a ' +
+       'search hint in the other rather than a cut');
+    // **The order, which is the whole claim.** The picture is not started until
+    // the soundtrack is off the link: queued together the picture takes the
+    // bandwidth and the soundtrack falls to a third of its own rate, so what
+    // "audio first" buys is not a smaller file arriving sooner — it is the
+    // soundtrack arriving sooner than anything can if the two are sharing.
+    same(job.video.state, 'waiting',
+         'the picture waits: it does not begin until the soundtrack is off the link');
+    same(job.audio.state, 'probing',
+         'and the soundtrack is already being opened');
+
+    pump(120);
+    same(A.shell.currentStage(), wasStage,
+         'the press starts the pull and stays where it is — nothing to walk to');
+    ok(!A.exporter.isRunning(),
+       'and the render is untouched: a fetch is not in the job slot');
+
+    waitFor('the soundtrack to land', () => job.audio.state === 'done' ||
+                                            job.audio.state === 'failed', 60000);
+    same(job.audio.state, 'done', `the soundtrack is here (${job.audio.error || 'no error'})`);
+    ok(/\.audio\.mkv$/.test(streamed.localAudio || ''),
+       `and the input knows where it is: ${streamed.localAudio}`);
+    ok(A.localcopy.soundIsHere(streamed),
+       'which is the question the whole ordering exists to answer yes to early');
+
+    A.drawSources();
+    pump(60);
+    ok(el('src-detail').textContent.indexOf('soundtrack is on this machine') >= 0,
+       'and the card says so, rather than leaving it to be discovered');
+
+    waitFor('the picture to land', () => job.video.state === 'done' ||
+                                         job.video.state === 'failed', 60000);
+    same(job.video.state, 'done', `the picture follows it (${job.video.error || 'no error'})`);
+    ok(/\.mkv$/.test(streamed.localCopy || '') &&
+       streamed.localCopy !== streamed.localAudio,
+       `written to a name of its own: ${streamed.localCopy}`);
+    // The durable witness that the order held, rather than a timing that this
+    // fixture is far too small to show: the queue numbers fetches as they are
+    // asked for, so a picture queued after the soundtrack has the larger number.
+    ok(job.video.fetch > job.audio.fetch,
+       `the picture was queued after the soundtrack (fetch ${job.audio.fetch} then ` +
+       `${job.video.fetch})`);
+
+    // What came out is the stream, copied. Read back rather than asserted from
+    // the spec: "the rows said copy:" is not the same claim as "the file has the
+    // packets in it".
+    const back = bro.ffmpeg.probe(streamed.localCopy);
+    ok(back && back.streams.length > 0, `the file opens (${back.streams.length} streams)`);
+    ok(!back.streams.some((s) => s.kind === 'data'),
+       'with no data stream, which Matroska will not hold');
+
+    A.drawSources();
+    pump(60);
+    pickRow();
+    ok(!!f('srclocaluse'),
+       'once a copy is here the card offers to point the input at it, which is what ' +
+       'makes a word search run on local media');
+
+    // ── and the same copy, by hand ─────────────────────────────────────────
+    //
+    // The press takes every decision, and those are defaults rather than the
+    // only answers. A section, another container or simply reading the command
+    // first are the Write stage's, and this is the door to it.
     A.openInput(streamed, { quiet: true });
     pump(120);
     A.shell.goTo('sources');
     pickRow();
-    click(f('srclocal'));
+    click(f('srclocalhand'));
     pump(120);
-    same(A.shell.currentStage(), 'write', 'the press walks to the stage that writes files');
+    same(A.shell.currentStage(), 'write', 'Describe it… walks to the stage that writes files');
 
     const S = A.exporter.currentSettings();
     same(S.container, 'matroska',
@@ -437,14 +512,18 @@ pump(100);
     ok(!S.streams.some((s) => s.kind === 'data'),
        'and no data row, which Matroska will not hold');
     ok(!A.exporter.isRunning(), 'nothing has been started — the invocation is there to read');
+    console.log(`  ${streamed.name}: sound → ${streamed.localAudio}, ` +
+                `picture → ${streamed.localCopy}`);
 
-    // And the card now offers to read what will be written.
-    A.shell.goTo('sources');
-    pickRow();
-    ok(!!f('srclocaluse'),
-       'once a copy has been set up the card offers to point the input at it, which is ' +
-       'what makes the word search run on local media');
-    console.log(`  a local copy of ${streamed.name} → ${S.path}`);
+    // The two files this section really wrote. They land beside the document,
+    // and a test with no document open has none — so they land in the working
+    // directory, which for ctest is the repository. Cleaned up here rather than
+    // gitignored: a pattern in .gitignore would hide the next thing that starts
+    // writing there by accident.
+    const fs = require('fs');
+    for (const path of [streamed.localAudio, streamed.localCopy]) {
+        try { fs.unlinkSync(path); } catch (e) { /* it is allowed not to be there */ }
+    }
 }
 
 screenshot('out/sources.png');

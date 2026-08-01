@@ -63,7 +63,7 @@ beside it where it is dead — `A device cannot be cut`, `One picture, no time a
 
 ## Saving a stream to this machine
 
-`Save a local copy…` appears beside those for an input that came off a page, and
+`Save a local copy` appears beside those for an input that came off a page, and
 it is worth pressing before anything else you plan to do more than once.
 Everything downstream reads an input *repeatedly* — a scrub, a filmstrip, a
 waveform, a transcription pass, a render — and for a URL every one of those is a
@@ -74,38 +74,75 @@ over HLS is the same segments fetched twice.
 What it does is a **stream copy**: the packets already on the CDN written into a
 local container without being decoded, which is what
 [Rewrap](rendering.md) does and is why it runs at whatever the network will give
-rather than at whatever an encoder will. So the press does not start anything —
-it sets the [Write stage](rendering.md) up and takes you there, with the stream
-list written, Matroska chosen, a filename filled in beside your document, and the
-command bar printing exactly what will happen. Read it and press Render.
+rather than at whatever an encoder will. It runs **in the background** and
+nothing here waits for it — the card grows a row per pull saying where each has
+got to, with `Stop` beside it, and you carry on. A pull is not a render: it takes
+no encoder, no compositor and none of the one job slot, so the Render button goes
+on working the whole time.
 
-Two things about what it sets up:
+### The soundtrack first, and then the picture
 
-- **The range is yours to set, and it is the whole difference.** HLS is
-  segmented, and `-ss`/`-to` on the copy rows means libavformat fetches the
-  segments the window covers and no others. The whole VOD is three quarters of an
-  hour of bandwidth; forty six-second hits out of five hours is 0.6% of it.
+One recording resolves to several renditions and the press takes **two** of them,
+one after the other: the audio-only stream, and then the picture. When the sound
+lands the card says so, because that is the moment the work that needs only sound
+can start — a transcription, a word search, finding where something happens —
+while the picture is still arriving.
+
+The reason they run one after the other is not the one the sizes suggest, and it
+was measured on a six-hour VOD with each pulled alone:
+
+| | rate | of the recording | size | to pull it all |
+|---|---|---|---|---|
+| `Audio Only` | 1.5 MB/s | 78× realtime | ~0.4 GB | ~4.6 min |
+| `1080p60` | 69.6 MB/s | 95× realtime | ~15 GB | ~3.8 min |
+
+The soundtrack is not the faster of the two per second of recording — it is very
+slightly *slower*. It is latency-bound: forty times fewer bytes over the same
+number of segments, so what it spends is round trips rather than bandwidth.
+Queued together, the picture took the link and the soundtrack fell to a third of
+its own rate. So what "sound first" buys is not a small file arriving before a
+big one; it is a **searchable soundtrack on this machine in five minutes instead
+of fourteen**.
+
+The two are different transcodes of one stream and **do not share a zero** — the
+ad-break discontinuities put them +0.80 s, +2.21 s and +2.57 s apart at three
+points of one pair — so a time you find in the sound is where to *look* in the
+picture and never where to cut it. The card says so once both are here.
+
+Two more things about the pull:
+
 - **Data streams are left out.** Twitch's HLS carries a `timed_id3` track of its
   own segment metadata, Matroska will not hold a data stream and says so, and the
-  track means nothing once the recording is off Twitch. The press says how many
-  it dropped rather than the list quietly being shorter than the file.
-- **Every row arrives closed, and the press reads nothing.** Opening a copied
-  video row draws its keyframe strip, and drawing that means reading the file to
-  find out where the keyframes are — over a network, on a container with no
-  index, that is a download. `Rewrap` opens the first row because you pressed it
-  on the stage you were already looking at; this press was made somewhere else,
-  about a file, and lands you on a list you can read without having paid for it.
-  Open a row when you want the strip. See
-  [Rendering](rendering.md) for what the reading costs and what it says when it
-  stops early.
+  track means nothing once the recording is off Twitch.
+- **Stopping leaves what was written.** A cancelled pull still closes its
+  container, because the point of stopping a six-hour download after ten minutes
+  is to have the ten minutes.
 
-Once it is set up the card offers **`Use the local copy`**, which points the
+Once a copy is here the card offers **`Use the local copy`**, which points the
 input at the file. The clips cut from it keep their times, and that is correct
 here where it is not correct between renditions: this is a copy of these packets
 and not another transcode of the same stream.
 
-The input must be on the timeline first — a render is of the edit, and this one
-refuses rather than appending five hours to a montage you were in the middle of.
+### Or take the decisions yourself
+
+`Describe it…` sets the same copy up on the [Write stage](rendering.md) and
+starts nothing. That is where a **section** is taken — `-ss`/`-to` on the copy
+rows means libavformat fetches the segments the window covers and no others, and
+the whole VOD against forty six-second hits out of five hours is the difference
+between three quarters of an hour of bandwidth and 0.6% of it — and where another
+container, a stream left out, or simply reading the invocation before it runs all
+live.
+
+Every row arrives closed there, and that is deliberate: opening a copied video
+row draws its keyframe strip, and drawing that means reading the file to find out
+where the keyframes are — over a network, on a container with no index, that is a
+download. Open a row when you want the strip. See
+[Rendering](rendering.md) for what the reading costs and what it says when it
+stops early.
+
+The input must be on the timeline for `Describe it…`, because the Write stage
+describes the edit; the background pull needs none of that.
+
 The same job is available without the window at all: `tools/pull_vod.js` is this
 press written as a script, and takes `--quality`, `--from` and `--to`.
 Those mirror `openInput()` exactly, so the button is never alive and then refusing.

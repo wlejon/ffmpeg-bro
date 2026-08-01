@@ -443,8 +443,23 @@ export function inPointNote(row) {
 export function rewrapRows(inputIndex, newId, span) {
     const input = inputs[inputIndex];
     if (!input || !input.probe) return [];
+    return copyRowsOf(input.probe, inputIndex, newId, span);
+}
+
+/// The same rows, out of a probe that is not an input's.
+///
+/// **One home for "which streams of a file become copy rows".** `ui/localcopy.js`
+/// pulls a *rendition* — a URL that is not on the input list and never will be,
+/// since it is a signed link to the other half of one recording — so it has a
+/// probe and no index to look one up by, and it was building the rows itself.
+/// Two lists of which kinds are copyable is exactly the pair that comes to
+/// disagree the day a fifth kind exists.
+///
+/// `inputIndex` is which `-i` the rows point at, which for a fetch of a single
+/// rendition is 0 and for a rewrap is the input's place on the list.
+export function copyRowsOf(probe, inputIndex, newId, span) {
     const rows = [];
-    for (const s of input.probe.streams) {
+    for (const s of (probe && probe.streams) || []) {
         if (s.kind !== 'video' && s.kind !== 'audio' && s.kind !== 'subtitle' &&
             s.kind !== 'data') continue;
         rows.push({

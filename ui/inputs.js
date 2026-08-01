@@ -195,10 +195,20 @@ export function addInput(spec) {
     // is for.
     input.renditions = Array.isArray(spec && spec.renditions) ? spec.renditions : null;
     input.rendition = String((spec && spec.rendition) || '');
-    // Where a local copy of this stream was written, once one has been. See
-    // `Save a local copy` on the Sources stage: a word search wants a file on
-    // this machine and not five hours of HLS.
+    // Where the local copies of this stream were written, once they have been.
+    // See `ui/localcopy.js`: a word search wants a file on this machine and not
+    // five hours of HLS.
+    //
+    // **Two, because they arrive at different times and answer different
+    // questions.** The soundtrack alone is a few percent of the bytes and is
+    // what a transcription pass wants, so it lands in a fraction of the time and
+    // the work that only needs the sound can start against it; the picture is
+    // what a cut is made of and goes on arriving behind it. They are also two
+    // transcodes of one stream and do not share a zero, which is why the pair is
+    // kept apart here rather than folded into one path — see the header of
+    // ui/localcopy.js for the measurement.
     input.localCopy = '';
+    input.localAudio = '';
     inputs.push(input);
     reopen(input);
     return input;

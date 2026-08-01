@@ -67,6 +67,8 @@ import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 // A stream site's page URL is not something libavformat opens; one request turns
 // it into one this build already can. See ui/vod.js.
 import { looksLikePage, resolve as resolveVod } from './vod.js';
+import { copiesOf, cancel as cancelCopy, tickLocalCopies,
+         PULL_WORDS } from './localcopy.js';
 // Which inputs a recording reads. The same question `graphReads()` asks of the
 // overlay, asked of the other thing that reads an `-i` without a clip being cut
 // from it — and it is only answerable at all because a device now lands in this
@@ -223,7 +225,8 @@ export function tickSources() {
     const opened = tickInputs();
     const read = tickTelemetry();
     const heard = marksModel.tickMarks();
-    const settled = opened || read || heard;
+    const pulled = tickLocalCopies();
+    const settled = opened || read || heard || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -503,6 +506,7 @@ function drawDetail() {
         // `MY_HOLIDAY_CLIP_FINAL_2.MP4`.
         head(input.name, { cls: 'section-head src-title', title: input.path }),
         ...whereRows(input),
+        ...localCopySection(input),
         ...demuxerRows(input),
         ...assemblyRows(input),
         ...decodeRows(input),
@@ -1268,10 +1272,16 @@ function footRows(input) {
 /// media itself said, and doing that over HLS is the same segments fetched
 /// twice.
 ///
-/// It walks to the Write stage rather than starting anything. See
-/// `prepareLocalCopy`: a copy of a whole VOD is three quarters of an hour of
-/// bandwidth, and the range is the difference between that and 0.6% of it, so
-/// the invocation is worth reading before it runs.
+/// **The press starts it rather than walking to the Write stage.** It used to
+/// fill the render in and take you there, on the argument that three quarters of
+/// an hour of bandwidth is worth reading the invocation for first — which was
+/// right about the cost and wrong about the answer. What it cost was the render:
+/// the one job slot, held for the length of a download, so the application you
+/// were pulling the recording into could not render anything until it finished.
+/// A fetch is not a render (src/native/fetch_queue.h), so this queues two of them
+/// and stays where it is. The range is still yours: a window is what
+/// `Cut this out` on a hit takes, and the Write stage's own `Rewrap` is still
+/// there for a copy you want to describe by hand.
 function localCopyButtons(input) {
     if (!input.origin && !input.renditions) return [];
     const out = [];
@@ -1290,16 +1300,93 @@ function localCopyButtons(input) {
                 if (hooks.flash) hooks.flash(`Reading ${basename(input.localCopy)} locally now`);
             } },
         }));
+    const job = copiesOf(input);
+    const busy = job && ['audio', 'video'].some(
+        (w) => job[w].state === 'waiting' || job[w].state === 'probing' ||
+               job[w].state === 'queued' || job[w].state === 'running');
     out.push(el('button', {
-        cls: 'tiny', 'data-f': 'srclocal', text: 'Save a local copy…',
-        disabled: !input.probe,
+        cls: 'tiny', 'data-f': 'srclocal',
+        text: busy ? 'Pulling…' : (job ? 'Pull it again' : 'Save a local copy'),
+        disabled: !input.probe || !!busy,
         title: input.probe
-            ? 'Set the Write stage up to copy this stream to a file on this machine — ' +
-              'no decode and no encode, so it runs at whatever the network will give'
+            ? 'Copy this stream to a file on this machine — the soundtrack first, ' +
+              'because it is a few percent of the bytes and is what a word search needs, ' +
+              'and the picture behind it. No decode and no encode, and nothing here waits.'
             : 'It has not opened yet',
         on: { click: () => { if (hooks.saveLocally) hooks.saveLocally(input); } },
     }));
+    // **And the same copy, by hand.** The press above takes every decision — both
+    // renditions, Matroska, a name beside the document, the whole recording — and
+    // those are the right defaults and not the only answers. A section, another
+    // container, a stream left out, or simply reading the invocation before it
+    // runs are all the Write stage's, which is where this application describes
+    // renders; this is the door to it, carrying the same rows the press would
+    // have used.
+    out.push(el('button', {
+        cls: 'tiny', 'data-f': 'srclocalhand', text: 'Describe it…',
+        disabled: !input.probe,
+        title: 'Set the Write stage up to copy this stream, without starting anything — ' +
+               'for a section, another container, or to read the command first',
+        on: { click: () => { if (hooks.describeCopy) hooks.describeCopy(input); } },
+    }));
     return out;
+}
+
+/// Where the two pulls have got to, as rows on the card.
+///
+/// **The soundtrack's row is the one this whole ordering exists for**, so it
+/// says what it unlocks the moment it lands rather than only that it is there:
+/// the point of pulling the sound first is that the work which needs only sound
+/// can start while the picture is still arriving, and a row that said `done` and
+/// nothing else would leave that to be discovered.
+///
+/// Drawn only once something has been asked for. An input nobody has pressed the
+/// button on has no rows here, rather than two saying `—`.
+function localCopySection(input) {
+    const rows = localCopyRows(input);
+    if (!rows.length) return [];
+    return [head('On this machine', {
+        title: 'What has been pulled off the page and written here, and where each ' +
+               'pull has got to',
+    }), ...rows];
+}
+
+function localCopyRows(input) {
+    const job = copiesOf(input);
+    if (!job) return [];
+    const rows = [];
+    const line = (which, what) => {
+        const pull = job[which];
+        if (!pull.state) return;
+        const word = PULL_WORDS[pull.state] || pull.state;
+        const pct = pull.state === 'running'
+            ? ` ${Math.round(pull.progress * 100)}%` : '';
+        const size = pull.bytes ? ` · ${bytes(pull.bytes)}` : '';
+        const stoppable = pull.state === 'waiting' || pull.state === 'probing' ||
+                          pull.state === 'queued' || pull.state === 'running';
+        rows.push(row(what, [
+            span(`${word}${pct}${size}`, 'mono' + (pull.state === 'failed' ? ' warn' : '')),
+            stoppable ? el('button', {
+                cls: 'tiny', 'data-f': `srcstop-${which}`, text: 'Stop',
+                title: 'Stop this pull. What has been written stays where it is.',
+                on: { click: () => { cancelCopy(input, which); drawSources(); } },
+            }) : null,
+            pull.error ? note(pull.error) : null,
+        ]));
+    };
+    line('audio', 'Sound');
+    line('video', 'Picture');
+    if (job.audio.state === 'done')
+        rows.push(note('The soundtrack is on this machine. A word search reads it now — ' +
+                       'the picture can go on arriving.'));
+    // The fact a cut has to be told, said where the pair is made rather than
+    // left for whoever makes one. See ui/localcopy.js.
+    if (!job.sameClock && job.audio.state === 'done')
+        rows.push(note('These are two renditions of one recording and they do not share a ' +
+                       'zero — measured at +0.80 s, +2.21 s and +2.57 s on one pair. So a ' +
+                       'time found in the sound is where to look in the picture and not ' +
+                       'where to cut it.'));
+    return rows;
 }
 
 /// What to do about it, for the things `blocked()` can say.

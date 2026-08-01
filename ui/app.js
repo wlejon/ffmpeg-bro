@@ -20,6 +20,7 @@ import { project, projectFps, makeClip, makeGenerator, applyGenerator, isGenerat
 import * as inputsModel from './inputs.js';
 import * as generators from './generator.js';
 import * as cuesModel from './cues.js';
+import * as localcopy from './localcopy.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending } from './analysis.js';
 import * as viewer from './viewer.js';
@@ -166,56 +167,73 @@ initSources({
         return clip;
     },
     clipsOf,
-    // A stream pulled off a page, written to this machine. Here rather than in
-    // `ui/sources.js` because it crosses three things that stage does not own —
-    // the timeline, the Write stage and the shell — and every one of them is a
-    // decision about somebody's edit.
+    // A stream pulled off a page, written to this machine — the soundtrack
+    // first, the picture behind it. Here rather than in `ui/sources.js` for the
+    // one thing that stage does not own: where the files go, which is beside the
+    // *document*.
     //
-    // **A clip, because the Write stage will not open without one.**
-    // `exporter.prepare()` refuses an empty timeline, which is right for every
-    // other render and is exactly wrong for this one: the whole intention is
-    // "copy this input" and the timeline is beside the point. Rather than
-    // loosening that rule for one press, the press lays a clip out — but only
-    // when this input has none *and* the timeline is empty. Appending five hours
-    // of stream to somebody's montage as a side effect of saving a file is worse
-    // than refusing with a sentence.
+    // **It starts them and stays where it is.** This used to lay a clip out, walk
+    // to the Write stage and fill a render in — because a copy is a render and
+    // this application has one place where renders are described. That was right
+    // about the description and wrong about the machinery: the render is the one
+    // job slot, so a download held it for as long as it took, and the timeline
+    // gained five hours of stream as a side effect of asking for a file. A fetch
+    // is not a render (src/native/fetch_queue.h), so there is nothing to make
+    // room for and nothing to walk to.
     saveLocally: (input) => {
+        const why = localcopy.save(input, whereCopiesGo());
+        if (why) return flash(`Cannot copy it: ${why}`);
+        const job = localcopy.copiesOf(input);
+        flash(job.audio.state
+                  ? `Pulling ${input.name} — the soundtrack first, then the picture. ` +
+                    'Both run in the background; the card says where each has got to.'
+                  : `Pulling ${input.name}. It runs in the background — nothing here waits ` +
+                    'for it, and the card offers to stop it.');
+    },
+    // The same copy, described rather than started. Here for `saveLocally`'s
+    // reason and one more: it walks to another stage, which is the shell's, and
+    // it needs a clip because `exporter.prepare()` refuses an empty timeline —
+    // right for every other render and beside the point for this one. Rather
+    // than loosening that rule for one press, the press lays a clip out, and
+    // only when this input has none *and* the timeline is empty: appending five
+    // hours of stream to somebody's montage as a side effect of asking to read
+    // a command is worse than refusing with a sentence.
+    describeCopy: (input) => {
         if (!clipsOf(input).length) {
             if (project.clips.length)
-                return flash('Use it on the timeline first — a render needs it in the ' +
-                             'edit, and adding it here would put five hours on the end ' +
-                             'of what you have');
+                return flash('Use it on the timeline first — the Write stage describes the ' +
+                             'edit, and adding it here would put five hours on the end of ' +
+                             'what you have. Save a local copy needs none of that.');
             openInput(input, { quiet: true });
         }
         if (!shell.goTo('write')) return;
-        const why = exporter.prepareLocalCopy(input, localCopyPath(input), null);
+        const why = exporter.prepareLocalCopy(
+            input, `${whereCopiesGo()}/${slugOf(input.name)}.mkv`, null);
         if (why) return flash(`Cannot copy it: ${why}`);
-        // Where it will land, remembered against the input so the Sources card
-        // can offer to read it once it is written. Not a promise that it exists.
-        input.localCopy = exporter.currentSettings().path;
         const dropped = (exporter.lastLocalCopy() || {}).dropped || 0;
-        flash(`Copying ${input.name} to ${basename(input.localCopy)}` +
+        flash(`${input.name} as a copy` +
               (dropped ? ` — leaving out ${dropped} data stream${dropped === 1 ? '' : 's'} ` +
                          'Matroska will not hold' : '') +
-              '. Set a range on the strip if you want part of it, then Render.');
+              '. Set a range on a row if you want part of it, then Render.');
     },
     changed: () => { changed('inputs'); },
 });
 
-/// Where a saved stream goes: beside the document if there is one, and beside
-/// the application otherwise, named after the input rather than after the signed
-/// URL — which is five hundred characters of token and is not a filename.
-///
-/// Matroska, because a copy has to go into a container that will hold what is
-/// being copied and Matroska holds very nearly everything. The container is an
-/// ordinary control on the stage this walks to, so this is a starting point and
-/// not a decision taken away from anybody.
-function localCopyPath(input) {
-    const slug = String(input.name || 'stream')
+/// A name that is a filename. Named after the input rather than after the signed
+/// URL, which is five hundred characters of token and is not one.
+function slugOf(name) {
+    return String(name || 'stream')
         .replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'stream';
+}
+
+/// Where a saved stream goes: beside the document if there is one, and beside
+/// the application otherwise.
+///
+/// The directory only — what each pull is *called* is `ui/localcopy.js`'s, since
+/// there are two of them and they must not land on one name.
+function whereCopiesGo() {
     const here = doc.documentPath();
-    const dir = here ? here.replace(/[/\\][^/\\]*$/, '') : '.';
-    return `${dir}/${slug}.mkv`;
+    return here ? here.replace(/[/\\][^/\\]*$/, '') : '.';
 }
 
 capture.initCapture({
@@ -2394,6 +2412,12 @@ globalThis.__ffmpegBro = {
     // a key press — the press is the shell's and the arithmetic is this.
     goToMark,
     exporter, capture,
+    // What has been pulled off a page onto this machine, and where each pull has
+    // got to. On the surface because the claim it makes is about *order* — the
+    // soundtrack lands first and the work that needs only sound can start against
+    // it while the picture is still arriving — and order is a thing a test has to
+    // watch happen rather than read off a card.
+    localcopy,
     // What this machine turned out to have, and the rule applied to it. On the
     // surface because the rule is a *pure* answer — a decision plus the sentence
     // that pays for having taken it — and reading it off the note under the button
