@@ -141,6 +141,30 @@ clip rather than to the element, so evicting a decoder leaves the timeline lanes
 exactly as they were, and tying the two together would make scrolling re-decode
 files.
 
+`ui/analysis.js` states the same rule about *reading* a clip and is the second
+place a cost was found to be a property of the window rather than of the
+project. A file on this machine is read whole, once, exactly as it always was. A
+clip whose input is a URL (`input.remote`, decided once in `ui/inputs.js` where
+the scheme is already parsed) is read for the span the timeline is showing, and
+`timeline.draw()` is what says which span that is. Four things about it are
+load-bearing. **The two lanes are not one job**, and the measurements say why: a
+strip *samples* and an envelope *integrates*, so twenty-four thumbnails cost 6.2 s
+whether they are spread over five minutes of a six-hour VOD or over all of it,
+while the envelope of that VOD is sixteen minutes of continuous decoding — the
+picture therefore follows the view at any zoom and the sound is capped at a
+window — and past four times that window it is not read at all, because two
+minutes of envelope in a six-hour lane is six pixels of waveform and the lane
+saying *why* it is empty is worth more. **A bucket nobody has read is not a
+bucket that was quiet**, which is
+what `peaks.have` is and why `columnsOf` answers `null` rather than zero for a
+column outside it. **The envelope is read from the cheapest source carrying the
+same soundtrack** — a local copy, then the audio-only rendition (1.9 s against
+6.5 s for the same sixty seconds), then the clip — and two of those are the ones
+that do not share the picture's zero, so `peaks.about` says which and the lane
+prints it. And **the same window is never asked for twice** (`tried`): a short
+answer that fails its own coverage test would otherwise be re-read on every
+frame for ever.
+
 The same document exposed a second cost that was never about the elements. A
 measurement landing — a waveform or filmstrip off `ui/analysis.js`'s worker, a
 telemetry track, a run of sound marks — arrives on the model's change channel,

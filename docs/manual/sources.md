@@ -67,9 +67,16 @@ beside it where it is dead — `A device cannot be cut`, `One picture, no time a
 it is worth pressing before anything else you plan to do more than once.
 Everything downstream reads an input *repeatedly* — a scrub, a filmstrip, a
 waveform, a transcription pass, a render — and for a URL every one of those is a
-network read of the whole recording. Word searches in particular want the media
-on this machine: finding a phrase means transcribing around it, and doing that
-over HLS is the same segments fetched twice.
+network read. Word searches in particular want the media on this machine:
+finding a phrase means transcribing around it, and doing that over HLS is the
+same segments fetched twice.
+
+Nothing waits for the copy. A clip on a URL is [read for the span the timeline
+is showing](timeline.md), so you can explore a six-hour recording while it is
+still arriving — but the reads are seconds each and the waveform is bounded to a
+window and taken from the audio-only rendition, which is a second or two from
+the picture. The moment a copy is on this machine both lanes are read from it
+instead: whole, exact and free.
 
 What it does is a **stream copy**: the packets already on the CDN written into a
 local container without being decoded, which is what

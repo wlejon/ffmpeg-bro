@@ -185,11 +185,15 @@ export function makeClip(input) {
         xform: defaultTransform(),
         volume: 1,
         muted: false,
-        peaks: null,        // { buckets, min, max, rms, duration } once analysed
-        film: null,         // { bitmap, width, height, count, times }
+        // What the clip looks and sounds like, filled in by ui/analysis.js and
+        // never by this file. `peaks` is one envelope over the whole file, with
+        // a `have` mask when it was read a window at a time; `film` is a short
+        // list of strips, because a clip on a link is read for the span on
+        // screen and holds several of them.
+        peaks: null,
+        film: null,
         video: null,        // the <video> element, owned by the viewer
         frame: null,        // its crop window, owned by the viewer
-        ready: false,
     };
 }
 
@@ -277,7 +281,6 @@ export function makeGenerator(settled) {
         film: null,
         video: null,
         frame: null,
-        ready: false,
     };
 }
 
@@ -857,7 +860,6 @@ export function splitClip(clip, t, makeElement) {
         xform: JSON.parse(JSON.stringify(clip.xform)),
         video: null,
         frame: null,
-        ready: false,
     });
     clip.length = local;
     project.clips.push(right);

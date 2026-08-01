@@ -45,9 +45,43 @@ suite stacks them:
   [the When lane](#the-when-lane).
 
 The filmstrips and the waveform come from `bro.media` (see bro's
-`docs/video-api.js`), which decodes the whole file through the same backend
-registry `<video>` plays through. Both are full-file decodes, so ffmpeg-bro runs
-them in a Worker and the lanes fill in behind a UI that never stops responding.
+`docs/video-api.js`), which decodes through the same backend registry `<video>`
+plays through. Decoding is not free, so ffmpeg-bro runs it in a Worker and the
+lanes fill in behind a UI that never stops responding.
+
+**A file on this machine is read whole. A clip on a link is read for the span
+you are looking at.** Opening a six-hour VOD by URL used to mean reading the
+whole recording twice — every audio packet of it for the envelope, a hundred and
+twenty seeks for the strip — down the same link a local copy is being pulled
+over. So a clip whose input is a URL is read for what the timeline is showing,
+a window at a time, one read at a time, and a window already read is not read
+again. Measured against a six-hour Twitch VOD:
+
+| | |
+|---|---|
+| 24 thumbnails across the whole recording | 6.2 s |
+| 12 thumbnails across a 300 s window | 3.4 s |
+| the envelope of a 60 s window (`Audio Only`) | 1.9 s |
+| the envelope of the same 60 s from the 1080p60 rendition | 6.5 s |
+| the envelope of the whole recording | ~16 min |
+
+The two lanes behave differently because those numbers say they should: **a
+strip samples and an envelope integrates.** Twenty-four seeks cost the same
+whether they are spread over five minutes or six hours, so the filmstrip covers
+whatever is on screen and zooming out is not a bigger job. The envelope has to
+decode every sample between its ends, so it is read in a bounded window — and
+zoomed out past that window the lane is honestly **blank** either side of it,
+because a bucket nobody has read is not a bucket that was quiet. Zoom out far
+enough and it stops reading altogether and says **zoom in to read the sound**,
+rather than spending four seconds on two minutes of waveform that would be six
+pixels wide in the middle of a six-hour bar.
+
+The envelope is also read from the cheapest source that carries the same
+soundtrack: a local copy if one has been pulled, otherwise the site's
+audio-only rendition, otherwise the clip itself. The middle two are a couple of
+seconds away from the picture and no offset corrects it (see [Saving a stream to
+this machine](sources.md)), so the lane says which one it read. Pull the sound
+and the lane gets exact and instant, which is the point of pulling it.
 
 **Zoom** with the wheel, about the pointer — the only version that lets you
 dive into a moment instead of steering the window back after every notch.

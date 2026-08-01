@@ -168,6 +168,9 @@ export function addInput(spec) {
         error: '',
         src: '',
         key: '',
+        // Set by `reopen` below, before anything can ask. Declared here so the
+        // shape of an input is one list and not two.
+        remote: false,
     };
     // **A name the caller gave, where there is one.** Every input on a path is
     // named by its basename and that is right; a VOD resolved from a page URL is
@@ -243,6 +246,13 @@ function reopen(input) {
     input.key = openingKey(input);
     input.error = '';
     input.probe = null;
+    // **Is this input read over a link?** Decided here, where the scheme is
+    // already being parsed, and read from here by everything that has to price
+    // a read of it — `ui/analysis.js` reads a remote input for the span on
+    // screen rather than whole. `schemeOf` answers '' for `file:`, which has a
+    // scheme and is a file on this machine; that distinction is the whole
+    // reason this is not a regex at each caller.
+    input.remote = !!schemeOf(input.path);
     // Whatever was already in flight is answering about the input this one no
     // longer is, and nobody is going to be told: forgotten rather than
     // cancelled, so the thread is reaped and no stale answer can land on top of

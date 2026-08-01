@@ -22,7 +22,8 @@ import * as generators from './generator.js';
 import * as cuesModel from './cues.js';
 import * as localcopy from './localcopy.js';
 import * as assemble from './sequence.js';
-import { analyzeClip, pending } from './analysis.js';
+import { analyzeClip, pending, tickAnalysis } from './analysis.js';
+import * as analysis from './analysis.js';
 import * as viewer from './viewer.js';
 import { initResidency, tick as tickResidency,
          pending as decodersPending, resident } from './residency.js';
@@ -1953,6 +1954,12 @@ function frame(now) {
     // and a watcher that only ran while one panel was up would leave the card
     // saying "connecting" until somebody went back to look at it.
     tickSources();
+    // What a clip looks and sounds like, for the span the timeline is showing.
+    // From here rather than from `timeline.draw()` because a view that has come
+    // to rest stops redrawing and it is the settling that decides a read is
+    // wanted — and because a source *improving* under a clip, which is what a
+    // local copy landing is, is not a view change at all.
+    tickAnalysis();
 
     requestAnimationFrame(frame);
 }
@@ -2418,6 +2425,11 @@ globalThis.__ffmpegBro = {
     // it while the picture is still arriving — and order is a thing a test has to
     // watch happen rather than read off a card.
     localcopy,
+    // What a clip looks and sounds like, and how much of it has been read. On
+    // the surface because the claim it makes is about *how little* is read for
+    // an input on a link — a lane that fills in for the span on screen and no
+    // further — and "no further" is only checkable by asking what was read.
+    analysis,
     // What this machine turned out to have, and the rule applied to it. On the
     // surface because the rule is a *pure* answer — a decision plus the sentence
     // that pays for having taken it — and reading it off the note under the button

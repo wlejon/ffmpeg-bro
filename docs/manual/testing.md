@@ -157,6 +157,15 @@ and not a table here, its length is a decision that a trim *raises*, it takes no
 `ui_graph.js`, what a document does with it in `ui_document.js`, and the render it
 produces in `ui_export.js`.
 
+Its second-to-last section needs **no network**, which is the same trick the
+other way round: reading a clip for the span on screen rather than whole is
+decided by one flag on the input (`remote`, `ui/inputs.js`), so the section sets
+it by hand on a ten-second fixture and everything downstream of it — the settle,
+the grid, the strips, the honest blank where nothing has been read — is the code
+a Twitch VOD goes through, against a file whose content a test can check. The
+assertion the whole design is for is the one that pumps a second and a half of a
+timeline that is holding still and requires that **nothing was read**.
+
 `ui_subtitles.js` is the three things people mean by subtitles, each of which is
 a different mechanism: the cue file arriving as an `-i` and being recognised
 from what libavformat found in it, the stream row that carries or converts it,

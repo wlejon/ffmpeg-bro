@@ -234,10 +234,15 @@ waitFor('the worker to read the clip', () => clip.film && (clip.peaks || !p.audi
 pump(80);
 ok(film.width > 100, `filmstrip canvas sized ${film.width}x${film.height}`);
 ok(litFraction(film) > 0.5, `filmstrip has picture (${(litFraction(film) * 100).toFixed(0)}% lit)`);
-ok(clip.film.times.length === clip.film.count &&
-   clip.film.times[clip.film.count - 1] > clip.film.times[0],
-   `${clip.film.count} thumbnails walking ${clip.film.times[0].toFixed(2)}s → ` +
-   `${clip.film.times[clip.film.count - 1].toFixed(2)}s`);
+// A file on this machine is read whole, so it has exactly one strip and that
+// strip spans the file — the list is what a clip read over a link needs, and
+// this is the case that must not have grown one.
+ok(clip.film.strips.length === 1, `one strip for a local file (${clip.film.strips.length})`);
+const strip0 = clip.film.strips[0];
+ok(strip0.times.length === strip0.count &&
+   strip0.times[strip0.count - 1] > strip0.times[0],
+   `${strip0.count} thumbnails walking ${strip0.times[0].toFixed(2)}s → ` +
+   `${strip0.times[strip0.count - 1].toFixed(2)}s`);
 if (p.audio) {
     ok(waveFraction(wave) > 0.02 && waveFraction(wave) < 0.9,
        `waveform drawn, not a solid block (${(waveFraction(wave) * 100).toFixed(0)}% lit)`);
@@ -1856,6 +1861,132 @@ console.log('\na generator on the timeline');
     flush();
     screenshot('out/15-generator.png');
 
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+}
+
+// ── a clip read over a link is read for the span on screen ─────────────────
+//
+// Opening a six-hour VOD by URL used to read the whole thing twice: every audio
+// packet of it for the envelope and a hundred and twenty seeks for the strip,
+// down the same link the local copy is being pulled over. Now what is read is
+// what is being shown.
+//
+// The fixture is a file on this machine, so it is read whole — which is right,
+// and is what the analysis section above checked. `input.remote` is the one
+// thing that decides between the two (ui/inputs.js), so setting it by hand is
+// how this drives the windowed path with no network: everything downstream of
+// that flag — the settle, the grid, the strips, what the lane draws — is the
+// same code a Twitch VOD goes through, against ten seconds whose content a test
+// can check.
+{
+    console.log('\nreading a clip on a link');
+    A.selectMany(A.project.clips.slice());
+    A.removeSelection();
+    pump(120);
+
+    dropFiles(400, 300, [media]);
+    waitFor('the clip to load', () => A.project.clips.length === 1);
+    const c = A.project.clips[0];
+    waitFor('it to be read as the local file it is', () => !!c.film, 30000);
+    ok(!c.peaks || !c.peaks.have,
+       'read as a file, the envelope is one whole-file answer with no gaps in it');
+    ok(c.film.strips.length === 1 && c.film.strips[0].to > c.length - 0.5,
+       'and the strip spans the file');
+
+    // What the lane says about the sound. This had never been drawn for anybody
+    // before: the note was gated on `clip.ready`, a field on the clip that
+    // nothing in the application ever set to true, so a file with no audio
+    // track had been silently saying nothing about it. It is gated on the probe
+    // now, which is what knowing whether there is a soundtrack actually depends
+    // on.
+    ok(A.analysis.soundNote(c) === '',
+       'a clip whose sound has been read says nothing, because the shape says it');
+    const realProbe = c.probe;
+    c.probe = { video: realProbe.video, audio: null,
+                format: realProbe.format, streams: realProbe.streams };
+    ok(A.analysis.soundNote(c) === 'no audio track',
+       'and one with no soundtrack says so');
+    c.probe = realProbe;
+
+    // Now the same file, read as though it were a long way away.
+    c.input.remote = true;
+    A.analysis.analyzeClip(c);
+    ok(!c.peaks && !c.film, 'a source that changed under a clip drops what was read of it');
+
+    A.timeline.fitView();
+    A.timeline.draw();
+    const whole = waitFor('the overview', () => !!c.film && !!c.peaks, 30000);
+    ok(whole, 'looking at all of it reads an overview of all of it');
+    const coarse = c.film.strips[0];
+    ok(coarse.from < 0.5 && coarse.to > c.length - 0.5,
+       `the overview strip spans the clip (${coarse.from.toFixed(2)}..${coarse.to.toFixed(2)}s)`);
+    ok(!!c.peaks.have, 'and the envelope now says which of it has been read');
+
+    // Zoom to a tenth of it. What is on screen is a finer question than the
+    // overview can answer, so it is read again — and only there.
+    const mid = c.start + c.length / 2;
+    const span = c.length / 10;
+    A.timeline.setView(mid - span / 2, span);
+    A.timeline.draw();
+    waitFor('a closer strip', () => c.film.strips.length > 1, 30000);
+    const fine = c.film.strips[0];
+    ok(fine.step < coarse.step * 0.6,
+       `the close read is finer than the overview (${fine.step.toFixed(2)}s a frame ` +
+       `against ${coarse.step.toFixed(2)})`);
+    ok(fine.to - fine.from < c.length * 0.8,
+       `and covers a window rather than the file (${(fine.to - fine.from).toFixed(2)}s ` +
+       `of ${c.length.toFixed(2)})`);
+
+    // The strip drawn at a moment is the finest one that covers it, so the close
+    // read replaces the overview inside its own window and nowhere else.
+    // The clip is at zero, untrimmed and at speed 1, so a moment of the source
+    // is a moment of the timeline and `sourceTime` has nothing to do here.
+    const inside = A.analysis.frameAt(c.film, c.length / 2);
+    ok(inside && inside.bitmap === fine.bitmap,
+       'inside the window the close read is what is drawn');
+    const outside = A.analysis.frameAt(c.film, 0.2);
+    ok(outside && outside.bitmap === coarse.bitmap,
+       'and outside it the overview still is, rather than a gap');
+
+    // Holding still reads nothing. This is the assertion the whole design is
+    // for: a window already held is not asked for again, and without it every
+    // frame of a still timeline would be another read down the link.
+    //
+    // Counted rather than inferred from the lanes. A re-read of a window
+    // already held *replaces* what it produced, so the strip count, the
+    // coverage mask and the picture all come out identical — a loop reading the
+    // same window a hundred times over would be invisible in every one of them.
+    const before = A.analysis.readCount();
+    pump(1500);
+    const after = A.analysis.readCount();
+    ok(after === before,
+       `a view that is holding still asks for nothing (${before} reads, still ${after})`);
+
+    // And the envelope is honest about the part it has not covered: a bucket
+    // nobody has read is not a bucket that was quiet. Checked against a mask
+    // written by hand, because the point is what the lane does with one and not
+    // how long it takes a decode to arrive.
+    const n = 8;
+    const half = new Uint8Array(n);
+    for (let i = 0; i < n / 2; i++) half[i] = 1;
+    c.peaks = {
+        buckets: n, duration: c.media, have: half,
+        min: new Array(n).fill(-0.5), max: new Array(n).fill(0.5),
+        rms: new Array(n).fill(0.5),
+    };
+    c.inPoint = 0; c.length = c.media; c.start = 0;
+    A.timeline.fitView();
+    const w = A.timeline.laneWidthPx();
+    const mixed = A.timeline.mixColumns(w);
+    const at = (f) => Math.round(A.timeline.timeToX(c.start + c.length * f));
+    ok(mixed.rms[at(0.25)] > 0.4,
+       `the read half has a shape (${mixed.rms[at(0.25)].toFixed(3)})`);
+    ok(mixed.rms[at(0.75)] === 0 && mixed.hi[at(0.75)] === 0,
+       'and the unread half is drawn as nothing at all, rather than as silence');
+
+    c.input.remote = false;
     A.selectMany(A.project.clips.slice());
     A.removeSelection();
     pump(120);

@@ -41,6 +41,7 @@ import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trac
          isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
          hasPicture, isGenerator, isTrackLocked, setTrackLocked,
          ripplesWith, sourceTime, speedOf } from './project.js';
+import { frameAt, soundNote, showing } from './analysis.js';
 import { rulerLabel, clock } from './format.js';
 import { dbHeight, ZERO_DBFS } from './levels.js';
 import { el, put } from './dom.js';
@@ -352,16 +353,6 @@ function laneContext(canvas) {
     return { ctx, w, h };
 }
 
-/// Last thumbnail grabbed at or before `t` seconds into the file.
-function thumbAt(times, t) {
-    let lo = 0, hi = times.length - 1, best = 0;
-    while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (times[mid] <= t) { best = mid; lo = mid + 1; } else hi = mid - 1;
-    }
-    return best;
-}
-
 function drawVideoLane(track, canvas) {
     const c = laneContext(canvas);
     if (!c) return;
@@ -412,8 +403,8 @@ function drawVideoLane(track, canvas) {
             ctx.fillText('sound only', l + 6, h / 2 + 3);
         }
 
-        if (clip.film && clip.film.count > 0) {
-            const { bitmap, width: tw, height: th, count, times } = clip.film;
+        if (clip.film && clip.film.strips.length) {
+            const { width: tw, height: th } = clip.film;
             // One thumbnail per its own natural width, laid out from the
             // clip's left edge so the pictures hold still while you pan, and
             // each showing the frame that is actually on screen there.
@@ -428,13 +419,20 @@ function drawVideoLane(track, canvas) {
                 // filmstrip's times are the file's and a sped-up clip walks
                 // through them faster, so a lane that subtracted a start would
                 // show the same shot stretched across the bar.
-                const t = sourceTime(clip, xToTime(sx));
-                const i = Math.min(count - 1, thumbAt(times, t));
+                //
+                // `frameAt` rather than an index, because a clip read over a
+                // link holds several strips of several spans and the finest one
+                // covering this moment is the one to draw — and where none has
+                // been read yet the slot is left empty rather than filled with
+                // the nearest picture that was, which would be a frame of
+                // somewhere else presented as a frame of here.
+                const f = frameAt(clip.film, sourceTime(clip, xToTime(sx)));
+                if (!f) continue;
                 // Partial slots at either edge crop the source rather than
                 // squeezing a whole thumbnail into fewer pixels.
                 const u0 = (dl - sx) / slot, u1 = (dr - sx) / slot;
-                ctx.drawImage(bitmap,
-                              i * tw + u0 * tw, 0, Math.max(1, (u1 - u0) * tw), th,
+                ctx.drawImage(f.bitmap,
+                              f.i * tw + u0 * tw, 0, Math.max(1, (u1 - u0) * tw), th,
                               dl, 0, dr - dl, h);
             }
         }
@@ -490,11 +488,18 @@ function drawVideoLane(track, canvas) {
     }
 }
 
-/// Which columns of the lane a clip covers, and how to read its peaks there.
+/// Which columns of the lane a clip covers, and what its sound does there.
 ///
 /// One helper because three passes ask the same two questions, and a second
 /// copy of the bucket arithmetic would be a second answer to which sample of
 /// the file is under a pixel.
+///
+/// `at(x)` is the whole reading of one column — the loudest rms and the widest
+/// envelope of every bucket under it — and it is **null where nothing has been
+/// read**. A clip on a link is read a window at a time (`ui/analysis.js`), so
+/// most of a long one is not silence but ground nobody has covered yet, and a
+/// lane that drew those columns as a flat line would be claiming the recording
+/// went quiet there.
 function columnsOf(clip, w) {
     const p = clip.peaks;
     const l = Math.max(0, Math.floor(timeToX(clip.start)));
@@ -509,7 +514,22 @@ function columnsOf(clip, w) {
         const b = Math.floor((t / p.duration) * n);
         return b < 0 ? 0 : b >= n ? n - 1 : b;
     };
-    return { l, r, n, p, bucketAt };
+    const at = (x) => {
+        const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
+        let rms = 0, min = 0, max = 0, any = false;
+        for (let b = b0; b < b1 && b < n; b++) {
+            // A whole-file read has no `have` and every bucket in it was read,
+            // which is the shape this has always been handed and the one a test
+            // builds by hand.
+            if (p.have && !p.have[b]) continue;
+            any = true;
+            if (p.rms[b] > rms) rms = p.rms[b];
+            if (p.min[b] < min) min = p.min[b];
+            if (p.max[b] > max) max = p.max[b];
+        }
+        return any ? { rms, min, max } : null;
+    };
+    return { l, r, at };
 }
 
 /// The mix, one column of the lane at a time.
@@ -537,20 +557,15 @@ export function mixColumns(w) {
         const col = columnsOf(clip, w);
         if (!col) continue;
         if (clip.muted || clip.volume < 0.02) { quiet.push(col); continue; }
-        mixed = true;
         const g = clip.volume;
-        const { l, r, n, p, bucketAt } = col;
+        const { l, r, at } = col;
         for (let x = l; x < r; x++) {
-            const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
-            let m = 0, a = 0, b2 = 0;
-            for (let b = b0; b < b1 && b < n; b++) {
-                if (p.rms[b] > m) m = p.rms[b];
-                if (p.min[b] < a) a = p.min[b];
-                if (p.max[b] > b2) b2 = p.max[b];
-            }
-            power[x] += (m * g) * (m * g);
-            lo[x] += a * g;
-            hi[x] += b2 * g;
+            const s = at(x);
+            if (!s) continue;
+            mixed = true;
+            power[x] += (s.rms * g) * (s.rms * g);
+            lo[x] += s.min * g;
+            hi[x] += s.max * g;
         }
     }
     const clipped = new Uint8Array(w);
@@ -613,10 +628,17 @@ function drawAudioLane() {
         const p = clip.peaks;
         ctx.fillStyle = p ? (isSelected(clip) ? '#24422f' : '#1d3227') : '#20242c';
         ctx.fillRect(l, 0, r - l, h);
-        if ((!p || !p.buckets || !p.duration) && clip.ready && r - l > 60) {
+        // What this lane is showing and what it is not — `analysis.soundNote`
+        // says both, because "reading…", "no audio track" and "read from the
+        // audio-only rendition, which is a second or two from the picture" are
+        // one question asked of one clip. Drawn under the shape rather than
+        // only where there is no shape: the last of the three is a caveat
+        // about a waveform that is right there.
+        const note = soundNote(clip);
+        if (note && r - l > 60) {
             ctx.font = '10px Consolas, monospace';
             ctx.fillStyle = '#8a92a0';
-            ctx.fillText(clip.probe.audio ? 'reading…' : 'no audio track', l + 6, mid + 3);
+            ctx.fillText(note, l + 6, p ? h - 4 : mid + 3);
         }
     }
 
@@ -647,25 +669,20 @@ function drawAudioLane() {
     // What is not in it, in its own colour and one clip at a time — there is no
     // mix for it to be part of, so there is nothing to sum.
     for (const col of quiet) {
-        const { l, r, n, p, bucketAt } = col;
+        const { l, r, at } = col;
         ctx.fillStyle = 'rgba(126, 214, 160, 0.12)';
         for (let x = l; x < r; x++) {
-            const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
-            let m = 0;
-            for (let b = b0; b < b1 && b < n; b++) if (p.rms[b] > m) m = p.rms[b];
-            const y = dbHeight(m) * mid;
+            const s = at(x);
+            if (!s) continue;
+            const y = dbHeight(s.rms) * mid;
             ctx.fillRect(x, mid - y, 1, y * 2);
         }
         ctx.fillStyle = 'rgba(126, 214, 160, 0.3)';
         for (let x = l; x < r; x++) {
-            const b0 = bucketAt(x), b1 = Math.max(b0 + 1, bucketAt(x + 1));
-            let a = 0, b2 = 0;
-            for (let b = b0; b < b1 && b < n; b++) {
-                if (p.min[b] < a) a = p.min[b];
-                if (p.max[b] > b2) b2 = p.max[b];
-            }
-            const top = mid - dbHeight(b2) * mid;
-            const bot = mid + dbHeight(a) * mid;
+            const s = at(x);
+            if (!s) continue;
+            const top = mid - dbHeight(s.max) * mid;
+            const bot = mid + dbHeight(s.min) * mid;
             ctx.fillRect(x, top, 1, Math.max(1, bot - top));
         }
     }
@@ -1681,6 +1698,27 @@ function drawScrollbar() {
     }
 }
 
+/// Tell the analysis which span of each clip's source is on screen.
+///
+/// A clip read over a link is read for what is being shown and no more (see
+/// `ui/analysis.js`), and this is the one place that knows what that is. Once
+/// per clip per draw rather than once per lane: both lanes show the same span
+/// of the same clip, and a second caller would be a second answer to which
+/// seconds are in view.
+///
+/// A width of zero is a hidden stage and not a clip nobody can see, which is
+/// the standing rule about measuring anything in this frame loop.
+function watchView() {
+    const w = laneWidth();
+    if (w <= 0) return;
+    for (const clip of project.clips) {
+        const l = Math.max(0, timeToX(clip.start));
+        const r = Math.min(w, timeToX(clip.start + clip.length));
+        if (r <= l) continue;
+        showing(clip, sourceTime(clip, xToTime(l)), sourceTime(clip, xToTime(r)), r - l);
+    }
+}
+
 export function draw() {
     syncLanes();
     syncHeads();
@@ -1693,6 +1731,7 @@ export function draw() {
     syncTelemetryLane();
     fitHeights();
     clampView();
+    watchView();
     drawRuler();
     for (const l of lanes) drawVideoLane(l.track, l.canvas);
     drawAudioLane();
