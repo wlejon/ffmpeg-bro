@@ -242,6 +242,8 @@ static uint64_t versionOf(const std::string& src) {
 bool settleOutput(const OutputView& v, OutputFacts* facts, std::string* err) {
     OutputReader reader;
     if (!reader.open(v, /*wantSound=*/false, err)) return false;
+    // Settling asks what the render *is*, not what it looks like at a moment, so
+    // no tick is taken and the lag never comes into it.
     if (facts) *facts = reader.facts();
     return true;
 }
@@ -295,16 +297,61 @@ bool OutputReader::open(const OutputView& v, bool wantSound, std::string* err) {
     return true;
 }
 
-OutputReader::Tick OutputReader::next(bool wantPicture) {
+OutputReader::Tick OutputReader::next(bool wantPicture, double screen) {
     Tick out;
-    if (!source_ || (total_ > 0 && n_ >= total_)) {
+    if (!source_) {
         out.done = true;
         return out;
     }
 
+    // The two moments of one tick. The sound is made at the frontier, because
+    // that is what fills the element's ring; the picture is made one frame after
+    // where the screen is, which is about a second behind it. See the note at the
+    // top of the header.
     const double into = double(n_) / facts_.fps;
-    const double t = facts_.start + into;
+    const double step = 1.0 / facts_.fps;
+    // A graph gets none of this: `GraphSource::canvasAt` takes no `t`, so asking
+    // for an earlier instant would produce the next frame either way and label it
+    // with a moment it is not.
+    //
+    // **One frame after the screen, and never past the frontier.** The two halves
+    // are the two things that can be true of a preview, and leaving either out
+    // brings the slideshow back in one of them:
+    //
+    //   - while the render is keeping up, the frontier is a second ahead of the
+    //     screen and the first half binds: each picture is the one the element is
+    //     about to want, so every one of them is seen;
+    //   - while it is *not* keeping up — a render slower than real time, or the
+    //     headless engine, whose mixer runs on `advanceTime` rather than on a
+    //     device and drains a fifth as fast — the element's clock outruns the
+    //     frontier and the second half binds: the newest thing made is the best
+    //     answer there is, which is what this always used to publish.
+    double back = facts_.graph ? into
+                              : std::max(0.0, std::min((screen < 0.0 ? into : screen) + step,
+                                                       into));
+    // Never backwards. The screen is read afresh every tick and a reading that
+    // arrived out of order would be a seek in every clip under the playhead
+    // rather than the frame after it.
+    if (back < shown_) back = shown_;
+    // **And a composite only where there is a new moment to make.** A pad holds
+    // one picture, so a second made for a moment the element has not reached only
+    // replaces the first — the work of a decode and a scale, thrown away. Between
+    // two asks there is nothing new to make, and this is what says so.
+    const bool fresh = back > shown_ || n_ == 0;
+    shown_ = back;
+
+    // **The range has run out when the *picture* has covered it**, not when the
+    // sound has. The sound is made a lag ahead and therefore finishes that much
+    // earlier; stopping there would take the last second off the thing being
+    // watched and hand the transport an end that had not come.
+    if (total_ > 0 && back >= facts_.length - 1e-9) {
+        out.done = true;
+        return out;
+    }
+
+    const double t = facts_.start + back;
     out.at = into;
+    out.pictureAt = back;
 
     // **A graph is pulled whether or not the picture is wanted.** libavfilter
     // holds every frame it has pushed at a sink until somebody takes it, so a
@@ -312,7 +359,7 @@ OutputReader::Tick OutputReader::next(bool wantPicture) {
     // same reason `GraphSource::tick` drains sinks nobody reads. The compositor is
     // the opposite: it is asked what the output looks like at an instant, and an
     // instant nobody asked about costs nothing.
-    const bool composite = wantPicture || facts_.graph;
+    const bool composite = (wantPicture && fresh) || facts_.graph;
     const Rgba* canvas = composite ? &source_->canvasAt(t) : nullptr;
     // The track stack says when it has run out; a graph does not, and past the
     // end of one the canvas is black — which is the convention `canvasAt`
@@ -327,7 +374,10 @@ OutputReader::Tick OutputReader::next(bool wantPicture) {
     // rounding never loses or repeats one at a frame boundary — which is the same
     // count `runExport` keeps for the writer, and has to be, or a preview and a
     // render would disagree about which samples belong to which frame.
-    if (facts_.audioRate > 0) {
+    //
+    // Only while the frontier is still inside the range: the ticks past it exist
+    // to let the picture catch up, and there is no sound left for them to make.
+    if (facts_.audioRate > 0 && (total_ <= 0 || into < facts_.length)) {
         const int rate = facts_.audioRate;
         const int channels = facts_.audioChannels;
         const int64_t upTo = std::llround((double(n_ + 1) / facts_.fps) * rate);
@@ -341,7 +391,7 @@ OutputReader::Tick OutputReader::next(bool wantPicture) {
         }
     }
 
-    if (wantPicture && canvas) out.picture = frameOf(*canvas, into, facts_.fps);
+    if (composite && canvas) out.picture = frameOf(*canvas, back, facts_.fps);
     ++n_;
     return out;
 }
@@ -384,6 +434,43 @@ void OutputRun::wake() {
         until_ = nowMs() + kDemandMs;
     }
     cv_.notify_all();
+}
+
+void OutputRun::sawPicture(double at) {
+    screenFrontier_.store(frontier_.load(std::memory_order_relaxed),
+                          std::memory_order_relaxed);
+    screenAt_.store(at, std::memory_order_relaxed);
+    // A reader that has taken a picture is a reader that wants the next one, and
+    // the loop may be idling a quarter of a second out.
+    wake();
+}
+
+double OutputRun::screenNow() const {
+    const double at = screenAt_.load(std::memory_order_relaxed);
+    if (at < 0.0) return -1.0;
+    // **Carried forward by what this run has made since the reading was taken —
+    // and by no more than a frame.**
+    //
+    // Carried forward at all because the reading goes stale the moment it is
+    // taken, and an element drawing more slowly than the output rate would
+    // otherwise be offered one frame per ask and crawl behind its own soundtrack.
+    // On the *render's* clock rather than the wall, because the wall is neither
+    // bro's clock in the headless engine, where `advanceTime` is, nor the
+    // render's when the render cannot keep up.
+    //
+    // By no more than a frame because a long gap between asks means the element
+    // was *waiting* on a picture from too far ahead, and carrying forward across
+    // that gap answers a run that is already ahead by getting further ahead.
+    // Unbounded, that is a runaway with only the frontier to stop it, and the
+    // frontier is exactly where the slideshow was: measured, it took a preview
+    // from sixty pictures a second to seven. The bound is what makes this a
+    // mechanism rather than a tuning — whatever either clock is doing, the
+    // picture offered is at most two frames past the screen, so the longest the
+    // element can sit staging one is two frames.
+    const double step = facts_.fps > 0.0 ? 1.0 / facts_.fps : 1.0 / 30.0;
+    const double made = frontier_.load(std::memory_order_relaxed) -
+                        screenFrontier_.load(std::memory_order_relaxed);
+    return at + std::min(std::max(0.0, made), step);
 }
 
 void OutputRun::loop() {
@@ -438,17 +525,20 @@ void OutputRun::loop() {
         const int64_t late = nowMs() - (anchor + static_cast<int64_t>(1000.0 * n / facts_.fps));
         const bool skip = late > static_cast<int64_t>(1500.0 / facts_.fps);
 
-        OutputReader::Tick tick = reader_->next(!skip);
+        // Published so `screenNow` can carry its reading forward against it.
+        frontier_.store(double(n) / facts_.fps, std::memory_order_relaxed);
+
+        OutputReader::Tick tick = reader_->next(!skip, screenNow());
         if (tick.done) {
             if (tick.picture) av_frame_free(&tick.picture);
             if (tick.sound) av_frame_free(&tick.sound);
             break;
         }
-        // Published with where it sits in the range, which is the clock the
-        // element reads back as its position — see the note at the top.
-        const double when = tick.at;
+        // Each published with where *it* sits in the range, which is the clock
+        // the element reads its two tracks back on — and they are two different
+        // moments now, which is the whole of the correction at the top.
         if (tick.picture) {
-            picture->put(tick.picture, when);
+            picture->put(tick.picture, tick.pictureAt);
             av_frame_free(&tick.picture);
         }
         if (tick.sound && sound) {
@@ -461,7 +551,7 @@ void OutputRun::loop() {
             // the one place in this application that number can be read off
             // something rather than assumed.
             sound->heard(tick.sound);
-            sound->putSound(tick.sound, when);
+            sound->putSound(tick.sound, tick.at);
             av_frame_free(&tick.sound);
         }
         ++n;

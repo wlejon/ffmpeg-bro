@@ -87,15 +87,55 @@
 // render runs at real time and no clock is consulted); with no sound in the
 // render there is no such regulator, and the run paces itself at the output rate.
 //
-// **The clock is the sound's, which is real time.** Pictures are stamped with the
-// moment they were published rather than with where they sit in the range, for
-// the reason `LiveSource` stamps them that way: an element told a picture is from
-// a moment already past will pump for more, and a render slower than real time
-// would be asked for frames faster than it can make them for as long as it ran.
-// The two numbers are the same whenever the render is keeping up, which is the
-// case this is tuned for; when it is not, the picture is older than the playhead
-// says and the sound is right, which is this file's whole trade written into one
-// timestamp.
+// **The picture is made for the moment being heard, which is not the moment the
+// run is working on.** This is the correction that made a preview of a large edit
+// watchable at all, and it is worth stating from the failure rather than from the
+// rule.
+//
+// A run cannot help working ahead. bro's `<video>` keeps half a second of sound
+// in its ring, this holds another `kSoundAhead` in the tap, and the queue's room
+// is what paces the loop — so the frame the run is composting is about a second
+// further on than the sound coming out of the speakers. A picture pad is
+// *newest wins*, so every pull handed bro that frontier frame; bro's pipeline
+// stages a picture whose moment has not come and stops pulling until it does
+// (`VideoPipeline::advanceTo`), so it sat on that one frame for the whole second
+// and the sixty published in the meantime were dropped unseen. Measured on a
+// 75-clip montage: the run published **60 pictures a second** and the element
+// took **0.7** — a slideshow, in front of sound that was exactly right, with the
+// playhead jumping two seconds at a time because `currentTime` is the displayed
+// picture's own stamp.
+//
+// So the two halves of a tick are two moments. The sound is made at the
+// frontier, because that is what fills the ring. The **canvas is made `lag`
+// behind it** and carries that earlier moment as its stamp, so the newest
+// picture is the one bro is about to want and every one of them is seen. The
+// compositor can answer for any instant, which is the whole reason this is
+// possible — and a graph cannot, so a graph preview gets no lag and keeps the
+// behaviour above until a picture pad grows a queue.
+//
+// **The moment is read off the screen, not guessed at.** Nothing in this process
+// can see bro's clock, and the two buffers between here and it belong to bro and
+// to this file separately — a constant here would be a second home for a number
+// in `el_video.cpp` that is free to change. But bro leaves an exact mark: it asks
+// for the next picture *when the one it staged became due*, so at the moment of
+// an ask its clock is standing on the moment that picture was made for. That is
+// `sawPicture`, and the next canvas is made one frame after it. bro's clock runs
+// on the wall, so the elapsed time since that ask is added and the anchor cannot
+// drift — which a servo on the *gap* could not manage, because the gap is one
+// draw interval even when everything is right and the error accumulated until
+// the picture stalled.
+//
+// **A composite only where there is a new moment to make**, which falls out of
+// the same reading: a pad holds one picture, so a second made for a moment the
+// element has not reached only replaces the first. Between two asks there is
+// nothing new, so a preview nobody is drawing composites nothing at all while its
+// sound goes on being exact — and the preview costs one frame rather than a queue.
+//
+// `LiveSource` has half of this already and says so — "one tick of lead, so the
+// picture stages rather than being consumed and pumped straight past". It needs
+// no lag because a camera *is* the clock: its newest frame is now by definition.
+// A render is the case where the producer runs ahead of the consumer, and that
+// is the whole difference between the two.
 //
 // **`-fps_mode` is one of the encode-half settings this ignores, and it has to
 // be.** A render with `vfr` on it keeps the graph's own frame times *in the
@@ -110,6 +150,7 @@
 #include "ffmpeg_export.h"
 #include "sound_meter.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -240,7 +281,12 @@ public:
     struct Tick {
         AVFrame* picture = nullptr;  ///< RGBA; null when skipped or past the end
         AVFrame* sound = nullptr;    ///< packed float; null for a silent render
-        double at = 0.0;             ///< seconds from the start of the range
+        /// Seconds from the start of the range — **the sound's** moment, which is
+        /// the frontier the ring is being filled from.
+        double at = 0.0;
+        /// And the picture's, which is `lag` behind it: the moment being heard
+        /// rather than the moment being made. See the note at the top.
+        double pictureAt = 0.0;
         bool done = false;           ///< the range has run out; nothing follows
     };
 
@@ -248,7 +294,14 @@ public:
     /// produces the sound, which is how a late render catches up — and it is
     /// honoured only for the compositor: see the note at the top about a graph
     /// having nothing that can be skipped.
-    Tick next(bool wantPicture);
+    ///
+    /// `screen` is where the picture on the element is, in seconds from the start
+    /// of the range, or negative before there has been one — see
+    /// `OutputRun::sawPicture`. The canvas is made one frame after it. Ignored for
+    /// a graph, which produces the frames it produces in order and cannot be
+    /// asked for an instant — `GraphSource::canvasAt` takes no `t` for exactly
+    /// that reason.
+    Tick next(bool wantPicture, double screen);
 
 private:
     std::unique_ptr<FrameSource> source_;
@@ -256,6 +309,11 @@ private:
     int64_t n_ = 0;              ///< the next frame's number in the range
     int64_t total_ = 0;          ///< how many there are, or 0 for "until it stops"
     int64_t samplesDone_ = 0;    ///< of the mix, counted from the start of the range
+    /// Where the last picture was made, so the next one is never earlier. The
+    /// lag moves while the servo learns it, and a canvas asked for an earlier
+    /// instant than the one before is a seek in every clip under the playhead
+    /// rather than the frame after it.
+    double shown_ = 0.0;
     std::vector<float> mix_;     ///< one tick's worth, reused
 };
 
@@ -283,7 +341,27 @@ public:
     /// what makes a paused preview free — see the note at the top.
     void wake();
 
+    /// A reader took the picture made for `at`, seconds from the start of the
+    /// range.
+    ///
+    /// **The one reading of bro's clock this process can get, and it is exact.**
+    /// `VideoPipeline::advanceTo` stages a picture whose moment has not come and
+    /// stops pulling until it has — so a reader asks for the next one at the
+    /// instant its clock reaches the moment the last one was made for. Two things
+    /// follow, and they are the whole of the correction described at the top:
+    /// where the screen is (`at`, plus however long ago this was, since bro's
+    /// clock runs on the wall), and that there is room for another picture.
+    ///
+    /// Called from whichever thread reads pictures — one of them, because bro
+    /// asks the pipeline's source for the video track and the ring's source for
+    /// the audio track and no object is given both.
+    void sawPicture(double at);
+
 private:
+    /// Where the screen is now, in seconds from the start of the range, or -1
+    /// before a picture has been shown. The last reading, carried forward by
+    /// what this run has made since — bounded, for the reason stated there.
+    double screenNow() const;
     friend std::shared_ptr<OutputRun> attachOutput(const std::string& src,
                                                    std::string* err);
     OutputRun() = default;
@@ -298,6 +376,23 @@ private:
     bool quit_ = false;
     /// When the demand runs out, on the steady clock in milliseconds.
     int64_t until_ = 0;
+    /// The last reading of the screen — see `sawPicture`. Atomics rather than
+    /// `m_` because they are written by the reader and read by the loop once a
+    /// tick, nothing is decided from the pair together beyond arithmetic, and a
+    /// reading a frame old is a screen a frame old.
+    ///
+    /// **Carried forward on the render's own clock, not on the wall.** The
+    /// reading is a moment in the range and it goes stale the instant it is
+    /// taken, so it has to be advanced — and the only rate that means anything
+    /// here is the rate this run is making frames at, which is what `frontier_`
+    /// is for. The wall was the first thing tried and it is wrong twice over: it
+    /// is not bro's clock in the headless engine, where `advanceTime` is, and it
+    /// is not the render's when the render cannot keep up.
+    std::atomic<double> screenAt_{-1.0};
+    std::atomic<double> screenFrontier_{0.0};
+    /// How far into the range this run has made sound for. Published so the
+    /// reading above can be carried forward against it.
+    std::atomic<double> frontier_{0.0};
 };
 
 /// The run behind this src, joining one that is already going or starting it.

@@ -645,8 +645,13 @@ public:
         if (!wantPicture_) return false;
         for (int waited = 0; waited < kReadWaitMs; waited += kSliceMs) {
             double at = 0.0;
-            if (AVFrame* f = picture_->take(&seen_, &at, kSliceMs))
+            if (AVFrame* f = picture_->take(&seen_, &at, kSliceMs)) {
+                // Where the screen is, told to the run before the frame is handed
+                // over rather than after: the answer is what the *next* canvas is
+                // made from, and a tick of the loop can fall between the two.
+                run_->sawPicture(at);
                 return hand(out, f, at, kVideoTrack, TrackKind::Video);
+            }
             // Ended *and* empty is the only false this returns: the range has run
             // out, which is the element ending.
             if (picture_->ended()) return false;
@@ -686,9 +691,10 @@ private:
 
     /// One frame off a pad, as the packet that carries it.
     ///
-    /// `at` is the moment the run published it, which is the clock both kinds are
-    /// on: the element's own. See the header on why that is the wall clock and not
-    /// the position in the range.
+    /// `at` is where the run said this one sits in the range — the picture's own
+    /// moment, which is `lead` behind the sound's. That is what the element reads
+    /// back as `currentTime` and therefore what the playhead follows, so it has
+    /// to be the moment being watched rather than the moment being made.
     bool hand(MediaPacket& out, AVFrame* f, double at, uint32_t track, TrackKind kind) {
         out.trackId = track;
         out.codec = Codec::Other;

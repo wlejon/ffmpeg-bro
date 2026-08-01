@@ -52,6 +52,18 @@
 // timeline lanes exactly as they were. Tying the two together would make
 // scrolling the timeline re-decode files, which is the cost this file exists to
 // remove rather than move.
+//
+// **The look-ahead is off while the clips are not the picture.** It exists so a
+// cut does not stutter, and there is no cut to cross when what is on the monitor
+// is the render (`ui/output.js`): the clips are parked and hidden behind it, so a
+// decoder opened for one of them is 65 ms of the drawing thread and a demuxer
+// held, spent on a shot nobody will see the crossing into. Measured while playing
+// a 75-clip montage on the render: **29 elements built in 45 seconds**, every one
+// of them for a clip behind the preview. What does *not* stop is `retain()` — the
+// clips under the playhead keep their decoders whatever is on screen, because
+// turning the preview off has to be a repaint rather than a seek per clip, and
+// because `setPlayhead` reads `clip.video.currentTime` on the line after it asks
+// for them.
 
 import { project, clipsAt } from './project.js';
 
@@ -103,10 +115,14 @@ export function retain(t) {
 
 /// Open what is coming, close what has gone. Called once a frame.
 ///
+/// `ahead` is whether to open anything the playhead has not reached yet — false
+/// while the render is the picture, because there is then no cut to cross. See
+/// the header.
+///
 /// The eviction runs before the queue is refilled, so a frame in which something
 /// left the window and something else entered it does both rather than putting
 /// the second off until the next one.
-export function tick(t) {
+export function tick(t, ahead = true) {
     if (!hooks.attach) return;
     // **The invariant first, every frame, however it came to be broken.** A seek
     // is not the only way a clip under the playhead can lose its element: an
@@ -127,7 +143,7 @@ export function tick(t) {
 
     // What is worth opening now, nearest first, so a queue that never drains
     // still drains in the order the playhead will want.
-    queue = project.clips
+    queue = !ahead ? [] : project.clips
         .filter((c) => !c.video && here.indexOf(c) < 0 && distance(c, t) <= NEAR)
         .sort((a, b) => distance(a, t) - distance(b, t))
         .slice(0, AHEAD_CAP);

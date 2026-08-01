@@ -64,7 +64,7 @@ import * as shell from './shell.js';
 import * as capture from './capture.js';
 import { initSources, drawSources, tickSources } from './sources.js';
 import { transport, initTransport, setPlayhead, play, pause, togglePlay, step,
-         applyAudioAll, tick as tickTransport } from './transport.js';
+         applyAudioAll, parkClip, tick as tickTransport } from './transport.js';
 import * as command from './command.js';
 import * as report from './report.js';
 import * as hardware from './hardware.js';
@@ -1314,7 +1314,10 @@ setControlsEnabled(false);
 // whole — `ui/residency.js` decides *when*, and deliberately knows nothing about
 // how an element is built or what it costs to place one.
 initResidency({
-    attach: (clip) => viewer.attachClip(clip),
+    // Built *and put where the playhead is*, because the two are one act: a
+    // decoder that arrived without a seek is a decoder at zero, and playback
+    // reads one as a timecode. See `parkClip`.
+    attach: (clip) => { viewer.attachClip(clip); parkClip(clip); },
     detach: (clip) => viewer.detachClip(clip),
 });
 
@@ -1727,7 +1730,10 @@ function frame(now) {
     // because playback inside a long clip moves the playhead without seeking and
     // a look-ahead computed only on seeks would go stale exactly where the next
     // cut is.
-    tickResidency(transport.t);
+    // The look-ahead is only worth having while the clips are what is on the
+    // monitor — see ui/residency.js. What is under the playhead is opened either
+    // way, which is what `tick` does before it looks at anything else.
+    tickResidency(transport.t, !output.isShowing());
 
     // A panel that changed size (window resize, fullscreen) has to be redrawn
     // from the analysis rather than stretched — a stretched waveform lies

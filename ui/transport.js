@@ -180,10 +180,21 @@ export function play() {
 }
 
 export function pause() {
+    // **The render's clock is handed back to the clips, and this is the one
+    // moment it can be.** While the render is the picture the playhead is the
+    // render's own — `advance()` reads it off the element every frame — and the
+    // clips are left parked wherever playback began, because parking twelve
+    // decoders on every frame is a seek per clip per frame. Releasing playback's
+    // claim makes the clips the picture again, so without this the picture *and*
+    // `adoptDecoderTime`'s reading both fall back to that stale moment: measured,
+    // a pause after a second and a half of playing dragged the playhead from
+    // 1.64 s to 0.08.
+    const wasShowing = output.isShowing();
     transport.playing = false;
     idleSince = Date.now();
     output.play(false);
     for (const c of viewer.activeClips()) if (c.video) c.video.pause();
+    if (wasShowing) setPlayhead(transport.t);
     tell();
 }
 
@@ -257,6 +268,30 @@ function lastClipBefore(t) {
 }
 
 // ── sound ──────────────────────────────────────────────────────────────────
+
+/// Put a decoder that has just been built where the playhead is.
+///
+/// **A clip can get its element without anybody having moved the playhead**, and
+/// that is not an edge case: `residency.tick()` opens what the playhead is
+/// approaching, once a frame, and playback moves the playhead through `advance()`
+/// rather than through `setPlayhead`. A fresh element is a paused one at zero, so
+/// a clip that arrived that way and then became the master clock reported
+/// `currentTime` 0 — and `advance()` turns that into `clip.start + (0 - inPoint)`,
+/// which is *negative* for any clip trimmed in. Measured: the playhead landing at
+/// −3.48 s a moment after pressing play.
+///
+/// So the element is parked on arrival, by the same map `setPlayhead` uses. Not
+/// *played*: whether it should be running is a question about what is on the
+/// monitor, and the frame loop is about to answer it.
+export function parkClip(clip) {
+    if (!clip || !clip.video) return;
+    applyAudio(clip);
+    // A generator is not sent anywhere — libavfilter's sources produce forward
+    // and the `lavfi` demuxer has no `read_seek`. Same rule as `setPlayhead`.
+    if (isGenerator(clip)) return;
+    const want = sourceTime(clip, transport.t);
+    if (Math.abs(clip.video.currentTime - want) > 0.0005) clip.video.currentTime = want;
+}
 
 export function applyAudio(clip) {
     if (!clip || !clip.video) return;

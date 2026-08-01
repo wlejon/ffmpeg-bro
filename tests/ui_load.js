@@ -208,6 +208,16 @@ assert(added === 0,
 //     after playback stops so that stop-and-go is free, and while it is held it
 //     is neither the picture nor the clock — the bug this caught was a scrub
 //     being dragged back to wherever the render had been paused.
+//   - **and the picture moves.** Taking the render over is worth nothing if what
+//     arrives is a slideshow, which is exactly what it was: the run publishes
+//     sixty pictures a second, the element took **0.7**, and the playhead went
+//     forward in jumps of two and a half seconds. A pad holds one picture, and
+//     the run was composting about a second ahead of the screen because that is
+//     how far ahead of the speaker bro's audio ring is — so every pull handed it
+//     a frame from the future, which it staged and sat on while the rest were
+//     replaced unseen. Checked as *how often the picture changes*, because
+//     nothing else tells a preview keeping up from one that has stopped: the
+//     playhead's average rate was 1× throughout the failure.
 
 A.setPlayhead(0);
 const pressed = Date.now();
@@ -219,6 +229,43 @@ waitFor('the render to take the picture', () => A.output.isShowing(), 60000);
 assert(!A.output.isWanted(),
        'playing turned the preview mode on — it should borrow the render, not switch a mode');
 console.log(`play() returned in ${pressMs} ms, render took the picture`);
+
+// ── the picture keeps up ───────────────────────────────────────────────────
+//
+// Counted over frames that are paced against the wall clock, because that is the
+// only pacing under which any of this means anything: `advanceTime` handed a
+// fixed sixteen milliseconds is real time only if the loop manages sixty frames
+// a second, and a loop that manages half that puts bro's clock — and everything
+// bro paces against it — at half speed. The failure this guards is invisible
+// there.
+{
+    const fps = (A.output.currentFacts() || {}).fps || 25;
+    let shown = 0, last = null;
+    const began = Date.now();
+    const until = began + 6000;
+    while (Date.now() < until) {
+        const at = Date.now();
+        wallSleep(8);
+        advanceTime(Math.max(1, Date.now() - at));
+        flush();
+        const r = A.output.at();
+        if (r !== null && r !== last) { shown++; last = r; }
+    }
+    const secs = (Date.now() - began) / 1000;
+    // **Against the rate the render is making them**, not against the loop's own
+    // frame count: the output rate is the ceiling and it is a property of the
+    // edit, so a 25 fps fixture can never show one per pass of a loop spinning at
+    // a hundred. A third of it is far below anything a working preview reaches —
+    // this fixture measures about two thirds — and two orders of magnitude above
+    // the failure, which was 0.7 a second against sixty.
+    const floor = fps * secs / 3;
+    assert(shown > floor,
+           `the monitor showed ${shown} pictures in ${secs.toFixed(1)} s of a ` +
+           `${fps} fps render (wanted more than ${floor.toFixed(0)}) — the element is ` +
+           'being handed a picture from ahead of the screen and sitting on it');
+    console.log(`the picture changed ${shown} times in ${secs.toFixed(1)} s ` +
+                `of a ${fps} fps render`);
+}
 
 // Kept across a pause, and silent while it is kept: neither the picture nor the
 // clock, so a scrub is answered by the clips and lands where it was aimed.
