@@ -50,6 +50,7 @@
 
 import { changed, timelineTime } from './project.js';
 import { asInput, hasSound } from './inputs.js';
+import { copyRowsOf } from './export/copy.js';
 
 /// Every read, in flight or finished, by input id.
 ///
@@ -295,4 +296,172 @@ export function hitRows(hit, clips) {
         rows.push({ clip, t, hit });
     }
     return rows;
+}
+
+// ── a hit becomes a window somebody can actually cut ───────────────────────
+
+/// How much either side of a hit a pulled window carries, in seconds.
+///
+/// **This number is the two clocks, and it is not a comfort margin.** A
+/// transcript is read from whatever soundtrack was cheapest — for a Twitch VOD
+/// that is the audio-only rendition — and the video rendition it will be cut
+/// from does not share its zero. Measured on one recording: +0.80 s, +2.21 s and
+/// +2.57 s at three points, a *step* rather than a drift, because an ad break is
+/// discontinuous in one and not the other. So a window that hugged the hit would
+/// sometimes not contain it at all.
+///
+/// Ten seconds is comfortably past the largest offset seen and is still a small
+/// file: at a stream's bitrate a twenty-second window is a few megabytes against
+/// the whole recording's several gigabytes, which is the entire point of pulling
+/// one. The pad is *stated* wherever a window is offered — an unexplained ten
+/// seconds looks like sloppiness rather than like the measurement it is.
+export const WINDOW_PAD = 10;
+
+/// The span to pull for a hit, clamped to the recording. `pad` is `WINDOW_PAD`
+/// unless a caller has a reason; there is currently none.
+export function windowFor(hit, duration, pad = WINDOW_PAD) {
+    const from = Math.max(0, hit.start - pad);
+    let to = hit.end + pad;
+    if (duration > 0) to = Math.min(to, duration);
+    return { from, to: Math.max(to, from + 1) };
+}
+
+/// Every window pull, by a key of its own. `{ key, inputId, hit, from, to, path,
+/// fetch, state, error }`.
+///
+/// Keyed by input **and window** rather than by input, because pulling two
+/// moments out of one six-hour recording is the ordinary use of this: you search
+/// for a word, and the three places it was said are three files.
+const pulls = new Map();
+
+const keyOf = (inputId, from) => `${inputId}@${from.toFixed(2)}`;
+
+export function pullsOf(inputId) {
+    return [...pulls.values()].filter((p) => p.inputId === inputId);
+}
+
+export function pullFor(inputId, from) {
+    return pulls.get(keyOf(inputId, from)) || null;
+}
+
+/// Pull just this window of the recording to a local file.
+///
+/// **The point of the whole feature.** A six-hour VOD is tens of gigabytes and
+/// the twenty seconds somebody actually wants is a few megabytes. The transcript
+/// found the moment; this fetches only that moment. `soon` puts it in front of
+/// any whole-recording copy already queued, because a window is what you are
+/// waiting on and a full copy is what you started so that you could get on —
+/// and `soon` jumps the queue without preempting, so nothing already running is
+/// left half-written.
+///
+/// It is a **fetch and not a render**: a stream copy, no compositor, no encoder,
+/// so it does not take the one job slot and the Render button stays live. See
+/// `src/native/fetch_queue.h`.
+export function pullWindow(input, hit, dir) {
+    // **Which streams a copy carries is `copyRowsOf`'s and not this file's**,
+    // for `ui/localcopy.js`'s reason: the Write stage's `Rewrap` answers the
+    // same question, and two lists of what is copyable are the pair that comes
+    // to disagree. What is dropped after it is what a fetch into Matroska will
+    // not hold — a data stream, which for a Twitch VOD is its own segment
+    // metadata and means nothing off Twitch.
+    let n = 0;
+    const rows = copyRowsOf(input.probe, 0, () => ++n, null)
+                     .filter((r) => r.kind !== 'data');
+    if (!rows.length) {
+        return { key: '', inputId: input.id, state: 'failed',
+                 error: 'there is nothing in that input that can be copied' };
+    }
+    const duration = (input.probe && input.probe.duration) || 0;
+    const { from, to } = windowFor(hit, duration);
+    const key = keyOf(input.id, from);
+    const have = pulls.get(key);
+    if (have && have.state !== 'failed') return have;
+
+    const stamp = `${Math.floor(from / 60)}m${String(Math.floor(from % 60)).padStart(2, '0')}s`;
+    const pull = {
+        key,
+        inputId: input.id,
+        hit,
+        from,
+        to,
+        path: `${dir}/${slug(input.name)}-${stamp}.mkv`,
+        fetch: 0,
+        state: 'queued',
+        error: '',
+    };
+    try {
+        pull.fetch = bro.ffmpeg.fetch.start({
+            path: pull.path,
+            format: 'matroska',
+            // **`ss` and `t` on the input**, which is what makes this a window
+            // rather than a whole recording that is stopped early: the demuxer
+            // seeks and the copy begins there, so what comes down the link is
+            // the window. `to` would be equivalent; `t` is used because the
+            // length is what was computed.
+            inputs: [{ path: input.path, ss: from, t: to - from }],
+            streams: rows,
+        }, { label: `${input.name} @ ${stamp}`, soon: true });
+    } catch (e) {
+        pull.state = 'failed';
+        pull.error = String((e && e.message) || e);
+    }
+    pulls.set(key, pull);
+    changed('transcript');
+    return pull;
+}
+
+/// Give up on a window pull, or forget a finished one.
+export function dropPull(key) {
+    const p = pulls.get(key);
+    if (!p) return;
+    if (p.fetch && (p.state === 'queued' || p.state === 'running')) {
+        try { bro.ffmpeg.fetch.stop(p.fetch); } catch (e) { /* already gone */ }
+    }
+    pulls.delete(key);
+    changed('transcript');
+}
+
+/// Take in what the fetch queue has to say about the windows. Called from
+/// `tickTranscripts`' caller for the reason every poll in this application is
+/// called from there: nothing calls back into JS.
+///
+/// One `list()` for every pull rather than a status call each — `ui/localcopy.js`
+/// reads the queue the same way and for the same reason: the answer is a lock
+/// and a copy either way.
+export function tickPulls() {
+    if (!pulls.size) return false;
+    let moved = false;
+    const running = new Map();
+    for (const f of bro.ffmpeg.fetch.list()) running.set(f.id, f);
+
+    for (const p of pulls.values()) {
+        if (p.state === 'done' || p.state === 'failed') continue;
+        const f = running.get(p.fetch);
+        if (!f) {
+            // Off the list is terminal: the queue forgets a fetch once it has
+            // answered, so this is done unless it said otherwise.
+            p.state = 'done';
+            moved = true;
+            continue;
+        }
+        const was = p.state;
+        p.state = f.state || p.state;
+        p.progress = f.progress || 0;
+        if (f.error) { p.state = 'failed'; p.error = f.error; }
+        if (p.state !== was) moved = true;
+    }
+    if (moved) changed('transcript');
+    return moved;
+}
+
+/// A filename out of an input's name. The same shape `ui/app.js` `slugOf` makes,
+/// kept here rather than imported because that one is not exported and a window
+/// file wants the same treatment for the same reason: a stream's title is a
+/// sentence with punctuation in it and a path is not.
+function slug(name) {
+    return String(name || 'window')
+        .replace(/\.[a-z0-9]+$/i, '')
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'window';
 }

@@ -1076,6 +1076,27 @@ body.fs #cropbox { display: none; }
     font-family: Consolas, "Courier New", monospace;
     font-size: var(--fs-sm);
 }
+/* The word-search field. Same treatment as the model path beside it, and wide
+   for a different reason: what goes in it is a phrase rather than a word, and a
+   field sized for one word teaches people to search for one word. */
+.src-find {
+    flex: 1 1 auto;
+    min-width: 12ch;
+    font-size: var(--fs-sm);
+}
+/* One place a phrase was said. The sentence around it is the point of the row —
+   it is how you tell the hit you want from the four you do not — so it takes the
+   room and elides rather than wrapping, which would make a list of twelve
+   unreadable at a glance. */
+.src-hit { align-items: center; }
+.src-said {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.85;
+}
 .src-data-series {
     display: flex;
     flex-wrap: wrap;

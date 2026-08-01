@@ -323,7 +323,7 @@ console.log('\nfinding a word, and saying how much was looked at');
         const i = A.inputs.inputs.find((x) => x.path === speech.path);
         return i && i.probe;
     });
-    const input = A.inputs.inputs.find((x) => x.path === speech.path);
+    input = A.inputs.inputs.find((x) => x.path === speech.path);
     ok(!!input, 'the speech file is open');
     ok(A.transcript.worthReading(input),
        'and is offered a transcription, because it has a soundtrack');
@@ -370,9 +370,110 @@ console.log('\nfinding a word, and saying how much was looked at');
     same(A.transcript.hitRows(h, []).length, 0,
          'and a hit with no clip covering it lands nowhere, rather than making one');
 
-    A.transcript.dropTranscript(input.id);
-    same(A.transcript.readOf(input.id), null, 'dropping it forgets it');
+}
+
+console.log('\na window is what a hit becomes, and the pad is the two clocks');
+{
+    // The pad is a *measurement*, not a comfort margin: the transcript is read
+    // from the soundtrack rendition and the picture rendition does not share its
+    // zero — up to 2.57 s apart on one recording. A pad at or under that would
+    // sometimes produce a window that does not contain the words it was cut for,
+    // which is the one failure mode this number exists to prevent.
+    ok(A.transcript.WINDOW_PAD > 2.57,
+       `the pad clears the largest measured clock offset (${A.transcript.WINDOW_PAD}s > 2.57s)`);
+
+    const mid = { start: 100, end: 104 };
+    const w = A.transcript.windowFor(mid, 600);
+    same(w.from, 100 - A.transcript.WINDOW_PAD, 'a window opens a pad before the words');
+    same(w.to, 104 + A.transcript.WINDOW_PAD, 'and closes a pad after them');
+
+    // Both ends clamp to the recording, because a hit in the first ten seconds
+    // is the ordinary case and a negative -ss is not a thing.
+    const head = A.transcript.windowFor({ start: 1, end: 2 }, 600);
+    same(head.from, 0, 'a window at the start does not open before the file does');
+    const tail = A.transcript.windowFor({ start: 595, end: 599 }, 600);
+    same(tail.to, 600, 'and one at the end does not run past it');
+    ok(tail.to > tail.from, 'a window is never empty');
+
+    // A recording that says nothing about its length still gives a window —
+    // the clamp is skipped rather than the window refused, because "this file
+    // has no duration" is not a reason to be unable to cut twenty seconds of it.
+    const unknown = A.transcript.windowFor(mid, 0);
+    same(unknown.to, 104 + A.transcript.WINDOW_PAD,
+         'a file with no declared duration still yields a window');
+}
+
+console.log('\nthe search is drawn where the words are, and says what it searched');
+{
+    A.shell.goTo('sources');
+    pump(60);
+    const find = document.querySelector('.src-find');
+    ok(!!find, 'a search field is drawn under the transcript');
+
+    find.value = 'country';
+    find.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(60);
+
+    const hitRows = Array.from(document.querySelectorAll('.src-hit'));
+    ok(hitRows.length > 0, `hits are listed (${hitRows.length})`);
+
+    // Every row carries the sentence around the hit. That is what tells the
+    // place you want from the four you do not, and a list of bare timestamps
+    // would make somebody click all of them.
+    const said = Array.from(document.querySelectorAll('.src-said'));
+    same(said.length, hitRows.length, 'every hit shows the sentence it was in');
+    ok(said.every((n) => n.textContent.trim().length > 0),
+       'and none of them is blank');
+
+    // The coverage sentence, which is the honesty of the count.
+    // Gathered from the rows themselves rather than from a container's
+    // textContent: this DOM is bro's subset and aggregating text up a tree is
+    // not something to assume of it.
+    const rowText = () => Array.from(document.querySelectorAll('.src-data'))
+                               .map((n) => n.textContent || '').join(' | ');
+    const text = rowText();
+    ok(/\d+ places?/.test(text), 'the count is stated');
+    ok(/read so far|in all/.test(text),
+       'and never on its own — how much was searched is in the same sentence');
+
+    // A phrase nobody said finds nothing, and still says how much was looked at.
+    find.value = 'wombat parliament';
+    find.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(60);
+    same(document.querySelectorAll('.src-hit').length, 0, 'a phrase nobody said finds nothing');
+    const none = rowText();
+    ok(/0 places/.test(none), 'and says so as a count');
+    ok(/read so far|in all/.test(none),
+       'with the coverage beside it — "none in ten minutes" is not "none at all"');
+
+    // Pulling a window is offered for a link and not for a local file: this one
+    // is on disk, so there is nothing to fetch and no button that would.
+    find.value = 'country';
+    find.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(60);
+    const buttons = Array.from(document.querySelectorAll('.src-hit button'))
+                         .map((b) => b.textContent);
+    ok(!buttons.some((t) => /^Pull /.test(t)),
+       'a file already on this machine is offered no window to pull');
+}
+
+console.log('\nforgetting it takes the words and the search with them');
+{
+    // Through the button rather than the model, because that is the only path a
+    // person has and it is the one that redraws: this stage is drawn directly
+    // rather than off the change channel (see needs()/drawPending() in
+    // ui/app.js), so a model call alone leaves the rows it wrote standing.
+    const forget = Array.from(document.querySelectorAll('button'))
+                        .find((b) => (b.title || '') === 'Drop this transcript.');
+    ok(!!forget, 'a finished transcript offers to be forgotten');
+    click(forget);
+    pump(60);
+    same(A.transcript.readOf(input.id), null, 'the press forgets it');
     same(A.transcript.search('country').length, 0, 'and it stops being searchable');
+    same(document.querySelectorAll('.src-hit').length, 0,
+         'and the hits come off the stage with it');
+    same(document.querySelector('.src-find'), null,
+         'along with the search field, which has nothing left to search');
 }
 
 }  // speech

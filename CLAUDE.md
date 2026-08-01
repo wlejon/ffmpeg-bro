@@ -519,6 +519,21 @@ A transcript is derived, so it is not in the document, not in
 belongs to the **input** rather than the clip and reaches the timeline through
 `timelineTime`, the same map the waveform, the Data lane and the Marks lane use.
 
+**A hit becomes a window, and that is the payoff.** `ui/transcript.js`
+`pullWindow()` copies only the span a search result is in — `ss` and `t` on the
+input, so what comes down the link is twenty seconds rather than six hours — as a
+`fetch` with `soon`, which jumps the queue without preempting because the window
+is what somebody is waiting on and the whole-recording copy is what they started
+so that they could get on. `WINDOW_PAD` is ten seconds and is **a measurement,
+not a margin**: the transcript is read from the soundtrack rendition and the
+picture rendition does not share its zero by up to 2.57 s, so a window that
+hugged the words would sometimes not contain them. `tests/ui_transcript.js`
+asserts the pad clears that number, which is what stops a later hand tightening
+it to look neat. When a window lands it is opened as a **new input** rather than
+the recording repointed — it is a different file with its own zero — and it goes
+in through the ordinary door, so `Use on the timeline` is still the press that
+puts it in the edit.
+
 The weights are not shipped and an absent model is refused **by name**;
 `brosoundml/scripts/download-whisper.sh --size large-v3` puts one on disk.
 Measured on an RTX 4090: large-v3 at 4.0x realtime, so a six-hour VOD is about

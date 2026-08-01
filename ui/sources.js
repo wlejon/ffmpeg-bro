@@ -232,8 +232,11 @@ export function tickSources() {
     // window is thirty seconds of audio and several seconds of GPU, so this is a
     // redraw every few seconds rather than every frame.
     const said = transcriptModel.tickTranscripts();
+    // The window pulls, which are fetches rather than reads: a search hit
+    // copying twenty seconds of a six-hour recording to this machine.
+    const grabbed = transcriptModel.tickPulls();
     const pulled = tickLocalCopies();
-    const settled = opened || read || heard || said || pulled;
+    const settled = opened || read || heard || said || grabbed || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1575,7 +1578,8 @@ function fileRows(p, input) {
         ]),
         ...p.streams.flatMap((s) => [streamLine(s), ...dataRows(input, s),
                                      ...soundRows(input, s),
-                                     ...transcriptRows(input, s)]),
+                                     ...transcriptRows(input, s),
+                                     ...searchRows(input, s)]),
     ];
 }
 
@@ -1845,6 +1849,145 @@ function transcriptRows(input, stream) {
                                             drawSources(); } } }),
     ]));
     return rows;
+}
+
+/// What has been typed into the word search, and how many hits to draw.
+///
+/// Not persisted and not in the document, for `marks.js`'s `shown` reason: it is
+/// an editorial act like a selected clip, and losing it on reopen costs a press.
+let query = '';
+let showAll = false;
+const HITS_SHOWN = 12;
+
+/// mm:ss, or h:mm:ss past an hour. A six-hour recording is the case this exists
+/// for and `12345.6s` is not a time anybody reads.
+///
+/// **Not `clock()` from `format.js`, and not named it either.** That one pads
+/// the hour, which is right in a timecode field of fixed width and wrong in a
+/// sentence — "0 places in the first 00:01:06" reads as a serial number.
+///
+/// The name mattered more than the difference. `clock` is imported at the top
+/// of this file, and a `function clock` beside it did not shadow the import —
+/// an import is a *live binding*, so the declaration was compiled into a write
+/// through it and replaced `format.js`'s own `clock`, for every importer.
+/// `timecode()` calls it internally, so the transport's readout became
+/// `0:01:08` in a field four numbers wide, and nothing in the diff was near it.
+/// That is now a SyntaxError in the engine (quickjs-ng, `is_module_import`),
+/// which is where it belonged; the rename is what this file owes it.
+function said(t) {
+    const s = Math.max(0, Math.floor(t));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = String(s % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+/// Finding a word, and what to do with the place it was said.
+///
+/// **Under the transcript rather than anywhere else.** A search is only over
+/// what has been read, so it belongs beside the thing that says how much that
+/// is — putting it on the timeline would separate the count from its coverage,
+/// and a count without its coverage is the one dishonest way to show this.
+function searchRows(input, stream) {
+    // Under the one audio stream the transcript was read from, for
+    // `transcriptRows`' reason: the control that reads a soundtrack goes beside
+    // the line that says what it is, and a file with three of them gets one row.
+    if (!input || stream.kind !== 'audio') return [];
+    const p = (input.probe && input.probe.streams) || [];
+    if (p.find((x) => x.kind === 'audio') !== stream) return [];
+
+    const e = transcriptModel.readOf(input.id);
+    if (!e || !e.result || !e.result.segments.length) return [];
+
+    const rows = [div('src-data', [
+        el('input', {
+            cls: 'src-find', type: 'text', value: query,
+            placeholder: 'find a word or a phrase',
+            title: 'Searches every transcript there is, over as much of each as ' +
+                   'has been read so far.',
+            // Both, deliberately: `input` is what makes a search feel live as
+            // you type, and `change` is what every other field on this stage is
+            // driven by — and what the suites dispatch. Listening to one would
+            // be a control that works for a person or for a test but not both.
+            on: { input: (ev) => { query = ev.target.value; showAll = false;
+                                   drawSources(); },
+                  change: (ev) => { query = ev.target.value; showAll = false;
+                                    drawSources(); } },
+        }),
+    ])];
+
+    if (!query.trim()) return rows;
+
+    const hits = transcriptModel.search(query).filter((h) => h.inputId === input.id);
+    const cov = transcriptModel.coverage();
+    // **The count and the coverage in one sentence, always.** "No results" over
+    // ten minutes of a six-hour recording and "no results" over all of it are
+    // different answers, and a count on its own cannot tell them apart.
+    const part = cov.duration > 0 && cov.read < cov.duration - 0.5;
+    rows.push(div('src-data', [
+        span(`${hits.length} ${hits.length === 1 ? 'place' : 'places'}` +
+             (part ? ` in the first ${said(cov.read)} of ${said(cov.duration)} read so far`
+                   : ` in all ${said(cov.duration)}`), 'dim'),
+    ]));
+    if (!hits.length) return rows;
+
+    const shown = showAll ? hits : hits.slice(0, HITS_SHOWN);
+    for (const hit of shown) rows.push(hitRow(input, hit));
+    if (hits.length > shown.length)
+        rows.push(div('src-data', [
+            el('button', { cls: 'btn tiny', text: `${hits.length - shown.length} more`,
+                           on: { click: () => { showAll = true; drawSources(); } } }),
+        ]));
+    return rows;
+}
+
+/// One place a phrase was said: when, what was around it, and the two things
+/// worth doing about it.
+function hitRow(input, hit) {
+    const pull = transcriptModel.pullFor(input.id, 
+        Math.max(0, hit.start - transcriptModel.WINDOW_PAD));
+
+    const kids = [
+        el('button', {
+            cls: 'btn tiny mono', text: said(hit.start),
+            title: 'Go to this moment. The playhead moves; nothing is cut.\n' +
+                   'A transcript is a place to look — the renditions of a stream ' +
+                   'do not share a zero, so the last few seconds are yours.',
+            on: { click: () => { if (hooks.goToHit) hooks.goToHit(input, hit); } },
+        }),
+        span(hit.text.length > 90 ? hit.text.slice(0, 88) + '…' : hit.text, 'src-said'),
+    ];
+
+    // Pulling a window is offered for a link and not for a file: a file on this
+    // machine is already here, and copying twenty seconds out of it to somewhere
+    // else would be a second copy of something nothing is waiting for.
+    if (input.remote) {
+        if (!pull)
+            kids.push(el('button', {
+                cls: 'btn tiny', text: 'Pull ' + (2 * transcriptModel.WINDOW_PAD) + 's',
+                title: `Copy just this window to this machine — ${transcriptModel.WINDOW_PAD}s ` +
+                       'either side of what was said.\n' +
+                       'That pad is not slack: the transcript was read from the ' +
+                       'soundtrack rendition and the picture rendition does not ' +
+                       'share its zero (measured up to 2.6s apart on one ' +
+                       'recording), so a window that hugged the words would ' +
+                       'sometimes not contain them.\n' +
+                       'It is a stream copy, so it runs in the background and ' +
+                       'jumps ahead of any whole-recording copy already queued.',
+                on: { click: () => { if (hooks.pullWindow) hooks.pullWindow(input, hit);
+                                     drawSources(); } },
+            }));
+        else if (pull.state === 'failed')
+            kids.push(span(pull.error || 'would not copy', 'src-error'));
+        else if (pull.state === 'done')
+            kids.push(el('button', { cls: 'btn tiny', text: 'Use it',
+                title: 'Put this window on the timeline as a clip of the local file.',
+                on: { click: () => { if (hooks.useWindow) hooks.useWindow(pull); } } }));
+        else
+            kids.push(span(pull.state === 'running'
+                ? `copying ${Math.round((pull.progress || 0) * 100)}%` : 'queued', 'dim'));
+    }
+    return div('src-data src-hit', kids);
 }
 
 /// The three kinds, in the order the chips go in. Taken off `MARK_WORDS` so that

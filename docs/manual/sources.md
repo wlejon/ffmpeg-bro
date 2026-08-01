@@ -403,6 +403,32 @@ The soundtrack it reads is the one your local copy has, if there is one — whic
 is why **Save a local copy** offers the soundtrack on its own. The audio-only
 rendition of a VOD is a fraction of the bytes and is all this needs.
 
+### Pulling just the window a hit is in
+
+Under a search result on a **link**, there is one more control: **Pull 20s**.
+
+This is the point of the whole feature. A six-hour VOD is tens of gigabytes; the
+twenty seconds you actually want is a few megabytes. The transcript found the
+moment, so this copies only that moment — `-ss` and `-t` on the input, so what
+comes down the link is the window rather than the recording. It is a stream
+copy, so it runs in the background, does not take the render slot, and jumps
+ahead of any whole-recording copy already queued: the window is what you are
+waiting on, and the full copy is the thing you started so that you could get on.
+
+**The ten seconds either side are not slack.** They are the two clocks again: the
+transcript was read from the soundtrack rendition and the picture rendition does
+not share its zero, by up to 2.6 s on the recording that was measured. A window
+that hugged the words would sometimes not contain them.
+
+When it lands, **Use it** opens the window as an input of its own — a new one,
+not the recording repointed, because it genuinely is a different file with its
+own zero. It appears on this stage with a card like anything else, and **Use on
+the timeline** puts it in the edit. One press more, and no second way in.
+
+A file already on this machine is offered no window to pull. There is nothing to
+fetch, and copying twenty seconds out of it to somewhere else is not something
+anybody is waiting for.
+
 ## While it is connecting
 
 A file on disk answers in about a millisecond. A URL answers when the far end
