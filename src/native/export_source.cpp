@@ -303,6 +303,32 @@ int SourceAudio::mixInto(float* dst, int frames, float gain) {
     return done;
 }
 
+double SourceAudio::duration() const {
+    if (!fmt_ || stream_ < 0) return 0.0;
+
+    // The stream's own duration first and the container's only as a fallback:
+    // a container carrying several streams reports the longest, which for a
+    // soundtrack that ends before the picture would be a claim about somebody
+    // else's stream.
+    const AVStream* st = fmt_->streams[stream_];
+    double d = 0.0;
+    if (st->duration != AV_NOPTS_VALUE && st->duration > 0)
+        d = st->duration * av_q2d(st->time_base);
+    else if (fmt_->duration != AV_NOPTS_VALUE && fmt_->duration > 0)
+        d = fmt_->duration / double(AV_TIME_BASE);
+    if (d <= 0.0) return 0.0;
+
+    // The input's own window, exactly as every other read of this reader sees
+    // it: `-ss` has already been taken off the front by `startOffset_`, and
+    // `-t` caps what is left.
+    d -= startOffset_;
+    if (limit_ > 0.0 && limit_ < d) d = limit_;
+    if (d <= 0.0) return 0.0;
+
+    // In seconds of output. A clip at 2x speed hands over half as many.
+    return d / (speed_ > 0.0 ? speed_ : 1.0);
+}
+
 void SourceAudio::close() {
     if (swr_) swr_free(&swr_);
     if (frame_) av_frame_free(&frame_);

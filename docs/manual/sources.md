@@ -347,6 +347,62 @@ stream is offered nothing, rather than a button that fails at the press. There i
 no build of this application without the sensors in it: `-DBRO_WITH_SOUNDML=OFF`
 stops the configure and says so.
 
+## Finding a word
+
+An **audio** stream gets a second control beside `Find sounds`: **Transcribe**.
+
+`Find sounds` says *where* something happened. This says *what was said*. Six
+hours of somebody talking is a recording nobody is going to scrub through, and
+neither a waveform nor a set of onsets can find the minute a name was mentioned.
+This decodes the soundtrack and runs speech-to-text over it, and then a search
+box finds the places a phrase was said.
+
+**The words arrive while it is still reading.** This is the difference from every
+other read on this stage. A transcript of a six-hour VOD is about ninety minutes
+of work on a fast GPU, and one you could only search at the end would be one
+nobody waits for — so it is searchable seconds after the press, over as much as
+has been read so far, and the readout says how far down the recording that is.
+
+That readout is not decoration. "No results" over the first ten minutes of a
+six-hour recording and "no results" over all six hours are completely different
+answers, and a count on its own cannot tell you which one you are looking at.
+
+**A hit is a place to look. It is never a cut.** Pressing one moves the playhead
+to it; nothing is trimmed. That restraint is deliberate and it is about clocks: a
+Twitch VOD's audio-only rendition and its 1080p rendition do not share a zero —
+measured at +0.80 s, +2.21 s and +2.57 s at three points of one recording, and a
+*step* rather than a drift, because an ad break is discontinuous in one and not
+in the other. So a transcript read from the cheap audio-only copy is on that
+copy's seconds, and a cut placed on a word boundary would land on the wrong
+file's clock. The transcript takes you to the right minute; your eyes do the
+rest.
+
+Two more things worth knowing before the first press.
+
+**The weights are not shipped, and their absence is said out loud.** A model is a
+directory of files that is between 145 MB and 3 GB depending on the size, so
+there is nothing to choose until you have downloaded one —
+`scripts/download-whisper.sh --size large-v3` in brosoundml puts one on disk.
+Until then the control names the file it could not find rather than quietly
+doing nothing.
+
+**Size is a real choice and it is yours.** `tiny` is 145 MB and transcribes clean
+speech correctly; on a stream with game audio under it, it will not. `large-v3`
+is 3 GB and is the one to use if the transcript has to be right. Measured here on
+an RTX 4090: large-v3 at 4x realtime, so a six-hour recording is about ninety
+minutes. On a CPU the same model is days — this is a feature that wants a GPU,
+and the build has to have been configured with one (`-DBRO_WITH_TENSOR_CUDA=ON`).
+
+Like a set of marks, a transcript belongs to the **input** rather than to a clip,
+so two clips cut from one recording share one, and a trim moves where the hits
+land without the soundtrack being read again. It is not in the document, not
+cached beside the app and not on the undo stack, for the reasons a set of marks
+is not: it is derived from the file, and reading it again gives the same answer.
+
+The soundtrack it reads is the one your local copy has, if there is one — which
+is why **Save a local copy** offers the soundtrack on its own. The audio-only
+rendition of a VOD is a fraction of the bytes and is all this needs.
+
 ## While it is connecting
 
 A file on disk answers in about a millisecond. A URL answers when the far end

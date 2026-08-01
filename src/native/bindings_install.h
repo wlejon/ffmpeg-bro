@@ -55,6 +55,16 @@ void installData(Table& ns);
 /// anyway.
 void installMarks(Table& ns);
 
+/// `transcribe.*` — what was *said* in a soundtrack, read by Whisper over a
+/// soundtrack libav decoded. The second entry that is not a part of ffmpeg's
+/// model, and it is on this surface for `marks`'s reason: the seam it needs is
+/// an `-i` read exactly as this application reads every other input.
+///
+/// Polled like `marks.reads` and `data.reads`, with one difference that is the
+/// whole feature: a *running* read answers with everything transcribed so far
+/// rather than with nothing. bindings_transcribe.cpp says why.
+void installTranscribe(Table& ns);
+
 /// `expr.evaluate` — libavutil's expression evaluator, so a filter option
 /// written as an expression can be drawn as the curve libavfilter will perform.
 /// bindings_expr.cpp.

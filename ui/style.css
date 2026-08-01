@@ -1066,6 +1066,16 @@ body.fs #cropbox { display: none; }
     padding: 1px 12px 1px 42px;
     font-size: var(--fs-sm);
 }
+/* The Whisper model directory. Wide, because what goes in it is a path somebody
+   pasted out of a download script and a field that shows half of one is a field
+   you cannot check. Flexes so it takes the rest of the row rather than pushing
+   the buttons beside it off the end. */
+.src-model {
+    flex: 1 1 auto;
+    min-width: 12ch;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: var(--fs-sm);
+}
 .src-data-series {
     display: flex;
     flex-wrap: wrap;

@@ -25,24 +25,6 @@ SoundMarks fail(const std::string& why) {
     return m;
 }
 
-/// Only one analysis at a time, process-wide.
-///
-/// Not a choice: `brotensor/detail/cpu/thread_pool.h` says its pool is a
-/// process-wide singleton and that `run()` "assumes it is not re-entered from a
-/// second concurrent application thread while a call is outstanding". The hub's
-/// mel front-end reaches it — the `matmul` that projects a magnitude spectrum
-/// onto the mel filterbank calls `parallel_for` over its rows — so two reads on
-/// two threads would share one job cursor.
-///
-/// What this does *not* cover, and cannot: bro's own audio inference thread
-/// running `bro.sense` or `bro.kws` over a live microphone hits the same pool
-/// through the same ops. Nothing in `ui/` starts one, and if something did, the
-/// hazard would be bro's to arbitrate rather than a lock in this file's to hold.
-std::mutex& analysisLock() {
-    static std::mutex m;
-    return m;
-}
-
 /// A run of frames one sensor held true for, being accumulated.
 ///
 /// One struct for both runs because they differ only in which flag opens them
@@ -68,6 +50,26 @@ bool longEnough(const Run& r, double minRunSec) {
 }
 
 } // namespace
+
+/// Only one analysis at a time, process-wide.
+///
+/// Not a choice: `brotensor/detail/cpu/thread_pool.h` says its pool is a
+/// process-wide singleton and that `run()` "assumes it is not re-entered from a
+/// second concurrent application thread while a call is outstanding". The hub's
+/// mel front-end reaches it — the `matmul` that projects a magnitude spectrum
+/// onto the mel filterbank calls `parallel_for` over its rows — so two reads on
+/// two threads would share one job cursor. A transcription's mel front-end is
+/// the same shape and takes the same lock (`src/native/transcribe.cpp`), which
+/// is why this is declared in the header rather than being local to this file.
+///
+/// What this does *not* cover, and cannot: bro's own audio inference thread
+/// running `bro.sense` or `bro.kws` over a live microphone hits the same pool
+/// through the same ops. Nothing in `ui/` starts one, and if something did, the
+/// hazard would be bro's to arbitrate rather than a lock in this file's to hold.
+std::mutex& analysisLock() {
+    static std::mutex m;
+    return m;
+}
 
 SoundMarks readSoundMarks(const MediaInput& in, const SoundMarkOptions& opts,
                           OpenWatch* watch, double timeoutSec) {

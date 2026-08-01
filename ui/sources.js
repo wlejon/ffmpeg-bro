@@ -90,6 +90,7 @@ import { streamsWorthReading, readingOf, readStream, dropReading, tickTelemetry,
 // namespace keeps `marksModel.MARK_WORDS` visibly the *one* home of the
 // sentences that say what a mark claims.
 import * as marksModel from './marks.js';
+import * as transcriptModel from './transcript.js';
 
 let refs = {};
 let hooks = {};
@@ -225,8 +226,14 @@ export function tickSources() {
     const opened = tickInputs();
     const read = tickTelemetry();
     const heard = marksModel.tickMarks();
+    // Unlike the other four this one is true while it is still *going*, not only
+    // when it settles — a transcript grows a window at a time and the point of it
+    // is being searchable before it is finished. It is bounded either way: a
+    // window is thirty seconds of audio and several seconds of GPU, so this is a
+    // redraw every few seconds rather than every frame.
+    const said = transcriptModel.tickTranscripts();
     const pulled = tickLocalCopies();
-    const settled = opened || read || heard || pulled;
+    const settled = opened || read || heard || said || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1567,7 +1574,8 @@ function fileRows(p, input) {
                  'dim'),
         ]),
         ...p.streams.flatMap((s) => [streamLine(s), ...dataRows(input, s),
-                                     ...soundRows(input, s)]),
+                                     ...soundRows(input, s),
+                                     ...transcriptRows(input, s)]),
     ];
 }
 
@@ -1722,6 +1730,120 @@ function soundRows(input, stream) {
             span(kind, 'mono'),
             span(String(kept[kind] || 0), 'dim'),
         ]))));
+    return rows;
+}
+
+/// What was *said* in this soundtrack, under the same stream line as the marks.
+///
+/// Beside `Find sounds` rather than anywhere else because they answer the two
+/// halves of one question — where something happened, and what was said — and a
+/// person who has just read one wants the other in the same place.
+///
+/// **The model is asked for before anything is read, and its absence is stated
+/// rather than hidden.** The weights are between 145 MB and 3 GB and are not
+/// shipped, so the ordinary state of a fresh checkout is that there is no model
+/// and there is nothing this can do about it. What it must not do is offer a
+/// button that appears to work: with no model chosen the row says so and shows
+/// the field, and the read itself names the file it could not find.
+function transcriptRows(input, stream) {
+    if (!input || stream.kind !== 'audio') return [];
+    if (!transcriptModel.worthReading(input)) return [];
+    const p = (input.probe && input.probe.streams) || [];
+    if (p.find((x) => x.kind === 'audio') !== stream) return [];
+
+    const rows = [];
+    const e = transcriptModel.readOf(input.id);
+
+    // The model directory, always visible once a transcription has been thought
+    // about. A path rather than a picker, because it is a *directory* of files
+    // and the thing a person has is the path their download script printed.
+    const modelField = el('input', {
+        cls: 'src-model', type: 'text',
+        value: transcriptModel.modelPath(),
+        placeholder: 'a Whisper model directory',
+        title: 'A directory holding config.json, model.safetensors, vocab.json ' +
+               'and merges.txt.\nNothing is downloaded here: brosoundml\'s ' +
+               'scripts/download-whisper.sh --size large-v3 puts one on disk.\n' +
+               'tiny is 145 MB and reads clean speech; large-v3 is 3 GB and is ' +
+               'the one to use if the transcript has to be right.',
+        on: { change: (ev) => { transcriptModel.useModel(ev.target.value);
+                                drawSources(); } },
+    });
+
+    if (!e) {
+        rows.push(div('src-data', [
+            el('button', {
+                cls: 'btn tiny', text: 'Transcribe',
+                title: 'Decode this soundtrack and read what was said in it, on ' +
+                       'a thread. The words arrive while it reads, so it is ' +
+                       'searchable long before it finishes.\n' +
+                       'A transcript is a place to look, never a cut: the ' +
+                       'renditions of a stream do not share a zero, so a hit ' +
+                       'moves the playhead and you agree.',
+                on: { click: () => { transcriptModel.transcribe(input);
+                                     drawSources(); } },
+            }),
+            modelField,
+        ]));
+        if (!transcriptModel.modelPath())
+            rows.push(div('src-data', [
+                span('no model chosen — nothing has read this soundtrack for words',
+                     'dim')]));
+        return rows;
+    }
+
+    if (e.state === 'reading') {
+        const r = e.result;
+        // How far down the recording, not a spinner. The one number that makes a
+        // partial transcript honest — a search over what has been read is a
+        // different answer from a search over the recording.
+        const how = r && r.duration > 0
+            ? `${r.read.toFixed(0)}s of ${r.duration.toFixed(0)}s` +
+              ` · ${r.segments.length} so far`
+            : 'starting…';
+        rows.push(div('src-data', [
+            span(`Transcribing · ${how}`, 'dim'),
+            el('button', { cls: 'btn tiny', text: 'Stop',
+                           title: 'Stop here and keep the words already found.',
+                           on: { click: () => { transcriptModel.stopTranscribing(input.id);
+                                                drawSources(); } } }),
+        ]));
+        return rows;
+    }
+
+    if (e.state === 'failed') {
+        rows.push(div('src-data', [span(e.error || 'will not read', 'src-error')]));
+        rows.push(div('src-data', [
+            el('button', { cls: 'btn tiny', text: 'Again',
+                           on: { click: () => { transcriptModel.dropTranscript(input.id);
+                                                transcriptModel.transcribe(input);
+                                                drawSources(); } } }),
+            modelField,
+        ]));
+        return rows;
+    }
+
+    // Done, or stopped part way. Both keep their words, and a stopped one says
+    // so — because what it holds is a transcript of *part* of the recording and
+    // a search over it must not look like a search over all of it.
+    const r = e.result || { segments: [], read: 0, duration: 0 };
+    const part = e.state === 'stopped' || (r.duration > 0 && r.read < r.duration - 0.5);
+    rows.push(div('src-data', [
+        span(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
+             (part ? ` · only the first ${r.read.toFixed(0)}s of ${r.duration.toFixed(0)}s`
+                   : ' · all of it'), 'dim'),
+        part ? el('button', { cls: 'btn tiny', text: 'Carry on',
+                              title: 'Read the rest of the soundtrack.',
+                              on: { click: () => {
+                                  transcriptModel.dropTranscript(input.id);
+                                  transcriptModel.transcribe(input);
+                                  drawSources(); } } })
+             : span('', 'dim'),
+        el('button', { cls: 'btn tiny', text: 'Forget',
+                       title: 'Drop this transcript.',
+                       on: { click: () => { transcriptModel.dropTranscript(input.id);
+                                            drawSources(); } } }),
+    ]));
     return rows;
 }
 

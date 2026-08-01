@@ -193,6 +193,20 @@ public:
     /// track.
     int stream() const { return stream_; }
 
+    /// How long the soundtrack is, in seconds of *this* reader's output — the
+    /// input's window and its speed already applied, so it is the length of what
+    /// `mixInto` will hand over rather than the length of the file. Zero when
+    /// the container does not say.
+    ///
+    /// **A reader that only walks forward does not need this and should not use
+    /// it**: `mixInto` answering short is the end of the file demonstrated
+    /// rather than declared, and it is right where a duration would be a
+    /// container's claim (`sound_marks.cpp` walks that way for that reason). It
+    /// is here for the one caller that cannot walk blind — `transcribe.cpp`
+    /// hands brosoundml a *seekable* reader, and the windowing loop on the other
+    /// side has to know how far it is going before it starts.
+    double duration() const;
+
 private:
     /// What rate to tell `swr` the samples arrived at: the file's, times the clip's
     /// speed. One home because `append()` asks twice — once to build the context

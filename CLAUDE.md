@@ -462,6 +462,72 @@ not on the undo track — `peaks`'s rule. They reach the timeline per clip throu
 use, which is what makes them follow a trim. `ui/marks.js` is the model,
 `ui/timeline.js`'s Marks lane draws them, and `,`/`.` walk them.
 
+### The words, which are the other thing a soundtrack holds
+
+`transcribe.h` is the second reader on this surface that is not a part of
+ffmpeg's model, and it answers the question a waveform and a mark cannot: *what
+was said*. Six hours of somebody talking is a recording nobody scrubs through.
+`brosoundml::Whisper` reads it, `brolm::whisper::Tokenizer` builds the prompt and
+decodes the ids, and both are linked into `ffmpeg-bro-core` — brolm's link line
+is new and the block in `CMakeLists.txt` says why reimplementing a byte-level BPE
+was not an option.
+
+**A transcript is a search hint and never the cut**, and everything downstream
+holds that line. The audio-only and video renditions of a Twitch VOD do not share
+a zero (+0.80 s, +2.21 s, +2.57 s at three points of one recording — a *step*,
+from an ad break discontinuous in one and not the other), so a transcript read
+from the cheap audio-only copy is on that copy's seconds and a cut placed on a
+word boundary would land on the wrong file's clock. A hit moves the playhead;
+a human agrees. `ui/transcript.js` `search()` returns a place and a sentence and
+deliberately carries no in point, no out point and no clip, and
+`tests/ui_transcript.js` asserts the shape of that object so a later hand cannot
+quietly add one.
+
+**Why this is native is NOT `sound_marks.h`'s reason, and the difference is the
+important part.** That file is native because `bro.sense.analyze()` is
+synchronous on the UI thread; `bro.stt.transcribe()` is already asynchronous, so
+that argument does not transfer. What forced it: Whisper wants mono 16 kHz and
+the conversion is `swr`'s, which bro must never learn about — so `SourceAudio` is
+the only reader that can feed it; and brotensor's pool is a process-wide
+singleton, so a transcription and a marks read take the *same* `analysisLock()`,
+which is only possible with both on this side. That lock moved out of
+`sound_marks.cpp`'s anonymous namespace into its header for exactly this.
+
+**Three engine fixes are why this file does not window anything.** Each was a
+place where routing around brosoundml would have worked and been wrong:
+a decoder asked for timestamps could answer `<|notimestamps|>` and produce none
+at all (`TranscribeOptions::no_timestamps_id` forbids it); a long-form run's
+timestamps restart at `<|0.00|>` every window and nothing said where a window
+began, so `[10.38]` was unplaceable in a six-hour recording
+(`Transcription::windows` and `on_window`); and long-form took the whole input as
+one `AudioBuffer` — 690 MB for six hours — so it could not do anything long
+(`AudioReader`). What is left here is the reader over `SourceAudio` and the walk
+from ids to segments. **When something is wrong one layer down, fix it there** —
+the measured result of doing so was that this file got smaller.
+
+**A poll of a running read answers with the words so far**, which is the one rule
+this breaks that `marks.reads` and `data.reads` keep. The consequence is that a
+terminal answer is *not* handed over exactly once — a finished read keeps
+answering until `forget`, or a caller polling a growing transcript on the frame
+loop would watch it vanish on the frame after it completed — so `forget` is
+required rather than tidy. `read` is carried beside the segments because without
+it nothing can tell "the last hour is silent" from "the last hour is unread", and
+`ui/transcript.js` `coverage()` is what makes a search count honest.
+
+A transcript is derived, so it is not in the document, not in
+`ui/.storage.json` and not on the undo track — `peaks`'s rule, and `marks`'s. It
+belongs to the **input** rather than the clip and reaches the timeline through
+`timelineTime`, the same map the waveform, the Data lane and the Marks lane use.
+
+The weights are not shipped and an absent model is refused **by name**;
+`brosoundml/scripts/download-whisper.sh --size large-v3` puts one on disk.
+Measured on an RTX 4090: large-v3 at 4.0x realtime, so a six-hour VOD is about
+ninety minutes and is searchable from the first window. The same model on the CPU
+is days, and whisper-tiny — which transcribes clean speech correctly and stream
+audio poorly — is 1.2x. **The default build has brotensor's CUDA backend off**
+(`BRO_WITH_TENSOR_CUDA`), which is what makes that difference; the feature works
+either way and is only worth using with a GPU.
+
 ### The native encode side
 
 `export_timeline.h` defines the seam: a `FrameSource` answers "what does the

@@ -84,6 +84,7 @@
 #include "ffmpeg_input.h"
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -267,6 +268,21 @@ struct SoundMarks {
 /// synchronous caller wants.
 SoundMarks readSoundMarks(const MediaInput& in, const SoundMarkOptions& opts,
                           OpenWatch* watch = nullptr, double timeoutSec = 0.0);
+
+/// That process-wide lock, by name, because it stopped being one file's.
+///
+/// It lives here because this is where the rule it enforces is written down (see
+/// the top of this file), but the rule is brotensor's and it binds *every*
+/// analysis this application runs, not the marks alone. `src/native/transcribe.cpp`
+/// is the second holder: a transcription's mel front-end reaches the same
+/// `matmul` and the same singleton pool, and a user can plausibly start a marks
+/// read and a transcription over the same recording within a second of each
+/// other. Two locks would be no lock.
+///
+/// Hold it around the analysis, not around the decode that feeds it — a
+/// transcription holds it for an hour and a half, and a marks read queued behind
+/// one must not also be sitting on a demuxer while it waits.
+std::mutex& analysisLock();
 
 // ── the same read, on a thread ────────────────────────────────────────────
 //

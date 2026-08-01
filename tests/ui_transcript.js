@@ -1,0 +1,381 @@
+// Finding a word in six hours of talking, driven the way a person drives it.
+//
+// The seams this is about, in the order they can fail:
+//
+//   - **an absent model is refused by name.** The weights are 3 GB and are not
+//     shipped, so the ordinary state of a fresh checkout is that there is no
+//     model. What must never happen is a press that appears to work and quietly
+//     produces nothing. The missing file is named, and a file with no soundtrack
+//     at all is a *different* refusal — the same distinction `ui_marks.js`
+//     draws between a silent recording and one with no sound track in it.
+//   - **the read is off the UI thread, and arrives while it runs.** This is the
+//     one that separates a transcript from every other read on that surface. A
+//     poll answers with the words so far, `read` says how far down the recording
+//     it has got, and the application keeps drawing throughout — checked by
+//     drawing during it rather than by trusting the word "thread".
+//   - **the times are absolute.** Whisper's own timestamps restart at zero
+//     every 30 s window; a segment two minutes into a recording must say two
+//     minutes. Asserted by transcribing a file built out of one clip repeated,
+//     where every repetition's position is known in advance.
+//   - **a search says how much it searched.** A search over ten minutes of a
+//     six-hour recording that finds nothing, and a search over all six hours
+//     that finds nothing, are different answers. `coverage()` is what makes the
+//     count honest, and a caller that showed the count alone would be lying.
+//
+// And the rule the whole thing is judged by, the same shape as `ui_marks.js`'s:
+// **a transcript is a search hint and never the cut.** The audio-only and video
+// renditions of a VOD do not share a zero, so a hit moves the playhead and a
+// human agrees. Nothing in this module trims anything, and that is asserted.
+//
+// The model is the one fixture that cannot be generated — there is no way to
+// synthesise speech a recogniser will read back — so every section that needs
+// one is **skipped rather than failed** when it is absent, which is this
+// repository's rule for every suite.
+//
+// Usage: ffmpeg-bro-headless ui/ tests/ui_transcript.js -- [<model-dir>] [<silent.mp4>]
+
+const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
+const modelArg = args[0];
+const noSound = args[1];
+
+function pump(ms) {
+    const steps = Math.max(1, Math.ceil(ms / 20));
+    for (let i = 0; i < steps; i++) { wallSleep(20); advanceTime(20); flush(); }
+}
+
+function waitFor(what, predicate, timeoutMs = 30000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) return true;
+        pump(40);
+    }
+    assert(false, `timed out waiting for ${what}`);
+    return false;
+}
+
+const el = (id) => document.getElementById(id);
+const type = (node, value) => {
+    node.value = value;
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+};
+const click = (node) => node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+let checks = 0;
+function ok(cond, what) {
+    checks++;
+    console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${what}`);
+    assert(cond, what);
+}
+function same(actual, expected, what) {
+    if (actual !== expected) {
+        console.log(`    expected: ${expected}`);
+        console.log(`    actual:   ${actual}`);
+    }
+    ok(actual === expected, what);
+}
+
+waitFor('app.js to finish', () => globalThis.__ffmpegBroReady);
+const A = globalThis.__ffmpegBro;
+const fs = require('fs');
+
+/// A model directory, or '' when there is none to be had. Taken from the
+/// argument when given, and otherwise looked for beside brosoundml — where its
+/// own download script puts one — so that a developer who has run that script
+/// gets the real sections without passing anything.
+/// **The smallest model wins, and that is deliberate.** What this suite is about
+/// is the seam — does a read arrive progressively, are the times absolute, does
+/// a search say how much it searched — and none of that is a question about how
+/// good the recogniser is. whisper-tiny answers all of it and transcribes the
+/// clean clip that ships beside it correctly; large-v3 answers it identically
+/// and is forty times the compute, which on a build without a GPU is the
+/// difference between two minutes and most of an hour. A suite that quietly
+/// picked the big one would be a suite that times out on an ordinary checkout.
+function findModel() {
+    const tried = [];
+    if (modelArg) tried.push(modelArg);
+    tried.push('D:/projects/brosoundml/weights/whisper');
+    tried.push('../brosoundml/weights/whisper');
+    tried.push('D:/projects/brosoundml/weights/whisper-large-v3');
+    for (const dir of tried) {
+        try {
+            if (fs.existsSync(dir + '/config.json') &&
+                fs.existsSync(dir + '/model.safetensors')) return dir;
+        } catch (e) { /* not there */ }
+    }
+    return '';
+}
+const model = findModel();
+
+// ── the surface ────────────────────────────────────────────────────────────
+
+console.log('\nthe call is there and says what it needs');
+{
+    ok(bro.ffmpeg.transcribe && bro.ffmpeg.transcribe.reads,
+       'bro.ffmpeg.transcribe.reads exists');
+    for (const fn of ['start', 'poll', 'cancel', 'forget'])
+        ok(typeof bro.ffmpeg.transcribe.reads[fn] === 'function',
+           `reads.${fn} is a function`);
+
+    // There is deliberately no `available()`. The question a caller has is not
+    // "was this binary built with speech" — it always was — but "is there a
+    // model on this disk", which is a property of a path and is answered by the
+    // read. `bro.ffmpeg.marks` dropped its own `available()` for the same
+    // reason: a call whose answer cannot vary teaches nobody anything.
+    ok(bro.ffmpeg.transcribe.available === undefined,
+       'no available(): the question is about a path, not about the build');
+
+    // A start with no model named is a programming mistake rather than a
+    // missing file, so it throws at the call instead of failing on the thread.
+    let threw = '';
+    try { bro.ffmpeg.transcribe.reads.start('x.wav', {}); }
+    catch (e) { threw = String((e && e.message) || e); }
+    ok(threw.includes('opts.model'), 'a start with no model names opts.model');
+    ok(threw.includes('download-whisper'),
+       'and says where a model comes from, rather than only that one is needed');
+}
+
+console.log('\na model that is not there is refused by name');
+{
+    const id = bro.ffmpeg.transcribe.reads.start('anything.wav',
+                                                 { model: 'Z:/no/such/whisper' });
+    ok(id > 0, 'the read starts — the refusal is the answer, not the call');
+    let p = null;
+    waitFor('the refusal', () => {
+        p = bro.ffmpeg.transcribe.reads.poll(id);
+        return p && !p.reading;
+    });
+    same(p.state, 'failed', 'it fails');
+    ok(p.error.includes('Z:/no/such/whisper/config.json'),
+       'and names the file that is missing, not just "could not load"');
+    ok(p.error.includes('download-whisper'), 'and says how to get one');
+    bro.ffmpeg.transcribe.reads.forget(id);
+}
+
+if (noSound && model) {
+    console.log('\na file with no soundtrack is a different refusal');
+    const id = bro.ffmpeg.transcribe.reads.start(noSound, { model });
+    let p = null;
+    waitFor('the refusal', () => {
+        p = bro.ffmpeg.transcribe.reads.poll(id);
+        return p && !p.reading;
+    }, 120000);
+    same(p.state, 'failed', 'it fails');
+    ok(/no sound/i.test(p.error),
+       'and says there is no sound, which is not the same as saying nothing was said');
+    ok(!p.error.includes('config.json'),
+       'and does not blame the model for the file');
+    bro.ffmpeg.transcribe.reads.forget(id);
+} else {
+    console.log('\nskipping the no-soundtrack refusal (no silent fixture or no model)');
+}
+
+// ── the model half ─────────────────────────────────────────────────────────
+
+if (!model) {
+    console.log('\nskipping every section that needs a model — none on this disk');
+    console.log(`  (looked beside brosoundml; pass one: ... tests/ui_transcript.js -- <dir>)`);
+    console.log(`\n${checks} checks passed`);
+} else {
+
+console.log(`\nusing the model at ${model}`);
+
+/// A speech file of a known shape: one clip repeated, so every repetition's
+/// position is known in advance and "the times are absolute" is checkable
+/// against arithmetic rather than against whatever the recogniser felt like.
+/// Written next to the generated fixtures, and skipped if the source clip that
+/// ships with the weights is not there.
+function buildSpeech(reps) {
+    // Beside the chosen model first, then beside any of the others: the clip
+    // ships with brosoundml's own download of whisper-tiny and a checkout that
+    // went straight to large-v3 has the weights without it.
+    let src = '';
+    for (const dir of [model,
+                       'D:/projects/brosoundml/weights/whisper',
+                       '../brosoundml/weights/whisper']) {
+        try {
+            if (fs.existsSync(dir + '/test_audio_en.wav')) {
+                src = dir + '/test_audio_en.wav';
+                break;
+            }
+        } catch (e) { /* not there */ }
+    }
+    if (!src) return null;
+    const buf = new Uint8Array(fs.readFileSync(src));
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let pos = 12, data = -1, len = 0;
+    while (pos + 8 <= buf.length) {
+        const id = String.fromCharCode(buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]);
+        const sz = dv.getUint32(pos + 4, true);
+        if (id === 'data') { data = pos + 8; len = sz; break; }
+        pos += 8 + sz + (sz & 1);
+    }
+    if (data < 0) return null;
+    const total = len * reps;
+    const wav = new Uint8Array(44 + total);
+    const wv = new DataView(wav.buffer);
+    const tag = (at, s) => { for (let i = 0; i < 4; i++) wav[at + i] = s.charCodeAt(i); };
+    tag(0, 'RIFF'); wv.setUint32(4, 36 + total, true); tag(8, 'WAVE');
+    tag(12, 'fmt '); wv.setUint32(16, 16, true); wv.setUint16(20, 1, true);
+    wv.setUint16(22, 1, true); wv.setUint32(24, 16000, true);
+    wv.setUint32(28, 32000, true); wv.setUint16(32, 2, true); wv.setUint16(34, 16, true);
+    tag(36, 'data'); wv.setUint32(40, total, true);
+    for (let i = 0; i < reps; i++) wav.set(buf.subarray(data, data + len), 44 + i * len);
+    // Absolute, because the two sides resolve a relative path differently:
+    // `fs` here is rooted at `ui/` (the app directory the engine was given) and
+    // the native read is rooted at the process's own working directory. One
+    // spelling that means the same file to both is the only way not to trip
+    // over that.
+    const out = fs.realpathSync('..').split('\\').join('/') +
+                '/build/fixtures/speech-repeated.wav';
+    fs.writeFileSync(out, wav);
+    return { path: out, clip: len / 32000, seconds: total / 32000 };
+}
+
+const speech = buildSpeech(6);
+if (!speech) {
+    console.log('  (the weights carry no test_audio_en.wav — skipping the read)');
+} else {
+
+console.log(`\na long read arrives while it runs (${speech.seconds.toFixed(0)} s)`);
+let done = null;
+{
+    const id = bro.ffmpeg.transcribe.reads.start(speech.path,
+                                                 { model, language: 'en' });
+    ok(id > 0, 'it starts');
+
+    // Drawn *during* the read, which is the assertion: a frozen window would
+    // fail this by never getting here rather than by reporting anything.
+    let partials = 0, sawGrowth = 0, drew = 0;
+    let p = null;
+    const deadline = Date.now() + 600000;
+    while (Date.now() < deadline) {
+        pump(100);
+        drew++;
+        p = bro.ffmpeg.transcribe.reads.poll(id);
+        if (!p) break;
+        if (p.reading && p.result.segments.length > sawGrowth) {
+            sawGrowth = p.result.segments.length;
+            partials++;
+        }
+        if (!p.reading) break;
+    }
+    ok(drew > 5, `the window kept drawing while it read (${drew} frames)`);
+    same(p.state, 'done', 'it finishes');
+    same(p.error, '', 'with nothing to report');
+    ok(partials > 1,
+       `the words arrived while it was still reading (${partials} updates), ` +
+       'which is the whole difference from every other read on this surface');
+
+    done = p.result;
+    bro.ffmpeg.transcribe.reads.forget(id);
+}
+
+console.log('\nthe times are absolute, not per window');
+{
+    ok(done.segments.length >= 4, `it found segments (${done.segments.length})`);
+    // Whisper restarts its own timestamps at zero every 30 s window. If that
+    // ever leaks through, a recording's segments sawtooth instead of walking
+    // forward — which is the failure that makes a hit unjumpable.
+    let back = 0;
+    for (let i = 1; i < done.segments.length; i++)
+        if (done.segments[i].start < done.segments[i - 1].start - 0.001) back++;
+    same(back, 0, 'no segment starts before the one in front of it');
+
+    const last = done.segments[done.segments.length - 1];
+    ok(last.end > speech.seconds * 0.8,
+       `the last segment is near the end (${last.end.toFixed(1)} s of ` +
+       `${speech.seconds.toFixed(0)} s), not stuck inside the first window`);
+    ok(last.end <= done.duration + 0.001,
+       'and nothing claims time the recording does not have');
+
+    // The file is one clip repeated, so a segment should begin near a multiple
+    // of the clip's length. Loose, because the recogniser decides where a
+    // phrase ends; the point is that they are spread across the recording
+    // rather than clustered in its first thirty seconds.
+    const late = done.segments.filter((s) => s.start > 30).length;
+    ok(late >= 2, `segments were found past the first window (${late} of them)`);
+
+    same(done.read.toFixed(1), done.duration.toFixed(1),
+         'a finished read says it read all of it');
+}
+
+console.log('\nfinding a word, and saying how much was looked at');
+{
+    // Driven through the model rather than through the native call, because
+    // what is being checked is the search — folding, the sort and the coverage.
+    A.transcript.useModel(model);
+    same(A.transcript.modelPath(), model, 'the model is remembered');
+
+    const before = A.transcript.search('country');
+    same(before.length, 0, 'nothing is found before anything has been read');
+    const cov0 = A.transcript.coverage();
+    same(cov0.duration, 0, 'and nothing has been read');
+
+    // A real input, added the way a person adds one. A hand-made object would
+    // be dropped on the next frame and the reason is worth knowing: `retain()`
+    // forgets every transcript whose input is no longer in the model, which is
+    // exactly what must happen when a file is removed while it is being read.
+    A.shell.goTo('sources');
+    pump(60);
+    type(el('src-path'), speech.path);
+    click(el('src-add'));
+    waitFor('the file to open', () => {
+        const i = A.inputs.inputs.find((x) => x.path === speech.path);
+        return i && i.probe;
+    });
+    const input = A.inputs.inputs.find((x) => x.path === speech.path);
+    ok(!!input, 'the speech file is open');
+    ok(A.transcript.worthReading(input),
+       'and is offered a transcription, because it has a soundtrack');
+
+    const entry = A.transcript.transcribe(input);
+    ok(entry && entry.state === 'reading', 'the press starts a read straight away');
+    waitFor('the transcript', () => {
+        const e = A.transcript.readOf(input.id);
+        return e && e.state !== 'reading';
+    }, 600000);
+    same(A.transcript.readOf(input.id).state, 'done', 'and it finishes');
+
+    const hits = A.transcript.search('country');
+    ok(hits.length >= 2, `the phrase is found where it was said (${hits.length})`);
+    ok(hits.every((h) => h.inputId === input.id), 'every hit names its input');
+    let outOfOrder = 0;
+    for (let i = 1; i < hits.length; i++)
+        if (hits[i].start < hits[i - 1].start) outOfOrder++;
+    same(outOfOrder, 0, 'hits come back in time order');
+
+    // Case and the punctuation a transcript attaches to a word, but NOT the
+    // spaces — collapsing those would make a phrase search match across a word
+    // boundary, and a phrase search is the main thing this is for.
+    same(A.transcript.search('COUNTRY').length, hits.length, 'case does not matter');
+    same(A.transcript.search('country,').length, hits.length,
+         'nor does punctuation somebody typed');
+    same(A.transcript.search('yourcountry').length, 0,
+         'but a space is a space: "yourcountry" is not "your country"');
+
+    const cov = A.transcript.coverage();
+    ok(cov.read > 0 && cov.duration > 0, 'coverage says what was searched');
+    same(cov.read.toFixed(1), cov.duration.toFixed(1),
+         'and after a finished read that is all of it');
+
+    // The line the whole feature turns on. A hit is a place to look: it carries
+    // a time and the sentence it was in, and nothing that would let a caller
+    // treat it as an edit. The two renditions of a VOD do not share a zero, so
+    // a cut placed on a word boundary would be placed on the wrong clock.
+    const h = hits[0];
+    same(Object.keys(h).sort().join(','), 'at,end,inputId,start,text',
+         'a hit is a place and a sentence — no in point, no out point, no clip');
+    ok(typeof A.transcript.hitRows === 'function',
+       'reaching the timeline is a separate step, through the clips');
+    same(A.transcript.hitRows(h, []).length, 0,
+         'and a hit with no clip covering it lands nowhere, rather than making one');
+
+    A.transcript.dropTranscript(input.id);
+    same(A.transcript.readOf(input.id), null, 'dropping it forgets it');
+    same(A.transcript.search('country').length, 0, 'and it stops being searchable');
+}
+
+}  // speech
+}  // model
+
+console.log(`\n${checks} checks passed`);

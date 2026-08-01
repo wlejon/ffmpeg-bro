@@ -175,6 +175,8 @@ add_library(ffmpeg-bro-core STATIC
     src/native/playback_output.cpp
     src/native/probe_async.cpp
     src/native/sound_marks.cpp
+    src/native/transcribe.cpp
+    src/native/bindings_transcribe.cpp
     src/native/sound_meter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
@@ -231,6 +233,32 @@ if(NOT TARGET brosoundml::brosoundml)
         "--recursive and no sibling checkout has neither.")
 endif()
 target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
+
+# ── brolm, for the one thing brosoundml deliberately does not do ───────────
+#
+# `src/native/transcribe.cpp` drives `brosoundml::Whisper`, which is
+# tokenizer-free by design: it takes an already-tokenized prompt and emits token
+# ids, and exactly two ints cross that boundary. Somebody has to be the
+# tokenizer, and `brolm::whisper::Tokenizer` is the one brosoundml is written
+# against — `build_prompt` for the decode prefix and `decode` for the words.
+#
+# Reimplementing it here was the alternative and is not a real one: it is a
+# byte-level BPE plus ~1600 special tokens read out of the checkpoint's own
+# vocab.json, and a second implementation that disagreed about a single merge
+# would silently transcribe different words.
+#
+# Costs nothing to add: `BRO_WITH_LM` is already ON in this build tree — bro's
+# `_bro_require` chain pulls it in behind `BRO_WITH_SOUNDML` (see the block at
+# the top of this file), so the target exists and is already compiled. This is a
+# link line and a name on the include path, exactly as brosoundml above.
+if(NOT TARGET brolm::brolm)
+    message(FATAL_ERROR
+        "BRO_WITH_SOUNDML is ON but no brolm target was created. brosoundml's "
+        "Whisper is tokenizer-free and src/native/transcribe.cpp needs "
+        "brolm::whisper::Tokenizer to build a prompt and decode the ids back "
+        "into words.")
+endif()
+target_link_libraries(ffmpeg-bro-core PUBLIC brolm::brolm)
 
 add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
 target_link_libraries(ffmpeg-bro PRIVATE ffmpeg-bro-core bro_engine)
@@ -533,6 +561,15 @@ add_test(NAME ui-telemetry COMMAND ffmpeg-bro-headless
 add_test(NAME ui-marks COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_marks.js"
          -- "${FIXTURE_MARKS}" "${FIXTURE_SILENT}")
+# What was said in a soundtrack, from the press to the search. The model is the
+# one fixture that cannot be generated — there is no synthesising speech a
+# recogniser will read back — so the suite refuses-by-name without one and skips
+# every section that needs one, which is this repository's rule for every suite.
+# The second file has no audio stream at all: "there is no sound in this input"
+# and "there is no model on this disk" must never be the same answer.
+add_test(NAME ui-transcript COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_transcript.js"
+         -- "" "${FIXTURE_SILENT}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
@@ -551,7 +588,7 @@ set_tests_properties(decode export capabilities inputs sequences playback hardwa
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
                      ui-measure ui-subtitles ui-document ui-output ui-telemetry ui-marks
-                     ui-load
+                     ui-transcript ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the

@@ -370,6 +370,63 @@ bro.ffmpeg.marks.reads.forget(id)   // abort it and throw the answer away
 ```
 
 ```js
+// What was SAID in a soundtrack — Whisper over a soundtrack libav decoded, on a
+// thread. `bro.ffmpeg.marks`' shape, with one difference that is the feature.
+bro.ffmpeg.transcribe.reads.start(path | input, {
+    model,        // REQUIRED. a directory of config.json + model.safetensors +
+                  // vocab.json + merges.txt. Nothing is downloaded and nothing
+                  // is shipped; brosoundml's scripts/download-whisper.sh puts
+                  // one there. Absent -> the read fails naming the missing file.
+    language,     // ISO-639-1, default "en". Whisper is TOLD, it does not detect
+                  // here, and being told the wrong one gives confident nonsense
+                  // rather than an error.
+    translate,    // render non-English speech as English. the model's own task,
+                  // not a second pass.
+    device,       // 'cuda' | 'cpu' | 'metal'; absent = the best available. the
+                  // same vocabulary bro.stt's loaders take.
+})                // -> id
+
+bro.ffmpeg.transcribe.reads.poll(id)
+// -> { state: "reading" | "done" | "failed" | "stopped", reading, elapsed,
+//      timeout, error,
+//      result: { streamIndex, duration, read, total, truncated,
+//                segments: [{ start, end, text }, ...] } }
+//
+// **`result` is filled in WHILE it reads, and that is the whole difference from
+// every other read on this surface.** `marks.reads.poll` and `data.reads.poll`
+// answer null until they are done, because half a list of onsets is worth
+// nothing. A transcript is not like that: at 4x realtime a six-hour recording is
+// ninety minutes, and one that could only be read at the end is one nobody
+// waits for. So the segments grow, and `read` says how far down the recording
+// the reading has got — without which a caller cannot tell "nothing was said in
+// the last hour" from "the last hour has not been read".
+//
+// It also means **a terminal answer is NOT handed over exactly once** here,
+// which is this surface's rule everywhere else. A finished read keeps answering
+// until `forget`, because a caller polling a growing answer on the frame loop
+// would otherwise watch the transcript vanish on the frame after it completed.
+// `forget` is therefore required rather than tidy — nothing else releases it.
+//
+// `start` times are on the INPUT's clock, the one clip.inPoint is written
+// against, so ui/project.js's timelineTime carries them onto a timeline through
+// a trim. Whisper times a SEGMENT, not a word: there is deliberately no
+// per-word position, because claiming one inside a six-second phrase would be
+// a measurement nothing made.
+//
+// `total` is exact even when `segments` was capped at kMaxSegments, so a
+// truncated transcript cannot understate what the recording held.
+//
+// There is no `available()`. The question a caller has is not "was this binary
+// built with speech" — it always was — but "is there a model on this disk",
+// which is a property of the path they passed and is answered by the read.
+
+bro.ffmpeg.transcribe.reads.cancel(id)  // stop at the next window, keep the words
+bro.ffmpeg.transcribe.reads.forget(id)  // stop it and drop the transcript
+// `cancel` is real inside the decode: the flag is polled once per generated
+// token by Whisper's own greedy loop as well as by libav's interrupt callback.
+```
+
+```js
 // What this build can write — asked of libavcodec, not hardcoded.
 bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
                           //    codecName: "h264",   // the codec, not the encoder
