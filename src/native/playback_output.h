@@ -131,6 +131,39 @@
 // nothing new, so a preview nobody is drawing composites nothing at all while its
 // sound goes on being exact — and the preview costs one frame rather than a queue.
 //
+// **And that rule is a pair of things pointing at each other, which is what the
+// rest of this is about.** It makes the picture depend on the screen and the
+// screen depend on the picture, so anything that interrupts the pair leaves both
+// of them waiting — and what a preview does then is play its sound perfectly over
+// one frozen frame for the rest of the file. Measured on a 1080p preview of a five-hour recording:
+// after four good seconds, seven ticks in 8.4 s and then `pics=0` for ever, with
+// the playhead still moving because `VideoPipeline::currentPts` falls back to the
+// clock once the pictures have run out. Three things hold it open:
+//
+//   - **The picture must not wait behind the sound's back-pressure.** The loop is
+//     paced by the room in the listener's queue; the queue is drained by bro's UI
+//     thread; that thread is the one blocked inside `advanceTo` waiting for the
+//     next picture. A three-way circular wait, broken by `kReadWaitMs` twice over
+//     — which drains the element's decoder and ends its video track. So the
+//     sleeping paths of the loop serve the screen first: `OutputReader::catchUp`
+//     makes that one picture and no sound, and costs nothing when the screen has
+//     not moved.
+//   - **The frontier is a ceiling only while it is above the screen.** A picture
+//     is not made past the moment the sound has reached, which is right while the
+//     render is ahead — and names the moment the reader already has when it is
+//     behind, which is not a picture at all. A render that cannot make its own
+//     frame rate lives permanently in that state, so a clamp without the
+//     qualification is a preview that stops the first time it falls behind.
+//   - **A skipped composite is not a composite.** `shown_` is where the last
+//     picture was *made*; moving it on a tick that made none says the moment has
+//     been answered when nothing was drawn.
+//
+// The thing deliberately *not* done about it is an expiry — a reading treated as
+// stale after so many frames without a take. It was tried and it was wrong: a
+// reader that is not taking is usually a reader sitting on a picture whose moment
+// has not come, which is what working looks like, and going back to the frontier
+// there put the slideshow back on the screen.
+//
 // `LiveSource` has half of this already and says so — "one tick of lead, so the
 // picture stages rather than being consumed and pumped straight past". It needs
 // no lag because a camera *is* the clock: its newest frame is now by definition.
@@ -303,16 +336,54 @@ public:
     /// that reason.
     Tick next(bool wantPicture, double screen);
 
+    /// A picture for the moment being watched, and nothing else: no sound, and no
+    /// step of the range's clock.
+    ///
+    /// **The picture must not wait behind the sound's back-pressure**, and that is
+    /// a deadlock rather than a delay. The run is paced by the room in the
+    /// listener's queue, the queue is drained by bro's UI thread, and that same
+    /// thread is the one that blocks inside `advanceTo` waiting for the next
+    /// picture — so a reader asking at a moment the run is waiting for sound room
+    /// wedges all three: the picture waits for a tick, the tick waits for the
+    /// queue, the queue waits for the thread waiting for the picture. Measured on
+    /// a 1080p preview of a five-hour file: seven ticks in 8.4 seconds, which is
+    /// two of `kReadWaitMs` — long enough for the element to drain its decoder and
+    /// declare the video track ended, after which the sound played on over one
+    /// frozen frame for the rest of the file.
+    ///
+    /// So the sleeping paths of the loop call this instead of merely sleeping. It
+    /// costs nothing where there is nothing to make: the moment is `screen + 1`
+    /// frame and `screen` moves only when a reader has taken a picture, so this
+    /// composites at most one per take, and nothing at all between a publish and
+    /// the ask that claims it.
+    ///
+    /// Empty for a graph, which pulls: there is no instant to ask one for, and a
+    /// frame taken here is a frame the next tick's sound would not have.
+    Tick catchUp(double screen);
+
 private:
+    /// Where the next picture goes, and whether it is a new moment at all.
+    ///
+    /// The one home for the rule both ways of making a picture follow: one frame
+    /// after the screen, not past the frontier while the frontier is ahead of the
+    /// screen, never earlier than the last one made. False where there is nothing
+    /// new to composite.
+    bool pictureMoment(double screen, double* at) const;
+
     std::unique_ptr<FrameSource> source_;
     OutputFacts facts_;
     int64_t n_ = 0;              ///< the next frame's number in the range
     int64_t total_ = 0;          ///< how many there are, or 0 for "until it stops"
     int64_t samplesDone_ = 0;    ///< of the mix, counted from the start of the range
-    /// Where the last picture was made, so the next one is never earlier. The
+    /// Where the last picture was **made**, so the next one is never earlier. The
     /// lag moves while the servo learns it, and a canvas asked for an earlier
     /// instant than the one before is a seek in every clip under the playhead
     /// rather than the frame after it.
+    ///
+    /// Made, and not merely considered: a tick that skips its composite because
+    /// the render arrived late has produced no picture, and moving this would
+    /// tell the next tick there was no new moment to make — which latches the
+    /// picture off for the rest of the range while the sound plays on.
     double shown_ = 0.0;
     std::vector<float> mix_;     ///< one tick's worth, reused
 };

@@ -307,6 +307,15 @@ target_link_libraries(ffmpeg-bro-capturetest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-capturetest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# The preview's cadence: which calls make a picture and for which moment. Every
+# assertion is about the pair the rule makes — no picture without a take, no take
+# without a picture — because each way of getting that pair stuck looked the same
+# from the outside: sound playing on over a picture that never changed again.
+add_executable(ffmpeg-bro-playbacktest tests/playback_test.cpp)
+target_link_libraries(ffmpeg-bro-playbacktest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-playbacktest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # A data stream, read: which parser answers for which fourcc, what GPMF says,
 # and — the bulk of it — what the parser does with a payload it is not allowed
 # to trust. Truncated at every boundary, scribbled on header by header, nested
@@ -422,6 +431,7 @@ add_test(NAME capabilities COMMAND ffmpeg-bro-captest "${FIXTURE_A}")
 add_test(NAME inputs COMMAND ffmpeg-bro-inputtest "${FIXTURE_A}" "${FIXTURE_ROTATED}"
          "${FIXTURE_DIR}/cues.srt")
 add_test(NAME sequences COMMAND ffmpeg-bro-seqtest "${FIXTURE_DIR}")
+add_test(NAME playback COMMAND ffmpeg-bro-playbacktest "${FIXTURE_A}")
 # The parser behind a data stream, and the hostile file it has to survive. The
 # fixture carries real GPMF; an optional second argument is a real camera file,
 # and the section that needs one says so and skips when there is none —
@@ -533,7 +543,7 @@ add_test(NAME ui-output COMMAND ffmpeg-bro-headless
 add_test(NAME ui-load COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_load.js"
          -- "${FIXTURE_A}")
-set_tests_properties(decode export capabilities inputs sequences hardware telemetry marks
+set_tests_properties(decode export capabilities inputs sequences playback hardware telemetry marks
                      PROPERTIES FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.

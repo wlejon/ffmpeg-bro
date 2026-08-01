@@ -144,6 +144,18 @@ the exception and can drop nothing: libavfilter holds every frame it has pushed 
 a sink until somebody takes it, so a pull skipped is memory grown rather than work
 saved, and a `filter_complex` slower than real time gaps its sound instead.
 
+**What it never does is stop.** A picture is made only where there is a new
+moment to make one for, and the moment is where the element says its screen is —
+so the picture and the screen depend on each other, and anything that interrupts
+the pair leaves both waiting. That failure is silent: the sound plays on, the
+playhead goes on moving, and the picture simply never changes again. Two things
+in the render hold it open and neither is a rate, so both hold on any machine:
+the picture is never withheld because the *sound* has not reached that moment
+yet — a render that cannot make its own frame rate lives permanently in that
+state — and it is never withheld because the run is waiting for room to put its
+next block of sound, since the thread that makes that room is the one waiting for
+the picture.
+
 A graph libavfilter will not have says so on the stage, in libavfilter's own
 words, rather than showing black.
 

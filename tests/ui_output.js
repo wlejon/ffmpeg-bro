@@ -135,6 +135,38 @@ console.log('\nthe clock');
     ok(out().paused, 'and pause stops the preview');
 }
 
+console.log('\nthe picture goes on being made');
+{
+    // **The one failure of this feature that says nothing while it happens.** A
+    // picture is published only where the screen has moved and the screen moves
+    // only where the element has taken one, so anything that interrupts that pair
+    // leaves both halves waiting — and what you get then is a preview that plays
+    // its sound perfectly, keeps its playhead moving (`currentPts` falls back to
+    // the clock once the pictures have run out) and never changes the picture
+    // again. Measured on a 1080p preview of a five-hour file it was permanent:
+    // pictures for four seconds, then none for the rest of the range.
+    //
+    // So: play, and watch the picture's own moment. Nothing here is a rate — a
+    // slow machine may make a tenth of the frames — only that it never stops.
+    A.setPlayhead(0);
+    pump(200);
+    A.play();
+    let last = -1;
+    let stall = 0;
+    let worst = 0;
+    for (let i = 0; i < 20; i++) {
+        pump(200);
+        const t = out().currentTime;
+        if (t > last + 1e-6) stall = 0;
+        else { stall += 200; worst = Math.max(worst, stall); }
+        last = t;
+    }
+    A.pause();
+    pump(100);
+    ok(worst <= 1000, `the picture never stood still (worst ${worst} ms)`);
+    ok(last > 1, `and got somewhere: ${last.toFixed(2)} s of render`);
+}
+
 // ── the sound of the render ────────────────────────────────────────────────
 //
 // The preview was a picture and nothing else, on the argument that the clips

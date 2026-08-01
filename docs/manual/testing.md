@@ -43,6 +43,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-captest <file>            # muxers, demuxers, protocols, devices, decoders
 ./build/Release/ffmpeg-bro-inputtest <file> [<rotated>] [<cues>]  # an -i: forced demuxer, options, window, token, filters
 ./build/Release/ffmpeg-bro-seqtest <fixture-dir>    # sequences, stills, -stream_loop, concat, image output
+./build/Release/ffmpeg-bro-playbacktest <file>      # the preview's cadence: which call makes a picture, and for which moment
 ./build/Release/ffmpeg-bro-capturetest out [<fixture-dir>]  # devices: an endless input, recording one, a session of several, a file laid over one
 ./build/Release/ffmpeg-bro-hwtest <file>           # the GPU: what is here, is it the same picture, what does each path cost
 ./build/Release/ffmpeg-bro-datatest <telemetry.mp4> [<real-gopro.MP4>]  # a data track: which parser, what GPMF says, and a payload it may not trust
@@ -418,6 +419,17 @@ because it looked interesting: an edit made *while* the preview is playing has t
 go on playing — a re-point hands the element a new src, and a new src is a paused
 element at zero — and a preview whose range ends before the timeline does has to
 stop there rather than hand over to the clip after it.
+
+A third is there because it broke in *use*: the picture has to go on being made.
+It plays for four seconds and watches the element's own clock, and what it
+asserts is only that the moment never stands still — no rate, because a machine
+that renders at a tenth of the speed should pass. `playbacktest` is the same
+failure taken one layer down and made deterministic: `OutputReader` driven by
+hand, with the screen readings a real element would have produced, asserting
+which calls make a picture and which moment each is for. The two are worth having
+separately — the invariant is a property of the reader and can be pinned exactly
+there, but nothing at that layer can see the deadlock between three threads that
+made it matter.
 
 The three sections in the middle are the three things one element per clip
 structurally cannot show, driven one at a time: a filter over the whole canvas, a

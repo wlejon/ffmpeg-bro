@@ -39,7 +39,7 @@ ctest --test-dir build -C Release
 ```
 
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
-`sequences`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
+`sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
 `ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
 `ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
 `ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`, `ui-load`):
