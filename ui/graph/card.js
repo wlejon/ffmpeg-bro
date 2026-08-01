@@ -52,7 +52,7 @@ export const LOD_ZOOM = 0.6;
 
 let hooks = {};
 
-/// `{ onSelect, onDragStart, onResizeStart, onChanged }`.
+/// `{ onSelect, onDragStart, onResizeStart, onChanged, onOpenFold }`.
 export function initCards(h) { hooks = h || {}; }
 
 // ── the players ────────────────────────────────────────────────────────────
@@ -176,10 +176,13 @@ export function restoreFocus(root) {
 
 // ── the card ───────────────────────────────────────────────────────────────
 
-/// `ctx` is `{ graph, key, width, lod }`. Returns the element; `view.js` places
-/// it, and `placeSockets()` finishes it once the height is known.
+/// `ctx` is `{ graph, key, width, lod, problem, fold }`. Returns the element;
+/// `view.js` places it, and `placeSockets()` finishes it once the height is
+/// known. `fold` is the run this card stands for, where it stands for one — see
+/// ui/graph/fold.js.
 export function buildCard(n, ctx) {
-    const { graph: g, key, width, lod, problem } = ctx;
+    const { graph: g, key, width, lod, problem, fold } = ctx;
+    if (fold) return foldCard(n, ctx);
     const cls = ['gn', `gn-${n.kind}`];
     if (n.locked) cls.push('gn-locked');
     if (!n.derived) cls.push('gn-user');
@@ -213,6 +216,67 @@ export function buildCard(n, ctx) {
         grip(key, width),
     ]);
     return node;
+}
+
+/// A clip's whole derived run, as one card.
+///
+/// **It says what it stands for and it opens.** Those two together are what make
+/// this a fold rather than a hiding place: the filters are named in the order
+/// they run, the insert points inside are counted, and one press puts the run
+/// back. Everything else about it is an ordinary card — the sockets are the
+/// graph's, the header drags it, the pin is remembered against its anchor — so
+/// nothing downstream of `buildCard` learns that folds exist.
+///
+/// No picture. A preview is a render of one *pad*, and a fold is not a pad: it
+/// stands for a run of them, and offering the last one's frame as "this card's
+/// output" would be true only until somebody dropped a filter inside. Open it
+/// and every node in it gets the picture it always had.
+function foldCard(n, ctx) {
+    const { graph: g, key, width, fold } = ctx;
+    const cls = ['gn', 'gn-fold'];
+    const name = fold.input ? basename(fold.input.path) : (n.title || 'a clip');
+    const pad = fold.input && fold.input.index !== undefined
+        ? (fold.input.outs || [{ stream: 'v' }])
+              .map((o) => `[${fold.input.index}:${o.stream}]`).join(' ')
+        : '';
+    const count = fold.nodes.filter((x) => x.kind === 'filter').length;
+    return el('div', {
+        cls: cls.join(' '),
+        'data-node': n.id,
+        'data-key': key || '',
+        'data-fold': fold.key,
+        'data-filter': 'fold',
+        style: { width: `${width}px` },
+        title: `${fold.key} — ${fold.filters.join(' → ')}`,
+        on: { click: (e) => hooks.onSelect && hooks.onSelect(key, e.ctrlKey || e.shiftKey) },
+    }, [
+        el('div', {
+            cls: 'gn-head',
+            'data-drag': key || '',
+            on: { mousedown: (e) => hooks.onDragStart && hooks.onDragStart(key, e) },
+        }, [
+            span('', 'gn-dot'),
+            span(name, 'gn-name'),
+            pad ? span(pad, 'gn-pad mono') : null,
+        ].filter(Boolean)),
+        el('div', { cls: 'gn-fold-body' }, [
+            // The chain itself, which is the whole claim the card makes: four
+            // words where four cards were.
+            span(fold.filters.join(' → ') || '—', 'gn-fold-chain mono'),
+            span(`${count} filter${count === 1 ? '' : 's'}` +
+                 (fold.points ? ` · ${fold.points} place${fold.points === 1 ? '' : 's'} to insert` : '') +
+                 (fold.input ? ' · and its -i' : ''), 'gn-fold-count dim'),
+        ]),
+        el('button', {
+            cls: 'gn-fold-open tiny',
+            text: 'Open',
+            title: `Draw ${fold.key}'s filters as the ${count} cards they are`,
+            on: { mousedown: (e) => e.stopPropagation(),
+                  click: (e) => { e.stopPropagation();
+                                  if (hooks.onOpenFold) hooks.onOpenFold(fold.key); } },
+        }),
+        sockets(n, g, key),
+    ]);
 }
 
 /// The name, what stream it is on, and the pad it produces. The pad is here

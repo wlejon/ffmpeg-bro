@@ -214,6 +214,7 @@ initGraphView({
     previews: el('gr-previews'),
     atPlayhead: el('gr-at-playhead'),
     relayout: el('gr-relayout'),
+    fold: el('gr-fold'),
     add: el('gr-add'),
     zoomIn: el('gr-zoom-in'),
     zoomOut: el('gr-zoom-out'),
@@ -390,6 +391,52 @@ const HEAVY = [
 ];
 let turn = 0;
 
+/// How long each of them took the last time it was drawn, and what to call it
+/// while it is owed.
+///
+/// **Measured rather than predicted, which is the whole point.** The obvious
+/// design is a rule — "over N clips, show a spinner" — and it is wrong twice: N
+/// is a guess about somebody else's machine, and the number that actually
+/// matters is not the clip count but what the redraw *costs*, which differs by a
+/// factor of thirty between these five and by another factor between a laptop
+/// and this one. So each draw times itself and the readout speaks when the last
+/// one was slow. It calibrates itself, it says which thing is late rather than
+/// spinning, and on a small edit it never appears at all.
+const took = {};
+const BUSY_WORDS = {
+    playback: 'settling playback',
+    timeline: 'redrawing the timeline',
+    spine: 'restating the render',
+    command: 'restating the command',
+    graph: 'laying out the graph',
+};
+
+/// Above this, a redraw is worth saying out loud. Well past a frame at 60 Hz, so
+/// nothing that keeps up ever speaks, and well under the point at which somebody
+/// has decided the window is broken.
+const BUSY_MS = 120;
+
+/// What is out of date and known to be slow, as a phrase — or '' for the case
+/// this is designed to be, which is everything keeping up.
+///
+/// The slowest owed thing rather than a list: two of them are usually owed at
+/// once and "restating the render, restating the command, laying out the graph"
+/// is a sentence nobody reads. What somebody wants to know is that the window is
+/// working and roughly on what.
+///
+/// **The first slow draw is silent, and that is not a bug to be fixed.** Nothing
+/// can be said about how long something takes until it has taken it once, and
+/// the alternative — guessing from the clip count — is the thing this measures
+/// its way out of. What it costs is that the very first arrival at a large graph
+/// says nothing and every one after it does, which is the right way round: the
+/// first is one frame late and the rest are the ones somebody is waiting on.
+function busyWord() {
+    let word = '', worst = BUSY_MS;
+    for (const key of Object.keys(BUSY_WORDS))
+        if (dirty[key] && (took[key] || 0) > worst) { worst = took[key]; word = BUSY_WORDS[key]; }
+    return word;
+}
+
 /// Draw whatever is out of date: the cheap ones always, and **one** of the
 /// expensive ones. Called once a frame, from the frame loop.
 ///
@@ -418,7 +465,13 @@ function drawPending() {
         if (!dirty[key]) continue;
         dirty[key] = false;
         turn = (turn + i + 1) % HEAVY.length;
+        // Timed on the way past, which is what `busyWord` reads. The cost of
+        // asking is one clock read per frame and it buys the only honest answer
+        // to "is this one of the slow ones" — measuring this machine drawing
+        // this edit.
+        const at = Date.now();
         draw();
+        took[key] = Date.now() - at;
         return;
     }
 }
@@ -1726,6 +1779,7 @@ document.addEventListener('drop', (e) => {
 let lastTick = 0;
 let lastViewerW = -1, lastViewerH = -1, lastLaneW = -1;
 let lastWaiting = -1;
+let lastBusy = '';
 
 function frame(now) {
     const dt = lastTick ? Math.min(0.25, (now - lastTick) / 1000) : 0;
@@ -1793,6 +1847,12 @@ function frame(now) {
     // that an edit which is already laid out is not yet fully drawn.
     const waiting = pending();
     if (waiting !== lastWaiting) { lastWaiting = waiting; needs('readouts'); }
+    // ...and whether one of the five redraws is owed and known to be slow. Read
+    // *before* `drawPending`, so the phrase goes up on the frame the work is
+    // still owed rather than on the one after it has been done — which for
+    // something that takes a single frame would be never. See `busyWord`.
+    const busy = busyWord();
+    if (busy !== lastBusy) { lastBusy = busy; needs('readouts'); }
     // And everything a change since the last frame marked out of date, drawn
     // once however many times it was marked. See `needs` for why this is here
     // rather than at each of the places that change something.
@@ -1850,10 +1910,15 @@ function syncUI() {
     const n = project.clips.length;
     const waiting = pending();
     const live = viewer.activeClips().length;
+    // Beside "reading 12…" rather than anywhere new, because they are the same
+    // kind of sentence: this line is where this application says what it is
+    // doing that you did not ask about and have not been given yet.
+    const busy = busyWord();
     stats.textContent = n
         ? `${project.width}×${project.height}  ${n} clip${n === 1 ? '' : 's'}` +
           (live > 1 ? `  ${live} playing` : '') +
-          (waiting ? `  reading ${waiting}…` : '')
+          (waiting ? `  reading ${waiting}…` : '') +
+          (busy ? `  ${busy}…` : '')
         : '';
 }
 
@@ -1982,9 +2047,17 @@ shell.initShell({
         // previews are taken from wherever the playhead is standing, snapshotted
         // now rather than followed: a playhead that moved would otherwise
         // re-render every node for a picture nobody asked to change.
+        // **Marked, not drawn.** Laying the graph out is the one arrival in this
+        // application that is priced in the size of the edit — 187 ms at
+        // seventy-five clips, and 668 with the folds opened — so drawing it
+        // inside the press means the window does not change until it is over,
+        // and what somebody sees is a button that did not work. Marked, the
+        // stage is up on this frame and the graph arrives on a later one with
+        // the readout saying which. `drawPending` only draws it while this stage
+        // is the one showing, which it now is.
         if (id === 'graph') {
             graphPreview.setRange(transport.t, transport.t + graphPreview.previewSeconds);
-            drawGraph();
+            needs('graph');
         }
         needs('command');
         // Which stack the buttons are about has just changed, even though

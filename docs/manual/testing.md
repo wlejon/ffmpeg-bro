@@ -451,6 +451,34 @@ that said the meter was per clip rather than per output channel. That the peak i
 *true* peak is asserted on the Capture stage instead, where the signal can be written
 down as an expression.
 
+`ui_load.js` is the suite for a large edit, and everything in it is a claim
+nothing else can make: **an edit of many clips holds few decoders**, every clip
+under the playhead has one whatever that costs, the lanes survive a decoder being
+let go, a measurement landing is not an edit, playback runs on the render, and a
+gesture on the Graph stage costs what the gesture changed. It is built from one
+file cut many times, because residency is about how many decoders are open and a
+decoder per clip is a decoder per clip whether or not two of them read the same
+path.
+
+Its timing assertions are all **ratios or worst frames, never totals**. The same
+total spread over a hundred frames and delivered in one are the same number and
+completely different to use, so what is asserted is the worst single frame; and
+"this is not quadratic" has no honest form other than asking the same question of
+two sizes and comparing, so the graph's derivation is timed at the full edit and
+at a fifth of it and checked against how much bigger the graph actually got. That
+one fails at about 20× on the array-walking model and passes at about 5× on the
+indexed one, which is a threshold that cannot be met by a fast machine or missed
+by a slow one.
+
+The last section is the fold — a clip's derived run drawn as one card, see [When
+there is too much of it to read](graph.md#when-there-is-too-much-of-it-to-read).
+Three of its four checks are about the fold not being a hiding place rather than
+about it being fast: a filter you inserted is on the screen as itself, a
+*derived* node you locked holds its whole run open, and the stage's own line says
+how many clips were collapsed and why any were not. The fourth is that walking to
+the stage returns without laying the graph out, because a press that does not
+return until the work is done is a press that looks like it failed.
+
 `captest` is what this build can write, read, reach and capture, and it prints
 as much as it asserts: how many muxers, which of them write pictures, which
 protocols are in and out, what capture devices the machine has. The numbers

@@ -25,6 +25,38 @@ every walk to another stage. The graph is indexed by id and by anchor now and th
 same restatement is 25 ms, which is the difference between an application that
 stutters at seventy-five clips and one that does not.
 
+## When there is too much of it to read
+
+Nine nodes a clip is 679 cards at seventy-five, and 679 cards is not a picture of
+anything. Nobody reads the ninth `trim`; what you came here to find out is which
+clip is which and what somebody put in the middle of one. So above about thirteen
+clips **each clip's derived run is drawn as one card** — `-i`, `trim`, `setpts`,
+`scale`, `format` and the sound beside them, as a card that names them in the
+order they run. `Collapse` on the bar is the switch, and once you have pressed it
+the answer is yours rather than the size of the edit's.
+
+It is a fold in what is *drawn*, and nowhere else. The whole graph is still
+derived, still printed along the bottom, still what gets rendered — the filter
+count on the bar is the render's and not the screen's, so it and the command bar
+cannot come apart. What it buys is arriving at the stage in 187 ms instead of 668,
+and a stage you can look at.
+
+Three things it will not do, which are the reasons it is a fold and not a hiding
+place:
+
+- **A run holding work of yours stays open.** A value you locked is an override in
+  force, and an override in force that you cannot see is the failure this whole
+  stage is designed against. The bar says how many stayed open and why.
+- **A filter you inserted is never inside one.** It is not part of any clip's
+  derived run — that is what makes it yours — so it is drawn as itself, on the
+  wire you put it on, downstream of the fold.
+- **It says what it folded.** `75 clips collapsed` sits on the bar beside the
+  counts. Anything not on the screen is stated on it.
+
+`Open` on a card puts that one clip's run back; the rest stay folded. A fold has
+no preview picture, because a preview is a render of one *pad* and a fold stands
+for several — open it and every node in it gets the picture it always had.
+
 ## Getting around it
 
 It works the way a node editor works. Nothing here is invented — Blender, Nuke,
@@ -43,6 +75,8 @@ be enough to use this.
 | drag a socket onto empty canvas | the palette, filtered to what can take that pad |
 | click a wire | select it; `Delete` cuts it |
 | `Add filter` | place one on the canvas with nothing wired to it |
+| `Collapse` / `Expand` | each clip's derived run as one card, or all of them |
+| `Open` on a folded card | that one clip's run back |
 | `Fit`, or `0` | frame the whole graph |
 | the percentage | back to 1:1 |
 | `Re-layout` | give every node back to the layout |

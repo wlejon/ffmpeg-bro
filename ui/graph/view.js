@@ -52,6 +52,7 @@ import * as overlay from './overlay.js';
 import * as panel from './panel.js';
 import * as preview from './preview.js';
 import { measureGraph } from './subgraph.js';
+import { fold, FOLD_OVER } from './fold.js';
 import { chaseWhen } from './when.js';
 import { chaseCurves } from './curve.js';
 
@@ -100,6 +101,22 @@ let bounds = '';        // and how big it came out, so a card that grew is frame
 let userMoved = false;  // ...unless you have panned or zoomed since
 let canvasSize = '';
 let lod = 'full';
+/// Which clips are drawn as one card, and which of those you have opened.
+///
+/// `foldChoice` is null until somebody presses the button, and after that it is
+/// the answer — the same rule `userMoved` states about the framing, and for the
+/// same reason: a stage that undid your press the next time the graph grew would
+/// be a stage arguing with you. `openFolds` holds the ones opened individually;
+/// it is cleared when the whole thing is folded again, because "collapse" that
+/// left three clips open would not be one.
+///
+/// Session state and deliberately not in the overlay: which folds you have open
+/// is where you are *looking*, like the pan and the zoom, and neither the
+/// document nor the workspace has any business remembering it. `lastFold` is the
+/// answer the last draw came to, which is what the toolbar reads.
+let foldChoice = null;
+const openFolds = new Set();
+let lastFold = null;
 
 /// Keys, not nodes: a redraw remakes every node object. The first inserted is the
 /// primary — what the panel is about — because that is the one you clicked.
@@ -185,6 +202,10 @@ export function initGraphView(r, hooks = {}) {
         keyOf: panel.keyOf,
         onSelect: (key, add) => select(key, add),
         onDragStart: (key, e) => startMove(key, e),
+        // One clip's run put back. Not a change to the graph and not an edit —
+        // the derivation is the same either way — so it redraws and nothing
+        // else hears about it.
+        onOpenFold: (key) => { openFolds.add(key); foldChoice = true; drawGraph(); },
         onWireStart: (key, dir, port, stream, e) => startWire(key, dir, port, stream, e),
         onResizeStart: (key, width, e) => { resizing = { key, from: width, x: e.clientX, at: width }; },
         // Pressing on the bar moves the picture at once — a click is a jump —
@@ -376,6 +397,23 @@ function bindBar(hooks) {
             userMoved = false;
             drawGraph();
         });
+    // Folding is a decision once you have made it, the way the framing is: until
+    // then the stage decides by how much there is to draw, and afterwards it does
+    // what you said. Opening every fold by hand and then adding a clip must not
+    // fold them all again.
+    if (refs.fold)
+        refs.fold.addEventListener('click', () => {
+            foldChoice = !foldingNow();
+            if (foldChoice) openFolds.clear();
+            drawGraph();
+        });
+}
+
+/// Whether the graph is folded as things stand — your press if you have made
+/// one, and otherwise whether there is more here than anybody could read.
+function foldingNow() {
+    if (foldChoice !== null) return foldChoice;
+    return !!lastFold && lastFold.folding;
 }
 
 function step(by) {
@@ -859,20 +897,31 @@ export function drawGraph() {
     const trouble = new Map();
     for (const p of d.problems) if (p.id && !trouble.has(p.id)) trouble.set(p.id, p);
 
-    put(refs.nodes, () => d.graph.nodes.map((n) => {
+    // A clip's derived run as one card, where there is more here than anybody
+    // could read. The graph that is *drawn* only — `d.graph` is still the whole
+    // derivation and is what is printed, measured, previewed and rendered. See
+    // ui/graph/fold.js.
+    const folding = foldChoice === null ? d.graph.nodes.length > FOLD_OVER : foldChoice;
+    lastFold = fold(d.graph, { open: openFolds, trouble, points: d.points,
+                               enabled: folding });
+    lastFold.folding = folding;
+    const shown = lastFold.graph;
+
+    put(refs.nodes, () => shown.nodes.map((n) => {
         const key = panel.keyOf(n);
-        const node = cards.buildCard(n, { graph: d.graph, key, width: cardWidth(key), lod,
-                                          problem: trouble.get(n.id) });
+        const node = cards.buildCard(n, { graph: shown, key, width: cardWidth(key), lod,
+                                          problem: trouble.get(n.id),
+                                          fold: lastFold.folds.get(n.id) });
         built.set(n.id, node);
         return node;
     }));
 
     const measured = new Map();
-    for (const n of d.graph.nodes)
+    for (const n of shown.nodes)
         measured.set(n.id, { w: cardWidth(panel.keyOf(n)),
                              h: built.get(n.id).getBoundingClientRect().height });
 
-    placed = layout(d.graph, (n) => measured.get(n.id),
+    placed = layout(shown, (n) => measured.get(n.id),
                     (n) => overlay.pinOf(panel.keyOf(n)));
     const boxes = new Map();
     byKey.clear();
@@ -902,7 +951,7 @@ export function drawGraph() {
     // computed before any of them existed. Not once you have panned or zoomed
     // yourself: at that point where you are looking is a decision, and nothing
     // here gets to overrule it.
-    const nowShape = shapeOf(d.graph);
+    const nowShape = shapeOf(shown);
     const nowBounds = `${Math.round(placed.width)}x${Math.round(placed.height)}`;
     if (shape !== nowShape || (!userMoved && bounds !== nowBounds)) {
         shape = nowShape;
@@ -1468,11 +1517,50 @@ function note(text) {
     refs.note.classList.toggle('hidden', !text);
 }
 
+/// What the fold did, as spans for the line above — and the button's own state,
+/// set from here because the two say the same thing and a button that disagreed
+/// with the sentence beside it would be worse than no button.
+///
+/// Empty when there is nothing to fold at all, which is a graph with no clips in
+/// it: an offer to collapse nothing is a control that does nothing.
+function foldStatus() {
+    const f = lastFold;
+    if (refs.fold) {
+        const useful = !!f && f.foldable > 0;
+        refs.fold.classList.toggle('hidden', !useful);
+        refs.fold.classList.toggle('on', !!f && f.folding);
+        refs.fold.textContent = f && f.folding ? 'Expand' : 'Collapse';
+    }
+    if (!f || !f.foldable) return [];
+    const held = f.held.length;
+    const out = [];
+    if (f.folds.size) {
+        out.push(span(`${f.folds.size} clip${f.folds.size === 1 ? '' : 's'} collapsed`,
+                      'gr-fold'));
+        out.push(span('·', 'dim'));
+    }
+    // Named by the reason rather than counted, because the reason is the point:
+    // a run stays open because it holds something the timeline cannot make
+    // again, and that is exactly what somebody came to this stage to see.
+    if (held) {
+        const why = f.held[0].why;
+        out.push(span(held === 1 ? `one left open — it holds ${why}`
+                                 : `${held} left open — the first holds ${why}`, 'gr-mine'));
+        out.push(span('·', 'dim'));
+    }
+    return out;
+}
+
 /// What is on screen, said in the same numbers the command bar uses.
 function status(p, d) {
     if (!refs.status) return;
     if (!p || !placed) return put(refs.status, () => []);
-    const nodes = placed.nodes.filter((b) => b.node.kind === 'filter').length;
+    // **From the derivation, not from what is drawn.** A folded card stands for
+    // four filters and the render still runs all four, so counting the boxes on
+    // the screen would make the one line on this stage that states the render
+    // disagree with the command bar underneath it the moment anything folded.
+    const nodes = d ? d.graph.nodes.filter((n) => n.kind === 'filter').length
+                    : placed.nodes.filter((b) => b.node.kind === 'filter').length;
     const mine = d ? d.graph.nodes.filter((n) => !n.derived).length : 0;
     const locks = d ? d.graph.nodes.filter((n) => n.locked).length : 0;
     const pins = overlay.pinCount();
@@ -1484,6 +1572,11 @@ function status(p, d) {
         span('·', 'dim'),
         span(`${p.chains.length} chain${p.chains.length === 1 ? '' : 's'}`),
         span('·', 'dim'),
+        // **What is not on the screen, whenever anything is not.** A fold is the
+        // one thing this stage does that leaves part of the render undrawn, so
+        // it is a statement and never silent: how many clips are one card, and
+        // how many refused to be because there is work of yours inside them.
+        ...foldStatus(),
         // A graph halfway through filling its pictures in should say so; half of
         // them blank and no explanation reads as broken.
         preview.isEnabled() && preview.outstanding()

@@ -2823,6 +2823,16 @@ button.text.primary:hover { background: #ffa063; }
 }
 /* The two ends of the graph are not filters and should not read as filters. */
 .gn-input, .gn-sink { background: var(--panel-hi); }
+/* A clip's whole derived run, drawn as one card. Dashed on the *inside* rather
+   than the border, because the dashed border already means "a node of yours" and
+   a fold is the opposite of that — it is the derivation, several nodes of it at
+   once. See ui/graph/fold.js. */
+.gn-fold { background: var(--panel-hi); }
+.gn-fold-body { padding: 4px 8px 6px; border-top: 1px dashed var(--line); }
+.gn-fold-chain { display: block; font-size: 11px; line-height: 1.4; word-break: break-word; }
+.gn-fold-count { display: block; font-size: 10px; margin-top: 2px; }
+.gn-fold-open { margin: 0 8px 6px; }
+.gr-fold { color: var(--blue); }
 /* A value set by hand outranks the derivation, and the graph has to say so —
    losing the lock silently is the one outcome worth designing against. */
 .gn-locked { border-color: var(--accent); }

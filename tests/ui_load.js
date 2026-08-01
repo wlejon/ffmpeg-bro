@@ -431,4 +431,116 @@ pump(200);
                 `(${(big / REPEATS).toFixed(1)} ms each)`);
 }
 
+// ── the graph is folded, and says so ───────────────────────────────────────
+//
+// Nine nodes a clip is 679 cards at seventy-five, and 679 cards is not a picture
+// of anything: the layout, the measure and the DOM come to 668 ms of arriving at
+// the stage, and none of it can be read once it is there. So a clip's derived
+// run is drawn as one card — see ui/graph/fold.js.
+//
+// Four claims. The first is the cost and the other three are the reasons a fold
+// is not a hiding place, which is the only interesting question about one:
+//
+//   - **far fewer cards than nodes**, which is the whole point.
+//   - **a run holding work of yours is never folded.** A filter you inserted is
+//     not derivable from the timeline and is the reason this stage exists; a
+//     fold that swallowed one would be the application losing your edit and
+//     saying nothing.
+//   - **the stage says what it folded.** Not a quiet optimisation.
+//   - **opening one puts the run back**, which is what makes it a fold.
+//
+// And the arrival itself: laying the graph out must not happen *inside* the
+// press, or the window does not change until it is over and what somebody sees
+// is a button that did not work.
+
+for (let i = 0; i < COUNT; i++) A.openInput(input, { quiet: true });
+A.setPlayhead(0);
+pump(400);
+A.shell.goTo('compose');
+pump(200);
+{
+    const cardCount = () => document.querySelectorAll('#gr-nodes .gn').length;
+    const foldCount = () => document.querySelectorAll('#gr-nodes .gn-fold').length;
+
+    // Arrive once so the stage has been drawn, then time the *press*.
+    A.shell.goTo('graph');
+    pump(600);
+    A.shell.goTo('compose');
+    pump(300);
+    const pressed = perf.now();
+    A.shell.goTo('graph');
+    const pressMs = perf.now() - pressed;
+    pump(600);
+
+    const derived = A.graph.current();
+    assert(derived && derived.nodes.length > 200,
+           `expected a large derivation, got ${derived ? derived.nodes.length : 0} nodes`);
+    assert(pressMs < 100,
+           `walking to the Graph stage blocked for ${pressMs.toFixed(0)} ms — the graph is ` +
+           'being laid out inside the press instead of on a later frame');
+
+    const cards = cardCount();
+    const folds = foldCount();
+    assert(folds > COUNT / 2,
+           `${folds} folds for ${COUNT} clips — the runs are not being folded`);
+    assert(cards < derived.nodes.length / 3,
+           `${cards} cards on screen for ${derived.nodes.length} derived nodes — ` +
+           'the fold is not reducing what has to be drawn');
+    console.log(`the graph folded: ${derived.nodes.length} nodes drawn as ${cards} cards ` +
+                `(${folds} of them clips), and the press returned in ${pressMs.toFixed(0)} ms`);
+
+    // It says so. The count of what is folded is on the stage's own line, which
+    // is the difference between a fold and something quietly not drawn.
+    const said = document.getElementById('gr-status').textContent;
+    assert(/collapsed/.test(said),
+           `the stage says "${said}" — nothing there says anything was collapsed`);
+    // ...and the filter count is still the render's, not the screen's.
+    assert(new RegExp(`${derived.nodes.filter((n) => n.kind === 'filter').length} filters`)
+               .test(said),
+           `the stage says "${said}" — the filter count is the drawn graph's rather than ` +
+           'the render\'s, so this line and the command bar under it disagree');
+
+    // **Work of yours is never inside a fold**, and there are two ways to have
+    // some. A filter you inserted is not part of any clip's derived run in the
+    // first place, so it is drawn as itself downstream of the fold. A *derived*
+    // node you locked is in one, and holds it open.
+    const at = A.project.clips[3];
+    const mineId = A.graph.overlay.insert(`clip:${at.id}/after-scale`, 'hflip');
+    assert(mineId, 'the insert did not take');
+    A.graph.draw();
+    pump(200);
+    assert(document.querySelector('#gr-nodes .gn-user'),
+           'a filter of mine is not on the screen at all — it went inside a fold');
+    console.log('a filter of yours is drawn as itself, outside the folds');
+
+    // The other way: an override on a node the derivation made.
+    const g = A.graph.current();
+    const locked = g.nodes.find((n) => n.anchor === `clip:${at.id}/scale`);
+    assert(locked, 'no derived scale node to lock');
+    A.graph.overlay.edit(locked, { params: { flags: 'lanczos' } });
+    A.graph.draw();
+    pump(200);
+    assert(foldCount() < folds,
+           `${foldCount()} folds against ${folds} before the lock — the run holding a ` +
+           'locked filter was folded anyway, so an override is in force and invisible');
+    assert(/left open/.test(document.getElementById('gr-status').textContent),
+           `the stage says "${document.getElementById('gr-status').textContent}" — ` +
+           'a run was held open and nothing says why');
+    console.log(`a locked filter held its clip open: ${foldCount()} folds, was ${folds}`);
+
+    // And opening one by hand puts its run back.
+    const before = cardCount();
+    const open = document.querySelector('#gr-nodes .gn-fold .gn-fold-open');
+    assert(open, 'a fold with no way to open it');
+    open.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    pump(300);
+    assert(cardCount() > before,
+           `opening a fold left ${cardCount()} cards, was ${before} — the run did not come back`);
+    console.log(`opening a fold put its run back: ${before} cards → ${cardCount()}`);
+
+    A.graph.overlay.edit(locked, { params: { flags: '' } });
+    A.graph.overlay.removeInsert(mineId.id);
+    A.graph.draw();
+}
+
 console.log('ui_load: ok');

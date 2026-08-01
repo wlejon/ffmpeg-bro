@@ -53,6 +53,21 @@ scrolling the timeline never re-reads a file. On a large document they fill in
 over the following seconds while everything else works normally, and the
 readout beside the clip count says how many are still being read.
 
+**And the same readout says when a redraw is going to take a moment.** Five
+things restate the whole edit — the playback chains, the timeline lanes, the
+spine, the command bar and the graph — and each is priced in the size of the
+project. A change marks them and the frame loop draws one per frame, so the
+window keeps taking input while a large edit catches up; what you get beside the
+clip count is `laying out the graph…` or `restating the render…` while it does.
+
+It is measured rather than predicted, which is why it is trustworthy and why it
+is usually not there. Each of the five times itself as it draws, and the line
+speaks only when the thing that is owed took more than a frame or two the last
+time it ran — so on a small edit you will never see it, on a large one you see
+which part is late, and nothing has to guess a clip count at which to start
+worrying. The first slow draw is silent: nothing can be said about how long
+something takes until it has taken it once.
+
 **Pressing play watches the render.** The picture on the monitor is normally one
 `<video>` per clip laid out inside the output canvas, which is exact and free —
 but playing an edit that way means crossing from one decoder to the next at every
