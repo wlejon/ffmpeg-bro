@@ -43,6 +43,21 @@ body { display: flex; flex-direction: column; }
 .mono { font-family: Consolas, "Courier New", monospace; }
 .dim  { color: var(--dim); }
 .spacer { flex: 1; }
+/* **This is what `show()` (ui/dom.js) toggles, and it wins only by specificity.**
+   A panel that sets its own `display` is declared further down the file, and two
+   single-class rules are decided by which comes later — so `display: none` here
+   silently loses and that panel never hides. Every `.thing.hidden { display:
+   none }` further down is one panel where that was found and fixed, and there
+   are fifteen of them: it is a real trap, and the rule is that a panel with a
+   `display` of its own owes one of those pairs.
+
+   It is deliberately not `!important`, which would fix all fifteen at once and
+   was tried. What that also does is switch on every hide that has been quietly
+   broken for as long as it has existed, in panels nobody has looked at — the
+   fifteen pairs below are the ones somebody noticed, and there is no reason to
+   think they are all of them. Turning those on is a change to make on purpose
+   and to look at, one panel at a time, rather than as a side effect of fixing a
+   drawer. */
 .hidden { display: none; }
 
 /* ── top bar ─────────────────────────────────────────────────────────── */
@@ -2282,6 +2297,17 @@ button.ex-back { display: block; width: 100%; margin-top: 6px; }
     white-space: nowrap;
 }
 
+/* **The drawer is as tall as what is in it, and no taller.** It has no height
+   of its own: the panes below carry the caps, so a render with four warnings
+   opens a drawer four warnings tall and one with four hundred opens the full
+   one. `max-height` is a backstop against a pane that grows a part nobody
+   capped — the panes are deliberately capped *under* it, so it should never be
+   what decides the size, and if it ever is, the fix is the pane and not this
+   number. (It used to be what decided it: a bug in the layout engine grew a
+   `flex: 1` child of an auto-height column into the container's own *width*,
+   so the drawer took 46vh of the window whatever it had to say and drew a
+   hundred pixels of log in it. Fixed in htmlayout's flex.cpp, which is where
+   it was wrong — see the note there.) */
 .rep-body {
     border-top: 1px solid var(--line);
     padding: 6px 12px 8px;
@@ -2290,6 +2316,11 @@ button.ex-back { display: block; width: 100%; margin-top: 6px; }
     flex-direction: column;
     min-height: 0;
 }
+/* The pair `.hidden` needs against the `display` above it — see the note there.
+   Without it the drawer could not be shut at all: `R` and the arrow both took
+   the class off and on and the panel stayed exactly where it was, with the
+   command bar pushed off the bottom of the window under it. */
+.rep-body.hidden { display: none; }
 .rep-filters {
     display: flex;
     align-items: center;
@@ -2315,21 +2346,35 @@ button.ex-back { display: block; width: 100%; margin-top: 6px; }
     border-bottom: 1px solid var(--line);
 }
 .rep-empty { font-size: var(--fs-sm); padding: 8px 0; line-height: 1.6; }
-/* The scrollbar sits over the content in this engine rather than beside it, so
+/* The two panes scroll, and they are capped at the same height on purpose: they
+   sit side by side, so the taller one is the drawer's height, and two different
+   caps would mean one pane deciding how much room the other one gets to leave
+   empty. 34vh + the heads above them + the filter row is a little under the
+   drawer's own 46vh backstop, which is what keeps that backstop from ever being
+   the thing that clips.
+
+   The scrollbar sits over the content in this engine rather than beside it, so
    a row that measures the full width has its right-hand end — which is where
    the number is — cut off by it. The gutter is the fix, and it costs nothing
    when there is nothing to scroll. */
-.rep-list, .rep-series-list {
+.rep-list {
     overflow-y: auto;
     min-height: 0;
-    max-height: 26vh;
+    max-height: 34vh;
     padding-right: 12px;
 }
 /* The measured column holds four things now — how to start one, what was
    found, the plot and the list — so it scrolls as a whole rather than each
    part scrolling inside itself, which is four scrollbars and one readable
-   panel's worth of room between them. */
-.rep-series { overflow-y: auto; padding-right: 12px; }
+   panel's worth of room between them. Which is why the list inside it carries
+   no cap of its own: that would be the second scrollbar, and it was there. */
+.rep-series {
+    overflow-y: auto;
+    min-height: 0;
+    max-height: 34vh;
+    padding-right: 12px;
+}
+.rep-series-list { min-height: 0; }
 
 /* A message is four columns and the first three are narrow on purpose: the
    sentence is what is being read, and level, source and time are what it is

@@ -250,4 +250,52 @@ ok(report.seriesFor('lavfi.cropdetect.w').points.length === width.points.length,
 ok(!el('rep-body').classList.contains('hidden'),
    'and the surface is where it was left');
 
+// ── how much of the window it costs ────────────────────────────────────────
+//
+// Both halves of this were broken at once and they read as one fault: a drawer
+// that could not be shut and that spent half the window on a hundred pixels of
+// log. They are two, and the assertions are separate for that reason.
+//
+// **Shut is shut.** `.hidden` is what `show()` toggles and it lost the cascade
+// to `.rep-body`'s own `display: flex` — same specificity, later rule — so the
+// drawer stayed exactly where it was and the command bar under it was pushed
+// off the bottom of the window.
+//
+// **Open is the size of what is in it.** The body has no height of its own, so
+// it should measure its filter row plus its columns and nothing more. It came
+// out at its `max-height` whatever it held, because a `flex: 1` child of an
+// auto-height column flex container grew into the container's own *width*
+// (fixed in htmlayout's flex.cpp — the note there has the numbers).
+
+console.log('\nwhat it costs the window');
+const body = el('rep-body');
+const foot = el('reportbar');
+const cmdbar = el('commandbar');
+const tall = (n) => (n && n.getBoundingClientRect ? n.getBoundingClientRect().height : 0);
+
+ok(!body.classList.contains('hidden'), 'the drawer is open to be measured');
+const filters = q('.rep-filters');
+const cols = q('.rep-cols');
+const held = tall(filters) + tall(cols);
+const bodyH = tall(body);
+ok(held > 0, `it is holding something (${Math.round(held)}px of filters and columns)`);
+// 20px of slack for the body's own padding and border, and nothing else: the
+// failure being caught is hundreds of pixels of nothing, not a rounding.
+ok(bodyH <= held + 20,
+   `and is no taller than that (${Math.round(bodyH)}px for ${Math.round(held)}px of content)`);
+ok(bodyH < window.innerHeight * 0.46 - 1 || held >= window.innerHeight * 0.46 - 21,
+   'so max-height is a cap it has not reached, not the height it always takes');
+
+key('r');
+pump(120);
+ok(el('rep-body').classList.contains('hidden'), 'R shuts it again');
+ok(tall(body) === 0, `and shut it takes no room at all (${tall(body)}px)`);
+ok(tall(foot) < 40, `the footer is the one-line bar again (${Math.round(tall(foot))}px)`);
+// The one that is visible from across the room: the drawer used to push this
+// off the bottom edge, which is how a window with no command bar in it happens.
+const cmdBottom = cmdbar.getBoundingClientRect().bottom;
+ok(cmdBottom <= window.innerHeight + 1,
+   `and the command bar is still on the screen (bottom ${Math.round(cmdBottom)} of ` +
+   `${window.innerHeight})`);
+
 console.log(`\n${checks} checks, all passed`);

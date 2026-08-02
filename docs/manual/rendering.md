@@ -252,7 +252,11 @@ command, because the only reason to print one is that it can be run.
 Under the command bar, and under every stage with it, is its counterpart: one
 says what is about to run and the other says what came back. Collapsed it is a
 line — *"The last render: 1 warning · 9 series · 207 samples"* — and `R` opens
-it from anywhere.
+it from anywhere. `R` again shuts it, and open it is exactly as tall as what it
+has to say: four warnings is four warnings of drawer. The panes stop growing at
+about a third of the window and scroll from there, so the longest log this
+application can produce still leaves two thirds of the screen looking at the
+edit.
 
 Because until it existed, a render could tell you four things: how far along it
 was, how fast, how big, and — only if it failed outright — one sentence. libav
