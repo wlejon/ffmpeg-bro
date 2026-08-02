@@ -403,58 +403,114 @@ console.log('\na window is what a hit becomes, and the pad is the two clocks');
          'a file with no declared duration still yields a window');
 }
 
-console.log('\nthe search is drawn where the words are, and says what it searched');
+console.log('\nwhat the card says about the read, and where the search now is');
 {
+    // **The search is not here any more, and this is the assertion that keeps
+    // it that way.** A field, a coverage sentence and twelve hit rows used to
+    // hang off this card, three levels deep inside the probe readout, each hit
+    // offering a jump, a window pull and a press that opened the window as an
+    // input. All of it was worth having and none of it was a description of an
+    // input: it is the Find stage's question asked one file at a time. See
+    // `wordsRows` in ui/sources.js and `searchFor` in ui/find.js.
     A.shell.goTo('sources');
     pump(60);
-    const find = document.querySelector('.src-find');
-    ok(!!find, 'a search field is drawn under the transcript');
+    same(document.querySelector('.src-find'), null,
+         'no search field on an input card — a search is the Find stage\u2019s question');
+    same(document.querySelector('.src-hit'), null, 'and no hit list under a stream');
 
-    find.value = 'country';
-    find.dispatchEvent(new Event('change', { bubbles: true }));
+    // The row that replaced them. Gathered from the rows themselves rather than
+    // from a container's textContent: this DOM is bro's subset and aggregating
+    // text up a tree is not something to assume of it.
+    const readRows = () => Array.from(document.querySelectorAll('.src-read'))
+                                .map((n) => n.textContent || '');
+    const words = readRows().find((t) => t.indexOf('Words') >= 0);
+    ok(!!words, 'the transcript has a row in the Reading it section');
+    ok(/\d+ segments?/.test(words), `saying what it found (${words.trim()})`);
+    ok(/all of it|only the first/.test(words),
+       'and how much of the recording it read — a count without its coverage is ' +
+       'the one dishonest way to show this');
+
+    // Which soundtrack it actually read. The old rows were drawn under the
+    // *first* audio line and said nothing, which asserted by position an answer
+    // no reader gives: both ask libav for `av_find_best_stream` and both report
+    // the index they were handed. See `soundStream` in ui/sources.js.
+    ok(/A\d|best of \d/.test(words), 'and which stream it read');
+
+    // Which model. A statement rather than a field, and the path is on the
+    // tooltip: it is the same value for every input in the list, because the
+    // weights are a property of the machine.
+    ok(!!document.querySelector('[data-f="srcmodelpick"]'),
+       'a picker for the weights — a directory is not a thing to spell by hand');
+    same(document.querySelector('.src-model'), null,
+         'and no per-input path field, which drew the same machine-wide value once ' +
+         'per card and split the stream list in half doing it');
+}
+
+console.log('\nthe door to the search arrives with the rule already wired');
+{
+    // A door rather than a corridor. Walking somebody to an empty canvas and
+    // asking them to place a Recording, a Said and a Stack and wire the three
+    // together is four presses to get back to what one field did — which is
+    // exactly the reason `strip()` exists on that stage.
+    const before = A.find.findGraph().nodes.length;
+    const door = document.querySelector('[data-f="srcsearchwords"]');
+    ok(!!door, 'a finished transcript offers the search');
+    click(door);
     pump(60);
 
-    const hitRows = Array.from(document.querySelectorAll('.src-hit'));
-    ok(hitRows.length > 0, `hits are listed (${hitRows.length})`);
+    const g = A.find.findGraph();
+    ok(g.nodes.length > before, `it placed the rule (${g.nodes.length - before} nodes)`);
+    const said = g.nodes.filter((n) => n.kind === 'said');
+    same(said.length, 1, 'one Said');
+    const src = g.producers(said[0])[0];
+    ok(!!src && src.kind === 'source', 'wired to a Recording');
+    same(src.params.inputId, input.id, 'which names the recording the press was on');
+    ok(g.consumers(said[0]).some((n) => n.kind === 'stack'),
+       'and ending in a Stack, because a Said with nowhere to go finds candidates ' +
+       'no press can turn into clips');
 
-    // Every row carries the sentence around the hit. That is what tells the
-    // place you want from the four you do not, and a list of bare timestamps
-    // would make somebody click all of them.
-    const said = Array.from(document.querySelectorAll('.src-said'));
-    same(said.length, hitRows.length, 'every hit shows the sentence it was in');
-    ok(said.every((n) => n.textContent.trim().length > 0),
-       'and none of them is blank');
+    // The phrase is the only thing left to do, and it finds what the model's own
+    // search finds — one rule reading one recording, not every transcript there
+    // is. `searchIn` is the seam; see ui/find/nodes.js.
+    g.setParam(said[0], 'phrase', 'country');
+    pump(20);
+    const stacks = A.find.stacks();
+    ok(stacks.length >= 1, 'the stack exists');
+    const found = stacks[0].list;
+    ok(found.length >= 2, `and holds a candidate per place it was said (${found.length})`);
+    ok(found.every((c) => c.inputId === input.id),
+       'every one of them off the recording that was wired in');
 
-    // The coverage sentence, which is the honesty of the count.
-    // Gathered from the rows themselves rather than from a container's
-    // textContent: this DOM is bro's subset and aggregating text up a tree is
-    // not something to assume of it.
-    const rowText = () => Array.from(document.querySelectorAll('.src-data'))
-                               .map((n) => n.textContent || '').join(' | ');
-    const text = rowText();
-    ok(/\d+ places?/.test(text), 'the count is stated');
-    ok(/read so far|in all/.test(text),
-       'and never on its own — how much was searched is in the same sentence');
+    // A candidate is a *span* where a hit was a place, and the pad is the two
+    // clocks — the same measurement, applied once. `pullSpan` is what stops it
+    // being applied twice; see ui/transcript.js.
+    ok(found.every((c) => c.out > c.in), 'a candidate is a span, not a moment');
+    ok(found.every((c) => c.at >= c.in && c.at <= c.out),
+       'with the words inside it, which is what `at` is for');
 
-    // A phrase nobody said finds nothing, and still says how much was looked at.
-    find.value = 'wombat parliament';
-    find.dispatchEvent(new Event('change', { bubbles: true }));
+    // And the panel the door opened onto lists them, each with the one press
+    // worth having on a single candidate: go and look at it. That was the hit
+    // row's timestamp button on the Sources card, and it is the same restraint
+    // — the playhead moves and nothing is cut, because the two renditions of a
+    // stream do not share a zero.
+    A.drawFind();
     pump(60);
-    same(document.querySelectorAll('.src-hit').length, 0, 'a phrase nobody said finds nothing');
-    const none = rowText();
-    ok(/0 places/.test(none), 'and says so as a count');
-    ok(/read so far|in all/.test(none),
-       'with the coverage beside it — "none in ten minutes" is not "none at all"');
+    const cands = Array.from(document.querySelectorAll('#fn-panel .fn-cand'));
+    ok(cands.length > 0, `the rule's panel lists what it found (${cands.length})`);
+    ok(cands.every((r) => !!r.querySelector('button')),
+       'and every row carries the press that goes to that moment');
 
-    // Pulling a window is offered for a link and not for a local file: this one
-    // is on disk, so there is nothing to fetch and no button that would.
-    find.value = 'country';
-    find.dispatchEvent(new Event('change', { bubbles: true }));
-    pump(60);
-    const buttons = Array.from(document.querySelectorAll('.src-hit button'))
-                         .map((b) => b.textContent);
-    ok(!buttons.some((t) => /^Pull /.test(t)),
-       'a file already on this machine is offered no window to pull');
+    // Pressing it again is the same rule, not a second copy of it: the canvas
+    // would otherwise grow a chain per press.
+    const n = g.nodes.length;
+    A.shell.goTo('sources');
+    pump(40);
+    click(document.querySelector('[data-f="srcsearchwords"]'));
+    pump(40);
+    same(A.find.findGraph().nodes.length, n,
+         'a second press opens the rule it already made rather than making another');
+    same(A.find.findGraph().nodes.find((x) => x.kind === 'said').params.phrase, 'country',
+         'with the phrase still in it');
 }
 
 console.log('\nforgetting it takes the words and the search with them');
@@ -463,6 +519,8 @@ console.log('\nforgetting it takes the words and the search with them');
     // person has and it is the one that redraws: this stage is drawn directly
     // rather than off the change channel (see needs()/drawPending() in
     // ui/app.js), so a model call alone leaves the rows it wrote standing.
+    A.shell.goTo('sources');
+    pump(60);
     const forget = Array.from(document.querySelectorAll('button'))
                         .find((b) => (b.title || '') === 'Drop this transcript.');
     ok(!!forget, 'a finished transcript offers to be forgotten');
@@ -470,38 +528,46 @@ console.log('\nforgetting it takes the words and the search with them');
     pump(60);
     same(A.transcript.readOf(input.id), null, 'the press forgets it');
     same(A.transcript.search('country').length, 0, 'and it stops being searchable');
-    same(document.querySelectorAll('.src-hit').length, 0,
-         'and the hits come off the stage with it');
-    same(document.querySelector('.src-find'), null,
-         'along with the search field, which has nothing left to search');
+    same(document.querySelector('[data-f="srcsearchwords"]'), null,
+         'along with the door to the search, which has nothing left to search');
+
+    // And the rule on the Find stage survives it, saying which press is missing.
+    // A rule is *authored* and a transcript is derived — the exact inversion
+    // ui/find/model.js is built on — so forgetting the read must not delete the
+    // work of wiring it up.
+    const g = A.find.findGraph();
+    ok(g.nodes.some((x) => x.kind === 'said'),
+       'the rule outlives the read it was reading — a rule is authored, a ' +
+       'transcript is derived');
+    same(A.find.stacks()[0].list.length, 0, 'and finds nothing now');
 }
 
-console.log('\nthe model is chosen on the card, two ways, and remembered');
+console.log('\nthe model is a machine-wide choice, stated rather than typed per input');
 {
     // The weights are not shipped, so choosing them is the first thing anybody
     // does with this feature and it was the first thing to go wrong: a bare
     // text field, committed on `change` — which the engine did not fire for a
     // text control at all — so a path was typed, the button beside it was
     // pressed, and the read failed saying no model had been chosen. The engine
-    // is where that was fixed (bro, layout/value_change.h). What is here is the
-    // half this application owes it.
+    // is where that was fixed (bro, layout/value_change.h).
+    //
+    // What is left of it here is the *picker*, and that is the point. The field
+    // was drawn once per input while holding one value for all of them, because
+    // the weights are a property of the machine — remembered in localStorage
+    // for exactly that reason. What somebody needs on a card is which model
+    // will run, which the row states in a word.
     A.shell.goTo('sources');
     pump(60);
-    const field = document.querySelector('.src-model');
-    ok(!!field, 'the model directory is a field on the card');
-    same(field.value, A.transcript.modelPath(), 'showing what is chosen');
     ok(!!document.querySelector('[data-f="srcmodelpick"]'),
-       'and there is a picker beside it — a directory is not a thing to spell by hand');
+       'the weights are chosen through a picker');
 
-    // Both, because a person leaves a field and a test dispatches one event.
-    field.value = 'D:/weights/typed-in';
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-    same(A.transcript.modelPath(), 'D:/weights/typed-in',
-         'a path arrives as it is typed');
-    field.value = 'D:/weights/left-behind';
-    field.dispatchEvent(new Event('change', { bubbles: true }));
-    same(A.transcript.modelPath(), 'D:/weights/left-behind',
-         'and again when the field is left');
+    A.transcript.useModel('D:/weights/left-behind');
+    A.drawSources();
+    pump(20);
+    const named = Array.from(document.querySelectorAll('.src-read'))
+                       .map((n) => n.textContent || '')
+                       .find((t) => t.indexOf('left-behind') >= 0);
+    ok(!!named, 'and the card names the one that is chosen, by its directory');
 
     // Remembered, because the weights are a property of this machine and
     // finding them again on every launch is the friction the picker exists to

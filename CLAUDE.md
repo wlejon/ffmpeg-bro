@@ -410,6 +410,20 @@ unheard recording answers empty and *names the press that is missing*. That is
 also what keeps a keystroke in the phrase field cheap enough to re-evaluate on —
 `evaluate` is a whole-graph walk, memoised only to keep it off the frame loop.
 
+**But this stage is the only place a search is drawn**, and that half is newer.
+Sources had its own: a field on an input's card, a coverage sentence, twelve hit
+rows, each offering a jump, a window pull and a press that opened the window as
+an input. Every one of those was worth having and none of them was a description
+of an input — it was this stage's question asked one file at a time, nested three
+levels inside the probe readout, in a list that grew to a screenful. So the
+search is `said` and nothing else, the window pull is a press on a *stack*
+(`pullRows` in `ui/find/view.js`, which is where a selection actually lives), and
+what Sources keeps is `searchWords` — a door that walks here having already
+placed and wired a `Recording`, a `Said` and a `Stack` (`searchFor` in
+`ui/find.js`, reusing a chain already pointed at that recording rather than
+growing one per press). A door onto an empty canvas with three nodes still to
+place would have been a worse control than the field it replaced.
+
 **The rules are in the document and the stacks are not.** This is the exact
 inverse of `marks`/`peaks`/`transcript` and the distinction that decides where
 everything on the stage lives: a rule is *authored* — "one of these for every
@@ -604,8 +618,8 @@ belongs to the **input** rather than the clip and reaches the timeline through
 `timelineTime`, the same map the waveform, the Data lane and the Marks lane use.
 
 **A hit becomes a window, and that is the payoff.** `ui/transcript.js`
-`pullWindow()` copies only the span a search result is in — `ss` and `t` on the
-input, so what comes down the link is twenty seconds rather than six hours — as a
+`pullSpan()` copies only the span a candidate covers — `ss` and `t` on the input,
+so what comes down the link is twenty seconds rather than six hours — as a
 `fetch` with `soon`, which jumps the queue without preempting because the window
 is what somebody is waiting on and the whole-recording copy is what they started
 so that they could get on. `WINDOW_PAD` is ten seconds and is **a measurement,
@@ -613,10 +627,14 @@ not a margin**: the transcript is read from the soundtrack rendition and the
 picture rendition does not share its zero by up to 2.57 s, so a window that
 hugged the words would sometimes not contain them. `tests/ui_transcript.js`
 asserts the pad clears that number, which is what stops a later hand tightening
-it to look neat. When a window lands it is opened as a **new input** rather than
-the recording repointed — it is a different file with its own zero — and it goes
-in through the ordinary door, so `Use on the timeline` is still the press that
-puts it in the edit.
+it to look neat. The pad is applied **exactly once** and that is the whole reason
+there are two entry points: `pullWindow` takes a hit and pads it through
+`windowFor`, `pullSpan` takes a span that a `said` rule's own `Either side` has
+already padded, and padding the second again would write a file the card's own
+number does not describe. When a window lands it is opened as a **new input**
+rather than the recording repointed — it is a different file with its own zero —
+and it goes in through the ordinary door, so `Use on the timeline` is still the
+press that puts it in the edit.
 
 The weights are not shipped and an absent model is refused **by name**;
 `brosoundml/scripts/download-whisper.sh --size large-v3` puts one on disk.

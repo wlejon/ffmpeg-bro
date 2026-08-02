@@ -533,7 +533,37 @@ export function pullFor(inputId, from) {
 /// It is a **fetch and not a render**: a stream copy, no compositor, no encoder,
 /// so it does not take the one job slot and the Render button stays live. See
 /// `src/native/fetch_queue.h`.
+///
+/// The pad is applied *here*, by `windowFor`, because a raw hit is a segment
+/// boundary and a segment boundary is not a span anybody can cut. A caller that
+/// already holds a padded span — a `said` candidate off the Find stage, whose
+/// own `Either side` field decided the pad — wants `pullSpan` instead, or the
+/// ten seconds would be added to it twice.
 export function pullWindow(input, hit, dir) {
+    const duration = (input.probe && input.probe.duration) || 0;
+    const { from, to } = windowFor(hit, duration);
+    const pull = pullSpan(input, from, to, dir);
+    // What the window was pulled *for*, carried so a row can say it. Set after
+    // the fact rather than passed in, because a span is the whole of what a
+    // fetch needs and the words are the whole of what a person needs.
+    if (pull && !pull.hit) pull.hit = hit;
+    return pull;
+}
+
+/// The same fetch, given the span rather than the words — every use of a window
+/// pull, once the pad has already been decided.
+///
+/// **Split out of `pullWindow` when the search moved to the Find stage.** A
+/// candidate there is already padded (`ui/find/nodes.js` `said`, whose pad
+/// defaults to `WINDOW_PAD` and says in its own field what lowering it costs),
+/// so what that stage holds is a span and not a hit. Padding it again would put
+/// twenty seconds either side of a window whose card said ten, which is the
+/// quiet kind of wrong: the file is right, the number on the screen is not.
+///
+/// Idempotent by span, which is what makes `Pull these windows` over a stack of
+/// twelve hundred safe to press twice: the key is the input and the start, so a
+/// second press over the same candidates asks for nothing new.
+export function pullSpan(input, from, to, dir) {
     // **Which streams a copy carries is `copyRowsOf`'s and not this file's**,
     // for `ui/localcopy.js`'s reason: the Write stage's `Rewrap` answers the
     // same question, and two lists of what is copyable are the pair that comes
@@ -547,8 +577,8 @@ export function pullWindow(input, hit, dir) {
         return { key: '', inputId: input.id, state: 'failed',
                  error: 'there is nothing in that input that can be copied' };
     }
-    const duration = (input.probe && input.probe.duration) || 0;
-    const { from, to } = windowFor(hit, duration);
+    from = Math.max(0, from);
+    to = Math.max(to, from + 1);
     const key = keyOf(input.id, from);
     const have = pulls.get(key);
     if (have && have.state !== 'failed') return have;
@@ -557,7 +587,7 @@ export function pullWindow(input, hit, dir) {
     const pull = {
         key,
         inputId: input.id,
-        hit,
+        hit: null,
         from,
         to,
         path: `${dir}/${slug(input.name)}-${stamp}.mkv`,

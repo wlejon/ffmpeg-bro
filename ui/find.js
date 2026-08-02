@@ -51,6 +51,12 @@ export function readsMoved() { readStamp++; }
 
 export function findGraph() { return graph; }
 
+/// The input a candidate names, or null if it has been removed since the rule
+/// ran. The view asks this to find out whether a stack's material is a link —
+/// `sendToTimeline` asks the same question for the same reason, and a candidate
+/// naming an input that has gone is an ordinary state rather than a fault.
+export function inputOf(inputId) { return inputById(inputId); }
+
 /// The world a rule is evaluated against.
 ///
 /// Four functions, and they are the *whole* of what makes a stack depend on
@@ -110,6 +116,59 @@ export function findSummary() {
     for (const s of list) { n += s.list.length; secs += S.totalOf(s.list); }
     return [`${list.length} stack${list.length === 1 ? '' : 's'}`,
             n ? `${n} clips · ${S.showTime(secs)}` : 'nothing found yet'];
+}
+
+// ── arriving with a question already asked ────────────────────────────────
+
+/// A rule that searches this recording for words, built if there is not one.
+///
+/// **The door off the Sources stage, and it is a door rather than a corridor.**
+/// The word search used to be a field on an input's card: you typed a phrase and
+/// the places it was said appeared under it. That was the Find stage's question
+/// asked one file at a time, and moving it here was right — but "go to Find and
+/// place a Recording, then a Said, then a Stack, and wire the three up" is four
+/// presses to get back to what one field did. `strip()` in ui/sources.js exists
+/// because this application decided a paragraph naming a stage is not a door;
+/// neither is an empty canvas.
+///
+/// So the press arrives with the rule wired and selected, and the only thing
+/// left to do is the thing that was always the point — type the phrase.
+///
+/// **It reuses rather than accumulates.** Pressing it twice for one recording
+/// must not leave two identical chains on the canvas: a `Said` already fed by a
+/// `Recording` naming this input *is* the answer to the press, whatever phrase
+/// is in it, so it is selected instead. Returns the node the view should open,
+/// or null if the input cannot be searched at all.
+export function searchFor(input) {
+    if (!input || !input.probe) return null;
+
+    // One already wired to this recording, if there is one. The source is what
+    // identifies it — a `Said` naming no recording is somebody's half-finished
+    // rule and adopting it would rewire their canvas out from under them.
+    for (const node of graph.nodes) {
+        if (node.kind !== 'said') continue;
+        const src = graph.producers(node)[0];
+        if (src && src.kind === 'source' && src.params.inputId === input.id) return node;
+    }
+
+    // A `source` for this recording, reused if one is already on the canvas: two
+    // cards naming one file is a canvas that reads as two recordings.
+    let src = graph.nodes.find((n) => n.kind === 'source' &&
+                                      n.params.inputId === input.id);
+    if (!src) {
+        src = graph.add('source');
+        graph.setParam(src, 'inputId', input.id);
+    }
+    const said = graph.add('said');
+    graph.connect(src, said);
+
+    // A `Stack` for it to end in, because a `Said` with nowhere to go finds
+    // candidates that no press can turn into clips — `stacksOf` reads the sinks.
+    // Only when this chain has none: a `Said` wired into an existing arrangement
+    // already ends somewhere.
+    const sink = graph.add('stack');
+    graph.connect(said, sink);
+    return said;
 }
 
 // ── a stack becomes an edit ───────────────────────────────────────────────

@@ -55,6 +55,34 @@
 // The rows were not wrong; a file with two video tracks and five soundtracks
 // was forty rows of them, and nothing in this stage is read as often as "what
 // is in this file".
+//
+// ── the probe and the reads are two sections ───────────────────────────────
+//
+// And then that readout was broken in half again, by the three controls that
+// had each been drawn under the stream they read: `Read it` under a `gpmd`
+// track, `Find sounds` and `Transcribe` under the first soundtrack, and under
+// those a word search with twelve hit rows and a full-width Whisper model path.
+// Each argued its position and each argument was locally right — the control
+// that dispatches on a fourcc belongs beside the fourcc.
+//
+// In aggregate it was wrong, because the two things are not the same kind of
+// thing. **A probe answer is free and complete**: it is what libavformat said
+// the instant the input was opened, under the options above. **A read is
+// between thirty milliseconds and ninety minutes of this machine**, spent
+// because somebody pressed a button, derived rather than part of the edit, and
+// forgettable. Interleaving them put a text box between `A0` and `V1`.
+//
+// So `fileRows` is the probe and `readRows` is what has been spent on it, and
+// the section head is the whole of what makes the difference legible. Two
+// things came free with it: a read's row can **name the stream it read** (the
+// old ones sat under the first soundtrack and asserted by position an answer
+// `av_find_best_stream` had not given), and the Whisper model path stopped
+// being a per-input field for a value that is the same on every card.
+//
+// The word search left the stage entirely. It was the Find stage's question
+// asked one file at a time; `searchWords` is the door, and it arrives there
+// with the rule already wired. See `wordsRows` below and `searchFor` in
+// ui/find.js.
 
 import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
@@ -522,6 +550,7 @@ function drawDetail() {
         ...decodeRows(input),
         ...windowRows(input),
         ...contentRows(input),
+        ...readRows(input),
     ]);
 
     // The act, pinned under the column rather than laid out among the rows.
@@ -1630,107 +1659,136 @@ function fileRows(p, input) {
                   p.format.bitRate ? kbps(p.format.bitRate) : ''].filter(Boolean).join(' · '),
                  'dim'),
         ]),
-        ...p.streams.flatMap((s) => [streamLine(s), ...dataRows(input, s),
-                                     ...soundRows(input, s),
-                                     ...transcriptRows(input, s),
-                                     ...searchRows(input, s)]),
+        // **Stream lines and nothing else.** Three readers used to hang off
+        // these — the telemetry parser under a data line, the sound marks and
+        // the transcript under the first audio line, and the word search under
+        // that — each defensible on its own and wrong together. A probe answer
+        // is what libavformat said the moment this input was opened; a read is
+        // minutes to ninety minutes of this machine, spent on purpose. Mixing
+        // them put a full-width model-path field between `A0` and `V1` and cut
+        // the one readout on this stage that is looked at most in half. They are
+        // `readRows` now, in a section that says what they are.
+        ...p.streams.map(streamLine),
     ];
 }
 
-/// What a data track carries, for the ones something here can read.
-///
-/// **Under the stream's own line rather than in a panel of its own**, because
-/// this is the one screen where a stream is described and a `gpmd` track is a
-/// stream. It is also where the fourcc is already printed -- the readout's rule
-/// is that a data stream says its tag on the line, since every one of them is
-/// called `bin_data` -- so the control that dispatches on the tag belongs beside
-/// the tag it dispatches on.
-///
-/// Offered **only** where a parser exists: `streamsWorthReading` filters against
-/// `bro.ffmpeg.data.parsers()`, which is asked of the native registry. A real
-/// GoPro file carries `gpmd`, `tmcd` and `fdsc`, and two of those get no button
-/// rather than a button that fails at the press.
-function dataRows(input, stream) {
-    if (!input || stream.kind !== 'data') return [];
-    if (!streamsWorthReading(input).some((s) => s.index === stream.index)) return [];
+// ── what has been read out of it ───────────────────────────────────────────
 
-    const e = readingOf(input.id, stream.index);
-    if (!e) {
-        return [div('src-data', [
-            el('button', { cls: 'btn tiny', text: 'Read it',
-                           title: 'Parse this track and offer what it carries. It is a ' +
-                                  'walk over the whole track -- 32 ms for a four-hour-' +
-                                  'gigabyte camera file -- and it happens on a thread, ' +
-                                  'so nothing here stops while it does.',
-                           on: { click: () => { readStream(input, stream.index); drawSources(); } } }),
-            span('nothing has read this track yet', 'dim'),
-        ])];
-    }
-    if (e.state === 'reading')
-        return [div('src-data', [span('Reading' + (e.elapsed > 0.4
-            ? ' \u00b7 ' + e.elapsed.toFixed(1) + 's' : '') + '\u2026', 'dim')])];
-    if (e.state !== 'done')
-        return [div('src-data', [
-            span(e.error || 'will not read', 'src-error'),
-            el('button', { cls: 'btn tiny', text: 'Again',
-                           on: { click: () => { dropReading(input.id, stream.index);
-                                                readStream(input, stream.index);
-                                                drawSources(); } } }),
-        ])];
-
-    const r = e.reading;
-    const facts = [r.device, r.series.length + ' series', r.packets + ' packets']
-        .filter(Boolean).join(' \u00b7 ');
-    const rows = [div('src-data', [
-        span(facts, 'dim'),
-        el('button', { cls: 'btn tiny', text: 'Forget',
-                       title: 'Drop this reading and take its series off the timeline.',
-                       on: { click: () => { dropReading(input.id, stream.index);
-                                            drawSources(); } } }),
-    ])];
-    // A track that would not parse all the way through is drawn with what
-    // survived and **says so**, because an empty plot cannot be told from a file
-    // with nothing in it. The count is the honest measure: one bad packet in
-    // seven thousand is a scratch, and seven thousand is a different file.
-    if (r.refused > 0)
-        rows.push(div('src-data', [
-            span(r.refused + ' of ' + r.packets + ' packets would not parse \u00b7 ' +
-                 r.refusal, 'src-error'),
-        ]));
-    rows.push(div('src-data-series',
-        r.series.map((sv) => seriesChip(input, stream.index, sv))));
-    return rows;
+/// Every deep read of this input, in one section, in one vocabulary.
+///
+/// **A read is not what came back, and this section exists to stop the two
+/// being the same paragraph.** These three — what a data track carries, where
+/// something happens in the soundtrack, what was said in it — were each drawn
+/// *inside* the stream list, under the line of the stream they read. One at a
+/// time that is defensible and each of them argued it in its own header: the
+/// control that dispatches on a fourcc belongs beside the fourcc, the control
+/// that reads a soundtrack belongs beside the soundtrack. In aggregate it was
+/// wrong. A probe answer is what libavformat said the instant this input was
+/// opened, free and complete; a read is between thirty milliseconds and ninety
+/// minutes of this machine, spent because somebody pressed a button. Drawing
+/// them as one thing put a full-width model-path field between `A0` and `V1`,
+/// and the readout looked at more than anything else on this stage — what is in
+/// this file — was cut in half by a text box.
+///
+/// So `What came back` is the probe and this is what has been spent on it.
+///
+/// **Each row names its stream**, which the old rows did not and could not.
+/// Marks and words are read from `av_find_best_stream`'s pick and were drawn
+/// under the *first* audio line, so the position asserted an answer neither
+/// reader had given. Both report the index they were actually handed
+/// (`sound_marks.h`, `transcribe.h`), and `soundStream` says it.
+///
+/// **The presses stay on this stage.** A transcript and a set of marks belong to
+/// an *input* rather than to a rule, and they cost minutes to hours, so nothing
+/// should start one unasked. `ui/find/` only ever reads them — which is what
+/// keeps a keystroke in a phrase field there cheap enough to re-evaluate the
+/// whole graph on — and a finder over an unheard recording names the press that
+/// is missing rather than making it.
+function readRows(input) {
+    if (!input || !input.probe) return [];
+    const rows = [
+        ...soundRow(input),
+        ...wordsRows(input),
+        ...telemetryRows(input),
+    ];
+    if (!rows.length) return [];
+    return [
+        head('Reading it', {
+            title: 'What this machine has been asked to work out about this input, ' +
+                   'beyond opening it. Nothing here happens on its own: each is a ' +
+                   'press, because each costs real time, and each answer is derived ' +
+                   'rather than part of the edit — none of it is in the document, on ' +
+                   'the undo track or in the unsaved marker.',
+        }),
+        ...rows,
+    ];
 }
 
-/// Where something happens in this soundtrack, for the audio streams.
+/// One read, on one line: what it reads, which stream it reads, where it has got
+/// to, and the door.
 ///
-/// **Under the stream's own line**, for `dataRows`'s reason exactly: this is the
-/// screen where a stream is described, a soundtrack is a stream, and the control
-/// that reads one belongs beside the line that says what it is.
+/// Four columns and always the same four, which is the whole point of collecting
+/// them: three readers that answer completely different questions are compared
+/// at a glance by "has this been done, on what, and how did it go". `said` is a
+/// node rather than a string because a failure is `src-error` and a summary is
+/// `dim`, and the difference between those is the row's answer.
+function readLine(what, of, ofWhy, said, acts) {
+    return div('src-read', [
+        span(what, 'src-read-k'),
+        el('span', { cls: 'src-read-of mono', text: of, title: ofWhy || '' }),
+        typeof said === 'string' ? el('span', { cls: 'src-read-v dim', text: said }) : said,
+        ...(acts || []).filter(Boolean),
+    ]);
+}
+
+/// A second line under a read, for whatever it has to offer once it is done —
+/// the mark chips, the series chips, a refusal count. Indented under the row it
+/// belongs to rather than beside it, because there can be forty of them.
+function readUnder(kids) { return div('src-read-more', kids.filter(Boolean)); }
+
+/// Which soundtrack a read reads, as the row's second column.
+///
+/// **Reported where there is an answer and named as a choice where there is
+/// not.** Both readers ask libav for `av_find_best_stream` — what `[0:a]` means
+/// on a command line — and both hand back the index they were given. Before any
+/// press there is nothing to report, and the two cases are genuinely different:
+/// a file with one soundtrack has no ambiguity to state, and a file with three
+/// has one that must not be settled by drawing the row under the first of them.
+function soundStream(input, entry) {
+    const p = (input.probe && input.probe.streams) || [];
+    const audio = p.filter((s) => s.kind === 'audio');
+    const got = entry && entry.result && entry.result.streamIndex;
+    if (Number.isInteger(got) && got >= 0)
+        return { of: `A${got}`, why: audio.length > 1
+            ? `read from A${got} — the best of this input's ${audio.length} soundtracks`
+            : 'read from this input\'s soundtrack' };
+    if (audio.length === 1)
+        return { of: `A${audio[0].index}`, why: 'the only soundtrack in this input' };
+    return { of: `best of ${audio.length}`,
+             why: `This input has ${audio.length} soundtracks and a read takes one — ` +
+                  'av_find_best_stream\'s pick, which is what [0:a] means on a ' +
+                  'command line. Which one it was is on this row once it has run.' };
+}
+
+/// Where something happens in this soundtrack.
 ///
 /// **Only where it will work.** `marks.worthReading` is the question — does this
-/// input carry a soundtrack — so a file with no audio stream gets no control
-/// rather than one that fails at the press. Same rule as the parser list one
-/// function up. It is asked of the marks model rather than of the input, because
-/// what counts as worth reading is that module's to decide.
+/// input carry a soundtrack — so a file with no audio stream gets no row rather
+/// than one whose press fails. It is asked of the marks model rather than of the
+/// input, because what counts as worth reading is that module's to decide.
 ///
 /// **The words on it are the whole of what stops this being a lie.** Nothing
 /// here says "birds", "speech" or "events": the button says what it does, and
 /// the three legends say what was measured. They come from `MARK_WORDS` in
 /// ui/marks.js so there is one copy of them.
-function soundRows(input, stream) {
-    if (!input || stream.kind !== 'audio') return [];
-    // The best audio stream is what is read — `av_find_best_stream`, which is
-    // what `[0:a]` means on a command line — so the control goes under one line
-    // and not under every audio stream of a file that has three. Which one it
-    // actually was comes back on the reading and is shown below.
+function soundRow(input) {
     if (!marksModel.worthReading(input)) return [];
-    const p = input.probe && input.probe.streams || [];
-    if (p.find((s) => s.kind === 'audio') !== stream) return [];
 
     const e = marksModel.readOf(input.id);
-    if (!e) {
-        return [div('src-data', [
+    const { of, why } = soundStream(input, e);
+
+    if (!e)
+        return [readLine('Sound', of, why, 'nothing has listened to this yet', [
             el('button', { cls: 'btn tiny', text: 'Find sounds',
                            // What it finds is listed out of `MARK_WORDS` rather
                            // than written here, for the reason that object
@@ -1748,23 +1806,22 @@ function soundRows(input, stream) {
                                             .join('\n'),
                            on: { click: () => { marksModel.findSounds(input);
                                                 drawSources(); } } }),
-            span('nothing has listened to this soundtrack yet', 'dim'),
         ])];
-    }
+
     if (e.state === 'reading')
-        return [div('src-data', [span('Listening' + (e.elapsed > 0.4
-            ? ' · ' + e.elapsed.toFixed(1) + 's' : '') + '…', 'dim')])];
+        return [readLine('Sound', of, why, 'Listening' + (e.elapsed > 0.4
+            ? ' · ' + e.elapsed.toFixed(1) + 's' : '') + '…', [])];
+
     if (e.state !== 'done')
-        return [div('src-data', [
-            span(e.error || 'will not read', 'src-error'),
+        return [readLine('Sound', of, why,
+                         span(e.error || 'will not read', 'src-read-v src-error'), [
             el('button', { cls: 'btn tiny', text: 'Again',
                            on: { click: () => { marksModel.dropMarks(input.id);
                                                 marksModel.findSounds(input);
                                                 drawSources(); } } }),
         ])];
 
-    const rows = [div('src-data', [
-        span(marksModel.summaryOf(e), 'dim'),
+    const rows = [readLine('Sound', of, why, marksModel.summaryOf(e), [
         el('button', { cls: 'btn tiny', text: 'Forget',
                        title: 'Drop these marks and take them off the timeline.',
                        on: { click: () => { marksModel.dropMarks(input.id);
@@ -1776,7 +1833,7 @@ function soundRows(input, stream) {
     // between. Each chip's tooltip is the sentence saying what that kind
     // actually measures, because a colour on a lane cannot say it.
     const kept = countByKind(e);
-    rows.push(div('src-data-series', MARK_KINDS.map((kind) =>
+    rows.push(readUnder(MARK_KINDS.map((kind) =>
         el('button', {
             cls: 'src-series' + (marksModel.isShown(kind) ? ' on' : ''),
             title: marksModel.MARK_WORDS[kind],
@@ -1820,70 +1877,40 @@ function ensureModel() {
     return true;
 }
 
-/// What was *said* in this soundtrack, under the same stream line as the marks.
+/// Which model is chosen, as the name of the directory it is in.
 ///
-/// Beside `Find sounds` rather than anywhere else because they answer the two
-/// halves of one question — where something happened, and what was said — and a
-/// person who has just read one wants the other in the same place.
-///
-/// **The model is asked for before anything is read, and its absence is stated
-/// rather than hidden.** The weights are between 145 MB and 3 GB and are not
-/// shipped, so the ordinary state of a fresh checkout is that there is no model
-/// and there is nothing this can do about it. What it must not do is offer a
-/// button that appears to work: with no model chosen the row says so and shows
-/// the field, and the read itself names the file it could not find.
-function transcriptRows(input, stream) {
-    if (!input || stream.kind !== 'audio') return [];
-    if (!transcriptModel.worthReading(input)) return [];
-    const p = (input.probe && input.probe.streams) || [];
-    if (p.find((x) => x.kind === 'audio') !== stream) return [];
+/// **A statement, not a field, and not once per input.** The path used to be an
+/// editable box on this card — wide, because a path is long — and it was drawn
+/// again for every input in the list while holding the same value for all of
+/// them: it is remembered in `localStorage` because the weights are a property
+/// of the machine and not of the edit. What somebody needs to know here is
+/// *which* model will run, which is the difference between a transcript that is
+/// right and 145 MB of guesses, and the directory's own name is that answer in
+/// one word — `large-v3`, `whisper-tiny`. The path in full is on the tooltip and
+/// the door to changing it is the press beside it.
+function modelName() {
+    const p = transcriptModel.modelPath();
+    if (!p) return '';
+    return basename(String(p).replace(/[\\/]+$/, '')) || p;
+}
 
-    const rows = [];
-    const e = transcriptModel.readOf(input.id);
-
-    // The model directory, always visible once a transcription has been thought
-    // about, and reachable two ways because the two are different questions.
-    //
-    // **Pick one**, because it is a directory on this machine and typing a path
-    // by hand is a spelling test with a wrong answer that reads as a broken
-    // application: `there is no '<path>/config.json'` names a file the user
-    // believes they chose. `showOpenFolderDialog` is bro's, the same door
-    // `ui/document.js` and `ui/export/form.js` open for a file, and folders
-    // rather than files because a Whisper model *is* the directory. It answers
-    // with a list and an empty one means cancelled — which is not the same as
-    // choosing nothing, so nothing is written.
-    //
-    // **And show the path**, because the thing a person often has is a line a
-    // download script printed and pasting it is faster than walking a tree to
-    // it — and because a field is the only thing that can show *which* model is
-    // chosen, which is the difference between a transcript that is right and
-    // one that is 145 MB of guesses.
-    const modelField = el('input', {
-        cls: 'src-model', type: 'text',
-        value: transcriptModel.modelPath(),
-        placeholder: 'a Whisper model directory',
-        title: 'A directory holding config.json, model.safetensors, vocab.json ' +
-               'and merges.txt.\nNothing is downloaded here: brosoundml\'s ' +
+/// The press that chooses the weights. `showOpenFolderDialog` is bro's, the same
+/// door `ui/document.js` and `ui/export/form.js` open for a file, and **folders
+/// rather than files** because a Whisper model *is* the directory. It answers
+/// with a list and an empty one means cancelled — which is not the same as
+/// choosing nothing, so nothing is written.
+function modelButton() {
+    return el('button', {
+        cls: 'btn tiny', 'data-f': 'srcmodelpick', text: 'Model…',
+        title: 'Choose the directory the weights are in.\n' +
+               'It holds config.json, model.safetensors, vocab.json and ' +
+               'merges.txt.\nNothing is downloaded here: brosoundml\'s ' +
                'scripts/download-whisper.sh --size large-v3 puts one on disk.\n' +
                'tiny is 145 MB and reads clean speech; large-v3 is 3 GB and is ' +
                'the one to use if the transcript has to be right.\n' +
                'Remembered between runs — the weights are a property of the ' +
-               'machine rather than of the edit.',
-        // Both, and **neither redraws**. `input` is what makes a pasted path
-        // arrive as it is pasted; `change` is the departure, which the engine
-        // now reports (bro `layout/value_change.h` — it did not, which is why
-        // typing a path and pressing the button beside it said no model had
-        // been chosen). Redrawing from either is the trap under both: a change
-        // fires during the *press* on that button, and rebuilding this row then
-        // frees the button between its mousedown and its mouseup, so the press
-        // it was reporting for never becomes a click. Nothing here needs the
-        // redraw — the field already shows what it holds.
-        on: { input: (ev) => transcriptModel.useModel(ev.target.value),
-              change: (ev) => transcriptModel.useModel(ev.target.value) },
-    });
-    const pickModel = el('button', {
-        cls: 'btn tiny', 'data-f': 'srcmodelpick', text: 'Model…',
-        title: 'Choose the directory the weights are in.',
+               'machine rather than of the edit, so this is the same choice for ' +
+               'every input.',
         on: { click: () => {
             if (typeof showOpenFolderDialog !== 'function') return;
             const picked = showOpenFolderDialog(transcriptModel.modelPath() || null);
@@ -1893,29 +1920,53 @@ function transcriptRows(input, stream) {
             drawSources();
         } },
     });
+}
+
+/// What was *said* in this soundtrack, under the same head as the marks.
+///
+/// Beside `Sound` rather than anywhere else because they answer the two halves
+/// of one question — where something happened, and what was said — and a person
+/// who has just read one wants the other in the same place.
+///
+/// **The model is named before anything is read, and its absence is stated
+/// rather than hidden.** The weights are between 145 MB and 3 GB and are not
+/// shipped, so the ordinary state of a fresh checkout is that there is no model
+/// and there is nothing this can do about it. What it must not do is offer a
+/// button that appears to work: with no model chosen the row says so, the press
+/// opens the picker rather than failing (`ensureModel`), and the read itself
+/// names the file it could not find.
+///
+/// **What is *not* here is the search.** A field, a coverage sentence and twelve
+/// hit rows used to hang off this row, each hit offering a jump, a window pull
+/// and a press that opened the window as an input. Every one of those was worth
+/// having and none of them was a description of an input: it is the Find stage's
+/// question — what is in this, and which of it do I want — asked one file at a
+/// time, three levels deep inside a probe readout, in a list that grew to a
+/// screenful. It is on that stage now, where the `said` rule already ran the
+/// same search, and `Search these words` is the door. See docs/manual/find.md.
+function wordsRows(input) {
+    if (!transcriptModel.worthReading(input)) return [];
+
+    const e = transcriptModel.readOf(input.id);
+    const { of, why } = soundStream(input, e);
+    const model = modelName();
+    const line = (said, acts) => readLine('Words', of, why, said, acts);
 
     if (!e) {
-        rows.push(div('src-data', [
-            el('button', {
-                cls: 'btn tiny', text: 'Transcribe',
-                title: 'Decode this soundtrack and read what was said in it, on ' +
-                       'a thread. The words arrive while it reads, so it is ' +
-                       'searchable long before it finishes.\n' +
-                       'A transcript is a place to look, never a cut: the ' +
-                       'renditions of a stream do not share a zero, so a hit ' +
-                       'moves the playhead and you agree.',
-                on: { click: () => { if (ensureModel())
-                                         transcriptModel.transcribe(input);
-                                     drawSources(); } },
-            }),
-            pickModel,
-            modelField,
-        ]));
-        if (!transcriptModel.modelPath())
-            rows.push(div('src-data', [
-                span('no model chosen — nothing has read this soundtrack for words',
-                     'dim')]));
-        return rows;
+        const start = el('button', {
+            cls: 'btn tiny', text: 'Transcribe',
+            title: 'Decode this soundtrack and read what was said in it, on ' +
+                   'a thread. The words arrive while it reads, so it is ' +
+                   'searchable long before it finishes.\n' +
+                   'A transcript is a place to look, never a cut: the ' +
+                   'renditions of a stream do not share a zero, so a hit ' +
+                   'moves the playhead and you agree.',
+            on: { click: () => { if (ensureModel()) transcriptModel.transcribe(input);
+                                 drawSources(); } },
+        });
+        return [line(model ? `${model} · nothing has read this for words yet`
+                           : 'no model chosen — nothing has read this for words',
+                     [start, modelButton()])];
     }
 
     if (e.state === 'reading') {
@@ -1941,210 +1992,143 @@ function transcriptRows(input, stream) {
         if (r && r.segments.length) bits.push(`${r.segments.length} segments`);
         if (p.rate) bits.push(`${p.rate.toFixed(1)}× realtime`);
         if (p.left) bits.push(`about ${transcriptModel.showLeft(p.left)} left`);
-        rows.push(div('src-data', [
-            span(`Transcribing · ${bits.join(' · ')}`, 'dim'),
+        const rows = [line(bits.join(' · '), [
             el('button', { cls: 'btn tiny', text: 'Stop',
                            title: 'Stop here and keep the words already found.',
                            on: { click: () => { transcriptModel.stopTranscribing(input.id);
                                                 drawSources(); } } }),
-        ]));
+        ])];
         // Which device it is on, and why that matters. A *statement* rather than
         // an explanation in `ui/export/explain.js`'s sense — it changes with the
         // machine and is the answer to "why is this taking days" — so it is
         // never folded. It is only said when it is bad news: on a card there is
         // nothing to explain and a line saying so would be one more thing to
         // read past.
-        const why = transcriptModel.whySlow();
-        if (why) rows.push(div('src-data', [span(why, 'ex-note')]));
+        const slow = transcriptModel.whySlow();
+        if (slow) rows.push(readUnder([span(slow, 'ex-note')]));
         return rows;
     }
 
-    if (e.state === 'failed') {
-        rows.push(div('src-data', [span(e.error || 'will not read', 'src-error')]));
-        rows.push(div('src-data', [
+    if (e.state === 'failed')
+        return [line(span(e.error || 'will not read', 'src-read-v src-error'), [
             el('button', { cls: 'btn tiny', text: 'Again',
                            on: { click: () => {
                                if (!ensureModel()) return drawSources();
                                transcriptModel.dropTranscript(input.id);
                                transcriptModel.transcribe(input);
                                drawSources(); } } }),
-            pickModel,
-            modelField,
-        ]));
-        return rows;
-    }
+            modelButton(),
+        ])];
 
     // Done, or stopped part way. Both keep their words, and a stopped one says
     // so — because what it holds is a transcript of *part* of the recording and
     // a search over it must not look like a search over all of it.
     const r = e.result || { segments: [], read: 0, duration: 0 };
     const part = e.state === 'stopped' || (r.duration > 0 && r.read < r.duration - 0.5);
-    rows.push(div('src-data', [
-        span(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
-             (part ? ` · only the first ${r.read.toFixed(0)}s of ${r.duration.toFixed(0)}s`
-                   : ' · all of it'), 'dim'),
-        // The door to the other thing a transcript is for. The search below
-        // finds a moment and pulls the twenty seconds around it as a new input,
-        // which is a question about *this file*; the Find stage turns the same
-        // words into stacks of clips you can weave together, which is a question
-        // about the edit. Both are worth having and they are on two stages
-        // because they are two questions — this is what says the second exists.
-        doorTo('Make clips…', 'find',
-               'Turn what was said into stacks of clips on the Find stage — ' +
-               'every use of a word, weighed against runs of sound, and ' +
-               'arranged.'),
+    return [line(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
+                 (part ? ` · only the first ${clock(r.read)} of ${clock(r.duration)}`
+                       : ' · all of it'), [
+        // The door to what a transcript is *for*, and it arrives with the rule
+        // already built. Walking somebody to an empty canvas and asking them to
+        // place a Recording, a Said and a Stack and wire the three together is a
+        // door in the sense that a corridor is a door — `strip()` above exists
+        // because this application decided a paragraph naming a stage is not
+        // one. See `searchWords` in ui/app.js.
+        el('button', {
+            cls: 'btn tiny', 'data-f': 'srcsearchwords', text: 'Search these words…',
+            title: 'Look for a word or a phrase in what was said, on the Find ' +
+                   'stage — where every place it was said becomes a stack of ' +
+                   'candidate clips you can weigh, weave and send to the ' +
+                   'timeline.\nThis takes you there with the rule already wired ' +
+                   'to this recording; type the phrase into it.',
+            on: { click: () => { if (hooks.searchWords) hooks.searchWords(input); } },
+        }),
         part ? el('button', { cls: 'btn tiny', text: 'Carry on',
                               title: 'Read the rest of the soundtrack.',
                               on: { click: () => {
                                   transcriptModel.dropTranscript(input.id);
                                   transcriptModel.transcribe(input);
                                   drawSources(); } } })
-             : span('', 'dim'),
+             : null,
         el('button', { cls: 'btn tiny', text: 'Forget',
                        title: 'Drop this transcript.',
                        on: { click: () => { transcriptModel.dropTranscript(input.id);
                                             drawSources(); } } }),
-    ]));
-    return rows;
-}
-
-/// What has been typed into the word search, and how many hits to draw.
-///
-/// Not persisted and not in the document, for `marks.js`'s `shown` reason: it is
-/// an editorial act like a selected clip, and losing it on reopen costs a press.
-let query = '';
-let showAll = false;
-const HITS_SHOWN = 12;
-
-/// mm:ss, or h:mm:ss past an hour. A six-hour recording is the case this exists
-/// for and `12345.6s` is not a time anybody reads.
-///
-/// **Not `clock()` from `format.js`, and not named it either.** That one pads
-/// the hour, which is right in a timecode field of fixed width and wrong in a
-/// sentence — "0 places in the first 00:01:06" reads as a serial number.
-///
-/// The name mattered more than the difference. `clock` is imported at the top
-/// of this file, and a `function clock` beside it did not shadow the import —
-/// an import is a *live binding*, so the declaration was compiled into a write
-/// through it and replaced `format.js`'s own `clock`, for every importer.
-/// `timecode()` calls it internally, so the transport's readout became
-/// `0:01:08` in a field four numbers wide, and nothing in the diff was near it.
-/// That is now a SyntaxError in the engine (quickjs-ng, `is_module_import`),
-/// which is where it belonged; the rename is what this file owes it.
-function said(t) {
-    const s = Math.max(0, Math.floor(t));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const ss = String(s % 60).padStart(2, '0');
-    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
-}
-
-/// Finding a word, and what to do with the place it was said.
-///
-/// **Under the transcript rather than anywhere else.** A search is only over
-/// what has been read, so it belongs beside the thing that says how much that
-/// is — putting it on the timeline would separate the count from its coverage,
-/// and a count without its coverage is the one dishonest way to show this.
-function searchRows(input, stream) {
-    // Under the one audio stream the transcript was read from, for
-    // `transcriptRows`' reason: the control that reads a soundtrack goes beside
-    // the line that says what it is, and a file with three of them gets one row.
-    if (!input || stream.kind !== 'audio') return [];
-    const p = (input.probe && input.probe.streams) || [];
-    if (p.find((x) => x.kind === 'audio') !== stream) return [];
-
-    const e = transcriptModel.readOf(input.id);
-    if (!e || !e.result || !e.result.segments.length) return [];
-
-    const rows = [div('src-data', [
-        el('input', {
-            cls: 'src-find', type: 'text', value: query,
-            placeholder: 'find a word or a phrase',
-            title: 'Searches every transcript there is, over as much of each as ' +
-                   'has been read so far.',
-            // Both, deliberately: `input` is what makes a search feel live as
-            // you type, and `change` is what every other field on this stage is
-            // driven by — and what the suites dispatch. Listening to one would
-            // be a control that works for a person or for a test but not both.
-            on: { input: (ev) => { query = ev.target.value; showAll = false;
-                                   drawSources(); },
-                  change: (ev) => { query = ev.target.value; showAll = false;
-                                    drawSources(); } },
-        }),
+        modelButton(),
     ])];
-
-    if (!query.trim()) return rows;
-
-    const hits = transcriptModel.search(query).filter((h) => h.inputId === input.id);
-    const cov = transcriptModel.coverage();
-    // **The count and the coverage in one sentence, always.** "No results" over
-    // ten minutes of a six-hour recording and "no results" over all of it are
-    // different answers, and a count on its own cannot tell them apart.
-    const part = cov.duration > 0 && cov.read < cov.duration - 0.5;
-    rows.push(div('src-data', [
-        span(`${hits.length} ${hits.length === 1 ? 'place' : 'places'}` +
-             (part ? ` in the first ${said(cov.read)} of ${said(cov.duration)} read so far`
-                   : ` in all ${said(cov.duration)}`), 'dim'),
-    ]));
-    if (!hits.length) return rows;
-
-    const shown = showAll ? hits : hits.slice(0, HITS_SHOWN);
-    for (const hit of shown) rows.push(hitRow(input, hit));
-    if (hits.length > shown.length)
-        rows.push(div('src-data', [
-            el('button', { cls: 'btn tiny', text: `${hits.length - shown.length} more`,
-                           on: { click: () => { showAll = true; drawSources(); } } }),
-        ]));
-    return rows;
 }
 
-/// One place a phrase was said: when, what was around it, and the two things
-/// worth doing about it.
-function hitRow(input, hit) {
-    const pull = transcriptModel.pullFor(input.id, 
-        Math.max(0, hit.start - transcriptModel.WINDOW_PAD));
+/// What a data track carries, for the ones something here can read.
+///
+/// Offered **only** where a parser exists: `streamsWorthReading` filters against
+/// `bro.ffmpeg.data.parsers()`, which is asked of the native registry. A real
+/// GoPro file carries `gpmd`, `tmcd` and `fdsc`, and two of those get no row
+/// rather than a button that fails at the press.
+///
+/// One row per readable track rather than one for the input, unlike the two
+/// above: a file can carry two of these and they are genuinely two reads, which
+/// is why the fourcc is in the row's stream column. Every data stream probes as
+/// `bin_data`, so without the tag a file with two would show the same row twice
+/// — the same fact `streamLine` states, and the reason the tag is on that line.
+function telemetryRows(input) {
+    const rows = [];
+    for (const stream of streamsWorthReading(input)) {
+        const of = `D${stream.index}`;
+        const why = `${stream.tag || stream.codec} — parsed by the reader registered ` +
+                    'for that fourcc, which is the whole identity of a data track ' +
+                    '(every one of them probes as bin_data).';
+        const e = readingOf(input.id, stream.index);
 
-    const kids = [
-        el('button', {
-            cls: 'btn tiny mono', text: said(hit.start),
-            title: 'Go to this moment. The playhead moves; nothing is cut.\n' +
-                   'A transcript is a place to look — the renditions of a stream ' +
-                   'do not share a zero, so the last few seconds are yours.',
-            on: { click: () => { if (hooks.goToHit) hooks.goToHit(input, hit); } },
-        }),
-        span(hit.text.length > 90 ? hit.text.slice(0, 88) + '…' : hit.text, 'src-said'),
-    ];
+        if (!e) {
+            rows.push(readLine('Telemetry', of, why, 'nothing has read this track yet', [
+                el('button', { cls: 'btn tiny', text: 'Read it',
+                               title: 'Parse this track and offer what it carries. It is a ' +
+                                      'walk over the whole track -- 32 ms for a four-hour-' +
+                                      'gigabyte camera file -- and it happens on a thread, ' +
+                                      'so nothing here stops while it does.',
+                               on: { click: () => { readStream(input, stream.index);
+                                                    drawSources(); } } }),
+            ]));
+            continue;
+        }
+        if (e.state === 'reading') {
+            rows.push(readLine('Telemetry', of, why, 'Reading' + (e.elapsed > 0.4
+                ? ' · ' + e.elapsed.toFixed(1) + 's' : '') + '…', []));
+            continue;
+        }
+        if (e.state !== 'done') {
+            rows.push(readLine('Telemetry', of, why,
+                               span(e.error || 'will not read', 'src-read-v src-error'), [
+                el('button', { cls: 'btn tiny', text: 'Again',
+                               on: { click: () => { dropReading(input.id, stream.index);
+                                                    readStream(input, stream.index);
+                                                    drawSources(); } } }),
+            ]));
+            continue;
+        }
 
-    // Pulling a window is offered for a link and not for a file: a file on this
-    // machine is already here, and copying twenty seconds out of it to somewhere
-    // else would be a second copy of something nothing is waiting for.
-    if (input.remote) {
-        if (!pull)
-            kids.push(el('button', {
-                cls: 'btn tiny', text: 'Pull ' + (2 * transcriptModel.WINDOW_PAD) + 's',
-                title: `Copy just this window to this machine — ${transcriptModel.WINDOW_PAD}s ` +
-                       'either side of what was said.\n' +
-                       'That pad is not slack: the transcript was read from the ' +
-                       'soundtrack rendition and the picture rendition does not ' +
-                       'share its zero (measured up to 2.6s apart on one ' +
-                       'recording), so a window that hugged the words would ' +
-                       'sometimes not contain them.\n' +
-                       'It is a stream copy, so it runs in the background and ' +
-                       'jumps ahead of any whole-recording copy already queued.',
-                on: { click: () => { if (hooks.pullWindow) hooks.pullWindow(input, hit);
-                                     drawSources(); } },
-            }));
-        else if (pull.state === 'failed')
-            kids.push(span(pull.error || 'would not copy', 'src-error'));
-        else if (pull.state === 'done')
-            kids.push(el('button', { cls: 'btn tiny', text: 'Use it',
-                title: 'Put this window on the timeline as a clip of the local file.',
-                on: { click: () => { if (hooks.useWindow) hooks.useWindow(pull); } } }));
-        else
-            kids.push(span(pull.state === 'running'
-                ? `copying ${Math.round((pull.progress || 0) * 100)}%` : 'queued', 'dim'));
+        const r = e.reading;
+        const facts = [r.device, r.series.length + ' series', r.packets + ' packets']
+            .filter(Boolean).join(' · ');
+        rows.push(readLine('Telemetry', of, why, facts, [
+            el('button', { cls: 'btn tiny', text: 'Forget',
+                           title: 'Drop this reading and take its series off the timeline.',
+                           on: { click: () => { dropReading(input.id, stream.index);
+                                                drawSources(); } } }),
+        ]));
+        // A track that would not parse all the way through is drawn with what
+        // survived and **says so**, because an empty plot cannot be told from a
+        // file with nothing in it. The count is the honest measure: one bad
+        // packet in seven thousand is a scratch, and seven thousand is a
+        // different file.
+        if (r.refused > 0)
+            rows.push(readUnder([
+                span(r.refused + ' of ' + r.packets + ' packets would not parse · ' +
+                     r.refusal, 'src-error'),
+            ]));
+        rows.push(readUnder(r.series.map((sv) => seriesChip(input, stream.index, sv))));
     }
-    return div('src-data src-hit', kids);
+    return rows;
 }
 
 /// The three kinds, in the order the chips go in. Taken off `MARK_WORDS` so that

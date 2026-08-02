@@ -74,7 +74,11 @@ Sources, deliberately, because nothing should spend that without being asked. A
 finder over a recording nobody has listened to answers with an empty stack and
 says which press is missing.
 
-**Said** — every place a phrase was said, out of the transcript.
+**Said** — every place a phrase was said, out of the transcript. This is the
+whole of the word search: there is no second one on an input's card, and
+`Search these words…` on the Sources `Words` row walks here with a `Recording`,
+a `Said` and a `Stack` already placed and wired to that recording, so the phrase
+is the only thing left to type.
 
 - *Words* — what to look for. Case and punctuation are ignored; spaces are not,
   so a phrase search works.
@@ -161,6 +165,40 @@ rather than with the file it came from. Forty clips all called
 
 A candidate whose recording has been removed since the rule ran is counted and
 said out loud rather than dropped in silence.
+
+Each candidate in the panel's preview list carries its own timestamp as a press:
+it moves the playhead to that moment through whichever clip covers it, and
+nothing is cut. A recording with nothing of it on the timeline yet says so rather
+than laying five hours of stream down as a side effect of a click.
+
+### Pulling the windows
+
+For a stack whose recording is a **link**, a second press: `Pull N windows`.
+
+This is what the word search is *for*. A six-hour VOD is tens of gigabytes and
+the twenty seconds each candidate covers is a few megabytes, so this copies only
+those — `-ss` and `-t` on the input, so what comes down the link is the windows
+rather than the recording. Stream copies, so they run in the background, take
+none of the one render slot, and jump ahead of any whole-recording copy already
+queued: these are what you are waiting on, and the full copy is the thing you
+started so that you could get on.
+
+The span pulled is **the candidate's own**, pad and all — the `Either side` field
+is where that number is decided, and re-padding it here would write a file the
+card's own number does not describe.
+
+At most twenty-four at a time, and it says so: one word search over six hours
+answers with twelve hundred candidates, and twelve hundred fetches is six hours
+of stream off one link. Press again for the next batch — a window already pulled
+costs nothing to ask for twice.
+
+When they land, `Open N here` opens them as inputs of their own on
+[Sources](sources.md) — new ones, not the recording repointed, because each is a
+different file with its own zero. `Use on the timeline` is still the press that
+puts one in the edit.
+
+A recording already on this machine is offered no windows to pull. There is
+nothing to fetch.
 
 ## What is saved and what is not
 

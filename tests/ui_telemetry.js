@@ -122,13 +122,22 @@ const stream = readable[0];
 
 console.log('\nthe control is offered against the stream that has a parser');
 {
-    const rows = qq('.src-data');
-    ok(rows.length >= 1, `a data row is drawn under the stream line (${rows.length})`);
+    // In the Reading it section rather than under the stream's own line: a
+    // probe answer is free and complete, a read is machine time somebody spent
+    // on purpose, and drawing them as one thing is what put a model-path field
+    // between two stream lines. See `readRows` in ui/sources.js.
+    const rows = qq('.src-read');
+    ok(rows.length >= 1, `a row is drawn in the Reading it section (${rows.length})`);
     ok(rows.some((r) => r.textContent.indexOf('Read it') >= 0),
        'offering to read it');
+    // And it names the track, which is the whole identity of one: every data
+    // stream probes as `bin_data`, so a file with two would otherwise draw the
+    // same row twice.
+    ok(rows.some((r) => (r.textContent || '').indexOf(`D${stream.index}`) >= 0),
+       `naming the stream it would read (D${stream.index})`);
     // One control per readable stream, not per data stream. A GoPro file has
     // three data tracks and one parser.
-    const buttons = qq('.src-data button').filter((b) => b.textContent === 'Read it');
+    const buttons = qq('.src-read button').filter((b) => b.textContent === 'Read it');
     same(buttons.length, readable.length,
          `one button per readable stream and no more (${buttons.length} of ` +
          `${dataStreams.length} data streams)`);
@@ -139,7 +148,7 @@ console.log('\nthe control is offered against the stream that has a parser');
 console.log('\nreading it does not stop the application');
 {
     const before = A.doc.dirty ? 'dirty' : 'clean';
-    const button = qq('.src-data button').find((b) => b.textContent === 'Read it');
+    const button = qq('.src-read button').find((b) => b.textContent === 'Read it');
     click(button);
     pump(0);
 

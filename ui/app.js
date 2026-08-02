@@ -59,7 +59,7 @@ import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
 import * as findModel from './find.js';
 import * as findStack from './find/stack.js';
 import * as findNodes from './find/nodes.js';
-import { initFindView, drawFind, arriveFind } from './find/view.js';
+import { initFindView, drawFind, arriveFind, openFindNode } from './find/view.js';
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
@@ -173,6 +173,29 @@ initSources({
         return clip;
     },
     clipsOf,
+    // Look for words in this recording, on the stage that looks for things.
+    //
+    // **The door, and it opens onto a rule rather than onto a canvas.** The
+    // Sources card's own field is gone — a search is the Find stage's question
+    // and it grew to a screenful inside a probe readout — so this is what stands
+    // in its place, and a door that landed somebody on an empty canvas with
+    // three nodes to place and wire would be a worse control than the field it
+    // replaced. `find.searchFor` builds the chain, reusing one already wired to
+    // this recording, and the view opens it with the phrase field ready.
+    searchWords: (input) => {
+        const node = findModel.searchFor(input);
+        if (!node) return flash('That input has not been opened yet');
+        if (!shell.goTo('find')) return;
+        openFindNode(node);
+        flash(`Looking in ${input.name} — type a word or a phrase`);
+    },
+
+    // Where a copy would go, for the card to say before anybody presses. The
+    // resolver is here rather than in `ui/sources.js` for `saveLocally`'s
+    // reason: one of the three answers is the document's own directory, and
+    // that stage does not own the document.
+    copiesGo: () => whereCopiesGo(),
+
     // A stream pulled off a page, written to this machine — the soundtrack
     // first, the picture behind it. Here rather than in `ui/sources.js` for the
     // one thing that stage does not own: where the files go, which is beside the
@@ -186,70 +209,6 @@ initSources({
     // gained five hours of stream as a side effect of asking for a file. A fetch
     // is not a render (src/native/fetch_queue.h), so there is nothing to make
     // room for and nothing to walk to.
-    // A place a phrase was said, gone to. **The playhead and nothing else.**
-    // The transcript was read from whatever soundtrack was cheapest — for a VOD
-    // that is the audio-only rendition — and the picture rendition does not
-    // share its zero, so trimming a clip to a word boundary would place a cut on
-    // the wrong file's seconds. This takes you to the right minute; your eyes do
-    // the rest, and that restraint is the whole discipline of the feature.
-    goToHit: (input, hit) => {
-        // Through a clip that covers it, because a hit is on the input's clock
-        // and the timeline's is a different one — `timelineTime` is the map, the
-        // same one the waveform and the Marks lane use.
-        for (const clip of clipsOf(input)) {
-            const t = timelineTime(clip, hit.start);
-            if (t === null || t === undefined) continue;
-            if (!shell.goTo('compose')) return;
-            setPlayhead(t);
-            select(clip, 'auto');
-            flash(`"${hit.text.slice(0, 60)}${hit.text.length > 60 ? '…' : ''}"`);
-            return;
-        }
-        // No clip covers it. Saying so beats laying five hours of stream on the
-        // timeline as a side effect of clicking a search result — `describeCopy`
-        // refuses for the same reason.
-        flash(clipsOf(input).length
-                  ? 'That moment is outside every clip cut from this input'
-                  : `Use ${input.name} on the timeline first, then a hit has ` +
-                    'somewhere to land');
-    },
-
-    // Copy just the window a hit is in. The payoff of the whole feature: the
-    // transcript found the moment in a recording of tens of gigabytes, and this
-    // fetches the few megabytes it is in. Here rather than in `ui/sources.js`
-    // for `saveLocally`'s reason — where the files go is beside the *document*,
-    // which that stage does not own.
-    pullWindow: (input, hit) => {
-        const pull = transcript.pullWindow(input, hit, whereCopiesGo());
-        if (pull.state === 'failed') return flash(`Cannot copy it: ${pull.error}`);
-        flash(`Pulling ${transcript.WINDOW_PAD * 2}s around "` +
-              `${hit.text.slice(0, 40)}…" — it jumps the queue and runs in the ` +
-              'background.');
-    },
-
-    // The window landed: open the local file as an input of its own.
-    //
-    // **A new input rather than the old one repointed**, because it *is* a
-    // different file — twenty seconds long, with its own zero — and quietly
-    // rewriting what a clip is cut from is the one thing this feature has spent
-    // its whole design avoiding.
-    //
-    // It stops at *opening* it, and does not lay a clip out. A window arrives
-    // through the ordinary door — it appears on this stage with a card, and `Use
-    // on the timeline` is the press that puts it in the edit, exactly as for a
-    // file somebody dropped. One press more, and no second way in.
-    useWindow: (pull) => {
-        const input = inputsModel.addInput({ path: pull.path });
-        if (!input) return flash('That window would not open');
-        flash(`${basename(pull.path)} is open — Use on the timeline puts it in the edit`);
-    },
-
-    // Where a copy would go, for the card to say before anybody presses. The
-    // resolver is here rather than in `ui/sources.js` for `saveLocally`'s
-    // reason: one of the three answers is the document's own directory, and
-    // that stage does not own the document.
-    copiesGo: () => whereCopiesGo(),
-
     saveLocally: (input) => {
         const why = localcopy.save(input, whereCopiesGo());
         if (why) return flash(`Cannot copy it: ${why}`);
@@ -375,6 +334,109 @@ initFindView({
     // yours", and leaving somebody on a canvas of rules would be the one moment
     // this stage refuses to hand over.
     wentToTimeline: () => shell.goTo('compose'),
+
+    // A candidate, gone to. **The playhead and nothing else.**
+    //
+    // The transcript was read from whatever soundtrack was cheapest — for a VOD
+    // that is the audio-only rendition — and the picture rendition does not
+    // share its zero, so trimming a clip to a word boundary would place a cut on
+    // the wrong file's seconds. This takes you to the right minute; your eyes do
+    // the rest, and that restraint is the whole discipline of the feature.
+    //
+    // Was `goToHit` on the Sources stage's own hit list, which is where the
+    // search used to be. A candidate carries `at` — where the thing itself is
+    // inside its padded span — so this lands on the word rather than ten seconds
+    // before it.
+    goToCandidate: (cand) => {
+        const input = inputsModel.byId(cand.inputId);
+        if (!input) return flash('That recording is not in this document any more');
+        // Through a clip that covers it, because a candidate is on the input's
+        // clock and the timeline's is a different one — `timelineTime` is the
+        // map, the same one the waveform and the Marks lane use.
+        for (const clip of clipsOf(input)) {
+            const t = timelineTime(clip, cand.at);
+            if (t === null || t === undefined) continue;
+            if (!shell.goTo('compose')) return;
+            setPlayhead(t);
+            select(clip, 'auto');
+            flash(cand.detail || cand.rule);
+            return;
+        }
+        // No clip covers it. Saying so beats laying five hours of stream on the
+        // timeline as a side effect of clicking a candidate — `describeCopy`
+        // refuses for the same reason. The stack's own press is the way in.
+        flash(clipsOf(input).length
+                  ? 'That moment is outside every clip cut from this recording'
+                  : `Nothing off ${input.name} is on the timeline yet — send the ` +
+                    'stack, or use the recording on Sources');
+    },
+
+    // What the windows for a stack have got to, so the panel can offer the right
+    // press. Here rather than in the view for the reason the two presses below
+    // are: `whereCopiesGo()` is the document's directory and the Find stage does
+    // not own the document.
+    pullState: (list) => {
+        let have = 0, running = 0, done = 0, failed = 0;
+        for (const c of list) {
+            const p = transcript.pullFor(c.inputId, Math.max(0, c.in));
+            if (!p) continue;
+            have++;
+            if (p.state === 'failed') { failed++; have--; continue; }
+            if (p.state === 'done') done++;
+            else running++;
+        }
+        return { have, running, done, failed };
+    },
+
+    // Copy the spans a stack holds. The payoff of the whole feature: the
+    // transcript found the moments in a recording of tens of gigabytes, and this
+    // fetches the few megabytes each is in.
+    //
+    // **The candidate's own span**, through `pullSpan` rather than `pullWindow`:
+    // it is already padded by the rule that made it, and padding it again would
+    // write a file the card's number does not describe.
+    pullWindows: (list, atOnce) => {
+        const dir = whereCopiesGo();
+        let started = 0, why = '';
+        for (const c of list) {
+            if (started >= atOnce) break;
+            if (transcript.pullFor(c.inputId, Math.max(0, c.in))) continue;
+            const input = inputsModel.byId(c.inputId);
+            if (!input) continue;
+            const p = transcript.pullSpan(input, c.in, c.out, dir);
+            if (p.state === 'failed') { why = p.error; continue; }
+            started++;
+        }
+        if (!started)
+            return flash(why ? `Cannot copy those: ${why}` : 'Those windows are already here');
+        flash(`Pulling ${started} window${started === 1 ? '' : 's'} into ${dir} — ` +
+              'they jump the queue and run in the background.');
+    },
+
+    // The windows landed: open the local files as inputs of their own.
+    //
+    // **New inputs rather than the recording repointed**, because each *is* a
+    // different file — twenty seconds long, with its own zero — and quietly
+    // rewriting what a clip is cut from is the one thing this feature has spent
+    // its whole design avoiding.
+    //
+    // It stops at *opening* them, and lays no clip out. A window arrives through
+    // the ordinary door — it appears on the Sources stage with a card, and `Use
+    // on the timeline` is the press that puts it in the edit, exactly as for a
+    // file somebody dropped. One press more, and no second way in.
+    useWindows: (list) => {
+        let made = 0;
+        for (const c of list) {
+            const p = transcript.pullFor(c.inputId, Math.max(0, c.in));
+            if (!p || p.state !== 'done') continue;
+            if (inputsModel.inputs.some((i) => i.path === p.path)) continue;
+            if (inputsModel.addInput({ path: p.path })) made++;
+        }
+        flash(made
+            ? `${made} window${made === 1 ? '' : 's'} open on Sources — Use on the ` +
+              'timeline puts one in the edit'
+            : 'Those windows are already open on Sources');
+    },
 });
 
 initGraphView({

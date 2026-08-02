@@ -1071,52 +1071,61 @@ body.fs #cropbox { display: none; }
 }
 .src-stream-what { flex: 1; min-width: 0; word-break: break-word; }
 
-/* What a data track carries. Indented under the stream's own line and set in
-   the same size, because it is more about that line rather than a section of
-   its own — a `gpmd` row and the numbers in it are one fact. */
-.src-data {
+/* Reading it: one line per deep read, four columns and always the same four.
+   The shape is what makes three readers answering different questions
+   comparable at a glance — has this been done, on what, and how did it go. Set
+   at the stream line's size and aligned to it, because a read is *about* one of
+   those lines even though it is no longer drawn under one. */
+.src-read {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
-    padding: 1px 12px 1px 42px;
+    padding: 2px 12px;
     font-size: var(--fs-sm);
+    min-height: 22px;
 }
-/* The Whisper model directory. Wide, because what goes in it is a path somebody
-   pasted out of a download script and a field that shows half of one is a field
-   you cannot check. Flexes so it takes the rest of the row rather than pushing
-   the buttons beside it off the end. */
-.src-model {
-    flex: 1 1 auto;
-    min-width: 12ch;
-    font-family: Consolas, "Courier New", monospace;
-    font-size: var(--fs-sm);
+.src-read:hover { background: #1b1e25; }
+/* Which read. Fixed width so the three line up as a column, in the accent that
+   means "this one" everywhere else — the stream number beside it is what a
+   `V0` is on the line above, and the two must not both shout. */
+.src-read-k {
+    flex-shrink: 0;
+    width: 68px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-size: var(--fs-xs);
 }
-/* The word-search field. Same treatment as the model path beside it, and wide
-   for a different reason: what goes in it is a phrase rather than a word, and a
-   field sized for one word teaches people to search for one word. */
-.src-find {
-    flex: 1 1 auto;
-    min-width: 12ch;
-    font-size: var(--fs-sm);
+/* Which stream it read. Fixed and monospaced for `src-stream-n`'s reason, and
+   wider than that one because this column also carries "best of 3" — the answer
+   a multi-soundtrack file gets before anything has run. */
+.src-read-of {
+    flex-shrink: 0;
+    width: 66px;
+    font-family: Consolas, monospace;
+    font-size: var(--fs-xs);
+    opacity: 0.75;
 }
-/* One place a phrase was said. The sentence around it is the point of the row —
-   it is how you tell the hit you want from the four you do not — so it takes the
-   room and elides rather than wrapping, which would make a list of twelve
-   unreadable at a glance. */
-.src-hit { align-items: center; }
-.src-said {
+/* How it went. Takes the room and elides rather than wrapping: a transcript in
+   flight prints five facts and a row that reflowed as they changed would make
+   the buttons beside it move under the pointer. */
+.src-read-v {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    opacity: 0.85;
 }
-.src-data-series {
+/* What a finished read has to offer — mark chips, series chips, a refusal
+   count. Under its row rather than beside it, because a HERO8 answers with
+   forty of them. */
+.src-read-more {
     display: flex;
     flex-wrap: wrap;
+    align-items: baseline;
     gap: 4px;
-    padding: 2px 12px 6px 42px;
+    padding: 2px 12px 6px 80px;
+    font-size: var(--fs-sm);
 }
 /* One series, as a thing to put on the timeline. A chip rather than a row in a
    list: a HERO8 offers forty of them and forty rows is the whole panel, while

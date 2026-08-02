@@ -346,7 +346,8 @@ function fieldRow(node, f) {
                             f.unit ? span(f.unit, 'dim') : null].filter(Boolean));
 }
 
-/// What a stack node offers: the press that makes it an edit.
+/// What a stack node offers: the press that makes it an edit, and the press that
+/// brings its material to this machine.
 function sinkRows(node, list) {
     const rows = [];
     const n = (list && list.length) || 0;
@@ -371,7 +372,86 @@ function sinkRows(node, list) {
                 if (hooks.wentToTimeline) hooks.wentToTimeline();
             } },
         }),
+        ...pullRows(list),
     ]));
+    return rows;
+}
+
+/// How many windows one press will fetch at most.
+///
+/// **A bound, because a stack is not a number anybody checked first.** One word
+/// search over a six-hour recording answers with twelve hundred candidates, and
+/// twelve hundred fetches is twelve hundred files and about six hours of stream
+/// off somebody's link. The cap is stated in the button and in the message —
+/// `ui/sources.js`'s rule about a truncation that says so — and pressing again
+/// takes the next batch, because `pullSpan` is keyed by span and a window
+/// already pulled costs nothing to ask for twice.
+const PULL_AT_ONCE = 24;
+
+/// Bring the windows to this machine, for a stack whose recording is a link.
+///
+/// **This is what the Sources stage's `Pull 20s` grew into.** There it was one
+/// press per search hit, on a list of twelve: the transcript found the moment in
+/// a recording of tens of gigabytes and the fetch took the few megabytes it was
+/// in. That is exactly right and it was in the wrong place — a stack *is* the
+/// selection, so the press belongs where the selection is.
+///
+/// **Only for a link.** A file already on this machine has nothing to fetch, and
+/// a button offering to copy twenty seconds of it to somewhere else would be a
+/// second copy of something nothing is waiting for.
+///
+/// **The span is the candidate's own**, through `pullSpan` rather than
+/// `pullWindow`: a `said` candidate is already padded by its node's own
+/// `Either side`, and re-padding it here would write a file the card's own
+/// number does not describe.
+///
+/// It does **not** repoint anything. Each window arrives as an input of its own
+/// on the Sources stage, exactly as it did before, because it *is* a different
+/// file with its own zero — and quietly rewriting what a clip is cut from is the
+/// one thing this whole feature has been designed around not doing.
+function pullRows(list) {
+    const remote = (list || []).filter((c) => {
+        const i = find.inputOf(c.inputId);
+        return i && i.remote;
+    });
+    if (!remote.length) return [];
+
+    const state = hooks.pullState ? hooks.pullState(remote) : null;
+    if (!state) return [];
+    const rows = [];
+    const left = remote.length - state.have;
+    if (left > 0)
+        rows.push(el('button', {
+            cls: 'btn tiny',
+            text: left > PULL_AT_ONCE ? `Pull ${PULL_AT_ONCE} windows`
+                                      : `Pull ${left} window${left === 1 ? '' : 's'}`,
+            title: 'Copy just these spans to this machine — a stream copy each, ' +
+                   'so they run in the background and jump ahead of any ' +
+                   'whole-recording copy already queued.\n' +
+                   'Each window is the candidate\'s own span, pad and all: a ' +
+                   'word search pads by ten seconds because the two renditions ' +
+                   'of a stream do not share a zero (measured up to 2.6s apart ' +
+                   'on one recording), and a window that hugged the words would ' +
+                   'sometimes not contain them.\n' +
+                   `At most ${PULL_AT_ONCE} at a time; press again for the rest.`,
+            on: { click: () => { if (hooks.pullWindows) hooks.pullWindows(remote, PULL_AT_ONCE);
+                                 drawFind(); } },
+        }));
+    if (state.running)
+        rows.push(span(`${state.running} copying`, 'dim'));
+    if (state.done)
+        rows.push(el('button', {
+            cls: 'btn tiny', text: `Open ${state.done} here`,
+            title: 'Add the windows that have landed as inputs of their own on ' +
+                   'the Sources stage. They are different files with their own ' +
+                   'zero, so nothing already on the timeline is repointed — ' +
+                   '"Use on the timeline" is still the press that puts one in ' +
+                   'the edit.',
+            on: { click: () => { if (hooks.useWindows) hooks.useWindows(remote);
+                                 drawFind(); } },
+        }));
+    if (state.failed)
+        rows.push(span(`${state.failed} would not copy`, 'warn'));
     return rows;
 }
 
@@ -379,16 +459,31 @@ function sinkRows(node, list) {
 ///
 /// **Capped, and it says so when it caps.** Twelve hundred rows would be twelve
 /// hundred elements rebuilt on every keystroke, and the honest thing is a bound
-/// that is stated rather than a list that quietly stops — `ui/sources.js` draws
-/// its hits the same way and for the same reason.
+/// that is stated rather than a list that quietly stops.
 const SHOWN = 8;
 
+/// One candidate a rule found, and the one thing worth doing about a single one
+/// of them: going to look at it.
+///
+/// **The stamp is the press, and the press moves the playhead and nothing
+/// else.** It is `ui/sources.js`'s hit row, which is where this came from, and
+/// the restraint is the whole discipline of the feature: a transcript is read
+/// from whatever soundtrack was cheapest, the picture rendition does not share
+/// its zero, and a cut placed on a word boundary would land on the wrong file's
+/// seconds. This takes you to the right minute; your eyes do the rest.
 function previewRows(list) {
     if (!list.length) return [];
     const rows = [div('fn-panel-head', 'What it found')];
     for (const c of list.slice(0, SHOWN))
         rows.push(div('fn-cand', [
-            span(S.showAt(c.at), 'mono'),
+            el('button', {
+                cls: 'btn tiny mono', text: S.showAt(c.at),
+                title: 'Go to this moment on the timeline. The playhead moves; ' +
+                       'nothing is cut.\nIt needs a clip of this recording to ' +
+                       'land in — a candidate is on the recording\'s own clock ' +
+                       'and the timeline\'s is a different one.',
+                on: { click: () => { if (hooks.goToCandidate) hooks.goToCandidate(c); } },
+            }),
             span(S.showTime(S.lengthOf(c)), 'dim'),
             span(c.detail || c.rule, 'fn-cand-why'),
         ]));
@@ -655,6 +750,27 @@ function openAddMenu() {
 /// consequence of stage views never being unmounted — so the fit is deferred to
 /// the first draw that happens with the stage up.
 export function arriveFind() {
+    framed = false;
+    drawFind();
+}
+
+/// Open one rule's panel, for somebody arriving with a question already asked.
+///
+/// **The second half of the door off the Sources stage.** `find.searchFor` wires
+/// the rule; this is what makes arriving on the canvas land *on* it rather than
+/// beside it — a `Said` selected, its panel open, its phrase field the thing in
+/// front of you. Without it the press would deposit somebody on a canvas of
+/// cards and leave them to find the one that was just added, which is the
+/// difference between a door and a corridor.
+///
+/// The fit is re-armed for the same reason `arriveFind` arms it: a rule added
+/// while the stage was `display:none` has no measurable height, so the layout
+/// that would put it on the screen has to happen on the first draw with the
+/// stage up.
+export function openFindNode(node) {
+    const n = graph().node(node);
+    if (!n) return;
+    chosen = n;
     framed = false;
     drawFind();
 }

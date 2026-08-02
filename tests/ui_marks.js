@@ -126,12 +126,18 @@ if (!audio.length) {
 let button = null;
 {
     ok(A.marks.worthReading(input), 'the input is worth listening to');
-    button = qq('.src-data button').find((b) => b.textContent === 'Find sounds');
-    ok(!!button, 'a Find sounds button is drawn under the stream line');
+    button = qq('.src-read button').find((b) => b.textContent === 'Find sounds');
+    ok(!!button, 'a Find sounds button is drawn in the Reading it section');
     // One control, not one per audio stream: the read takes the *best* audio
     // stream, which is what `[0:a]` means on a command line.
-    same(qq('.src-data button').filter((b) => b.textContent === 'Find sounds').length, 1,
+    same(qq('.src-read button').filter((b) => b.textContent === 'Find sounds').length, 1,
          'exactly one, because one soundtrack is read');
+    // And it says which soundtrack, which the old rows could not: they were
+    // drawn under the *first* audio line and so asserted by position an answer
+    // no reader had given. See `soundStream` in ui/sources.js.
+    const row = qq('.src-read').find((r) => (r.textContent || '').includes('Sound'));
+    ok(!!row && /A\d|best of \d/.test(row.textContent || ''),
+       'and the row names the stream a read would read');
 }
 
 // ── the read is off the UI thread ──────────────────────────────────────────
@@ -390,7 +396,7 @@ if (noSound) {
     } else {
         ok(!A.marks.worthReading(quiet),
            'a file with no audio stream is not worth listening to');
-        ok(!qq('.src-data button').some((b) => b.textContent === 'Find sounds'),
+        ok(!qq('.src-read button').some((b) => b.textContent === 'Find sounds'),
            'and no button is drawn for it — the affordance is where it works, not ' +
            'everywhere with a refusal behind it');
     }

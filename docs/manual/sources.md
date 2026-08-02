@@ -235,15 +235,56 @@ file can be opened without being an `-i`: a `movie` filter, which opens its file
 inside libavfilter with none of this stage's options reaching it. It is listed
 rather than left off, with the offer to make it an input instead.
 
+## Reading it
+
+Under `What came back` there is a second section, and the difference between the
+two is worth stating once because everything below depends on it.
+
+**`What came back` is the probe.** It is what libavformat said the instant this
+input was opened, under the options set above it: the container, and one line per
+stream. It costs nothing and it is complete.
+
+**`Reading it` is what this machine has been asked to work out**, beyond opening
+the file. There are three of those — what a data track carries, where something
+happens in the soundtrack, and what was said in it — and each is a press, because
+each costs real time: thirty milliseconds for a telemetry track, about a minute
+per hour of sound for the marks, ninety minutes for a six-hour transcript on a
+fast GPU. Nothing here starts on its own.
+
+Each is one row, and always the same four columns:
+
+```
+READING IT
+  SOUND       A1   51 transients, 1 tonal run                       [Forget]
+  WORDS       A1   large-v3 · nothing has read this for words yet   [Transcribe] [Model…]
+  TELEMETRY   D2   HERO8 Black · 40 series · 708 packets            [Forget]
+```
+
+Which read, **which stream it read**, how it went, and the door. The second
+column is not decoration. `Sound` and `Words` both read the soundtrack libav
+picks as the best one — what `[0:a]` means on a command line — and a file with
+three of them says `best of 3` until a read has run and reported which it
+actually was. These controls used to be drawn under the *first* audio line, which
+asserted by position an answer neither reader had given.
+
+They were also drawn *inside* the stream list, which is what this section exists
+to undo: a probe answer and a ninety-minute read are different kinds of thing,
+and interleaving them put a full-width model-path field between `A0` and `V1` and
+cut the readout looked at more than anything else on this stage in half.
+
+Everything in this section is **derived**. None of it is in the document, on the
+undo track or in the unsaved marker, for the reason a waveform is not: it comes
+back from the file the same way twice, and storing an answer the next reopen may
+contradict is how a document comes to disagree with the file it describes.
+
 ## Reading a data track
 
-A file's streams are listed as one line each, and one kind of line has a control
-under it: a **data** stream whose fourcc something here can parse.
+The first row is a **data** stream whose fourcc something here can parse.
 
 `gpmd`, `tmcd`, `mebx` and `fdsc` all probe as `bin_data`, because there is no
 decoder for any of them — a data stream is packets whose meaning belongs to
 whatever they were written for, and the container's fourcc is the whole of what
-identifies one. That is why the tag is printed on the line here and nowhere
+identifies one. That is why the tag is printed on the stream line and nowhere
 else, and it is also the thing a parser dispatches on: **a data stream whose
 fourcc is X is read by the parser registered for X**. One is registered today,
 for GoPro's `gpmd`. A real camera file carries three data tracks and two of them
@@ -297,7 +338,7 @@ is not saved either — see [Not yet](not-yet.md).
 
 ## Finding things by sound
 
-An **audio** stream gets a control of its own: **Find sounds**.
+The `Sound` row: **Find sounds**.
 
 Reviewing wildlife footage, the birds are audible long before anything is
 visible. A waveform is no help — at a lane's zoom a call and the wind under it
@@ -372,23 +413,50 @@ stops the configure and says so.
 
 ## Finding a word
 
-An **audio** stream gets a second control beside `Find sounds`: **Transcribe**.
+The `Words` row, directly under `Sound`: **Transcribe**.
+
+The two are beside each other because they answer the two halves of one question
+— where something happened, and what was said — and somebody who has just read
+one wants the other in the same place.
 
 `Find sounds` says *where* something happened. This says *what was said*. Six
 hours of somebody talking is a recording nobody is going to scrub through, and
 neither a waveform nor a set of onsets can find the minute a name was mentioned.
-This decodes the soundtrack and runs speech-to-text over it, and then a search
-box finds the places a phrase was said.
+This decodes the soundtrack and runs speech-to-text over it. What you then *do*
+with the words is the [Find stage](find.md)'s, and `Search these words…` on this
+row is the door — it walks there with the rule already wired to this recording,
+and typing a phrase into it is the only thing left to do.
+
+**The reading is here and the searching is there**, and the split is deliberate.
+A transcript belongs to an *input* — it is a property of the file, it costs
+minutes to hours, and nothing should spend that unasked — so the press that
+starts one is on this stage and nowhere else. A rule on the Find stage only ever
+*reads* what has been read, which is what keeps a keystroke in its phrase field
+cheap enough to re-evaluate the whole graph on, and a finder wired to a recording
+nobody has transcribed says which press is missing rather than making it.
+
+There used to be a search box on this card, with the places a phrase was said
+listed under it. It was the Find stage's question asked one file at a time, three
+levels deep inside a probe readout, in a list that grew to a screenful — so it is
+on that stage now, where the same search was already running.
 
 **The words arrive while it is still reading.** This is the difference from every
 other read on this stage. A transcript of a six-hour VOD is about ninety minutes
 of work on a fast GPU, and one you could only search at the end would be one
 nobody waits for — so it is searchable seconds after the press, over as much as
-has been read so far, and the readout says how far down the recording that is.
+has been read so far, and the row says how far down the recording that is:
 
-That readout is not decoration. "No results" over the first ten minutes of a
-six-hour recording and "no results" over all six hours are completely different
-answers, and a count on its own cannot tell you which one you are looking at.
+```
+WORDS   A0   1:12:30 of 5:34:30 · 22% · 1,204 segments · 4.0× realtime · about 68 min left   [Stop]
+```
+
+That readout is not decoration. A rate is what tells a read that is working from
+one that has silently stopped — 4.0× says a six-hour VOD is ninety minutes and
+0.05× says it will not finish today — and neither is knowable from a percentage.
+When it is done the row says `all of it` or `only the first 1:12:30 of 5:34:30`,
+because "no results" over ten minutes of a six-hour recording and "no results"
+over all six hours are completely different answers, and a count on its own
+cannot tell you which one you are looking at.
 
 **A hit is a place to look. It is never a cut.** Pressing one moves the playhead
 to it; nothing is trimmed. That restraint is deliberate and it is about clocks: a
@@ -409,11 +477,13 @@ there is nothing to choose until you have downloaded one —
 Until then the control names the file it could not find rather than quietly
 doing nothing.
 
-`Model…` picks the directory, and the field beside it takes a path you paste —
-the line a download script printed is often exactly what you have, and the field
-is also the only thing that can show you *which* model is currently chosen. It
-is remembered between runs: the weights are a property of this machine rather
-than of the edit, so a folder chosen once stays chosen.
+`Model…` picks the directory. The row **names** the one that is chosen, by the
+directory's own name — `large-v3`, `whisper-tiny` — with the full path on the
+tooltip, because which model will run is the difference between a transcript that
+is right and 145 MB of guesses. It is a statement rather than a field on purpose:
+the choice is remembered between runs and is the same for every input in the
+list, since the weights are a property of this machine rather than of the edit,
+and a per-input text box was the same value drawn once per card.
 
 And `Transcribe` with nothing chosen **asks** rather than failing: it opens that
 same picker, and starts once you have named a directory. It used to make a
@@ -437,31 +507,36 @@ The soundtrack it reads is the one your local copy has, if there is one — whic
 is why **Save a local copy** offers the soundtrack on its own. The audio-only
 rendition of a VOD is a fraction of the bytes and is all this needs.
 
-### Pulling just the window a hit is in
+### Pulling just the window
 
-Under a search result on a **link**, there is one more control: **Pull 20s**.
+The payoff of the whole feature, and it is on the [Find stage](find.md) — because
+what it acts on is a *selection*, and a stack of candidates is what a selection
+is here.
 
-This is the point of the whole feature. A six-hour VOD is tens of gigabytes; the
-twenty seconds you actually want is a few megabytes. The transcript found the
-moment, so this copies only that moment — `-ss` and `-t` on the input, so what
-comes down the link is the window rather than the recording. It is a stream
-copy, so it runs in the background, does not take the render slot, and jumps
-ahead of any whole-recording copy already queued: the window is what you are
-waiting on, and the full copy is the thing you started so that you could get on.
+A six-hour VOD is tens of gigabytes; the twenty seconds you actually want is a
+few megabytes. The transcript found the moments, so `Pull N windows` on a stack
+copies only those — `-ss` and `-t` on the input, so what comes down the link is
+each window rather than the recording. They are stream copies, so they run in the
+background, take none of the render slot, and jump ahead of any whole-recording
+copy already queued: the windows are what you are waiting on, and the full copy
+is the thing you started so that you could get on.
 
 **The ten seconds either side are not slack.** They are the two clocks again: the
 transcript was read from the soundtrack rendition and the picture rendition does
 not share its zero, by up to 2.6 s on the recording that was measured. A window
-that hugged the words would sometimes not contain them.
+that hugged the words would sometimes not contain them. The span pulled is the
+candidate's own, pad and all, so the file matches the number the rule's card
+shows — which is why the `Either side` field on a `Said` rule is the one place
+that number is decided.
 
-When it lands, **Use it** opens the window as an input of its own — a new one,
-not the recording repointed, because it genuinely is a different file with its
-own zero. It appears on this stage with a card like anything else, and **Use on
-the timeline** puts it in the edit. One press more, and no second way in.
+When they land, `Open N here` opens them as inputs of their own — new ones, not
+the recording repointed, because each genuinely is a different file with its own
+zero. They appear on **this** stage with cards like anything else, and `Use on
+the timeline` puts one in the edit. One press more, and no second way in.
 
-A file already on this machine is offered no window to pull. There is nothing to
-fetch, and copying twenty seconds out of it to somewhere else is not something
-anybody is waiting for.
+A recording already on this machine is offered no windows to pull. There is
+nothing to fetch, and copying twenty seconds out of it to somewhere else is not
+something anybody is waiting for.
 
 ## While it is connecting
 
