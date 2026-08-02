@@ -56,6 +56,10 @@ import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
          outrankedControls, tickGraph, graphKey, measureTo,
          currentGraph } from './graph/view.js';
+import * as findModel from './find.js';
+import * as findStack from './find/stack.js';
+import * as findNodes from './find/nodes.js';
+import { initFindView, drawFind, arriveFind } from './find/view.js';
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
@@ -349,6 +353,30 @@ capture.initCapture({
 // What was inserted and locked last time, before anything asks for a graph.
 graphOverlay.restore();
 
+initFindView({
+    viewport: el('fn-viewport'),
+    wires: el('fn-wires'),
+    nodes: el('fn-nodes'),
+    mini: el('fn-mini'),
+    panel: el('fn-panel'),
+    menu: el('fn-menu'),
+    status: el('fn-status'),
+    add: el('fn-add'),
+    relayout: el('fn-relayout'),
+    fit: el('fn-fit'),
+    zoomIn: el('fn-zoom-in'),
+    zoomOut: el('fn-zoom-out'),
+    zoomLabel: el('fn-zoom'),
+}, {
+    flash,
+    // A stack that has just become clips is an edit, and the place to look at an
+    // edit is Compose. Walking there is the *answer* to the press rather than a
+    // convenience: the whole caution about the two clocks ends in "the trim is
+    // yours", and leaving somebody on a canvas of rules would be the one moment
+    // this stage refuses to hand over.
+    wentToTimeline: () => shell.goTo('compose'),
+});
+
 initGraphView({
     viewport: el('gr-viewport'),
     canvas: el('gr-wires'),
@@ -516,7 +544,7 @@ let resumeAfterScrub = false;
 // assert.
 const dirty = {
     playback: false, timeline: false, readouts: false, spine: false,
-    command: false, document: false, graph: false,
+    command: false, document: false, graph: false, find: false,
 };
 
 /// Mark one or more of them out of date.
@@ -535,6 +563,12 @@ const HEAVY = [
     // Only while it is up: everything the layout measures is zero behind a
     // `display:none`, and it is rebuilt on the way in anyway.
     ['graph',    () => { if (shell.currentStage() === 'graph') drawGraph(); }],
+    // Same condition and the same reason: the layout measures cards, and every
+    // height behind a `display:none` is zero. It is in this rotation rather than
+    // drawn directly because a transcription landing marks it on *every* frame
+    // for as long as a six-hour read is running, which is exactly the starvation
+    // the rotation exists to bound.
+    ['find',     () => { if (shell.currentStage() === 'find') drawFind(); }],
 ];
 let turn = 0;
 
@@ -556,6 +590,7 @@ const BUSY_WORDS = {
     spine: 'restating the render',
     command: 'restating the command',
     graph: 'laying out the graph',
+    find: 'running the rules',
 };
 
 /// Above this, a redraw is worth saying out loud. Well past a frame at 60 Hz, so
@@ -647,6 +682,14 @@ onChange((what) => {
         what === 'transcript') {
         // ...and the readouts, which count how many clips are still being read.
         needs('timeline', 'readouts');
+        // A rule on the Find stage reads the marks and the transcript, so words
+        // landing off a six-hour transcription genuinely change what a `Said`
+        // finds — that is the feature, a stack that fills in while the recording
+        // is still being read. It goes through `readsMoved` rather than through
+        // a redraw because the evaluation is memoised: this is the stamp that
+        // says the memo is stale, and the stage draws from it on its own frame.
+        findModel.readsMoved();
+        needs('find', 'spine');
         return;
     }
 
@@ -670,6 +713,12 @@ onChange((what) => {
     // jumps to it.
     marks.retain(inputsModel.inputs.map((i) => i.id));
     transcript.retain(inputsModel.inputs.map((i) => i.id));
+    // And a rule on the Find stage naming an input that has gone. Unlike the
+    // three above it, the rule is **kept** and only its recording is cleared —
+    // a set of marks is dead weight but a phrase somebody typed and wired into
+    // five other nodes is work, and deleting it because a file was removed on
+    // another stage would take the wires with it. `find.js` `retain` says so.
+    findModel.retain(inputsModel.inputs.map((i) => i.id));
     // And the settings of a track the timeline no longer shows — a sync lock on
     // V4 after the last clip on it was deleted. Here for the same argument as the
     // line above and stated where that argument already is: a track can empty out
@@ -2150,6 +2199,7 @@ shell.initShell({
     views: {
         capture: el('st-capture'),
         sources: el('st-sources'),
+        find: el('st-find'),
         compose: el('st-compose'),
         graph: el('st-graph'),
         encode: el('st-encode'),
@@ -2192,6 +2242,13 @@ shell.initShell({
         } else exporter.closeExport();
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
         if (id === 'sources') drawSources();
+        // Drawn on the way in for the reason the graph is: every height its
+        // layout measures reads zero while the stage is `display:none`, which is
+        // the standing consequence of stage views never being unmounted. Drawn
+        // directly rather than marked, unlike the graph, because it is not
+        // priced in the size of the edit — a dozen rule cards is a dozen, on a
+        // montage of seventy-five clips as much as on one.
+        if (id === 'find') arriveFind();
         // The device is opened when you arrive and given back when you leave.
         // A camera held by a preview on a stage nobody is looking at is a
         // camera the recording — or another application — cannot open.
@@ -2313,6 +2370,11 @@ function stageState(id) {
                 `${v} V · ${clips.length} clip${clips.length === 1 ? '' : 's'} · ` +
                 clock(duration())];
     }
+    // Deliberately not gated on there being clips, unlike every card below it:
+    // this is the one stage whose whole purpose is to be used when the timeline
+    // is empty, and a card reading '—' over a graph that has just found four
+    // hundred candidates would be the spine disagreeing with the stage.
+    if (id === 'find') return findModel.findSummary();
     if (id === 'graph') {
         if (!clips.length) return ['—', ''];
         const g = graphSummary();
@@ -2497,6 +2559,19 @@ globalThis.__ffmpegBro = {
     // drawn half.
     marks,
     transcript,
+    // The rules that turn a recording into stacks of clips. On the surface whole
+    // because almost everything worth checking about this stage is **pure** — a
+    // graph, an evaluation context of four functions, and a list in and a list
+    // out — so a test builds a real graph, hands it a transcript that was never
+    // read from a file, and asserts the arrangement. That is deliberate and it
+    // is the shape `ui/find/model.js` `evaluate` was given: the alternative
+    // would be a suite that had to transcribe six hours to find out what a 1:3
+    // weave does. `find.stack` is the arithmetic on its own, which is what the
+    // ordering assertions go through.
+    find: findModel,
+    findStack,
+    findNodes,
+    drawFind,
     // The jump, so a test can check where `,` and `.` land without synthesising
     // a key press — the press is the shell's and the arithmetic is this.
     goToMark,

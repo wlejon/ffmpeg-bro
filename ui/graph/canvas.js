@@ -34,6 +34,22 @@ import { portY } from './layout.js';
 /// nor sound — and it is the same orange the socket it leaves is drawn in.
 const WIRE = { v: '#4a9eff', a: '#57c98a', s: '#ff8c42' };
 const WIRE_DIM = { v: '#2c5f99', a: '#357a55', s: '#99551f' };
+
+/// The Find stage's two, which are the other thing a wire can carry
+/// (`ui/find/model.js`): a **recording** on its way into a finder, and a
+/// **stack** of candidates on its way through the arrangement. Here rather than
+/// there because a wire's colour and the curve it is stroked onto are one fact,
+/// and a palette kept beside the caller is how the two come to disagree about
+/// which end of a graph is which.
+///
+/// Violet for a recording, because the three above are taken and because violet
+/// is what a *generator* is drawn in on the timeline — the same idea, a source
+/// that is not yet a picture. Amber for a stack, clear of the accent, which
+/// everywhere in this application means "selected".
+export const FIND_WIRES = {
+    wire: { input: '#b07cff', stack: '#ffcf5c' },
+    dim:  { input: '#6a4a99', stack: '#997c37' },
+};
 const GRID = 'rgba(255, 255, 255, 0.17)';
 const MINI_BG = 'rgba(0, 0, 0, 0.35)';
 const MINI_EDGE = 'rgba(255, 255, 255, 0.18)';
@@ -110,8 +126,15 @@ function onScreen(c, w, h) {
 ///
 /// The hovered and chosen wires are drawn on their own afterwards, because they
 /// are one wire each and their whole point is to be on top.
-export function paintWires(ctx, placed, view, lit, hovered, chosen) {
+export function paintWires(ctx, placed, view, lit, hovered, chosen, palette) {
     if (!placed) return;
+    const WIRES = (palette && palette.wire) || WIRE;
+    const DIMS = (palette && palette.dim) || WIRE_DIM;
+    // What an unrecognised stream falls back to. The first entry of whichever
+    // palette is in use rather than `WIRE.v`, which would draw a Find stage wire
+    // in the filter graph's blue and say it carried a picture.
+    const anyWire = WIRES[Object.keys(WIRES)[0]];
+    const anyDim = DIMS[Object.keys(DIMS)[0]];
     const W = ctx.canvas ? ctx.canvas.width : 0;
     const H = ctx.canvas ? ctx.canvas.height : 0;
     // Keyed by group and stream, built as it goes: an edit with no sound in it
@@ -134,7 +157,7 @@ export function paintWires(ctx, placed, view, lit, hovered, chosen) {
     const order = [...groups.values()].sort((a, b) => (a.on ? 1 : 0) - (b.on ? 1 : 0));
     for (const g of order) {
         ctx.lineWidth = Math.max(1, (g.on ? 2.2 : 1.4) * view.zoom);
-        ctx.strokeStyle = g.on ? (WIRE[g.stream] || WIRE.v) : (WIRE_DIM[g.stream] || WIRE_DIM.v);
+        ctx.strokeStyle = g.on ? (WIRES[g.stream] || anyWire) : (DIMS[g.stream] || anyDim);
         ctx.beginPath();
         for (const c of g.curves) {
             ctx.moveTo(c.x1, c.y1);
@@ -204,10 +227,12 @@ export function wireAt(placed, px, py, view, tol = 7) {
 /// is saying matter while it is in the air: that this is not yet a connection,
 /// and that it is a picture or a sound — which is what decides whether the pad
 /// it is heading for can take it.
-export function paintPending(ctx, from, to, stream, valid) {
+export function paintPending(ctx, from, to, stream, valid, palette) {
+    const WIRES = (palette && palette.wire) || WIRE;
+    const colour = WIRES[stream] || WIRES[Object.keys(WIRES)[0]];
     ctx.save();
     ctx.setLineDash(valid ? [] : [5, 4]);
-    ctx.strokeStyle = WIRE[stream] || WIRE.v;
+    ctx.strokeStyle = colour;
     ctx.lineWidth = 2;
     const reach = Math.max(24, Math.abs(to.x - from.x) * 0.45);
     ctx.beginPath();
@@ -219,7 +244,7 @@ export function paintPending(ctx, from, to, stream, valid) {
     // trails off. Filled where it would connect and hollow where it would not.
     ctx.beginPath();
     ctx.arc(to.x, to.y, 4, 0, Math.PI * 2);
-    if (valid) { ctx.fillStyle = WIRE[stream] || WIRE.v; ctx.fill(); }
+    if (valid) { ctx.fillStyle = colour; ctx.fill(); }
     else { ctx.strokeStyle = MINI_EDGE; ctx.lineWidth = 1.5; ctx.stroke(); }
 }
 
@@ -277,7 +302,8 @@ function miniFit(placed, w, h) {
     };
 }
 
-export function paintMini(canvas, placed, view, port) {
+export function paintMini(canvas, placed, view, port, palette) {
+    const DIMS = (palette && palette.dim) || WIRE_DIM;
     const w = canvas.width, h = canvas.height;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, w, h);
@@ -293,7 +319,7 @@ export function paintMini(canvas, placed, view, port) {
     // that are already touching, and the shape of the graph is what a minimap is
     // for. Every editor with one draws it this way.
     for (const b of placed.nodes) {
-        ctx.fillStyle = WIRE_DIM[b.stream] || WIRE_DIM.v;
+        ctx.fillStyle = DIMS[b.stream] || DIMS[Object.keys(DIMS)[0]];
         ctx.fillRect(b.x * m.k + m.ox, b.y * m.k + m.oy,
                      Math.max(2, b.w * m.k), Math.max(2, b.h * m.k));
     }

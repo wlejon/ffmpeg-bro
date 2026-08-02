@@ -347,6 +347,39 @@
         </div>
     </section>
 
+    <!-- Find: where a recording becomes material. Between Sources and Compose
+         because that is where it is in the work — you have the file, you do not
+         yet have an edit, and for a six-hour recording the whole job is asking
+         it questions and keeping the answers. A canvas of rules rather than a
+         list of them, because the answers are combined: "one of these, three of
+         those" is a wire between two nodes and is a paragraph of settings in
+         anything else. See ui/find/model.js for why this is not the Graph
+         stage's graph. -->
+    <section id="st-find" class="stage-view hidden">
+        <div class="fn-main">
+            <div id="fn-viewport" class="fn-viewport">
+                <canvas id="fn-wires" class="fn-wires"></canvas>
+                <div id="fn-nodes" class="fn-nodes"></div>
+                <canvas id="fn-mini" class="fn-mini" width="180" height="120"></canvas>
+                <div id="fn-menu" class="fn-menu"></div>
+            </div>
+            <!-- What the selected rule is set to, and what it found. One column
+                 for both, because tuning a rule and reading its result are one
+                 gesture with a pause in it. -->
+            <div id="fn-panel" class="fn-panel"></div>
+        </div>
+        <div class="fn-bar">
+            <div id="fn-status" class="fn-status dim"></div>
+            <span class="spacer"></span>
+            <button id="fn-add" class="tiny" title="Place a rule on the canvas and wire it up">Add rule</button>
+            <button id="fn-relayout" class="tiny" title="Give every rule back to the layout">Re-layout</button>
+            <button id="fn-zoom-out" class="tiny icon" title="Zoom out">−</button>
+            <button id="fn-zoom" class="tiny">100%</button>
+            <button id="fn-zoom-in" class="tiny icon" title="Zoom in">+</button>
+            <button id="fn-fit" class="tiny">Fit</button>
+        </div>
+    </section>
+
     <!-- Encode: what the picture is going to be put through. The A/B
          comparison is the reason this is a stage of the window rather than a
          box in the middle of one — an encoder setting is chosen by looking at

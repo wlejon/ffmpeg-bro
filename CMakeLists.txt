@@ -570,6 +570,13 @@ add_test(NAME ui-marks COMMAND ffmpeg-bro-headless
 add_test(NAME ui-transcript COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_transcript.js"
          -- "" "${FIXTURE_SILENT}")
+# Turning a recording into stacks of clips. Almost all of it is pure — the
+# arrangements are list-in/list-out and `evaluate` takes its world as four
+# functions — so the one file is for the half that is not: sending a stack makes
+# real clips out of a real input, end to end, in the order the rules put them in.
+add_test(NAME ui-find COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_find.js"
+         -- "${FIXTURE_MARKS}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
@@ -588,7 +595,7 @@ set_tests_properties(decode export capabilities inputs sequences playback hardwa
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
                      ui-measure ui-subtitles ui-document ui-output ui-telemetry ui-marks
-                     ui-transcript ui-load
+                     ui-transcript ui-find ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the

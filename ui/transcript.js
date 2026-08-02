@@ -241,6 +241,99 @@ export function tickTranscripts() {
     return moved;
 }
 
+// ── how it is going ───────────────────────────────────────────────────────
+
+/// Which device a transcription will run on, and whether this build could ever
+/// use a card. `{ backend, available, compiled }`.
+///
+/// **`bro.gpu` and not a number this repository works out**, which is the "ask
+/// libav" convention one layer over — the same one `transcribe.cpp`'s
+/// `deviceFor` follows when it asks brotensor rather than deciding. bro's own
+/// documentation names this "the device the ML loaders default to, so it is the
+/// honest signal for *will this be slow*", and `bro.stt` and this binding pick
+/// by the same precedence, so what it reports is what a read will land on.
+///
+/// **Why it is on the screen at all.** The difference between the two answers is
+/// 4.0x realtime and about 0.05x — ninety minutes against several days for a
+/// six-hour VOD — and it is decided by *the build* (`BRO_WITH_TENSOR_CUDA`, off
+/// by default) rather than by anything the user set. Somebody with two binaries
+/// on one machine has no other way to tell which one they launched, and the
+/// symptom of the wrong one is a progress line that does not visibly move. That
+/// is not a state this application should leave anybody to work out.
+///
+/// Read once. bro's properties are lazy getters over a driver probe, and this is
+/// asked from a row that redraws on the frame loop.
+let compute = null;
+
+export function computeDevice() {
+    if (compute) return compute;
+    let backend = '', available = false, compiled = [];
+    try {
+        backend = String(bro.gpu.backend || '');
+        available = !!bro.gpu.available;
+        compiled = (bro.gpu.compiledBackends || []).slice();
+    } catch (e) {
+        // No `bro.gpu` at all is an engine older than the one this was written
+        // against. Reporting nothing is right: an empty string prints no device
+        // rather than a wrong one.
+    }
+    compute = { backend, available, compiled };
+    return compute;
+}
+
+/// Why a read is as fast as it is, or '' when there is nothing to say.
+///
+/// One sentence, and it is a **statement** in `ui/export/explain.js`'s sense
+/// rather than an explanation: it is the answer to a question somebody is
+/// holding right now, it changes with the machine, and it is never folded away.
+export function whySlow() {
+    const c = computeDevice();
+    if (c.available) return '';
+    const couldHave = c.compiled.some((b) => b !== 'cpu');
+    return couldHave
+        ? 'on the CPU — this build has a GPU backend but no usable device was found'
+        : 'on the CPU — this build has no GPU backend in it, so a large model is ' +
+          'days rather than minutes';
+}
+
+/// How a read is going, as numbers rather than as a sentence.
+///
+/// `{ read, duration, rate, left, done }` — `rate` is **x realtime**, which is
+/// the one number that makes a long read legible: 4.0x says a six-hour recording
+/// is ninety minutes and 0.05x says it is not going to finish today, and neither
+/// is knowable from a percentage that has not visibly moved. `left` is the
+/// estimate that follows from it, in seconds, and both are null until there is
+/// enough to divide by — a rate computed over the first half-second is the model
+/// loading, not the model reading.
+///
+/// **Measured rather than assumed**, which is why it is `read / elapsed` and not
+/// a constant per device: what a card does with large-v3 depends on the card,
+/// and the number somebody wants is the one their machine is doing.
+export function progressOf(entry) {
+    const r = entry && entry.result;
+    const read = (r && r.read) || 0;
+    const duration = (r && r.duration) || 0;
+    const el = (entry && entry.elapsed) || 0;
+    // Six seconds is about what large-v3 takes to reach the card, so a rate
+    // before then is the load divided by itself.
+    const rate = el > 6 && read > 0 ? read / el : null;
+    const left = rate && duration > read ? (duration - read) / rate : null;
+    return { read, duration, rate, left, done: duration > 0 && read >= duration - 0.5 };
+}
+
+/// A duration as something to be read at a glance, over the range this deals in
+/// — seconds to days. `ui/find/stack.js` has the same job for a *candidate* and
+/// deliberately not the same function: that one stops at hours because a clip
+/// does, and a transcription estimate that could not say "2 days" would be
+/// hiding the one answer worth acting on.
+export function showLeft(s) {
+    if (!(s > 0)) return '';
+    if (s < 90) return `${Math.round(s)}s`;
+    if (s < 5400) return `${Math.round(s / 60)} min`;
+    if (s < 172800) return `${(s / 3600).toFixed(1)} h`;
+    return `${(s / 86400).toFixed(1)} days`;
+}
+
 // ── finding a word ────────────────────────────────────────────────────────
 
 /// Fold a string for comparison. Case and the punctuation Whisper attaches to
@@ -293,6 +386,56 @@ export function search(phrase) {
         ? a.start - b.start
         : String(a.inputId).localeCompare(String(b.inputId))));
     return hits;
+}
+
+/// Every place `phrase` was said **in one recording**, which is what a rule on
+/// the Find stage asks (`ui/find/nodes.js`).
+///
+/// `search()` above answers over every transcript there is, which is right for a
+/// box on a card that means "anywhere". A `Said` node is wired to one recording
+/// and must not quietly find hits in another — a stack whose candidates came
+/// from two files when one was asked for is a montage with a stranger in it.
+///
+/// `whole` matches on word boundaries, and it is offered rather than assumed
+/// because both are wanted: looking for `insane` and being given `insanely` is
+/// usually right and sometimes exactly wrong, and only the person searching
+/// knows which. The boundary is against the *folded* text, where punctuation has
+/// already become spaces, so "yeah," and "yeah" are one word either way.
+export function searchIn(inputId, phrase, whole = false) {
+    const want = fold(phrase);
+    const hits = [];
+    const e = reads.get(inputId);
+    if (!want || !e || !e.result || !e.result.segments) return hits;
+    for (const s of e.result.segments) {
+        const hay = fold(s.text);
+        let from = 0;
+        for (;;) {
+            const at = hay.indexOf(want, from);
+            if (at < 0) break;
+            from = at + want.length;
+            if (whole) {
+                const before = at === 0 ? ' ' : hay[at - 1];
+                const after = from >= hay.length ? ' ' : hay[from];
+                if (before !== ' ' || after !== ' ') continue;
+            }
+            hits.push({ inputId, start: s.start, end: s.end, text: s.text, at });
+        }
+    }
+    return hits;
+}
+
+/// What has been read of **one** recording, as `{ read, duration }`, or null
+/// when nothing has transcribed it at all.
+///
+/// Null and `{read: 0}` are different answers and the distinction is the one
+/// `coverage()` exists to make one level up: nothing has listened to this file
+/// is a press somebody has not made, and a transcript that has read none of it
+/// yet is a press they made a moment ago. A card that showed the same words for
+/// both would be telling somebody to do what they have already done.
+export function coverageOf(inputId) {
+    const e = reads.get(inputId);
+    if (!e || !e.result) return null;
+    return { read: e.result.read || 0, duration: e.result.duration || 0 };
 }
 
 /// How much of everything there is to search has actually been searched, as

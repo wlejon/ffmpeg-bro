@@ -76,12 +76,21 @@ function depths(g) {
 /// around every pin — would mean dragging one node rearranged the eight you were
 /// happy with, which is the opposite of what dragging it was for.
 ///
+/// `streams` is optional and answers what *kind of thing* travels on a node's
+/// output and on an edge — `{ of(node), ofEdge(edge) }`. It defaults to
+/// `streamsOf(g)`, which is the filter graph's picture/sound/cues, and it is a
+/// parameter because this arithmetic is not about filters: the Find stage
+/// (`ui/find/model.js`) lays out a graph whose wires carry recordings and stacks
+/// of candidates, and it wants these columns and these rows rather than a second
+/// implementation of them that would drift. Nothing else in this file knows what
+/// a stream is, which is what made the split a parameter rather than a fork.
+///
 /// Returns `{ nodes, wires, width, height }` — `nodes` carrying the node and
 /// its box, `wires` the endpoints of every edge already resolved to the port it
 /// arrives at, so the caller draws curves and does no arithmetic.
-export function layout(g, sizeOf, pinOf) {
+export function layout(g, sizeOf, pinOf, streams) {
     const depth = depths(g);
-    const streamOf = streamsOf(g);
+    const streamOf = streams || streamsOf(g);
 
     // Column membership, in the order the nodes were made — which for a
     // derived graph is the order its chains print in, and so the order a
@@ -198,7 +207,11 @@ export function layout(g, sizeOf, pinOf) {
         const oy2 = portY(b.h, e.port, b.inPorts);
         wires.push({
             edge: e,
-            stream: streamOf.ofEdge(e),
+            // `ofEdge` is optional so a caller with one answer per node — which
+            // is every graph whose nodes have a single output kind — supplies
+            // `of` alone rather than two functions that cannot disagree.
+            stream: streamOf.ofEdge ? streamOf.ofEdge(e)
+                                    : streamOf.of(g.node ? g.node(e.from) : null),
             oy1, oy2,
             x1: a.x + a.w, y1: a.y + oy1,
             x2: b.x, y2: b.y + oy2,

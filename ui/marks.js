@@ -205,6 +205,30 @@ export function tickMarks() {
     return settled;
 }
 
+/// Every mark read from one input, on that **input's** own clock, or null when
+/// nothing has listened to it.
+///
+/// `markRows` is the other reader and the difference between them is the point:
+/// that one answers what is on the *timeline*, mapped through each clip and
+/// filtered by which kinds are shown, because it feeds a lane. This one answers
+/// what is in the *recording*, unmapped and unfiltered, because a rule on the
+/// Find stage (`ui/find/nodes.js`) is looking for material that is not on the
+/// timeline yet — that is the whole purpose of the stage — and a finder that
+/// went through the clips could only ever find what had already been cut.
+///
+/// The list itself, not a copy. It is `ui/find/model.js`'s to read and nobody's
+/// to write, and copying twenty thousand marks on every evaluation to enforce
+/// that would cost more than the walk it feeds.
+///
+/// Null rather than an empty list when nothing has read it, for `coverageOf`'s
+/// reason one file over: "nothing has listened to this" and "this soundtrack is
+/// silent" are different answers and only the first is a press somebody is
+/// missing.
+export function marksOf(inputId) {
+    const e = reads.get(inputId);
+    return e && e.result ? e.result.marks : null;
+}
+
 // ── which kinds are on the lane ───────────────────────────────────────────
 
 /// Is this kind drawn and jumped to?

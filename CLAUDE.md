@@ -42,7 +42,8 @@ One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
 `sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
 `ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
 `ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
-`ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`, `ui-load`):
+`ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`, `ui-transcript`,
+`ui-find`, `ui-load`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -131,10 +132,18 @@ which is what `ui/sources.js`'s model path does.
 
 ffmpeg's model is inputs → streams → a filter graph → encoders → a muxer → an
 output. This app presents exactly that as its navigation — `ui/shell.js` draws
-the spine: **Capture → Sources → Compose → Graph → Encode → Write**. Anything the
-app cannot yet express usually has an obvious home in that chain and no home in
-an NLE's timeline-plus-export-dialog model; put new capability where ffmpeg puts
-it.
+the spine: **Capture → Sources → Find → Compose → Graph → Encode → Write**.
+Anything the app cannot yet express usually has an obvious home in that chain and
+no home in an NLE's timeline-plus-export-dialog model; put new capability where
+ffmpeg puts it.
+
+**Find is the one stage that is not part of that model, and it says so.**
+Sources answers "what is this file" and Compose answers "what is the edit";
+between them is a question a six-hour recording makes unavoidable and neither
+asks — *what is in it, and which of it do I want*. Nothing on that stage reaches
+the render: it produces clips, and the clips go to Compose exactly as a dropped
+file does. See [the manual](docs/manual/find.md) and the **second graph** section
+below for why it is not the Graph stage's graph.
 
 Stage views hide each other with `display:none` and are **never unmounted** —
 the viewer's `<video>` elements *are* the decoders. Consequence that keeps
@@ -366,6 +375,63 @@ and a closed tab carries a count so it summarises rather than hides.
   in the source file's own seconds. `ui/graph/spans.js` is the third reader: every
   span in the edit on the timeline's clock, which is what the timeline's When lane
   draws and writes back through.
+
+### The second graph, whose values are clips rather than frames
+
+`ui/find/` is a node graph that is deliberately **not** `ui/graph/`'s, and the
+reason is the one property that graph has. Every node there prints into a
+`-filter_complex` and `derive.js` refuses rather than approximates, so the graph
+can never describe a render the app would not perform. A node meaning *every time
+he said "insane"* has no printout at all — its value is an ordered list of spans.
+Putting it in there would end the printing, which is the whole point of it.
+
+So: same idiom, different values. `ui/graph/layout.js` and `ui/graph/canvas.js`
+are **imported** — the columns-are-depth arithmetic and the bezier stroking are
+one fact each, and two node editors with two of either would drift in a week —
+and both were taught their one missing parameter, that a wire can carry something
+other than a picture or a sound. Two things travel here: an `input` (violet) and
+a `stack` (amber), and `accepts()` is the one test that refuses a wire between
+them.
+
+Four decisions in it are load-bearing.
+
+**A candidate is not a clip.** `ui/find/stack.js` holds spans with a reason
+attached, as plain data; twelve hundred come out of one word search and building
+twelve hundred `<video>` elements to find that out would be `ui/residency.js`'s
+ruinous case reached deliberately. `why` is not decoration — a stack composed out
+of four rules is unreadable without it, and it becomes the clip's name so a
+timeline of forty reads as `1:04:12 "oh yeah that's the"` rather than forty
+copies of one filename.
+
+**The finders read what has been read and never start a read.** A transcript is
+about ninety minutes of GPU and a marks pass is minutes of arithmetic; both are
+asked for on Sources because nothing should spend that unasked. A finder over an
+unheard recording answers empty and *names the press that is missing*. That is
+also what keeps a keystroke in the phrase field cheap enough to re-evaluate on —
+`evaluate` is a whole-graph walk, memoised only to keep it off the frame loop.
+
+**The rules are in the document and the stacks are not.** This is the exact
+inverse of `marks`/`peaks`/`transcript` and the distinction that decides where
+everything on the stage lives: a rule is *authored* — "one of these for every
+three of those" is somebody's editorial decision — so it is in the `.fbro`, on
+the undo track and in the unsaved marker. What it computes is *derived from the
+rules* the way a waveform is derived from a file, so it is in none of them.
+`retain()` is the same inversion: a `source` naming a removed input is repointed
+to nothing rather than deleted, because the rule is work and the wires would go
+with it.
+
+**`evaluate` takes its world as four functions**, which is a seam and not a test
+hook. It is the whole of what makes a stack depend on anything outside the graph,
+so `tests/ui_find.js` evaluates a real graph against a transcript that was never
+read — the alternative was a suite that had to transcribe six hours to find out
+what a 1:3 weave does. `find.js` `evaluateWith` is that argument taken, and it is
+deliberately uncached.
+
+And the rule inherited from `ui/transcript.js` and never restated: **a transcript
+is a search hint and never the cut.** A `said` candidate carries `WINDOW_PAD`
+either side because the two renditions of a stream do not share a zero (+2.57 s
+at worst, measured), so what reaches the timeline *contains* the moment rather
+than cutting at it. `tests/ui_find.js` asserts the pad clears that number.
 
 ### The JS surface
 

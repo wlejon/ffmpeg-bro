@@ -3424,3 +3424,210 @@ select.when-op { height: 22px; font-size: 11px; }
 .when-i { flex: 0 0 auto; width: 10px; font-size: 10.5px; color: var(--dim); }
 .when-edit select.when-op { flex: 0 0 78px; width: 78px; min-width: 0; }
 .when-edit button.tiny { flex: 0 0 auto; min-width: 0; padding: 0 6px; }
+
+/* ── Find: the stage where a recording becomes material ─────────────────────
+   The Graph stage's anatomy on purpose — a viewport with a transformed card
+   container over an untransformed canvas, a panel down the side, a bar along
+   the bottom — because somebody who has used that stage has already learnt this
+   one. What differs is what a wire carries, and the two socket colours are the
+   whole of that difference on the screen: violet is a recording on its way into
+   a finder, amber is a stack of candidates on its way through the arrangement.
+   Those two are `FIND_WIRES` in ui/graph/canvas.js and are written there rather
+   than here, because a socket that disagreed with the wire leaving it would say
+   the picture was something it is not. */
+.fn-main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+}
+.fn-viewport {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+    background: #0f1114;
+    cursor: grab;
+}
+.fn-wires {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+}
+/* A frame of reference rather than a box — `.gn-nodes`' rule, and for its
+   reason: a size here would give the pan something to be clipped against. */
+.fn-nodes {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    transform-origin: 0 0;
+}
+.fn-mini {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+/* A rule. Narrower than a filter node because it says three short things and
+   its settings are in the panel; wide enough that a phrase in quotes fits
+   without wrapping, which is the one label that varies in length. */
+.fn {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 170px;
+    transform-origin: 0 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    font-size: 11.5px;
+}
+/* The two ends are not rules and should not read as rules — `.gn-input`'s
+   distinction, which the Graph stage already draws. */
+.fn-source, .fn-sink { background: var(--panel-hi); }
+.fn.on { border-color: var(--accent); }
+.fn-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--line);
+    cursor: move;
+}
+.fn-kind { font-weight: 600; }
+/* How many candidates left this rule. The number is the point of the stage —
+   a chain of five reads as five numbers going down, and where a rule threw
+   everything away is visible without opening anything — so it is monospaced
+   and it is not dimmed. */
+.fn-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+}
+.fn-label { padding: 3px 8px 0; word-break: break-word; }
+.fn-total { padding: 0 8px 4px; font-size: 10.5px; }
+/* What is missing, or what this rule just did. Never folded: it changes with
+   the state and is the answer to a question somebody is holding — the line
+   ui/export/explain.js draws between a statement and an explanation. */
+.fn-note {
+    padding: 2px 8px 4px;
+    font-size: 10.5px;
+    color: var(--warn, #e5a54b);
+    line-height: 1.35;
+}
+
+/* A socket, on the edge it belongs to and centred on the point the wire lands
+   at — `portY`, the same formula, expressed as a percentage because a card's
+   height is not known until it has been measured. */
+.fn-sock {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    margin-top: -5px;
+    border-radius: 50%;
+    border: 1px solid #0f1114;
+    cursor: crosshair;
+}
+.fn-sock-in { left: -5px; }
+.fn-sock-out { right: -5px; }
+.fn-sock-input { background: #b07cff; }
+.fn-sock-stack { background: #ffcf5c; }
+
+/* The menu of what can be placed. Over the canvas rather than in the bar,
+   because it is opened, read and closed, and a column that pushed the canvas
+   sideways every time would move the graph under the pointer. */
+.fn-menu {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: none;
+    flex-direction: column;
+    min-width: 130px;
+    padding: 4px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    z-index: 4;
+}
+.fn-menu.on { display: flex; }
+.fn-menu-group {
+    padding: 5px 6px 2px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+}
+.fn-menu-item {
+    text-align: left;
+    padding: 3px 6px;
+    background: none;
+    border: 0;
+    border-radius: 3px;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.fn-menu-item:hover { background: var(--panel-hi); }
+
+.fn-panel {
+    width: 264px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 8px 10px 14px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+}
+.fn-panel input.wide, .fn-panel select { width: 100%; box-sizing: border-box; }
+.fn-panel-head {
+    margin: 8px 0 4px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.fn-panel-foot { margin-top: 10px; display: flex; gap: 6px; }
+.fn-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+}
+.fn-field-name { flex: 0 0 92px; color: var(--dim); font-size: 11px; }
+
+/* One candidate, in the panel. Three columns that answer the three questions
+   somebody has about a row of a stack: where in the recording, how long, and
+   why it is here. */
+.fn-cand {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    padding: 2px 0;
+    font-size: 11px;
+    border-bottom: 1px solid var(--line);
+}
+.fn-cand-why {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--dim);
+}
+
+.fn-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 10px;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    flex-shrink: 0;
+}
+.fn-status { display: flex; gap: 6px; font-size: 11px; }

@@ -104,6 +104,7 @@ import * as inputsModel from './inputs.js';
 import * as generators from './generator.js';
 import * as cues from './cues.js';
 import * as overlay from './graph/overlay.js';
+import * as find from './find.js';
 import { settings } from './export/state.js';
 import * as store from './export/store.js';
 import { basename } from './format.js';
@@ -169,6 +170,16 @@ export function snapshot() {
         // why the words alone would lose a styled track on the first save.
         subtitles: cues.cueBlob(),
         graph: copy(overlay.current()),
+        // The rules on the Find stage, which are content in the way the cues
+        // above are content: "every time he said this, and one monologue for
+        // every three of them" is an editorial decision, not a description of a
+        // file, and nothing can re-derive it. Deliberately *unlike* a
+        // transcript, a set of marks and a waveform, which are read from a file
+        // and give the same answer twice — those are in no document, no
+        // workspace and no undo step. What the rules produce is not written
+        // either, for that same reason: a stack comes back from the rules the
+        // way a waveform comes back from a file.
+        find: copy(find.snapshot()),
         output: outputBlob(),
         session: sessionBlob(),
     };
@@ -335,6 +346,12 @@ export function open(doc) {
     // everything pinned to a clip that is no longer open — so an overlay adopted
     // first would be stripped by the tidying that followed it.
     overlay.adopt(d.graph);
+    // The rules, after the inputs and for the same ordering reason: a `source`
+    // node names an input by id, and `find.retain()` — which runs off the change
+    // channel that removing an input fires — would clear one adopted before the
+    // inputs it points at were there. An absent key opens as an empty canvas,
+    // which is what every document written before this stage existed says.
+    find.open(d.find || null);
     // **Only when the document has any.** An *edit* history state deliberately
     // carries no `output` — a `Ctrl-Z` on the timeline must not reach the form,
     // which is why the settings are a second stack rather than part of this one —

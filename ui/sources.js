@@ -1920,20 +1920,42 @@ function transcriptRows(input, stream) {
 
     if (e.state === 'reading') {
         const r = e.result;
-        // How far down the recording, not a spinner. The one number that makes a
-        // partial transcript honest — a search over what has been read is a
-        // different answer from a search over the recording.
-        const how = r && r.duration > 0
-            ? `${r.read.toFixed(0)}s of ${r.duration.toFixed(0)}s` +
-              ` · ${r.segments.length} so far`
-            : 'starting…';
+        const p = transcriptModel.progressOf(e);
+        // **How far, how fast, and how long left.** This used to be "starting…"
+        // until the first window landed and a bare `Ns of Ns` after it, and on
+        // the recording this feature exists for that is a line that does not
+        // visibly move for an hour and a half. There is no way to tell it from a
+        // read that has silently stopped, which is the question somebody
+        // actually has, and the answer to it is a **rate**: 4.0x says a six-hour
+        // VOD is ninety minutes and 0.05x says it will not finish today. Neither
+        // is knowable from a percentage.
+        //
+        // Measured rather than assumed — `read / elapsed` on this machine with
+        // this model — because what a card does with large-v3 depends on the
+        // card, and the number somebody wants is the one theirs is doing.
+        const bits = [];
+        if (p.duration > 0) {
+            bits.push(`${clock(p.read)} of ${clock(p.duration)}`);
+            bits.push(`${Math.round((p.read / p.duration) * 100)}%`);
+        } else bits.push('opening the soundtrack');
+        if (r && r.segments.length) bits.push(`${r.segments.length} segments`);
+        if (p.rate) bits.push(`${p.rate.toFixed(1)}× realtime`);
+        if (p.left) bits.push(`about ${transcriptModel.showLeft(p.left)} left`);
         rows.push(div('src-data', [
-            span(`Transcribing · ${how}`, 'dim'),
+            span(`Transcribing · ${bits.join(' · ')}`, 'dim'),
             el('button', { cls: 'btn tiny', text: 'Stop',
                            title: 'Stop here and keep the words already found.',
                            on: { click: () => { transcriptModel.stopTranscribing(input.id);
                                                 drawSources(); } } }),
         ]));
+        // Which device it is on, and why that matters. A *statement* rather than
+        // an explanation in `ui/export/explain.js`'s sense — it changes with the
+        // machine and is the answer to "why is this taking days" — so it is
+        // never folded. It is only said when it is bad news: on a card there is
+        // nothing to explain and a line saying so would be one more thing to
+        // read past.
+        const why = transcriptModel.whySlow();
+        if (why) rows.push(div('src-data', [span(why, 'ex-note')]));
         return rows;
     }
 
@@ -1961,6 +1983,16 @@ function transcriptRows(input, stream) {
         span(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
              (part ? ` · only the first ${r.read.toFixed(0)}s of ${r.duration.toFixed(0)}s`
                    : ' · all of it'), 'dim'),
+        // The door to the other thing a transcript is for. The search below
+        // finds a moment and pulls the twenty seconds around it as a new input,
+        // which is a question about *this file*; the Find stage turns the same
+        // words into stacks of clips you can weave together, which is a question
+        // about the edit. Both are worth having and they are on two stages
+        // because they are two questions — this is what says the second exists.
+        doorTo('Make clips…', 'find',
+               'Turn what was said into stacks of clips on the Find stage — ' +
+               'every use of a word, weighed against runs of sound, and ' +
+               'arranged.'),
         part ? el('button', { cls: 'btn tiny', text: 'Carry on',
                               title: 'Read the rest of the soundtrack.',
                               on: { click: () => {

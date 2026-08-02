@@ -37,6 +37,15 @@ const STAGES = [
     // rather than a claim about this render.
     { id: 'capture', name: 'Capture' },
     { id: 'sources', name: 'Sources' },
+    // Between having the file and having the edit, which is where the work is
+    // for a recording nobody is going to scrub through. Sources answers "what
+    // is this file"; Compose answers "what is the edit"; this answers "what is
+    // *in* the recording, and which of it do I want" — a different question
+    // from either, and the one a six-hour VOD makes unavoidable. It is not part
+    // of ffmpeg's model and does not pretend to be: nothing here reaches the
+    // render, it produces clips and the clips go to Compose, exactly as a
+    // person dragging a file in does.
+    { id: 'find',    name: 'Find' },
     { id: 'compose', name: 'Compose' },
     // Between the edit and the encoder, which is where it is in ffmpeg: the
     // filter graph is what the decoded streams are put through on the way to
