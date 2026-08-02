@@ -76,6 +76,8 @@ const tell = () => { if (hooks.changed) hooks.changed(); };
 /// active clip's own clock is the master then, and writing currentTime back
 /// would fight it.
 export function setPlayhead(t, seek = true) {
+    t = Number(t);
+    if (Number.isNaN(t)) return;
     const d = duration();
     transport.t = Math.max(0, Math.min(d, t));
     const here = clipsAt(transport.t);
@@ -310,7 +312,10 @@ export function applyAudio(clip) {
     clip.video.loop = false;
 }
 
-export function applyAudioAll() { for (const c of viewer.activeClips()) applyAudio(c); }
+export function applyAudioAll() {
+    for (const c of viewer.activeClips()) applyAudio(c);
+    output.applyAudio();
+}
 
 // ── the clock ──────────────────────────────────────────────────────────────
 

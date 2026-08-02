@@ -187,10 +187,15 @@ export function buildCard(n, ctx) {
     if (n.locked) cls.push('gn-locked');
     if (!n.derived) cls.push('gn-user');
     if (n.pinned) cls.push('gn-pinned');
-    // Marked where the person is working, not only in the command bar. A graph
-    // that will not run is a fact about one node, and the place to say it is on
-    // that node — the bar along the bottom is where you find out *afterwards*.
     if (problem) cls.push('gn-bad');
+
+    const inner = el('div', { cls: 'gn-inner' }, [
+        header(n, g, key),
+        lod === 'min' || !problem ? null : problemRow(problem),
+        lod === 'min' ? null : body(n, g),
+        shotView(key, width),
+        grip(key, width),
+    ]);
 
     const node = el('div', {
         cls: cls.join(' '),
@@ -208,12 +213,8 @@ export function buildCard(n, ctx) {
         // what makes dragging four nodes at once possible.
         on: { click: (e) => hooks.onSelect && hooks.onSelect(key, e.ctrlKey || e.shiftKey) },
     }, [
-        header(n, g, key),
-        lod === 'min' || !problem ? null : problemRow(problem),
-        lod === 'min' ? null : body(n, g),
-        shotView(key, width),
+        inner,
         sockets(n, g, key),
-        grip(key, width),
     ]);
     return node;
 }
@@ -232,24 +233,16 @@ export function buildCard(n, ctx) {
 /// output" would be true only until somebody dropped a filter inside. Open it
 /// and every node in it gets the picture it always had.
 function foldCard(n, ctx) {
-    const { graph: g, key, width, fold } = ctx;
+    const { graph: g, key, width, fold, problem } = ctx;
     const cls = ['gn', 'gn-fold'];
+    if (problem) cls.push('gn-bad');
     const name = fold.input ? basename(fold.input.path) : (n.title || 'a clip');
     const pad = fold.input && fold.input.index !== undefined
         ? (fold.input.outs || [{ stream: 'v' }])
               .map((o) => `[${fold.input.index}:${o.stream}]`).join(' ')
         : '';
     const count = fold.nodes.filter((x) => x.kind === 'filter').length;
-    return el('div', {
-        cls: cls.join(' '),
-        'data-node': n.id,
-        'data-key': key || '',
-        'data-fold': fold.key,
-        'data-filter': 'fold',
-        style: { width: `${width}px` },
-        title: `${fold.key} — ${fold.filters.join(' → ')}`,
-        on: { click: (e) => hooks.onSelect && hooks.onSelect(key, e.ctrlKey || e.shiftKey) },
-    }, [
+    const inner = el('div', { cls: 'gn-inner' }, [
         el('div', {
             cls: 'gn-head',
             'data-drag': key || '',
@@ -275,6 +268,18 @@ function foldCard(n, ctx) {
                   click: (e) => { e.stopPropagation();
                                   if (hooks.onOpenFold) hooks.onOpenFold(fold.key); } },
         }),
+    ]);
+    return el('div', {
+        cls: cls.join(' '),
+        'data-node': n.id,
+        'data-key': key || '',
+        'data-fold': fold.key,
+        'data-filter': 'fold',
+        style: { width: `${width}px` },
+        title: `${fold.key} — ${fold.filters.join(' → ')}`,
+        on: { click: (e) => hooks.onSelect && hooks.onSelect(key, e.ctrlKey || e.shiftKey) },
+    }, [
+        inner,
         sockets(n, g, key),
     ]);
 }

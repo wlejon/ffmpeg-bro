@@ -2902,9 +2902,15 @@ button.text.primary:hover { background: #ffa063; }
     transform-origin: 0 0;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 5px;
+    border-radius: 6px;
     cursor: default;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.gn-inner {
+    border-radius: 5px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 /* The two ends of the graph are not filters and should not read as filters. */
 .gn-input, .gn-sink { background: var(--panel-hi); }

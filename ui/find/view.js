@@ -86,7 +86,7 @@ export function initFindView(r, h = {}) {
 /// a card's height depends on how many fields its kind declares and there is no
 /// honest way to guess it, so the cards go into the DOM, are measured, and only
 /// then does the layout run.
-export function drawFind() {
+export function drawFind(skipPanel = false) {
     if (!refs.viewport) return;
     const g = graph();
     const res = find.result();
@@ -118,7 +118,7 @@ export function drawFind() {
 
     if (!framed && placed.nodes.length) { framed = true; fitView(); }
     apply();
-    drawPanel(res);
+    if (!skipPanel) drawPanel(res);
     drawStatus(res);
 }
 
@@ -217,8 +217,14 @@ function buildCard(node, res) {
         pick(node);
         startMove(node, e);
         e.preventDefault();
+        e.stopPropagation();
     });
-    card.addEventListener('mousedown', (e) => { if (e.button === 0) pick(node); });
+    card.addEventListener('mousedown', (e) => {
+        if (e.button === 0) {
+            pick(node);
+            e.stopPropagation();
+        }
+    });
     return card;
 }
 
@@ -339,7 +345,10 @@ function fieldRow(node, f) {
             // cheap to re-run, so a keystroke re-evaluates and the counts on the
             // cards move as the phrase is typed — which is the whole feel of the
             // stage.
-            on: { input: (e) => { g.setParam(node, f.key, e.target.value); drawFind(); } },
+            on: { 
+                input: (e) => { g.setParam(node, f.key, e.target.value); drawFind(true); },
+                change: (e) => { g.setParam(node, f.key, e.target.value); drawFind(); }
+            },
         });
     }
     return div('fn-field', [span(f.label, 'fn-field-name'), control,

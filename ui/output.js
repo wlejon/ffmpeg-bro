@@ -57,6 +57,7 @@
 // preview shows an older picture than the playhead claims.
 
 import { previewSpec, range } from './export/spec.js';
+import { transport } from './transport.js';
 
 /// The id the render is registered under. One, because there is one program
 /// monitor: a second preview would be a second render of the same edit
@@ -425,13 +426,16 @@ function apply() {
     if (v.src !== src) {
         try { v.pause(); } catch (e) {}
         v.src = src;
-        // Audible, and full scale: what comes out of this element is the render's
-        // own mix, so anything less than 1.0 would be a gain nobody asked for
-        // sitting between the numbers on the Encode stage and the sound in the
-        // room. Said on every re-point rather than once, because an element handed
-        // a new src is a fresh one in every respect.
-        v.muted = false;
-        v.volume = 1;
+        // Apply transport audio settings. Said on every re-point rather than once,
+        // because an element handed a new src is a fresh one in every respect.
+        applyAudio();
     }
     tell();
+}
+
+export function applyAudio() {
+    if (!el) return;
+    el.muted = transport.muted;
+    el.volume = transport.volume;
+    el.playbackRate = transport.rate;
 }

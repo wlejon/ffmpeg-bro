@@ -119,11 +119,16 @@ export function makeFindGraph() {
         if (a === b) return 'a node cannot feed itself';
         const out = N.portKinds(a, 'out')[fromPort];
         const inn = N.portKinds(b, 'in')[port];
-        if (!out || !inn) return 'there is no such socket';
-        if (!N.accepts(out, inn))
-            return out === N.INPUT
+
+        const effOut = out || (a.kind === 'source' ? N.INPUT : N.STACK);
+        const effInn = inn || (b.kind === 'source' ? N.INPUT : N.STACK);
+
+        if (!N.accepts(effOut, effInn))
+            return effOut === N.INPUT
                 ? 'that is a recording — it goes into a Said or a Sound'
                 : 'that is a stack — it does not go into a recording socket';
+
+        if (!out || !inn) return 'there is no such socket';
         if (reaches(b, a)) return 'that would make a loop';
         g.disconnectAt(b, port);
         edges.push({ from: a.id, to: b.id, port, fromPort });

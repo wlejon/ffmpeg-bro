@@ -238,8 +238,10 @@ export function mixed(a, b, takeA = 1, takeB = 1) {
     // taking none of either is an empty stack.
     if (!na && !nb) return out;
     while (i < a.length || j < b.length) {
+        const startI = i, startJ = j;
         for (let k = 0; k < na && i < a.length; k++) out.push(a[i++]);
         for (let k = 0; k < nb && j < b.length; k++) out.push(b[j++]);
+        if (i === startI && j === startJ) break;
     }
     return out;
 }

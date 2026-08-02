@@ -133,7 +133,8 @@ import { schemeOf, protocolLinked, teeSpec, newDestination,
          destinationRows } from './export/destination.js';
 import { changed as projectChanged } from './project.js';
 import { addInput, updateInput, removeInput as dropInput, reprobe, byId,
-         opening, openStoppable, stopOpening, asInput as inputSpec } from './inputs.js';
+         opening, openStoppable, stopOpening, asInput as inputSpec,
+         inputs as projectInputs } from './inputs.js';
 import { recordGraph, recordPads } from './graph/record.js';
 import { current as overlayState, onChange as overlayChanged } from './graph/overlay.js';
 
@@ -453,6 +454,9 @@ export function clashingPath() {
     const seen = recordFiles();
     for (let i = 1; i < seen.length; ++i)
         if (seen[i] && seen.indexOf(seen[i]) < i) return seen[i];
+    const inputPaths = projectInputs.map(i => i.path);
+    for (const f of seen)
+        if (f && inputPaths.includes(f)) return f;
     return '';
 }
 
@@ -563,6 +567,7 @@ export function release(i) {
     if (!input) return;
     dropCard(i);
     capture.inputs.splice(i, 1);
+    if (i < focus) focus--;
     dropInput(input);
     if (focus >= capture.inputs.length) focus = capture.inputs.length - 1;
     if (focus < 0) focus = 0;
@@ -792,7 +797,7 @@ function drawCardRows(i) {
             title: 'Seconds to read this input for. Blank runs until you press Stop. ' +
                    'It belongs to the input, as -t does on a command line, and the ' +
                    'shortest of them ends the recording.',
-            on: { change: () => change(input, { to: Number(seconds.value) || 0 }) },
+            on: { change: () => change(input, { to: Math.max(0, Number(seconds.value) || 0) }) },
         });
         const out = [row('Source', source), row('Stop after', seconds)];
 
@@ -2421,6 +2426,11 @@ export function setRegionFromDrag(from, to, index) {
     const shownH = c.video.clientHeight || 1;
     const realW = c.video.videoWidth || shownW;
     const realH = c.video.videoHeight || shownH;
+
+    from.x = Math.max(0, Math.min(shownW, from.x));
+    from.y = Math.max(0, Math.min(shownH, from.y));
+    to.x = Math.max(0, Math.min(shownW, to.x));
+    to.y = Math.max(0, Math.min(shownH, to.y));
 
     const x = Math.max(0, Math.round(Math.min(from.x, to.x) * realW / shownW));
     const y = Math.max(0, Math.round(Math.min(from.y, to.y) * realH / shownH));

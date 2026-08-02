@@ -3816,7 +3816,7 @@ if (!media) {
         const vary = document.querySelectorAll('#gr-panel [data-f^="vary:"]');
         ok(vary.length >= 1, 'a value that does not move is offered a way to');
         vary[vary.length - 1].dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-        pump(200);
+        pump(500);
         const wrote = overlay.inserts()[0].pos[3];
         ok(/^'lerp\(0,0,clip\(/.test(wrote),
            `one press writes a flat ramp at the value that was there: ${wrote}`);

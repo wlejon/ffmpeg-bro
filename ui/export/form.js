@@ -323,6 +323,7 @@ function oneTargetRows(kind) {
         placeholder: kind === 'stream' ? 'a URL to push the render to'
                                        : 'where the file goes',
         on: { change: () => {
+            const wasPath = settings.path;
             settings.path = path.value.trim();
             // **A filename is not a picture.** `referenceKey()` deliberately
             // leaves the path out, so naming the file must not throw away a
@@ -340,8 +341,12 @@ function oneTargetRows(kind) {
             const was = settings.videoCodec;
             followExtension();
             refreshFileLabel();
-            if (settings.videoCodec !== was) hooks.changed();
-            else hooks.restated();
+            if (settings.videoCodec !== was || schemeOf(settings.path) !== schemeOf(wasPath)) {
+                hooks.changed();
+            } else {
+                hooks.restated();
+                drawForm();
+            }
         } },
     });
 
