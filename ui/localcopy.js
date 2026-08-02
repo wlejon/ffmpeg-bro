@@ -92,6 +92,49 @@ export function allCopies() {
     return Array.from(jobs.values());
 }
 
+/// The folder pulls are written to, when somebody has said which.
+///
+/// Empty means nobody has, and `ui/app.js` answers with the document's own
+/// directory then. That is the right default and it has one bad case, which is
+/// the case this exists for: an edit that has never been saved has no
+/// directory, so the fallback is the folder the application was started in —
+/// which is a real place and one nobody can point at. A fourteen-gigabyte
+/// download nobody can name the destination of is a download you go and find
+/// with a file search, and "where did it go" is the question this feature was
+/// asked the first time it was used.
+///
+/// Remembered between runs under a key of its own, `ui/measure.js`'s rule and
+/// the same argument the Whisper model directory makes: which disk has room for
+/// a five-hour recording is a property of the machine rather than of the edit.
+/// Not in the document for the reason nothing else here is — a `.fbro` opened
+/// on another machine would name a folder that is not there.
+const FOLDER_KEY = 'ffmpeg-bro.copies';
+
+let folder = readFolder();
+
+function readFolder() {
+    try {
+        const saved = localStorage.getItem(FOLDER_KEY);
+        const blob = saved ? JSON.parse(saved) : null;
+        return blob && typeof blob === 'object' && typeof blob.folder === 'string'
+            ? blob.folder : '';
+    } catch (e) {
+        return '';        // never set, or written by a shape that is not this one
+    }
+}
+
+/// Where copies go, or '' for "wherever the document is".
+export function copyFolder() { return folder; }
+
+/// Say where they should go. An empty string puts it back to the document's own
+/// directory, which is what the control's `Beside the document` offers.
+export function useCopyFolder(dir) {
+    folder = String(dir || '').replace(/[/\\]+$/, '');
+    try { localStorage.setItem(FOLDER_KEY, JSON.stringify({ folder })); }
+    catch (e) { /* not fatal: it still holds for this run */ }
+    return folder;
+}
+
 /// Where a pull's file goes.
 ///
 /// Named after the input rather than after the signed URL, which is five hundred

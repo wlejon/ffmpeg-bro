@@ -116,6 +116,29 @@ ad-break discontinuities put them +0.80 s, +2.21 s and +2.57 s apart at three
 points of one pair — so a time you find in the sound is where to *look* in the
 picture and never where to cut it. The card says so once both are here.
 
+### Where it goes
+
+The card says, on a `Folder` row, before anything has been pulled. There are
+three answers and it names which one is speaking:
+
+- a folder you chose with `Choose…`, which then takes every copy — a five-hour
+  stream is tens of gigabytes, so this is usually a question about which disk;
+- otherwise **beside the document**, which is where an edit's media belongs;
+- and with no document saved, the directory the application was started in. That
+  is a real place and a useless one to be told about, so the row says so and the
+  press to end the question is right there.
+
+A chosen folder is remembered between runs and **wins over the document's**,
+which is the opposite of how a default usually gives way: it is the answer to
+"put my downloads on the big disk", and saving the document somewhere else
+afterwards must not silently move fourteen gigabytes of them. `Beside the
+document` clears it and puts the first rule back. It is not in the `.fbro` file
+— it names a disk on this machine, and a document opened on another would carry
+a folder that is not there.
+
+Each pull's row then names the file it is writing, so the folder above it and
+the name beside it are the whole answer.
+
 Two more things about the pull:
 
 - **Data streams are left out.** Twitch's HLS carries a `timed_id3` track of its
@@ -385,6 +408,17 @@ there is nothing to choose until you have downloaded one —
 `scripts/download-whisper.sh --size large-v3` in brosoundml puts one on disk.
 Until then the control names the file it could not find rather than quietly
 doing nothing.
+
+`Model…` picks the directory, and the field beside it takes a path you paste —
+the line a download script printed is often exactly what you have, and the field
+is also the only thing that can show you *which* model is currently chosen. It
+is remembered between runs: the weights are a property of this machine rather
+than of the edit, so a folder chosen once stays chosen.
+
+And `Transcribe` with nothing chosen **asks** rather than failing: it opens that
+same picker, and starts once you have named a directory. It used to make a
+failed read saying `no model has been chosen`, which was true, unhelpful, and a
+dead end with an `Again` button on it.
 
 **Size is a real choice and it is yours.** `tiny` is 145 MB and transcribes clean
 speech correctly; on a stream with game audio under it, it will not. `large-v3`

@@ -240,15 +240,27 @@ initSources({
         flash(`${basename(pull.path)} is open — Use on the timeline puts it in the edit`);
     },
 
+    // Where a copy would go, for the card to say before anybody presses. The
+    // resolver is here rather than in `ui/sources.js` for `saveLocally`'s
+    // reason: one of the three answers is the document's own directory, and
+    // that stage does not own the document.
+    copiesGo: () => whereCopiesGo(),
+
     saveLocally: (input) => {
         const why = localcopy.save(input, whereCopiesGo());
         if (why) return flash(`Cannot copy it: ${why}`);
         const job = localcopy.copiesOf(input);
+        // Naming the folder in the sentence, because the press is the moment
+        // somebody wants to know where it is going and the card is behind the
+        // message. It says it on the card too — this is the same fact twice on
+        // purpose, once where it is asked and once where it is looked up.
         flash(job.audio.state
-                  ? `Pulling ${input.name} — the soundtrack first, then the picture. ` +
-                    'Both run in the background; the card says where each has got to.'
-                  : `Pulling ${input.name}. It runs in the background — nothing here waits ` +
-                    'for it, and the card offers to stop it.');
+                  ? `Pulling ${input.name} into ${whereCopiesGo()} — the soundtrack ` +
+                    'first, then the picture. Both run in the background; the card ' +
+                    'says where each has got to.'
+                  : `Pulling ${input.name} into ${whereCopiesGo()}. It runs in the ` +
+                    'background — nothing here waits for it, and the card offers to ' +
+                    'stop it.');
     },
     // The same copy, described rather than started. Here for `saveLocally`'s
     // reason and one more: it walks to another stage, which is the shell's, and
@@ -286,12 +298,20 @@ function slugOf(name) {
         .replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'stream';
 }
 
-/// Where a saved stream goes: beside the document if there is one, and beside
-/// the application otherwise.
+/// Where a saved stream goes: the folder somebody chose, else beside the
+/// document, else beside the application.
 ///
 /// The directory only — what each pull is *called* is `ui/localcopy.js`'s, since
 /// there are two of them and they must not land on one name.
+///
+/// **The chosen folder wins over the document's**, which is the opposite of how
+/// a default normally gives way: it is the answer to "put my downloads on the
+/// big disk", and a document saved somewhere else afterwards must not silently
+/// move fourteen gigabytes of them. Choosing `Beside the document` clears it and
+/// puts the first rule back.
 function whereCopiesGo() {
+    const chosen = localcopy.copyFolder();
+    if (chosen) return chosen;
     const here = doc.documentPath();
     return here ? here.replace(/[/\\][^/\\]*$/, '') : '.';
 }

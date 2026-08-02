@@ -70,7 +70,30 @@ const reads = new Map();
 /// defaulted to a guess at a path — a wrong guess produces "there is no
 /// '<path>/config.json'" pointing at a directory the user never named, which
 /// reads as a bug in the application rather than as a thing to go and fix.
-let modelDir = '';
+///
+/// **Remembered between runs**, under a key of its own the way `ui/measure.js`
+/// keeps its toggle: the weights are a 3 GB directory somebody put on a
+/// particular disk once, it is a property of the machine rather than of the
+/// edit, and finding it again on every launch is the difference between a
+/// feature you use and one you mean to. Not in the document for the reason a
+/// transcript is not in it — a `.fbro` opened on another machine would name a
+/// path that is not there. Version-tolerant on the way in, like every other
+/// read of persisted state here: whatever is under the key becomes a string or
+/// becomes nothing.
+const MODEL_KEY = 'ffmpeg-bro.transcript';
+
+let modelDir = readModelDir();
+
+function readModelDir() {
+    try {
+        const saved = localStorage.getItem(MODEL_KEY);
+        const blob = saved ? JSON.parse(saved) : null;
+        return blob && typeof blob === 'object' && typeof blob.model === 'string'
+            ? blob.model : '';
+    } catch (e) {
+        return '';         // never set, or written by a shape that is not this one
+    }
+}
 
 /// Which language the model is told it is hearing. Whisper does not detect here;
 /// it is told, and being told the wrong one produces confident nonsense rather
@@ -78,7 +101,17 @@ let modelDir = '';
 let language = 'en';
 
 export function modelPath() { return modelDir; }
-export function useModel(path) { modelDir = String(path || ''); changed('transcript'); }
+export function useModel(path) {
+    modelDir = String(path || '');
+    // Written on the press rather than at the read, `ui/measure.js`'s rule and
+    // for its reason: a path chosen and never transcribed with is still the
+    // path this machine has, and losing it would be the friction all over
+    // again. An object under the key so a second thing about transcribing has
+    // somewhere to go without a migration.
+    try { localStorage.setItem(MODEL_KEY, JSON.stringify({ model: modelDir })); }
+    catch (e) { /* not fatal: the path still holds for this run */ }
+    changed('transcript');
+}
 export function languageUsed() { return language; }
 export function useLanguage(code) { language = String(code || 'en'); changed('transcript'); }
 

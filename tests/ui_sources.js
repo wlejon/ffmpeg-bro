@@ -413,6 +413,32 @@ pump(100);
     ok(el('src-detail').textContent.indexOf('Audio Only') >= 0,
        'the sound-only one is named as such — it is the one a transcription pass wants');
 
+    // ── where it goes, before anything goes there ──────────────────────────
+    //
+    // The first question this feature was asked in use was "where is it
+    // downloading to", and the honest answer was that it depended: beside the
+    // document, or — with none open — the directory the application happened to
+    // be started in, which nothing on the screen said. Fourteen gigabytes with
+    // no stated destination is a file you find with a search.
+    ok(!!f('srccopydir'),
+       'the card offers to choose where copies go, before one has been made');
+    same(A.localcopy.copyFolder(), '',
+         'and nothing is chosen to begin with — the document decides');
+    ok(el('src-detail').textContent.indexOf(A.localcopy.copyFolder() || '.') >= 0,
+       'the folder is on the card as a path rather than left to be guessed at');
+
+    A.localcopy.useCopyFolder('D:/vods');
+    A.drawSources(); pump(20); pickRow();
+    ok(el('src-detail').textContent.indexOf('D:/vods') >= 0,
+       'a chosen folder is what the card says');
+    ok(!!f('srccopydirclear'),
+       'and there is a way back to beside the document');
+    click(f('srccopydirclear'));
+    pump(20); pickRow();
+    same(A.localcopy.copyFolder(), '', 'which clears it');
+    ok(!f('srccopydirclear'),
+       'and takes its own button away, since there is nothing left to clear');
+
     // ── the pull ───────────────────────────────────────────────────────────
     //
     // The press starts two fetches and stays here. It used to lay a clip out,
@@ -459,6 +485,10 @@ pump(100);
     pump(60);
     ok(el('src-detail').textContent.indexOf('soundtrack is on this machine') >= 0,
        'and the card says so, rather than leaving it to be discovered');
+    ok(el('src-detail').textContent.indexOf(
+           String(streamed.localAudio).replace(/^.*[/\\]/, '')) >= 0,
+       'named, so the folder above it and this line are the whole answer to ' +
+       'where the file went');
 
     waitFor('the picture to land', () => job.video.state === 'done' ||
                                          job.video.state === 'failed', 60000);

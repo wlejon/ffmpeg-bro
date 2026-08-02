@@ -476,6 +476,44 @@ console.log('\nforgetting it takes the words and the search with them');
          'along with the search field, which has nothing left to search');
 }
 
+console.log('\nthe model is chosen on the card, two ways, and remembered');
+{
+    // The weights are not shipped, so choosing them is the first thing anybody
+    // does with this feature and it was the first thing to go wrong: a bare
+    // text field, committed on `change` — which the engine did not fire for a
+    // text control at all — so a path was typed, the button beside it was
+    // pressed, and the read failed saying no model had been chosen. The engine
+    // is where that was fixed (bro, layout/value_change.h). What is here is the
+    // half this application owes it.
+    A.shell.goTo('sources');
+    pump(60);
+    const field = document.querySelector('.src-model');
+    ok(!!field, 'the model directory is a field on the card');
+    same(field.value, A.transcript.modelPath(), 'showing what is chosen');
+    ok(!!document.querySelector('[data-f="srcmodelpick"]'),
+       'and there is a picker beside it — a directory is not a thing to spell by hand');
+
+    // Both, because a person leaves a field and a test dispatches one event.
+    field.value = 'D:/weights/typed-in';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    same(A.transcript.modelPath(), 'D:/weights/typed-in',
+         'a path arrives as it is typed');
+    field.value = 'D:/weights/left-behind';
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    same(A.transcript.modelPath(), 'D:/weights/left-behind',
+         'and again when the field is left');
+
+    // Remembered, because the weights are a property of this machine and
+    // finding them again on every launch is the friction the picker exists to
+    // remove. Read back through the store rather than the module's own memory.
+    const saved = JSON.parse(localStorage.getItem('ffmpeg-bro.transcript') || '{}');
+    same(saved.model, 'D:/weights/left-behind', 'and written down for the next run');
+
+    A.transcript.useModel(model);      // put the real one back for what follows
+    A.drawSources();
+    pump(20);
+}
+
 }  // speech
 }  // model
 

@@ -68,7 +68,7 @@ import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 // it into one this build already can. See ui/vod.js.
 import { looksLikePage, resolve as resolveVod } from './vod.js';
 import { copiesOf, cancel as cancelCopy, tickLocalCopies,
-         PULL_WORDS } from './localcopy.js';
+         copyFolder, useCopyFolder, PULL_WORDS } from './localcopy.js';
 // Which inputs a recording reads. The same question `graphReads()` asks of the
 // overlay, asked of the other thing that reads an `-i` without a clip being cut
 // from it — and it is only answerable at all because a device now lands in this
@@ -1342,7 +1342,7 @@ function localCopyButtons(input) {
     return out;
 }
 
-/// Where the two pulls have got to, as rows on the card.
+/// Where a copy of this stream goes, and where the two pulls have got to.
 ///
 /// **The soundtrack's row is the one this whole ordering exists for**, so it
 /// says what it unlocks the moment it lands rather than only that it is there:
@@ -1350,15 +1350,63 @@ function localCopyButtons(input) {
 /// can start while the picture is still arriving, and a row that said `done` and
 /// nothing else would leave that to be discovered.
 ///
-/// Drawn only once something has been asked for. An input nobody has pressed the
-/// button on has no rows here, rather than two saying `—`.
+/// The *pull* rows are drawn only once something has been asked for — an input
+/// nobody has pressed the button on gets no pair of rows saying `—`. The folder
+/// is the exception and is always here, because it is the one thing you want to
+/// know before pressing rather than after.
 function localCopySection(input) {
-    const rows = localCopyRows(input);
-    if (!rows.length) return [];
+    // Drawn for anything that *could* be pulled rather than only for something
+    // that has been, because the first question this feature was asked is where
+    // the file went — and the moment to answer it is before fourteen gigabytes
+    // are on their way somewhere, not after.
+    if (!input.origin && !input.renditions) return [];
     return [head('On this machine', {
-        title: 'What has been pulled off the page and written here, and where each ' +
-               'pull has got to',
-    }), ...rows];
+        title: 'Where a copy of this stream goes, what has been pulled already, ' +
+               'and where each pull has got to',
+    }), copyFolderRow(), ...localCopyRows(input)];
+}
+
+/// Where a copy will be written, said out loud, with the press that changes it.
+///
+/// **The folder and *why* it is that folder**, because the default has two
+/// cases and only one of them is a place somebody can find: beside the
+/// document is obvious once a document exists, and before that it is the
+/// directory the application happens to have been started in, which is a real
+/// answer and a useless one. So the row says which of the two is speaking, and
+/// the press that ends the question is right there.
+function copyFolderRow() {
+    const dir = hooks.copiesGo ? hooks.copiesGo() : '.';
+    const chosen = copyFolder();
+    const why = chosen
+        ? 'chosen — every copy goes here'
+        : dir === '.'
+        ? 'the folder this application was started in — save the document, or ' +
+          'choose one'
+        : 'beside the document';
+    const nodes = [
+        span(dir, 'mono'),
+        span(why, 'dim'),
+        el('button', {
+            cls: 'tiny', 'data-f': 'srccopydir', text: 'Choose…',
+            title: 'Pick the folder every local copy is written to. A five-hour ' +
+                   'stream is tens of gigabytes, so this is usually a question ' +
+                   'about which disk.',
+            on: { click: () => {
+                if (typeof showOpenFolderDialog !== 'function') return;
+                const picked = showOpenFolderDialog(dir === '.' ? null : dir);
+                if (!picked || !picked.length) return;   // cancelled, not cleared
+                useCopyFolder(String(picked[0]));
+                drawSources();
+            } },
+        }),
+    ];
+    if (chosen)
+        nodes.push(el('button', {
+            cls: 'tiny', 'data-f': 'srccopydirclear', text: 'Beside the document',
+            title: 'Forget the chosen folder and put copies beside the document again',
+            on: { click: () => { useCopyFolder(''); drawSources(); } },
+        }));
+    return row('Folder', nodes);
 }
 
 function localCopyRows(input) {
@@ -1376,6 +1424,12 @@ function localCopyRows(input) {
                           pull.state === 'queued' || pull.state === 'running';
         rows.push(row(what, [
             span(`${word}${pct}${size}`, 'mono' + (pull.state === 'failed' ? ' warn' : '')),
+            // What it is called, since the folder is a row above and the two
+            // together are the whole answer to "where did it go". The name
+            // rather than the path: the path is on the row above and repeating
+            // it twice per pull is how a card stops being read.
+            pull.path ? el('span', { cls: 'dim', text: basename(pull.path),
+                                     title: pull.path }) : null,
             stoppable ? el('button', {
                 cls: 'tiny', 'data-f': `srcstop-${which}`, text: 'Stop',
                 title: 'Stop this pull. What has been written stays where it is.',
@@ -1737,6 +1791,35 @@ function soundRows(input, stream) {
     return rows;
 }
 
+/// Ask for the weights when nothing has named them, and answer whether there are
+/// any now.
+///
+/// **A press that needs a model asks for one rather than failing.** Pressing
+/// `Transcribe` with nothing chosen used to make a *failed read* whose message
+/// was `no model has been chosen` — a true sentence, an `Again` button beside
+/// it, and a dead end: the application knew exactly what was missing and made
+/// the person go and find the control for it. Cancelling the picker is still an
+/// answer, and it is said rather than left as a press that did nothing.
+///
+/// A dialog is modal and waits for a person, so **a suite that presses one of
+/// these must choose a model first** — `tests/ui_transcript.js` does, through
+/// the model — or it will sit on a folder picker nobody is looking at.
+function ensureModel() {
+    if (transcriptModel.modelPath()) return true;
+    if (typeof showOpenFolderDialog !== 'function') return false;
+    const picked = showOpenFolderDialog(null);
+    const dir = picked && picked.length ? String(picked[0]) : '';
+    if (!dir) {
+        if (hooks.flash)
+            hooks.flash('Nothing was read: a Whisper model directory has to be ' +
+                        'chosen first — brosoundml\'s scripts/download-whisper.sh ' +
+                        'puts one on disk.');
+        return false;
+    }
+    transcriptModel.useModel(dir);
+    return true;
+}
+
 /// What was *said* in this soundtrack, under the same stream line as the marks.
 ///
 /// Beside `Find sounds` rather than anywhere else because they answer the two
@@ -1759,8 +1842,22 @@ function transcriptRows(input, stream) {
     const e = transcriptModel.readOf(input.id);
 
     // The model directory, always visible once a transcription has been thought
-    // about. A path rather than a picker, because it is a *directory* of files
-    // and the thing a person has is the path their download script printed.
+    // about, and reachable two ways because the two are different questions.
+    //
+    // **Pick one**, because it is a directory on this machine and typing a path
+    // by hand is a spelling test with a wrong answer that reads as a broken
+    // application: `there is no '<path>/config.json'` names a file the user
+    // believes they chose. `showOpenFolderDialog` is bro's, the same door
+    // `ui/document.js` and `ui/export/form.js` open for a file, and folders
+    // rather than files because a Whisper model *is* the directory. It answers
+    // with a list and an empty one means cancelled — which is not the same as
+    // choosing nothing, so nothing is written.
+    //
+    // **And show the path**, because the thing a person often has is a line a
+    // download script printed and pasting it is faster than walking a tree to
+    // it — and because a field is the only thing that can show *which* model is
+    // chosen, which is the difference between a transcript that is right and
+    // one that is 145 MB of guesses.
     const modelField = el('input', {
         cls: 'src-model', type: 'text',
         value: transcriptModel.modelPath(),
@@ -1769,9 +1866,32 @@ function transcriptRows(input, stream) {
                'and merges.txt.\nNothing is downloaded here: brosoundml\'s ' +
                'scripts/download-whisper.sh --size large-v3 puts one on disk.\n' +
                'tiny is 145 MB and reads clean speech; large-v3 is 3 GB and is ' +
-               'the one to use if the transcript has to be right.',
-        on: { change: (ev) => { transcriptModel.useModel(ev.target.value);
-                                drawSources(); } },
+               'the one to use if the transcript has to be right.\n' +
+               'Remembered between runs — the weights are a property of the ' +
+               'machine rather than of the edit.',
+        // Both, and **neither redraws**. `input` is what makes a pasted path
+        // arrive as it is pasted; `change` is the departure, which the engine
+        // now reports (bro `layout/value_change.h` — it did not, which is why
+        // typing a path and pressing the button beside it said no model had
+        // been chosen). Redrawing from either is the trap under both: a change
+        // fires during the *press* on that button, and rebuilding this row then
+        // frees the button between its mousedown and its mouseup, so the press
+        // it was reporting for never becomes a click. Nothing here needs the
+        // redraw — the field already shows what it holds.
+        on: { input: (ev) => transcriptModel.useModel(ev.target.value),
+              change: (ev) => transcriptModel.useModel(ev.target.value) },
+    });
+    const pickModel = el('button', {
+        cls: 'btn tiny', 'data-f': 'srcmodelpick', text: 'Model…',
+        title: 'Choose the directory the weights are in.',
+        on: { click: () => {
+            if (typeof showOpenFolderDialog !== 'function') return;
+            const picked = showOpenFolderDialog(transcriptModel.modelPath() || null);
+            const dir = picked && picked.length ? String(picked[0]) : '';
+            if (!dir) return;
+            transcriptModel.useModel(dir);
+            drawSources();
+        } },
     });
 
     if (!e) {
@@ -1784,9 +1904,11 @@ function transcriptRows(input, stream) {
                        'A transcript is a place to look, never a cut: the ' +
                        'renditions of a stream do not share a zero, so a hit ' +
                        'moves the playhead and you agree.',
-                on: { click: () => { transcriptModel.transcribe(input);
+                on: { click: () => { if (ensureModel())
+                                         transcriptModel.transcribe(input);
                                      drawSources(); } },
             }),
+            pickModel,
             modelField,
         ]));
         if (!transcriptModel.modelPath())
@@ -1819,9 +1941,12 @@ function transcriptRows(input, stream) {
         rows.push(div('src-data', [span(e.error || 'will not read', 'src-error')]));
         rows.push(div('src-data', [
             el('button', { cls: 'btn tiny', text: 'Again',
-                           on: { click: () => { transcriptModel.dropTranscript(input.id);
-                                                transcriptModel.transcribe(input);
-                                                drawSources(); } } }),
+                           on: { click: () => {
+                               if (!ensureModel()) return drawSources();
+                               transcriptModel.dropTranscript(input.id);
+                               transcriptModel.transcribe(input);
+                               drawSources(); } } }),
+            pickModel,
             modelField,
         ]));
         return rows;

@@ -109,6 +109,24 @@ are written that way for that reason and are simply no longer forced to be.
 `bro.media` is installed in worker realms, which is what `ui/analyze-worker.js`
 uses for full-file peak and filmstrip decodes off the UI thread.
 
+**A gap here is fixed in bro, not routed around here**, and `change` is the
+worked example. A text `<input>` fired none — `input` per keystroke, and `change`
+only for a checkbox, a radio, a range and a colour — so *every* field on every
+stage written the way HTML says to write one was dead in the window and alive
+only in the suites, which dispatch the event by hand (`type()` in every
+`tests/ui_*.js`). It surfaced as a Whisper model path typed in and a button
+beside it answering `no model has been chosen`. The fix is bro's
+`layout/value_change.h`: `change` reports a *departure from an edited field*, so
+a field left alone, an edit typed and undone, and a value a script wrote all
+report nothing. Two consequences to know here. The suites still cannot see any
+of it — they synthesise events and never press a mouse, so **the real
+interleaving is only testable in bro** (`tests/events/test_text_change.js`). And
+`change` now arrives *during* the press on whatever was clicked next, which in a
+browser loses that click when the handler redraws; bro puts the press back onto
+the control standing where the pressed one stood, and only if the tag and the
+words match. Do not lean on that: a field that can commit on `input` should,
+which is what `ui/sources.js`'s model path does.
+
 ## The model everything is arranged around
 
 ffmpeg's model is inputs → streams → a filter graph → encoders → a muxer → an
