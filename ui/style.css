@@ -24,7 +24,20 @@
     --fs-lg:    19px;
 }
 
-* { box-sizing: border-box; }
+*, *::before, *::after {
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+input, textarea, select, [contenteditable="true"], .selectable, .mono-select {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
+}
 
 html, body {
     margin: 0;
@@ -35,7 +48,6 @@ html, body {
     font-family: "Segoe UI", system-ui, sans-serif;
     font-size: 13px;
     overflow: hidden;
-    user-select: none;
 }
 
 body { display: flex; flex-direction: column; }
@@ -3540,17 +3552,35 @@ select.when-op { height: 22px; font-size: 11px; }
     position: absolute;
     left: 0;
     top: 0;
-    width: 170px;
+    width: 180px;
     transform-origin: 0 0;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 5px;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-    font-size: 11.5px;
+    font-size: 12px;
+    /* A coloured left edge by group, so the canvas reads as zones before the
+       titles are read. Violet for generators, blue for finders, neutral for
+       shapers, amber for arrangers — the same palette the wires and sockets
+       already use, so nothing new to learn. */
+    border-left: 3px solid var(--line);
 }
 /* The two ends are not rules and should not read as rules — `.gn-input`'s
    distinction, which the Graph stage already draws. */
 .fn-source, .fn-sink { background: var(--panel-hi); }
+/* Left border by group, matching the GROUPS map in ui/find/nodes.js. A canvas
+   of ten rules reads as zones before any title is skimmed. */
+.fn-source { border-left-color: #b07cff; }  /* violet — a recording */
+.fn[data-kind="said"],
+.fn[data-kind="sound"] { border-left-color: var(--blue); }  /* finders */
+.fn[data-kind="pad"],
+.fn[data-kind="merge"],
+.fn[data-kind="length"],
+.fn[data-kind="order"],
+.fn[data-kind="slice"] { border-left-color: var(--dim); }  /* shapers */
+.fn[data-kind="mix"],
+.fn[data-kind="every"] { border-left-color: #ffcf5c; }  /* arrangers */
+.fn-sink { border-left-color: var(--good); }  /* the Stack — where it ends */
 .fn.on { border-color: var(--accent); }
 .fn-head {
     display: flex;
@@ -3606,36 +3636,52 @@ select.when-op { height: 22px; font-size: 11px; }
 .fn-menu {
     position: absolute;
     right: 8px;
-    bottom: 8px;
+    bottom: 36px;
     display: none;
     flex-direction: column;
-    min-width: 130px;
-    padding: 4px;
+    width: 320px;
+    padding: 6px;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 5px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     z-index: 4;
 }
 .fn-menu.on { display: flex; }
 .fn-menu-group {
-    padding: 5px 6px 2px;
+    padding: 8px 8px 3px;
     font-size: 10px;
-    letter-spacing: 0.06em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--dim);
 }
+.fn-menu-group:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--line);
+}
 .fn-menu-item {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    align-items: center;
+    gap: 8px;
     text-align: left;
-    padding: 3px 6px;
+    padding: 5px 8px;
     background: none;
     border: 0;
-    border-radius: 3px;
+    border-radius: 4px;
     color: inherit;
     font: inherit;
     cursor: pointer;
+    transition: background 0.1s ease;
 }
 .fn-menu-item:hover { background: var(--panel-hi); }
+.fn-menu-title {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+}
 
 .fn-panel {
     width: 264px;
@@ -3691,3 +3737,99 @@ select.when-op { height: 22px; font-size: 11px; }
     flex-shrink: 0;
 }
 .fn-status { display: flex; gap: 6px; font-size: 11px; }
+
+/* ── the empty state ────────────────────────────────────────────────────────
+   A centred card that says what this canvas is for, when there is nothing on
+   it. An empty canvas with a status line is a canvas that says nothing, and
+   a stage that says nothing is a stage nobody finds. */
+.fn-empty {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 360px;
+    padding: 20px 28px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    text-align: center;
+    z-index: 3;
+}
+.fn-empty-title {
+    font-size: var(--fs-md);
+    font-weight: 600;
+    margin-bottom: 14px;
+}
+.fn-empty-step {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    text-align: left;
+    padding: 5px 0;
+    font-size: 12px;
+    line-height: 1.45;
+}
+.fn-empty-num {
+    flex: 0 0 20px;
+    text-align: center;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--accent);
+}
+.fn-empty-act {
+    margin-top: 16px;
+}
+
+/* ── the improved add menu ──────────────────────────────────────────────────
+   Wider so the one-line descriptions fit. The `.fn-menu` rule above already
+   holds the position and layout; only the description span is new. */
+.fn-menu-desc {
+    display: block;
+    font-size: 11px;
+    color: var(--dim);
+    line-height: 1.3;
+}
+
+/* ── graph search ───────────────────────────────────────────────────────────
+   A text input in the toolbar, for finding a node in a graph too big to scan.
+   Dimming non-matches is what lets you see the result at a glance. */
+.gr-search {
+    width: 140px;
+    padding: 2px 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+}
+.gr-search:focus { border-color: var(--blue); outline: none; }
+.gr-search::placeholder { color: var(--dim); }
+
+/* Nodes that do not match the search. Dimmed rather than hidden, because the
+   topology is part of the answer — a filter is found by name and read by
+   where it is in the chain. */
+.gn.gn-dimmed {
+    opacity: 0.18;
+    pointer-events: none;
+}
+
+/* ── graph wire legend ──────────────────────────────────────────────────────
+   What blue, green and orange mean. Here rather than in a tooltip, because a
+   thing that has to be discovered is a thing that is never learnt. */
+.gr-legend {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 10px;
+    color: var(--dim);
+    margin-left: 4px;
+}
+.gr-legend-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-left: 6px;
+}

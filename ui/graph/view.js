@@ -160,8 +160,12 @@ const view = () => ({ zoom, panX, panY });
 /// a selector match that silently answered nothing would make the whole background
 /// draggable including the cards on it.
 function inNode(node) {
-    for (let p = node; p && p !== refs.viewport; p = p.parentNode)
-        if (p.classList && p.classList.contains('gn')) return true;
+    if (!node) return false;
+    if (refs.nodes && refs.nodes.contains(node) && node !== refs.nodes) return true;
+    for (let p = node; p && p !== refs.viewport; p = p.parentNode || p.parentElement) {
+        if (p.classList && typeof p.classList.contains === 'function' && p.classList.contains('gn')) return true;
+        if (p.getAttribute && (p.getAttribute('data-node') || p.getAttribute('data-key'))) return true;
+    }
     return false;
 }
 
@@ -170,9 +174,84 @@ function port() {
              h: refs.viewport ? refs.viewport.clientHeight : 0 };
 }
 
+function applySearch() {
+    if (!refs.search || !refs.nodes) return;
+    const term = refs.search.value.toLowerCase().trim();
+    const cards = Array.from(refs.nodes.querySelectorAll('.gn'));
+    
+    if (!term) {
+        for (const node of cards) node.classList.remove('gn-dimmed');
+        return;
+    }
+
+    if (!placed || !lastGraph) return;
+
+    let matchCount = 0;
+    let lastMatch = null;
+
+    for (const b of placed.nodes) {
+        const k = panel.keyOf(b.node);
+        if (!k) continue;
+        const els = cardsFor(k);
+        if (!els || !els.length) continue;
+        
+        const n = lastGraph.node(b.node.id);
+        if (!n) continue;
+
+        let text = (n.name || '').toLowerCase() + ' ';
+        text += (n.filter || '').toLowerCase() + ' ';
+        if (n.clip && n.clip.name) text += n.clip.name.toLowerCase() + ' ';
+        if (n.params) {
+            for (const key in n.params) {
+                text += String(n.params[key]).toLowerCase() + ' ';
+            }
+        }
+        
+        const matched = text.includes(term);
+        for (const el of els) {
+            el.classList.toggle('gn-dimmed', !matched);
+            if (matched) {
+                matchCount++;
+                lastMatch = b;
+            }
+        }
+    }
+
+    if (matchCount === 1 && lastMatch) {
+        const p = port();
+        panX = p.w / 2 - (lastMatch.x + lastMatch.w / 2) * zoom;
+        panY = p.h / 2 - (lastMatch.y + lastMatch.h / 2) * zoom;
+        userMoved = true;
+        apply();
+    }
+}
+
 export function initGraphView(r, hooks = {}) {
     refs = r;
     outer = hooks;
+
+    refs.search = r.search || document.getElementById('gr-search');
+    if (refs.search) {
+        refs.search.addEventListener('input', applySearch);
+        refs.search.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                refs.search.value = '';
+                refs.search.blur();
+                applySearch();
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key.toLowerCase() === 'f' && refs.viewport && refs.viewport.offsetWidth > 0) {
+            if (refs.search) {
+                refs.search.focus();
+                e.preventDefault();
+            }
+        }
+    });
 
     preview.initPreview({
         // The preview graph is derived over its own short range, so it asks for a
@@ -453,7 +532,11 @@ function startMove(key, e) {
     if (!key || !placed || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!selection.has(key)) select(key, false);
+    if (!e.shiftKey && !e.ctrlKey) {
+        if (selection.size > 1 || !selection.has(key)) select(key, false);
+    } else {
+        if (!selection.has(key)) select(key, true);
+    }
     const parts = [];
     const ids = new Set();
     // **Cards and boxes are paired by their order, because a key can name more
@@ -733,6 +816,10 @@ function clearSelection() {
     panel.selectNode(null, 0);
     markSelection();
     paint();
+    if (window.getSelection) {
+        const sel = window.getSelection();
+        if (sel) sel.removeAllRanges();
+    }
 }
 
 /// Everything the rubber band touched.

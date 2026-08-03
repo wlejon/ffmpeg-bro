@@ -91,6 +91,42 @@ export function drawFind(skipPanel = false) {
     const g = graph();
     const res = find.result();
 
+    if (g.nodes.length === 0) {
+        if (!refs.emptyGuide) {
+            refs.emptyGuide = div('fn-empty', [
+                div('fn-empty-title', 'Build a search'),
+                div('fn-empty-step', [
+                    span('1', 'fn-empty-num'),
+                    span('Add a Recording to name the file'),
+                ]),
+                div('fn-empty-step', [
+                    span('2', 'fn-empty-num'),
+                    span('Add a Said or Sound to find moments in it'),
+                ]),
+                div('fn-empty-step', [
+                    span('3', 'fn-empty-num'),
+                    span('Wire them to a Stack and send it to the timeline'),
+                ]),
+                div('fn-empty-act', [
+                    el('button', {
+                        cls: 'tiny', text: 'Add Recording',
+                        on: { click: () => {
+                            const node = graph().add('source');
+                            const available = find.pickableInputs();
+                            if (available.length === 1) graph().setParam(node, 'inputId', available[0].id);
+                            chosen = node;
+                            drawFind();
+                        } },
+                    }),
+                ]),
+            ]);
+            refs.viewport.appendChild(refs.emptyGuide);
+        }
+        refs.emptyGuide.style.display = '';
+    } else {
+        if (refs.emptyGuide) refs.emptyGuide.style.display = 'none';
+    }
+
     // Gone nodes take their cards with them. Done before the build so a card
     // whose node was deleted cannot be measured into the layout.
     for (const [id, card] of [...cards]) {
@@ -187,6 +223,7 @@ function buildCard(node, res) {
              (node.kind === 'source' ? ' fn-source' : '') +
              (node.kind === 'stack' ? ' fn-sink' : ''),
         'data-node': node.id,
+        'data-kind': node.kind,
     });
 
     const head = div('fn-head', [
@@ -200,7 +237,27 @@ function buildCard(node, res) {
 
     const label = kind && kind.label ? kind.label(node, ctx) : '';
     if (label) card.appendChild(div('fn-label', label));
-    if (note) card.appendChild(div('fn-note', note));
+    if (note) {
+        const noteEl = div('fn-note', note);
+        if (node.kind === 'source' && !node.params.inputId) {
+            noteEl.style.cursor = 'pointer';
+            noteEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const available = find.pickableInputs();
+                if (available.length === 1) {
+                    graph().setParam(node, 'inputId', available[0].id);
+                    drawFind();
+                } else {
+                    pick(node);
+                    if (refs.panel) {
+                        const sel = refs.panel.querySelector('select');
+                        if (sel) sel.focus();
+                    }
+                }
+            });
+        }
+        card.appendChild(noteEl);
+    }
     // How much material, on anything that carries a stack — for
     // `ui/find/stack.js` `summaryOf`'s reason: forty candidates is four minutes
     // at six seconds each and forty minutes at sixty, and those are different
@@ -221,7 +278,11 @@ function buildCard(node, res) {
     });
     card.addEventListener('mousedown', (e) => {
         if (e.button === 0) {
+            const tag = e.target.tagName;
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON' ||
+                e.target.classList.contains('fn-sock') || e.target.classList.contains('fn-note')) return;
             pick(node);
+            startMove(node, e);
             e.stopPropagation();
         }
     });
@@ -519,8 +580,12 @@ function drawStatus(res) {
 // ── pointer ───────────────────────────────────────────────────────────────
 
 function inCard(target) {
-    for (let n = target; n && n !== refs.viewport; n = n.parentNode)
-        if (n.classList && n.classList.contains('fn')) return true;
+    if (!target) return false;
+    if (refs.nodes && refs.nodes.contains(target) && target !== refs.nodes) return true;
+    for (let n = target; n && n !== refs.viewport; n = n.parentNode || n.parentElement) {
+        if (n.classList && typeof n.classList.contains === 'function' && n.classList.contains('fn')) return true;
+        if (n.getAttribute && (n.getAttribute('data-node') || n.getAttribute('data-kind'))) return true;
+    }
     return false;
 }
 
@@ -580,11 +645,38 @@ function bindViewport() {
         apply();
         e.preventDefault();
     });
+
+    document.addEventListener('keydown', (e) => {
+        if (!refs.viewport || refs.viewport.offsetWidth === 0) return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (chosen) {
+                graph().remove(chosen);
+                chosen = null;
+                drawFind();
+                e.preventDefault();
+            }
+        } else if (e.key === 'Escape') {
+            if (chosen) {
+                pick(null);
+                e.preventDefault();
+            }
+        } else if (e.key === 'a') {
+            openAddMenu();
+            e.preventDefault();
+        }
+    });
 }
 
 function pick(node) {
     if (chosen === node) return;
     chosen = node;
+    swallowClick = true;
+    if (!node && window.getSelection) {
+        const sel = window.getSelection();
+        if (sel) sel.removeAllRanges();
+    }
     drawFind();
 }
 
@@ -721,6 +813,20 @@ function fitView() {
     panY = (p.h - placed.height * zoom) / 2 - placed.top * zoom;
 }
 
+const DESCRIPTIONS = {
+    source: 'Name a file to search through',
+    said: 'Find every time a phrase was said',
+    sound: 'Find sounds by energy, pitch or transients',
+    pad: 'Add time before and after each hit',
+    merge: 'Join overlapping or nearby hits into one',
+    length: 'Keep only hits of a certain duration',
+    order: 'Rearrange the hits',
+    slice: 'Take a portion of the list',
+    mix: 'Weave two stacks in a ratio',
+    every: 'Place one stack into another at intervals',
+    stack: 'The end of a chain — send this to the timeline'
+};
+
 /// The menu of what can be placed, grouped by what it is for.
 ///
 /// **Placed and then wired, rather than inserted onto a wire.** `Mix` and
@@ -741,14 +847,21 @@ function openAddMenu() {
                 out.push(div('fn-menu-group', group));
             }
             out.push(el('button', {
-                cls: 'fn-menu-item', text: N.KINDS[kind].title,
+                cls: 'fn-menu-item',
                 on: { click: () => {
                     const node = graph().add(kind);
+                    if (kind === 'source') {
+                        const available = find.pickableInputs();
+                        if (available.length === 1) graph().setParam(node, 'inputId', available[0].id);
+                    }
                     refs.menu.classList.remove('on');
                     chosen = node;
                     drawFind();
                 } },
-            }));
+            }, [
+                span(N.KINDS[kind].title, 'fn-menu-title'),
+                span(DESCRIPTIONS[kind], 'fn-menu-desc')
+            ]));
         }
         return out;
     });
