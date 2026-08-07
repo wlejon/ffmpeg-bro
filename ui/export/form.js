@@ -939,17 +939,17 @@ function videoRows(codec, info, cont) {
         { 'data-f': 'vcodec', on: { change: (e) => { settings.videoCodec = e.target.value; hooks.changed(); } } },
         videoEncoders().map((e) => ({ id: e.id, label: label(e, cont.videoCodecs) })),
         codec)));
-    if (info.longName) rows.push(row('', note(info.longName)));
-    if (isHardwareEncoder(codec))
-        rows.push(row('', span(encodeCost + ' A graph that ends on the same card hands ' +
-                               'this encoder its frames without a copy.', 'dim')));
-    rows.push(...chooseRows(codec));
 
+    rows.push(...chooseRows(codec));
     rows.push(...rateRows(codec, info));
 
     if (info.presets && info.presets.length)
-        rows.push(row('Speed', select({ 'data-f': 'preset', on: { change: set('preset') } },
-                                       info.presets, settings.preset)));
+        rows.push(row('Speed', btns([
+            span('fastest encode', 'dim tiny'),
+            select({ 'data-f': 'preset', on: { change: set('preset') } },
+                   info.presets, settings.preset),
+            span('best compression', 'dim tiny'),
+        ])));
     if (info.tunes && info.tunes.length)
         rows.push(row('Tune', select({ 'data-f': 'tune', on: { change: set('tune') } },
                                      [{ id: '', label: 'none' }, ...info.tunes], settings.tune)));
@@ -1062,7 +1062,12 @@ function rateRows(codec, info) {
                 hooks.tweaked();
             } },
         });
-        rows.push(row('Quality', btns([slider, qualityLabel])));
+        rows.push(row('Quality', btns([
+            span('smaller file', 'dim tiny'),
+            slider,
+            span('higher quality', 'dim tiny'),
+            qualityLabel,
+        ])));
         refreshQualityLabel();
     }
     if (settings.rate === 'bitrate' || settings.rate === 'twopass' ||
@@ -1070,22 +1075,6 @@ function rateRows(codec, info) {
         rows.push(row('Bitrate', num('vbitrate',
             { min: 1, max: 500000, step: 500, value: settings.videoBitrate,
               on: { change: number('videoBitrate', 1) } }, 'kbps')));
-    }
-    if (settings.rate === 'twopass') {
-        // What two-pass costs and what it cannot promise, said where it is
-        // chosen. **Whether an encoder acts on `-pass` is the one thing
-        // libavcodec will not answer in advance** — there is no capability flag
-        // for it and no option to ask about, and this is the third place in
-        // this application where a capability genuinely cannot be queried. So
-        // the control does exactly what it says (it writes `-pass 1` and
-        // `-pass 2`, as the command line does) and the render says afterwards
-        // if the encoder kept its statistics somewhere else.
-        rows.push(row('', note(
-            'The range is rendered twice: once to measure where the bits are needed, ' +
-            'and once to spend them. Twice the time, and the closest an encoder can get ' +
-            'to a size you have to hit. What comes out of pass one is a statistics file ' +
-            'beside the output, and a render whose encoder ignored -pass says so in the ' +
-            'report rather than pretending.')));
     }
     if (settings.rate === 'constrained') {
         rows.push(row('Ceiling', num('maxrate',
