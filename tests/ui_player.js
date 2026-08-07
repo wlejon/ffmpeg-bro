@@ -1430,6 +1430,7 @@ console.log('\nthe graph stage');
     key('n');
     pump(200);
     ok(A.shell.currentStage() === 'graph', 'n goes there');
+    A.graph.setFold(false);
 
     const g = A.graph.derive(A.exporter.buildSpec(), A.exporter.specSources());
     ok(g.ok, 'the edit on the timeline can be described as a graph');

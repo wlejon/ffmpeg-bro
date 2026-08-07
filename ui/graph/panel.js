@@ -158,10 +158,8 @@ function contents(g) {
 function pointGone() {
     return [
         head('Insert'),
-        div('gp-hint dim',
-            'The wire you opened this on is not in the graph any more — the clip it ' +
-            'belonged to has been trimmed out of the range, deleted, or had the stream ' +
-            'this point was on taken off it. Nothing was put anywhere.'),
+        div('gp-desc dim',
+            'Target wire is no longer present in graph (clip trimmed or deleted).'),
         el('button', { cls: 'tiny', text: 'Close', 'data-f': 'pointgone',
                        on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
     ];
@@ -349,22 +347,27 @@ function nodePanel(node) {
     }
 
     if (node.kind !== 'filter') {
-        out.push(div('gp-hint dim', node.kind === 'input'
-            ? `One file, as ffmpeg would open it — ${pads} — ${node.path || ''}`
-            : 'The pad the muxer maps. What leaves here is what gets written.'));
-        // An input the graph reads on its own account rather than one a clip is
-        // cut from. Worth saying, because everything that decides how it opens
-        // is on another stage and this is where somebody is looking at it.
+        out.push(div('gp-desc dim', node.kind === 'input'
+            ? `Input file: ${node.path || ''} (${pads})`
+            : 'Muxer output pad mapping.'));
         if (node.kind === 'input' && !node.derived) {
-            out.push(div('gp-hint dim',
-                'The graph reads this one; nothing on the timeline is cut from it. The ' +
-                'demuxer, its options and the window are the input’s — edit them on the ' +
-                'Sources stage and this follows.'));
+            out.push(div('gp-desc dim', 'Standalone graph input read directly by demuxer.'));
             out.push(...padRows(node));
-            out.push(div('gp-actions', [el('button', {
-                cls: 'tiny', text: 'Remove', 'data-f': 'remove',
-                on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
-            }), measureAction(node)]));
+            out.push(div('gp-actions', [
+                el('button', {
+                    cls: 'tiny primary', text: 'Sources stage →',
+                    on: { click: () => {
+                        if (globalThis.__ffmpegBro && globalThis.__ffmpegBro.switchStage) {
+                            globalThis.__ffmpegBro.switchStage('sources');
+                        }
+                    } }
+                }),
+                el('button', {
+                    cls: 'tiny', text: 'Remove', 'data-f': 'remove',
+                    on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
+                }),
+                measureAction(node)
+            ]));
             return out;
         }
         out.push(div('gp-actions', [measureAction(node)]));
@@ -372,7 +375,7 @@ function nodePanel(node) {
     }
 
     const info = infoOf(node.filter);
-    if (info && info.description) out.push(div('gp-hint dim', info.description));
+    if (info && info.description) out.push(div('gp-desc dim', info.description));
     if (node.filter === 'movie' || node.filter === 'amovie') {
         const pathVal = String((node.params && node.params.filename) || (node.pos && node.pos[0]) || '');
         const validatePath = (p) => !p.includes(':') || p.includes('\\:');
@@ -467,9 +470,8 @@ function nodePanel(node) {
     out.push(div('gp-actions', actions));
 
     if (node.locked && node.derived)
-        out.push(div('gp-hint dim',
-            'These values outrank the edit: moving, trimming or cropping this clip ' +
-            'will not change them until it is unlocked.'));
+        out.push(div('gp-desc dim',
+            'Locked: timeline trim/crop will not overwrite parameters until unlocked.'));
 
     return out;
 }
@@ -614,7 +616,7 @@ function namedRows(node, options) {
     // search box over an empty table, and a line offering to search all zero of
     // them, reads as something having gone wrong.
     if (!options.length)
-        return [div('gp-hint dim', `libavfilter reports no options for ${node.filter}.`)];
+        return [div('gp-desc dim', `libavfilter reports no options for ${node.filter}.`)];
 
     const list = div('gp-opt-list');
     const field = el('input', {
@@ -642,7 +644,7 @@ function optionRows(node, options) {
     const out = [];
     for (const o of shown) out.push(optionRow(node, o));
     if (matching.length > OPTION_LIMIT)
-        out.push(div('gp-hint dim', `and ${matching.length - OPTION_LIMIT} more — narrow the search`));
+        out.push(div('gp-desc dim', `+${matching.length - OPTION_LIMIT} more matching options`));
     return out;
 }
 
@@ -688,9 +690,7 @@ function palette(point) {
 
     return [
         div('gp-head', [span('Insert', 'gp-name'), span(point.title, 'gp-badge')]),
-        div('gp-hint dim',
-            point.stream === 'a' ? 'A filter here reads the clip’s sound as it is at this point.'
-                                 : 'A filter here reads the picture as it is at this point.'),
+        div('gp-desc dim', `${streamWord(point.stream)} stream filter insert`),
         row('Find', field),
         list,
         el('button', { cls: 'tiny', text: 'Cancel', on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
@@ -851,7 +851,7 @@ function sourceRows(pad, term) {
         for (const f of made.slice(0, FILTER_LIMIT)) rows.push(padRow(pad, f));
     }
     if (made.length > FILTER_LIMIT)
-        rows.push(div('gp-hint dim', `and ${made.length - FILTER_LIMIT} more — narrow the search`));
+        rows.push(div('gp-desc dim', `+${made.length - FILTER_LIMIT} more source filters`));
     return rows;
 }
 
@@ -895,7 +895,7 @@ function padRowsFor(pad, all) {
     if (out.length) out.push(head('Common Filters'));
     for (const f of shown) out.push(padRow(pad, f));
     if (matching.length > FILTER_LIMIT)
-        out.push(div('gp-hint dim', `and ${matching.length - FILTER_LIMIT} more — narrow the search`));
+        out.push(div('gp-desc dim', `+${matching.length - FILTER_LIMIT} more matching filters`));
     return out;
 }
 
@@ -966,8 +966,8 @@ function filterRows(point, all) {
 
     const out = [];
     if (!term)
-        out.push(div('gp-hint dim',
-                     `A few to start with. Type to search all ${all.length} this build has.`));
+        out.push(div('gp-desc dim',
+                     `Common filters (${all.length} available)`));
     for (const f of shown)
         out.push(el('button', {
             cls: 'gp-filter', 'data-filter': f.name,
@@ -979,7 +979,7 @@ function filterRows(point, all) {
             } },
         }, [span(f.name, 'gp-fname mono'), span(f.description || '', 'dim')]));
     if (matching.length > FILTER_LIMIT)
-        out.push(div('gp-hint dim', `and ${matching.length - FILTER_LIMIT} more — narrow the search`));
+        out.push(div('gp-desc dim', `+${matching.length - FILTER_LIMIT} more matching filters`));
     return out;
 }
 

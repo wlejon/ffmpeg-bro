@@ -1208,19 +1208,25 @@ function snapTime(t, exclude) {
 function wireVideoLane(entry) {
     let drag = null;
 
-    // The lane to measure against is looked up on every event rather than
-    // captured, because a cross-track drag rebuilds the lanes underneath
-    // itself: `moveClip` changes the track count, `syncLanes()` drops every
-    // row, and the element the press started on is detached — where
-    // `getBoundingClientRect()` reports `left: 0`. The scale would still be
-    // right (`laneWidth()` comes from the new `lanes[0]`) and only the origin
-    // wrong, so the clip jumped sideways by the width of the track heads the
-    // instant it crossed tracks and stayed there, snapping to the wrong
-    // neighbours for the rest of the drag. `laneOf` exists for exactly this.
     const liveLane = () => {
         const l = laneOf(entry.track);
         return l ? l.lane : entry.lane;
     };
+
+    entry.lane.addEventListener('mousemove', (e) => {
+        if (dragging) return;
+        const x = localX(e, liveLane());
+        const grab = grabAt(x, entry.track);
+        if (grab) {
+            if (grab.what === 'start' || grab.what === 'end') {
+                entry.lane.style.cursor = 'ew-resize';
+            } else {
+                entry.lane.style.cursor = 'grab';
+            }
+        } else {
+            entry.lane.style.cursor = 'default';
+        }
+    });
 
     tracked(entry.lane,
         (e) => {
@@ -1356,6 +1362,22 @@ function snapShift(a, b, by) {
 /// write a lock that outranks the edit for ever after.
 function wireSpanLane(entry) {
     let drag = null;
+
+    entry.lane.addEventListener('mousemove', (e) => {
+        if (dragging) return;
+        const box = entry.lane.getBoundingClientRect();
+        const x = e.clientX - box.left;
+        const grab = spanGrabAt(x, e.clientY - box.top);
+        if (grab) {
+            if (grab.what === 'from' || grab.what === 'to') {
+                entry.lane.style.cursor = 'ew-resize';
+            } else {
+                entry.lane.style.cursor = 'move';
+            }
+        } else {
+            entry.lane.style.cursor = 'default';
+        }
+    });
 
     tracked(entry.lane,
         (e) => {

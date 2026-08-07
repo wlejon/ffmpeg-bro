@@ -54,7 +54,7 @@ import { padsOf } from './graph/filters.js';
 import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
          outrankedControls, tickGraph, graphKey, measureTo,
-         currentGraph } from './graph/view.js';
+         currentGraph, setFold } from './graph/view.js';
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
@@ -2439,7 +2439,7 @@ globalThis.__ffmpegBro = {
     // do not have to go through a spec and a printed string to reach it.
     graph: { makeGraph, restore, derive, print, layout, portY, problems, padsOf, socketAt,
              overlay: graphOverlay, draw: drawGraph, summary: graphSummary,
-             placement: graphPlacement,
+             placement: graphPlacement, setFold,
              outranked: outrankedControls, preview: graphPreview, previewGraph,
              measureGraph, measureTo, current: currentGraph,
              // What the viewer was last asked to play, per clip. The chain's

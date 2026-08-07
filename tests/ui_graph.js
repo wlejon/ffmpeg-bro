@@ -2073,7 +2073,7 @@ if (!media) {
     waitFor('a clip on the timeline', () => A.project.clips.length === 1);
     ok(A.shell.goTo('graph'), 'the Graph stage opens');
     pump(400);
-    A.graph.draw();
+    A.graph.setFold(false);
     pump(200);
 
     const vp = document.getElementById('gr-viewport');

@@ -3175,6 +3175,8 @@ console.log('\na filter inserted on the graph');
     A.graph.overlay.clear();
     q('#spine [data-stage="graph"]').click();
     pump(300);
+    A.graph.setFold(false);
+    pump(200);
 
     const clipId = A.project.clips[0].id;
     same(qq('#gr-nodes .gp-plus').length, 0,

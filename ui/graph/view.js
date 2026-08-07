@@ -286,7 +286,10 @@ export function initGraphView(r, hooks = {}) {
         // else hears about it.
         onOpenFold: (key) => { openFolds.add(key); foldChoice = true; drawGraph(); },
         onWireStart: (key, dir, port, stream, e) => startWire(key, dir, port, stream, e),
-        onResizeStart: (key, width, e) => { resizing = { key, from: width, x: e.clientX, at: width }; },
+        onResizeStart: (key, width, e) => {
+            resizing = { key, from: width, x: e.clientX, at: width };
+            document.body.style.cursor = 'nwse-resize';
+        },
         // Pressing on the bar moves the picture at once — a click is a jump —
         // and holding follows the pointer without moving it again until release.
         onScrubStart: (key, f) => {
@@ -330,34 +333,136 @@ export function initGraphView(r, hooks = {}) {
 
 // ── pointer ────────────────────────────────────────────────────────────────
 
+let activeContextMenu = null;
+
+function dismissContextMenu() {
+    if (activeContextMenu && activeContextMenu.parentNode) {
+        activeContextMenu.parentNode.removeChild(activeContextMenu);
+    }
+    activeContextMenu = null;
+}
+
+function showContextMenu(e) {
+    dismissContextMenu();
+    const rect = refs.viewport.getBoundingClientRect();
+    const canvasX = (e.clientX - rect.left - panX) / zoom;
+    const canvasY = (e.clientY - rect.top - panY) / zoom;
+
+    let targetNode = null;
+    let p = e.target;
+    while (p && p !== refs.viewport) {
+        if (p.getAttribute && (p.getAttribute('data-key') || p.getAttribute('data-node'))) {
+            const key = p.getAttribute('data-key') || p.getAttribute('data-node');
+            targetNode = lastGraph ? (lastGraph.node(key) || lastGraph.byAnchor(key)) : null;
+            if (targetNode) break;
+        }
+        p = p.parentNode || p.parentElement;
+    }
+
+    const items = [];
+
+    if (targetNode) {
+        const isDisabled = targetNode.params && String(targetNode.params.enable) === '0';
+        items.push({
+            label: isDisabled ? 'Enable' : 'Disable',
+            action: () => {
+                overlay.edit(targetNode, { params: { enable: isDisabled ? '' : '0' } });
+                drawGraph();
+            }
+        });
+
+        items.push({
+            label: 'Delete',
+            action: () => {
+                if (!targetNode.derived) {
+                    overlay.removeInsert(targetNode.id);
+                } else if (targetNode.anchor && overlay.isLocked(targetNode.anchor)) {
+                    overlay.unlock(targetNode.anchor);
+                }
+                drawGraph();
+            }
+        });
+
+        const key = panel.keyOf(targetNode);
+        const isPinned = !!overlay.pinOf(key);
+        items.push({
+            label: isPinned ? 'Unanchor' : 'Anchor',
+            action: () => {
+                if (isPinned) {
+                    overlay.setPin(key, null, null);
+                } else {
+                    overlay.setPin(key, Math.round(canvasX), Math.round(canvasY));
+                }
+                drawGraph();
+            }
+        });
+    } else {
+        items.push({
+            label: 'Add node here',
+            action: () => {
+                panel.openPad({ at: { x: canvasX, y: canvasY } });
+            }
+        });
+    }
+
+    const menu = el('div', { cls: 'gr-ctx-menu' });
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+
+    for (const item of items) {
+        const row = el('div', { cls: 'gr-ctx-item', text: item.label, on: {
+            click: (ev) => {
+                ev.stopPropagation();
+                dismissContextMenu();
+                item.action();
+            }
+        } });
+        menu.appendChild(row);
+    }
+
+    document.body.appendChild(menu);
+    activeContextMenu = menu;
+
+    const onOutside = (ev) => {
+        if (menu.contains(ev.target)) return;
+        dismissContextMenu();
+        document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('keydown', onEsc, true);
+    };
+    const onEsc = (ev) => {
+        if (ev.key === 'Escape') {
+            dismissContextMenu();
+            document.removeEventListener('mousedown', onOutside, true);
+            document.removeEventListener('keydown', onEsc, true);
+        }
+    };
+    setTimeout(() => {
+        document.addEventListener('mousedown', onOutside, true);
+        document.addEventListener('keydown', onEsc, true);
+    }, 0);
+}
+
 function bindViewport() {
-    // **Left-drag on the background selects; middle-drag pans.** Nuke, Houdini
-    // and Blender all work this way and it is the pair that leaves both gestures
-    // reachable: with left-drag panning there is nowhere to put a rubber band,
-    // and a node editor without one means selecting eight nodes is eight clicks.
-    // Middle-drag pans from anywhere, cards included, which is the only way out
-    // of a corner filled with them.
+    refs.viewport.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showContextMenu(e);
+    });
+
     refs.viewport.addEventListener('mousedown', (e) => {
         if (e.button === 1) {
             dragging = { x: e.clientX, y: e.clientY, panX, panY, moved: false };
+            document.body.style.cursor = 'grabbing';
             e.preventDefault();
         } else if (e.button === 0 && !inNode(e.target)) {
             marquee = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY,
                         add: e.ctrlKey || e.shiftKey };
+            document.body.style.cursor = 'crosshair';
             e.preventDefault();
         }
     });
 
-    // A click on the background with nothing dragged is "select nothing" — the
-    // panel is about a node and there has to be a way to be about none. A drag
-    // that happened to end there is not: `pickInside` has already decided what
-    // the selection is.
     refs.viewport.addEventListener('click', (e) => {
         if (inNode(e.target) || e.target === refs.mini || swallowClick) return;
-        // A click on a wire selects it, because a wire is now a thing that can
-        // be deleted and everything that can be deleted has to be selectable.
-        // Checked before "select nothing", since a wire is what you were aiming
-        // at and the background is what you hit by missing.
         const rect = refs.viewport.getBoundingClientRect();
         const hit = canvas.wireAt(placed, e.clientX - rect.left, e.clientY - rect.top, view());
         if (hit) return selectWire(hit);
@@ -387,12 +492,11 @@ function bindViewport() {
     });
 
     document.addEventListener('mouseup', (e) => {
+        document.body.style.cursor = '';
         if (wiring) return endWire(e);
         if (scrubbing) {
             const at = scrubbing.at;
             scrubbing = null;
-            // Where it was let go, which for a plain click is where it went down
-            // — one repeated seek, against a render per pixel of the drag.
             preview.seekPlay(at);
             return;
         }
@@ -400,8 +504,6 @@ function bindViewport() {
         if (marquee) {
             const m = marquee;
             marquee = null;
-            // A rubber band ends with a click on the background. Letting that
-            // click through would clear the selection the band had just made.
             swallowClick = Math.abs(m.x1 - m.x0) + Math.abs(m.y1 - m.y0) > 4;
             pickInside(m);
             return;
@@ -410,9 +512,6 @@ function bindViewport() {
         if (!resizing) return;
         const done = resizing;
         resizing = null;
-        // Committed once. Everything downstream of a size — the layout, the wires,
-        // and the preview that has to be re-rendered to be sharp at it — happens
-        // here rather than on every pixel of the drag.
         overlay.setSize(done.key, done.at);
         drawGraph();
     });
@@ -488,6 +587,12 @@ function bindBar(hooks) {
         });
 }
 
+export function setFold(choice) {
+    foldChoice = choice;
+    if (choice) openFolds.clear();
+    drawGraph();
+}
+
 /// Whether the graph is folded as things stand — your press if you have made
 /// one, and otherwise whether there is more here than anybody could read.
 function foldingNow() {
@@ -532,6 +637,7 @@ function startMove(key, e) {
     if (!key || !placed || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    document.body.style.cursor = 'grabbing';
     if (!e.shiftKey && !e.ctrlKey) {
         if (selection.size > 1 || !selection.has(key)) select(key, false);
     } else {
@@ -684,13 +790,9 @@ function startWire(key, dir, port, stream, e) {
     if (!key || !placed || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    document.body.style.cursor = 'crosshair';
     const box = placed.nodes.find((b) => panel.keyOf(b.node) === key);
     if (!box) return;
-    // `ox`/`oy` is where the drag began and `x`/`y` is where the pointer is now,
-    // and they are two fields rather than one because they are two facts. Held
-    // in one, the origin is overwritten by the first mouse move and every drag
-    // measures as zero pixels long — which reads as a press that did nothing,
-    // since a press that did nothing is exactly what a zero-length drag is.
     wiring = { key, dir, port, stream, box,
                from: canvas.socketPoint(box, dir, port),
                ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, over: null };
@@ -708,6 +810,7 @@ function dragWire(e) {
 }
 
 function endWire(e) {
+    document.body.style.cursor = '';
     const w = wiring;
     wiring = null;
     // A press and release on one socket is a click, not a drag. Nothing is a
@@ -984,11 +1087,9 @@ export function drawGraph() {
     const trouble = new Map();
     for (const p of d.problems) if (p.id && !trouble.has(p.id)) trouble.set(p.id, p);
 
-    // A clip's derived run as one card, where there is more here than anybody
-    // could read. The graph that is *drawn* only — `d.graph` is still the whole
-    // derivation and is what is printed, measured, previewed and rendered. See
-    // ui/graph/fold.js.
-    const folding = foldChoice === null ? d.graph.nodes.length > FOLD_OVER : foldChoice;
+    // A clip's derived run as one card, folded by default per clip into one card
+    // unless explicitly opened/expanded by the user. User nodes (derived: false) never fold.
+    const folding = foldChoice === null ? true : foldChoice;
     lastFold = fold(d.graph, { open: openFolds, trouble, points: d.points,
                                enabled: folding });
     lastFold.folding = folding;
