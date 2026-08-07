@@ -324,9 +324,9 @@ function joinRows() {
         candidates.filter((i) => joining.has(i.id)).map((i) => i.path);
 
     const rows = [
-        head('Read end to end'),
+        head('Read end to end', { title: 'Read files end to end before decoding, on the timeline' }),
         ...candidates.map((input) => el('button', {
-            cls: 'src-demuxer tiny' + (joining.has(input.id) ? ' on' : ''),
+            cls: `src-demuxer tiny${joining.has(input.id) ? ' on' : ''}`,
             'data-join': input.id,
             on: { click: () => {
                 if (joining.has(input.id)) joining.delete(input.id);

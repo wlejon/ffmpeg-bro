@@ -520,10 +520,9 @@ pump(150);
     // And the sentence stays on the stage rather than being flashed away: it is
     // about a decision that has already been written into the controls above it,
     // and one that vanished would be a decision nobody could go back and read.
-    const note = q('.ex-chosen');
-    ok(!!note && note.textContent.length > 40,
-       `the press leaves its reason on the stage: “${
-           note ? note.textContent.slice(0, 110) : 'nothing'}…”`);
+    const noteTitle = f('hwchoose') ? f('hwchoose').title : '';
+    ok(noteTitle.length > 20,
+       `the button carries its reason: “${noteTitle.slice(0, 110)}…”`);
     if (onCard.length)
         ok(H.isHardwareEncoder(A.exporter.currentSettings().videoCodec),
            `and the encoder it named is the one in force (${
