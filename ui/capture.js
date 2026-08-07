@@ -783,20 +783,12 @@ function drawCardRows(i) {
             cls: 'wide', 'data-f': 'capsource', 'data-input': String(i), type: 'text',
             value: input.path,
             placeholder: HINTS[input.format] || 'what to capture',
-            title: 'What this device is asked for — the argument after -i',
             on: { change: () => change(input, { path: source.value.trim() }) },
         });
-        // `-t` is the input's own window, which `ui/inputs.js` carries as an end
-        // time: with no `-ss` in front of it those are the same number, and the
-        // native reader takes either. Holding both here would be holding two
-        // fields that can disagree.
         const seconds = el('input', {
             cls: 'wide', 'data-f': 'capseconds', 'data-input': String(i), type: 'text',
             value: input.to ? String(input.to) : '',
             placeholder: 'never',
-            title: 'Seconds to read this input for. Blank runs until you press Stop. ' +
-                   'It belongs to the input, as -t does on a command line, and the ' +
-                   'shortest of them ends the recording.',
             on: { change: () => change(input, { to: Math.max(0, Number(seconds.value) || 0) }) },
         });
         const out = [row('Source', source), row('Stop after', seconds)];
