@@ -24,24 +24,14 @@ With several clips selected the panel edits all of them. A property they
 disagree on reads as blank or `mixed` rather than as one clip's value, so
 tabbing past a field cannot silently apply it to the rest.
 
-None of this costs anything per frame. The crop is a window around the clip's
-`<video>`, opacity and stacking order are an `opacity` and a `z-index` on that
-window, and the engine clips replaced content against an ancestor's overflow
-like anything else — so a change is a handful of style writes and the decoded
-frame still goes straight to the renderer.
-
 ## Grid
 
 `Grid` (or `G`) sets every clip's placement aside and gives each an equal cell.
 The shape is chosen so a cell has the canvas's own aspect rather than being
-square — the clips came out of that canvas, so that is the shape that fills:
-four clips go 2×2, a dozen go 4×3, and three go two-up with a gap rather than
-into one row of slivers. Scale and position still work inside a cell, so one can
-be pushed in on a detail while the others hold still.
+square: four clips go 2×2, a dozen go 4×3, and three go two-up with a gap rather
+than into one row of slivers. Scale and position still work inside a cell, so
+one can be pushed in on a detail while the others hold still.
 
-Everything plays at once. The topmost clip's decoder is the master clock and the
-rest are chased back into line whenever they drift more than about two frames —
-correcting every frame would mean a seek per clip per frame, and left alone,
-several decoders each free-running on their own audio clock come apart within a
-minute. Four 1080p60 streams stay inside ~35 ms of each other; the ceiling is
-decode throughput, not the transport.
+Everything plays at once and stays in sync automatically. On heavy footage —
+several 1080p60 streams at once — a slight drift can appear briefly and is
+corrected within a couple of frames; it is not something you need to manage.

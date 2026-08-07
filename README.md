@@ -65,11 +65,9 @@ cmake --build build --config Release
 
 `--recursive` matters: this build turns bro's `BRO_WITH_SOUNDML` on, which
 reaches brotensor, brolm and brosoundml in bro's tree. They are MIT like bro,
-nothing is downloaded at configure or build time, and they add no vcpkg port —
-they cost 27 s of build and 2.7 MB of binary here, because the linker takes what
-is referenced and nothing here calls a language model. What they buy is a
-working `bro.sense` — the acoustic sensors behind `Find sounds` on Sources,
-which mark a soundtrack where something happens in it.
+nothing is downloaded at configure or build time, and they add no vcpkg port.
+What they buy is a working `bro.sense` — the acoustic sensors behind
+`Find sounds` on Sources, which mark a soundtrack where something happens in it.
 bro's own preflight only checks three of its
 submodules, so an unrecursed clone fails by naming a missing `CMakeLists.txt`
 rather than a missing submodule.
@@ -141,13 +139,14 @@ honest, complete list:
   no clip behind it; a clip whose filters cannot be shown honestly (one that
   resizes the picture, one that forks) is badged `fx` rather than left looking
   broken. `O` puts the render itself there instead, which has none of those
-  exceptions and costs a render — and has no sound.
+  exceptions and carries its own sound, but takes a moment to build and rebuilds
+  whenever the playhead moves.
 - A phone clip plays, lays out and exports the right way up, but the timeline's
   filmstrip still shows its frames on their side.
-- A document holds the edit and not the session: which clip was selected, where
-  the playhead was and how far the timeline was zoomed are not written.
-- Undo covers the edit and stops at the Encode and Write stages, which are a
-  form.
+- A document saves the edit and where you left off in it (selection, playhead,
+  zoom, stage) — not what has been analysed or what a render last said.
+- Undo is split into two separate histories: the edit, and the Encode/Write
+  settings. `Ctrl`+`Z` on one never reaches the other.
 
 ## License
 
