@@ -276,7 +276,16 @@ function drawList() {
 
             const setEl = node.querySelector('.src-set');
             setEl.innerHTML = '';
-            const flags = (summary(input) || '').split(' ').filter(Boolean);
+            const rawParts = (summary(input) || '').trim().split(/\s+/).filter(Boolean);
+            const flags = [];
+            for (let i = 0; i < rawParts.length; i++) {
+                if (rawParts[i].startsWith('-') && i + 1 < rawParts.length && !rawParts[i + 1].startsWith('-')) {
+                    flags.push(`${rawParts[i]} ${rawParts[i + 1]}`);
+                    i++;
+                } else if (rawParts[i]) {
+                    flags.push(rawParts[i]);
+                }
+            }
             for (const flag of flags) {
                 setEl.appendChild(el('span', { cls: 'src-chip mono', text: flag }));
             }

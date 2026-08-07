@@ -71,14 +71,18 @@ function edit(write) {
 export function showProperties() {
     const clip = project.selected;
     if (!clip) {
-        panel.filename.textContent = 'no media';
-        panel.filename.classList.add('dim');
+        if (panel.filename) {
+            panel.filename.textContent = 'no media';
+            panel.filename.classList.add('dim');
+        }
         put(panel.chips, () => []);
         put(panel.transform, () => []);
         return;
     }
-    panel.filename.textContent = clip.name;
-    panel.filename.classList.remove('dim');
+    if (panel.filename) {
+        panel.filename.textContent = clip.name;
+        panel.filename.classList.remove('dim');
+    }
     showChips(clip.probe);
     showTransform(clip);
 }

@@ -136,7 +136,8 @@ export function toggleExplainAll() {
 /// flattens and skips nulls, so `[...rows, why('copy', a, b)]` is the whole of
 /// what a call site has to say.
 export function why(key, ...texts) {
-    return null;
+    if (!explaining(key)) return null;
+    return texts.filter(Boolean).map((t) => div('ex-why', t));
 }
 
 /// The ⓘ itself, for a section whose heading is something other than a heading.

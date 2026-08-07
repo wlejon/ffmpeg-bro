@@ -147,6 +147,12 @@ export function buildOptionRow(o, cur, apply) {
                     validate(v, numInput);
                     slider.value = v !== '' ? v : String(o.default || o.min);
                     apply(v);
+                },
+                change: (e) => {
+                    const v = e.target.value.trim();
+                    validate(v, numInput);
+                    slider.value = v !== '' ? v : String(o.default || o.min);
+                    apply(v);
                 }
             }
         });

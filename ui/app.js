@@ -2009,8 +2009,15 @@ el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 // arguments are the canvas's), and a dialog in front of a colour card would be a
 // question with no information in it. It falls back to its own first entry after
 // every pick so that picking the same one twice lays out two.
-{
-    const pick = el('gen-pick');
+const btnAddGen = el('btn-add-gen');
+if (btnAddGen) {
+    btnAddGen.addEventListener('click', () => {
+        const gens = generators.pictureSources();
+        if (gens.length) addGenerator(gens[0].name);
+    });
+}
+const pick = el('gen-pick');
+if (pick) {
     const add = (value, text, title) => {
         const opt = document.createElement('option');
         opt.value = value;

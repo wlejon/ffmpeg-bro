@@ -749,14 +749,6 @@ function canTake(stream, dir) {
 /// made.
 function wantsSource(pad) { return !pad.key || pad.dir === 'in'; }
 
-function sourceRows(pad, term) {
-    const stream = pad.key ? (pad.stream || 'v') : null;
-    const hit = (a, b) => !term || String(a).toLowerCase().indexOf(term) >= 0 ||
-                          String(b || '').toLowerCase().indexOf(term) >= 0;
-
-    // An input is offered for a pad one of its own streams can fill, which for
-    // a picture pad now includes a file whose only usable stream is a bitmap
-    // subtitle track — those cues *are* pictures once painted.
 function inputRow(pad, input) {
     const streams = streamKinds(input);
     return el('button', {
@@ -771,6 +763,35 @@ function inputRow(pad, input) {
     }, [span(input.name, 'gp-fname mono'),
         span(streams.map(streamWord).join(' · '), 'gp-badge'),
         span(input.path, 'dim')]);
+}
+
+function driftRows(node, options) {
+    if (!node || node.kind !== 'filter' || !isSource(node.filter)) return [];
+    const want = sourceDefaults(node.filter);
+    const keys = Object.keys(want);
+    if (!keys.length) return [];
+
+    const drifted = keys.filter((k) => node.params[k] !== undefined &&
+                                       String(node.params[k]) !== String(want[k]));
+    if (!drifted.length) return [];
+
+    const label = { size: 'size', rate: 'frame rate', sample_rate: 'sample rate' };
+    const said = drifted.map((k) => `${label[k] || k} ${node.params[k]} ≠ render ${want[k]}`).join('; ') +
+                 ' (depends on what is wired after it)';
+    return [
+        div('gp-problems', div('gp-problem gp-drift mono', said)),
+        div('gp-actions', el('button', {
+            cls: 'tiny primary', text: 'Match the render', 'data-f': 'match-render',
+            title: drifted.map((k) => `${k}=${want[k]}`).join(' '),
+            on: { click: () => {
+                noteEdit();
+                const params = {};
+                for (const k of drifted) params[k] = want[k];
+                overlay.edit(node, { params });
+                changed();
+            } },
+        })),
+    ];
 }
 
 function sourceDefaults(filter) {
