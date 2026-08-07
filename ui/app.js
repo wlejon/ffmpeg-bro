@@ -1673,19 +1673,25 @@ function updateCropUI() {
 document.addEventListener('keydown', (e) => {
     // Let form controls keep their own keys.
     const tag = e.target && e.target.tagName;
-    if (tag === 'SELECT' || tag === 'INPUT') return;
+    if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return;
 
-    // Along the chain, wherever you are. The pipeline has an order and this
-    // follows it, rather than cycling a list of tabs.
+    // Along the chain, wherever you are.
     if (e.key === '[' || e.key === ']') {
         shell.step(e.key === ']' ? 1 : -1);
         e.preventDefault();
         return;
     }
-    // The document, from every stage, for the reason the report is: it is not
-    // about any one of them. Above the per-stage handlers below so that Ctrl-S
-    // saves while the Graph stage has the keyboard, and it takes the modifier so
-    // that plain `s` goes on splitting a clip.
+    // Number keys 1-6 switch stages globally.
+    if (['1', '2', '3', '4', '5', '6'].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const idx = parseInt(e.key, 10) - 1;
+        const stList = shell.stages();
+        if (stList[idx]) {
+            shell.goTo(stList[idx]);
+            e.preventDefault();
+            return;
+        }
+    }
+    // The document, from every stage.
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         saveDocument(e.shiftKey);
         e.preventDefault();
@@ -1701,9 +1707,6 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         return;
     }
-    // Undo from every stage, and the Graph stage is the one it is most wanted
-    // on — a wire is work in the way a slider position is not. Both spellings of
-    // redo, because both are somebody's muscle memory.
     if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         stepHistory(!e.shiftKey);
         e.preventDefault();
@@ -1714,46 +1717,37 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         return;
     }
-    // The report is under every stage, so it is reachable from every stage —
-    // including the two that otherwise take the keyboard for themselves, which
-    // are the two a render is started and watched from.
+    // The report drawer is reachable from every stage.
     if (e.key === 'r' || e.key === 'R') {
         report.setOpen(!report.isOpen());
         e.preventDefault();
         return;
     }
-    if (shell.currentStage() === 'sources' || shell.currentStage() === 'capture') {
-        if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
-        return;
-    }
-    // The graph owns the keyboard while it is up, for the reason the encode
-    // side does: Space must not start playback on a timeline nobody can see.
-    // It is asked first and says whether it took the key, so that Escape clears
-    // a selection when there is one and leaves the stage when there is not —
-    // which is the order every editor uses and the only one that lets you both.
+
+    // Graph stage gets first option to handle node-level keyboard events.
     if (shell.currentStage() === 'graph') {
         if (graphKey(e)) { e.preventDefault(); return; }
-        if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
-        return;
     }
 
-    // The encode side owns the keyboard while it is the stage you are on:
-    // Space must not start playback on a timeline nobody can see, and Delete
-    // must not remove the clips being rendered. Escape is the way back.
-    // ...except for the keys that mean the same thing there. Space plays the
-    // comparison rather than the timeline, and the arrows step it.
+    // Exporter (Encode stage) has its own preview player keyboard controls.
     if (exporter.isOpen()) {
-        if (e.key === 'Escape') { shell.goTo('compose'); e.preventDefault(); }
-        else if (e.key === ' ') { exporter.togglePreviewPlay(); e.preventDefault(); }
-        else if (e.key === 'ArrowLeft') { exporter.stepPreviewBy(-1); e.preventDefault(); }
-        else if (e.key === 'ArrowRight') { exporter.stepPreviewBy(1); e.preventDefault(); }
-        return;
+        if (e.key === ' ') { exporter.togglePreviewPlay(); e.preventDefault(); return; }
+        if (e.key === 'ArrowLeft') { exporter.stepPreviewBy(-1); e.preventDefault(); return; }
+        if (e.key === 'ArrowRight') { exporter.stepPreviewBy(1); e.preventDefault(); return; }
     }
 
+    // Letter-based stage navigation shortcuts (when plain keys pressed).
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === 'e') { shell.goTo('encode'); e.preventDefault(); return; }
+        if (e.key === 'i') { shell.goTo('sources'); e.preventDefault(); return; }
+        if (e.key === 'd') { shell.goTo('capture'); e.preventDefault(); return; }
+        if (e.key === 'n') { shell.goTo('graph'); e.preventDefault(); return; }
+    }
+
+    // Global transport & stage-local shortcuts
     switch (e.key) {
+        // Transport controls (global across stages)
         case ' ':          togglePlay(); break;
-        // Shift is a second of time, not a second's worth of frames: one seek
-        // instead of `fps` of them, and it means the same thing.
         case 'ArrowLeft':  if (e.shiftKey) setPlayhead(transport.t - 1); else step(-1); break;
         case 'ArrowRight': if (e.shiftKey) setPlayhead(transport.t + 1); else step(1); break;
         case 'Home':       setPlayhead(0); break;
@@ -1762,31 +1756,27 @@ document.addEventListener('keydown', (e) => {
         case 'k':          pause(); break;
         case 'l':          nudgeRate(1); break;
         case 'm':          btnMute.click(); break;
-        case 'f':          toggleFullscreen(); break;
-        case 'c':          setCropMode(!cropMode); break;
-        case 's':          splitAtPlayhead(); break;
-        case 'g':          setLayout(project.layout === 'grid' ? 'stack' : 'grid'); break;
-        // `o` for output — the render on the monitor rather than the clips.
-        case 'o':          setOutputPreview(!output.isOn()); break;
-        // `t` for the text track. A soft track is the one thing in an output a
-        // player can switch off, so the preview of one switches off too.
-        case 't':          setSoftCues(!softcues.isOn()); break;
-        case 'e':          shell.goTo('encode'); break;
-        case 'i':          shell.goTo('sources'); break;
-        // `d` for device: `c` is the crop handles and `r` is the report.
-        case 'd':          shell.goTo('capture'); break;
-        // `n` for node graph: `g` is the grid layout and `f` is fullscreen.
-        case 'n':          shell.goTo('graph'); break;
-        case 'a':          if (e.ctrlKey || e.metaKey) selectMany(project.clips.slice());
+
+        // Stage-local hotkeys (Compose stage only)
+        case 'f':          if (shell.currentStage() === 'compose') toggleFullscreen(); else return; break;
+        case 'c':          if (shell.currentStage() === 'compose') setCropMode(!cropMode); else return; break;
+        case 's':          if (shell.currentStage() === 'compose') splitAtPlayhead(); else return; break;
+        case 'g':          if (shell.currentStage() === 'compose') setLayout(project.layout === 'grid' ? 'stack' : 'grid'); else return; break;
+        case 'o':          if (shell.currentStage() === 'compose') setOutputPreview(!output.isOn()); else return; break;
+        case 't':          if (shell.currentStage() === 'compose') setSoftCues(!softcues.isOn()); else return; break;
+        case 'a':          if ((e.ctrlKey || e.metaKey) && shell.currentStage() === 'compose') selectMany(project.clips.slice());
                            else return;
                            break;
-        case 'Delete':     removeSelection(); break;
-        case '+': case '=': timeline.zoomBy(1 / 1.5, transport.t); break;
-        case '-':          timeline.zoomBy(1.5, transport.t); break;
-        case '0':          timeline.fitView(); break;
+        case 'Delete':     if (shell.currentStage() === 'compose') removeSelection(); else return; break;
+        case '+': case '=': if (shell.currentStage() === 'compose') timeline.zoomBy(1 / 1.5, transport.t); else return; break;
+        case '-':          if (shell.currentStage() === 'compose') timeline.zoomBy(1.5, transport.t); else return; break;
+        case '0':          if (shell.currentStage() === 'compose') timeline.fitView(); else return; break;
         case 'Escape':     if (cropMode) setCropMode(false);
                            else if (project.selection.length > 1) select(project.selected);
-                           else if (fullscreen) toggleFullscreen(); break;
+                           else if (fullscreen) toggleFullscreen();
+                           else if (shell.currentStage() !== 'compose') shell.goTo('compose');
+                           else return;
+                           break;
         default: return;
     }
     e.preventDefault();

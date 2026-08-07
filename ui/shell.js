@@ -104,6 +104,7 @@ function apply() {
 export function drawSpine() {
     if (!bar) return;
     put(bar, () => STAGES.map((s, i) => {
+        const keyNum = String(i + 1);
         const state = hooks.state ? hooks.state(s.id) : null;
         const warn = hooks.warnings ? hooks.warnings(s.id) : null;
         const texts = warn && warn.length ? warn.map((w) => (typeof w === 'string' ? w : w.text)) : [];
@@ -111,10 +112,15 @@ export function drawSpine() {
         const card = el('button', {
             cls: 'st' + (s.id === current ? ' on' : '') + (texts.length ? (hasErr ? ' warn error' : ' warn') : ''),
             'data-stage': s.id,
+            'data-key': keyNum,
+            'data-shortcut': keyNum,
             title: texts.length ? texts.join('\n') : undefined,
             on: { click: () => goTo(s.id) },
         }, [
-            div('st-name', s.name),
+            div('st-head', [
+                span(s.name, 'st-name'),
+                span(keyNum, 'st-key'),
+            ]),
             // Two lines, always both present even when empty, so a stage does
             // not change height as its state fills in and shove the picture
             // below it up and down.

@@ -161,6 +161,12 @@ button.st.warn .st-name::after {
     content: " !";
     color: var(--accent);
 }
+.st-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+}
 .st-name {
     font-size: var(--fs-sm);
     font-weight: 600;
@@ -168,6 +174,19 @@ button.st.warn .st-name::after {
     text-transform: uppercase;
     color: var(--dim);
     line-height: 1.5;
+}
+.st-key {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: Consolas, "Courier New", monospace;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--panel-hi, rgba(255, 255, 255, 0.08));
+    color: var(--dim);
+    line-height: 1.3;
+}
+button.st.on .st-key {
+    color: var(--accent);
 }
 /* Both lines are always present, even empty, so a card does not change height
    as its state fills in and shove the whole window up and down. */
@@ -2289,17 +2308,58 @@ button.ex-back { display: block; width: 100%; margin-top: 6px; }
     cursor: pointer;
 }
 .rep-toggle {
-    min-width: 20px;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    background: none;
-    border: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    background: var(--panel-hi, rgba(255, 255, 255, 0.06));
+    border: 1px solid var(--line, rgba(255, 255, 255, 0.1));
+    border-radius: 4px;
     color: var(--dim);
-    font-size: var(--fs-base);
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    cursor: pointer;
     flex-shrink: 0;
 }
-.rep-toggle:hover { background: none; color: var(--accent); }
+.rep-toggle:hover {
+    background: var(--panel);
+    color: var(--text);
+    border-color: var(--accent);
+}
+.rep.open .rep-toggle {
+    background: var(--panel-hi);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.rep-tab-label {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.rep-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--line, #333);
+    color: var(--text);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    line-height: 1;
+}
+.rep-badge.warn {
+    background: var(--accent);
+    color: #000;
+}
+.rep-badge.bad {
+    background: var(--bad);
+    color: #fff;
+}
+.rep-badge.hidden {
+    display: none;
+}
 .rep-head {
     flex: 1;
     min-width: 0;

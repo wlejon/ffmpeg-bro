@@ -117,7 +117,9 @@ export function setOpen(on) {
     if (open === on) return;
     open = on;
     refs.bar.classList.toggle('open', open);
-    refs.toggle.textContent = open ? '▾' : '▸';
+    const icon = refs.toggle.querySelector('#rep-icon');
+    if (icon) icon.textContent = open ? '▾' : '▸';
+    else refs.toggle.textContent = open ? '▾' : '▸';
     show(refs.body, open);
     draw();
 }
@@ -446,15 +448,14 @@ function headline() {
                : state.lastJob ? 'the last render'
                : 'ffmpeg';
     if (!bits.length)
-        return [what === 'ffmpeg' ? 'Nothing to report yet' : `Nothing to report from ${what}`,
-                n, series.length];
-    return [`${what[0].toUpperCase()}${what.slice(1)}: ${bits.join(' · ')}`, n, series.length];
+        return ['Report', n, series.length];
+    return [`Report · ${what}: ${bits.join(' · ')}`, n, series.length];
 }
 
 export function draw() {
     if (!refs.head) return;
     dirty = false;
-    const [text, n] = headline();
+    const [text, n, seriesCount] = headline();
     // On the bar rather than only inside the drawer: the drawer is shut most of
     // the time, and "these numbers are about a render that no longer exists" is
     // exactly the thing somebody has to know *before* going looking for them.
@@ -468,6 +469,21 @@ export function draw() {
     ]);
     refs.bar.classList.toggle('warn', !n.errors && n.warnings > 0);
     refs.bar.classList.toggle('bad', n.errors > 0);
+
+    const badgeEl = refs.toggle ? refs.toggle.querySelector('#rep-badge') : null;
+    if (badgeEl) {
+        const activeCount = n.errors + n.warnings + seriesCount;
+        if (activeCount > 0) {
+            badgeEl.textContent = String(activeCount);
+            badgeEl.classList.remove('hidden', 'warn', 'bad');
+            if (n.errors > 0) badgeEl.classList.add('bad');
+            else if (n.warnings > 0) badgeEl.classList.add('warn');
+        } else {
+            badgeEl.textContent = '0';
+            badgeEl.classList.add('hidden');
+        }
+    }
+
     if (!open) return;
 
     put(refs.body, () => [
