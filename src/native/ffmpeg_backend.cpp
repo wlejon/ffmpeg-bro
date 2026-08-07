@@ -932,6 +932,19 @@ public:
             if (limitNs_ > 0 && pts >= limitNs_) return false;
             if (pts < 0) pts = 0;
 
+            // After a seek, skip audio packets that arrived before the
+            // target. The seek lands on a video keyframe, which can be
+            // seconds before the requested time; the video pipeline decodes
+            // from the keyframe and drops pre-target frames itself, but
+            // audio has no such mechanism — the ring fills from wherever
+            // the demuxer landed. Without this, a seek into a file with
+            // 2 s keyframe spacing plays up to 2 s of audio from before
+            // the moment that is on screen.
+            if (seekFloorNs_ > 0 && it->kind == TrackKind::Audio) {
+                if (pts < seekFloorNs_) continue;
+                seekFloorNs_ = 0;
+            }
+
             out.trackId = trackId;
             out.codec = it->codec;
             out.kind = it->kind;
@@ -993,6 +1006,9 @@ public:
         // Every chain starts again from where the seek landed, decoder and
         // graph both — see `StreamFilter::reset`. A frame from before the seek
         // is a frame from somewhere else.
+        // Audio packets between the keyframe and the target are skipped
+        // in `readPacket` and `emitFiltered` — see the floor logic there.
+        seekFloorNs_ = pts;
         drained_ = false;
         for (auto& f : filtered_) {
             f->filter->reset();
@@ -1108,6 +1124,15 @@ private:
         }
         if (pts < 0) pts = 0;
 
+        // Same floor as the unfiltered path: see seekTo.
+        if (seekFloorNs_ > 0 && pick->kind == TrackKind::Audio) {
+            if (pts < seekFloorNs_) {
+                av_frame_free(&f);
+                return false;
+            }
+            seekFloorNs_ = 0;
+        }
+
         out.trackId = pick->trackId;
         out.codec = Codec::Other;
         out.kind = pick->kind;
@@ -1131,6 +1156,13 @@ private:
     int videoStreamIndex_ = -1;
     TimeNs startOffsetNs_ = 0;
     TimeNs limitNs_ = 0;
+    /// Audio packets before this PTS are skipped after a seek. The seek
+    /// lands on a video keyframe, which can be seconds before the target;
+    /// the video pipeline drops pre-target frames itself, but the audio
+    /// ring has no equivalent mechanism and would fill from the keyframe
+    /// position, playing content from before the moment on screen. Set
+    /// in `seekTo`, cleared on the first audio packet at or past it.
+    TimeNs seekFloorNs_ = 0;
     bool endless_ = false;
 };
 
