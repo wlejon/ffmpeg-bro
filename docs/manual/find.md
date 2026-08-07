@@ -12,7 +12,7 @@ ordered list of spans of that recording, each carrying the reason it is there.
 Stacks go into other rules — shaped, filtered, reordered, woven together — and
 the end of a chain is a stack you send to the timeline in one press.
 
-It sits after Sources and before Compose because that is where the work is.
+It sits after Sources and before Compose:
 
 ```
 Capture → Sources → Find → Compose → Graph → Encode → Write
@@ -20,43 +20,35 @@ Capture → Sources → Find → Compose → Graph → Encode → Write
 
 ## Why it is a second graph and not the Graph stage
 
-The Graph stage holds ffmpeg's filter graph. Every node in it prints into a
-`-filter_complex`, and the derivation
-[refuses rather than approximates](graph.md) precisely so that the graph can
-never describe a render the application would not perform. A rule that says
-*every time he said "insane"* has no printout at all — its value is a list of
-clips, not a stream of frames.
-
-So this is a separate graph with the same idiom: cards, sockets, wires, drag to
-connect, a panel for the selected node. What differs is what a wire carries, and
-there are exactly two things:
+The Graph stage holds ffmpeg's filter graph, and every node in it prints into a
+render. A rule that says *every time he said "insane"* has no printout at all —
+its value is a list of clips, not a stream of frames — so this is a separate
+canvas with the same idiom: cards, sockets, wires, drag to connect, a panel for
+the selected node. What differs is what a wire carries:
 
 | Wire | Carries |
 |---|---|
 | violet | a **recording** — an input, on its way into a finder |
 | amber | a **stack** — an ordered list of candidates |
 
-A wire that would join the wrong two is refused by name when you drop it. That
-is the same rule the filter graph follows and for the same reason: a wire that
-silently became something else would produce an empty stack four nodes
-downstream with nothing on the screen saying why.
+A wire that would join the wrong two is refused when you drop it.
 
 ## A candidate is not a cut
 
 Everything on a stack is a **candidate**: a span of a recording, with the reason
 it is there. It is deliberately not a clip until you say so.
 
-The reason is measured rather than cautious. A transcript is read from whichever
-soundtrack was cheapest — for a Twitch VOD that is the audio-only rendition —
-and **the picture rendition does not share its zero**. On one recording the two
-were +0.80 s, +2.21 s and +2.57 s apart at three points, and it is a *step*
-rather than a drift, because an ad break is discontinuous in one and not the
-other. A span cut to the word boundary would sometimes not contain the word.
+A transcript is read from whichever soundtrack was cheapest — for a linked
+recording that is usually the audio-only rendition — and the picture rendition
+does not share its zero: the two can drift apart by a few seconds, in a step
+rather than a smooth drift, wherever the source has a discontinuity such as an
+ad break. A span cut exactly to the word boundary would sometimes not contain
+the word.
 
-So a candidate off a word search carries **ten seconds either side**, and that
-number is the measurement. You can lower it; the rule says what that costs when
-you do. What lands on the timeline contains the moment rather than cutting at
-it, and the trim is yours.
+So a candidate off a word search carries **ten seconds either side** by
+default. You can lower it; the rule says what that costs when you do. What
+lands on the timeline contains the moment rather than cutting at it, and the
+trim is yours.
 
 ## The rules
 
@@ -68,17 +60,15 @@ it, and the trim is yours.
 ### Find
 
 These are the only two rules that read a soundtrack, and **neither of them ever
-starts a read**. Transcribing six hours is about ninety minutes of GPU and
-listening to it is about six minutes of arithmetic; both are asked for on
-Sources, deliberately, because nothing should spend that without being asked. A
-finder over a recording nobody has listened to answers with an empty stack and
-says which press is missing.
+starts a read**. Transcribing and listening for sounds are both asked for on
+Sources, deliberately, because nothing should spend that time without being
+asked. A finder over a recording nobody has listened to answers with an empty
+stack and says which press is missing.
 
 **Said** — every place a phrase was said, out of the transcript. This is the
-whole of the word search: there is no second one on an input's card, and
-`Search these words…` on the Sources `Words` row walks here with a `Recording`,
-a `Said` and a `Stack` already placed and wired to that recording, so the phrase
-is the only thing left to type.
+whole of the word search: `Search these words…` on the Sources `Words` row
+walks here with a `Recording`, a `Said` and a `Stack` already placed and wired
+to that recording, so the phrase is the only thing left to type.
 
 - *Words* — what to look for. Case and punctuation are ignored; spaces are not,
   so a phrase search works.
@@ -91,30 +81,29 @@ found nothing over the first ten minutes of six hours and a search that found
 nothing over all of it are completely different answers.
 
 **Sound** — every run the acoustic sensors marked, out of a
-[Find sounds](sources.md) pass.
+[Find sounds](sources.md#finding-things-by-sound) pass.
 
 - *Kind* — `sound`, `tonal` or `onset`. The three are named after what was
   **measured** and never after what made it: `sound` is a run above the measured
   noise floor, `tonal` is sustained periodicity with a real frequency in hertz,
   `onset` is a spectral-flux transient. Nothing here decided anything was a
   voice, a bird or a word.
-- *At least* / *At most* — in seconds. A `sound` run over four seconds is the
-  closest this application comes to "somebody is talking for a while", and it is
-  offered as what it is rather than under that name.
+- *At least* / *At most* — in seconds. Not offered on `onset`, which has no
+  length.
 - *Around* — a frequency, on a tonal run only, matched within a tenth.
 
-A transient has no length, so a stack of onsets is a stack of *moments*. The
-rule says so and points at **Pad**, which is what makes them clips.
+A transient has no length, so a stack of onsets is a stack of *moments*. Put a
+**Pad** after it to turn them into clips.
 
 ### Shape
 
 **Pad** — widen everything by so much before and after, clamped to the
 recording.
 
-**Merge** — fold candidates that touch into one, with a tolerance. The thing
-every finder needs and no finder does itself: a word said three times in one
-breath, padded ten seconds each, is three overlapping spans of one moment — cut,
-that is the same clip three times. The survivor says how many went into it.
+**Merge** — fold candidates that touch into one, within a tolerance. A word
+said three times in one breath, padded ten seconds each, is three overlapping
+spans of one moment — cut, that is the same clip three times. The survivor says
+how many went into it.
 
 **Length** — drop what is too short or too long.
 
@@ -134,15 +123,13 @@ feeding **Every**.
 
 **Every** — put one of the second after every *n*th of the first.
 
-The two are not the same operation and the difference is worth knowing. **Mix**
-weaves two streams symmetrically. **Every** treats the first as a *spine* and
-places the second into it, so running out of what is being placed leaves the
-rest of the spine continuous.
+The two are not the same operation. **Mix** weaves two streams symmetrically.
+**Every** treats the first as a *spine* and places the second into it, so
+running out of what is being placed leaves the rest of the spine continuous.
 
-Both run until **both** sides are empty. Stopping at the shorter would silently
-discard the tail of the longer, and that loss is invisible in the result — it
-comes out as a montage that is mysteriously short. When one side runs out the
-rule says so, and says how many rounds the ratio actually held for.
+Both run until **both** sides are empty, so the tail of the longer is never
+silently dropped once the shorter side runs out — the card says how many
+rounds the ratio actually held for.
 
 ### Keep
 
@@ -151,17 +138,11 @@ rule says so, and says how many rounds the ratio actually held for.
 ## Sending a stack
 
 One press. The clips land **end to end on one track**, in the stack's order,
-after whatever is already there.
-
-End to end rather than at each candidate's own time, because a stack *is* an
-order — that is what **Mix** and **Every** were for — and laying them out at
-source times would throw the arrangement away and pile them at one place
-besides. Appended rather than replacing, because sending a second stack is the
-ordinary use: that is what building a montage out of several rules is.
+after whatever is already there — appended rather than replacing, so sending a
+second stack is how a montage is built out of several rules.
 
 Each clip is named with the reason it is here — `1:04:12 "oh yeah that's the"` —
-rather than with the file it came from. Forty clips all called
-`twitch-vod-2834479749.mkv` is a timeline nobody can read.
+rather than with the file it came from.
 
 A candidate whose recording has been removed since the rule ran is counted and
 said out loud rather than dropped in silence.
@@ -177,20 +158,15 @@ For a stack whose recording is a **link**, a second press: `Pull N windows`.
 
 This is what the word search is *for*. A six-hour VOD is tens of gigabytes and
 the twenty seconds each candidate covers is a few megabytes, so this copies only
-those — `-ss` and `-t` on the input, so what comes down the link is the windows
-rather than the recording. Stream copies, so they run in the background, take
-none of the one render slot, and jump ahead of any whole-recording copy already
-queued: these are what you are waiting on, and the full copy is the thing you
-started so that you could get on.
+those spans — stream copies, so they run in the background, take none of the
+one render slot, and jump ahead of any whole-recording copy already queued.
 
-The span pulled is **the candidate's own**, pad and all — the `Either side` field
-is where that number is decided, and re-padding it here would write a file the
-card's own number does not describe.
+The span pulled is **the candidate's own**, pad and all — the `Either side`
+field on the `Said` rule is where that number is decided, and it is not
+re-padded here.
 
-At most twenty-four at a time, and it says so: one word search over six hours
-answers with twelve hundred candidates, and twelve hundred fetches is six hours
-of stream off one link. Press again for the next batch — a window already pulled
-costs nothing to ask for twice.
+At most 24 at a time, and it says so. Press again for the next batch — a window
+already pulled costs nothing to ask for twice.
 
 When they land, `Open N here` opens them as inputs of their own on
 [Sources](sources.md) — new ones, not the recording repointed, because each is a
@@ -226,6 +202,7 @@ on another stage would be the wrong trade.
 | Click a wire | cut it |
 | Drag the background | pan |
 | Wheel | zoom about the pointer |
+| `A` | open the Add menu |
 | **Add rule** | place one, then wire it |
 | **Re-layout** | give every card back to the automatic layout |
 
@@ -235,9 +212,7 @@ every rule reads exactly one list per socket.
 ## Not yet
 
 - **Nothing sees the picture.** Every rule here reads a soundtrack. Finding
-  where something *appeared* is the next thing this stage is shaped for — a
-  vision rule is another entry in the same table, producing the same stacks —
-  and it is not here.
+  where something *appeared* is not here.
 - **A stack goes to one track.** Sending two stacks to two tracks to be
   composited is two presses and a drag, not a wire.
 - **No rule reads the timeline.** Rules find material in recordings; they cannot

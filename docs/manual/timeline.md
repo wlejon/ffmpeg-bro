@@ -7,93 +7,62 @@ suite stacks them:
 
 - **V1, V2, …** filmstrips — each slot showing the frame that is on screen at
   that point, so it stays honest as you zoom in. There is always one empty lane
-  above the highest one in use: dragging a clip into it is how you add a track,
-  and the lanes share a fixed height between them so the waveform never gets
-  pushed off the bottom. Beside each name is a padlock: the [sync
-  lock](#the-sync-lock). A clip stored sideways gets upright, portrait slots:
-  the strip is cut to the *displayed* aspect and the pictures are turned to
-  match, which is the one place anything here rotates pixels rather than the
-  thing they are drawn on — a strip is a finished image with nothing left
-  downstream to turn it.
+  above the highest one in use: dragging a clip into it is how you add a track.
+  Beside each name is a padlock: the [sync lock](#the-sync-lock). A clip stored
+  sideways gets upright, portrait slots: the strip is cut to the *displayed*
+  aspect and the pictures are turned to match.
 - **A1** the waveform — peak envelope over an RMS body, so you can see where
   the sound is before you hear it. **One waveform, not one per clip**: two
   clips that overlap in time are one sound at that moment, and A1 draws what
-  the render will make of it rather than whichever of them was painted last.
-  The two halves are summed the way a mix is summed and not the same way as
-  each other — the envelope *adds*, because two sounds at once reach the sum of
-  their peaks and that is what clipping is, while the body is a
-  root-sum-of-squares, because power adds and amplitude does not: two
-  uncorrelated sounds at -6 dB make one at -3 rather than one at 0. A **muted**
-  clip is drawn on its own, dimmed, and is outside the sum — it is still there
-  and simply not being heard, so hiding it would make it hard to find again and
-  folding it in would draw sound the render will not write.
+  the render will make of it. A **muted** clip is drawn on its own, dimmed, and
+  is outside the sum — it is still there and simply not being heard.
 
   The lane is drawn in **decibels**, from -60 dBFS at the centre line to +6 at
-  the top, with a dashed line across it where full scale is. Amplitude is the
-  wrong scale to judge sound by eye — a linear lane spends half its height on
-  the top 6 dB and crushes a quiet dialogue line into the last few pixels,
-  where the decisions are; on this one a halving is the same distance wherever
-  it happens. The ceiling is *above* full scale because the envelope is a sum
-  and a sum can exceed it: two clips that each peak just under 0 dBFS make a
-  mix that does not, and a lane that stopped at 1.0 drew that as exactly full
-  height and looked fine. Columns that go over are drawn in their own colour,
-  so an over is something you see rather than something you infer from a shape
-  that has run out of room.
+  the top, with a dashed line across it where full scale is. The ceiling is
+  *above* full scale because the envelope is a sum of everything playing at
+  once and a sum can exceed it: two clips that each peak just under 0 dBFS make
+  a mix that does not. Columns that go over are drawn in their own colour, so
+  an over is something you see rather than something you infer.
 
 - **When** — the spans that turn a filter on and off part way through the render,
   drawn where the shots they cover are. It is only there when there are any; see
   [the When lane](#the-when-lane).
 
-The filmstrips and the waveform come from `bro.media` (see bro's
-`docs/video-api.js`), which decodes through the same backend registry `<video>`
-plays through. Decoding is not free, so ffmpeg-bro runs it in a Worker and the
-lanes fill in behind a UI that never stops responding.
+Decoding the filmstrips and the waveform is not free, so ffmpeg-bro runs it off
+the UI thread and the lanes fill in behind a window that never stops
+responding.
 
 **A file on this machine is read whole. A clip on a link is read for the span
-you are looking at.** Opening a six-hour VOD by URL used to mean reading the
-whole recording twice — every audio packet of it for the envelope, a hundred and
-twenty seeks for the strip — down the same link a local copy is being pulled
-over. So a clip whose input is a URL is read for what the timeline is showing,
-a window at a time, one read at a time, and a window already read is not read
-again. Measured against a six-hour Twitch VOD:
-
-| | |
-|---|---|
-| 24 thumbnails across the whole recording | 6.2 s |
-| 12 thumbnails across a 300 s window | 3.4 s |
-| the envelope of a 60 s window (`Audio Only`) | 1.9 s |
-| the envelope of the same 60 s from the 1080p60 rendition | 6.5 s |
-| the envelope of the whole recording | ~16 min |
-
-The two lanes behave differently because those numbers say they should: **a
-strip samples and an envelope integrates.** Twenty-four seeks cost the same
-whether they are spread over five minutes or six hours, so the filmstrip covers
-whatever is on screen and zooming out is not a bigger job. The envelope has to
-decode every sample between its ends, so it is read in a bounded window — and
-zoomed out past that window the lane is honestly **blank** either side of it,
-because a bucket nobody has read is not a bucket that was quiet. Zoom out far
-enough and it stops reading altogether and says **zoom in to read the sound**,
-rather than spending four seconds on two minutes of waveform that would be six
-pixels wide in the middle of a six-hour bar.
+you are looking at.** So a clip whose input is a URL is read a window at a
+time, following what the timeline shows, and a window already read is not read
+again. **A strip samples and an envelope integrates**, and the two lanes behave
+differently because of it: the filmstrip covers whatever is on screen and
+zooming out is not a bigger job, but the envelope has to decode every sample
+between its ends, so it is read in a bounded window. Zoomed out past that
+window the lane is honestly **blank** either side of it — a bucket nobody has
+read is not a bucket that was quiet — and zoom out far enough and it stops
+reading altogether and says **zoom in to read the sound**, rather than
+spending several seconds on a waveform that would be a few pixels wide in the
+middle of a long recording.
 
 The envelope is also read from the cheapest source that carries the same
 soundtrack: a local copy if one has been pulled, otherwise the site's
 audio-only rendition, otherwise the clip itself. The middle two are a couple of
 seconds away from the picture and no offset corrects it (see [Saving a stream to
-this machine](sources.md)), so the lane says which one it read. Pull the sound
+this machine](sources.md#saving-a-stream-to-this-machine)), so the lane says which one it read. Pull the sound
 and the lane gets exact and instant, which is the point of pulling it.
 
-**Zoom** with the wheel, about the pointer — the only version that lets you
-dive into a moment instead of steering the window back after every notch.
+**Zoom** with the wheel, about the pointer — the version that lets you dive
+into a moment instead of steering the window back after every notch.
 `Shift`+wheel pans, the scrollbar under the tracks pans, and `Fit` goes back to
 the whole timeline. Everything is drawn from the visible window rather than the
-whole file, so at 200× the strip is the individual frames around the playhead
-and the waveform under it is the sound at that instant.
+whole file, so at high zoom the strip is the individual frames around the
+playhead and the waveform under it is the sound at that instant.
 
 **Drop more files** to add them. One or two land after what is already there.
 Three or more is a different act — that is a morning's recordings, not an edit —
 so they go on tracks of their own, all starting together at zero, and the canvas
-switches to a **grid** (see below). Each gets its own filmstrip and waveform.
+switches to a **grid**. Each gets its own filmstrip and waveform.
 
 **Drag a clip** along its lane to move it — it snaps to the timeline start, the
 playhead and the other clips' edges, and anything it lands on top of *on the
@@ -107,9 +76,7 @@ trim stops at its neighbours rather than growing over them. The two grips
 appear on the selected clip.
 
 **Hold `Alt`** and each of those three targets becomes the edit that is about
-the *cut* rather than about the clip. One modifier is enough because the target
-already says which of the three you mean, and they hold three different things
-constant:
+the *cut* rather than about the clip:
 
 | | | |
 |---|---|---|
@@ -117,28 +84,22 @@ constant:
 | `Alt` + a **cut** between two butted clips | **roll** | holds the total, moves the boundary — the programme is the same length and the cut is somewhere else in it |
 | `Alt` + a clip's **body** | **slip** | holds the window, moves the content inside it — the clip stays put and starts somewhere else in the file |
 
-**A cut is a different target from an end**, which is what makes that table
-unambiguous rather than clever: two clips laid end to end share an x, and the
-left one's out-point *is* the right one's in-point, so there is one boundary
-there with two names. A clip with a gap after it has a loose end and no cut, and
-`Alt` on it ripples.
+A cut is only where two clips are butted end to end and share an edge; a clip
+with a gap after it has a loose end and no cut, and `Alt` on it ripples.
 
 Slip drags the film under the window, so dragging **right shows earlier
-footage** — the convention every editor uses, and worth stating because both
-readings are defensible. It stops at the ends of the footage rather than
-shortening the clip, since a slip that got shorter would be a trim wearing the
-wrong name. Roll stops when either side runs out of frames, by doing less rather
-than by refusing: a drag that stops moving says where the wall is more clearly
-than a drag that does nothing.
+footage** — the convention every editor uses. It stops at the ends of the
+footage rather than shortening the clip. Roll stops when either side runs out
+of frames, by doing less rather than by refusing.
 
 Ripple moves everything later **on the same track**, unless that track is
 [locked](#the-sync-lock) to others.
 
 **Split** (`S`, or the button) cuts every selected clip the playhead is inside —
 one keypress through a whole stack, or through exactly the one you picked. Both
-halves point at the same file, so a split costs nothing but a second `<video>`,
-and together they cover exactly what the one clip covered. Trimming a half and
-deleting the other is how you take a piece out of the middle.
+halves point at the same file, and together they cover exactly what the one
+clip covered. Trimming a half and deleting the other is how you take a piece
+out of the middle.
 
 **Select** by clicking a clip or its picture. `Ctrl`/`Shift`-click adds to the
 selection, `Ctrl`+`A` takes everything, `Esc` narrows back to one. `Delete`
@@ -153,108 +114,90 @@ speed selector and `J`/`K`/`L` beside the viewer are still how fast you are
 transport's volume and the clip's do.
 
 **Changing it keeps the footage and changes the bar.** "Play this shot at 2×"
-means the same seconds of the file in half as much of the programme, which is the
-gesture people have — so the clip's bar halves and its in and out points do not
-move. Slowing a clip down therefore *grows* it, and it stops at the clip after it
-exactly as a trim does: it clamps rather than refusing and never overlaps. The bar
-carries a `2×` badge, because a shot at 2× looks exactly like half as much of the
-same shot until it plays.
+means the same seconds of the file in half as much of the programme — so the
+clip's bar halves and its in and out points do not move. Slowing a clip down
+therefore *grows* it, and it stops at the clip after it exactly as a trim does.
+The bar carries a `2×` badge, because a shot at 2× looks exactly like half as
+much of the same shot until it plays.
 
-Everything else on the timeline goes on meaning what it meant. A clip's length is
-still how much of the programme it occupies; what it takes out of its file is
-that times the speed, so trimming half a second off the tail of a 2× clip gives
-back a second of footage, and a slip runs out of file when twice the bar's length
-reaches the end.
+A clip's length is still how much of the programme it occupies; what it takes
+out of its file is that times the speed, so trimming half a second off the tail
+of a 2× clip gives back a second of footage, and a slip runs out of file when
+twice the bar's length reaches the end.
 
-**The pitch moves with the speed.** Speeding a clip up resamples its sound —
-`asetrate` then `aresample`, which is what the printed command shows and what the
-internal compositor asks libav's own resampler for — so it goes up in pitch like a
-tape run fast. That is deliberate rather than a limitation: preserving the pitch
-means time-stretching, which is libavfilter's `atempo`, and the internal
-compositor has no filter graph to put one in — so a render that did it one way
-while [the graph](graph.md) said the other would be this application describing a
-render it does not perform. `atempo` is a filter you can place on the Graph stage
-if you want it, and it is named in the line under the control and in the command
-bar's notes.
+**The pitch moves with the speed.** Speeding a clip up resamples its sound, so
+it goes up in pitch like a tape run fast. That is deliberate rather than a
+limitation: preserving the pitch means time-stretching, which the internal
+compositor cannot do, so a render that did it one way while [the
+graph](graph.md) said the other would be describing a render this application
+does not perform. `atempo` is a filter you can place on the Graph stage
+yourself if you want the pitch held.
 
-**Reverse and freeze are refused, by name.** A negative speed is reverse playback,
-which nothing here can express: decoders walk forward, and libavfilter's `reverse`
-buffers the whole stream in memory before it emits a frame. Zero is a freeze
-frame, which is a different feature. Both come back as a sentence rather than
-being quietly clamped to something nobody asked for.
+**Reverse and freeze are refused, by name.** A negative speed is reverse
+playback, which nothing here can express, and zero is a freeze frame, which is
+a different feature. Both come back as a sentence rather than being quietly
+clamped to something nobody asked for.
 
-Two things a speed costs. A **copied** stream cannot be sped up at all — a copy is
-the packets as they were read, and there is nothing a copy can do to a packet's
-timing — so the Write stage stops offering to follow a sped-up clip and says why;
-encode it instead. And the viewer will not show a filter placed at a sped-up
-clip's `after scale` point, which keeps its `fx` badge: see
-[Not yet](not-yet.md).
+Two things a speed costs. A **copied** stream cannot be sped up at all — the
+Write stage stops offering to follow a sped-up clip and says why; encode it
+instead. And the viewer will not show a filter placed at a sped-up clip's
+`after scale` point, which keeps its `fx` badge: see [Not yet](not-yet.md).
 
 ## A generator, laid out like a clip
 
-`ffmpeg -f lavfi -i testsrc` is one of the first commands anybody runs. **Generator**
-in the timeline bar lays one out here: pick `testsrc`, `color`, `smptebars`,
-`mandelbrot` — every filter libavfilter declares with no input pads and a picture
-on its output — and what appears on a lane is a **clip**.
+**Generator** in the timeline bar lays out a test source: pick `testsrc`,
+`color`, `smptebars`, `mandelbrot` — every picture-producing source this build
+has — and what appears on a lane is a **clip**.
 
-That is the whole design and not a turn of phrase. It has a track, a start, a
-length, in and out points, a rectangle on the canvas, a selection ring, and a
-`<video>` of its own showing the real thing on the program monitor. Drag it, trim
-it, `Alt`-drag it to ripple, roll the cut after it, slip inside it, split it,
-stack it under a title, crop it, fade it with `Opacity` — none of that is a second
-implementation of anything. The bar is drawn in a colour of its own with the
-command that makes it written along it, and it carries no filmstrip and nothing on
-A1, because there are no thumbnails to grab from a source that cannot be seeked
-and no sound in it to draw.
+It has a track, a start, a length, in and out points, a rectangle on the
+canvas, a selection ring, and a program-monitor picture of its own. Drag it,
+trim it, `Alt`-drag it to ripple, roll the cut after it, slip inside it, split
+it, stack it under a title, crop it, fade it with `Opacity` — all of that works
+exactly as it does for a file. The bar is drawn in a colour of its own with the
+command that makes it written along it, and it carries no filmstrip and nothing
+on A1, because there is no source file to read a thumbnail or a sound from.
 
-**How long one is is a decision, not a measurement.** A `color` is infinite:
-libavfilter goes on producing frames for as long as something pulls them, so unlike
-a file there is nothing to discover. One arrives five seconds long — long enough to
-see and short enough to trim, and no dialog, because a question with no information
-in it is worse than a default. Drag its end *outward* and it gets longer: asking a
-`testsrc` for another ten seconds is a request it answers. That is the same
-convention this application already follows for [an endless
-input](sources.md) — `-t` is the only thing that can say — with the number kept on
-the clip, so it travels in the [document](document.md) and comes back with the
-edit.
+**How long one is is a decision, not a measurement.** Something like `color` is
+infinite: it goes on producing frames for as long as something pulls them, so
+unlike a file there is nothing to discover. One arrives five seconds long —
+long enough to see and short enough to trim — and dragging its end *outward*
+makes it longer, the same convention an [endless input](sources.md) follows.
+The number is kept on the clip and travels with the document.
 
-**Its arguments are one line, on the properties panel.** `size=1920x1080:rate=25`,
-exactly what you would have typed after `-f lavfi -i`, with the filter's own
-description under it. A new one takes the canvas's size and rate where the filter
-has options to put them, so a test pattern dropped on a 1080p edit is 1080p rather
-than libavfilter's 320×240 default. An option the filter does not have is refused
-in libavfilter's own words and nothing changes; the full option table, drawn per
-option, is on that filter's card on the [Graph stage](graph.md).
+**Its arguments are one line, on the properties panel** — `size=1920x1080:rate=25`
+— with the filter's own description under it. A new one takes the canvas's
+size and rate where the filter has options to put them. An option the filter
+does not have is refused and nothing changes; the full option table is on that
+filter's card on the [Graph stage](graph.md).
 
-**A sound source is not a clip.** `sine` and `anullsrc` are sources too, and they
-are deliberately not in the list: a bar with no picture would have nothing for the
-canvas and no length anything on screen states. One of those is a node wired to the
-mix on the Graph stage, where it has a pad to be wired to.
+**A sound source is not a clip.** `sine` and `anullsrc` are sources too, and
+they are deliberately not in the list: a bar with no picture would have
+nothing for the canvas and no length anything on screen states. One of those
+is a node wired to the mix on the Graph stage instead.
 
-Two things about a generator are genuinely not like a file, and both come from the
-same fact — libavfilter's sources produce forward and the `lavfi` demuxer cannot
-seek. It is never the **master clock**: with a file clip under the playhead the
-file drives the transport even with the generator on the lane above it, and a
-timeline of nothing but generators runs on the wall clock, the same way a gap
-between clips does. And the picture on the monitor is the generator *running*
-rather than the generator at the playhead's moment — right for a `color` or a
-`smptebars`, and for a moving pattern it is the pictures without the timecode. `O`
-shows [the render itself](playback.md#the-output-instead-of-the-clips), which is
-that moment exactly.
+Two things about a generator are genuinely not like a file. It is never the
+**master clock**: with a file clip under the playhead the file drives the
+transport even with the generator on the lane above it, and a timeline of
+nothing but generators runs on the wall clock, the same way a gap between
+clips does. And the picture on the monitor is the generator *running* rather
+than the generator at the playhead's moment — right for a still pattern, and
+for a moving one it is the pictures without the timecode. `O` shows [the
+render itself](playback.md#the-output-instead-of-the-clips), which is that
+moment exactly.
 
 The [Graph stage](graph.md) draws the filter at the head of the clip's chain,
-where an `-i` would be for a file. It is a **derived** node: rebuilt on every
-timeline edit and gone when you delete the bar. A generator you place on that stage
-by hand is the other thing entirely — a node, with no lane and no bar — and the two
-do not interfere.
+where an `-i` would be for a file. It is rebuilt on every timeline edit and
+gone when you delete the bar. A generator you place on that stage by hand is a
+different thing entirely — a node, with no lane and no bar — and the two do
+not interfere.
 
 ## The When lane
 
-A filter does not have to run for the whole render: `enable=` turns one on and off
-part way through, and the [Graph stage](graph.md#when-it-is-on) is where an
-expression is written. What that stage cannot answer is the question the spans are
-usually about — *does the blur cover the whole of this take, does the logo come off
-before the cut* — because the take is here.
+A filter does not have to run for the whole render: `enable=` turns one on and
+off part way through, written as an expression on the [Graph
+stage](graph.md#when-it-is-on). What that stage cannot answer is the question
+the spans are usually about — *does the blur cover the whole of this take, does
+the logo come off before the cut* — because the take is here.
 
 So every span that exists is drawn here, under the video tracks, as a region on
 the timeline's own ruler:
@@ -266,41 +209,27 @@ the timeline's own ruler:
 | press anywhere on the lane | the playhead goes there, as on any other lane |
 
 Ends snap to the same things a clip snaps to — the start of the timeline, the
-playhead, and the other clips' edges — because "cover exactly that shot" is what
-the gesture is nearly always for. A whole-span drag snaps by whichever of its two
-edges lands on something.
+playhead, and the other clips' edges — because "cover exactly that shot" is
+what the gesture is nearly always for.
 
-**The lane is there because spans are.** An edit with none does not carry an empty
-lane; a span made on the Graph stage is here when you come back; taking the last
-one off takes the lane with it. That is the same rule the video lanes follow —
-how many there are is a property of the edit and not of the window.
+**The lane is there because spans are.** An edit with none does not carry an
+empty lane; a span made on the Graph stage is here when you come back; taking
+the last one off takes the lane with it.
 
 **One row per node, and each says which node it is.** A `hue` on one shot and a
-`drawtext` over the whole canvas are two rows, each carrying the filter's name and
-what it is on — `hue · V1 shot.mp4`, `drawtext · the whole canvas` — in a colour of
-its own. The name is drawn at the left of its row and the regions are translucent
-over it, so it is readable at any zoom rather than only where a region is wide
-enough to hold it.
+`drawtext` over the whole canvas are two rows, each carrying the filter's name
+and what it is on — `hue · V1 shot.mp4`, `drawtext · the whole canvas` — in a
+colour of its own, so two spans that overlap in time stay two regions you can
+each reach with the pointer. A node you delete takes its row with it.
 
-Rows rather than one shared strip, and that is the load-bearing part: two spans
-from different nodes that overlap in time would otherwise be drawn over each other
-and the one underneath would be unreachable by the pointer, which is the whole
-gesture. The rows are ordered by the clip each node is about, so a drag — which
-moves a span and never a clip — can never reorder them underneath your hand. A
-node you delete takes its row with it.
+It travels in the [document](document.md) with the rest of the graph, and a
+span dragged here is one press of `Ctrl`+`Z` to undo.
 
-**It is the same edit as the strip in the column**, through the same two functions,
-so a span dragged here and a span dragged there cannot come to mean different
-things, and either is one press of `Ctrl`+`Z`. It travels in the
-[document](document.md) with the rest of the graph.
-
-Two kinds of span are deliberately not on it, and each because there is nothing
-true to draw. A filter on a file the *graph* reads on its own account — a
-watermark, a logo bug — is written in that file's own timestamps and no clip is cut
-from it, so no second of the edit corresponds to its `t=5`; it has a strip in the
-column, where the ruler is that file's. And `enable` on a filter libavfilter says
-has no timeline support is a graph that will not build, reported on the node rather
-than drawn as a region you could drag.
+Two kinds of span are not on it. A filter on a file the *graph* reads on its
+own account — a watermark, a logo bug — is written in that file's own
+timestamps with no clip cut from it, so it has a strip in the column instead,
+where the ruler is that file's own. And `enable` on a filter that has no
+timeline support is reported on the node rather than drawn as a region.
 
 ## The Cues lane
 
@@ -308,10 +237,9 @@ Cues this document holds — see [Cues of your own](subtitles.md#cues-of-your-ow
 — drawn as regions on the timeline's own ruler, directly above the waveform, with
 a strip under it for the words.
 
-It is here rather than in a panel for one reason, and it is the reason the "Not
-yet" entry that used to stand in its place gave: **a subtitle's timing is judged
-by listening to where the line is spoken.** A pair of number fields cannot answer
-"does this come on when he starts talking"; a region against A1 can.
+It is here rather than in a panel because **a subtitle's timing is judged by
+listening to where the line is spoken**: a pair of number fields cannot answer
+"does this come on when he starts talking", but a region against A1 can.
 
 | | |
 |---|---|
@@ -321,7 +249,7 @@ by listening to where the line is spoken.** A pair of number fields cannot answe
 | press the lane | the playhead goes there, as on any other lane |
 
 Ends snap to the same things everything else on this timeline snaps to: the
-start, the playhead, and every clip's edges. The strip carries the four presses:
+start, the playhead, and every clip's edges. The strip carries four presses:
 
 | | |
 |---|---|
@@ -331,28 +259,26 @@ start, the playhead, and every clip's edges. The strip carries the four presses:
 | **Delete** | take it out |
 
 A split leaves the words with the first half and hands you an **empty** second
-one. Where in the sentence the cut goes is not something this can know, and a
-guess you then have to correct is worse than a cue to type into.
+one — where in the sentence the cut goes is not something this can know.
 
 **The lane is there because cues are** — the same rule the video tracks and the
 When lane follow. A document with no cue track does not carry an empty one, and
 the first one appears the moment `+ Subtitle` on the Write stage makes it or a
 file's cues are taken into the document.
 
-Each cue is drawn with **its own words inside it**, which is the opposite of what
-the When lane does and right for the opposite reason: a span's identity is its
-filter, which is one name belonging to the whole row, and a cue's identity is
-what it says. The line is pinned to the visible left edge, so a cue running off
-the window keeps its words readable, and it is cut with an ellipsis rather than
-spilling into the next one.
+Each cue is drawn with **its own words inside it**, which is the opposite of
+what the When lane does: a span's identity is its filter, one name belonging
+to the whole row, and a cue's identity is what it says. The line is pinned to
+the visible left edge, so a cue running off the window keeps its words
+readable, cut with an ellipsis rather than spilling into the next one.
 
 Everything here is one press of `Ctrl`+`Z`, and travels in the
-[document](document.md). Typing is folded into one step the way a slider drag is;
-the four presses are four kinds, so a split and the cue you added after it are two.
+[document](document.md). Typing is folded into one undo step the way a slider
+drag is.
 
-A cue that came out of a file and still carries ASS override codes says so in the
-strip, next to the field you are about to type into — because retyping it is when
-they go. There is more about that, and what it costs, under [Cues of your
+A cue that came out of a file and still carries ASS override codes says so in
+the strip, next to the field you are about to type into, because retyping it
+is when they go. See [Cues of your
 own](subtitles.md#what-a-fork-costs-and-it-is-the-one-thing-here-that-can-lose-work).
 
 ## The Data lane
@@ -361,18 +287,15 @@ Numbers read out of a data track — see [Reading a data
 track](sources.md#reading-a-data-track) — drawn against the timeline's own
 ruler, directly above the waveform.
 
-Beside the waveform is where it belongs, and for the reason the Cues lane is
-where it is: what a number off a camera is *for* is telling you where in the
-shot something happened. A list of readings answers "how fast was I going"; a
-line under the clips answers "which of these shots is the one where the bike
-went over", which is the question somebody reviewing an afternoon of footage
-actually has.
+Beside the waveform is where it belongs: what a number off a camera is *for*
+is telling you where in the shot something happened. A list of readings
+answers "how fast was I going"; a line under the clips answers "which of these
+shots is the one where the bike went over".
 
-One row per picked series. Each row is drawn **per clip**, not per file: the
-reading belongs to the input and the lane is the edit, so a series is cut the way
-the picture is — two clips from one recording show two pieces of one line, in the
-order they were cut into, following every trim, move and speed change without the
-track being read again.
+One row per picked series. Each row is drawn **per clip**, not per file: two
+clips from one recording show two pieces of one line, in the order they were
+cut into, following every trim, move and speed change without the track being
+read again.
 
 | | |
 |---|---|
@@ -381,27 +304,20 @@ track being read again.
 | a break in the line | no sample landed there |
 
 The band and the line are the same claim A1 makes about sound, and for the same
-reason. A lane pixel at a normal zoom covers hundreds of gyroscope samples: the
-mean alone hides every spike, which is the half of a telemetry trace anybody is
-looking for, and the maximum alone says a camera was permanently at its worst
-moment. A break is a break because a recording whose GPS dropped out for a minute
-did not travel in a straight line through it — it was not measured, and a
-straight line is the one drawing that claims it was.
+reason: the mean alone hides every spike, which is the half of a telemetry trace
+anybody is looking for, and the maximum alone says a camera was permanently at
+its worst moment. A break is a break because a recording whose GPS dropped out
+for a minute did not travel in a straight line through it.
 
 Each row is on **its own vertical scale**, drawn between its own lowest and
-highest sample, with those two numbers printed beside its name. Two quantities on
-one axis invent a correlation that is not in the data — the alignment of the two
-scales is arbitrary and a reader cannot see that it is — which is the rule
-`ui/plot.js` states for the Report drawer's chart and which the shape of this
-lane arrives at on its own.
+highest sample, with those two numbers printed beside its name — putting two
+different quantities on one axis would invent a correlation that is not in the
+data.
 
-The numbers beside a name are folded over **every** sample rather than over what
-is drawn. The line is a decimation — two thousand buckets, whether the track is
-twenty seconds or two hours — and the reach is not.
-
-**The lane is there because a series is picked**, the same rule the video tracks,
-the When lane and the Cues lane follow. Nothing on it can be edited: a reading is
-what a file says. Pressing it moves the playhead, as on every other lane.
+**The lane is there because a series is picked**, the same rule the video
+tracks, the When lane and the Cues lane follow. Nothing on it can be edited: a
+reading is what a file says. Pressing it moves the playhead, as on every other
+lane.
 
 ## The Marks lane
 
@@ -418,27 +334,22 @@ them:
 | blue | a `tonal` run, drawn with a band showing how long it lasted |
 | green | a `sound` run, likewise |
 
-**One row, not three.** The other three lanes here grow a row per span, per cue
-track, per picked series, because each of those is a thing you point at on its
-own. A mark is not: what you do with one is *jump to it*, and `,` and `.` walk
-every mark in the edit in time order whatever kind it is. Three stacked rows
-would turn the commonest gesture — go to the next thing — into a question about
-which row you were on.
+**One row, not three.** What you do with a mark is *jump to it*, and `,` and
+`.` walk every mark in the edit in time order whatever kind it is — three
+stacked rows would turn the commonest gesture into a question about which row
+you were on.
 
-A tick is one pixel wide because what it says is "here". A run gets a band under
-the tick and an onset does not: an onset *has* no length, and a band of some
-minimum width drawn for one would be this lane inventing a duration nobody
-measured.
+A tick is one pixel wide because what it says is "here". A run gets a band
+under the tick and an onset does not, because an onset *has* no length.
 
 Marks are drawn **per clip**, exactly as a telemetry series is: they belong to
-the input and the lane is the edit, so they follow every trim, move and speed
-change without the soundtrack being read again. A mark in a part of the file the
-clip does not cover is simply absent, rather than drawn at the edge — a moment
-the edit does not contain is not a moment.
+the input and follow every trim, move and speed change without the soundtrack
+being read again. A mark in a part of the file the clip does not cover is
+simply absent.
 
 Nothing here can be edited: a mark is what a soundtrack says. Pressing the lane
-moves the playhead, as on every other lane. Which kinds are drawn is decided on
-the Sources stage, where the reading was asked for.
+moves the playhead. Which kinds are drawn is decided on the Sources stage,
+where the reading was asked for.
 
 ## The sync lock
 
@@ -457,22 +368,16 @@ Which of the two a given pair of tracks is, only you know, so it is a control
 rather than a rule — and the safe answer is the default. A lock is **part of the
 edit**: it is saved in the [document](document.md), and locking a track is one
 press of `Ctrl`+`Z` to undo, because it changes what the next drag does to the
-clips. It is not part of where you happen to be standing, which is the half of a
-document that an undo deliberately never touches.
+clips.
 
 **A lock is visible before the drag, never discovered after it.** The padlock
 shuts, the track's name goes to the accent colour, and the whole lane takes a
-faint wash of it — so a locked group is two or three lanes plainly marked as one,
-and a ripple can never quietly move clips on a lane you were not looking at.
-Hovering the padlock says what the press will do, including the case where a track
-is the only locked one and so nothing else moves with it yet.
+faint wash of it — so a locked group is two or three lanes plainly marked as one.
+Hovering the padlock says what the press will do, including the case where a
+track is the only locked one and so nothing else moves with it yet.
 
 Locking a lane and then emptying it costs nothing: a lock lasts as long as its
-lane is on the screen, and a lane that has gone takes its lock with it. There is
-no list of tracks anywhere — how many lanes there are is still worked out from the
-clips that exist — so a lock left over from a deleted clip can neither put a lane
-on the screen nor move a clip that is not on one.
+lane is on the screen, and a lane that has gone takes its lock with it.
 
 Only ripple is affected. Dragging a clip along its lane, trimming, rolling and
-slipping all do exactly what they did: the lock is about the one edit whose whole
-point is that it moves things you are not touching.
+slipping all do exactly what they did.
