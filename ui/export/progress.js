@@ -152,8 +152,7 @@ function buildRunning(p, kind, open, key) {
         // of you, and a render in progress is what this panel is.
         div('ex-line ex-acts', el('button', {
             cls: 'tiny', 'data-f': 'stop', text: 'Stop',
-            title: 'End the render — what it has written so far still gets its trailer ' +
-                   'and is playable',
+            title: 'Stop',
             on: { click: hooks.stop },
         })),
     ].filter(Boolean));

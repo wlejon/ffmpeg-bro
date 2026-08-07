@@ -310,9 +310,7 @@ function filtersNote() {
 function measureAction(node) {
     return el('button', {
         cls: 'tiny', text: 'Measure to here', 'data-f': 'measure-to',
-        title: 'render the range as far as this node — the filters it depends on and no ' +
-               'others — and keep nothing but what they measured. The Report drawer says ' +
-               'what came back.',
+        title: 'Measure to here',
         on: { click: () => { if (hooks.measureTo) hooks.measureTo(node); } },
     });
 }
@@ -461,7 +459,7 @@ function nodePanel(node) {
     if (node.locked && node.derived)
         actions.push(el('button', {
             cls: 'tiny', text: 'Unlock', 'data-f': 'unlock',
-            title: 'Hand this node back to the derivation',
+            title: 'Unlock',
             on: { click: () => { overlay.unlock(node.anchor); changed(); } },
         }));
     // Last, and unconditional — every filter node can be measured to, so the

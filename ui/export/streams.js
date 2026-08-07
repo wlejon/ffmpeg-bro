@@ -548,8 +548,7 @@ function rewrapRow() {
         buttons.push(el('button', {
             cls: 'tiny', text: `Rewrap ${input.name}`,
             'data-rewrap': input.id,
-            title: 'Every stream of this input, copied — no decode, no encode, ' +
-                   'the same bytes in a different container',
+            title: 'Rewrap',
             on: { click: () => rewrap(index, null) },
         }));
         // **The lossless cut, which is a rewrap with the edit's span on it.**
@@ -561,9 +560,7 @@ function rewrapRow() {
             buttons.push(el('button', {
                 cls: 'tiny', text: `Cut ${input.name}`,
                 'data-cut': input.id,
-                title: `Every stream of this input, copied over the span the clip on the ` +
-                       `timeline takes — ${sp.from.toFixed(2)} to ${sp.to.toFixed(2)} s — and ` +
-                       `each row following that clip, so trimming it again moves the cut`,
+                title: 'Lossless cut',
                 on: { click: () => rewrap(index, sp) },
             }));
     }
@@ -720,8 +717,7 @@ function says(s) {
         .concat(padChoices(s.kind).map((c) => ({ id: c.id, label: c.label })))
         .concat(copyChoices(s.kind).map((c) => ({ id: c.id, label: `copy — ${c.label}` })));
     const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
-                            title: 'Made from the edit, taken off a pad of the graph, ' +
-                                   'or copied straight out of an input',
+                            title: 'Stream source',
                             on: { change: (e) => { setSource(s, e.target.value); } } },
                           sources, s.source || (s.kind === 'video' ? 'composite' : 'mix'));
 
@@ -785,7 +781,7 @@ function says(s) {
 function saysSubtitle(s) {
     const choices = subtitleChoices();
     const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
-                            title: 'Carried through as it is or decoded and written again',
+                            title: 'Subtitle source',
                             on: { change: (e) => { setSource(s, e.target.value); } } },
                           choices, s.source || '');
 
@@ -822,7 +818,7 @@ function saysSubtitle(s) {
 function saysData(s) {
     const choices = copyChoices('data');
     const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
-                            title: 'Which data track is carried through',
+                            title: 'Data stream',
                             on: { change: (e) => { setSource(s, e.target.value); } } },
                           choices.length ? choices.map((c) => ({ id: c.id, label: c.label }))
                                          : [{ id: '', label: 'no data stream is open' }],
@@ -925,14 +921,11 @@ function facetsOf(s) {
     const out = [];
     const span = spanFacet(s);
     if (span) out.push(span);
-    out.push({ v: 'naming', l: 'Naming', title: 'Language, the name a track menu shows, ' +
-                                                 'and the fourcc the muxer writes' });
-    out.push({ v: 'flags', l: 'Flags', title: 'What a player should do with this stream ' +
-                                              'without being asked' });
+    out.push({ v: 'naming', l: 'Naming', title: 'Naming' });
+    out.push({ v: 'flags', l: 'Flags', title: 'Flags' });
     out.push({ v: 'metadata', l: 'Metadata', title: '-metadata:s: on this stream' });
     if (s.kind !== 'data')
-        out.push({ v: 'packets', l: 'Packets', title: 'Bitstream filters — the one stage ' +
-                                                      'that is neither an encoder nor a muxer' });
+        out.push({ v: 'packets', l: 'Packets', title: 'Packets' });
     return out.map((f) => {
         const n = facetCount(s, f.v);
         return n ? Object.assign({}, f, { l: `${f.l} · ${n}` }) : f;
@@ -944,12 +937,10 @@ function facetsOf(s) {
 function spanFacet(s) {
     if (s.kind === 'subtitle') {
         if (!readsInput(s)) return null;
-        return { v: 'span', l: 'Cues', title: 'What part of the track is read, and which ' +
-                                              'cues survive it' };
+        return { v: 'span', l: 'Cues', title: 'Cues' };
     }
     if (!isCopy(s)) return null;
-    return { v: 'span', l: 'Span', title: 'What part of the input is copied, and where a ' +
-                                          'copy is allowed to begin' };
+    return { v: 'span', l: 'Span', title: 'Span' };
 }
 
 /// How many things are set on a facet, for the badge on its tab.
@@ -1115,7 +1106,7 @@ function copyRows(s, restate) {
     if (land !== null && want - land > 0.001)
         out.push(div('ex-add', el('button', {
             cls: 'tiny', text: `Snap to ${land.toFixed(2)} s`, 'data-f': 'copy-snap',
-            title: 'Move the in-point to the keyframe the copy would start on anyway',
+            title: 'Snap to keyframe',
             on: { click: () => { s.copyFrom = land; restate(); drawStreams(); } },
         })));
 
@@ -1140,8 +1131,7 @@ function followRow(s, restate) {
                 span(`${bound.name} · ${held.from.toFixed(2)} → ${held.to.toFixed(2)} s`, 'mono'),
                 el('button', {
                     cls: 'tiny', 'data-f': 'copy-unfollow', text: 'Stop following',
-                    title: 'Leave these two numbers exactly where they are and stop taking ' +
-                           'them from the clip',
+                    title: 'Stop following',
                     on: { click: () => { unfollow(s); restate(); drawStreams(); } },
                 }),
             ]),
@@ -1170,8 +1160,7 @@ function followRow(s, restate) {
         div('ex-add', el('button', {
             cls: 'tiny', 'data-f': 'copy-follow',
             text: `Follow the clip (${sp.from.toFixed(2)} → ${sp.to.toFixed(2)} s)`,
-            title: 'Take the in and out points from the clip on the timeline, and keep ' +
-                   'taking them — the same clock, so the numbers go across unchanged',
+            title: 'Follow clip',
             on: { click: () => { follow(s, sp.clip); restate(); drawStreams(); } },
         })),
         // What the press is about *now*: the numbers may already be these ones,
@@ -1284,14 +1273,13 @@ function cueRows(s, restate) {
     if (w.converting && w.onScreen)
         out.push(div('ex-add', el('button', {
             cls: 'tiny', text: `Start at ${time(w.onScreen.start)} s`, 'data-f': 'cue-snap',
-            title: 'Open the window on the cue that is on screen at the in-point, which a ' +
-                   'conversion would otherwise drop',
+            title: 'Start at cue',
             on: { click: () => { s.copyFrom = w.onScreen.start; restate(); drawStreams(); } },
         })));
     else if (!w.converting && w.slip > 0.001)
         out.push(div('ex-add', el('button', {
             cls: 'tiny', text: `Snap to ${time(w.zero)} s`, 'data-f': 'cue-snap',
-            title: 'Move the in-point to the cue the copy would start on anyway',
+            title: 'Snap to cue',
             on: { click: () => { s.copyFrom = w.zero; restate(); drawStreams(); } },
         })));
 
@@ -1429,7 +1417,7 @@ function bsfRows(s, restate) {
                             b.name || '');
         const move = (delta) => el('button', {
             cls: 'tiny', text: delta < 0 ? '↑' : '↓', 'data-bsf-move': `${i}:${delta}`,
-            title: 'The order is what runs',
+            title: 'Move',
             on: { click: () => {
                 const j = i + delta;
                 if (j < 0 || j >= s.bsf.length) return;
@@ -1458,7 +1446,7 @@ function bsfRows(s, restate) {
 
     rows.push(div('ex-add', el('button', {
         cls: 'tiny', text: '+ Bitstream filter', 'data-add': 'bsf',
-        title: 'Rewrite the packets on the way to the muxer, without re-encoding',
+        title: 'Add bitstream filter',
         on: { click: () => { s.bsf.push({ name: '', options: {} }); changed(); } },
     })));
     rows.push(div('ex-note dim',

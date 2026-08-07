@@ -538,16 +538,9 @@ function drawOffers() {
                 } },
             });
         }),
-        // Rendering a file you did not want, to find out what a filter thought
-        // of it, is most of a reason not to bother. This is the same render
-        // with the output thrown away — the graph, the range, `-f null -` — so
-        // starting a measurement costs the decode and the filters and nothing
-        // else. It is the ordinary path with the file taken off the end, not a
-        // private one: what it measures is what an export would measure.
         on.length ? el('button', {
             cls: 'tiny primary', 'data-f': 'measure-now',
-            title: 'render the range through the graph, keep nothing but what the ' +
-                   'measuring filters found',
+            title: 'Measure now',
             text: 'Measure now',
             on: { click: () => {
                 const no = hooks.measureNow ? hooks.measureNow() : 'nothing to measure with';
@@ -555,13 +548,6 @@ function drawOffers() {
                 draw();
             } },
         }) : null,
-        // **Off by default, and that is the decision rather than a default.**
-        // Whether a render is cheap enough to spend without being asked is a
-        // question about somebody's machine — a 4K graph re-run every time a clip
-        // is nudged is not something to have decided for them — so the answer is
-        // theirs to give, once, here. What it turns on is described at the bottom
-        // of ui/measure.js; what it can never do is take the one job slot from a
-        // render, a preview or a recording, which is `remeasure()` above.
         el('button', {
             cls: 'tiny' + (measure.autoRemeasure() ? ' on' : ''),
             'data-f': 'remeasure',
@@ -773,8 +759,7 @@ function drawFilters() {
         el('button', {
             cls: 'tiny' + (mine ? ' on' : ''),
             'data-f': 'mine',
-            title: 'Only what the render in hand said, rather than everything since the ' +
-                   'application opened',
+            title: 'This render',
             text: 'This render',
             on: { click: () => { mine = !mine; draw(); } },
         }),

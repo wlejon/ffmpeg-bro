@@ -214,7 +214,7 @@ export function whenRows(node, g, commit) {
             // and "on from here to somewhere arbitrary" is not.
             el('button', {
                 cls: 'tiny', text: 'On from here', 'data-f': 'addhere', 'data-here': 'add',
-                title: 'Add a span that comes on where the playhead is standing',
+                title: 'On from playhead',
                 on: { click: () => {
                     const at = playheadOn(clk, transport.t);
                     if (!onRuler(clk, at)) return;
@@ -313,8 +313,8 @@ function spanRow(spans, s, i, clk, commit) {
     const here = (which) => el('button', {
         cls: 'tiny when-here', text: which === 'from' ? '⇤' : '⇥',
         'data-f': `here${i}:${which}`, 'data-here': `${i}:${which}`,
-        title: which === 'from' ? 'Come on where the playhead is standing'
-                                : 'Go off where the playhead is standing',
+        title: which === 'from' ? 'Start at playhead'
+                                : 'End at playhead',
         on: { click: () => {
             const t = playheadOn(clk, transport.t);
             if (!onRuler(clk, t)) return;
@@ -334,7 +334,7 @@ function spanRow(spans, s, i, clk, commit) {
         s.to !== null ? number('to') : null,
         s.to !== null ? here('to') : null,
         el('button', {
-            cls: 'tiny', text: '×', title: 'Take this span off',
+            cls: 'tiny', text: '×', title: 'Remove span',
             'data-f': `dropspan${i}`,
             on: { click: () => commit(printEnable(spans.filter((_, k) => k !== i))) },
         }),
@@ -630,13 +630,13 @@ function spanEl(s, i, clk) {
     const pc = (v) => `${((v / Math.max(0.001, clk.length)) * 100).toFixed(2)}%`;
     return place(div('when-span', [
         el('span', { cls: 'when-grab', 'data-span': String(i),
-                     title: 'Drag to move this span' }),
+                     title: 'Move span' }),
         s.from !== null ? el('span', { cls: 'when-edge when-edge-a',
                                        'data-drag': `${i}:from`,
-                                       title: 'Drag to move where it comes on' }) : null,
+                                       title: 'Start edge' }) : null,
         s.to !== null ? el('span', { cls: 'when-edge when-edge-b',
                                      'data-drag': `${i}:to`,
-                                     title: 'Drag to move where it goes off' }) : null,
+                                     title: 'End edge' }) : null,
     ]), at(d.a), pc(Math.max(0.001, d.b - d.a)));
 }
 

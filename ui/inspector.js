@@ -250,8 +250,7 @@ function speedRows(again) {
         cls: 'num' + (mixed ? ' mixed' : ''), type: 'number',
         value: mixed ? '' : +value.toFixed(3), placeholder: '—',
         min: SPEED_MIN, max: SPEED_MAX, step: 0.05, 'data-speed': 'x',
-        title: 'How fast this clip runs — 2 is twice as fast in half the timeline, ' +
-               'over the same footage. The pitch moves with it.',
+        title: 'Speed',
     });
     field.addEventListener('change', () => {
         if (field.value === '') return;             // still mixed, left alone
@@ -311,10 +310,7 @@ function generatorRows(clip, again) {
         cls: 'gen-args', type: 'text', value: argsOf(clip.generator),
         placeholder: 'no arguments',
         'data-gen-args': clip.generator.filter,
-        title: 'What follows the filter name, exactly as ffmpeg takes it — ' +
-               'key=value pairs separated by colons. Every option this build’s ' +
-               `${clip.generator.filter} has is on its card on the Graph stage; ` +
-               'an option it does not have is refused here in libavfilter’s own words.',
+        title: 'Filter options',
     });
     field.addEventListener('change', () => {
         hooks.setGeneratorArgs(clip, field.value);

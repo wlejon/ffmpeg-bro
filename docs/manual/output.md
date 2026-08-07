@@ -399,14 +399,9 @@ anything. Chapters and file metadata, above the stream list, follow the same
 rule: each is a line carrying its count until there is something in it, and a
 list with anything in it is always open.
 
-### ⓘ
+### Statements and Warnings
 
-Every section of this stage can explain itself, and none of them does unless
-asked. `ⓘ` on a heading opens that section's reasoning; `ⓘ Explain`, at the
-top of the stream list, turns all of them on at once. What you choose is
-remembered. What is never folded is anything true of *this* render — what a
-setting costs, why a control is missing, that a stream will not be written —
-because those answer a question you're holding right now.
+Every statement or warning on this stage is shown directly on screen, anchored to the control or stream it describes — what a setting costs, why a control is missing, or why a stream will not be written.
 
 ### What will be written
 

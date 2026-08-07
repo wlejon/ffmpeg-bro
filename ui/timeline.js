@@ -745,10 +745,7 @@ function syncSpanLane() {
     }
     if (!spanRow) {
         const row = el('div', { cls: 'track-row when-row' });
-        const head = el('div', { cls: 'track-head',
-            title: 'Filters that are on for part of the render — one row per node, ' +
-                   'each drawn where the shot it covers is. Drag an end to move it, ' +
-                   'the middle to move the whole span.' },
+        const head = el('div', { cls: 'track-head', title: 'When' },
             [el('span', { cls: 'track-name', text: 'When' })]);
         const lane = el('div', { cls: 'track-lane', id: 'lane-when' });
         const canvas = document.createElement('canvas');

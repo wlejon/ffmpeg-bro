@@ -116,7 +116,7 @@ export function curveRows(node, g, commit) {
         if (mode.frame)
             out.push(div('gp-actions', el('button', {
                 cls: 'tiny', text: `Set eval=${mode.frame}`, 'data-f': 'eval-frame',
-                title: 'Make libavfilter re-read these expressions on every frame',
+                title: 'Set eval',
                 on: { click: () => commit({ kind: 'param', name: 'eval' }, mode.frame) },
             })));
     } else if (moving && mode.has) {
@@ -143,7 +143,7 @@ function slotRows(node, slot, clk, mode, commit) {
             span(slot.read.text, 'curve-value mono'),
             el('button', {
                 cls: 'tiny', text: 'Vary over time', 'data-f': `vary:${slot.name}`,
-                title: 'Write this as an expression of t, starting flat at what it is now',
+                title: 'Vary over time',
                 on: { click: () => set(printPoints(
                     firstPoints(clk, valueAt(slot.read.text, clk.start)))) },
             }),
@@ -184,7 +184,7 @@ function slotRows(node, slot, clk, mode, commit) {
             }) : null,
             points ? el('button', {
                 cls: 'tiny', text: 'Hold it still', 'data-f': `flatten:${slot.name}`,
-                title: 'Back to a single number — whatever it is at the first point',
+                title: 'Hold it still',
                 on: { click: () => set(quote(num(points[0].v))) },
             }) : null,
         ]),
@@ -225,7 +225,7 @@ function pointRow(points, i, clk, set) {
         number('t'),
         el('button', {
             cls: 'tiny when-here', text: '⇤', 'data-here': `${i}`,
-            title: 'Move this point to where the playhead is standing',
+            title: 'Move point to playhead',
             on: { click: () => {
                 const t = playheadOn(clk, transport.t);
                 if (t === null || t < clk.start || t > clk.start + clk.length) return;
@@ -235,7 +235,7 @@ function pointRow(points, i, clk, set) {
         span('is', 'dim'),
         number('v'),
         points.length > 2 ? el('button', {
-            cls: 'tiny', text: '×', title: 'Take this point off', 'data-f': `droppoint${i}`,
+            cls: 'tiny', text: '×', title: 'Remove point', 'data-f': `droppoint${i}`,
             on: { click: () => set(printPoints(points.filter((_, k) => k !== i))) },
         }) : null,
     ]);

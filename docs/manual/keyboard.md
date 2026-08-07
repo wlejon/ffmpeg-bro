@@ -22,6 +22,7 @@
 | `I` | the Sources stage — what is actually in the files |
 | `R` | what the render said — messages and what filters measured |
 | `N` | the Graph stage — the edit as a filtergraph (`0` fits it) |
+| `1`–`6` | jump directly to stage 1–6 (Compose, Sources, Capture, Graph, Encode, Write) |
 | `[` `]` | one step back / forward along the pipeline |
 | `Space` `←` `→` | on the Encode stage: play / pause and step the comparison |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |

@@ -104,8 +104,7 @@ export function createMeter(opts = {}) {
         const over = el('div', {
             cls: 'm-over', text: 'over',
             'data-f': `over-${label}-${name}`,
-            title: 'Lit when this channel has gone past full scale. Click to forget it, ' +
-                   'and the loudest-so-far reading beside it with it.',
+            title: 'Over',
             // The press forgets this meter and then tells the caller, which is how
             // one click clears every pad on the Capture stage. `clear` itself is
             // silent, so a caller answering by clearing every meter it owns —

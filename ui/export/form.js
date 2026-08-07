@@ -239,8 +239,7 @@ function keepTryingRows(kind) {
         row('If it drops', btns(el('button', {
             cls: 'tiny' + (k.on ? ' on' : ''), 'data-f': 'keeptrying',
             text: k.on ? 'Keep trying' : 'Fail the render',
-            title: 'Wrap the muxer in ffmpeg’s fifo, which queues packets and reconnects ' +
-                   'rather than ending the render when the destination goes away',
+            title: 'Keep trying',
             on: { click: () => { k.on = !k.on; hooks.changed(); } },
         }))),
     ];
@@ -256,23 +255,9 @@ function keepTryingRows(kind) {
                                            k.maxAttempts, 0,
                                            (v) => { k.maxAttempts = Math.max(0, Math.round(v) || 0); },
                                            'attempts — blank never gives up')));
-    // **Two choices where ffmpeg has three, and the missing one is fifo's own
-    // default.** `drop_pkts_on_overflow` off means the render *blocks* on a full
-    // queue, and `fifo_thread_recover` loops on EAGAIN while it is off — so a
-    // destination that never comes up leaves the consumer retrying for ever
-    // while the render thread waits inside `av_interleaved_write_frame`, and
-    // Stop, which is checked once per output frame, never arrives. Measured: a
-    // four-second render to a closed port with two recovery attempts ran for
-    // twenty seconds and ignored a cancel. Blocking is right for a destination
-    // that is merely slow and stays reachable to a spec written by hand; nothing
-    // on this stage produces one. The note below says so rather than leaving a
-    // control that is quietly absent.
     rows.push(row('When it fills', segmented('fifofull', [
-        { v: 'drop', l: 'Drop', title: 'drop_pkts_on_overflow — the render keeps its own ' +
-                                       'pace and the oldest packets are thrown away' },
-        { v: 'keyframe', l: 'Drop, resume on a keyframe',
-          title: 'restart_with_keyframe — the same, and after a drop nothing is sent until ' +
-                 'a keyframe, so the far end has a picture to start from' },
+        { v: 'drop', l: 'Drop', title: 'drop_pkts_on_overflow' },
+        { v: 'keyframe', l: 'Drop, resume on a keyframe', title: 'restart_with_keyframe' },
     ], k.restartWithKeyframe ? 'keyframe' : 'drop', (v) => {
         k.restartWithKeyframe = v === 'keyframe';
         hooks.changed();
@@ -1114,7 +1099,7 @@ function advancedRows(codec) {
         row('Faststart', btns(el('button', {
             cls: 'tiny' + (settings.faststart ? ' on' : ''), 'data-f': 'faststart',
             text: settings.faststart ? 'On' : 'Off',
-            title: 'Move the index to the front of an mp4',
+            title: 'Faststart',
             on: { click: () => { settings.faststart = !settings.faststart; hooks.changed(); } },
         }))),
         row('Title', title),
@@ -1138,10 +1123,10 @@ function advancedRows(codec) {
 // was pressed would go on naming moments nothing cuts at.
 
 const KEYFRAME_MODES = [
-    { v: 'none', l: 'Off', title: 'Whatever the GOP length produces' },
-    { v: 'cuts', l: 'Cut points', title: 'One wherever the edit cuts, followed live' },
-    { v: 'times', l: 'Times', title: 'A list of seconds into the output' },
-    { v: 'expr', l: 'Expression', title: 'ffmpeg’s own, evaluated per frame' },
+    { v: 'none', l: 'Off', title: 'Off' },
+    { v: 'cuts', l: 'Cut points', title: 'Cut points' },
+    { v: 'times', l: 'Times', title: 'Times' },
+    { v: 'expr', l: 'Expression', title: 'Expression' },
 ];
 
 function keyframeRows() {
@@ -1186,9 +1171,8 @@ const THREAD_TYPES = [{ id: '', label: 'auto' }, { id: 'frame', label: 'frame' }
                       { id: 'frame+slice', label: 'frame + slice' }];
 
 const FPS_MODES = [
-    { v: 'cfr', l: 'Constant', title: 'The range walked at the output rate, each frame '
-                                    + 'stamped with its number' },
-    { v: 'vfr', l: 'Variable', title: 'The filter graph’s own frame times, kept' },
+    { v: 'cfr', l: 'Constant', title: 'Constant' },
+    { v: 'vfr', l: 'Variable', title: 'Variable' },
 ];
 
 function timingRows() {
@@ -1226,8 +1210,7 @@ function timingRows() {
         segmented('fpsmode', FPS_MODES.map(
             (m) => (m.v === 'vfr' && !canVary
                 ? Object.assign({}, m, { disabled: true,
-                                         title: 'Only a filter graph has frame times of its '
-                                              + 'own to keep' })
+                                         title: 'Requires filter graph' })
                 : m)), settings.fpsMode,
             (v) => { settings.fpsMode = v; drawForm(); hooks.changed(); }),
         span(`-fps_mode ${inForce}`, 'mono dim'),
@@ -1247,7 +1230,7 @@ function timingRows() {
     rows.push(row('Shortest', btns(el('button', {
         cls: 'tiny' + (settings.shortest ? ' on' : ''), 'data-f': 'shortest',
         text: settings.shortest ? 'On' : 'Off',
-        title: 'End the file where the content ends rather than where the range does',
+        title: 'Shortest',
         on: { click: () => { settings.shortest = !settings.shortest; drawForm();
                              hooks.changed(); } },
     }))));

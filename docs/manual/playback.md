@@ -132,12 +132,13 @@ last cleared, and the `over` light latches once a signal has passed full scale.
 Click either to clear both. It is the same meter the [Capture](capture.md)
 stage draws below its pictures, on the same scale, for the same reason.
 
-**A file with no picture in it is an ordinary clip.** Drop an `.mp3`, a `.wav`
+**A file with no picture in it is an ordinary clip. Drop an `.mp3`, a `.wav`
 or an `.m4a` on the timeline and it lays out with the length of its audio
 track, plays, moves the playhead and goes into the mix. It takes up no room on
 the canvas, and a render of a timeline with nothing but sound on it writes a
-file with a soundtrack and no video stream. `[` and `]` step by decoded
-picture, so a stretch of timeline with only sound on it steps clip to clip
-rather than frame to frame. The master clock stays with the topmost clip that
+file with a soundtrack and no video stream. Frame stepping (with `←` and `→`)
+steps by decoded picture, so a stretch of timeline with only sound on it steps
+clip to clip rather than frame to frame (`[` and `]` step one stage back / forward
+along the pipeline). The master clock stays with the topmost clip that
 *has* a picture, wherever one is present — a music bed under the footage never
 takes the clock away from what is being watched.

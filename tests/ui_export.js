@@ -481,8 +481,7 @@ ok(intentButtons.length >= 3, `${intentButtons.length} presets offered`);
 // list, the types, the ranges and the help all come out of libavcodec.
 
 console.log('\nevery option the encoder has');
-f('advanced').click();
-pump(60);
+if (!f('optsearch')) { f('advanced').click(); pump(60); }
 ok(!!f('optsearch'), 'the advanced section opens with an option search');
 // Its own column, not a fold under twenty other controls: eighty options read
 // through a slot are not options anyone reads.

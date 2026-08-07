@@ -263,7 +263,7 @@ function foldCard(n, ctx) {
         el('button', {
             cls: 'gn-fold-open tiny',
             text: 'Open',
-            title: `Draw ${fold.key}'s filters as the ${count} cards they are`,
+            title: 'Open',
             on: { mousedown: (e) => e.stopPropagation(),
                   click: (e) => { e.stopPropagation();
                                   if (hooks.onOpenFold) hooks.onOpenFold(fold.key); } },
@@ -547,7 +547,7 @@ function playButton(key) {
         cls: 'gn-play' + (playing ? ' on' : ''),
         'data-play': key,
         text: playing ? '■' : '▶',
-        title: playing ? 'Stop' : 'Play this node from here to the end of the range',
+        title: playing ? 'Stop' : 'Play',
         on: { mousedown: (e) => e.stopPropagation(),
               click: (e) => {
                   e.stopPropagation();
@@ -572,9 +572,7 @@ function playButton(key) {
 function scrubBar(key) {
     const bar = el('div', {
         cls: 'gn-scrub', 'data-scrub': key,
-        title: 'Where in the range this is. Click or drag to move it — anything already ' +
-               'rendered (the lighter part) is instant, and further on costs what playing ' +
-               'there costs, because every second on this stage is a real render.',
+        title: 'Position',
         on: {
             // The card's own mousedown starts a move, and the viewport's starts a
             // marquee. Neither is what a hand on this bar means.
@@ -605,7 +603,7 @@ export function scrubFraction(bar, clientX) {
 function grip(key, width) {
     if (!key) return null;
     return el('div', { cls: 'gn-grip', 'data-grip': key,
-        title: 'Drag to resize — the preview re-renders at the new size',
+        title: 'Resize',
         on: { mousedown: (e) => {
             e.preventDefault();
             e.stopPropagation();
