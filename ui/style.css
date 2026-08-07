@@ -427,14 +427,16 @@ button.st.warn .st-name::after {
 
 /* Transient overlay for speed / mute / seek feedback. */
 #osd {
-    position: absolute;
-    left: 20px; top: 16px;
+    position: fixed;
+    top: 42px; left: 20px;
+    z-index: 1000;
     padding: 6px 12px;
     background: rgba(0, 0, 0, 0.72);
     border: 1px solid var(--line);
     border-radius: 4px;
     font-size: 14px;
     color: #fff;
+    pointer-events: none;
 }
 
 /* How loud what is leaving is, right now. A strip of its own between the picture

@@ -614,6 +614,7 @@ are deliberately distinct.
 
 ## Conventions that are load-bearing
 
+- **No instructional prose or explaining tooltips in the UI.** The UI itself must lead into what it does. Instructions (how to operate) are replaced by affordances (controls, cursors, handles, menus). Explanations (teaching concepts) leave the UI for the manual (`docs/manual/`). Statements (changing facts/counts/refusals) stay as 1-line structured data anchored to controls. Build-reported strings and shortcut-name titles (e.g. `title="Mute (M)"`) remain.
 - **Ask libav; never hardcode a list.** Muxers, demuxers, encoders, protocols,
   devices, filters and their option tables are enumerated (`ffmpeg_capabilities.cpp`,
   surfaced as `bro.ffmpeg.*` — see docs/api.md). "The four containers we support"
