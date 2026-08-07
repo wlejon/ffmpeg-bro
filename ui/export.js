@@ -335,7 +335,27 @@ function updateSummary() {
                                                 'will not be written') : null,
         ]),
     ])));
-    put(el_.warnings, () => warnings().map((t) => div('warn', t)));
+    const warnList = warnings();
+    const errors = warnList.filter((w) => w.level === 'error');
+    put(el_.warnings, () => warnList.map((w) => div('warn ' + w.level, w.text)));
+    if (el_.go) {
+        if (errors.length > 0) {
+            el_.go.disabled = true;
+            el_.go.title = errors.map((e) => e.text).join('\n');
+        } else {
+            el_.go.disabled = false;
+            el_.go.title = 'Write the file';
+        }
+    }
+    if (el_.goReason) {
+        if (errors.length > 0) {
+            show(el_.goReason, true);
+            el_.goReason.textContent = errors[0].text;
+        } else {
+            show(el_.goReason, false);
+            el_.goReason.textContent = '';
+        }
+    }
     if (hooks.described) hooks.described();
 }
 
@@ -469,6 +489,8 @@ export function startMeasurement(cut = null) {
 
 function begin() {
     if (isRendering()) return;
+    const warnList = warnings();
+    if (warnList.some((w) => w.level === 'error')) return;
     const spec = buildSpec();
     if (!spec.path) {
         if (hooks.flash) hooks.flash('Choose a file to write to');

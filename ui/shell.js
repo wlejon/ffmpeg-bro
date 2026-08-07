@@ -106,10 +106,12 @@ export function drawSpine() {
     put(bar, () => STAGES.map((s, i) => {
         const state = hooks.state ? hooks.state(s.id) : null;
         const warn = hooks.warnings ? hooks.warnings(s.id) : null;
+        const texts = warn && warn.length ? warn.map((w) => (typeof w === 'string' ? w : w.text)) : [];
+        const hasErr = warn && warn.some((w) => typeof w !== 'string' && w.level === 'error');
         const card = el('button', {
-            cls: 'st' + (s.id === current ? ' on' : '') + (warn && warn.length ? ' warn' : ''),
+            cls: 'st' + (s.id === current ? ' on' : '') + (texts.length ? (hasErr ? ' warn error' : ' warn') : ''),
             'data-stage': s.id,
-            title: warn && warn.length ? warn.join('\n') : undefined,
+            title: texts.length ? texts.join('\n') : undefined,
             on: { click: () => goTo(s.id) },
         }, [
             div('st-name', s.name),

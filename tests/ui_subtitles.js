@@ -363,7 +363,7 @@ pump(60);
 // ── the honesty ────────────────────────────────────────────────────────────
 
 console.log('\nwhat can and cannot be shown');
-const warned = A.exporter.currentWarnings().join(' | ');
+const warned = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
 ok(warned.indexOf('shows a soft track as the cues it is') >= 0,
    'the stage says the viewer does draw the track, so nobody concludes it was not written');
 ok(warned.indexOf('cannot show is how they will') >= 0,
@@ -381,7 +381,7 @@ choose(q(`[data-stream="${srow.id}"] [data-f="stream-source"]`), 'decode:1:0');
 srow.codec = 'ass';
 A.exporter.redraw();
 pump(60);
-const styled = A.exporter.currentWarnings().join(' | ');
+const styled = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
 ok(styled.indexOf('names its fonts by name') >= 0,
    'an ASS track with no font attached says what that costs');
 srow.codec = '';

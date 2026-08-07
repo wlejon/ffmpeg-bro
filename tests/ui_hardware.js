@@ -381,7 +381,7 @@ pump(80);
     A.graph.overlay.insert('composite/after-overlay', 'hwupload', { stream: 'v' });
     pump(120);
 
-    const onCard = (list) => list.some((w) => /leaves its picture on the card/.test(w));
+    const onCard = (list) => list.some((w) => /leaves its picture on the card/.test(w.text || w));
 
     S.audio = true;
     S.streams = A.exporter.defaultStreams();

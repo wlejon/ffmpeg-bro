@@ -88,7 +88,7 @@ const overErrors = (vs) => -10 * Math.log10(mean(vs.map((v) => Math.pow(10, -v /
 /// Both files have to exist and there has to be at least one metric. Said as a
 /// reason rather than as a missing panel: a build without any of the three is a
 /// real state and "nothing here" would read as a bug.
-export function why() {
+export function qualityReason() {
     if (!metrics().length)
         return 'this build of libavfilter has no psnr, ssim or libvmaf in it, so there is ' +
                'nothing to measure the two halves with';

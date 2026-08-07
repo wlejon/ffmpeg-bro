@@ -2041,6 +2041,9 @@ button.cap-go:disabled .cap-go-dot { background: var(--dim); }
 
 .ex-warnings { padding: 6px 0; }
 .ex-warnings .warn { color: var(--accent); font-size: var(--fs-base); line-height: 1.7; }
+.ex-warnings .warn.caution { color: var(--accent); }
+.ex-warnings .warn.error { color: var(--bad); font-weight: 500; }
+.ex-go-reason { color: var(--bad); font-size: var(--fs-xs); line-height: 1.5; padding: 4px 0; }
 
 /* The act, directly under the last line of the read-back it is the conclusion
    of — which is the whole reason the read-back is on this side, and which a

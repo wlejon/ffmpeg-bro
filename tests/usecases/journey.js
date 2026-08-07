@@ -238,7 +238,7 @@ export function journey({ id, title, who, wants, shell }) {
 /// Every workspace key this application writes. Named here rather than imported
 /// so that a key added to the app and not to this list shows up as a journey
 /// inheriting something, which is the failure this exists to prevent.
-const WORKSPACE_KEYS = ['ffmpeg-bro.export', 'ffmpeg-bro.explain', 'ffmpeg-bro.graph'];
+const WORKSPACE_KEYS = ['ffmpeg-bro.export', 'ffmpeg-bro.graph'];
 
 /// **Start where a new person starts.**
 ///

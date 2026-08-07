@@ -34,7 +34,6 @@ import { setAudioIncluded } from './streams.js';
 import { kindOf, describeKind, schemeOf, protocolLinked,
          newDestination, destinationRows } from './destination.js';
 import { newVersion, versionSize } from './versions.js';
-import { explained, why, onExplainChange } from './explain.js';
 
 let panes = {};
 let hooks = {};
@@ -58,9 +57,6 @@ let fileLabel = null;
 export function initForm(refs, h) {
     panes = refs;
     hooks = h || {};
-    // The Destination column has ⓘs of its own and the master button is in the
-    // column beside it, so both have to reach this draw.
-    onExplainChange(() => drawForm());
 }
 
 const RATE_LABELS = {
@@ -149,7 +145,7 @@ function outputRows() {
     // labelled row saying "Goes to: one file" and a paragraph explaining what a
     // file is; both are still here, in the cell beside it, where an answer
     // belongs relative to the thing it is about.
-    const where = [explained('destination', 'Write to')];
+    const where = [head('Write to')];
 
     // One encode, several places. The rows live in `destination.js` beside the
     // escaping they are built to avoid, because a recording writes through a
@@ -168,7 +164,6 @@ function outputRows() {
 
     const what = [head('Format'),
                   ...formatRows(kind),
-                  why('destination', describeKind(kind, muxer)),
                   head(`${showFormatOptions ? '▾' : '▸'} ${settings.container} options · ` +
                        `${all.length}`, {
                       'data-f': 'formatopts',
@@ -282,13 +277,6 @@ function keepTryingRows(kind) {
         k.restartWithKeyframe = v === 'keyframe';
         hooks.changed();
     })));
-    rows.push(why('keep-trying',
-        'This is -f fifo in front of the muxer, with -fifo_format naming it. A render that ' +
-        'reconnected says so in the report and counts how many times — what was happening ' +
-        'while the destination was gone is not in the file, so a recovered render is not the ' +
-        'same as one that never dropped. A blank field is the fifo muxer’s own default. ' +
-        'fifo’s third mode, blocking until the queue drains, is not offered: a blocked ' +
-        'render whose destination never comes up cannot be stopped.'));
     return rows;
 }
 
@@ -352,10 +340,6 @@ function oneTargetRows(kind) {
         rows.push(row('Protocol', span(
             linked ? `${scheme} · linked in` : `${scheme} · not in this build`,
             linked ? 'mono' : 'mono src-missing')));
-        rows.push(why('destination',
-            'A protocol’s own options are in the column beside the muxer’s. They travel in ' +
-            'one bag, which is what libavformat does with what a muxer does not recognise — ' +
-            'and a key neither takes stops the render rather than being ignored.'));
     } else {
         // Only where there is a file to choose. A dialog for a URL would be a
         // dialog that cannot say what is being asked for.
@@ -380,7 +364,7 @@ function oneTargetRows(kind) {
 
 function versionRows() {
     const list = settings.versions || [];
-    const rows = [explained('versions', `${list.length ? '▾' : '▸'} Also write · ${list.length}`, {
+    const rows = [head(`${list.length ? '▾' : '+'} Also write · ${list.length}`, {
         'data-f': 'versions',
         cls: 'section-head ex-head ex-toggle',
         // No fold of its own: the list *is* the disclosure. Empty it is one
@@ -390,10 +374,6 @@ function versionRows() {
     })];
 
     if (!list.length) {
-        rows.push(why('versions',
-            'One encode to several places is the tee muxer, above. This is the other one: ' +
-            'the same edit encoded again at another size — a 1080p master and a 720p proxy, ' +
-            'which no single encoder can produce, because an encoder has one frame size.'));
         return rows;
     }
 
@@ -408,10 +388,6 @@ function versionRows() {
             placeholder: 'the render’s, unless this says otherwise',
             on: { change: () => { v.format = muxer.value.trim(); hooks.changed(); } },
         });
-        // One side is enough and the other is worked out from the render's
-        // aspect — see `versionSize`. Both blank is not a version at all, which
-        // is what `activeVersions` refuses: a second encode of exactly the
-        // master is a file copy done the expensive way.
         const w = el('input', {
             cls: 'num', 'data-f': `ver-w-${i}`, type: 'number', min: '0',
             value: String(v.width || ''), placeholder: 'auto',
@@ -434,7 +410,7 @@ function versionRows() {
         rows.push(head(`Version ${i + 1}`, { cls: 'section-head' }));
         rows.push(row('Size', btns([w, span('×', 'dim'), h])));
         rows.push(row('', span(`${size.width} × ${size.height}`, 'dim')));
-        rows.push(row('-f', muxer));
+        rows.push(row('Container', muxer));
         rows.push(row('To', target));
         rows.push(row('', btns([
             el('button', { cls: 'tiny', 'data-f': `ver-drop-${i}`, text: 'Remove',
@@ -445,20 +421,10 @@ function versionRows() {
         ])));
     });
 
-    // What is wrong with the list is said in `warnings()`, above the Render
-    // button, and not again here. Two encodes aimed at one path is a render
-    // that succeeds and is wrong, which is precisely what that list is; a
-    // second copy of the sentence beside the row would be a second place that
-    // has to be kept saying the same thing.
     rows.push(row('', btns([
         el('button', { cls: 'tiny', 'data-f': 'ver-add', text: '+ Version',
                        on: { click: addVersion } }),
     ])));
-    rows.push(why('versions',
-        'Another whole encode of the same edit: the muxer, the codec, the rate control, ' +
-        'the streams and the range are this render’s, and only the size and where it goes ' +
-        'are its own. CRF is a quality target rather than a bitrate, so the smaller one ' +
-        'comes out smaller without being told to.'));
     return rows;
 }
 
@@ -582,7 +548,7 @@ function numberingRows(pathInput) {
             hooks.changed();
         } },
     });
-    rows.push(row('-start_number', startField));
+    rows.push(row('First frame number', startField));
 
     const total = outputFrames();
     let names = [];

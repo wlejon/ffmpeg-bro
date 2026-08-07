@@ -17,7 +17,7 @@ import { bytes, clock, elapsed, timecode } from '../format.js';
 import { settings, preview, PREVIEW_LENGTHS, currentJob, outputFps,
          outputExt } from './state.js';
 import { previewSpec, range } from './spec.js';
-import { qualitySpec, qualityResult, why as whyNoQuality, metrics } from './quality.js';
+import { qualitySpec, qualityResult, qualityReason, metrics } from './quality.js';
 
 let panes = {};
 let hooks = {};
@@ -356,7 +356,7 @@ function qualityLine() {
                         ' comparing the two halves, frame by frame…']);
     const q = preview.quality;
     if (!q || !q.length) {
-        const no = whyNoQuality();
+        const no = qualityReason();
         return no && metrics().length === 0 ? div('dim', no) : null;
     }
     const bits = [];

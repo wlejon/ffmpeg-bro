@@ -396,6 +396,7 @@ exporter.initExport({
     progress: el('ex-progress'),
     cancel: el('ex-cancel'),
     go: el('ex-go'),
+    goReason: el('ex-go-reason'),
 }, {
     pause,
     flash,

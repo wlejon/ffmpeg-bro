@@ -381,13 +381,19 @@ const S = A.exporter.currentSettings();
 // change and then a read, with no redraw in between.
 {
     const wasW = S.width, wasH = S.height;
-    const odd = () => A.exporter.currentWarnings().some((t) => /even dimensions/.test(t));
+    const odd = () => A.exporter.currentWarnings().some((w) => /even dimensions/.test(w.text || w));
     S.width = 640; S.height = 360;
+    A.exporter.redraw();
     ok(!odd(), 'an even output is not complained about');
+    ok(!el('ex-go').disabled, 'export button is enabled when no error warning is present');
     S.width = 641;
+    A.exporter.redraw();
     ok(odd(), 'and the very next answer knows about a change nothing redrew for');
+    ok(el('ex-go').disabled, 'export button is disabled when an error warning is present');
     S.width = wasW; S.height = wasH;
+    A.exporter.redraw();
     ok(!odd(), 'and knows when it is put back');
+    ok(!el('ex-go').disabled, 'export button is re-enabled when error warning is cleared');
 }
 
 S.videoCodec = 'libx264';
@@ -883,12 +889,12 @@ console.log('\nthe Write stage is the output’s stream list');
             S.streams[0].codec = codec;
             f('vcodec').dispatchEvent(new Event('change'));
             pump(60);
-            ok(A.exporter.currentWarnings().join(' | ').indexOf('does not know') < 0,
+            ok(A.exporter.currentWarnings().map(w => w.text || w).join(' | ').indexOf('does not know') < 0,
                'and in an mp4 it is not warned about');
             S.container = 'matroska';
             f('vcodec').dispatchEvent(new Event('change'));
             pump(60);
-            ok(A.exporter.currentWarnings().join(' | ')
+            ok(A.exporter.currentWarnings().map(w => w.text || w).join(' | ')
                    .indexOf("matroska muxer does not know 'hvc1'") >= 0,
                'the same tag in Matroska is refused before the render, naming both');
             S.container = wasContainer;
@@ -979,43 +985,7 @@ console.log('\nthe Write stage is the output’s stream list');
            'and nothing in it is editable, because it is the read-back and not a second editor');
     }
 
-    // ── the reasoning, one press away ─────────────────────────────────────
-    //
-    // Every section of this stage can explain itself and none of them does
-    // until asked. What must never fold is a statement about *this* render —
-    // see ui/export/explain.js, which draws that line.
-    {
-        const all = f('explain-all');
-        ok(!!all, 'the stage offers to explain every one of its sections at once');
-        // **Quieted first rather than assumed quiet.** Whether somebody wants
-        // the prose is remembered in the workspace — deliberately, it is the
-        // whole point of the fold — so a run inheriting a real session's
-        // `{"all":true}` starts with every paragraph on the screen, and an
-        // assertion about the *default* would be an assertion about whoever ran
-        // the application last. What is being tested is that the fold works.
-        if (all.classList.contains('on')) { all.click(); pump(60); }
-        ok(!q('#ex-streams .ex-why'), 'and with them put away no section explains itself');
-        all.click();
-        pump(60);
-        ok(qq('#ex-streams .ex-why').length > 0 && qq('#ex-dest .ex-why').length > 0,
-           `one press puts the reasoning back in both columns ` +
-           `(${qq('#ex-streams .ex-why').length} + ${qq('#ex-dest .ex-why').length})`);
-        all.click();
-        pump(60);
-        same(qq('#ex-streams .ex-why').length, 0, 'and takes it away again');
 
-        // One section at a time, which is the press people actually make.
-        const one = q('#ex-streams [data-why="chapters"]');
-        ok(!!one, 'each heading carries its own ⓘ');
-        one.click();
-        pump(60);
-        ok(qq('#ex-streams .ex-why').length > 0, 'which explains that section');
-        ok(el('ex-streams').textContent.indexOf('what is chapter 2') >= 0,
-           'in the words that were there before the fold was');
-        one.click();
-        pump(60);
-        same(qq('#ex-streams .ex-why').length, 0, 'and puts it away');
-    }
 
     // A preview must not inherit an eight-stream output. Both halves of the
     // A/B comparison exist to show what the encoder costs one picture, and a
@@ -1403,7 +1373,7 @@ console.log('\nwhere the render goes');
 
     // A stream has no size and no percentage — the same vocabulary a recording
     // uses, rather than a second convention.
-    const streamWarnings = A.exporter.currentWarnings();
+    const streamWarnings = A.exporter.currentWarnings().map(w => w.text || w);
     ok(!streamWarnings.some((w) => w.indexOf('no udp output protocol') >= 0),
        'a protocol this build has is not warned about');
 
@@ -1460,7 +1430,7 @@ console.log('\na set of files, and what to open at the end');
     S.gopSeconds = 2;
     A.exporter.redraw();
     pump(40);
-    const segWarn = A.exporter.currentWarnings();
+    const segWarn = A.exporter.currentWarnings().map(w => w.text || w);
     ok(segWarn.some((w) => w.indexOf('can only start on a keyframe') >= 0),
        'a keyframe interval longer than the segment time is called out, with both numbers');
 
@@ -1576,12 +1546,12 @@ console.log('\nseveral destinations at once');
     S.destinations = [S.destinations[0]];
     A.exporter.redraw();
     pump(20);
-    ok(A.exporter.currentWarnings().some((w) => w.indexOf('one destination through tee') >= 0),
+    ok(A.exporter.currentWarnings().some((w) => (w.text || w).indexOf('one destination through tee') >= 0),
        'one destination through tee is called out');
     S.destinations = [];
     A.exporter.redraw();
     pump(20);
-    ok(A.exporter.currentWarnings().some((w) => w.indexOf('nowhere to go') >= 0),
+    ok(A.exporter.currentWarnings().some((w) => (w.text || w).indexOf('nowhere to go') >= 0),
        'and none at all is called out rather than rendered');
     S.destinations = [];
 }
@@ -1690,7 +1660,7 @@ console.log('\na version is the same edit at another size');
     S.versions[0].path = S.path;
     A.exporter.redraw();
     pump(20);
-    ok(A.exporter.currentWarnings().some((w) => /writes where the render itself writes/.test(w)),
+    ok(A.exporter.currentWarnings().some((w) => /writes where the render itself writes/.test(w.text || w)),
        'a version aimed at the render’s own path is called out');
     S.versions[0].path = `${bro.appDir}/../out/uivproxy.mp4`;
 
@@ -1703,7 +1673,7 @@ console.log('\na version is the same edit at another size');
     pump(20);
     same(A.exporter.buildSpec().passes, undefined,
          'a version with nothing of its own is not a pass');
-    ok(A.exporter.currentWarnings().some((w) => /second encode of the identical file/.test(w)),
+    ok(A.exporter.currentWarnings().some((w) => /second encode of the identical file/.test(w.text || w)),
        'and it says so rather than silently dropping the row');
 
     // Two-pass and two versions is four walks: each output measured and then
@@ -2239,7 +2209,7 @@ console.log('\na stream copied rather than encoded');
 
     // And the refusal, where the decision is: a copy cannot land at 0.37 s and
     // the warnings say so with both numbers.
-    let said = A.exporter.currentWarnings().join(' | ');
+    let said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
     ok(said.indexOf('keyframe') >= 0 && said.indexOf('more than you asked for') >= 0,
        `the warnings name what the cut costs (${said})`);
 
@@ -2249,7 +2219,7 @@ console.log('\na stream copied rather than encoded');
     ok(Math.abs(spec.streams[0].copyFrom - keys.times[0]) < 0.001 ||
        Math.abs(spec.streams[0].copyFrom - keys.times[1]) < 0.001,
        `snapping puts the in-point on a keyframe (${spec.streams[0].copyFrom})`);
-    said = A.exporter.currentWarnings().join(' | ');
+    said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
     ok(said.indexOf('more than you asked for') < 0,
        'and then there is nothing left to warn about');
 
@@ -2272,7 +2242,7 @@ console.log('\na stream copied rather than encoded');
     // the input again and looks like a successful export.
     A.graph.overlay.insert('clip:' + A.project.clips[0].id + '/after-scale', 'hflip');
     pump(60);
-    said = A.exporter.currentWarnings().join(' | ');
+    said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
     // Named in full. `the filters on the Graph stage do not reach a copied
     // stream` and `the crop and opacity on this clip do not reach a copied
     // stream` share their tail, so the substring alone would have been
@@ -2288,7 +2258,7 @@ console.log('\na stream copied rather than encoded');
     // the worst outcome this stage has. Three claims, no render between them.
     {
         const clip = A.project.clips[0];
-        const before = A.exporter.currentWarnings().join(' | ');
+        const before = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
         ok(before.indexOf('a copy is one input’s packets') < 0 &&
            before.indexOf('the packets go into the file as they are') < 0 &&
            before.indexOf('a copy is not resized') < 0,
@@ -2302,7 +2272,7 @@ console.log('\na stream copied rather than encoded');
                               { id: clip.id + 1000, start: clip.start + clip.length }));
         A.exporter.redraw();
         pump(60);
-        said = A.exporter.currentWarnings().join(' | ');
+        said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
         ok(said.indexOf('a copy is one input’s packets') >= 0 &&
            said.indexOf(`${A.project.clips.length} clips`) >= 0,
            `a second clip on the timeline is refused, counted (${said})`);
@@ -2315,7 +2285,7 @@ console.log('\na stream copied rather than encoded');
         clip.xform.crop = { l: 0.1, t: 0, r: 0, b: 0 };
         A.exporter.redraw();
         pump(60);
-        said = A.exporter.currentWarnings().join(' | ');
+        said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
         ok(said.indexOf('the crop and opacity on this clip do not reach a copied stream') >= 0,
            `a crop is refused (${said})`);
         clip.xform.crop = crop;
@@ -2328,7 +2298,7 @@ console.log('\na stream copied rather than encoded');
         S.width = w + 320;
         A.exporter.redraw();
         pump(60);
-        said = A.exporter.currentWarnings().join(' | ');
+        said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
         ok(said.indexOf('a copy is not resized') >= 0 &&
            said.indexOf(`${S.width}×${S.height}`) >= 0,
            `an output of a different size is refused, with both sizes (${said})`);
@@ -3315,7 +3285,7 @@ console.log('\na filter inserted on the graph');
         const spec = A.exporter.buildSpec();
         same(spec.filterGraph, undefined,
              'a graph with a problem in it is not attached to the spec');
-        const said = A.exporter.currentWarnings().join(' | ');
+        const said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
         ok(said.indexOf('would go through the internal compositor without your filters') >= 0,
            `and the stage says the render will happen without them (${said})`);
         ok(/vflip/.test(said), 'with the reason, which names the node it is about');
@@ -3893,7 +3863,7 @@ console.log('\na stream fed from a pad of the graph');
     pump(200);
     same(A.exporter.buildSpec().streams.filter((s) => s.kind === 'video')[1].source,
          'pad:wide', 'and the stream fed from it followed the name');
-    ok(A.exporter.currentWarnings().every((w) => w.indexOf('no pad called') < 0),
+    ok(A.exporter.currentWarnings().every((w) => (w.text || w).indexOf('no pad called') < 0),
        'so nothing is left naming a pad that is not there');
 
     // ...and when it does not, which is what the warning is for. Renamed on the
@@ -3903,7 +3873,7 @@ console.log('\na stream fed from a pad of the graph');
     pump(150);
     O.renameOutput(out.id, 'right');
     pump(60);
-    const said = A.exporter.currentWarnings().join(' | ');
+    const said = A.exporter.currentWarnings().map(w => w.text || w).join(' | ');
     ok(/has no pad called that/.test(said),
        `a row naming a pad that is not there is said out loud: ${said}`);
     ok(/nothing in the file is fed from \[right\]/.test(said),
@@ -4444,7 +4414,7 @@ console.log('\nkeep trying if it drops');
     A.exporter.redraw();
     pump(20);
     ok(!A.exporter.buildSpec().keepTrying.on, 'a tee gets none');
-    ok(A.exporter.currentWarnings().some((w) => w.indexOf('does not apply to a tee') >= 0),
+    ok(A.exporter.currentWarnings().some((w) => (w.text || w).indexOf('does not apply to a tee') >= 0),
        'and the stage says so rather than dropping it silently');
 
     // The half that can be rendered: a fifo around a local file. The point is
