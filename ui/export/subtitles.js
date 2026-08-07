@@ -11,8 +11,7 @@
 //     a Matroska file, `webvtt` in a `.vtt` beside the video. This is `-c:s
 //     mov_text` against `-c:s copy`, and it is the same `-map` either way.
 //
-// The third is **edited** (`cues:3`) — the cues the document itself holds, in
-// `ui/cues.js`, typed and retimed on the timeline. This is still not a *composed*
+// The third is **edited** (`cues:3`) — custom cues in document history. This is still not a *composed*
 // source in the way the canvas and the mix are: a render materialises the track
 // into a real subtitle file beside the output and reads it as an ordinary `-i`,
 // because ffmpeg has no way to receive cues except as a file. By the time a spec

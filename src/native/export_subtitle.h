@@ -116,7 +116,7 @@ bool parseDecodeSource(const std::string& source, int* input, int* stream);
 //     styles, the resolution the positions are against, and per cue its layer,
 //     its style, its margins and its overrides.
 //
-//     That pair exists because of what `ui/cues.js` does with the answer.
+//     That pair exists because of what cue processing does with the answer.
 //     Taking a file's cues into the document to edit them is a **fork**, and a
 //     fork through `text` alone would silently flatten somebody's styled
 //     subtitles the moment they retimed one line — losing work, quietly, which

@@ -91,25 +91,10 @@ about it instead.
   holds every frame until something takes it — so a graph slower than real
   time gaps its *sound* instead. There is no workaround beyond a lighter
   graph.
-- **Cues seen positioned on the picture, and cues that keep their styling
-  through a retype.** Typing, retiming and splitting a cue works against the
-  waveform and ruler — see [cues of your own](subtitles.md#cues-of-your-own)
-  — but two things about that fall short:
-
-  - The words are never shown over the shot while you write them, only on the
-    lane and the strip. To see them positioned, burn a render's worth of them
-    in with `subtitles=`.
-  - Retyping a cue's text replaces the *whole* text field, including any
-    override codes it carried (`{\i1}`, karaoke timing, and so on) — a cue
-    forked from a subtitle file keeps its styling only until you edit its
-    words. The loss is shown per cue and counted on the Write stage rather
-    than discovered later. There is no style editor to write new codes by
-    hand.
-
-  Nothing here ever writes back to the file a track came from — a fork always
-  stays a fork. And `-itsoffset` on the input is still the right tool for a
-  track that is uniformly out of sync: one number shifts the whole thing,
-  which many small cue edits is a poor substitute for.
+- **Cue content authoring and editing in the UI.** Authoring and editing custom
+  cues in the UI is not currently surfaced. The underlying document schema and
+  export engine retain support for subtitle cue streams, and imported subtitle
+  tracks from input files continue to be supported via softcues preview.
 - **Picture subtitles as text, or through libass.** `dvdsub` and
   `hdmv_pgs_subtitle` cannot become `subrip` (that is optical character
   recognition) and cannot be burned in with `subtitles=` (that filter reads
@@ -167,27 +152,9 @@ about it instead.
   another way writes them wherever it likes, pass 2 reads nothing useful, and
   the render says so by naming the encoder — there's no way to ask a codec in
   advance whether it supports this.
-- **A data stream drawn over the picture, or cut on.** Reading a telemetry
-  track and plotting it beside the waveform works now — see [reading a data
-  track](sources.md#reading-a-data-track) and [the Data
-  lane](timeline.md#the-data-lane) — for GoPro's `gpmd` specifically. Other
-  fourccs (`tmcd`, `fdsc`, a phone's `mebx`) are each a different format and
-  are refused by name rather than guessed at; adding one is possible but
-  hasn't been done. Two things the Data lane cannot yet do:
-
-  - **Burn a live reading onto the picture** — "speed, bottom left, updated
-    four times a second" — as anything other than typed cues, which would be
-    dishonest: cues you type are saved and re-edited as your own words, and
-    would not update if the track were re-read.
-  - **Cut on a reading** — "put a cut wherever the accelerometer crosses 20"
-    — there is no threshold, hysteresis or minimum-shot-length control for a
-    data track the way there is for the Measure stage's findings.
-
-  Two smaller gaps: a reading is decimated to two thousand buckets on the way
-  in, so zooming the timeline in past that shows the same decimated line
-  rather than finer detail (the numbers printed beside a row are still exact,
-  over every sample). And which series you picked to plot is not saved
-  between sessions — reopening the document loses the pick.
+- **Data lane and telemetry track visualization in the UI.** Data stream parsing
+  (`ffmpeg_data.h`, `gpmd` telemetry) exists in the native C++ engine (`bro.ffmpeg.data`),
+  but telemetry visualization (Data lane) is not currently surfaced in the UI.
 - **Hardware filters this build does not have.** `hwupload`, `hwdownload` and
   `hwupload_cuda` are present; `scale_cuda`, `overlay_cuda`, `scale_qsv` and
   the rest of a device family are not, because this build's ffmpeg was
@@ -225,25 +192,11 @@ about it instead.
   machine's whole audio mix, sample peak rather than true peak, two channels
   regardless of the output's own count — labelled `monitor` so it isn't
   mistaken for the real thing. Press `O` before trusting a level.
-- **Finding things by sound, by *what* the sound was.** Finding *where*
-  something happens already works — see [finding things by
-  sound](sources.md#finding-things-by-sound) — but it never says *what* made
-  the sound, and it never will from these sensors: an `onset` is the same
-  event for a wingbeat, a car door or a footstep, and a `tonal` run is the
-  same event for a blackbird and a fridge. What the marks carry — the flux of
-  a transient, the frequency of a tonal run — isn't exposed as a filter, so
-  there's no way yet to ask for "only transients stronger than this" or "only
-  runs between 2 and 6 kHz" to cut a dawn chorus's three hundred marks down
-  to the twenty worth hearing.
-
-  **Searching for a spoken word is a licensing problem, not a missing
-  feature.** The engine underneath this application has an open-vocabulary
-  keyword spotter that would do exactly this — type a word, get every moment
-  someone said it. The checkpoint it needs was trained partly on data
-  distributed for academic, non-commercial use only, and this application is
-  distributed under the GPL. Shipping a control wired to weights that cannot
-  be shipped commercially isn't a smaller version of the problem, it's a
-  different one, so the feature stays off.
+- **Find stage, Whisper transcription, and Sound marks in the UI.** Sound marks
+  analysis (`sound_marks.h`, `bro.ffmpeg.marks`) and Whisper speech-to-text
+  transcription (`transcribe.h`, `bro.ffmpeg.transcript`) exist in the native C++
+  engine, but the Find stage node graph, transcript search, and sound marks timeline
+  lane are not currently surfaced in the UI.
 - **Two renders running at once.** This application runs one render at a
   time. Downloads and live monitoring are not affected — a background fetch
   (see [saving a stream to this

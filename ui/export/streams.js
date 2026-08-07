@@ -1478,7 +1478,7 @@ function cueRows(s, restate) {
 // edited one are both mapped without somebody having added a second row for the
 // second one, which is exactly the explicit act it should be.
 //
-// The file is not touched, now or ever. See the top of ui/cues.js.
+// The source file is not touched, now or ever.
 
 
 

@@ -35,12 +35,7 @@ import { portY } from './layout.js';
 const WIRE = { v: '#4a9eff', a: '#57c98a', s: '#ff8c42' };
 const WIRE_DIM = { v: '#2c5f99', a: '#357a55', s: '#99551f' };
 
-/// The Find stage's two, which are the other thing a wire can carry
-/// (`ui/find/model.js`): a **recording** on its way into a finder, and a
-/// **stack** of candidates on its way through the arrangement. Here rather than
-/// there because a wire's colour and the curve it is stroked onto are one fact,
-/// and a palette kept beside the caller is how the two come to disagree about
-/// which end of a graph is which.
+/// Additional wire types (e.g. recording/stack) can also be drawn if specified.
 ///
 /// Violet for a recording, because the three above are taken and because violet
 /// is what a *generator* is drawn in on the timeline — the same idea, a source

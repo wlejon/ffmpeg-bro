@@ -79,10 +79,9 @@ function depths(g) {
 /// `streams` is optional and answers what *kind of thing* travels on a node's
 /// output and on an edge — `{ of(node), ofEdge(edge) }`. It defaults to
 /// `streamsOf(g)`, which is the filter graph's picture/sound/cues, and it is a
-/// parameter because this arithmetic is not about filters: the Find stage
-/// (`ui/find/model.js`) lays out a graph whose wires carry recordings and stacks
-/// of candidates, and it wants these columns and these rows rather than a second
-/// implementation of them that would drift. Nothing else in this file knows what
+/// parameter because this arithmetic is not about filters: other node graphs
+/// can lay out custom graphs carrying recordings or candidate stacks without a second
+/// implementation that would drift. Nothing else in this file knows what
 /// a stream is, which is what made the split a parameter rather than a fork.
 ///
 /// Returns `{ nodes, wires, width, height }` — `nodes` carrying the node and

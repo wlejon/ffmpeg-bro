@@ -42,8 +42,7 @@ One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
 `sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
 `ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
 `ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
-`ui-document`, `ui-output`, `ui-telemetry`, `ui-marks`, `ui-transcript`,
-`ui-find`, `ui-load`):
+`ui-document`, `ui-output`, `ui-load`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -132,7 +131,7 @@ which is what `ui/sources.js`'s model path does.
 
 ffmpeg's model is inputs → streams → a filter graph → encoders → a muxer → an
 output. This app presents exactly that as its navigation — `ui/shell.js` draws
-the spine: **Capture → Sources → Find → Compose → Graph → Encode → Write**.
+the spine: **Capture → Sources → Compose → Graph → Encode → Write**.
 Anything the app cannot yet express usually has an obvious home in that chain and
 no home in an NLE's timeline-plus-export-dialog model; put new capability where
 ffmpeg puts it.
@@ -186,16 +185,14 @@ answer that fails its own coverage test would otherwise be re-read on every
 frame for ever.
 
 The same document exposed a second cost that was never about the elements. A
-measurement landing — a waveform or filmstrip off `ui/analysis.js`'s worker, a
-telemetry track, a run of sound marks — arrives on the model's change channel,
-and that channel's listener rebuilds the Sources cards, the spine, the command
-bar, the export rows and every element's source. Seventy-five clips answer with a
-hundred and fifty of those and they arrive in one drain: at 22 clips it was a
-**single frame of 12.9 s** against a median frame of 1 ms. Those three channels
-are *derived*, not edits — they are already excluded from the undo track and the
-unsaved marker for the same reason — so the listener now returns early and marks
-the timeline, which is the only thing that draws any of them, for one redraw on
-the next frame.
+measurement landing — a waveform or filmstrip off `ui/analysis.js`'s worker —
+arrives on the model's change channel, and that channel's listener rebuilds the
+Sources cards, the spine, the command bar, the export rows and every element's
+source. Seventy-five clips answer with a hundred and fifty of those and they arrive
+in one drain: at 22 clips it was a **single frame of 12.9 s** against a median frame
+of 1 ms. Derived channels are excluded from the undo track and the unsaved marker
+for the same reason — so the listener now returns early and marks the timeline
+for one redraw on the next frame.
 
 That last move is the general one and `needs()`/`drawPending()` in `ui/app.js`
 is where it lives. Five redraws restate the *whole* edit — `refreshPlayback`
@@ -269,21 +266,7 @@ re-point a filter at a different shot or a row at somebody else's dialogue.
 `useClipId`/`useInputId`/`useCueId` are how the three counters are told what a
 document has already handed out.
 
-`ui/cues.js` is the third thing in the document that is *content* rather than a
-description of a file, beside the clips and the graph: cues you typed, on the
-timeline's own clock, with a lane (`ui/timeline.js`) to retime them against A1.
-Two decisions in it are not negotiable. **The source file is never written to** —
-taking a file's cues in is a fork, the row is repointed in place so both copies
-can never render, and the input is read exactly as it always was. And **a render
-materialises the track into a real subtitle file beside the output and reads it
-back as an ordinary `-i`**, because ffmpeg has no way to receive cues except as a
-file; `attachCueFiles` in `ui/export/spec.js` names it (turning `cues:3` into
-`decode:4:0`, which is why nothing downstream learned the third form exists) and
-`ui/export.js` writes it at the one moment a render starts. `cueTextOf` answers
-with `raw` and `header` beside `text` for exactly one reason — a fork through the
-words alone would silently flatten somebody's styled subtitles, which is the one
-failure on this path that loses work. `ui/softcues.js` is the *reader* of all
-three ways a subtitle row reads its cues, drawing them over the program monitor
+`ui/softcues.js` is the *reader* of subtitle rows from imported tracks, drawing them over the program monitor
 (`Cues`, `T`), and the one thing it must never grow is a **style**: a soft track
 is styled by whatever player opens the file, so it draws `text`, says on the
 canvas that this is what the cues say and not how they will look, and switches
@@ -369,53 +352,6 @@ and a closed tab carries a count so it summarises rather than hides.
   span in the edit on the timeline's clock, which is what the timeline's When lane
   draws and writes back through.
 
-### The second graph, whose values are clips rather than frames
-
-`ui/find/` is a node graph that is deliberately **not** `ui/graph/`'s, and the
-reason is the one property that graph has. Every node there prints into a
-`-filter_complex` and `derive.js` refuses rather than approximates, so the graph
-can never describe a render the app would not perform. A node meaning *every time
-he said "insane"* has no printout at all — its value is an ordered list of spans.
-Putting it in there would end the printing, which is the whole point of it.
-
-So: same idiom, different values. `ui/graph/layout.js` and `ui/graph/canvas.js`
-are **imported** — the columns-are-depth arithmetic and the bezier stroking are
-one fact each, and two node editors with two of either would drift in a week —
-and both were taught their one missing parameter, that a wire can carry something
-other than a picture or a sound. Two things travel here: an `input` (violet) and
-a `stack` (amber), and `accepts()` is the one test that refuses a wire between
-them.
-
-Four decisions in it are load-bearing.
-
-**A candidate is not a clip.** `ui/find/stack.js` holds spans with a reason
-attached, as plain data; twelve hundred come out of one word search and building
-twelve hundred `<video>` elements to find that out would be `ui/residency.js`'s
-ruinous case reached deliberately. `why` is not decoration — a stack composed out
-of four rules is unreadable without it, and it becomes the clip's name so a
-timeline of forty reads as `1:04:12 "oh yeah that's the"` rather than forty
-copies of one filename.
-
-**The finders read what has been read and never start a read.** A transcript is
-about ninety minutes of GPU and a marks pass is minutes of arithmetic; both are
-asked for on Sources because nothing should spend that unasked. A finder over an
-unheard recording answers empty and *names the press that is missing*. That is
-also what keeps a keystroke in the phrase field cheap enough to re-evaluate on —
-`evaluate` is a whole-graph walk, memoised only to keep it off the frame loop.
-
-**But this stage is the only place a search is drawn**, and that half is newer.
-Sources had its own: a field on an input's card, a coverage sentence, twelve hit
-rows, each offering a jump, a window pull and a press that opened the window as
-an input. Every one of those was worth having and none of them was a description
-of an input — it was this stage's question asked one file at a time, nested three
-levels inside the probe readout, in a list that grew to a screenful. So the
-search is `said` and nothing else, the window pull is a press on a *stack*
-(`pullRows` in `ui/find/view.js`, which is where a selection actually lives), and
-what Sources keeps is `searchWords` — a door that walks here having already
-placed and wired a `Recording`, a `Said` and a `Stack` (`searchFor` in
-`ui/find.js`, reusing a chain already pointed at that recording rather than
-growing one per press). A door onto an empty canvas with three nodes still to
-place would have been a worse control than the field it replaced.
 
 
 ### The JS surface
@@ -489,8 +425,7 @@ is a spectral-flux transient, a `tonal` run is sustained autocorrelation
 periodicity with a real frequency in hertz, and a `sound` run is an energy gate
 against a measured noise floor — bro calls that flag `voice` and this
 deliberately does not, because nothing in a gate decided anything about a voice.
-The words have one home (`MARK_WORDS` in `ui/marks.js`) and `tests/ui_marks.js`
-asserts none of them names a *source* of sound. A label claiming a
+A label claiming a
 classification the DSP never made is the one failure that would make the whole
 feature a lie.
 
@@ -525,11 +460,7 @@ with a sentence, the link and the sources are unconditional, and there is no
 left is the distinction that was always the point: a *silent file* gives back an
 empty list, and a file with no soundtrack at all is refused by name.
 
-Marks are derived, so they are not in the document, not in `ui/.storage.json` and
-not on the undo track — `peaks`'s rule. They reach the timeline per clip through
-`timelineTime` (`ui/project.js`), the same map the waveform and the Data lane
-use, which is what makes them follow a trim. `ui/marks.js` is the model,
-`ui/timeline.js`'s Marks lane draws them, and `,`/`.` walk them.
+Sound marks processing is implemented in native C++ (`sound_marks.h`, `bro.ffmpeg.marks`). Note that sound marks visualization and UI controls are currently not surfaced in the UI layer.
 
 ### The words, which are the other thing a soundtrack holds
 
@@ -546,11 +477,7 @@ holds that line. The audio-only and video renditions of a Twitch VOD do not shar
 a zero (+0.80 s, +2.21 s, +2.57 s at three points of one recording — a *step*,
 from an ad break discontinuous in one and not the other), so a transcript read
 from the cheap audio-only copy is on that copy's seconds and a cut placed on a
-word boundary would land on the wrong file's clock. A hit moves the playhead;
-a human agrees. `ui/transcript.js` `search()` returns a place and a sentence and
-deliberately carries no in point, no out point and no clip, and
-`tests/ui_transcript.js` asserts the shape of that object so a later hand cannot
-quietly add one.
+word boundary would land on the wrong file's clock. A hit moves the playhead; a human agrees.
 
 **Why this is native is NOT `sound_marks.h`'s reason, and the difference is the
 important part.** That file is native because `bro.sense.analyze()` is
@@ -580,32 +507,9 @@ terminal answer is *not* handed over exactly once — a finished read keeps
 answering until `forget`, or a caller polling a growing transcript on the frame
 loop would watch it vanish on the frame after it completed — so `forget` is
 required rather than tidy. `read` is carried beside the segments because without
-it nothing can tell "the last hour is silent" from "the last hour is unread", and
-`ui/transcript.js` `coverage()` is what makes a search count honest.
+it nothing can tell "the last hour is silent" from "the last hour is unread".
 
-A transcript is derived, so it is not in the document, not in
-`ui/.storage.json` and not on the undo track — `peaks`'s rule, and `marks`'s. It
-belongs to the **input** rather than the clip and reaches the timeline through
-`timelineTime`, the same map the waveform, the Data lane and the Marks lane use.
-
-**A hit becomes a window, and that is the payoff.** `ui/transcript.js`
-`pullSpan()` copies only the span a candidate covers — `ss` and `t` on the input,
-so what comes down the link is twenty seconds rather than six hours — as a
-`fetch` with `soon`, which jumps the queue without preempting because the window
-is what somebody is waiting on and the whole-recording copy is what they started
-so that they could get on. `WINDOW_PAD` is ten seconds and is **a measurement,
-not a margin**: the transcript is read from the soundtrack rendition and the
-picture rendition does not share its zero by up to 2.57 s, so a window that
-hugged the words would sometimes not contain them. `tests/ui_transcript.js`
-asserts the pad clears that number, which is what stops a later hand tightening
-it to look neat. The pad is applied **exactly once** and that is the whole reason
-there are two entry points: `pullWindow` takes a hit and pads it through
-`windowFor`, `pullSpan` takes a span that a `said` rule's own `Either side` has
-already padded, and padding the second again would write a file the card's own
-number does not describe. When a window lands it is opened as a **new input**
-rather than the recording repointed — it is a different file with its own zero —
-and it goes in through the ordinary door, so `Use on the timeline` is still the
-press that puts it in the edit.
+Whisper transcription is implemented in native C++ (`transcribe.h`, `bro.ffmpeg.transcript`). Note that transcription UI components and Find integration are currently not surfaced in the UI layer.
 
 The weights are not shipped and an absent model is refused **by name**;
 `brosoundml/scripts/download-whisper.sh --size large-v3` puts one on disk.
