@@ -2,225 +2,138 @@
 
 # The card
 
-There is no "use hardware acceleration" checkbox, and that is a finding rather
-than an omission. **Decoding on a card and encoding on a card are two different
-decisions with opposite answers on this machine**, so they are two controls in
-the two places they belong: the device an input decodes on is on Sources, in
-front of the `-i` beside `-probesize`, because a decoder belongs to an input;
-the encoder a stream is written with is on Encode, because that is what a stream
-is. One switch covering both would be wrong about half of what it did.
+There is no single "use hardware acceleration" checkbox, because decoding on
+a card and encoding on a card are two different decisions with, on typical
+hardware, opposite answers. They are two controls in two places: the device
+an input decodes on is on Sources, because a decoder belongs to an input; the
+encoder a stream is written with is on Encode, because that is what a stream
+is.
 
-What the menus offer is what this machine turned out to have. `bro.ffmpeg
-.hwaccels` lists what the *build* has — every type a vcpkg ffmpeg is compiled
-with is in it on every machine, card or no card — so nothing is drawn from it.
-`bro.ffmpeg.hardware()` creates a device of each type and reports whether that
-worked, and the picker is cut down again by whether this build's decoder for
-*this codec* has a configuration for that device. Two RTX 4090s still do not
-give you a CUDA ProRes decoder.
+What the menus offer is only what *this machine* turns out to have — every
+device type this build supports is probed by actually creating one, and the
+picker only lists what worked. A codec can still be unsupported on a device
+that otherwise works: two RTX 4090s do not give you a CUDA ProRes decoder if
+the build's decoder for that codec has no configuration for that device.
 
-That question is asked by *failing*, so it is asked with the report channel
-muted. Every type the build carries and this machine has no card for answers
-with an error — on a machine with NVIDIA cards, `AMFQueryVersion failed with
-error 1` — and those are not things a render said: left in the channel they
-open the report drawer red under a render that went perfectly, before anybody
-has pressed anything. What the failure was is reported as the device's own
-`error`, which is where somebody asking about a card is already looking.
-
-**Unavailable refuses, and says why. It never falls back silently.** A type that
-is compiled in and absent, a driver that will not answer, a codec the card
-cannot decode: each stops the open with the reason named. That is this repo's
-standing rule — a render must not succeed while ignoring what it was told —
-and here it has a second edge, because on this hardware falling back to software
-would make the render *faster*, and nobody would ever notice it happening.
+**Unavailable refuses, and says why. It never falls back silently.** A device
+type that is compiled in but absent, a driver that will not answer, a codec
+the card cannot decode — each stops the open with the reason named, because
+on capable hardware a silent fallback to software would make the render
+*faster*, and you would never notice it happening.
 
 ## What it measured
 
-`tests/hardware_test.cpp`, on this machine: **AMD Ryzen 9 7950X3D (16 cores, 32
-threads) and two NVIDIA GeForce RTX 4090s**, driver 610.62, vcpkg ffmpeg with
-`nvcodec` and `amf`. Four device types work here — `cuda`, `dxva2`, `d3d11va`,
-`d3d12va` — and `amf` does not: AMF is compiled in and there is no AMD card.
+The advice built into this application — the `Choose for me` button below,
+and the guidance next to the Decode-on and encoder pickers — was tuned on one
+machine: an AMD Ryzen 9 7950X3D with two NVIDIA RTX 4090s. Your hardware may
+give different numbers, but the general pattern below holds across most
+consumer GPUs and is why the advice defaults the way it does.
 
-One pass over a file, `nextRaw` a frame at a time, milliseconds per picture:
+**Hardware decode is usually a loss, not a win.** On the measured machine it
+was two to six times slower than software decode across all core counts, and
+copying the frame back to system memory was not the reason — the decode
+engine itself is a throughput accelerator being asked for one frame at a
+time, while software decode is threaded across every core. Hardware decode is
+still offered, because it is the only way to feed a hardware filter graph
+without an upload step, and it may win on hardware with fewer CPU cores.
 
-| | 640×360 | 1920×1080 | 3840×2160 |
-|---|---|---|---|
-| software, threaded across all cores | **0.05** | **0.35** | **1.70** |
-| cuda, brought back to system memory | 0.29 | 1.21 | 4.51 |
-| cuda, left on the card | 0.29 | 1.17 | 4.38 |
-
-**Hardware decode is a loss here, by between two and six times, and the readback
-everybody blames is not the reason.** Bringing a 4K frame down costs 3% of the
-decode's wall clock; the decode itself is what is slow, because NVDEC is a
-throughput engine being asked for one frame at a time while libavcodec has
-thirty-two threads and frame-level parallelism. It is offered anyway — a laptop
-with four cores and a QSV block has different numbers, and it is the only way to
-feed a hardware filter graph without an upload — but the **Decode on** picker carries
-the measurement, so it is said on the control somebody is about to use.
-
-The encoder is the opposite answer. The same 1.6 s of output, rendered three
-ways at the source's own size:
-
-| | 640×360 | 1920×1080 | 3840×2160 |
-|---|---|---|---|
-| decode + composite + x264 `ultrafast`, all in system memory | **56 ms** | 453 ms | 1848 ms |
-| decode on the card, filter on it, NVENC, never coming down | 96 ms | **205 ms** | **565 ms** |
-| decode on the CPU, upload, NVENC | 85 ms | **190 ms** | 591 ms |
-
-**Above SD the card is worth two to three times, and below it the card loses
-outright** — 4K is 3.3× and 640×360 is 0.6×, because a small frame is all
-fixed cost and a GPU round trip is mostly fixed cost. Note the third row: on this
-machine the *best* arrangement at 1080p is a software decode uploaded straight
-into NVENC, which is what falls out of hardware decode being the slower half.
-And note that x264 is on `ultrafast` throughout — at `medium` the gap widens by
-a great deal more than these numbers show.
+**Hardware encode is the opposite: usually a real win, above a certain
+resolution.** On the measured machine, above standard definition the card
+encoded two to three times faster than software; at 360p and below the card
+lost outright, because a small frame is mostly fixed overhead and a GPU round
+trip is mostly fixed cost too. The best arrangement at 1080p on that machine
+was software decode feeding the encoder directly on the card, rather than
+decoding on the card as well.
 
 ## Choosing it for you, on a press
 
-Two decisions in two places is right, and it is also two decisions in two places.
-So the Encode stage carries **`Choose for me`**, which applies the arrangement the
-tables above arrived at — *software decode, hardware encode, above SD* — to this
-machine and this render, and then says what it did.
+The Encode stage carries **`Choose for me`**, which applies that arrangement
+— software decode, hardware encode, above standard definition — to your
+machine and your render, and says what it did and why:
 
-> H.264 (NVIDIA) on cuda, because 1080 lines is above SD and the card is worth two
-> to three times there — measured, in docs/manual/card.md. Same codec as libx264,
-> so what will play on the other end has not changed. landscape.mp4 is decoding on
-> a device and goes back to the CPU: the decode is measured two to six times slower
-> there, and the readback everybody blames is 3% of it.
+> H.264 (NVIDIA) on cuda, because 1080 lines is above SD and the card is
+> worth two to three times there. Same codec as libx264, so what will play on
+> the other end has not changed. landscape.mp4 is decoding on a device and
+> goes back to the CPU: the decode is measured slower there.
 
-**A press, and never automatic.** An application that quietly rewrote your encoder
-when you opened a file would be the "use hardware acceleration" checkbox this one
-exists without, one step worse: it would be making the choice *and* not saying so.
-The sentence is not a nicety — choosing on somebody's behalf and then having to say
-so is the entire cost of the feature, so it is on the button before the press as
-well as on the stage after it.
+**A press, and never automatic.** Nothing here rewrites your encoder on its
+own — the whole point of not having a single "hardware acceleration"
+checkbox is that a choice like this should be visible, not quiet.
 
-**It asks the machine, never a list.** Which encoders run on a device here is
-`bro.ffmpeg.hardware()`'s answer, cut down to the ones this build carries; nothing
-in it names a device or an encoder. The only preference it expresses is *which* of
-several to reach for, and even that is derived — the same codec as the one already
-chosen, read off `codecName`, so a press changes where the encoding happens and not
-what will play on the other end.
-
-**And it says so when there is nothing to choose.** A machine with no working
-device, or one whose devices report no encoder this build carries, gets the sentence
-naming that rather than a button that appears to do nothing — the same rule the
-**Decode on** picker follows when nothing here can decode the file.
-
-Below SD it presses the other way, because that is what the second table says: a
-device encoder at 360 lines is moved back to the CPU, naming both. The line is
-drawn at **576** — the top of standard definition — and not at a measured number,
-because the measurement has 640×360 at 0.6× and 1920×1080 at 2.2× and no number in
-that gap is more honest than another.
+It asks the machine for what is actually available rather than assuming from
+a name, and its one preference is to keep the same codec family already
+chosen, so pressing it changes *where* encoding happens rather than what will
+play on the other end. If nothing on your machine can do better, it says so
+instead of doing nothing silently. The line between "above SD" and "at or
+below SD" is drawn at 576 lines — the top of standard definition — since the
+measured gap between what wins and loses is wide enough that no exact number
+in between is more honest than another.
 
 ## A second card
 
-**How many is a different question from whether any**, and it is asked the same
-way: by trying. `bro.ffmpeg.hardware()` used to create one device of each type
-and report whether that worked; a machine with two cards and a machine with one
-gave the same answer, so **Which one** on Sources was a text box, and the number
-typed into it was a guess this application could not check. libavutil is why —
-there is no count, and no iterator over the devices of a *type*; the only call
-that takes the string `-hwaccel_device` and `-filter_hw_device cuda:1` take is
-`av_hwdevice_ctx_create`, which either makes a device or does not. So each type
-is asked for index 0, 1, 2 … until it refuses, and the list is a picker.
+Which device *index* to use (`-hwaccel_device`) is asked of the machine the
+same way presence is: by trying to create device 0, then 1, and so on until
+it fails. **Which one** on Sources is therefore a real picker built from what
+this machine actually has, not a text box you have to guess a number into.
 
-This machine answers `0, 1` for all four of its working types. The contexts are
-freed again — a CUDA primary context is a few hundred megabytes of a card's
-memory, and holding one on every card so that a menu could be drawn would be
-spending a card nobody has chosen to use — which costs 316 ms of the probe's
-805 ms, paid once and only when something asks.
-
-**An index this machine does not have is shown and not snapped.** A document
-written here and opened on a laptop carries `-hwaccel_device 1` on its input; the
-picker keeps the value, marks it as not on this machine, and the render is
-refused at the open with libav's own reason. Quietly selecting the default would
-be a render pointed at a different card from the one the file names, which is
-the class of silent disagreement this application refuses everywhere else.
+**An index this machine does not have is shown, not silently snapped to the
+default.** A document written on a two-card machine and opened on a one-card
+laptop keeps its `-hwaccel_device 1`, marked as not available here, and the
+render is refused at open with libav's own reason — rather than quietly
+running on a different card than the one the document names.
 
 ### What the second one is worth
 
-Both cards reach the render, and `tests/hardware_test.cpp` measures the same
-1080p render — software decode, `hwupload`, `h264_nvenc` — on each of them:
+Two cards of the same model are not guaranteed to perform identically — a
+card on a narrower PCIe link measured a few percent slower on the same
+render — so the picker is worth having even on a machine with two of the same
+GPU.
 
-| | card 0 | card 1 |
-|---|---|---|
-| decode on the CPU, upload, encode on the card | **187 ms** | 195 ms |
-
-**Two of the same model are not two of the same card.** Card 1 is 4% behind, and
-`nvidia-smi` says why: it is on a x4 PCIe link where card 0 has x16. So "which
-one" is a real choice on this machine and not a formality, and the picker is
-worth having for that alone.
-
-**What a second card is not worth is a second render.** The obvious use — run two
-renders at once, one per card — was measured before it was built, and the numbers
-say the card is almost never the thing in the way. Two 1080p renders of the
-arrangement above, through the ffmpeg CLI so that the two could actually run at
-once:
-
-| | one render | two, one card | two, two cards |
-|---|---|---|---|
-| software decode, `h264_nvenc`, 1080p | 1.58 s | 1.66 s | 1.67 s |
-| NVDEC decode, `hevc_nvenc` `p7`, 4K | 13.6 s | 17.2 s | **13.7 s** |
-
-At 1080p the second card is worth nothing, because the first was never busy: two
-renders on one card cost 5% more than one. Only where the encoder is genuinely
-saturated — 4K at the slowest preset, with the decode on the card too — does the
-second card pay, and even there most of the win (27.1 s sequential → 17.2 s) is
-from running two at all rather than from the second card (17.2 s → 13.7 s).
-
-And the case that would have justified it does not use a card at all: the A/B
-stage's reference is `libx264 -crf 0`, deliberately, because the comparison is
-only worth looking at if the reference is what the compositor produced before any
-encoder saw it. Reference and candidate together are 1.09 s sequential, 0.84 s
-concurrent with the candidate on card 0 — and **0.92 s with the candidate on card
-1**, which is slower. See [Not yet](not-yet.md) for the rest of that, including
-what running two jobs at once would cost the report.
+**A second card is rarely worth a second render.** Running two renders at
+once, one per card, was measured directly: at 1080p a second render on the
+*same* card cost only a few percent more than one, because the encoder was
+never the bottleneck — so a second card bought almost nothing. Only a genuinely
+saturated encoder (4K, the slowest preset, decode on the card too) showed a
+real win from a second card, and even there most of the benefit came from
+running two jobs at once rather than from the second card specifically. The
+A/B comparison's reference render deliberately does not use a card at all,
+for the same reason: it exists to be compared against, not to be fast. See
+[Not yet](not-yet.md) for more on running more than one render at a time.
 
 ## Never coming down
 
-A render whose pictures are made on a card and encoded on the same card does not
-touch system memory at any point. It is not a special path: `FrameSource` grew
-two optional questions — which pool the pictures arrive in, and the picture
-itself rather than a canvas — and a hardware encoder is *opened against that
-pool*, so `avcodec_open2` builds its surfaces from the graph's own. Everything
-else about the job is unchanged.
-
-Which means the arrangement is reachable by wiring it. Put an `hwupload` on the
-last wire before the output, choose `h264_nvenc`, and the render has nothing to
-copy; the command bar prints `-filter_hw_device cuda` and the `hwupload` in the
-graph, and a standalone ffmpeg given that command does the same thing. It is
-all-or-nothing per file: a render that kept its pictures up and had one software
-video stream in it is refused, naming the stream, rather than downloading behind
-your back.
+A render whose pictures are made on a card and encoded on the same card never
+touches system memory. Put `hwupload` on the last wire before the output,
+choose a hardware encoder such as `h264_nvenc`, and the render has nothing
+left to copy — the command bar's `-filter_hw_device` and `hwupload` describe
+exactly that, and a standalone `ffmpeg` given the same command does the same
+thing. It is all-or-nothing per file: a render that would otherwise keep its
+pictures up but still has one software video stream in it is refused, naming
+the stream, rather than silently downloading behind your back.
 
 Two consequences worth knowing. A render on this path **ends when its graph
-ends** — there is no black frame past the last picture, because black would have
-to be made in system memory and uploaded once a frame, which is the cost the
-path exists to avoid. And the **viewer cannot show a clip whose input keeps its
-pictures on the card** in the way you might expect: playback downloads every
-frame unconditionally, because bro's renderer takes three planes it can read and
-there is no path in playback that could hand it a device handle.
+ends** — there is no way to hold a black frame past the last picture without
+an upload, so this path does not do it. And **the viewer cannot show a clip
+whose input keeps its pictures on the card**: playback always downloads every
+frame, so this path is for rendering, not for previewing.
 
 ## Filters on the card
 
-`hwupload`, `hwdownload` and whatever `_cuda` / `_qsv` / `_vulkan` / `_d3d11`
-filters this build has are ordinary nodes on the graph — the palette offers them
-because it offers whatever libavfilter reports, and there is no list of hardware
-filters written down anywhere. The device they get is `-filter_hw_device`, and
-it is derived rather than asked for: an input that decodes on a device names one,
-a filter that belongs to a device names one, and `hwupload` takes no argument
-that could name a third.
+`hwupload`, `hwdownload` and whatever `_cuda`/`_qsv`/`_vulkan`/`_d3d11`
+filters this build has are ordinary nodes on the Graph stage's palette — it
+offers whatever libavfilter reports, with no separate hardware-filter list.
+The device such a filter runs on is derived automatically from whichever
+input or filter already named one; `hwupload` itself takes no argument that
+could name a device.
 
-**A picture on a card reaching a filter that reads pixels is libavfilter's least
-readable failure** — four hundred pixel format names, twice, and nothing in it
-saying the word hardware. The Graph stage names the node and says which way to
-cross. And a clip whose input keeps its pictures up gets an `hwdownload` at the
-head of its chain from the derivation, because that is exactly what the
-compositor does with one, and the printed command and the render have to agree.
+**A picture on a card reaching a filter that expects one in system memory
+fails with libavfilter's own, fairly unreadable, pixel-format error.** The
+Graph stage names the node and says which way to cross when this happens. A
+clip whose input keeps its pictures on a device gets an `hwdownload` added to
+the front of its chain automatically, to match what the compositor itself
+does with such a clip.
 
-Worth knowing about builds: **a vcpkg ffmpeg with `nvcodec` gets NVDEC and NVENC
-and not the `scale_cuda`/`overlay_cuda` family**, which needs the CUDA compiler
-at configure time. So this build can decode on the card and encode on the card
-with nothing at all to put between them — and a picture still never has to come
-down, because `trim` and `setpts` are arithmetic on timestamps and pass any
-format through.
+Whether this build can filter *on* the card (`scale_cuda`, `overlay_cuda`,
+and similar) depends on how it was built — decoding and encoding on the card
+work without it, since `trim` and `setpts` are pure timestamp arithmetic and
+pass any pixel format through untouched.
