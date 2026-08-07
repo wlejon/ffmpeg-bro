@@ -301,6 +301,26 @@
          what the DOM is for — and a curve is not. The minimap is a second
          canvas because a graph this wide runs off the screen. -->
     <section id="st-graph" class="stage-view hidden">
+        <div class="gr-toolbar">
+            <span class="gr-toolbar-group">
+                <button id="gr-add" class="tiny">+ Add node</button>
+                <button id="gr-fold" class="tiny">Collapse ▾</button>
+            </span>
+            <span class="gr-toolbar-sep">|</span>
+            <span class="gr-toolbar-group">
+                <button id="gr-previews" class="tiny">Previews ⏻</button>
+                <button id="gr-at-playhead" class="tiny">At playhead</button>
+                <span id="gr-at-playhead-readout" class="dim mono tiny-note"></span>
+            </span>
+            <span class="gr-toolbar-sep">|</span>
+            <span class="gr-toolbar-group">
+                <button id="gr-zoom-out" class="tiny icon">−</button>
+                <button id="gr-zoom" class="tiny">100%</button>
+                <button id="gr-zoom-in" class="tiny icon">+</button>
+                <button id="gr-fit" class="tiny">Fit</button>
+                <button id="gr-relayout" class="tiny">Re-layout</button>
+            </span>
+        </div>
         <div class="gr-main">
             <div id="gr-viewport" class="gr-viewport">
                 <canvas id="gr-wires" class="gr-wires"></canvas>
@@ -308,9 +328,6 @@
                 <canvas id="gr-mini" class="gr-mini" width="180" height="120"></canvas>
                 <div id="gr-note" class="gr-note dim hidden"></div>
             </div>
-            <!-- What the selected node is set to, or what can go on the wire
-                 whose + was clicked. One column for both, because inserting a
-                 filter and configuring it are one gesture with a pause in it. -->
             <div id="gr-panel" class="gr-panel"></div>
         </div>
         <div class="gr-bar">
@@ -321,25 +338,6 @@
                 <span class="gr-legend-dot" style="background: #57c98a;"></span>audio  
                 <span class="gr-legend-dot" style="background: #ff8c42;"></span>subs
             </span>
-            <span class="spacer"></span>
-            <!-- A filter that is not on any wire. Everything with two inputs
-                 needs this: there is no wire an `overlay` can be spliced onto,
-                 so it is placed first and wired afterwards. -->
-            <button id="gr-add" class="tiny" title="Place a source or a filter on the canvas and wire it up">Add node</button>
-            <!-- A clip's derived run as one card. On by itself above a graph
-                 nobody could read, and a decision of yours once you have
-                 pressed it — the same rule the fit follows. -->
-            <button id="gr-fold" class="tiny" title="Draw each clip's derived filters as one card">Collapse</button>
-            <button id="gr-at-playhead" class="tiny">At playhead</button>
-            <button id="gr-previews" class="tiny">Previews</button>
-            <button id="gr-relayout" class="tiny" title="Give every node back to the layout">Re-layout</button>
-            <!-- Out, the percentage, in, frame. The readout is a button because
-                 a number that says how far you are from 1:1 should be the way
-                 back to it. -->
-            <button id="gr-zoom-out" class="tiny icon" title="Zoom out">−</button>
-            <button id="gr-zoom" class="tiny" title="Back to 1:1">100%</button>
-            <button id="gr-zoom-in" class="tiny icon" title="Zoom in">+</button>
-            <button id="gr-fit" class="tiny">Fit</button>
         </div>
     </section>
 

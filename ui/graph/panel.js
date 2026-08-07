@@ -49,6 +49,7 @@ import { renamePad } from '../export/pads.js';
 // two thresholds and only one of them suppressed a `flags` range, so every
 // int32 AVOption printed ±2147483648 here and nowhere else.
 import { rangeOf, buildOptionRow } from '../opttable.js';
+import { graphSummary } from './view.js';
 
 let refs = {};
 let hooks = {};
@@ -243,32 +244,39 @@ function find(g, key) {
 }
 
 function empty() {
+    const sum = graphSummary();
+    const stats = sum.ok ? [
+        div('stat-row mono', [
+            span(`nodes: ${sum.nodes}`, 'gp-badge'),
+            span(`chains: ${sum.chains}`, 'gp-badge'),
+            span(`inputs: ${sum.inputs}`, 'gp-badge'),
+            span(`user: ${sum.mine}`, 'gp-badge'),
+            span(`locks: ${sum.locks}`, 'gp-badge'),
+        ])
+    ] : [];
+
     return [
-        head('Graph'),
-        div('gp-hint dim',
-            'Click a node to see what it is set to, or hover a wire and click its + to put ' +
-            'a filter there. Values can be typed on the cards themselves; this column is ' +
-            'every other option the filter has. Everything here is derived from the edit ' +
-            'until you change it.'),
-        div('gp-hint dim',
-            'Drag a node’s title bar to place it and Re-layout gives the whole graph ' +
-            'back. Drag the background to select several, middle-drag to pan, wheel ' +
-            'to zoom.'),
-        // A recipe rather than a feature. The whole argument of this stage is
-        // that the graph is the mechanism, so the common case is worth naming
-        // and is worth *not* being a button that does something private.
-        div('gp-hint dim',
-            'A watermark is two nodes and two wires: Add node offers every file you have ' +
-            'loaded and every source libavfilter has — place the logo, drag from the ' +
-            'composite into empty canvas and pick overlay, then drag the logo’s picture ' +
-            'socket onto overlay’s second input. A testsrc or a colour goes on the same ' +
-            'way, and a graph with nothing on the timeline behind it still renders.'),
-        overlay.isEmpty() ? null : div('gp-hint dim', filtersNote()),
+        head('Graph Summary'),
+        ...stats,
+        div('gp-actions', [
+            el('button', {
+                cls: 'tiny primary', text: '+ Add node',
+                on: { click: () => {
+                    openPad({ at: { x: 100, y: 100 } });
+                } }
+            }),
+            el('button', {
+                cls: 'tiny', text: 'Collapse',
+                on: { click: () => {
+                    if (refs.fold) refs.fold.click();
+                } }
+            })
+        ]),
         overlay.isEmpty() ? null : el('button', {
-            cls: 'tiny', text: 'Clear my filters and locks',
+            cls: 'tiny warn', text: 'Clear my filters and locks',
             on: { click: () => { overlay.clear(); sel = null; changed(); } },
         }),
-    ];
+    ].filter(Boolean);
 }
 
 /// Said here rather than left to be found out.
@@ -365,15 +373,42 @@ function nodePanel(node) {
 
     const info = infoOf(node.filter);
     if (info && info.description) out.push(div('gp-hint dim', info.description));
-    if (node.filter === 'movie' || node.filter === 'amovie')
-        out.push(div('gp-hint dim',
-            'A movie opens the file itself, outside the input list — so nothing on the ' +
-            'Sources stage reaches it: no forced demuxer, no -probesize, no window. Write ' +
-            'the path the way libavfilter reads one, quoted with its colon escaped ' +
-            '(\'C\\:/logo.png\'): a colon separates a filter’s arguments and a comma ends ' +
-            'the filter, so a bare path with a drive letter fails and a bare path with a ' +
-            'comma in it fails differently. The same picture as an input node, with all of ' +
-            'that and a row of its own, is one drag from a socket away.'));
+    if (node.filter === 'movie' || node.filter === 'amovie') {
+        const pathVal = String((node.params && node.params.filename) || (node.pos && node.pos[0]) || '');
+        const validatePath = (p) => !p.includes(':') || p.includes('\\:');
+        const escapePath = (p) => p.replace(/:/g, '\\:').replace(/,/g, '\\,');
+        out.push(div('gp-movie-box', [
+            el('input', {
+                cls: 'wide mono', type: 'text', value: pathVal, placeholder: 'path…',
+                on: {
+                    input: (e) => {
+                        if (!validatePath(e.target.value)) e.target.classList.add('invalid');
+                        else e.target.classList.remove('invalid');
+                    },
+                    change: (e) => {
+                        const val = escapePath(e.target.value.trim());
+                        noteEdit();
+                        overlay.edit(node, { params: { filename: val } });
+                        changed();
+                    }
+                }
+            }),
+            el('button', {
+                cls: 'tiny', text: 'Use as an input instead',
+                on: { click: () => {
+                    if (pathVal) {
+                        const inp = documentInputs.find(i => i.path === pathVal || i.name === pathVal);
+                        if (inp) {
+                            overlay.removeInsert(node.id);
+                            overlay.addSource(inp.id);
+                            sel = null;
+                            changed();
+                        }
+                    }
+                } }
+            })
+        ]));
+    }
     out.push(...padRows(node));
 
     const options = optionsOf(node.filter);
@@ -451,35 +486,48 @@ function nodePanel(node) {
 /// Commits on `change`, like everything else on this stage: on `input` the node
 /// would be renamed once per keystroke and the rows would chase it.
 function outputRows(node) {
-    const out = [
-        div('gp-hint dim',
-            'A pad of your own. Whatever is wired here comes out of the render as a stream ' +
-            'of its own — add one on the Write stage and pick “the graph’s ' +
-            `[${node.name || '…'}]” as its source. The chain feeding it is printed ending ` +
-            'in that name, so the command above and the render are the same thing.'),
-    ];
+    const out = [];
+    const validateName = (n) => {
+        if (!n) return true;
+        if (n === 'vout' || n === 'aout') return false;
+        return /^[a-zA-Z0-9_-]+$/.test(n);
+    };
     const field = el('input', {
         cls: 'wide mono', 'data-f': 'outname', type: 'text', value: node.name || '',
         placeholder: 'out2',
-        on: { change: () => {
-            noteEdit();
-            const before = node.name || '';
-            const next = field.value.trim();
-            if (next === before) return;
-            overlay.renameOutput(node.id, next);
-            renamePad(before, next);
-            changed();
-        } },
+        on: {
+            input: (e) => {
+                if (!validateName(e.target.value.trim())) e.target.classList.add('invalid');
+                else e.target.classList.remove('invalid');
+            },
+            change: (e) => {
+                const before = node.name || '';
+                const next = e.target.value.trim();
+                if (!validateName(next) || next === before) return;
+                noteEdit();
+                overlay.renameOutput(node.id, next);
+                renamePad(before, next);
+                changed();
+            }
+        }
     });
     out.push(row('Name', field));
-    out.push(div('gp-hint dim',
-        'Letters, digits and underscores — it is a filtergraph pad label. vout and aout ' +
-        'are the derivation’s own names for the composite and the mix and cannot be used.'));
     out.push(...padRows(node));
-    out.push(div('gp-actions', [el('button', {
-        cls: 'tiny', text: 'Remove', 'data-f': 'remove',
-        on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
-    }), measureAction(node)]));
+    out.push(div('gp-actions', [
+        el('button', {
+            cls: 'tiny primary', text: 'Map it on Write →',
+            on: { click: () => {
+                if (globalThis.__ffmpegBro && globalThis.__ffmpegBro.switchStage) {
+                    globalThis.__ffmpegBro.switchStage('write');
+                }
+            } }
+        }),
+        el('button', {
+            cls: 'tiny', text: 'Remove', 'data-f': 'remove',
+            on: { click: () => { overlay.removeInsert(node.id); sel = null; changed(); } },
+        }),
+        measureAction(node)
+    ]));
     return out;
 }
 
@@ -709,30 +757,6 @@ function sourceRows(pad, term) {
     // An input is offered for a pad one of its own streams can fill, which for
     // a picture pad now includes a file whose only usable stream is a bitmap
     // subtitle track — those cues *are* pictures once painted.
-    const files = documentInputs.filter((i) =>
-        (!stream || streamKinds(i).some((k) => padTakes(k, stream))) &&
-        hit(i.name, i.path));
-    const made = sourceFilters().filter((f) => {
-        const pads = padsOf(f.name);
-        return pads && (!stream || pads.outs.indexOf(stream) >= 0) &&
-               hit(f.name, f.description);
-    });
-    if (!files.length && !made.length) return [];
-
-    const rows = [head(`Sources · ${files.length + made.length}`)];
-    if (!term)
-        rows.push(div('gp-hint dim',
-            'A file the graph reads is an -i, with the demuxer, options and window it ' +
-            'has on the Sources stage — which is why it is here rather than a movie=. ' +
-            'Below it, everything libavfilter makes out of nothing.'));
-    for (const i of files) rows.push(inputRow(pad, i));
-    for (const f of made.slice(0, FILTER_LIMIT)) rows.push(padRow(pad, f));
-    if (made.length > FILTER_LIMIT)
-        rows.push(div('gp-hint dim', `and ${made.length - FILTER_LIMIT} more — narrow the search`));
-    return rows;
-}
-
-/// One of the document's inputs, offered as a node the graph reads.
 function inputRow(pad, input) {
     const streams = streamKinds(input);
     return el('button', {
@@ -749,75 +773,6 @@ function inputRow(pad, input) {
         span(input.path, 'dim')]);
 }
 
-/// A generator still carrying the numbers the render had when it was placed.
-///
-/// **The other half of a refusal.** `sourceDefaults` fills a `testsrc`'s size
-/// and rate in from the render at the moment it is placed, so the ordinary case
-/// simply agrees; change the output size afterwards and the two disagree, and
-/// the render is refused with both numbers. Refusing is right — a writer opened
-/// for one size being handed another is a scaler quietly resizing every frame —
-/// but being told at render time about a decision taken twenty minutes earlier
-/// is being told in the wrong place.
-///
-/// **It states the disagreement rather than predicting a failure.** Whether a
-/// particular generator's size actually reaches the output depends on what is
-/// wired downstream of it — a `color` feeding an `overlay` as a badge is
-/// legitimately a different size from the render, and a `scale` in between
-/// settles it either way. So this says what the two numbers are and where each
-/// came from, which cannot be wrong, and leaves the refusal at render time to
-/// be the authority on what the graph does.
-///
-/// The button is the "follows the render" half: one press writes what
-/// `sourceDefaults` would have written today. It is a press and not a binding
-/// for the reason `Follow the clip` is — a value that silently rewrote itself
-/// would stop being the value somebody typed.
-function driftRows(node, options) {
-    if (!node || node.kind !== 'filter' || !isSource(node.filter)) return [];
-    const want = sourceDefaults(node.filter);
-    const keys = Object.keys(want);
-    if (!keys.length) return [];
-
-    // Only what was actually set: a generator left on its own default is not a
-    // generator carrying a stale number, it is one nobody has told anything.
-    const drifted = keys.filter((k) => node.params[k] !== undefined &&
-                                       String(node.params[k]) !== String(want[k]));
-    if (!drifted.length) return [];
-
-    const label = { size: 'size', rate: 'frame rate', sample_rate: 'sample rate' };
-    const said = drifted.map((k) => `${label[k] || k} ${node.params[k]}, and the render is ` +
-                                    `${want[k]}`).join('; ');
-    return [
-        div('gp-problems', div('gp-problem gp-drift',
-            `This ${node.filter} was placed carrying the render's numbers and they have ` +
-            `changed since: ${said}. Whether that matters depends on what is wired after ` +
-            `it — a generator feeding an overlay is meant to be its own size — but a graph ` +
-            `whose last pad is not the render's size is refused when it runs.`)),
-        div('gp-actions', el('button', {
-            cls: 'tiny', text: 'Match the render', 'data-f': 'match-render',
-            title: drifted.map((k) => `${k}=${want[k]}`).join(' '),
-            on: { click: () => {
-                noteEdit();
-                const params = {};
-                for (const k of drifted) params[k] = want[k];
-                overlay.edit(node, { params });
-                changed();
-            } },
-        })),
-    ];
-}
-
-/// What the render already knows, written into a generator as it is placed.
-///
-/// A `testsrc` is 320x240 and 25 fps until it is told otherwise, and a graph
-/// whose last pad is a different size from the render is refused — correctly,
-/// because a writer opened for one size being handed another is a scaler
-/// quietly resizing every frame. Filling the size and rate in at the moment of
-/// placing means the ordinary case simply agrees, and changing them afterwards
-/// is a decision that gets said out loud.
-///
-/// Which options those are is read out of the filter's own table rather than
-/// tabled here: a video source has `size` and `rate`, a sound source has
-/// `sample_rate`, and a source with neither gets nothing.
 function sourceDefaults(filter) {
     if (!isSource(filter) || !hooks.canvas) return {};
     const c = hooks.canvas() || {};
@@ -831,48 +786,6 @@ function sourceDefaults(filter) {
     return params;
 }
 
-function padPalette(pad) {
-    const all = pad.key ? canTake(pad.stream || 'v', pad.dir)
-                        : allFilters().filter((f) => !!padsOf(f.name));
-    const list = div('gp-filter-list');
-    const field = el('input', {
-        cls: 'wide', 'data-f': 'padsearch', type: 'text', value: search,
-        placeholder: 'name or description',
-        on: { input: () => { search = field.value; put(list, () => padRowsFor(pad, all)); } },
-    });
-    put(list, () => padRowsFor(pad, all));
-
-    return [
-        div('gp-head', [span('Place', 'gp-name'),
-                        span(pad.key ? `from a ${streamWord(pad.stream)} pad`
-                                     : 'on the canvas', 'gp-badge')]),
-        div('gp-hint dim', pad.key
-            ? 'It lands where you let go and is wired to the pad you dragged from. ' +
-              'A filter with more inputs than that arrives with the rest empty — drag ' +
-              'a wire to each of them.'
-            : 'It lands unwired. Drag from a socket to a socket to join it up.'),
-        row('Find', field),
-        list,
-        el('button', { cls: 'tiny', text: 'Cancel',
-                       on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
-    ];
-}
-
-// ── outputs ────────────────────────────────────────────────────────────────
-//
-// **The forward analogue of the sources above.** Dragging backwards out of an
-// empty input pad asks "where does this come from", and the answer that leads
-// the palette is a file or a generator. Dragging *forwards* out of an output pad
-// asks "where does this go", and the answer nothing could give until now is
-// "out of the render, as a stream of its own" — every other entry is a filter
-// that does something to it on the way to somewhere else.
-//
-// Placing one names it, because a pad with no label is a pad nothing can be
-// mapped to; the name is editable the moment it lands, since the panel is
-// showing the node it just made.
-
-/// Can an output be attached to what is being held? Nothing when the wire came
-/// off an *input* pad: an output produces nothing for that wire to land on.
 function wantsOutput(pad) { return !pad.key || pad.dir === 'out'; }
 
 function outputOffer(pad, term) {
@@ -891,24 +804,63 @@ function outputOffer(pad, term) {
                 if (hooks.placed) hooks.placed(rec, pad);
                 else changed();
             } },
-        }, [span(name, 'gp-fname mono'), span('a named pad', 'gp-badge'),
-            span('this pad leaves the render as a stream of its own — map it on the ' +
-                 'Write stage', 'dim')]),
+        }, [span(name, 'gp-fname mono'), span('a named pad', 'gp-badge')]),
+    ];
+}
+
+function sourceRows(pad, term) {
+    const stream = pad.key ? (pad.stream || 'v') : null;
+    const hit = (a, b) => !term || String(a).toLowerCase().indexOf(term) >= 0 ||
+                          String(b || '').toLowerCase().indexOf(term) >= 0;
+
+    const files = documentInputs.filter((i) =>
+        (!stream || streamKinds(i).some((k) => padTakes(k, stream))) &&
+        hit(i.name, i.path));
+    const made = sourceFilters().filter((f) => {
+        const pads = padsOf(f.name);
+        return pads && (!stream || pads.outs.indexOf(stream) >= 0) &&
+               hit(f.name, f.description);
+    });
+    if (!files.length && !made.length) return [];
+
+    const rows = [head(`Your files · ${files.length}`)];
+    for (const i of files) rows.push(inputRow(pad, i));
+    if (made.length) {
+        rows.push(head(`Sources · ${made.length}`));
+        for (const f of made.slice(0, FILTER_LIMIT)) rows.push(padRow(pad, f));
+    }
+    if (made.length > FILTER_LIMIT)
+        rows.push(div('gp-hint dim', `and ${made.length - FILTER_LIMIT} more — narrow the search`));
+    return rows;
+}
+
+function padPalette(pad) {
+    const all = pad.key ? canTake(pad.stream || 'v', pad.dir)
+                        : allFilters().filter((f) => !!padsOf(f.name));
+    const list = div('gp-filter-list');
+    const field = el('input', {
+        cls: 'wide', 'data-f': 'padsearch', type: 'text', value: search,
+        placeholder: `search ${all.length} filters…`,
+        on: { input: () => { search = field.value; put(list, () => padRowsFor(pad, all)); } },
+    });
+    put(list, () => padRowsFor(pad, all));
+
+    return [
+        div('gp-head', [span('Place', 'gp-name'),
+                        span(pad.key ? `from a ${streamWord(pad.stream)} pad`
+                                     : 'on the canvas', 'gp-badge')]),
+        row('Find', field),
+        list,
+        el('button', { cls: 'tiny', text: 'Cancel',
+                       on: { click: () => { sel = null; draw(graph, trouble, points); } } }),
     ];
 }
 
 function padRowsFor(pad, all) {
     const term = search.trim().toLowerCase();
     const out = [];
-    // Forward out of a pad: where it goes, before what happens to it on the way.
     if (wantsOutput(pad) && pad.key) out.push(...outputOffer(pad, term));
-    // Sources first, because a pad with nothing on it and a canvas with nothing
-    // on it are both places where the question is "where does the picture come
-    // from" before it is "what happens to it".
     if (wantsSource(pad)) out.push(...sourceRows(pad, term));
-    // ...and on the bare canvas, after them: nothing is being held, so neither
-    // question is the one being asked and the order is arbitrary — an output is
-    // the rarer thing to be reaching for with no wire in the air.
     if (wantsOutput(pad) && !pad.key) out.push(...outputOffer(pad, term));
 
     const isMade = (f) => wantsSource(pad) && isSource(f.name);
@@ -919,11 +871,7 @@ function padRowsFor(pad, all) {
         : all.filter((f) => MULTI.indexOf(f.name) >= 0);
     const shown = matching.slice(0, FILTER_LIMIT);
 
-    if (out.length) out.push(head('Filters'));
-    if (!term)
-        out.push(div('gp-hint dim',
-                     `The ones this is for, to start with. Type to search all ${all.length} ` +
-                     'that can take this pad.'));
+    if (out.length) out.push(head('Common Filters'));
     for (const f of shown) out.push(padRow(pad, f));
     if (matching.length > FILTER_LIMIT)
         out.push(div('gp-hint dim', `and ${matching.length - FILTER_LIMIT} more — narrow the search`));
@@ -975,21 +923,13 @@ function wirePanel(wire) {
         div('gp-actions', [
             el('button', {
                 cls: 'tiny', text: 'Delete', 'data-f': 'unwire',
-                title: mine ? 'Forget this wire'
-                            : 'Take this wire off — the rebuild will not put it back',
                 on: { click: () => { overlay.unwire(wire.key, wire.port); sel = null; changed(); } },
             }),
             mine || overlay.isCut(wire.key, wire.port) ? el('button', {
                 cls: 'tiny', text: 'Give it back', 'data-f': 'rewire',
-                title: 'Let the derivation decide what arrives here',
                 on: { click: () => { overlay.reconnect(wire.key, wire.port); sel = null; changed(); } },
             }) : null,
         ]),
-        div('gp-hint dim', mine
-            ? 'You made this one. Deleting it leaves the pad empty; the derivation ' +
-              'will not fill it back in unless you give the pad back.'
-            : 'The derivation made this one, and makes it again on every timeline ' +
-              'edit — so taking it off is remembered as a cut rather than as nothing.'),
     ];
 }
 

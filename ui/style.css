@@ -3223,6 +3223,55 @@ select.gn-f { text-align: left; }
 
 .gr-mine { color: var(--accent); }
 
+.gr-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+.gr-toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.gr-toolbar-sep {
+    color: var(--line);
+    opacity: 0.5;
+}
+button.pressed, button.on {
+    background: var(--accent);
+    color: #fff;
+}
+
+.gr-ctx-menu {
+    position: fixed;
+    z-index: 2000;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 4px 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    min-width: 150px;
+}
+.gr-ctx-item {
+    padding: 6px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+    color: var(--fg);
+}
+.gr-ctx-item:hover {
+    background: var(--accent);
+    color: #fff;
+}
+.gr-ctx-item.disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
 .gr-bar {
     display: flex;
     align-items: center;
