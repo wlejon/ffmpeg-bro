@@ -42,3 +42,7 @@ no reader looking for the command bar would have gone.
 - **[Testing](testing.md)** — every suite, what each is about, and how to run
   one on its own
 - **[Not yet](not-yet.md)** — an honest inventory of what this does not do
+
+Beside the manual sits **[Use cases](../usecases/README.md)** — twelve ordinary
+jobs driven end to end by scripts that record what each one cost, and the work
+list that fell out of them.

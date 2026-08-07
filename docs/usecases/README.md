@@ -8,21 +8,25 @@ that records what it cost. Not "does the application work" — the suites in
 there, and what did they have to know first.**
 
 Every one of these runs. Every one asserts the file that came out. The costs
-below are measured by the scripts rather than argued for here, so this page
-cannot drift away from the application.
+below are measured by the scripts rather than argued for here. The journeys are
+not registered with ctest: each needs a process of its own, so they are run by
+hand, and the tally is read out of the records they write.
 
 ```
-ctest --test-dir build -C Release -R usecases        # all twelve, then the tally
-ctest --test-dir build -C Release -R uc03            # one of them
+./build/Release/ffmpeg-bro-headless ui/ tests/usecases/uc03_lossless_cut.js   # one journey
+./build/Release/ffmpeg-bro-headless ui/ tests/usecases/run_all.js             # the tally, after running them
 ```
+
+Six of the twelve have write-ups here (UC01–UC06). The other six journeys run
+and are recorded like the rest; their write-ups are not written yet.
 
 ## Who this application is for
 
 The honest answer, and it is the thing the numbers are for.
 
 The navigation is **ffmpeg's architecture**: inputs → streams → a filter graph →
-encoders → a muxer → an output, drawn as `Capture → Sources → Compose → Graph →
-Encode → Write`. That is a real and defensible choice — it is why this app can
+encoders → a muxer → an output, drawn as `Capture → Sources → Find → Compose →
+Graph → Encode → Write`. That is a real and defensible choice — it is why this app can
 express stream copy, per-stream mapping, two-pass, bitstream filters and 182
 containers when an NLE-shaped one cannot — and it is stated as a principle in
 CLAUDE.md: *put new capability where ffmpeg puts it.*
@@ -64,12 +68,12 @@ wording it better.
 | [UC04](uc04-change-the-container.md) | Change the container without touching the video | 5 | 2 | 2 | 2 |
 | [UC05](uc05-one-frame-as-a-png.md) | Get one frame out as a PNG | 8 | 2 | 3 | 3 |
 | [UC06](uc06-just-the-audio.md) | Get just the audio out, as an mp3 | 5 | 2 | 2 | 1 |
-| [UC07](uc07-join-clips.md) | Join several clips end to end | 4 | 2 | 0 | 0 |
-| [UC08](uc08-burn-in-subtitles.md) | Burn subtitles into the picture | 7 | 4 | 1 | 1 |
-| [UC09](uc09-master-and-proxy.md) | A master and a small proxy out of one edit | 5 | 2 | 1 | 1 |
-| [UC10](uc10-record-the-screen.md) | Record the screen to a file | 7 | 2 | 3 | 0 |
-| [UC11](uc11-record-and-stream.md) | Record and stream at the same time | 5 | 1 | 3 | 1 |
-| [UC12](uc12-logo-in-the-corner.md) | Put a logo in the corner | 5 | 2 | 0 | 0 |
+| UC07 | Join several clips end to end | 4 | 2 | 0 | 0 |
+| UC08 | Burn subtitles into the picture | 7 | 4 | 1 | 1 |
+| UC09 | A master and a small proxy out of one edit | 5 | 2 | 1 | 1 |
+| UC10 | Record the screen to a file | 7 | 2 | 3 | 0 |
+| UC11 | Record and stream at the same time | 5 | 1 | 3 | 1 |
+| UC12 | Put a logo in the corner | 5 | 2 | 0 | 0 |
 
 ## The three that are wrong rather than merely expensive
 
@@ -86,14 +90,14 @@ length and presents it as correct. `rippleTrim` (Alt-drag) is the gesture that
 does what was meant. Nothing says which drag you just performed.
 
 **Dropping a subtitle file on the window does nothing at all.**
-[UC08](uc08-burn-in-subtitles.md). No input, no clip, no refusal, no message.
+UC08. No input, no clip, no refusal, no message.
 The file is perfectly readable — added through the Sources path field it probes
 and is recognised as subtitles from what libavformat found in it rather than
 from its name. The first gesture anybody tries fails silently, which is the one
 way a UI must never fail.
 
 **Dropping several clips stacks them instead of joining them.**
-[UC07](uc07-join-clips.md). Three files that are obviously one sequence land on
+UC07. Three files that are obviously one sequence land on
 three tracks at time zero, all playing at once. The monitor shows the top of the
 stack, so it looks exactly like one clip.
 
@@ -104,17 +108,17 @@ These are ordered by how many journeys each would help.
 
 ### 1. There is no second answer to "where does the file go"
 
-[UC10](uc10-record-the-screen.md), [UC11](uc11-record-and-stream.md). Capture
+UC10, UC11. Capture
 has **Save to** and **Container**; Write has **Write to** and **Format**. Same
 questions, different names, different stages, nothing carried between them —
 plus Capture's own video codec, audio codec, quality and *Also write*. The one
 thing the two stages do share is the tee destination editor, which is the proof
 that they are one question.
 
-The spine reads `Capture → Sources → Compose → Graph → Encode → Write` with
-arrows, and a recording takes none of those arrows: it is written by Capture and
-then re-opened at Sources. Two of the six cards are a different pipeline drawn
-as part of this one.
+The spine reads `Capture → Sources → Find → Compose → Graph → Encode → Write`
+with arrows, and a recording takes none of those arrows: it is written by
+Capture and then re-opened at Sources. Two of the seven cards are a different
+pipeline drawn as part of this one.
 
 ### 2. The app cannot answer the question people actually ask
 
@@ -130,7 +134,7 @@ knows the duration and could.
 
 [UC03](uc03-lossless-cut.md), [UC04](uc04-change-the-container.md),
 [UC05](uc05-one-frame-as-a-png.md), [UC06](uc06-just-the-audio.md),
-[UC09](uc09-master-and-proxy.md). Every one of these jobs has a correct, fast,
+UC09. Every one of these jobs has a correct, fast,
 well-built answer in the application, named after the ffmpeg mechanism that
 implements it and placed where that mechanism lives:
 
@@ -159,7 +163,7 @@ looking at.
 
 ### 5. Two stages do the same job and nothing says which
 
-[UC12](uc12-logo-in-the-corner.md). A logo can go on Compose (a clip on a track
+UC12. A logo can go on Compose (a clip on a track
 above, placed by the viewer's own rectangle) or on Graph (an `overlay` node).
 Both are correct and they are different renders. The spine puts them side by
 side with an arrow, which reads as *and then* rather than *or*.
