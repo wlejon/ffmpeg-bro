@@ -77,7 +77,7 @@ const viewerEl = el('viewer');
 const stage    = el('stage');
 const dropzone = el('dropzone');
 const osd      = el('osd');
-const filename = el('filename');
+const docTitle = el('doc-title');
 const chips    = el('chips');
 const xformPanel = el('transform');
 const stats    = el('stats');
@@ -149,6 +149,7 @@ initSources({
     options: el('src-options'),
     add: el('src-add'),
     addPath: el('src-path'),
+    browse: el('src-browse'),
     join: el('src-join'),
 }, {
     flash,
@@ -332,7 +333,7 @@ initGraphView({
     },
 });
 
-initInspector({ filename, chips, transform: xformPanel }, {
+initInspector({ chips, transform: xformPanel }, {
     // The panel edits the model; putting the picture and the timeline back in
     // step with it is the application's job, not the panel's.
     edited: () => { viewer.refreshAll(); updateCropUI(); changed('edit'); },
@@ -346,6 +347,15 @@ initInspector({ filename, chips, transform: xformPanel }, {
     redraw: () => { viewer.refreshAll(); updateCropUI(); timeline.draw(); },
     cropHandlesOn: () => cropMode,
     toggleCropHandles: () => setCropMode(!cropMode),
+    addFilter: (filterName) => {
+        const clip = project.selected;
+        if (!clip) return;
+        const anchor = `clip:${clip.id}/audio`;
+        graph.insert(anchor, filterName);
+        changed('edit');
+        viewer.refreshAll();
+        timeline.draw();
+    },
     // Which of the panel's controls a lock on the graph has taken over. Asked
     // rather than pushed, because it is a function of the edit and the overlay
     // together and both move.
@@ -866,8 +876,6 @@ doc.initDocument({
     }),
 });
 
-const docName = el('doc-name');
-
 /// Put the screen back after the model has been replaced under it.
 ///
 /// The half that is true of an undo as well as of an Open: the picture laid out
@@ -949,9 +957,9 @@ function enterSession(s) {
 
 /// The name, and whether it has been touched since it was last written.
 function drawDocument() {
-    if (!docName) return;
-    docName.textContent = doc.documentName();
-    docName.classList.toggle('modified', doc.isModified());
+    if (!docTitle) return;
+    docTitle.textContent = doc.documentName();
+    docTitle.classList.toggle('modified', doc.isModified());
 }
 
 /// Guarded the way the spine's doors are: a render or a recording holds the
@@ -2011,26 +2019,61 @@ el('btn-export').addEventListener('click', () => shell.goTo('encode'));
 // every pick so that picking the same one twice lays out two.
 const btnAddGen = el('btn-add-gen');
 if (btnAddGen) {
-    btnAddGen.addEventListener('click', () => {
-        const gens = generators.pictureSources();
-        if (gens.length) addGenerator(gens[0].name);
-    });
-}
-const pick = el('gen-pick');
-if (pick) {
-    const add = (value, text, title) => {
-        const opt = document.createElement('option');
-        opt.value = value;
-        opt.textContent = text;
-        if (title) opt.title = title;
-        pick.appendChild(opt);
+    let popover = null;
+    const closePopover = () => {
+        if (popover && popover.parentNode) {
+            popover.parentNode.removeChild(popover);
+        }
+        popover = null;
     };
-    add('', 'add…');
-    for (const f of generators.pictureSources()) add(f.name, f.name, f.description || '');
-    pick.addEventListener('change', () => {
-        const filter = pick.value;
-        pick.value = '';
-        if (filter) addGenerator(filter);
+
+    btnAddGen.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (popover) {
+            closePopover();
+            return;
+        }
+        const gens = generators.pictureSources();
+        if (!gens.length) return;
+
+        popover = document.createElement('div');
+        popover.className = 'gen-popover';
+
+        for (const f of gens) {
+            const item = document.createElement('div');
+            item.className = 'gen-popover-item';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'gen-popover-name';
+            nameEl.textContent = f.name;
+
+            item.appendChild(nameEl);
+
+            if (f.description) {
+                const descEl = document.createElement('span');
+                descEl.className = 'gen-popover-desc';
+                descEl.textContent = f.description;
+                item.appendChild(descEl);
+            }
+
+            item.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                addGenerator(f.name);
+                closePopover();
+            });
+            popover.appendChild(item);
+        }
+
+        const parent = btnAddGen.parentNode || document.body;
+        parent.appendChild(popover);
+
+        const onOutsideClick = (ev) => {
+            if (popover && !popover.contains(ev.target) && ev.target !== btnAddGen) {
+                closePopover();
+                document.removeEventListener('click', onOutsideClick);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', onOutsideClick), 0);
     });
 }
 

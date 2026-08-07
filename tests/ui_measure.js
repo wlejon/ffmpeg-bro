@@ -480,7 +480,7 @@ console.log('\nmeasuring stops where you say it stops');
     const button = document.querySelector('#gr-panel [data-f="measure-to"]');
     ok(!!button, `and its panel offers to measure to it (“${button && button.textContent}”)`);
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    pump(80);
+    waitFor('the measurement note', () => /Measuring/.test(el('gr-note') ? el('gr-note').textContent : ''), 5000);
 
     const said = el('gr-note') ? el('gr-note').textContent : '';
     ok(/Measuring \d+ of \d+ nodes/.test(said),

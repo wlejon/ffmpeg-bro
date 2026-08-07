@@ -146,6 +146,29 @@ export function initSources(nodes, h) {
         refs.addPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
     }
 
+    if (refs.browse) {
+        refs.browse.addEventListener('click', () => {
+            const openFn = typeof showOpenFileDialog === 'function'
+                ? showOpenFileDialog
+                : (typeof window !== 'undefined' && typeof window.showOpenFileDialog === 'function' ? window.showOpenFileDialog : null);
+            if (openFn) {
+                const res = openFn("Media Files|mp4;mkv;mov;avi;mp3;wav;png;jpg;webp;*", true);
+                const paths = Array.isArray(res) ? res : (res ? [res] : []);
+                for (const p of paths) {
+                    const inp = addInput(typedSpec(p));
+                    if (inp) {
+                        chosenId = inp.id;
+                        if (inp.error && hooks.flash) hooks.flash(inp.error);
+                    }
+                }
+                if (paths.length) {
+                    if (hooks.changed) hooks.changed();
+                    drawSources();
+                }
+            }
+        });
+    }
+
     if (refs.join) refs.join.addEventListener('click', () => {
         joinOpen = !joinOpen;
         drawSources();

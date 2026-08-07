@@ -372,7 +372,6 @@ if (second) {
     pump(200);
     ok(A.activeClip() === b, 'the playhead inside the second clip plays the second clip');
     ok(A.project.selected === b, 'and the inspector follows it');
-    ok(el('filename').textContent === b.name, `the title bar names it: ${b.name}`);
     A.setPlayhead(clip.length * 0.5);
     pump(200);
     ok(A.activeClip() === clip, 'and back again');

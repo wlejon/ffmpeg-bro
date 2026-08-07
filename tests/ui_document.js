@@ -388,7 +388,7 @@ doc.load(path);
 A.documentOpened({ clips: [], skipped: [] });
 pump(120);
 ok(!doc.isModified(), 'freshly opened, nothing is unsaved');
-ok(el('doc-name').className.indexOf('modified') < 0, 'and the topbar does not say it is');
+ok(el('doc-title').className.indexOf('modified') < 0, 'and the topbar does not say it is');
 A.select(A.project.clips[0]);
 pump(60);
 // The selection *is* in the document now — see the session section below — and
@@ -399,8 +399,8 @@ ok(!doc.isModified(), 'picking a clip is not an edit — the dot is about work, 
 A.setLayout('stack');
 pump(60);
 ok(doc.isModified(), 'moving something is');
-ok(el('doc-name').className.indexOf('modified') >= 0, 'and the topbar says so');
-same(el('doc-name').textContent, leaf(path),
+ok(el('doc-title').className.indexOf('modified') >= 0, 'and the topbar says so');
+same(el('doc-title').textContent, leaf(path),
      'beside the name, which has not changed');
 
 // ── the buttons ────────────────────────────────────────────────────────────
@@ -894,6 +894,28 @@ console.log('\na generator clip, round-tripped');
     try { fs.unlinkSync(genPath); } catch (e) { /* nothing to clean up */ }
     doc.reset();
     pump(150);
+}
+
+// ── A4: Keep pitch / atempo user node round-trip ───────────────────────────
+{
+    doc.reset();
+    pump(100);
+    const clip = A.addGenerator('testsrc');
+    A.select(clip);
+    pump(50);
+
+    const anchor = `clip:${clip.id}/audio`;
+    const node = A.graph.overlay.insert(anchor, 'atempo');
+    ok(node && node.anchor === anchor && node.filter === 'atempo',
+       `atempo node created with proper anchor id (${anchor})`);
+
+    const snap = doc.snapshot();
+    const roundTripInserts = snap.graph && snap.graph.inserts;
+    ok(roundTripInserts && roundTripInserts.some((n) => n.anchor === anchor && n.filter === 'atempo'),
+       'atempo user node survives document save/load round-trip');
+
+    doc.reset();
+    pump(100);
 }
 
 
