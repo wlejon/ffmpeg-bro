@@ -103,8 +103,6 @@ import { COMPOSITE_POINT } from './graph/derive.js';
 import { streamsOf } from './export/streams.js';
 import { readsInput, filterPath } from './export/subtitles.js';
 import { goTo } from './shell.js';
-import { streamsWorthReading, readingOf, readStream, dropReading, tickTelemetry,
-         isPicked, pick, labelOf } from './telemetry.js';
 
 let refs = {};
 let hooks = {};
@@ -238,9 +236,8 @@ export function tickSources() {
     // arriving on three threads, and `||` would leave one of them unpolled for a
     // frame whenever another went first.
     const opened = tickInputs();
-    const read = tickTelemetry();
     const pulled = tickLocalCopies();
-    const settled = opened || read || pulled;
+    const settled = opened || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1673,178 +1670,7 @@ function fileRows(p, input) {
 /// **The presses stay on this stage.** A set of marks belongs to
 /// an *input*, and they cost time, so nothing should start one unasked.
 function readRows(input) {
-    if (!input || !input.probe) return [];
-    const rows = [
-        ...telemetryRows(input),
-    ];
-    if (!rows.length) return [];
-    return [
-        head('Reading it', {
-            title: 'What this machine has been asked to work out about this input, ' +
-                   'beyond opening it. Nothing here happens on its own: each is a ' +
-                   'press, because each costs real time, and each answer is derived ' +
-                   'rather than part of the edit — none of it is in the document, on ' +
-                   'the undo track or in the unsaved marker.',
-        }),
-        ...rows,
-    ];
-}
-
-/// One read, on one line: what it reads, which stream it reads, where it has got
-/// to, and the door.
-///
-/// Four columns and always the same four, which is the whole point of collecting
-/// them: three readers that answer completely different questions are compared
-/// at a glance by "has this been done, on what, and how did it go". `said` is a
-/// node rather than a string because a failure is `src-error` and a summary is
-/// `dim`, and the difference between those is the row's answer.
-function readLine(what, of, ofWhy, said, acts) {
-    return div('src-read', [
-        span(what, 'src-read-k'),
-        el('span', { cls: 'src-read-of mono', text: of, title: ofWhy || '' }),
-        typeof said === 'string' ? el('span', { cls: 'src-read-v dim', text: said }) : said,
-        ...(acts || []).filter(Boolean),
-    ]);
-}
-
-/// A second line under a read, for whatever it has to offer once it is done —
-/// the mark chips, the series chips, a refusal count. Indented under the row it
-/// belongs to rather than beside it, because there can be forty of them.
-function readUnder(kids) { return div('src-read-more', kids.filter(Boolean)); }
-
-function transcriptRows(input, r) {
-    const part = (r.duration > 0 && r.read < r.duration - 0.5);
-    return [line(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
-                 (part ? ` · only the first ${clock(r.read)} of ${clock(r.duration)}`
-                       : ' · all of it'), [
-        part ? el('button', { cls: 'btn tiny', text: 'Carry on',
-                              title: 'Read the rest of the soundtrack.',
-                              on: { click: () => {
-                                  transcriptModel.dropTranscript(input.id);
-                                  transcriptModel.transcribe(input);
-                                  drawSources(); } } })
-             : null,
-        el('button', { cls: 'btn tiny', text: 'Forget',
-                       title: 'Drop this transcript.',
-                       on: { click: () => { transcriptModel.dropTranscript(input.id);
-                                            drawSources(); } } }),
-        modelButton(),
-    ])];
-}
-
-/// What a data track carries, for the ones something here can read.
-///
-/// Offered **only** where a parser exists: `streamsWorthReading` filters against
-/// `bro.ffmpeg.data.parsers()`, which is asked of the native registry. A real
-/// GoPro file carries `gpmd`, `tmcd` and `fdsc`, and two of those get no row
-/// rather than a button that fails at the press.
-///
-/// One row per readable track rather than one for the input, unlike the two
-/// above: a file can carry two of these and they are genuinely two reads, which
-/// is why the fourcc is in the row's stream column. Every data stream probes as
-/// `bin_data`, so without the tag a file with two would show the same row twice
-/// — the same fact `streamLine` states, and the reason the tag is on that line.
-function telemetryRows(input) {
-    const rows = [];
-    for (const stream of streamsWorthReading(input)) {
-        const of = `D${stream.index}`;
-        const why = `${stream.tag || stream.codec} — parsed by the reader registered ` +
-                    'for that fourcc, which is the whole identity of a data track ' +
-                    '(every one of them probes as bin_data).';
-        const e = readingOf(input.id, stream.index);
-
-        if (!e) {
-            rows.push(readLine('Telemetry', of, why, 'nothing has read this track yet', [
-                el('button', { cls: 'btn tiny', text: 'Read it',
-                               title: 'Parse this track and offer what it carries. It is a ' +
-                                      'walk over the whole track -- 32 ms for a four-hour-' +
-                                      'gigabyte camera file -- and it happens on a thread, ' +
-                                      'so nothing here stops while it does.',
-                               on: { click: () => { readStream(input, stream.index);
-                                                    drawSources(); } } }),
-            ]));
-            continue;
-        }
-        if (e.state === 'reading') {
-            rows.push(readLine('Telemetry', of, why, 'Reading' + (e.elapsed > 0.4
-                ? ' · ' + e.elapsed.toFixed(1) + 's' : '') + '…', []));
-            continue;
-        }
-        if (e.state !== 'done') {
-            rows.push(readLine('Telemetry', of, why,
-                               span(e.error || 'will not read', 'src-read-v src-error'), [
-                el('button', { cls: 'btn tiny', text: 'Again',
-                               on: { click: () => { dropReading(input.id, stream.index);
-                                                    readStream(input, stream.index);
-                                                    drawSources(); } } }),
-            ]));
-            continue;
-        }
-
-        const r = e.reading;
-        const facts = [r.device, r.series.length + ' series', r.packets + ' packets']
-            .filter(Boolean).join(' · ');
-        rows.push(readLine('Telemetry', of, why, facts, [
-            el('button', { cls: 'btn tiny', text: 'Forget',
-                           title: 'Drop this reading and take its series off the timeline.',
-                           on: { click: () => { dropReading(input.id, stream.index);
-                                                drawSources(); } } }),
-        ]));
-        // A track that would not parse all the way through is drawn with what
-        // survived and **says so**, because an empty plot cannot be told from a
-        // file with nothing in it. The count is the honest measure: one bad
-        // packet in seven thousand is a scratch, and seven thousand is a
-        // different file.
-        if (r.refused > 0)
-            rows.push(readUnder([
-                span(r.refused + ' of ' + r.packets + ' packets would not parse · ' +
-                     r.refusal, 'src-error'),
-            ]));
-        rows.push(readUnder(r.series.map((sv) => seriesChip(input, stream.index, sv))));
-    }
-    return rows;
-}
-
-
-/// One series, as a thing to put on the timeline or take off it.
-///
-/// The label is the fourcc first and the file's own `STNM` after it, which is
-/// `labelOf`'s rule and is stated there. What is on the chip beside it is the
-/// **reach** -- the exact min and max over every sample, not over the buckets --
-/// and the unit the file gave, because "is this the one I want" is a question
-/// about the numbers and not about the name.
-///
-/// A series the format's own divisor could not be applied to is marked `raw`.
-/// That is the one thing on this stage that says a number may not mean what it
-/// looks like, and it is worth a word: an unscaled `GPS5` latitude is
-/// 474305352, which is a number, and 47.4305352 is a place.
-function seriesChip(input, streamIndex, sv) {
-    const on = isPicked(input.id, streamIndex, sv);
-    const reach = shortNum(sv.min) + '..' + shortNum(sv.max) + (sv.units ? ' ' + sv.units : '');
-    return el('button', {
-        cls: 'src-series' + (on ? ' on' : ''),
-        title: labelOf(sv) + '\n' + sv.samples + ' samples at ' +
-               sv.rate.toFixed(1) + ' Hz\n' + reach +
-               (sv.scaled ? '' : '\nno divisor was applied to this one'),
-        on: { click: () => {
-            const why = pick(input.id, streamIndex, sv);
-            if (why && hooks.flash) hooks.flash(why);
-            drawSources();
-        } },
-    }, [
-        span(labelOf(sv), 'mono'),
-        span(reach + (sv.scaled ? '' : ' raw'), 'dim'),
-    ]);
-}
-
-/// Enough of a number to tell two series apart on a chip.
-function shortNum(v) {
-    if (!Number.isFinite(v)) return '--';
-    const a = Math.abs(v);
-    if (a >= 10000) return v.toExponential(1);
-    if (a >= 100) return String(Math.round(v));
-    if (a >= 1) return v.toFixed(2);
-    return v.toFixed(3);
+    return [];
 }
 
 /// One stream, on one line, in the terms that stream is described in.

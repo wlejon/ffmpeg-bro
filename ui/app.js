@@ -59,7 +59,6 @@ import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
-import * as telemetry from './telemetry.js';
 import * as graphPlayback from './graph/playback.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
@@ -585,7 +584,7 @@ onChange((what) => {
     // three is the timeline, and even that is marked rather than drawn, because
     // a hundred and fifty redraws of the same lanes in one frame is the same
     // mistake one level down.
-    if (what === 'analysis' || what === 'telemetry') {
+    if (what === 'analysis') {
         // ...and the readouts, which count how many clips are still being read.
         needs('timeline', 'readouts');
         return;
@@ -601,11 +600,6 @@ onChange((what) => {
     // else in this call would have noticed going away.
     graphOverlay.retain(project.clips.map((c) => c.id),
                         inputsModel.inputs.map((i) => i.id));
-    // And a reading taken off a data track of an input that has gone, which is
-    // the same shape of problem one line up and is answered in the same place
-    // for the same reason: the row on the Telemetry lane would otherwise name a
-    // file nothing answers to.
-    telemetry.retain(inputsModel.inputs.map((i) => i.id));
     // And the settings of a track the timeline no longer shows — a sync lock on
     // V4 after the last clip on it was deleted. Here for the same argument as the
     // line above and stated where that argument already is: a track can empty out
@@ -644,8 +638,7 @@ onChange((what) => {
     // `marks` is the fifth and joins it exactly: a detected onset is a
     // measurement of a soundtrack, and undo answers "does this change the
     // clips".
-    if (what !== 'selection' && what !== 'analysis' && what !== 'document' &&
-        what !== 'telemetry')
+    if (what !== 'selection' && what !== 'analysis' && what !== 'document')
         { doc.touch(); history.record(what); needs('document'); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
@@ -2385,13 +2378,6 @@ globalThis.__ffmpegBro = {
     // can be lost and the only way to see it is to read the file that would be
     // written without writing one.
     cues: cuesModel,
-    // What a data track turned out to carry, and which of it is on the lane. On
-    // the surface whole, because everything worth checking about it is pure and
-    // is *between* two things a screenshot cannot show: the numbers the parser
-    // produced, and which of them somebody put on the timeline. The lane itself
-    // is a canvas, so `timeline.telemetryLane()` is the reader for the drawn
-    // half and this is the reader for the claim.
-    telemetry,
     exporter, capture,
     // What has been pulled off a page onto this machine, and where each pull has
     // got to. On the surface because the claim it makes is about *order* — the

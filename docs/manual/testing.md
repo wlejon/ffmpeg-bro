@@ -58,7 +58,6 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -349,16 +348,6 @@ the tags that got no parser, so the seam is as visible there as it is with a
 `gpmd` present. Of those seventy-one files, twenty-one carry real GPMF and **all
 twenty-one parse with no packet refused** — 40 series each, and the largest (a
 4 GB recording, 1058 payloads) read in 45 ms.
-
-`ui_telemetry.js` is the two seams either side of that parser: that the control
-is offered against a `gpmd` row and against no other stream — because the list of
-fourccs is asked of the native registry rather than written down in `ui/` — that
-the read is started, polled from the frame loop and answered while the
-application goes on drawing, that a picked series becomes a lane which sits
-directly above the waveform and follows the clips through a trim without the
-track being read again, and that reading a file does **not** mark the document
-unsaved, which is the rule a waveform follows and the reason a reading is not in
-the document.
 
 ## Finding things by sound
 

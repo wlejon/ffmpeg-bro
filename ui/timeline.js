@@ -49,7 +49,6 @@ import { setIcon } from './icons.js';
 import { spanRows, placeSpans, editEdge, editBody, commitSpans } from './graph/spans.js';
 import { cueTracks, addCue, removeCue, splitCue, mergeCue, setCueText, setCueTime,
          hasOverrides, cuesChanged } from './cues.js';
-import { telemetryRows, bucketAt, shortLabelOf } from './telemetry.js';
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
 let cueBar, cueBarRow;
@@ -102,17 +101,6 @@ const CUE_MIN = 0.05;
 // against a neighbour takes the room there is instead, because the gesture people
 // use to write a whole track is press-press-press down the timeline.
 const CUE_SECONDS = 2;
-
-// The Telemetry lane, on the same trade again and with the biggest numbers of
-// the three, because a row here is a *plot*: a line inside an envelope needs
-// vertical room the way a region does not, and a row eight pixels tall is a
-// smudge rather than a shape. So the ideal is 26 — one 10px label with a 14px
-// plot under it — the budget is a little over three of those, and the floor is
-// where the envelope stops being distinguishable from the line through it.
-const TEL_ROW = 26;
-const TEL_BUDGET = 84;
-const TEL_FLOOR = 12;
-
 
 // The colours a row is told apart by. Six, because the label is what actually
 // names a node and this is what makes two rows readable as two at a glance; a
@@ -1285,252 +1273,7 @@ export function cueLane() {
              rowHeight: cueRowH, selected: cueSel };
 }
 
-// -- the Telemetry lane -----------------------------------------------------
-//
-// One row per series somebody picked off a data stream (`ui/telemetry.js`),
-// drawn against the same ruler as everything else. This is the entry in "Not
-// yet" that said a GoPro's speed could not be plotted beside the waveform, and
-// beside the waveform is exactly where it goes: what a number off a camera is
-// *for* is telling you where in the shot something happened, which is a question
-// about the timeline and not about a file.
-//
-// **A row is drawn per clip, not per file.** The reading belongs to an input and
-// the lane is the edit, so each clip of that input draws its own stretch of the
-// series through `sourceTime` -- the same map `columnsOf` uses for the waveform,
-// which is what makes a series follow a trim, a move and a speed for free. A
-// series is therefore *cut* the way the picture is: two clips from one recording
-// show two pieces of one line, in the order they were cut into.
-//
-// **The envelope and the line are the same claim `drawAudioLane` makes.** Each
-// bucket carries a min, a max and a mean over every sample that landed in it, so
-// a lane pixel covering 700 gyroscope samples shows the reach as a band and the
-// average as the line through it. A mean alone would hide every spike, which is
-// the half of a telemetry trace anybody is looking for; a max alone would say a
-// camera was permanently at its worst moment.
-//
-// **A bucket nothing landed in is a gap.** The line is broken there rather than
-// joined across it, because a recording whose GPS dropped out for a minute did
-// not travel in a straight line through it -- it was not measured, and a
-// straight line is the one drawing that claims it was.
-//
-// The lane has **no hit test and no drag**, unlike the other two: there is
-// nothing here to edit. A reading is what a file says, and the only gestures are
-// scrubbing (which the lane shares with A1) and picking a different series,
-// which is on the Sources stage where the reading was asked for.
 
-/// The lane's own DOM, or null when nothing is picked.
-let telRow = null;
-/// The rows as of the last sync -- held for `spanList`'s reason: the draw and
-/// the readout have to be about the same list.
-let telList = [];
-/// Measured, not chosen. See `spanRowH`.
-let telRowH = 0;
-/// Pixels the lane and the gap above it come to, for `fitHeights()`.
-let telStack = 0;
-
-/// Build or drop the lane so that it is there exactly when a series is picked.
-///
-/// Re-appended last on every sync, the way the Cues lane is, so that it sits
-/// directly above A1 whatever else appeared or went away -- a plot read against
-/// a waveform wants to be next to the waveform, and the When and Cues lanes come
-/// and go on channels of their own.
-function syncTelemetryLane() {
-    telList = telemetryRows();
-    const want = telList.length;
-    if (!want) {
-        if (telRow) { tracksEl.removeChild(telRow.row); telRow = null; }
-        telRowH = 0;
-        telStack = 0;
-        return;
-    }
-    if (!telRow) {
-        const row = el('div', { cls: 'track-row tel-row' });
-        const head = el('div', { cls: 'track-head',
-            title: 'Numbers read out of a data track - one row per series, drawn ' +
-                   'where the clip it came out of is. The band is the reach of ' +
-                   'every sample under that pixel and the line is their mean. ' +
-                   'Pick series on the Sources stage.' },
-            [el('span', { cls: 'track-name', text: 'Data' })]);
-        const lane = el('div', { cls: 'track-lane', id: 'lane-telemetry' });
-        const canvas = document.createElement('canvas');
-        lane.appendChild(canvas);
-        row.appendChild(head);
-        row.appendChild(lane);
-        tracksEl.appendChild(row);
-        tracksEl.appendChild(playhead);
-        telRow = { row, head, lane, canvas };
-        scrubOn(lane);
-        rebuilt = true;
-    }
-    // Last in the box, under everything else and directly above A1.
-    if (telRow.row.nextSibling !== playhead) {
-        tracksEl.appendChild(telRow.row);
-        tracksEl.appendChild(playhead);
-    }
-    const pitch = Math.max(TEL_FLOOR, Math.min(TEL_ROW, Math.floor(TEL_BUDGET / want)));
-    // Two for the lane's own border, as everywhere else here.
-    const h = want * pitch + 2;
-    telRow.lane.style.height = h + 'px';
-    telRow.row.style.height = h + 'px';
-    telRow.head.classList.toggle('tiny', pitch < 22);
-    telStack = 4 + h;
-}
-
-/// One row's vertical scale.
-///
-/// **Each row on its own axis, never a shared one.** `ui/plot.js` states the
-/// rule this follows, and states it for a chart with several lines on one pair
-/// of axes: two quantities with different scales on one axis invent a
-/// correlation that is not in the data. Here every row *is* its own axis, which
-/// is the same answer arrived at through the lane's shape rather than through a
-/// decision -- and it is why a row is drawn against its own min and max rather
-/// than the picked set's.
-///
-/// A series that never moved is given room either side of itself rather than
-/// being drawn as a rule along a border: a constant 9.81 is a true and useful
-/// thing to see, and a line pinned to an edge does not read as a line at all.
-function telScale(s) {
-    let lo = s.min, hi = s.max;
-    if (!(hi > lo)) {
-        const pad = Math.max(1e-6, Math.abs(hi) * 0.1 || 1);
-        lo -= pad; hi += pad;
-    }
-    return { lo, hi };
-}
-
-function drawTelemetryLane() {
-    if (!telRow) return;
-    const c = laneContext(telRow.canvas);
-    if (!c) return;
-    const { ctx, w, h } = c;
-    // The pitch the label placement uses, taken from the height the lane
-    // actually got. See `spanRowH`.
-    const rh = telRowH = h / Math.max(1, telList.length);
-
-    telList.forEach((row, i) => {
-        const top = i * rh;
-        // Every other row banded, so a stack of them reads as rows.
-        if (i % 2) {
-            ctx.fillStyle = 'rgba(255,255,255,0.025)';
-            ctx.fillRect(0, top, w, rh);
-        }
-
-        const { lo, hi } = telScale(row.series);
-        const plotTop = top + (rh >= 20 ? 11 : 2);
-        const plotH = Math.max(2, top + rh - 2 - plotTop);
-        const Y = (v) => plotTop + plotH - ((v - lo) / (hi - lo)) * plotH;
-
-        if (rh >= 20) {
-            ctx.font = '10px Consolas, monospace';
-            ctx.fillStyle = row.color;
-            const name = shortLabelOf(row.series);
-            ctx.fillText(name, 4, top + 9);
-            // The reach, out of the exact statistics rather than the buckets --
-            // the numbers beside a row are the ones every sample was folded
-            // into, not the ones that survived the decimation.
-            ctx.fillStyle = '#7c838f';
-            const reach = fmtValue(row.series.min) + '..' + fmtValue(row.series.max) +
-                          (row.units ? ' ' + row.units : '');
-            ctx.fillText(reach, 4 + ctx.measureText(name).width + 6, top + 9);
-        }
-
-        for (const clip of project.clips) {
-            // `clip.input` is the input *object* — `clipsOf()` in ui/project.js
-            // compares against one and `ui/document.js` writes `c.input.id` —
-            // so the id is a step down. This line compared the object to the id
-            // and was therefore always false, which drew no series at all: the
-            // lane appeared, took its height, drew its labels and its reach, and
-            // left the plot empty. It survived because the reader this stage is
-            // tested through (`telemetryLane().rows`) is the *picked* list and
-            // not what was drawn.
-            if (!clip.input || clip.input.id !== row.inputId) continue;
-            const l = Math.max(0, Math.floor(timeToX(clip.start)));
-            const r = Math.min(w, Math.ceil(timeToX(clip.start + clip.length)));
-            if (r <= l) continue;
-            drawSeriesOver(ctx, row, l, r, clip, Y);
-        }
-    });
-}
-
-/// One clip's stretch of one series: the envelope, then the mean over it.
-///
-/// The bucket walk is `columnsOf`'s, restated for a reading rather than for a
-/// set of peaks -- not shared with it, because the two answer different
-/// questions about different objects (`clip.peaks` is the file's whole duration
-/// against a bucket count, a reading is the *track's* own span against its own)
-/// and one function taking either would be a function deciding which it had been
-/// given. What *is* shared is the map from a lane pixel to a moment in the file,
-/// which is `sourceTime` and lives in ui/project.js.
-function drawSeriesOver(ctx, row, l, r, clip, Y) {
-    const series = row.series, reading = row.reading;
-    const bAt = (x) => bucketAt(reading, sourceTime(clip, xToTime(x)));
-
-    // The envelope first, as a band, so the line drawn over it stays legible
-    // where the reach is wide.
-    ctx.fillStyle = row.color;
-    ctx.globalAlpha = 0.22;
-    for (let x = l; x < r; x++) {
-        const b0 = bAt(x);
-        if (b0 < 0) continue;
-        const next = bAt(x + 1);
-        const b1 = Math.max(b0 + 1, next < 0 ? b0 + 1 : next);
-        let a = Infinity, b2 = -Infinity;
-        for (let b = b0; b < b1 && b < reading.buckets; b++) {
-            if (!series.filled[b]) continue;
-            if (series.lo[b] < a) a = series.lo[b];
-            if (series.hi[b] > b2) b2 = series.hi[b];
-        }
-        if (!(b2 >= a)) continue;
-        const yTop = Y(b2), yBot = Y(a);
-        ctx.fillRect(x, yTop, 1, Math.max(1, yBot - yTop));
-    }
-    ctx.globalAlpha = 1;
-
-    // The mean, broken wherever a pixel had nothing in it. A `moveTo` rather
-    // than a `lineTo` across a gap is the whole of "a gap is a gap".
-    ctx.strokeStyle = row.color;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    let open = false;
-    for (let x = l; x < r; x++) {
-        const b0 = bAt(x);
-        if (b0 < 0) { open = false; continue; }
-        const next = bAt(x + 1);
-        const b1 = Math.max(b0 + 1, next < 0 ? b0 + 1 : next);
-        let sum = 0, n = 0;
-        for (let b = b0; b < b1 && b < reading.buckets; b++) {
-            if (!series.filled[b]) continue;
-            sum += series.mean[b];
-            n++;
-        }
-        if (!n) { open = false; continue; }
-        const y = Y(sum / n) + 0.5;
-        if (open) ctx.lineTo(x + 0.5, y);
-        else { ctx.moveTo(x + 0.5, y); open = true; }
-    }
-    ctx.stroke();
-}
-
-/// A number in about six characters, for a lane head with no room for more.
-///
-/// The same intent as `shortValue` in ui/plot.js and deliberately not the same
-/// function: that one is for a readout under a pointer with a line to itself,
-/// this one sits beside a name in a 26-pixel row and has to keep a latitude and
-/// a shutter speed apart in the same width.
-function fmtValue(v) {
-    if (!Number.isFinite(v)) return '--';
-    const a = Math.abs(v);
-    if (a >= 10000) return v.toExponential(1);
-    if (a >= 100) return String(Math.round(v));
-    if (a >= 1) return v.toFixed(2);
-    return v.toFixed(3);
-}
-
-/// The lane, for tests -- the reader `whenLane()` and `cueLane()` are, and for
-/// the same reason: a canvas cannot be asserted against.
-export function telemetryLane() {
-    return { lane: telRow ? telRow.lane : null, rows: telList, rowHeight: telRowH };
-}
 
 
 function drawRuler() {
@@ -1595,7 +1338,6 @@ export function draw() {
     syncHeads();
     syncSpanLane();
     syncCueLane();
-    syncTelemetryLane();
     fitHeights();
     clampView();
     watchView();
@@ -1604,7 +1346,6 @@ export function draw() {
     drawAudioLane();
     drawSpanLane();
     drawCueLane();
-    drawTelemetryLane();
     drawCueBar();
     drawScrollbar();
 
@@ -1699,7 +1440,7 @@ let laneStack = 0;
 /// The words strip is outside the box of lanes — it is a form and not a lane —
 /// so it is a term on the timeline's own height rather than on `#tracks`'s.
 function fitHeights() {
-    const stack = laneStack + spanStack + cueStack + telStack;
+    const stack = laneStack + spanStack + cueStack;
     tracksEl.style.height = stack + 'px';
     // Everything above and below the box of lanes: the zoom bar, the ruler, the
     // waveform, the words strip when there is one, the scrollbar and the gaps.

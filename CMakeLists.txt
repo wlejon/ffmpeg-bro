@@ -546,14 +546,6 @@ add_test(NAME ui-subtitles COMMAND ffmpeg-bro-headless
 add_test(NAME ui-document COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_document.js"
          -- "${FIXTURE_A}" "${FIXTURE_B}")
-# A data track, read and put on the timeline. The fixture carries real GPMF
-# whose divisors are the difference between 9.81 and 981, so what this can check
-# that a screenshot cannot is that the number on the lane is the number the file
-# means. Everything about *shape* also holds against a real camera file, and the
-# sections about the fixture's own values say so and skip.
-add_test(NAME ui-telemetry COMMAND ffmpeg-bro-headless
-         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_telemetry.js"
-         -- "${FIXTURE_DATA}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
@@ -571,8 +563,7 @@ set_tests_properties(decode export capabilities inputs sequences playback hardwa
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document ui-output ui-telemetry
-                     ui-load
+                     ui-measure ui-subtitles ui-document ui-output ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
