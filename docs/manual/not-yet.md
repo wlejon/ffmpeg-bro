@@ -49,6 +49,7 @@ about it instead.
   is decide *for* you whether that is cheap: it has no sense of whether a
   given graph is a quick `cropdetect` or a slow `libvmaf`, so turning it on
   re-runs everything, not just what's cheap.
+- **Reading web page URLs or resolving stream site links.** ffmpeg-bro opens direct media paths, protocol URLs (HLS, RTSP, HTTP media links) and devices. Web page URLs (HTML pages) are not resolved automatically; hand libavformat a direct media or playlist URL.
 - **Reading a URL that keeps dropping, and a device that hangs on open.**
   Both ends of a flaky connection are handled for the *writing* side —
   `Keep trying` reconnects a broken output and counts the gaps, see [when the

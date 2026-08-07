@@ -72,7 +72,6 @@
 // looks like is derived from the file, which is `peaks`'s standing rule.
 
 import { project, changed, hasPicture, isGenerator } from './project.js';
-import { forListening } from './vod.js';
 
 // ── how much is read, and when ─────────────────────────────────────────────
 
@@ -169,23 +168,7 @@ function sourceFor(clip, half) {
     const input = clip.input;
     const remote = !!(input && input.remote);
     const local = (input && input.localCopy) || '';
-    // The picture is the clip's own source or a copy of it, and never a
-    // sibling rendition: a filmstrip is what a cut is made against, so a frame
-    // from a stream that resolves its ad breaks differently would put the shot
-    // you picked a second or two from where you picked it.
-    if (half === 'picture') {
-        if (local) return { path: local, link: false, about: '' };
-        return { path: clip.src || clip.path, link: remote, about: '' };
-    }
     if (local) return { path: local, link: false, about: '' };
-    const sound = (input && input.localAudio) || '';
-    // A sound-only copy exists only where the site published an audio-only
-    // rendition, and that rendition is the one that does not share the
-    // picture's zero — so this branch is always the inexact one.
-    if (sound) return { path: sound, link: false, about: 'sound from the local copy of the soundtrack' };
-    const only = forListening({ renditions: (input && input.renditions) || [] });
-    if (only && only.audioOnly && only.url)
-        return { path: only.url, link: true, about: `sound from ${only.name}` };
     return { path: clip.src || clip.path, link: remote, about: '' };
 }
 

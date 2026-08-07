@@ -64,7 +64,6 @@
 // a fact about this machine, not about the edit, which is `peaks`'s rule.
 
 import { inputs } from './inputs.js';
-import { forListening } from './vod.js';
 import { copyRowsOf } from './export/copy.js';
 
 /// One input's pulls, by input id. Not a Map keyed by the input object: an input
@@ -156,23 +155,20 @@ function pathFor(dir, name, which) {
 /// there is no separate sound pull at all: pulling the same rendition twice
 /// would be the same bytes twice, which is worse than not having the shortcut.
 function renditionsFor(input) {
-    const list = (input && input.renditions) || [];
-    const video = list.find((r) => r.name === input.rendition) || list[0] || null;
-    const audio = forListening({ renditions: list });
     return {
-        video: video ? video.url : input.path,
-        videoName: video ? video.name : 'the stream',
-        audio: audio && audio.audioOnly ? audio.url : '',
-        audioName: audio && audio.audioOnly ? audio.name : '',
+        video: input ? input.path : '',
+        videoName: input ? input.name : 'the stream',
+        audio: '',
+        audioName: '',
     };
 }
 
-/// Ask for both. Returns a sentence when it could not, and '' when it is under
-/// way. The press returns immediately: the first thing either pull does is open
-/// a rendition, and that happens on a thread.
+/// Ask for a local copy. Returns a sentence when it could not, and '' when it is under
+/// way. The press returns immediately: the first thing the pull does is open
+/// the stream, and that happens on a thread.
 export function save(input, dir) {
     if (!input) return 'there is no input to copy';
-    if (!input.renditions && !input.origin)
+    if (!input.remote && !input.origin)
         return 'that input is already a file on this machine';
     const where = renditionsFor(input);
     if (!where.video) return 'nothing in it says what to read';
@@ -180,29 +176,15 @@ export function save(input, dir) {
     const job = {
         input: input.id,
         name: input.name,
-        // **Whether the two pulls are on one clock**, which is the fact a cut
-        // taken against a transcript has to be told. See the header.
-        sameClock: !where.audio,
+        sameClock: true,
         audio: blank(),
         video: blank(),
     };
 
     job.video.path = pathFor(dir, input.name, 'video');
-    job.video.label = `${input.name} · ${where.videoName}`;
+    job.video.label = `${input.name}`;
     job.video.url = where.video;
-    if (where.audio) {
-        job.audio.path = pathFor(dir, input.name, 'audio');
-        job.audio.label = `${input.name} · ${where.audioName}`;
-        job.audio.url = where.audio;
-        // The picture is described but not started. `tick()` begins it when the
-        // soundtrack is off the link — see the measurement in the header, and
-        // note that `waiting` is this module's word rather than the queue's: the
-        // fetch does not exist yet, so there is nothing queued to be behind.
-        job.video.state = 'waiting';
-        begin(job.audio);
-    } else {
-        begin(job.video);
-    }
+    begin(job.video);
 
     jobs.set(input.id, job);
     return '';

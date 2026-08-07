@@ -36,15 +36,6 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   up. Repeat (`-stream_loop`) says how many more times to read the input; `-1` is
   forever, which has no length at all, so a looping input is as long as Stop at says
   and no longer.
-- **Stream**, only for an input that came from a *page* rather than from a path.
-  Pasting a stream page's URL into **From** turns the page into the HLS renditions
-  behind it — nothing is downloaded until something asks for a range of it. All of
-  them are kept, not just the best: one recording is two different jobs, the picture
-  at full resolution for the cut and `Audio Only` at a fraction of the bytes,
-  and picking one is an ordinary change of `-i`. What does
-  **not** carry between two of them is *times* — a VOD's renditions do not resolve
-  ad breaks identically and drift apart by seconds — so a cut made against one is a
-  search hint against another and the row says so.
 - **What came back** — the container on one line, then **one line per stream**:
   `V0  h264  1920×1080 · 29.97 fps · yuv420p · bt709`. Everything else the probe
   reported — profile, language, pixel aspect, colour range, per-stream duration — is
@@ -59,37 +50,23 @@ beside it where it is dead — `A device cannot be cut`, `One picture, no time a
 
 ## Saving a stream to this machine
 
-`Save a local copy` appears beside those for an input that came off a page, and
+`Save a local copy` appears beside those for a remote URL input, and
 it is worth pressing before anything else you plan to do more than once.
 Everything downstream reads an input *repeatedly* — a scrub, a filmstrip, a
 waveform, a render — and for a URL every one of those is a
 network read.
 
 Nothing waits for the copy. A clip on a URL is [read for the span the timeline
-is showing](timeline.md), so you can explore a six-hour recording while it is
-still arriving — the waveform is bounded to a window and taken from the
-audio-only rendition, which is a second or two from the picture, until the copy
-lands. The moment a copy is on this machine both lanes are read from it instead:
+is showing](timeline.md), so you can explore a long recording while it is
+still arriving. The moment a copy is on this machine both lanes are read from it instead:
 whole, exact and free.
 
-What it does is a **stream copy**: the packets already on the CDN written into a
+What it does is a **stream copy**: the packets written into a
 local container without being decoded, which is what [Rewrap](rendering.md)
-does. It runs **in the background** — the card grows a row per pull saying where
-each has got to, with `Stop` beside it, and you carry on. A pull is not a
+does. It runs **in the background** — the card grows a row saying where the pull has
+got to, with `Stop` beside it, and you carry on. A pull is not a
 render: it takes no encoder, no compositor and none of the one job slot, so the
 Render button goes on working the whole time.
-
-### The soundtrack first, and then the picture
-
-The press pulls **two** streams, one after the other: the audio-only stream,
-and then the picture. When the sound lands the card says so, because that is
-the moment work that needs only sound can start — finding where
-something happens — while the picture is still arriving.
-
-The two are different transcodes of one stream and **do not share a zero** — a
-Twitch VOD's ad-break discontinuities put them up to a few seconds apart — so a
-time you find in the sound is where to *look* in the picture and never where to
-cut it. The card says so once both are here.
 
 ### Where it goes
 

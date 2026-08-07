@@ -83,9 +83,6 @@ import { clock, bytes, kbps, basename } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
          lengthOf, kindOf, endless, opening, stopOpening, tickInputs } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
-// A stream site's page URL is not something libavformat opens; one request turns
-// it into one this build already can. See ui/vod.js.
-import { looksLikePage, resolve as resolveVod } from './vod.js';
 import { copiesOf, cancel as cancelCopy, tickLocalCopies,
          copyFolder, useCopyFolder, PULL_WORDS } from './localcopy.js';
 // Which inputs a recording reads. The same question `graphReads()` asks of the
@@ -135,15 +132,6 @@ export function initSources(nodes, h) {
         const add = () => {
             const path = refs.addPath.value.trim();
             if (!path) return;
-            // **A page from a stream site is opened by resolving it first.**
-            // `https://www.twitch.tv/videos/…` is HTML, and handing it to
-            // libavformat gets "Invalid data found when processing input" —
-            // which is true and useless. One request turns it into an HLS URL
-            // this build can already open, so the application does that rather
-            // than sending somebody away for a downloader. Nothing is fetched
-            // but the playlist: what comes back is a URL and it is opened as
-            // one. See ui/vod.js.
-            if (looksLikePage(path)) return addPage(path);
             // Typing `shot_%04d.png` means a sequence in exactly the way
             // dropping the folder does, and a path that is one picture means a
             // still. Anything else is a file or a URL and nothing is added to
@@ -151,42 +139,6 @@ export function initSources(nodes, h) {
             added(addInput(typedSpec(path)));
         };
 
-        /// Resolve a page and add what it names.
-        ///
-        /// Asynchronous, and the field is left holding what was typed until it
-        /// lands: the request is one round trip but it is a *network* round
-        /// trip, and a field that emptied itself before the answer came back
-        /// would leave somebody looking at an empty stage wondering whether
-        /// they had pressed the button.
-        const addPage = (page) => {
-            if (hooks.flash) hooks.flash('Asking the site about that link…');
-            resolveVod(page).then((vod) => {
-                added(addInput({
-                    path: vod.url,
-                    // The readable half. The URL it is opening is a signed
-                    // playlist that expires; this is what it came from.
-                    name: vod.label,
-                    origin: vod.page,
-                    // **All of them, not just the one being opened.** One
-                    // recording is two jobs — the picture for the cut, the sound
-                    // alone for a transcription at a fraction of the bytes — and
-                    // a resolver that answered with the best stream and dropped
-                    // the rest made the second one cost the first one's
-                    // bandwidth. They were already being counted in the flash
-                    // message below and then thrown away.
-                    renditions: vod.renditions,
-                    rendition: vod.renditions[0].name,
-                }));
-                if (hooks.flash)
-                    hooks.flash(`${vod.label} — ${vod.renditions.length} renditions, ` +
-                                `opened at ${vod.renditions[0].name}`);
-            }).catch((e) => {
-                // Named rather than swallowed: a VOD that is deleted, private
-                // or subscriber-only is a different answer from a link that was
-                // mistyped, and only the site can tell them apart.
-                if (hooks.flash) hooks.flash(String((e && e.message) || e));
-            });
-        };
         refs.add.addEventListener('click', add);
         // Enter in the field is the same act. A path typed and then abandoned
         // because the button was somewhere else is the commonest way a field
@@ -581,55 +533,8 @@ function whereRows(input) {
                   'about a filename',
         })));
     }
-    rows.push(...renditionRows(input));
     if (opening(input)) rows.push(...waitingRows(input));
     return rows;
-}
-
-/// The other streams of the same recording, where the input came out of a page.
-///
-/// **Switching is a change of path and nothing more.** Every rendition is the
-/// same recording — the same length, the same content, the same page — so
-/// swapping one for another is exactly the edit `From` above already is, and it
-/// goes through the same `change()` so the file is reopened and the clips
-/// reading it are reloaded the way they would be for any other change of `-i`.
-///
-/// Two things it deliberately does not do. It does not re-resolve: the URLs came
-/// back in one answer and are all signed with the same lifetime, so asking again
-/// for the one you picked would be a second round trip for a string already in
-/// hand. And it does not re-cut anything — the clips keep their times, which is
-/// right within one file and is *not* right between two renditions of a Twitch
-/// VOD, where the discontinuities where the ads were leave the clocks up to two
-/// and a half seconds apart. That is why the row says so rather than the
-/// application pretending the swap is free.
-function renditionRows(input) {
-    const list = input.renditions;
-    if (!list || list.length < 2) return [];
-    const at = list.findIndex((r) => r.url === input.path);
-    const pick = el('select', {
-        cls: 'wide', 'data-f': 'srcrendition',
-        title: 'Another stream of the same recording',
-        on: { change: () => {
-            const r = list[Number(pick.value)];
-            if (!r) return;
-            input.rendition = r.name;
-            change(input, { path: r.url });
-        } },
-    }, list.map((r, i) => el('option', {
-        value: String(i),
-        selected: i === at ? true : undefined,
-        text: `${r.name}${r.audioOnly ? ' — sound only' : ''}` +
-              (r.bandwidth ? ` · ${Math.round(r.bandwidth / 1000)} kb/s` : ''),
-    })));
-    return [
-        row('Stream', pick),
-        note(`${list.length} renditions of ${input.origin || 'this recording'}. ` +
-             'They are the same recording at different rates — the sound-only one is a ' +
-             'fraction of the bytes and is what a transcription pass wants. Times do not ' +
-             'carry between two of them: a Twitch VOD’s renditions do not resolve the ' +
-             'ad breaks identically and drift apart by seconds, so a cut made against one ' +
-             'is a search hint against another and not a cut.'),
-    ];
 }
 
 /// What is happening while an input is being opened, and the way to stop it.

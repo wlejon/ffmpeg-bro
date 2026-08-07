@@ -45,12 +45,7 @@ reading altogether and says **zoom in to read the sound**, rather than
 spending several seconds on a waveform that would be a few pixels wide in the
 middle of a long recording.
 
-The envelope is also read from the cheapest source that carries the same
-soundtrack: a local copy if one has been pulled, otherwise the site's
-audio-only rendition, otherwise the clip itself. The middle two are a couple of
-seconds away from the picture and no offset corrects it (see [Saving a stream to
-this machine](sources.md#saving-a-stream-to-this-machine)), so the lane says which one it read. Pull the sound
-and the lane gets exact and instant, which is the point of pulling it.
+The envelope is also read from the local copy if one has been pulled, otherwise from the clip itself. Pulling a local copy makes reading exact and instant.
 
 **Zoom** with the wheel, about the pointer — the version that lets you dive
 into a moment instead of steering the window back after every notch.
