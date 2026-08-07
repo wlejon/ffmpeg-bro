@@ -554,13 +554,6 @@ add_test(NAME ui-document COMMAND ffmpeg-bro-headless
 add_test(NAME ui-telemetry COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_telemetry.js"
          -- "${FIXTURE_DATA}")
-# Where something happens in a soundtrack, from the press to the lane to the two
-# keys that walk it. The second file has no audio stream at all, which is what
-# says the control is drawn where it will work rather than everywhere with a
-# refusal behind it.
-add_test(NAME ui-marks COMMAND ffmpeg-bro-headless
-         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_marks.js"
-         -- "${FIXTURE_MARKS}" "${FIXTURE_SILENT}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
@@ -578,7 +571,7 @@ set_tests_properties(decode export capabilities inputs sequences playback hardwa
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document ui-output ui-telemetry ui-marks
+                     ui-measure ui-subtitles ui-document ui-output ui-telemetry
                      ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 

@@ -7,7 +7,6 @@
 | `Space` | play / pause |
 | `←` `→` | step one frame (hold `Shift` for one second) |
 | `J` `L` | shuttle down / up through the speed list |
-| `,` `.` | jump to the previous / next [mark](timeline.md#the-marks-lane) in the sound |
 | `K` | pause |
 | `Home` `End` | go to start / end |
 | `M` | mute |

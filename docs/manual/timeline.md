@@ -319,38 +319,6 @@ tracks, the When lane and the Cues lane follow. Nothing on it can be edited: a
 reading is what a file says. Pressing it moves the playhead, as on every other
 lane.
 
-## The Marks lane
-
-Where something happens in the sound — see [Finding things by
-sound](sources.md#finding-things-by-sound) — drawn against the same ruler,
-between the Data lane and the waveform.
-
-One row for every mark in the edit, and colour is the only thing that separates
-them:
-
-| | |
-|---|---|
-| yellow | an `onset` — a sharp change in the spectrum |
-| blue | a `tonal` run, drawn with a band showing how long it lasted |
-| green | a `sound` run, likewise |
-
-**One row, not three.** What you do with a mark is *jump to it*, and `,` and
-`.` walk every mark in the edit in time order whatever kind it is — three
-stacked rows would turn the commonest gesture into a question about which row
-you were on.
-
-A tick is one pixel wide because what it says is "here". A run gets a band
-under the tick and an onset does not, because an onset *has* no length.
-
-Marks are drawn **per clip**, exactly as a telemetry series is: they belong to
-the input and follow every trim, move and speed change without the soundtrack
-being read again. A mark in a part of the file the clip does not cover is
-simply absent.
-
-Nothing here can be edited: a mark is what a soundtrack says. Pressing the lane
-moves the playhead. Which kinds are drawn is decided on the Sources stage,
-where the reading was asked for.
-
 ## The sync lock
 
 The padlock beside a track's name says whether that track ripples on its own or

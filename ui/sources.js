@@ -105,10 +105,6 @@ import { readsInput, filterPath } from './export/subtitles.js';
 import { goTo } from './shell.js';
 import { streamsWorthReading, readingOf, readStream, dropReading, tickTelemetry,
          isPicked, pick, labelOf } from './telemetry.js';
-// Whole, unlike the line above: this module reads eight things off it and a
-// namespace keeps `marksModel.MARK_WORDS` visibly the *one* home of the
-// sentences that say what a mark claims.
-import * as marksModel from './marks.js';
 
 let refs = {};
 let hooks = {};
@@ -243,9 +239,8 @@ export function tickSources() {
     // frame whenever another went first.
     const opened = tickInputs();
     const read = tickTelemetry();
-    const heard = marksModel.tickMarks();
     const pulled = tickLocalCopies();
-    const settled = opened || read || heard || pulled;
+    const settled = opened || read || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1680,7 +1675,6 @@ function fileRows(p, input) {
 function readRows(input) {
     if (!input || !input.probe) return [];
     const rows = [
-        ...soundRow(input),
         ...telemetryRows(input),
     ];
     if (!rows.length) return [];
@@ -1718,86 +1712,8 @@ function readLine(what, of, ofWhy, said, acts) {
 /// belongs to rather than beside it, because there can be forty of them.
 function readUnder(kids) { return div('src-read-more', kids.filter(Boolean)); }
 
-/// Which soundtrack a read reads, as the row's second column.
-///
-/// **Reported where there is an answer and named as a choice where there is
-/// not.** Both readers ask libav for `av_find_best_stream` — what `[0:a]` means
-/// on a command line — and both hand back the index they were given. Before any
-/// press there is nothing to report, and the two cases are genuinely different:
-/// a file with one soundtrack has no ambiguity to state, and a file with three
-/// has one that must not be settled by drawing the row under the first of them.
-function soundStream(input, entry) {
-    const p = (input.probe && input.probe.streams) || [];
-    const audio = p.filter((s) => s.kind === 'audio');
-    const got = entry && entry.result && entry.result.streamIndex;
-    if (Number.isInteger(got) && got >= 0)
-        return { of: `A${got}`, why: audio.length > 1
-            ? `read from A${got} — the best of this input's ${audio.length} soundtracks`
-            : 'read from this input\'s soundtrack' };
-    if (audio.length === 1)
-        return { of: `A${audio[0].index}`, why: 'the only soundtrack in this input' };
-    return { of: `best of ${audio.length}`,
-             why: `This input has ${audio.length} soundtracks and a read takes one — ` +
-                  'av_find_best_stream\'s pick, which is what [0:a] means on a ' +
-                  'command line. Which one it was is on this row once it has run.' };
-}
-
-/// Where something happens in this soundtrack.
-///
-/// **Only where it will work.** `marks.worthReading` is the question — does this
-/// input carry a soundtrack — so a file with no audio stream gets no row rather
-/// than one whose press fails. It is asked of the marks model rather than of the
-/// input, because what counts as worth reading is that module's to decide.
-///
-/// **The words on it are the whole of what stops this being a lie.** Nothing
-/// here says "birds", "speech" or "events": the button says what it does, and
-/// the three legends say what was measured. They come from `MARK_WORDS` in
-/// ui/marks.js so there is one copy of them.
-function soundRow(input) {
-    if (!marksModel.worthReading(input)) return [];
-
-    const e = marksModel.readOf(input.id);
-    const { of, why } = soundStream(input, e);
-
-    if (!e)
-        return [readLine('Sound', of, why, 'nothing has listened to this yet', [
-            el('button', { cls: 'btn tiny', text: 'Find sounds',
-                           // What it finds is listed out of `MARK_WORDS` rather
-                           // than written here, for the reason that object
-                           // exists: it is the one home of the sentences saying
-                           // what a mark measured, and `tests/ui_marks.js` reads
-                           // it and refuses any that names a *source* of sound.
-                           // A copy on this tooltip would be the one the guard
-                           // cannot see.
-                           title: 'Decode this soundtrack and mark where something ' +
-                                  'happens in it. It reads the whole track -- about ' +
-                                  'a minute per hour of sound -- on a thread, so ' +
-                                  'nothing here stops while it does. Nothing is ' +
-                                  'classified: a mark says when, never what.\n' +
-                                  MARK_KINDS.map((k) => `${k}: ${marksModel.MARK_WORDS[k]}`)
-                                            .join('\n'),
-                           on: { click: () => { marksModel.findSounds(input);
-                                                drawSources(); } } }),
-        ])];
-
-    if (e.state === 'reading')
-        return [readLine('Sound', of, why, 'Listening' + (e.elapsed > 0.4
-            ? ' · ' + e.elapsed.toFixed(1) + 's' : '') + '…', [])];
-
-    if (e.state !== 'done')
-        return [readLine('Sound', of, why,
-                         span(e.error || 'will not read', 'src-read-v src-error'), [
-            el('button', { cls: 'btn tiny', text: 'Again',
-                           on: { click: () => { marksModel.dropMarks(input.id);
-                                                marksModel.findSounds(input);
-                                                drawSources(); } } }),
-        ])];
-
-    const rows = [readLine('Sound', of, why, marksModel.summaryOf(e), [
-        el('button', { cls: 'btn tiny', text: 'Forget',
-                       title: 'Drop these marks and take them off the timeline.',
-                       on: { click: () => { marksModel.dropMarks(input.id);
-                                    uration > 0 && r.read < r.duration - 0.5);
+function transcriptRows(input, r) {
+    const part = (r.duration > 0 && r.read < r.duration - 0.5);
     return [line(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
                  (part ? ` · only the first ${clock(r.read)} of ${clock(r.duration)}`
                        : ' · all of it'), [
@@ -1889,24 +1805,6 @@ function telemetryRows(input) {
     return rows;
 }
 
-/// The three kinds, in the order the chips go in. Taken off `MARK_WORDS` so that
-/// a fourth sensor is a row there and no edit here.
-const MARK_KINDS = Object.keys(marksModel.MARK_WORDS);
-
-/// How many marks of each kind a finished read holds, in one pass.
-///
-/// The **kept** ones, which is what a chip's number has to be: it is what would
-/// appear on the lane if the chip were turned on, and the totals before the
-/// minimum run length are already in the sentence above it. One walk rather than
-/// one per chip, because the list runs to twenty thousand and this is redrawn on
-/// every press on this stage.
-function countByKind(entry) {
-    const out = {};
-    const r = entry && entry.result;
-    if (!r) return out;
-    for (const m of r.marks) out[m.kind] = (out[m.kind] || 0) + 1;
-    return out;
-}
 
 /// One series, as a thing to put on the timeline or take off it.
 ///

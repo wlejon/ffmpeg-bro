@@ -40,8 +40,8 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   Pasting a stream page's URL into **From** turns the page into the HLS renditions
   behind it — nothing is downloaded until something asks for a range of it. All of
   them are kept, not just the best: one recording is two different jobs, the picture
-  at full resolution for the cut and `Audio Only` at a fraction of the bytes for
-  finding sound marks, and picking one is an ordinary change of `-i`. What does
+  at full resolution for the cut and `Audio Only` at a fraction of the bytes,
+  and picking one is an ordinary change of `-i`. What does
   **not** carry between two of them is *times* — a VOD's renditions do not resolve
   ad breaks identically and drift apart by seconds — so a cut made against one is a
   search hint against another and the row says so.
@@ -195,23 +195,18 @@ input was opened, under the options set above it: the container, and one line pe
 stream. It costs nothing and it is complete.
 
 **`Reading it` is what this machine has been asked to work out**, beyond opening
-the file. There are two of those — what a data track carries, and where something
-happens in the soundtrack — and each is a press, because
-each costs real time: about thirty milliseconds for a telemetry track, about a
-minute per hour of sound for the marks. Nothing here starts on its own.
+the file — such as what a data track carries — and it is a press, because
+it costs real time: about thirty milliseconds for a telemetry track.
+Nothing here starts on its own.
 
 Each is one row, and always the same four columns:
 
 ```
 READING IT
-  SOUND       A1   51 transients, 1 tonal run                       [Forget]
   TELEMETRY   D2   HERO8 Black · 40 series · 708 packets             [Forget]
 ```
 
-Which read, **which stream it read**, how it went, and the door. `Sound` reads
-the soundtrack libav picks as the best one, and a file with more
-than one soundtrack says `best of N` until a read has run and reported which it
-actually was.
+Which read, **which stream it read**, how it went, and the door.
 
 Everything in this section is **derived**. None of it is in the document, on the
 undo track or in the unsaved marker: it comes back from the file the same way
@@ -268,67 +263,6 @@ like: a GPS latitude without its divisor is 474305352, which is a number, and
 answer the next reopen may contradict is how a document comes to disagree with
 the file it describes. Which series you picked is not saved either — see [Not
 yet](not-yet.md).
-
-## Finding things by sound
-
-The `Sound` row: **Find sounds**.
-
-Reviewing wildlife footage, the birds are audible long before anything is
-visible. A waveform is no help — at a lane's zoom a call and the wind under it
-are the same two pixels — so this decodes the whole soundtrack and marks the
-moments something happened in it. Press `,` and `.` to jump between them.
-
-It finds three things, and **each is named after what was measured, never after
-what made it**:
-
-| Kind | What it is |
-|---|---|
-| `onset` | a sharp change in the spectrum — something happened here |
-| `tonal` | a run of steady pitch, with the frequency it was measured at |
-| `sound` | a run louder than the noise floor around it |
-
-That table is the whole of the honesty of this feature. An `onset` is spectral
-flux crossing a threshold: it does not know whether it was a wingbeat, a car
-door or a footstep. A `tonal` run is sustained autocorrelation periodicity, and
-its frequency in hertz is a real measurement — but a whistle, a hum, an engine
-and a blackbird all read as one. A `sound` run is an energy gate against a noise
-floor the detector measured for itself; it is *not* speech detection. **Nothing
-here classifies anything.** A mark says *when*, and it never says *what*.
-
-The detection is pure CPU arithmetic — no model, no weights, nothing downloaded,
-and the same answer on every machine. **It is a press rather than something that
-happens**, for the reason reading a data track is: it walks the whole
-soundtrack, about a minute of work per hour of sound, on a thread of its own, so
-nothing here stops while it does.
-
-Under the summary sit three chips, one per kind, with how many of each was kept.
-Press one to take that kind off [the Marks lane](timeline.md#the-marks-lane) and
-out of the `,`/`.` walk.
-
-A run shorter than a tenth of a second is not kept: a run of one frame is a
-flicker rather than a place, and a lane of them is a smear nothing can be jumped
-between. The summary counts every run the sensors found, so the number above the
-chips and the number on them can differ.
-
-Two things are worth knowing before you trust a mark:
-
-- **The first half-second of any file usually carries a mark or two that are not
-  really in it.** The onset detector compares each frame against a slowly-built
-  average of the recent past, and at the start of a file there is no past, so
-  the earliest frames clear the bar trivially. They are weak, and the ones that
-  matter are not.
-- **A mark is stamped at the start of the window the sensor fired on**, so a
-  jump lands slightly early. That is on purpose: landing early plays the whole
-  of what was detected, and landing late clips its front, which is the part an
-  onset is about.
-
-**Marks are not in the document**: they are derived from a file and would be
-recomputed identically, so storing them is how a document comes to disagree
-with the file it describes. They are not on the undo stack either — undo
-answers "does this change the clips", and a detected onset does not.
-
-The control is drawn under a soundtrack and nowhere else — a file with no audio
-stream is offered nothing, rather than a button that fails at the press.
 
 
 ## While it is connecting

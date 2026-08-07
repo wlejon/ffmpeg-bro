@@ -59,7 +59,6 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_marks.js -- <marks.m4a> [<no-audio>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -363,7 +362,7 @@ the document.
 
 ## Finding things by sound
 
-`markstest` is the measurement and `ui_marks.js` is everything around it.
+`markstest` is the native measurement suite.
 
 The measurement is almost entirely **a number of seconds**, because that is what
 the feature is: a mark is a place, and a detector that finds a transient a second
@@ -402,15 +401,6 @@ for a reason worth remembering — the branch was never once configured, built o
 run, only checked by compiling two files with the macro forced off, so the suite
 that asserted it was asserting a claim nothing had ever exercised.
 
-`ui_marks.js` adds the four seams around it — that the control appears under a
-soundtrack and nowhere else, that the read is started and polled while the
-application goes on drawing, that a mark reaches the timeline through the clip it
-belongs to and follows a trim without the soundtrack being read again, and that
-`,` and `.` walk the marks in time order from either end. It also asserts the
-thing that cannot be seen in a screenshot and would make the whole feature a lie:
-that **none of the three kinds is named after a source of sound**. The words come
-from one object in `ui/marks.js`, and the test reads them and looks for "bird",
-"speech", "voice", "word", "music" and the rest.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).
