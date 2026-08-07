@@ -164,9 +164,7 @@
             </div>
             <div id="dropzone">
                 <div class="dz-icon">&#9654;</div>
-                <p class="big">Drop a media file here</p>
-                <p class="dim">anything ffmpeg can read &mdash; mp4, mkv, mov, webm, avi, ts&hellip;</p>
-                <p class="dim">drop more to add them to the timeline</p>
+                <p class="big">Drop media here</p>
             </div>
             <!-- Why the output preview has no picture, when it has none. Over
                  the stage rather than beside it: what it is explaining is the
@@ -255,23 +253,14 @@
                 <span id="tl-zoom" class="mono dim"></span>
                 <div class="group">
                     <button id="btn-split" class="text" title="Split at the playhead (S)">Split</button>
+                    <button id="btn-crop" class="text" title="Crop (C)">Crop</button>
                     <button id="btn-grid" class="text" title="Lay every clip out as a grid (G)">Grid</button>
                     <button id="btn-output" class="text" title="Show the render itself instead of the clips (O)">Output</button>
-                    <button id="btn-cues" class="text" title="Show the output's soft subtitle tracks over the picture as the cues they are, unstyled — a soft track is styled by whatever player opens the file, so this is what the cues say and not how they will look. It turns off, which is what a soft track does (T)">Cues</button>
+                    <button id="btn-cues" class="text" title="Cues (T)">Cues</button>
                     <button id="btn-export" class="text" title="Render the timeline to a file (E)">Export</button>
                 </div>
-                <!-- Something to lay out that is not a file. Every filter
-                     libavfilter declares with no input pads and a picture on its
-                     output — testsrc, color, smptebars, mandelbrot — becomes a
-                     clip here: a lane, a bar, in and out points. The list is the
-                     registry's, filled in by app.js. -->
-                <div class="field">
-                    <label for="gen-pick">Generator</label>
-                    <select id="gen-pick" title="Lay a filter that makes its own pictures on the timeline. It becomes a clip: drag it, trim it, stack it, put a filter on it."></select>
-                </div>
+                <button id="btn-add-gen" class="text">+ Add generator…</button>
                 <span class="spacer"></span>
-                <span class="dim tl-hint">wheel zooms &middot; shift+wheel pans &middot;
-                    drag a clip to move it, its ends to trim, another lane to restack</span>
             </div>
             <div id="ruler-row">
                 <div class="track-head"></div>

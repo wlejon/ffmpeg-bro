@@ -254,11 +254,14 @@ function speedRows(again) {
         set(Number(field.value));
     });
 
-    const note = div('gp-hint dim',
-        'The same footage in less of the programme. The sound is resampled, so the ' +
-        'pitch moves with the speed — an atempo filter on the Graph stage is the ' +
-        'pitch-preserving answer. A copied stream cannot be sped up at all.');
-    const sayIt = (why) => { note.textContent = why; note.classList.add('gp-problem'); };
+    const chip = span('pitch follows speed', 'gp-badge');
+    const keepPitchBtn = el('button', {
+        cls: 'tiny', text: 'Keep pitch',
+        on: { click: () => {
+            if (hooks.addFilter) hooks.addFilter('atempo');
+        } }
+    });
+    const speedInfo = div('gp-speed-info', [chip, keepPitchBtn]);
 
     return [
         controlRow('Speed', div('btns', [
@@ -270,7 +273,7 @@ function speedRows(again) {
                 on: { click: () => set(v) },
             })),
         ])),
-        controlRow('', note),
+        controlRow('', speedInfo),
     ];
 }
 
