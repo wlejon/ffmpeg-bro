@@ -105,18 +105,10 @@
              own option table beside it — the same column the encoder's and the
              muxer's options get, from the same component. -->
         <div class="src-bar">
-            <input id="src-path" class="wide" type="text"
-                   placeholder="a file path, or a URL"
-                   title="Anything a protocol this build links can reach &mdash; https://, srt://, udp://, rtmp://, tcp://">
+            <input id="src-path" class="wide" type="text" placeholder="a file path, or a URL">
             <button id="src-add" class="tiny primary">Add</button>
-            <!-- Several files as one `-i`, through the concat demuxer. Beside
-                 Add because it makes an input in the same way, and never in a
-                 menu: the three things called concat here — this demuxer, the
-                 filter, and two clips laid end to end on the timeline — are
-                 different renders, and the one being offered has to say which
-                 it is where it is offered. -->
-            <button id="src-join" class="tiny"
-                    title="Read several files one after another as one -i, through the concat demuxer">Join…</button>
+            <button id="src-browse" class="tiny">Browse…</button>
+            <button id="src-join" class="tiny">Join…</button>
         </div>
         <div class="src-main">
             <div id="src-list" class="src-list"></div>

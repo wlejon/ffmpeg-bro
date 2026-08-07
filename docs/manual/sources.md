@@ -48,79 +48,7 @@ beside it where it is dead — `A device cannot be cut`, `One picture, no time a
 `Never ends — set Stop at`, `No length to cut`, `Nothing to play`, `Will not open`,
 `Still connecting`, `Still opening`.
 
-## Saving a stream to this machine
 
-`Save a local copy` appears beside those for a remote URL input, and
-it is worth pressing before anything else you plan to do more than once.
-Everything downstream reads an input *repeatedly* — a scrub, a filmstrip, a
-waveform, a render — and for a URL every one of those is a
-network read.
-
-Nothing waits for the copy. A clip on a URL is [read for the span the timeline
-is showing](timeline.md), so you can explore a long recording while it is
-still arriving. The moment a copy is on this machine both lanes are read from it instead:
-whole, exact and free.
-
-What it does is a **stream copy**: the packets written into a
-local container without being decoded, which is what [Rewrap](rendering.md)
-does. It runs **in the background** — the card grows a row saying where the pull has
-got to, with `Stop` beside it, and you carry on. A pull is not a
-render: it takes no encoder, no compositor and none of the one job slot, so the
-Render button goes on working the whole time.
-
-### Where it goes
-
-The card says, on a `Folder` row, before anything has been pulled. There are
-three answers and it names which one is speaking:
-
-- a folder you chose with `Choose…`, which then takes every copy — a five-hour
-  stream is tens of gigabytes, so this is usually a question about which disk;
-- otherwise **beside the document**, which is where an edit's media belongs;
-- and with no document saved, the directory the application was started in. That
-  is a real place and a useless one to be told about, so the row says so and the
-  press to end the question is right there.
-
-A chosen folder is remembered between runs and **wins over the document's**,
-which is the answer to "put my downloads on the big disk": saving the document
-somewhere else afterwards must not silently move fourteen gigabytes of them.
-`Beside the document` clears it and puts the first rule back. It is not saved in
-the `.fbro` file — it names a disk on this machine, and a document opened on
-another would carry a folder that is not there.
-
-Each pull's row names the file it is writing, so the folder above it and the
-name beside it are the whole answer.
-
-Two more things about the pull:
-
-- **Data streams are left out.** A stream's own segment-metadata track means
-  nothing once the recording is off the site it came from, and some containers
-  will not hold a data stream at all.
-- **Stopping leaves what was written.** A cancelled pull still closes its
-  container, because the point of stopping a six-hour download after ten minutes
-  is to have the ten minutes.
-
-Once a copy is here the card offers **`Use the local copy`**, which points the
-input at the file. The clips cut from it keep their times, which is correct
-because this is a copy of these packets and not another transcode of the same
-stream.
-
-### Or take the decisions yourself
-
-`Describe it…` sets the same copy up on the [Write stage](rendering.md) and
-starts nothing. That is where a **section** is taken — `-ss`/`-to` on the copy
-rows means libavformat fetches the segments the window covers and no others —
-and where another container, a stream left out, or simply reading the
-invocation before it runs all live.
-
-A row opened there for a copied video draws its keyframe strip only once you
-open it, because drawing that means reading the file to find out where the
-keyframes are — over a network, on a container with no index, that is a
-download. Open a row when you want the strip. See
-[Rendering](rendering.md) for what the reading costs and what it says when it
-stops early.
-
-The input must be on the timeline for `Describe it…`, because the Write stage
-describes the edit; the background pull needs none of that.
 
 `Re-probe` and `Remove` sit at the other end of the same bar; `Remove` says who
 is holding the input instead of going dead silently.

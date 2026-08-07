@@ -257,7 +257,7 @@ function drawList() {
             return [
                 div('src-empty', [
                     div('src-empty-title', 'No inputs'),
-                    div('src-empty-note dim', 'Type a path above, or drop a file.'),
+                    div('src-empty-note dim', 'Drop media files here'),
                 ]),
                 ...graphFileRows(),
             ];
@@ -269,30 +269,19 @@ function drawList() {
             node.classList.toggle('on', input === current);
             node.classList.toggle('bad', !!input.error);
             node.setAttribute('data-input', input.id);
+            node.tabIndex = 0;
             node.querySelector('.src-n').textContent = `${inputs.indexOf(input)}`;
             node.querySelector('.src-name').textContent = input.name;
             node.querySelector('.src-where').textContent = input.path;
-            // What is *set* on it, in ffmpeg's own words. An input carrying
-            // nothing says nothing rather than saying "default", which would be
-            // a row of noise on every card in the ordinary case.
-            const set = node.querySelector('.src-set');
-            set.textContent = summary(input);
-            set.title = 'What is set on this input, in ffmpeg’s own words — ' +
-                        'everything the command bar prints in front of its -i';
-            // A file of cues is never cut into a clip and is used all the same
-            // — by a stream row on the Write stage, or by a `subtitles=` node
-            // burning it into the picture. Both are counted, because "unused"
-            // beside a file the render is about to open is the one thing this
-            // stage cannot afford to get wrong, and a subtitle file would
-            // otherwise read that way permanently.
+
+            const setEl = node.querySelector('.src-set');
+            setEl.innerHTML = '';
+            const flags = (summary(input) || '').split(' ').filter(Boolean);
+            for (const flag of flags) {
+                setEl.appendChild(el('span', { cls: 'src-chip mono', text: flag }));
+            }
+
             const written = subtitleWriters.has(inputs.indexOf(input));
-            // A device the Capture stage has activated is read by the
-            // recording, which is a use this list would otherwise not know
-            // about — and "unused" beside a camera that is about to be
-            // recorded is the same mistake as "unused" beside a logo the
-            // render is about to open. It is asked of the capture rather than
-            // guessed from `kindOf`, because a `-f dshow` forced here by hand
-            // is a device nothing is recording and should say so.
             const recorded = capture.inputs.indexOf(input.id) >= 0;
             const use = node.querySelector('.src-used');
             use.textContent =
@@ -302,19 +291,26 @@ function drawList() {
                    recorded ? 'recording' : '',
                    written ? 'written' : '',
                    inGraph ? 'in the graph' : ''].filter(Boolean).join(' · ') || 'unused';
-            use.title =
-                opening(input) ? 'the open is on a thread of its own — nothing here is blocked'
-                : input.error ? input.error
-                : [used ? `${used} clip${used === 1 ? ' is' : 's are'} cut from it` : '',
-                   recorded ? 'activated for a recording on the Capture stage' : '',
-                   written ? 'a stream row on the Write stage reads it' : '',
-                   inGraph ? 'a node on the Graph stage reads it' : '']
-                    .filter(Boolean).join('\n') ||
-                  'nothing is cut from it — which is an ordinary state';
+
             node.addEventListener('click', () => {
                 chosenId = input.id;
                 demuxerOpen = false;
                 drawSources();
+            });
+            node.addEventListener('keydown', (e) => {
+                const idx = inputs.indexOf(input);
+                if (e.key === 'ArrowDown' && idx < inputs.length - 1) {
+                    e.preventDefault();
+                    chosenId = inputs[idx + 1].id;
+                    drawSources();
+                } else if (e.key === 'ArrowUp' && idx > 0) {
+                    e.preventDefault();
+                    chosenId = inputs[idx - 1].id;
+                    drawSources();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (hooks.use && !blocked(input)) hooks.use(input);
+                }
             });
             return node;
         }), ...graphFileRows()];
