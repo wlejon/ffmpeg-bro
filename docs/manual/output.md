@@ -149,6 +149,10 @@ Beside the picker, every option the muxer has — `movflags`, `hls_time`,
 exactly like the encoder's. Changing the muxer empties the option bag, because
 an option that belonged to the old one is usually an error on the new one.
 
+### Streaming & Recovery
+
+When streaming to a remote endpoint (RTMP, UDP, SRT), network interruptions can cause libavformat to abort the render. Enabling **Keep trying** wraps the output format in ffmpeg's `fifo` pseudo-muxer (`-f fifo -fifo_format <muxer>`), queueing packets in memory and attempting reconnects automatically. When sending to multiple destinations, configure fifo per-destination so a drop on one endpoint does not halt the others.
+
 ## Writing pictures
 
 `image2` writes a *set* of files rather than one, and the filename says which:

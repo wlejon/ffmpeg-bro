@@ -14,7 +14,7 @@
 // width by something that measured after the layout moved.
 
 import { project, duration } from '../project.js';
-import { put, span, show } from '../dom.js';
+import { el, put, span, show } from '../dom.js';
 import { clock } from '../format.js';
 import { settings } from './state.js';
 import { range } from './spec.js';
@@ -26,6 +26,8 @@ let hooks = {};
 let canvas = null;
 let nums = null;
 let marker = null;
+let handleIn = null;
+let handleOut = null;
 let laneTop = 0.8;                // where the preview lane starts, as a fraction
 let drag = null;
 
@@ -34,7 +36,11 @@ export function initStrip(refs, h) {
     canvas = refs.canvas;
     nums = refs.nums;
     marker = refs.marker;
+    handleIn = refs.handleIn;
+    handleOut = refs.handleOut;
     canvas.addEventListener('mousedown', press);
+    if (handleIn) handleIn.addEventListener('mousedown', (e) => startHandleDrag('in', e));
+    if (handleOut) handleOut.addEventListener('mousedown', (e) => startHandleDrag('out', e));
     refs.all.addEventListener('click', () => {
         settings.rangeIn = 0;
         settings.rangeOut = 0;
@@ -54,9 +60,31 @@ export function markPreviewAt(t) {
 
 export function drawStrip() {
     const r = range();
-    put(nums, () => [span('in', 'dim'), ` ${clock(r.start)}  `,
-               span('out', 'dim'), ` ${clock(r.end)}  `,
-               span('·', 'dim'), ` ${clock(r.length)}`]);
+    const total = Math.max(0.001, duration());
+    put(nums, () => [
+        span('in', 'dim'),
+        el('input', {
+            cls: 'num tiny range-in-input', type: 'number', min: 0, max: String(total), step: 0.1,
+            value: settings.rangeIn.toFixed(2),
+            on: { change: (e) => {
+                const out = settings.rangeOut > 0 ? settings.rangeOut : total;
+                settings.rangeIn = Math.max(0, Math.min(Number(e.target.value) || 0, out - 0.1));
+                hooks.changed();
+            } }
+        }),
+        span('out', 'dim'),
+        el('input', {
+            cls: 'num tiny range-out-input', type: 'number', min: 0, max: String(total), step: 0.1,
+            value: (settings.rangeOut || total).toFixed(2),
+            on: { change: (e) => {
+                const val = Number(e.target.value) || 0;
+                settings.rangeOut = val >= total ? 0 : Math.max(settings.rangeIn + 0.1, val);
+                hooks.changed();
+            } }
+        }),
+        span('·', 'dim'),
+        ` ${clock(r.length)}`
+    ]);
     paintStrip();
 }
 
@@ -133,6 +161,9 @@ function paintStrip() {
     ctx.moveTo(x(r.end) - 1, bodyTop);   ctx.lineTo(x(r.end) - 1, bodyBot);
     ctx.stroke();
 
+    if (handleIn) handleIn.style.left = `${Math.round(x(r.start))}px`;
+    if (handleOut) handleOut.style.left = `${Math.round(x(r.end))}px`;
+
     // Where the preview samples from, and how much of it.
     const pr = hooks.previewRange();
     ctx.fillStyle = 'rgba(120, 200, 255, 0.35)';
@@ -155,6 +186,21 @@ export function refitStrip() {
     if (!canvas) return;
     const w = Math.round(canvas.getBoundingClientRect().width);
     if (w > 0 && w !== canvas.width) paintStrip();
+}
+
+function startHandleDrag(kind, e) {
+    e.stopPropagation();
+    e.preventDefault();
+    drag = kind;
+    move(e);
+    const up = () => {
+        drag = null;
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        hooks.changed();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
 }
 
 /// Which of the three things under the pointer is being dragged.

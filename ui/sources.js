@@ -752,7 +752,7 @@ function windowRows(input) {
     return [
         head('Window'),
         ...windowControls,
-        row('Start at', number('srcss', 'ss', input.ss, '0', '-ss')),
+        row('Start at', number('srcss', 'ss', input.ss, '0', '-ss. An input seek is not a clip’s in-point')),
         row('Stop at', number('srcto', 'to', input.to, 'the end', '-to')),
         row('Delay by', number('srcoffset', 'itsoffset', input.itsoffset, '0', '-itsoffset')),
         row('Repeat', number('srcloop', 'streamLoop', input.streamLoop, '0', '-stream_loop', '× more')),

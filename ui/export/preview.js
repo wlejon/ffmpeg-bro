@@ -241,10 +241,7 @@ function stage(busy, have) {
     node.ref = node.cand = null;
     const idle = fromTemplate('tpl-pv-idle');
     const message = idle.querySelector('.message');
-    message.textContent = preview.error
-        ? preview.error
-        : `Render ${settings.previewLength} s at these settings and compare it, ` +
-          `pixel for pixel, against the same frames unencoded.`;
+    message.textContent = preview.error || '';
     if (preview.error) message.className = 'message ex-failed';
     return idle;
 }

@@ -344,16 +344,14 @@
         </div>
         <div id="ex-strip" class="ex-strip-bar">
             <div class="section-head">Range</div>
-            <div class="ex-strip-wrap">
+            <div class="ex-strip-wrap range-strip">
                 <canvas id="ex-strip-c" class="ex-strip"></canvas>
-                <!-- Where the preview has got to, against the whole edit. A div
-                     over the canvas rather than part of it: this moves every
-                     frame, and repainting a window-wide canvas to shift one
-                     line is work for nothing. -->
+                <div id="ex-handle-in" class="range-handle handle-in" title="In point"></div>
+                <div id="ex-handle-out" class="range-handle handle-out" title="Out point"></div>
                 <div id="ex-strip-head" class="ex-strip-head hidden"></div>
             </div>
             <div class="ex-pv-row mono">
-                <span id="ex-range-nums"></span>
+                <span id="ex-range-nums" class="range-nums"></span>
                 <span class="spacer"></span>
                 <button class="tiny" id="ex-range-all">Whole timeline</button>
             </div>

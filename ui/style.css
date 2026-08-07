@@ -2798,6 +2798,54 @@ button.ex-back { display: block; width: 100%; margin-top: 6px; }
 /* Full width, because that is what a timeline is: the whole edit, with the
    part being written picked out of it. */
 .ex-strip-wrap { position: relative; }
+.range-strip {
+    position: relative;
+    user-select: none;
+}
+.range-handle {
+    position: absolute;
+    top: 13px;
+    bottom: 12px;
+    width: 8px;
+    margin-left: -4px;
+    background: var(--accent, #ff8c42);
+    border-radius: 2px;
+    cursor: ew-resize;
+    z-index: 2;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+.range-handle::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    right: 2px;
+    height: 6px;
+    margin-top: -3px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 1px;
+}
+.range-nums {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.range-nums input {
+    width: 64px;
+}
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    white-space: nowrap;
+}
+.slider-row input[type="range"] {
+    flex: 1;
+    min-width: 60px;
+    height: 18px;
+    accent-color: var(--accent);
+}
 .ex-strip-head {
     position: absolute;
     top: 0;

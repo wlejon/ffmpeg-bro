@@ -19,6 +19,7 @@ import { basename } from '../format.js';
 import { btns, num, note } from './controls.js';
 import { settings, activeVideoCodec, activeAudioCodec, outputExt,
          outputFps } from './state.js';
+import { remember } from './store.js';
 import { videoEncoders, audioEncoders, muxers, encoderInfo, audioInfo,
          muxerInfo, optionsOf, formatOptionsOf,
          rateModes, qualityRange } from './capabilities.js';
@@ -38,7 +39,7 @@ import { explained, why, onExplainChange } from './explain.js';
 let panes = {};
 let hooks = {};
 
-let showAdvanced = false;
+// showAdvanced lives in settings now, persisted across sessions.
 
 // The muxer picker's own state. Held here rather than in `settings` because
 // none of it is part of the render: which facet you were looking at and what
@@ -102,19 +103,15 @@ export function drawForm() {
         ...videoRows(codec, info, cont),
         head('Audio'),
         ...audioRows(cont),
-        head(`${showAdvanced ? '▾' : '▸'} Advanced`, {
+        head(`${settings.showAdvanced ? '▾' : '▸'} Advanced`, {
             'data-f': 'advanced',
             cls: 'section-head ex-toggle',
-            on: { click: () => { showAdvanced = !showAdvanced; drawForm(); } },
+            on: { click: () => { settings.showAdvanced = !settings.showAdvanced; remember(); drawForm(); hooks.changed(); } },
         }),
     ]);
 
-    // The advanced block is a column of its own rather than a fold at the
-    // bottom of this one. There are eighty options for x265; reading them
-    // through a slot under twenty other controls is not reading them, and
-    // scrolling away from the codec to reach them is worse.
-    show(panes.advanced, showAdvanced);
-    put(panes.advanced, () => (showAdvanced ? advancedRows(codec) : []));
+    show(panes.advanced, settings.showAdvanced);
+    put(panes.advanced, () => (settings.showAdvanced ? advancedRows(codec) : []));
 }
 
 // ── output ─────────────────────────────────────────────────────────────────
@@ -240,16 +237,7 @@ function keepTryingRows(kind) {
     // A tee is refused rather than quietly given one, and the refusal names the
     // form that does work. See `keepTrying()` in spec.js for the argument; it is
     // stated here because this is where somebody would look for the control.
-    if (kind === 'several')
-        return [row('If it drops', note(
-            'One fifo in front of several destinations is one queue and one recovery for ' +
-            'all of them, so a single flaky endpoint would take the others down and back ' +
-            'with it. Per destination it works and is what ffmpeg’s own documentation ' +
-            'writes: set that destination’s -f to fifo and give it fifo_format=<muxer> in ' +
-            'its options.'))];
-    // A file on this machine does not drop and come back. Said rather than
-    // hidden only where it is nearly relevant — a set of segments going to a
-    // local folder is not what this is about either.
+    if (kind === 'several') return [];
     if (kind !== 'stream') return [];
 
     const rows = [
@@ -261,12 +249,7 @@ function keepTryingRows(kind) {
             on: { click: () => { k.on = !k.on; hooks.changed(); } },
         }))),
     ];
-    if (!k.on) {
-        rows.push(row('', note(
-            'The render ends when the destination stops accepting it, with libav’s own ' +
-            'message in the report and whatever had been sent already closed properly.')));
-        return rows;
-    }
+    if (!k.on) return rows;
 
     rows.push(row('Queue', fifoNum('fifoqueue', 'queue_size', k.queueSize, 0,
                                    (v) => { k.queueSize = Math.max(0, Math.round(v) || 0); },
@@ -450,9 +433,7 @@ function versionRows() {
                                  settings.height || project.height || 1080);
         rows.push(head(`Version ${i + 1}`, { cls: 'section-head' }));
         rows.push(row('Size', btns([w, span('×', 'dim'), h])));
-        rows.push(row('', note(v.width && v.height
-            ? `${size.width} × ${size.height}`
-            : `${size.width} × ${size.height} — the other side follows the render’s aspect`)));
+        rows.push(row('', span(`${size.width} × ${size.height}`, 'dim')));
         rows.push(row('-f', muxer));
         rows.push(row('To', target));
         rows.push(row('', btns([
@@ -982,58 +963,21 @@ function videoRows(codec, info, cont) {
 // the same reason `formatOpen` is — it is where you are, not what will be written.
 let chosenNote = '';
 
-/// `Choose for me`, and the sentence it leaves behind.
-///
-/// **The whole cost of the press is having to say what it did**, so the sentence is
-/// the feature and the button is the way in. The rule is ui/hardware.js's — software
-/// decode, hardware encode, above SD — measured on this machine and written down in
-/// docs/manual/card.md; what is here is the press, the two writes it makes, and the
-/// line it leaves.
-///
-/// **Never on load**, which is the alternative rejected: a render whose encoder was
-/// quietly rewritten when the stage opened would be the "use hardware acceleration"
-/// checkbox this application deliberately does not have, and worse, because it would
-/// have made the choice without anybody having asked for one.
-///
-/// **And it says so when there is nothing to choose.** A machine with no working
-/// device, or one whose devices report no encoder this build carries, gets the
-/// sentence naming that rather than a button that appears to do nothing — which is
-/// the same rule the `-hwaccel` picker follows when nothing can decode the file.
 function chooseRows(codec) {
     const choice = chooseFor({ height: settings.height || project.height,
                                videoCodec: codec, inputs });
-    const rows = [row('', [
-        el('button', {
-            cls: 'tiny', 'data-f': 'hwchoose', text: 'Choose for me',
-            // The answer before the press as well as after it, because a button
-            // whose effect can only be discovered by pressing it is a button
-            // nobody presses twice.
-            title: choice.why,
-            on: { click: () => {
-                const answer = chooseFor({ height: settings.height || project.height,
-                                           videoCodec: activeVideoCodec(), inputs });
-                chosenNote = answer.why;
-                // The decode half first: it is the half with no exceptions, and an
-                // input reopened without its device has to be put back under
-                // whatever is cut from it before anything redraws.
-                for (const input of applyChoice(answer))
-                    if (hooks.reopened) hooks.reopened(input);
-                if (answer.encoder) settings.videoCodec = answer.encoder;
-                // `changed` and not `restated`: an encoder is what the picture is
-                // spent on, so the candidate render is no longer of these settings.
-                hooks.changed();
-            } },
-        }),
-        span(choice.changed
-                 ? 'software decode, hardware encode, above SD — the arrangement this machine ' +
-                   'was measured in'
-                 : 'this render already is what the measurement asks for', 'dim'),
-    ])];
-    // The sentence stays until the next press. It is about a decision that was
-    // taken, and a note that vanished on the next redraw would be a decision nobody
-    // could go back and read.
-    if (chosenNote) rows.push(row('', span(chosenNote, 'dim ex-chosen')));
-    return rows;
+    return [row('', el('button', {
+        cls: 'tiny', 'data-f': 'hwchoose', text: 'Choose for me',
+        title: choice.why,
+        on: { click: () => {
+            const answer = chooseFor({ height: settings.height || project.height,
+                                       videoCodec: activeVideoCodec(), inputs });
+            for (const input of applyChoice(answer))
+                if (hooks.reopened) hooks.reopened(input);
+            if (answer.encoder) settings.videoCodec = answer.encoder;
+            hooks.changed();
+        } },
+    }))];
 }
 
 function rateRows(codec, info) {
@@ -1062,10 +1006,10 @@ function rateRows(codec, info) {
                 hooks.tweaked();
             } },
         });
-        rows.push(row('Quality', btns([
-            span('smaller file', 'dim tiny'),
-            slider,
+        rows.push(row('Quality', div('slider-row', [
             span('higher quality', 'dim tiny'),
+            slider,
+            span('smaller file', 'dim tiny'),
             qualityLabel,
         ])));
         refreshQualityLabel();
@@ -1241,12 +1185,9 @@ function keyframeRows() {
 
     if (settings.keyframeMode === 'cuts') {
         const at = cutPoints(range());
-        rows.push(row('', note(at.length
-            ? `${at.length} cut${at.length === 1 ? '' : 's'} inside the range — ` +
-              `${at.map((t) => t.toFixed(2)).join(', ')} s into the file. Read from the ` +
-              'timeline every time, so moving a clip moves the keyframe with it.'
-            : 'No cut falls inside the range, so this asks for nothing. Split a clip or ' +
-              'widen the range and the keyframes follow.')));
+        rows.push(row('', span(at.length
+            ? `${at.length} cut${at.length === 1 ? '' : 's'} (${at.map((t) => t.toFixed(2)).join(', ')} s)`
+            : '0 cuts in range', 'dim')));
     }
     if (settings.keyframeMode === 'times') {
         const f = el('input', {
@@ -1255,10 +1196,6 @@ function keyframeRows() {
             on: { change: () => { settings.keyframeTimes = f.value.trim(); hooks.changed(); } },
         });
         rows.push(row('At', f));
-        rows.push(row('', note(
-            'Seconds into the *output*, which is what ffmpeg means by them — so the same ' +
-            'command run elsewhere writes the same file. A moment between two frames lands ' +
-            'on the one after it.')));
     }
     if (settings.keyframeMode === 'expr') {
         const f = el('input', {
@@ -1267,10 +1204,6 @@ function keyframeRows() {
             on: { change: () => { settings.keyframeExpr = f.value.trim(); hooks.changed(); } },
         });
         rows.push(row('expr:', f));
-        rows.push(row('', note(
-            'libavutil’s evaluator, per frame, over n, t, n_forced, prev_forced_n and ' +
-            'prev_forced_t. One that will not parse stops the render rather than being ' +
-            'quietly dropped.')));
     }
     return rows;
 }
@@ -1333,34 +1266,10 @@ function timingRows() {
             (v) => { settings.fpsMode = v; drawForm(); hooks.changed(); }),
         span(`-fps_mode ${inForce}`, 'mono dim'),
     ])));
-    rows.push(row('', note(
-        canVary
-            ? (inForce === 'vfr'
-                ? 'The pictures reach the file with the timestamps libavfilter gave them, on ' +
-                  'the graph’s own clock — so a rate change inside the graph comes out as ' +
-                  'itself. A frame whose timestamp does not advance is dropped, which is what ' +
-                  'ffmpeg’s `vfr` means. The range still says where the file ends.'
-                : 'The render walks the range at the output rate and stamps each frame with ' +
-                  'its number. Variable would keep the graph’s own frame times instead.')
-            : (padFed
-                ? 'Variable is unavailable because a stream here is fed from a graph pad: ' +
-                  'each pad leaves the graph at its own moments, and one walk over the frames ' +
-                  'has one timestamp to give. Map the composite, or write the pads as renders ' +
-                  'of their own.'
-                : 'Variable is unavailable because this render composites the timeline. The ' +
-                  'compositor answers for any instant it is asked about, so it has no frame ' +
-                  'times of its own to keep — put the rate change in the graph and it does.'))));
 
     rows.push(row('Field order', segmented('fieldorder', FIELD_ORDERS, settings.fieldOrder,
                                            (v) => { settings.fieldOrder = v; drawForm();
                                                     hooks.changed(); })));
-    if (settings.fieldOrder)
-        rows.push(row('', note(
-            'The encoder is put into field mode and every frame is marked to match. What ' +
-            'is composited here is progressive, so this is right for footage that was ' +
-            'interlaced and has come through untouched, and a claim about the picture ' +
-            'otherwise — and the chroma of a 4:2:0 output is subsampled across both ' +
-            'fields either way.')));
 
     rows.push(row('Threads', btns([
         num('threads', { min: 0, max: 64, value: settings.threads,
@@ -1376,10 +1285,6 @@ function timingRows() {
         on: { click: () => { settings.shortest = !settings.shortest; drawForm();
                              hooks.changed(); } },
     }))));
-    if (settings.shortest)
-        rows.push(row('', note(
-            'The render stops at the first frame with nothing left to draw, instead of ' +
-            'writing the rest of the range as black.')));
 
     return rows;
 }

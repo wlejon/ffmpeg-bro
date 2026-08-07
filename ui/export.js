@@ -114,7 +114,8 @@ export function initExport(refs, h) {
     // The range is in `settings` too — `rangeIn`/`rangeOut` are what the render
     // walks — so dragging an end of the strip is the settings changing.
     initStrip({ canvas: byId('ex-strip-c'), nums: byId('ex-range-nums'),
-                marker: byId('ex-strip-head'), all: byId('ex-range-all') }, {
+                marker: byId('ex-strip-head'), all: byId('ex-range-all'),
+                handleIn: byId('ex-handle-in'), handleOut: byId('ex-handle-out') }, {
         previewRange,
         movePreviewTo: (t) => { preview.at = t; },
         changed: said(() => { invalidatePreview(); drawAll(); }),

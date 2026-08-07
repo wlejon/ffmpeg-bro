@@ -240,9 +240,9 @@ export function destinationRows({ list, changed, prefix = 'tee', first = 'matros
         rows.push(row('-f', muxer));
         rows.push(row('To', target));
         if (scheme)
-            rows.push(row('', note(protocolLinked(scheme)
+            rows.push(row('', span(protocolLinked(scheme)
                 ? `${scheme} · linked in`
-                : `${scheme} · not in this build, so this destination will fail at open`)));
+                : `${scheme} · not in this build, so this destination will fail at open`, 'dim')));
         rows.push(row('', btns([
             el('button', { cls: 'tiny', 'data-f': at('drop', i), text: 'Remove',
                            on: { click: () => { list.splice(i, 1); changed(); } } }),

@@ -16,7 +16,7 @@ const SETTINGS_KEY = 'ffmpeg-bro.export';
 // *this* timeline, and carrying "Opening, 0 to 12.5s" into the next edit would
 // put a mark somewhere that means nothing — unlike a codec or a language,
 // which mean the same thing whatever is being written.
-const REMEMBERED = ['container', 'videoCodec', 'audioCodec', 'rate', 'quality',
+const REMEMBERED = ['showAdvanced', 'container', 'videoCodec', 'audioCodec', 'rate', 'quality',
                     'videoBitrate', 'maxrate', 'bufsize', 'preset', 'tune', 'profile',
                     'pixelFormat', 'fps', 'scaler', 'gopSeconds', 'bframes',
                     // `keyframeMode` is remembered and the cut points are not,
@@ -114,6 +114,7 @@ function waitOrDefault(v) {
 
 /// What is in `settings` now, made safe to use.
 function sanitise() {
+    settings.showAdvanced = !!settings.showAdvanced;
     // The remembered container and codec may not exist in this build — and
     // `container` used to hold an *extension*, so a blob written before muxers
     // were asked for by name says "mkv", which libavformat has never heard of.

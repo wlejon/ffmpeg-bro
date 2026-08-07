@@ -20,6 +20,7 @@ export const PREVIEW_LENGTHS = [1, 2, 3, 5, 10];
 // What the workspace was left set to. Remembered across exports because the
 // second one is nearly always the first one again with a different range.
 export const settings = {
+    showAdvanced: false,
     path: '',
     // The muxer, by the name `-f` takes: "mp4", "matroska", "mpegts". Not an
     // extension — nothing in libavformat is called "mkv", forty-seven muxers
