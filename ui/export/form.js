@@ -16,7 +16,7 @@ import { project, projectFps } from '../project.js';
 import { el, div, span, put, select, segmented, show,
          row, head } from '../dom.js';
 import { basename } from '../format.js';
-import { btns, num, note } from './controls.js';
+import { btns, num } from './controls.js';
 import { settings, activeVideoCodec, activeAudioCodec, outputExt,
          outputFps } from './state.js';
 import { remember } from './store.js';
