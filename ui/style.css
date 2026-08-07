@@ -1621,9 +1621,26 @@ button.src-go:disabled { background: var(--panel-hi); border-color: var(--line);
     position: absolute;
     border: 1px solid var(--accent);
     background: rgba(90, 160, 255, 0.15);
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: move;
 }
 .cap-marquee.hidden { display: none; }
+
+.cap-handle {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+    border: 1px solid #fff;
+    border-radius: 2px;
+    box-sizing: border-box;
+    pointer-events: auto;
+}
+.cap-handle-nw { top: -4px; left: -4px; cursor: nwse-resize; }
+.cap-handle-ne { top: -4px; right: -4px; cursor: nesw-resize; }
+.cap-handle-sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+.cap-handle-se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.cap-blocker-row { display: flex; align-items: center; gap: 6px; }
 
 .cap-note-area { min-height: 0; flex-shrink: 0; }
 .cap-note { padding: 4px 0; line-height: 1.4; font-size: var(--fs-sm); }
