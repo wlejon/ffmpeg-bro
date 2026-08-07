@@ -52,9 +52,7 @@ import { parseCopy, isCopy, copyChoices, copiedStream, copiedInput,
 import { subtitleChoices, subtitleEncoders, subtitleCodecsOf, defaultSubtitleCodec,
          holdsSubtitles, isDecode, readsInput, readStream, readInput,
          defaultSubtitleSource, cuesFor, cueWindow, cueWindowNote,
-         cueTextFor, cueSaying, parseCueTrack, isCueRow, cueSource } from './subtitles.js';
-import { cueTracks, trackById as cueTrackById, makeCueTrack, forkFrom, forkRefusal,
-         hasOverrides, fileExtension, cueFilePath, cuesChanged } from '../cues.js';
+         cueTextFor, cueSaying } from './subtitles.js';
 import { goTo } from '../shell.js';
 import { isPad, parsePad, padChoices } from './pads.js';
 import { explained, why, whyButton, explainAllButton, onExplainChange } from './explain.js';
@@ -116,20 +114,11 @@ export function normalizeStreams() {
         s.id = newId();
         s.source = s.source || (s.kind === 'video' ? 'composite'
                               : s.kind === 'audio' ? 'mix' : '');
-        // A row reading the document's own cues names a track by **id**, which is
-        // the same kind of name a followed clip is and gets the same two-way
-        // answer: after a document has been opened the tracks are there and the
-        // link is kept; at boot, out of `localStorage`, there are none beside it
-        // and every such row goes — because cue track 3 in the next edit is
-        // somebody else's dialogue. Dropped outright rather than repointed at a
-        // file, the way a data row is: there is no file this row was ever about.
-        const cueId = s.kind === 'subtitle' ? parseCueTrack(s.source) : null;
-        if (cueId !== null && !cueTrackById(cueId)) continue;
         // A subtitle row reads an input and there is no composed source to fall
         // back to, so a row whose input has gone takes the first subtitle
         // stream that is still there — and is dropped when there is none. It
         // cannot become "the mix" the way a stale copy of a soundtrack can.
-        if (s.kind === 'subtitle' && cueId === null) {
+        if (s.kind === 'subtitle') {
             const at = readsInput(s);
             const gone = !at || !inputs[at.input] || !(inputs[at.input].probe || {}).streams;
             if (gone) {
@@ -243,8 +232,7 @@ export function manifest() {
         else if (copied) {
             const input = copiedInput(s);
             from = `copied${input ? ` from ${input.name}` : ''}`;
-        } else if (isCueRow(s)) from = 'cues in this document';
-        else if (s.kind === 'subtitle') from = readsInput(s) ? 'read from an input' : 'no source';
+        } else if (s.kind === 'subtitle') from = readsInput(s) ? 'read from an input' : 'no source';
         else if (isPad(s)) from = `the graph’s [${parsePad(s.source)}]`;
         else from = s.kind === 'video' ? 'the composite' : 'the mix';
         // The one thing here that is a *refusal* rather than a description: a
@@ -275,10 +263,6 @@ export function addStream(kind) {
     // nothing would be a control to fill in before anything could happen.
     if (kind === 'subtitle') {
         s.source = defaultSubtitleSource(settings.container);
-        if (!s.source) {
-            s.source = cueSource(makeCueTrack({ name: 'Cues' }).id);
-            cuesChanged();
-        }
     }
     // A data row is a copy and nothing else, so it arrives pointing at the
     // first data stream there is — for the same reason a subtitle row does,
@@ -848,21 +832,9 @@ function says(s) {
 /// on a row that is being copied, which is a setting that does nothing, and the
 /// application would have to say so afterwards.
 function saysSubtitle(s) {
-    // Three kinds of answer in one menu, because they are one decision: where do
-    // this row's cues come from. The two file answers are `subtitleChoices()`;
-    // the third is the document's own tracks, and one more entry that *makes*
-    // one. Offering "type them here" even with no file open is the point — a
-    // person with no subtitles at all and a line to write starts there.
-    const choices = subtitleChoices()
-        .concat(cueTracks.map((t) => ({
-            id: cueSource(t.id),
-            label: `edit — ${t.name} · ${t.cues.length} cue${t.cues.length === 1 ? '' : 's'} ` +
-                   'in this document',
-        })))
-        .concat([{ id: NEW_CUES, label: 'type them here — a new track of your own' }]);
+    const choices = subtitleChoices();
     const picker = select({ cls: 'ex-stream-src', 'data-f': 'stream-source',
-                            title: 'Carried through as it is, decoded and written again, or ' +
-                                   'a track of cues this document holds',
+                            title: 'Carried through as it is or decoded and written again',
                             on: { change: (e) => { setSource(s, e.target.value); } } },
                           choices, s.source || '');
 
@@ -930,23 +902,8 @@ function saysData(s) {
 /// cues come from" is one question and a second control for one of its answers
 /// would read as a second question. `setSource` turns it into a real `cues:<id>`
 /// before anything else sees it, so nothing downstream ever meets this string.
-const NEW_CUES = 'cues:new';
-
 function setSource(s, source) {
-    if (source === NEW_CUES) {
-        const track = makeCueTrack({ name: 'Cues' });
-        source = cueSource(track.id);
-        // On the model's channel, because a track is the edit: this is the one
-        // press on this stage that makes an undo step on the *other* history
-        // track, and it is right that it does — the cues are content.
-        cuesChanged();
-    }
     s.source = source;
-    // A row reading the document's cues has no window: `cueFileText` has already
-    // put them on the output's clock and clamped them, so a `-ss` in front of the
-    // `-i` would move every cue twice. See `attachCueFiles` in export/spec.js,
-    // which zeroes these again on the way to the renderer whatever is here.
-    if (isCueRow(s)) { s.copyFrom = 0; s.copyTo = 0; }
     if (isCopy(s)) {
         s.codec = '';
         s.bsf = s.bsf || [];
@@ -1173,7 +1130,6 @@ function copyRows(s, restate) {
     // have to be read against, and a copy and a conversion cut differently out
     // of the same pair. So the cues are on screen, as the places they are.
     if (s.kind === 'subtitle') {
-        if (isCueRow(s)) return editedCueRows(s);
         if (!readsInput(s)) return [];
         const input = readInput(s);
         return [
@@ -1181,7 +1137,6 @@ function copyRows(s, restate) {
                          span('seconds into the file', 'dim')]),
             row('To', [subNum(s, 'copyTo', restate), span('0 is the end of it', 'dim')]),
             ...cueRows(s, restate),
-            ...forkRow(s),
             why('span',
                 'The start is also the output’s zero: a subtitle file written against a ' +
                 'whole programme, read from ten seconds in, comes out ten seconds earlier ' +
@@ -1525,85 +1480,7 @@ function cueRows(s, restate) {
 //
 // The file is not touched, now or ever. See the top of ui/cues.js.
 
-/// `Edit these cues`, or the reason it is not offered.
-function forkRow(s) {
-    const why = forkRefusal(s);
-    if (why)
-        return [div('ex-copy-note dim', `These cues cannot be taken into the document: ${why}.`)];
-    return [div('ex-add', el('button', {
-        cls: 'tiny', text: 'Edit these cues', 'data-f': 'cue-fork',
-        title: 'Copy this track’s cues into the document, where they can be typed, ' +
-               'retimed on the timeline and split. The file itself is never written to, ' +
-               'and this row stops reading it.',
-        on: { click: () => {
-            // The render's zero on the timeline, asked of the caller rather than
-            // imported: `ui/export/spec.js` reads this module for `streamSpecs`,
-            // so reading it back would be a cycle for one number.
-            const track = forkFrom(s, hooks.renderZero ? hooks.renderZero() : 0);
-            if (!track) return;
-            setSource(s, cueSource(track.id));
-            cuesChanged();
-            // Where the lane is, which is the point of the press — the same move
-            // `Burn it into the picture` makes towards the Graph stage.
-            goTo('compose');
-        } },
-    }))];
-}
 
-/// A row that reads the document's own cues: what is in the track, what will be
-/// written, and what it cost to get here.
-function editedCueRows(s) {
-    const track = cueTrackById(parseCueTrack(s.source));
-    if (!track) return [];
-    const styled = track.cues.filter(hasOverrides).length;
-    const ext = fileExtension(track);
-    const name = basename(cueFilePath(track, settings.path || ''));
-    const out = [
-        div('ex-note',
-            `${track.cues.length} cue${track.cues.length === 1 ? '' : 's'} this document holds.`),
-        div('ex-add', el('button', {
-            cls: 'tiny', text: 'Edit them on the timeline', 'data-f': 'cue-edit',
-            on: { click: () => goTo('compose') },
-        })),
-        why('span',
-            'They are edited on the timeline, in the Cues lane under the waveform — which is ' +
-            'where a subtitle’s timing is judged, because it is judged by listening.'),
-    ];
-    if (track.from)
-        out.push(div('ex-copy-note dim',
-            `Taken out of ${track.name}. That file is no longer read by this row — the ` +
-            'document is what renders, and nothing here writes back to it.'));
-    // **The render writes a file, and saying so is what keeps the printed command
-    // honest.** ffmpeg has no way to receive cues except as one, so this is not a
-    // detail of the implementation — it is what the `-i` in the command bar is.
-    // **The name of the file the render writes is a statement and stays**, for
-    // the reason it was written down at all: ffmpeg has no way to receive cues
-    // except as a file, so this is what the `-i` in the command bar *is*, and a
-    // printed command naming a file nothing had said would be written is the one
-    // thing on this path that would read as a lie.
-    out.push(div('ex-note dim',
-        `The render writes these into ${name || 'a .' + ext + ' file'} beside the output ` +
-        `and reads it back as an ordinary -i, so the command the bar prints runs.`));
-    out.push(why('span',
-        ext === 'ass'
-            ? 'ASS, because that is the format these cues are already in — every text ' +
-              'decoder in libavcodec hands over ASS, so the styles and each cue’s own ' +
-              'layout came with them and .srt could not carry them back out.'
-            : 'SubRip, because a track typed here is words and times and nothing else; ' +
-              'wrapping them in a script header would be claiming a look nobody chose.',
-        'What the stream in the output comes out as is the container’s question, not this ' +
-        'one.'));
-    if (styled)
-        out.push(div('ex-copy-note warn',
-            `${styled} of these cue${styled === 1 ? ' still carries' : 's still carry'} ` +
-            'override codes — {\\i1}, {\\pos(…)} — which is styling the file already had. ' +
-            'They are written back exactly as they were. Retyping one of those cues drops ' +
-            'that cue’s codes, because the whole text field is replaced; its style, layer ' +
-            'and margins stay. There is no style editor here, and there is not going to be ' +
-            'one: writing an override from a control would be a second opinion about what ' +
-            'it means, and libass already has the only one that matters.'));
-    return out;
-}
 
 /// A cue's words on one line, short enough to sit in a list.
 ///

@@ -60,9 +60,7 @@
 
 import { settings } from './export/state.js';
 import { range } from './export/spec.js';
-import { cuesFor, cueTextFor, cueWindow, cueSaying,
-         parseCueTrack } from './export/subtitles.js';
-import { trackById } from './cues.js';
+import { cuesFor, cueTextFor, cueWindow, cueSaying } from './export/subtitles.js';
 import { el } from './dom.js';
 
 /// What the note says while the overlay is on and there is something to draw.
@@ -121,38 +119,9 @@ export function showingAt(t) {
     const r = range();
     const lines = [];
     for (const row of rows) {
-        const id = parseCueTrack(row.source);
-        if (id !== null) ownLines(lines, id, t, r);
-        else readLines(lines, row, t, r);
+        readLines(lines, row, t, r);
     }
     return { lines, why: '' };
-}
-
-/// A row reading the document's own cues. Already on the timeline's clock,
-/// which is the ruler the lane is drawn on — so there is no map to apply and the
-/// only thing the render does to them is the range.
-///
-/// Clipped to the range for the reason `cueFileText` clips: what is outside it
-/// is not in the output, and a cue drawn where the file will have none is the
-/// overlay claiming something the render will not do. A cue straddling the start
-/// is written clamped to zero, which on this clock is simply "from the range's
-/// start onwards" — the same statement, on the ruler it is being read against.
-function ownLines(lines, id, t, r) {
-    const track = trackById(id);
-    // A row naming a track this document no longer has. `warnings()` says so on
-    // the Write stage, where it can be fixed; drawing nothing is right here.
-    if (!track) return;
-    const from = r.start;
-    const to = r.end > r.start ? r.end : Infinity;
-    for (const c of track.cues) {
-        const at = Math.max(c.start, from);
-        const until = Math.min(c.end, to);
-        // `until <= at` is a cue with no length, or one the range has nothing
-        // left of. Neither is ever on screen — half-open, so a cue ends where
-        // the next one may begin without the two ever being drawn together.
-        if (t < at - 1e-6 || t >= until - 1e-6) continue;
-        if (c.text) lines.push({ kind: 'text', text: c.text });
-    }
 }
 
 /// A row reading a file — carried or converted, and the difference is entirely

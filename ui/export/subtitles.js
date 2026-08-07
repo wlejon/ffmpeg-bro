@@ -59,30 +59,7 @@ import { muxerInfo } from './capabilities.js';
 /// `availableSubtitleEncoders` — so a build that gains one gains it here.
 export const subtitleEncoders = () => (bro.ffmpeg.subtitleEncoders || []);
 
-// ── the third way a subtitle row reads ─────────────────────────────────────
-//
-// `cues:3` — the cues the *document* holds, in `ui/cues.js`. It is neither of
-// the two above and it could not be: there is no `-i` behind it until a render
-// writes one, because ffmpeg has no way to receive cues except as a file.
-//
-// **What lives here is the string and nothing else.** Parsing `cues:3` is a fact
-// about a row's source, so it belongs beside `parseDecode` — but a *list* of cue
-// tracks is a fact about the document, so it belongs where the document can be
-// seen. `ui/export/streams.js` builds the menu, because `ui/cues.js` reads this
-// module and importing it back would be a cycle for one array.
 
-/// `cues:3` → 3, or null. A track id, which is a name written down: see the ids
-/// rule at the top of ui/document.js.
-export function parseCueTrack(source) {
-    const m = /^cues:(\d+)$/.exec(String(source || ''));
-    return m ? Number(m[1]) : null;
-}
-
-export function isCueRow(row) {
-    return parseCueTrack(row && row.source) !== null;
-}
-
-export const cueSource = (id) => `cues:${id}`;
 
 /// `decode:1:0` → `{ input: 1, stream: 0 }`, or null.
 export function parseDecode(source) {

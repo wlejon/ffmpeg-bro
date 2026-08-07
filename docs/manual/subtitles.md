@@ -11,9 +11,7 @@ mechanisms:
 | **Burned into the image** | a `subtitles` filter on the Graph stage, like every other filter |
 | **A file on its own** | a render whose only stream is subtitles: extracting one, or converting the format |
 
-Any of the three can read a file you added — and the first can also read cues
-this document *holds*, which is [Cues of your own](#cues-of-your-own). The
-first is also on the monitor, as the cues it is and not as a look nobody can
+Any of the three can read a file you added. The first is also on the monitor, as the cues it is and not as a look nobody can
 promise: [A soft track on the monitor](#a-soft-track-on-the-monitor-as-the-cues-it-is).
 
 The second is libass drawing characters, so it is for text tracks. A track of
@@ -111,83 +109,7 @@ bitmap cue is a picture of characters; there is nothing to read out of one,
 so the reason stands where the words would have been and the times are still
 drawn and still snap.
 
-## Cues of your own
 
-A subtitle row's third answer is **edit** — the cues this document holds,
-rather than a file's. `+ Subtitle` with no subtitle file open makes one
-straight away and points the row at it; with one open, the menu has `type
-them here — a new track of your own` at the bottom of the same list the
-carry and convert entries are in.
-
-They are typed and retimed on the [Cues lane](timeline.md#the-cues-lane),
-under the waveform, which is where a subtitle's timing is judged — by
-listening to where the line is spoken.
-
-### Taking a file's cues, which is a fork
-
-`Edit these cues`, on a subtitle row's **Cues** tab, copies that track's cues
-into the document. From that press onwards **the document is what renders
-and the file is not read by this row**: the row is repointed in place, so
-there is never a state where both copies reach the output without somebody
-having added a second row for the second one. The tab says which file the
-cues came out of and that it has stopped being read.
-
-**The file itself is never written to.** Not on save, not on render, not
-ever. The cues are undoable with `Ctrl`+`Z` and travel inside a `.fbro`.
-
-A track of **pictures** cannot be taken this way, and the press is replaced
-by the reason: `dvdsub` and `hdmv_pgs_subtitle` are pictures of characters,
-and reading the words out of one is optical character recognition. Such a
-track can still be [drawn](#drawing-them-when-they-are-pictures).
-
-### What a fork costs, and it is the one thing here that can lose work
-
-A forked cue arrives carrying its style, layer, margins and override codes —
-`{\i1}`, `{\pos(120,400)}` — inside its text, and a cue **nobody retypes is
-written back exactly as it was**.
-
-Retyping a cue's words replaces that one text field, so:
-
-| | |
-|---|---|
-| **kept** | its style, its layer, its margins, its effect — and every other cue's everything |
-| **lost** | that cue's own override codes |
-
-This is said on the row's Cues tab, with a count of how many still carry any,
-and the count goes down as they do. There is no style editor here and there
-is not going to be one: a cue is text, a start and an end.
-
-### The render writes a file, and the printed command names it
-
-**ffmpeg has no way to receive cues except as a file.** There is no `-cue`
-option and no filter that makes text out of nothing, so a render materialises
-the track into a real subtitle file and passes it as an ordinary `-i`. The
-command bar's notes say so, because the `-i` looks like a file you added and
-is not.
-
-It is written **beside the output**, named from the output's name and the
-track's id — `programme.sub1.ass` — so rendering twice overwrites one file
-instead of leaving a trail. A destination that is a URL or a `tee` list goes
-to the temp directory instead.
-
-The times in it are already the **output's**, with anything outside the
-render range dropped and a cue straddling the start clamped — which is why
-there is no `-ss` in front of that `-i`. Two [versions](output.md) of a
-render share the one file, since cues do not change with the size.
-
-Which format is decided by what the track holds:
-
-| | |
-|---|---|
-| **`.ass`** | a track forked from a file, because its cues are already ASS |
-| **`.srt`** | a track typed here, because it is words and times and nothing else |
-
-What the **stream in the output** comes out as is a different question with
-its own answer — the muxer's: `.ass` into an mp4 is `mov_text` and into
-Matroska is `ass`.
-
-`-itsoffset` is untouched by any of this and is still the right tool for a
-*file* that is uniformly out — it shifts a whole track on the input.
 
 ## Burning them in
 
@@ -294,9 +216,8 @@ bottom of the canvas, with a line above it saying that this is what the cues
 track is precisely the thing a player can switch off, so an overlay that
 switches off is a faithful preview of one.
 
-**All three ways a row reads its cues are drawn.** A row reads the document's
-own track, carries a file's packets, or converts them. The first is already
-in timeline seconds; the other two are mapped the same way [A track beside
+**Both file-backed ways a row reads its cues are drawn.** A row carries a file's
+packets, or converts them. They are mapped the same way [A track beside
 the picture](#a-track-beside-the-picture) states it — a conversion's zero is
 the in-point exactly, a copy's is the stamp of the cue it begins on. Cues
 outside the render's range are not drawn, for the same reason they are not

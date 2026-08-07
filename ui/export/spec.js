@@ -17,8 +17,6 @@ import { streamSpecs } from './streams.js';
 import { outputTarget, schemeOf, isTee } from './destination.js';
 import { renderGraph } from '../filtergraph.js';
 import { deviceForRender } from '../hardware.js';
-import { parseCueTrack } from './subtitles.js';
-import { trackById, cuesIn, cueFilePath, fileExtension, demuxerFor } from '../cues.js';
 import { current as overlayState, isEmpty, nodes as overlayNodes } from '../graph/overlay.js';
 
 /// Swap a path's extension, keeping the directory and the name. Written
@@ -542,11 +540,6 @@ export function buildSpec(over = {}) {
         clips,
     };
 
-    // Cues the document holds, turned into the one thing ffmpeg can read them
-    // from. Before the graph below, because it adds `-i`s and the derivation
-    // counts that list.
-    attachCueFiles(spec);
-
     // Which of the renderer's two paths this render takes, decided in one
     // place — see `needsGraph()` for the two reasons it can be libavfilter.
     //
@@ -590,79 +583,7 @@ export function buildSpec(over = {}) {
     return spec;
 }
 
-/// A subtitle row reading the document's own cues, turned into an `-i` and a
-/// `decode:` of it.
-///
-/// **ffmpeg has no way to receive cues except as a file**, so this is not a
-/// translation of the edit into something approximate — it is the only exact
-/// form the render has. What comes out the far side is an ordinary extra input
-/// and an ordinary converted subtitle stream, which is why the renderer,
-/// `ui/graph/derive.js` and `ui/command.js` have all needed no change: by the
-/// time any of them sees the spec, `cues:3` is `decode:4:0` and the file is
-/// named in `inputs`.
-///
-/// Four things this is careful about:
-///
-///   - **The file is named here and written by `ui/export.js`.** This function
-///     runs on every keystroke on the Encode and Write stages, and a `writeFileSync`
-///     from here would be a disk write per character typed into the output path.
-///     `spec.cueFiles` is the handover — read by the render on the way past and
-///     by the command bar's note, and ignored by the renderer exactly as
-///     `clip.id` is.
-///   - **The window is applied to the file, not to the row.** `copyFrom`/`copyTo`
-///     go back to zero, because `cueFileText` has already shifted the cues onto
-///     the output's clock and clamped one straddling the start; a `-ss` in front
-///     of the `-i` as well would move every cue twice.
-///   - **A track with nothing in the range writes no stream at all.** An empty
-///     subtitle file is a stream a muxer writes a header for and no cues into,
-///     which in a player looks exactly like a track that failed.
-///   - **One file per track, however many outputs there are.** A version is
-///     built by recursing through `buildSpec()` at another size, and the pass it
-///     becomes overrides `path`, `clips` and the graph — never `inputs` or
-///     `streams`. So both outputs read the one file, which is right: the cues do
-///     not change with the picture's size, and two versions naming one filename
-///     would otherwise be two writers racing for it.
-function attachCueFiles(spec) {
-    const rows = spec.streams || [];
-    if (!rows.some((s) => parseCueTrack(s && s.source) !== null)) return;
-    // Copied rather than pushed into, because a caller may have handed its own
-    // `inputs` in through `over` and this must not grow somebody else's array.
-    const inputs = (spec.inputs || []).slice();
-    const info = (spec.inputInfo || []).slice();
-    const files = [];
-    const kept = [];
-    for (const s of rows) {
-        const id = parseCueTrack(s && s.source);
-        if (id === null) { kept.push(s); continue; }
-        const track = trackById(id);
-        // A row naming a track that is not there, one with nothing in the range,
-        // and one whose format this build cannot read back. All three are said by
-        // `warnings()` rather than sent — a render refused over a row is a
-        // refusal about the form, which is the same rule a pathless attachment
-        // follows.
-        if (!track || !cuesIn(track, spec.start, spec.end)) continue;
-        const format = demuxerFor(fileExtension(track));
-        if (!format) continue;
-        const path = cueFilePath(track, spec.path);
-        const at = inputs.length;
-        inputs.push({ path, format, options: {}, decoderOptions: {},
-                      hwaccel: '', hwaccelDevice: '', hwaccelOutputFormat: '',
-                      ss: 0, to: 0, itsoffset: 0, streamLoop: 0 });
-        // Index-aligned with `inputs`, which is the contract `specInputInfo()`
-        // states. `streams: []` rather than `['v']`: this list is what decides
-        // how many sockets a source card draws, and a file of cues offers a graph
-        // nothing — a text track grows no pad, for the reason `streamKinds` gives.
-        info.push({ id: `cues:${track.id}`, name: track.name, path,
-                    streams: [], sampleRate: 0 });
-        files.push({ id: track.id, path, from: spec.start, to: spec.end });
-        kept.push(Object.assign({}, s, { source: `decode:${at}:0`,
-                                         copyFrom: 0, copyTo: 0 }));
-    }
-    spec.inputs = inputs;
-    spec.inputInfo = info;
-    spec.streams = kept;
-    if (files.length) spec.cueFiles = files;
-}
+
 
 // ── the same spec, asked for five times ────────────────────────────────────
 //

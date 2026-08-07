@@ -42,11 +42,7 @@ a repository beside the footage, and a diff of one should be readable. It holds:
   lock](timeline.md#the-sync-lock) (whether an `Alt`-drag ripples that track
   alone or every locked track together). A document from before track locks
   existed opens with none set.
-- **Subtitles** — the [cues you typed](subtitles.md#cues-of-your-own): one entry
-  per track, its name, its ASS script header, and the cues themselves, each
-  keeping both its current words and the original dialogue line it was forked
-  from (so retyping a line never silently discards a styled original). This is
-  content, the way a clip is content — it is not re-derived from anywhere.
+
 - **Graph** — everything you inserted, locked, placed and wired on the
   [Graph](graph.md) stage.
 - **Output** — what [Encode and Write](output.md) are set to, plus three things

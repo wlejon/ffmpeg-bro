@@ -31,9 +31,7 @@
 //     the inputs do not come back, and it is restored from a document because they
 //     do. `ui/export/streams.js` refuses a followed clip from `localStorage` for
 //     exactly the same reason and keeps one from a document for exactly the same
-//     reason. A **cue track**'s id is the third of these: a subtitle row on the
-//     Write stage says `cues:3`, and an open that renumbered would point that row
-//     at somebody else's dialogue — see `useCueId` in ui/cues.js.
+//     reason.
 //   - **An input is written as what opens it**, never as a file: the path, the
 //     demuxer, both option bags, the hardware decode and the window — the whole
 //     of `asInput()`. Opening a document *is* a reopen, so what has to be stored
@@ -101,7 +99,6 @@ import { project, makeClip, makeGenerator, applyGenerator, isGenerator, placeCli
          SPEED_MIN, SPEED_MAX,
          isTrackLocked, setTrackLocked } from './project.js';
 import * as inputsModel from './inputs.js';
-import * as cues from './cues.js';
 import * as overlay from './graph/overlay.js';
 import { settings } from './export/state.js';
 import * as store from './export/store.js';
@@ -161,12 +158,6 @@ export function snapshot() {
         })),
         clips: project.clips.map(clipBlob),
         tracks: trackBlob(),
-        // The cues somebody typed, which are content in the way a clip is
-        // content: nothing can re-derive them from a file, because the file they
-        // may have been forked from is not what renders any more. Written whole,
-        // including each cue's dialogue line — see `cueBlob()` in ui/cues.js for
-        // why the words alone would lose a styled track on the first save.
-        subtitles: cues.cueBlob(),
         graph: copy(overlay.current()),
         output: outputBlob(),
         session: sessionBlob(),
@@ -316,12 +307,6 @@ export function open(doc) {
         if (!wanted.has(input.id)) inputsModel.removeInput(input);
     inputsModel.orderInputs(specs.map((s) => s.id));
 
-    // The cues, before the output settings below, because a stream row read out
-    // of `output` names a cue track by id and `normalizeStreams()` drops a row
-    // naming one that is not there. Read after the clips only for tidiness — a
-    // cue track names nothing else in the document, which is the whole reason it
-    // can be a list of its own rather than a field on something.
-    cues.adoptCues(d.subtitles);
     readCanvas(d.canvas, made);
     // After the clips, because it is about the tracks they are on. Absent means
     // *no locks* rather than "leave them alone" — unlike `output` below — because

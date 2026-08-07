@@ -231,55 +231,7 @@ timestamps with no clip cut from it, so it has a strip in the column instead,
 where the ruler is that file's own. And `enable` on a filter that has no
 timeline support is reported on the node rather than drawn as a region.
 
-## The Cues lane
 
-Cues this document holds — see [Cues of your own](subtitles.md#cues-of-your-own)
-— drawn as regions on the timeline's own ruler, directly above the waveform, with
-a strip under it for the words.
-
-It is here rather than in a panel because **a subtitle's timing is judged by
-listening to where the line is spoken**: a pair of number fields cannot answer
-"does this come on when he starts talking", but a region against A1 can.
-
-| | |
-|---|---|
-| drag a region's end | move where the cue comes on, or goes off |
-| drag its middle | move the whole cue, keeping its length |
-| press a region | select it — its words appear in the strip below |
-| press the lane | the playhead goes there, as on any other lane |
-
-Ends snap to the same things everything else on this timeline snaps to: the
-start, the playhead, and every clip's edges. The strip carries four presses:
-
-| | |
-|---|---|
-| **+ Cue** | a new cue at the playhead, running to the next cue or two seconds, whichever comes first |
-| **Split** | cut this cue in two at the playhead |
-| **Merge** | join it with the next one — the words become two lines, the span runs from this start to that end |
-| **Delete** | take it out |
-
-A split leaves the words with the first half and hands you an **empty** second
-one — where in the sentence the cut goes is not something this can know.
-
-**The lane is there because cues are** — the same rule the video tracks and the
-When lane follow. A document with no cue track does not carry an empty one, and
-the first one appears the moment `+ Subtitle` on the Write stage makes it or a
-file's cues are taken into the document.
-
-Each cue is drawn with **its own words inside it**, which is the opposite of
-what the When lane does: a span's identity is its filter, one name belonging
-to the whole row, and a cue's identity is what it says. The line is pinned to
-the visible left edge, so a cue running off the window keeps its words
-readable, cut with an ellipsis rather than spilling into the next one.
-
-Everything here is one press of `Ctrl`+`Z`, and travels in the
-[document](document.md). Typing is folded into one undo step the way a slider
-drag is.
-
-A cue that came out of a file and still carries ASS override codes says so in
-the strip, next to the field you are about to type into, because retyping it
-is when they go. See [Cues of your
-own](subtitles.md#what-a-fork-costs-and-it-is-the-one-thing-here-that-can-lose-work).
 
 ## The sync lock
 
