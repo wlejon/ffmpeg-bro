@@ -11,69 +11,6 @@
 // what this one is set to and what it turned out to contain, and — beside it —
 // the demuxer's own option table, drawn by the component the encoder's and the
 // muxer's columns use (see ui/opttable.js).
-//
-// Two things it is careful about, both of them the point of the stage:
-//
-//   - **An input seek is not a clip's in-point.** `-ss` decides what the input
-//     *is*: its zero moves, its duration shrinks, and the clips cut from it are
-//     measured from there. Trimming a clip picks a moment out of an input.
-//   - **The probe is the answer to what the options just did.** It is re-run
-//     with the options in force, so the stream list under them is the file as
-//     this input opens it and not as libavformat's defaults see it.
-//
-// ── What this stage says, and what it stopped saying ───────────────────────
-//
-// Both of those used to be **paragraphs on the screen**, and so did nine more:
-// what a device is, what a sequence's frame rate means, which of the three
-// concats this one is, where a decoder option reaches, why hardware decoding is
-// usually slower here. Every one true, and together they were the stage — three
-// hundred words with the controls scattered through them, the primary action
-// (`Use on the timeline`) sitting mid-column at the weight of an ordinary
-// button, and the file's own streams pushed off the bottom by the prose
-// explaining the fields above them.
-//
-// The rule is the Capture stage's, arrived at the same way: **a stage states, a
-// manual explains.** What is on screen is a label, a value, and a door to
-// whatever would change it. A sentence that was load-bearing is a `title` on
-// the control it is about — where somebody looking at the control will find it
-// — and the argument lives in docs/manual/sources.md and in these headers.
-//
-// The vocabulary went with it. `-ss`, `-to`, `-itsoffset`, `-stream_loop`,
-// `-hwaccel`, `-framerate` and `-start_number` were the *labels* of the fields,
-// which is a UI legible only to somebody who did not need it. They are **Start
-// at**, **Stop at**, **Delay by**, **Repeat**, **Decode on**, **Rate** and
-// **First number** now, each carrying its ffmpeg spelling in its tooltip — and
-// the exact line is a foot below in the command bar, which is the honest place
-// for it. What stayed in ffmpeg's own words is the `-i` **number** on a list
-// card, because the graph genuinely calls an input `[1:v]`, and the one-line
-// `summary()` under it, because "what is set on this input" is precisely a list
-// of flags and any translation of it would be a second answer.
-//
-// What it turned out to contain went from six rows a stream to **one line a
-// stream** — `V0  h264  1920×1080 · 29.97 fps · yuv420p · bt709` — with the
-// profile, the language, the colour range and the pixel aspect in its tooltip.
-// The rows were not wrong; a file with two video tracks and five soundtracks
-// was forty rows of them, and nothing in this stage is read as often as "what
-// is in this file".
-//
-// ── the probe and the reads are two sections ───────────────────────────────
-//
-// And then that readout was broken in half again, by the controls that
-// had each been drawn under the stream they read: `Read it` under a `gpmd`
-// track, and `Find sounds` under the first soundtrack.
-// Each argued its position and each argument was locally right — the control
-// that dispatches on a fourcc belongs beside the fourcc.
-//
-// In aggregate it was wrong, because the two things are not the same kind of
-// thing. **A probe answer is free and complete**: it is what libavformat said
-// the instant the input was opened, under the options above. **A read is
-// between thirty milliseconds and ninety minutes of this machine**, spent
-// because somebody pressed a button, derived rather than part of the edit, and
-// forgettable. Interleaving them put controls between `A0` and `V1`.
-// So `fileRows` is the probe and `readRows` is what has been spent on it, and
-// the section head is the whole of what makes the difference legible. A read's row can
-// **name the stream it read** (the old ones sat under the first soundtrack and
-// asserted by position an answer `av_find_best_stream` had not given).
 
 import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
@@ -85,15 +22,8 @@ import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 import { copiesOf, cancel as cancelCopy, tickLocalCopies,
          copyFolder, useCopyFolder, PULL_WORDS } from './localcopy.js';
-// Which inputs a recording reads. The same question `graphReads()` asks of the
-// overlay, asked of the other thing that reads an `-i` without a clip being cut
-// from it — and it is only answerable at all because a device now lands in this
-// list rather than in a private one on that stage.
 import { capture } from './capture.js';
 import { optionColumn } from './opttable.js';
-// The same note the Write stage's rows are written with. Imported rather than
-// written again: a second one would be a second answer to how a paragraph under
-// a control is styled, and the two would drift on the first change to either.
 import { note } from './export/controls.js';
 import * as graph from './graph/overlay.js';
 import { COMPOSITE_POINT } from './graph/derive.js';
@@ -103,17 +33,7 @@ import { goTo } from './shell.js';
 
 let refs = {};
 let hooks = {};
-
-// Which input the detail column is about, by id. By id and not by reference
-// because the list is rebuilt from the model on every change, and an input that
-// has gone should leave the panel showing the next one rather than a card that
-// is no longer in the document.
 let chosenId = '';
-
-// The demuxer picker is a search over three hundred and fifty names, not a
-// dropdown: there is no list of the good ones anywhere, which is the same
-// problem the muxer picker and the filter palette have and the same shape of
-// answer.
 let demuxerOpen = false;
 let demuxerSearch = '';
 
@@ -132,17 +52,10 @@ export function initSources(nodes, h) {
         const add = () => {
             const path = refs.addPath.value.trim();
             if (!path) return;
-            // Typing `shot_%04d.png` means a sequence in exactly the way
-            // dropping the folder does, and a path that is one picture means a
-            // still. Anything else is a file or a URL and nothing is added to
-            // it — see ui/sequence.js.
             added(addInput(typedSpec(path)));
         };
 
         refs.add.addEventListener('click', add);
-        // Enter in the field is the same act. A path typed and then abandoned
-        // because the button was somewhere else is the commonest way a field
-        // like this fails.
         refs.addPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
     }
 
@@ -173,43 +86,74 @@ export function initSources(nodes, h) {
         joinOpen = !joinOpen;
         drawSources();
     });
+
+    // B3. Stage drop target for dragging and dropping media files
+    const stage = refs.stage || (typeof document !== 'undefined' ? document.getElementById('st-sources') : null);
+    if (stage) {
+        stage.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+            stage.classList.add('drop-over');
+        });
+        stage.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+            stage.classList.add('drop-over');
+        });
+        stage.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!stage.contains(e.relatedTarget)) {
+                stage.classList.remove('drop-over');
+            }
+        });
+        stage.addEventListener('dragend', () => {
+            stage.classList.remove('drop-over');
+        });
+        stage.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            stage.classList.remove('drop-over');
+            const files = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+            let addedAny = false;
+            for (const f of files) {
+                const p = f.path || f.name;
+                if (p) {
+                    const inp = addInput(typedSpec(p));
+                    if (inp) {
+                        chosenId = inp.id;
+                        if (inp.error && hooks.flash) hooks.flash(inp.error);
+                        addedAny = true;
+                    }
+                }
+            }
+            if (addedAny) {
+                if (hooks.changed) hooks.changed();
+                drawSources();
+            }
+        });
+    }
 }
 
-// Which inputs the join is about, by id. Held here rather than on the inputs
-// because it is a gesture in progress and not part of the document — the same
-// reason the demuxer picker's search term is not in the model.
 let joinOpen = false;
 const joining = new Set();
 
-/// The input the panel is about: the one chosen, or the first one there is.
 function chosen() {
     return inputs.find((i) => i.id === chosenId) || inputs[0] || null;
 }
 
 export function drawSources() {
     if (!refs.list) return;
+    if (refs.join) refs.join.classList.toggle('on', joinOpen);
     drawList();
     drawDetail();
 }
 
-// The `<span>`s showing how long an open has been waiting, by input id. Held
-// rather than redrawn, because the alternative is relaying out this stage sixty
-// times a second to move one number — and most of the window is `display:none`
-// at any moment, so a redraw here is not a redraw of a card.
 const waitingText = new Map();
 
-/// Take in whatever the opens in flight have said, and keep the clocks moving.
-///
-/// From the frame loop, for the reason the render's poll is: nothing calls back
-/// into JS, so this is the only way an answer that arrived on another thread
-/// reaches the screen. It runs wherever you are standing — an input typed on
-/// this stage goes on connecting while you walk to the timeline, exactly as a
-/// render goes on rendering.
 export function tickSources() {
-    // Every poll runs, and none is allowed to skip another: a probe settling, a
-    // data read settling and a soundtrack read settling are three answers
-    // arriving on three threads, and `||` would leave one of them unpolled for a
-    // frame whenever another went first.
     const opened = tickInputs();
     const pulled = tickLocalCopies();
     const settled = opened || pulled;
@@ -225,18 +169,8 @@ export function tickSources() {
     }
 }
 
-/// What an open in flight is waiting *on*, which is not decoration: the two
-/// kinds wait on different things, and only one of them can be cut short.
-///
-/// A URL is connecting — to a host, through a protocol, and a Stop reaches the
-/// socket libav is sitting on. A device is opening — a driver is being asked
-/// for a picture, and libavdevice's `read_header` never polls the interrupt
-/// callback, so a Stop there ends the waiting and not the open. One word each,
-/// so that what is on screen is the truth about which wait this is.
 function waitingOn(input) { return kindOf(input) === 'device' ? 'device' : 'url'; }
 
-/// "Connecting · 3.4s of 10", or the same without the deadline until the first
-/// poll has said what the deadline is.
 function waitingLabel(input) {
     const o = input.opening || {};
     const secs = `${(o.elapsed || 0).toFixed(1)}s`;
@@ -246,22 +180,10 @@ function waitingLabel(input) {
 
 // ── the list ───────────────────────────────────────────────────────────────
 
-/// Which inputs the graph reads on its own account, by id.
-///
-/// **An input with no clip is not necessarily unused.** A logo laid over the
-/// picture is an `-i` that nothing on the timeline is cut from, and a card
-/// reading "unused" beside a file the render is about to open would be the one
-/// thing this stage cannot afford to get wrong.
 function graphReads() {
     return new Set(graph.sourceInputs());
 }
 
-/// Which inputs a stream row on the Write stage reads, by `-i` number.
-///
-/// The other way an input is used without a clip being cut from it. A subtitle
-/// file is the case that makes it necessary — nothing on the timeline is ever
-/// cut from one — but a copied soundtrack is the same shape and was already
-/// being reported as unused.
 function streamReads() {
     const out = new Set();
     for (const s of streamsOf()) {
@@ -276,16 +198,30 @@ function drawList() {
     const reads = graphReads();
     const subtitleWriters = streamReads();
     put(refs.list, () => {
+        // B4. Visible status chip/banner when Join mode is armed
+        const joinBannerNode = joinOpen ? div('src-join-banner', [
+            span(`Join mode armed · ${joining.size} selected`, 'src-join-chip'),
+            el('button', {
+                cls: 'tiny btn-cancel-join',
+                text: '✕',
+                title: 'Cancel Join mode',
+                on: { click: () => { joining.clear(); joinOpen = false; drawSources(); } },
+            }),
+        ]) : null;
+
         if (!inputs.length)
             return [
+                joinBannerNode,
                 div('src-empty', [
                     div('src-empty-title', 'No inputs'),
                     div('src-empty-note dim', 'Drop media files here'),
                 ]),
                 ...graphFileRows(),
-            ];
-        if (joinOpen) return joinRows();
-        return [...inputs.map((input) => {
+            ].filter(Boolean);
+
+        if (joinOpen) return [joinBannerNode, ...joinRows()].filter(Boolean);
+
+        return [joinBannerNode, ...inputs.map((input) => {
             const node = fromTemplate('tpl-input');
             const used = hooks.clipsOf ? hooks.clipsOf(input).length : 0;
             const inGraph = reads.has(input.id);
@@ -345,47 +281,21 @@ function drawList() {
                 }
             });
             return node;
-        }), ...graphFileRows()];
+        }), ...graphFileRows()].filter(Boolean);
     });
 }
 
-/// A `movie` filter's filename, with the filtergraph escaping taken off.
-///
-/// `'C\:/logo.png'` is how a Windows path has to be written inside a filter
-/// argument: a colon separates a filter's arguments, and the quotes are there
-/// because a comma ends the filter and a filename is free to contain one. What
-/// is wanted here is the path.
-///
-/// **Both layers, or the round trip does not close.** `filterPath()` in
-/// `export/subtitles.js` writes the quotes and this took only the backslashes
-/// off, so `Add as an input` handed `addInput` a path with a leading apostrophe
-/// on it and the open failed on a filename nobody had typed.
 function unescapePath(text) {
     let s = String(text || '').trim();
     if (s.length > 1 && s[0] === '\'' && s[s.length - 1] === '\'') s = s.slice(1, -1);
     return s.replace(/\\(.)/g, '$1');
 }
 
-/// Files the graph opens for itself, which are the one way this stage can stop
-/// being every file the render opens.
-///
-/// A `movie` filter is not an `-i`: it opens the file inside libavfilter, with
-/// none of the demuxer options, none of the window and none of the probing that
-/// the rows above are made of. The application does not reach for it — a source
-/// placed on the Graph stage is an input reference, for the reasons written in
-/// `graph/derive.js` — but it is an ordinary filter and the palette offers every
-/// one of those, so what it names is accounted for here rather than left off the
-/// list and quietly opened.
 function graphFileRows() {
     const nodes = graph.nodes().filter((n) => n.filter === 'movie' || n.filter === 'amovie');
     if (!nodes.length) return [];
     return [
-        head('Opened by the graph', {
-            title: 'A movie filter opens its file inside libavfilter, so nothing on this ' +
-                   'stage reaches it: no forced demuxer, no -probesize, no window, no probe. ' +
-                   'Added as an input it gets all of them, and the graph can read it as ' +
-                   '[n:v] instead.',
-        }),
+        head('Opened by the graph'),
         ...nodes.map((n) => {
             const named = (n.params && n.params.filename) || (n.pos && n.pos[0]) || '';
             const path = unescapePath(named);
@@ -394,7 +304,7 @@ function graphFileRows() {
                 span(path || 'no file named yet', path ? 'dim' : 'src-missing'),
                 path ? el('button', {
                     cls: 'tiny', 'data-f': 'srcadopt', text: 'Add',
-                    title: 'Open it as an -i, with a demuxer, options and a window',
+                    title: 'Add as input',
                     on: { click: () => {
                         const made = addInput(typedSpec(path));
                         chosenId = made.id;
@@ -408,33 +318,13 @@ function graphFileRows() {
     ];
 }
 
-/// Several files as one `-i`, in the order they are ticked.
-///
-/// **This is the concat *demuxer*, and saying so is the point of the panel.**
-/// It reads the listed files one after another before anything is decoded, so
-/// they have to be encoded compatibly; the concat *filter* joins decoded
-/// streams inside the graph and does not care; and two clips laid end to end
-/// on the timeline is neither, because that is an edit and goes through the
-/// compositor. All three are reachable from this application, and somebody
-/// reaching for "join these two files" can mean any of them.
 function joinRows() {
     const candidates = inputs.filter((i) => kindOf(i) !== 'concat' && i.probe);
     const chosenPaths = () =>
         candidates.filter((i) => joining.has(i.id)).map((i) => i.path);
 
     const rows = [
-        // Three different things in this application are called concat and they
-        // are three different renders. Which one this is has to be sayable
-        // where it is offered — as a tooltip on the heading rather than the
-        // four lines of prose it was, because the panel is a list of ticks and
-        // a paragraph above them is the thing nobody reads.
-        head('Read end to end', {
-            title: 'The concat demuxer reads these files one after another as a single -i, ' +
-                   'before anything is decoded — so they have to be encoded compatibly.\n\n' +
-                   'The concat filter joins decoded streams inside the graph and does not ' +
-                   'care what they were.\n\nTwo clips laid end to end on the timeline is ' +
-                   'neither: that is an edit, and it goes through the compositor.',
-        }),
+        head('Read end to end'),
         ...candidates.map((input) => el('button', {
             cls: 'src-demuxer tiny' + (joining.has(input.id) ? ' on' : ''),
             'data-join': input.id,
@@ -456,7 +346,7 @@ function joinRows() {
     rows.push(div('src-actions', [
         el('button', {
             cls: 'tiny primary', 'data-f': 'srcjoingo', text: 'Join',
-            title: 'Write a concat list and add it as one input',
+            title: 'Join selected inputs',
             disabled: chosenPaths().length < 2,
             on: { click: () => {
                 const made = addInput(concatSpec(chosenPaths()));
@@ -481,9 +371,6 @@ function joinRows() {
 function drawDetail() {
     const input = chosen();
     show(refs.options, !!input);
-    // Nothing at all, rather than a second empty state: `chosen()` falls back to
-    // the first input, so this is reachable only when the list is empty — and
-    // the list is already saying so, in the column that owns the question.
     if (!input) {
         put(refs.detail, () => []);
         put(refs.options, () => []);
@@ -492,9 +379,6 @@ function drawDetail() {
     }
 
     put(refs.detail, () => [
-        // The filename as it is written, not shouted: `.section-head` sets its
-        // text in caps, which is right for `WINDOW` and wrong for
-        // `MY_HOLIDAY_CLIP_FINAL_2.MP4`.
         head(input.name, { cls: 'section-head src-title', title: input.path }),
         ...whereRows(input),
         ...localCopySection(input),
@@ -503,24 +387,12 @@ function drawDetail() {
         ...decodeRows(input),
         ...windowRows(input),
         ...contentRows(input),
-        ...readRows(input),
     ]);
 
-    // The act, pinned under the column rather than laid out among the rows.
     put(refs.foot, () => footRows(input));
-
-    // The demuxer's own option table, beside the input rather than under it,
-    // for the reason the encoder's and the muxer's are: mp4's demuxer has
-    // thirty options and libavformat's generic table another forty, and a fold
-    // is not somewhere anybody reads seventy rows.
     put(refs.options, () => optionRows(input));
 }
 
-/// One line stating a fact this stage cannot change, with the door to whatever
-/// can. The Capture stage's `.cap-strip` in the Sources vocabulary, and it
-/// exists for the same reason: the two inputs that are not a clip and never
-/// will be — a device, a file of cues — were each answered with two paragraphs
-/// naming the stage to go to, and a paragraph is not a door.
 function strip(key, text, why, door) {
     return div('src-strip', [
         span(key, 'src-strip-k'),
@@ -534,51 +406,30 @@ const doorTo = (label, stage, why) => el('button', {
     on: { click: () => goTo(stage) },
 });
 
-/// Where it comes from, and what is answering for that.
 function whereRows(input) {
     const path = el('input', {
         cls: 'wide', 'data-f': 'srcpath', type: 'text', value: input.path,
-        title: 'What -i is handed, exactly as written',
+        title: 'File path or URL',
         on: { change: () => change(input, { path: path.value.trim() }) },
     });
     const rows = [row('From', path)];
 
     const scheme = schemeOf(input.path);
     const protocols = (bro.ffmpeg.protocols && bro.ffmpeg.protocols.input) || [];
-    // Only for a URL. "Protocol: file" under every path on the machine is a row
-    // that has never once been the answer to anything.
     if (scheme) {
-        // A URL naming a protocol this build does not have fails at open with a
-        // message about a filename, which is the least helpful place to find
-        // out. Every protocol here is one `avio_enum_protocols` reported.
         const known = protocols.indexOf(scheme) >= 0;
         rows.push(row('Over', el('span', {
             cls: known ? 'mono' : 'mono src-missing',
             text: known ? scheme : `${scheme} — not in this build`,
             title: known
                 ? `libavformat links ${scheme}, one of ${protocols.length} input protocols`
-                : `This build has no ${scheme} protocol, so the open fails with a message ` +
-                  'about a filename',
+                : `This build has no ${scheme} protocol, so the open fails with a message about a filename`,
         })));
     }
     if (opening(input)) rows.push(...waitingRows(input));
     return rows;
 }
 
-/// What is happening while an input is being opened, and the way to stop it.
-///
-/// **The Stop says what it does, and for a device that is less than it is for a
-/// URL.** On a URL it reaches the `AVIOInterruptCB` the open was started with,
-/// so libav abandons the connect, the handshake or the read it is inside and
-/// the card says `stopped` a frame or two later. On a device it cannot: nothing
-/// in libavdevice's `read_header` consults that callback, so what the press
-/// ends is this application's waiting, and the thread stays inside libav until
-/// the driver answers. A button that hid the row while the thread stayed
-/// blocked would be worse than no button — it would say the machine had stopped
-/// doing something it was still doing — so the row says both halves.
-///
-/// The elapsed figure is written into `waitingText` and updated from the frame
-/// loop rather than redrawn, which is why it is built as its own node here.
 function waitingRows(input) {
     const readout = span(waitingLabel(input), 'mono src-waiting');
     waitingText.set(input.id, readout);
@@ -587,27 +438,12 @@ function waitingRows(input) {
         row(device ? 'Opening' : 'Connecting', readout),
         row('', el('button', {
             cls: 'tiny', 'data-f': 'srcstop', text: device ? 'Stop waiting' : 'Stop',
-            title: device
-                ? 'Stop waiting for this device. It does not abort the open — libavdevice ' +
-                  'never asks libav’s interrupt callback while it is talking to a driver — ' +
-                  'so the thread is abandoned and reaped when the device finally answers.'
-                : 'Abandon the open. This reaches libav’s interrupt callback, which is ' +
-                  'the only thing that can abort a connect that is already in progress.',
+            title: device ? 'Stop waiting for device' : 'Abandon opening',
             on: { click: () => { stopOpening(input); } },
         })),
-        row('', note(device
-            ? 'The open is on a thread of its own, so the window stays alive while it waits. ' +
-              'A device blocks in its own driver, where neither the deadline nor Stop can ' +
-              'reach it; what they do reach is the stream analysis after it, which is most ' +
-              'of an open on a screen grabber and about half of one on a camera.'
-            : 'The open is on a thread of its own, so the window stays alive while it waits — ' +
-              'and it gives up by itself if nothing answers in time. Name resolution is the ' +
-              'one part neither the deadline nor Stop can cut short: getaddrinfo has no ' +
-              'callback in it.')),
     ];
 }
 
-/// What it probed as, and what it can be forced to.
 function demuxerRows(input) {
     const probed = input.probe ? input.probe.format.name : '';
     const rows = [row('Read as', div('src-demux', [
@@ -621,13 +457,12 @@ function demuxerRows(input) {
         el('button', {
             cls: 'tiny', 'data-f': 'demuxpick',
             text: demuxerOpen ? 'Close' : 'Change…',
-            title: `Force one of the ${(bro.ffmpeg.demuxers || []).length} demuxers this ` +
-                   'build has, which is what -f means in front of an -i',
+            title: 'Select demuxer (-f)',
             on: { click: () => { demuxerOpen = !demuxerOpen; drawSources(); } },
         }),
         input.format && el('button', {
             cls: 'tiny', 'data-f': 'demuxprobe', text: 'Auto',
-            title: 'Hand the choice back to libavformat',
+            title: 'Auto-detect demuxer',
             on: { click: () => change(input, { format: '' }) },
         }),
     ]))];
@@ -636,10 +471,6 @@ function demuxerRows(input) {
     return rows;
 }
 
-/// Three hundred and fifty demuxers, searched rather than listed.
-///
-/// The same shape as the muxer picker one stage along, and for the same reason:
-/// nothing here is a list of the good ones, and a name is what `-f` takes.
 function demuxerPicker(input) {
     const list = div('src-picker');
     const draw = () => put(list, () => {
@@ -675,29 +506,11 @@ function demuxerPicker(input) {
     return div('src-pick', [row('Find', search), list]);
 }
 
-// ── inputs whose content is assembled ──────────────────────────────────────
-//
-// A numbered run of files, a single picture held for a chosen length, and a
-// list read end to end are three inputs that are not a file. **Everything they
-// are set with is an ordinary demuxer option** — `-framerate`,
-// `-start_number`, `-pattern_type` and `-loop` belong to `image2`, `safe`
-// belongs to `concat` — so these rows write into the same bag `-probesize`
-// goes in, and the option column beside them holds the same values. Given
-// their own rows because the two or three that matter are otherwise three
-// among seventy, and because *what they mean* is the point: a sequence's frame
-// rate is a decision, and drawing it as row 34 of an option table says the
-// opposite.
-
-/// One demuxer option, edited as itself: the value goes into the bag under the
-/// name ffmpeg gives it, and the command bar prints it in front of the `-i`.
 function optionField(input, key, opts = {}) {
     const field = el('input', {
         cls: opts.wide ? 'wide' : 'num', 'data-f': opts.name || key, type: 'text',
         value: input.options[key] !== undefined ? String(input.options[key]) : '',
         placeholder: opts.hint || '',
-        // The ffmpeg name of the key, and what it decides, on the control it is
-        // about — the row is labelled in words now, and the word is not the
-        // spelling the command bar prints.
         title: opts.title || `-${key}`,
         on: { change: () => {
             const next = Object.assign({}, input.options);
@@ -720,80 +533,28 @@ function assemblyRows(input) {
     }
 }
 
-/// A file of cues, which is an `-i` this stage can describe and the timeline
-/// cannot use.
-///
-/// It is here because it *is* an `-i` — `ffmpeg -i clip.mp4 -i cues.srt` is how
-/// everyone writes it, the demuxer can be forced, `-ss` shifts every cue, and
-/// the command bar prints all of that in front of the same `-i` as everything
-/// else. What it cannot be is a clip: there is no picture to lay out and no
-/// sound to mix, and offering `Use on the timeline` would put a clip of nothing
-/// on it.
-///
-/// So the panel says the two things it *can* be, and both are somewhere else:
-/// a stream in the output, which is the Write stage, and a burn-in, which is a
-/// `subtitles` filter on the Graph stage like every other filter.
 function subtitleRows(input) {
     const cues = (input.probe ? input.probe.streams : [])
         .map((s) => `${s.index}: ${s.codec}${s.language ? ` (${s.language})` : ''}`);
     return [
         head('Subtitles'),
         row('Tracks', span(cues.join(' · ') || 'none libavformat could read', 'mono')),
-        // The two homes, as two doors rather than as the two paragraphs that
-        // named them. Each is a decision taken somewhere else, and telling
-        // somebody to go there is worse than taking them.
         strip('Cues', 'no picture and no sound — nothing to lay out',
-              'A file of cues is an ordinary -i: the demuxer, its options and Start at all ' +
-              'reach it. What it cannot be is a clip.\n\n' +
-              'Three things can be done with it. A subtitle stream on the Write stage ' +
-              'travels beside the picture as a track a player can turn off. Burn in below ' +
-              'draws it over the whole canvas, which is right for cues written against the ' +
-              'finished programme. Burn in on a clip’s properties panel draws it on that ' +
-              'clip, on the file’s own clock — which is right for an .srt that came with ' +
-              'the shot, and is the one the viewer can show you.',
+              '',
               doorTo('Write', 'write', 'Carry it as a track the player can turn off')),
         row('Burn in', div('src-demux', [
             el('span', {
                 cls: 'mono dim src-filter', text: `subtitles=${filterPath(input.path)}`,
-                title: 'The colon in a drive letter is escaped and the path quoted because ' +
-                       'a filtergraph separates a filter’s arguments with colons and its ' +
-                       'filters with commas',
             }),
             el('button', {
                 cls: 'tiny', 'data-f': 'srcburn', text: 'Place it',
-                title: 'Put an ordinary subtitles node on the graph, on the whole canvas ' +
-                       'after compositing — movable, configurable and deletable there like ' +
-                       'any other',
+                title: 'Place subtitles node on graph',
                 on: { click: () => burnIn(input) },
             }),
         ])),
     ];
 }
 
-/// The short way to `subtitles=`, and it is short only in the sense that it
-/// knows the name of the filter and how to write the path.
-///
-/// **Over the whole canvas, which is a statement about the clock.** These cues
-/// are being drawn on the composite, where a cue at 00:01:30 is a minute and a
-/// half into what will be *written*. That is right for a file authored against
-/// the finished programme and wrong for one that came with a shot, and the
-/// other door — `Burn in` on a clip's properties panel — is the second, on that
-/// clip's own chain above the derivation's `setpts`. Nothing can ask a file
-/// which of the two it is, so both exist and each says what it is for.
-///
-/// **What it places is an ordinary node**, at `COMPOSITE_POINT`, which is the
-/// same point the palette offers and the same one a measurement lands at. It
-/// appears on the Graph stage, it is printed by the command bar, it can be
-/// moved, configured and deleted there, and nothing about the render behaves
-/// differently because this button rather than the palette put it there — the
-/// rule chunk 10's measurement offers follow, for the same reason: a shortcut
-/// that produced something you could not then find is worse than no shortcut.
-///
-/// The anchor comes from `derive.js` rather than being written out, because
-/// `applyOverlay` drops an insert whose point no derivation declares without a
-/// word — right for a clip trimmed out of the range, and silent ruin for a name
-/// that has drifted: this button would go on placing a record nothing ever
-/// resolves, and the only symptom is that pressing it does nothing.
 function burnIn(input) {
     graph.insert(COMPOSITE_POINT, 'subtitles',
                  { params: { filename: filterPath(input.path) } });
@@ -801,97 +562,49 @@ function burnIn(input) {
     goTo('graph');
 }
 
-/// A live device, which is an input this stage can describe and cannot lay out.
-///
-/// It is here because a device *is* an `-i` and this is where an `-i` is
-/// edited: forcing `-f dshow` by hand is a legitimate thing to do and the
-/// result should be understood rather than shown as a file that will not open.
-///
-/// **It used to say "no end, so no clip", and that was the wrong half.** `Stop
-/// at` gives a device an end — it is `-t`, and `-t` is exactly what gives an
-/// endless input a length everywhere else in this application — so the sentence
-/// was answerable and the refusal it was standing in for was not. The half that
-/// cannot be given is the seek: a libavdevice demuxer has no `read_seek`, every
-/// scrub comes back `Invalid argument`, and a trim measured on the render is a
-/// *wait* of exactly its own length (see `deviceClip` in
-/// src/native/ffmpeg_export.h for the numbers). So this says the true thing and
-/// points at the two places a live input does work.
 function deviceRows(input) {
     return [
         strip('Live', 'plays now and cannot be cut',
-              'A device has no way back to a moment that has gone. Stop at gives one a ' +
-              'length, and a length was never what was missing: seeking a device is an ' +
-              'error, so a trim on one would be a wait of its own length rather than a ' +
-              'jump, and the picture on the monitor could never be the moment under the ' +
-              'playhead. That is what a live input is, not a gap in this stage.\n\n' +
-              'Live goes through the Capture stage instead, and it goes all the way ' +
-              'through: several devices on one graph, a file over them in a movie node, ' +
-              'and a destination that is a URL — so a camera with a title on it, streamed ' +
-              'out, is that stage rather than this one. What it writes to a file is an ' +
-              'input like any other, and that one can be cut.',
+              '',
               doorTo('Capture', 'capture', 'Watch it, compose it, record or stream it')),
     ];
 }
 
-/// A numbered run of files, as the one `-i` it is.
 function sequenceRows(input) {
     const seq = input.sequence;
     const rows = [head('Image sequence')];
 
     if (seq && seq.count) {
         rows.push(row('Frames', span(`${seq.count} · ${seq.start}…${seq.end}`, 'mono')));
-        // A gap is reported and never closed. image2 stops at the first
-        // missing number, so a run of three hundred with twelve absent is not
-        // three hundred frames — and a length nothing will render is worse
-        // than a number that looks short. Stays on the screen rather than
-        // going into a tooltip: it is a refusal, not an explanation.
         if (seq.missing)
             rows.push(row('', el('span', {
                 cls: 'src-missing',
                 text: `${seq.missing} missing — the sequence ends at the first gap`,
-                title: `${seq.missing} number${seq.missing === 1 ? ' is' : 's are'} missing ` +
-                       `between ${seq.start} and ${seq.end}. image2 stops at the first gap, ` +
-                       'so this input is shorter than the files on disk.',
+                title: `${seq.missing} frame gap(s) detected`,
             })));
     }
 
-    // **The rate of a sequence is an input option, not a property of the
-    // files.** Twelve pictures are twelve pictures; how long each is on screen
-    // is a decision, and the same files are one second or two depending only
-    // on this — which is the sentence this stage most has to be able to say.
     rows.push(row('Rate', [
         optionField(input, 'framerate', {
             name: 'seqfps', hint: String(SEQUENCE_FPS),
-            title: '-framerate — a sequence has no frame rate of its own; nothing on disk ' +
-                   'says how long each picture is on screen. The same files are one second ' +
-                   'or two depending only on this.',
+            title: '-framerate',
         }),
         span('fps', 'dim'),
     ]));
 
     rows.push(row('First number', optionField(input, 'start_number', {
         name: 'seqstart', hint: '0',
-        title: '-start_number — which number the run begins at. image2 looks for the first ' +
-               'five from zero and then gives up, so a run beginning at 1000 is unopenable ' +
-               'without it, and one beginning at 1 opens only by accident.',
+        title: '-start_number',
     })));
 
-    // `pattern_type` is the demuxer's own option and its values are the
-    // demuxer's own; whether `glob` *works* is a compile-time fact about this
-    // build and the only capability in this application that has to be asked
-    // by trying. Offering it where it cannot work would be offering something
-    // that fails at open with a sentence about a file.
     const pattern = input.options.pattern_type || 'sequence';
     rows.push(row('Named by', div('src-demux', [
         segmented('src-pattern', [
-            { v: 'sequence', l: 'number', title: 'pattern_type sequence — a number in the ' +
-                                                 'name, %04d' },
+            { v: 'sequence', l: 'number', title: 'pattern_type sequence' },
             { v: 'glob', l: 'pattern', disabled: !bro.ffmpeg.globPatterns,
               title: bro.ffmpeg.globPatterns
-                  ? 'pattern_type glob — a shell pattern, frame*.png'
-                  : 'This build of libavformat was compiled without globbing, so ' +
-                    'pattern_type=glob is refused at open. Numbered patterns are ' +
-                    'unaffected.' },
+                  ? 'pattern_type glob'
+                  : 'glob pattern not available in this build' },
         ], pattern, (id) => {
             const next = Object.assign({}, input.options);
             if (id === 'sequence') delete next.pattern_type; else next.pattern_type = id;
@@ -901,21 +614,13 @@ function sequenceRows(input) {
     return rows;
 }
 
-/// One picture, held. The only input on this stage whose length is not a fact.
 function stillRows(input) {
-    const held = endless(input);
     const seconds = el('input', {
         cls: 'num', 'data-f': 'stillhold', type: 'text',
         value: input.to ? String(input.to) : '',
         placeholder: '0',
-        title: '-loop 1 with a -t. A still has no duration of its own — it is a decision, ' +
-               'not a fact. The loop makes the input go on producing the same picture and ' +
-               'this is the only thing that can say how long it lasts; either without the ' +
-               'other is a clip that cannot be laid out.',
+        title: '-loop 1 -t',
         on: { change: () => {
-            // The hold is `-loop 1` and `-t` together, so setting one sets
-            // both: a `-t` on an input that does not loop is a window on one
-            // picture and still no time at all.
             const next = Object.assign({}, input.options, { loop: '1' });
             if (!next.framerate) next.framerate = String(SEQUENCE_FPS);
             change(input, { to: Number(seconds.value) || 0, options: next,
@@ -929,88 +634,41 @@ function stillRows(input) {
         row('Rate', [
             optionField(input, 'framerate', {
                 name: 'stillfps', hint: String(SEQUENCE_FPS),
-                title: '-framerate — how many times a second the held picture is produced',
+                title: '-framerate',
             }),
             span('fps', 'dim'),
         ]),
-        // Not looping is a refusal and it is `blocked()`'s to make: the bar
-        // under this column states it, and it is pinned, so a second copy here
-        // is the same sentence twice in one glance.
     ].filter(Boolean);
 }
 
-/// Several files as one input, through the concat demuxer.
 function concatRows(input) {
     const parts = input.parts || [];
     return [
-        // The distinction this application exists to make legible, on the
-        // heading because all three are reachable from here and they are three
-        // different renders.
-        head('Read end to end', {
-            title: 'The concat demuxer reads these files as one input, before any decoding, ' +
-                   'and wants them encoded compatibly.\n\nThe concat filter joins decoded ' +
-                   'streams inside the graph and does not care what they were.\n\nTwo clips ' +
-                   'laid end to end on the timeline is neither — that is an edit, and it ' +
-                   'goes through the compositor.',
-        }),
+        head('Read end to end'),
         ...parts.map((p, i) => row(String(i), span(p, 'mono dim'))),
         row('List', el('span', {
             cls: 'mono dim', text: input.path,
-            title: 'Each entry carries its own duration, because without one the demuxer ' +
-                   'reports no length at all until something has read to the end of the ' +
-                   'last file.',
         })),
     ];
 }
 
-/// The window: which part of the input there is.
-/// Where this input's pictures are decoded — `-hwaccel`, and the two words that
-/// go with it.
-///
-/// **Here rather than on the Encode stage, because a decoder belongs to an
-/// input.** ffmpeg writes `-hwaccel` in front of the `-i` for the same reason it
-/// writes `-probesize` there, and two clips cut from one file cannot be decoded
-/// one way and the other.
-///
-/// **And the cost is stated where the choice is made.** Every application with
-/// a "hardware acceleration" switch reads as offering an optimisation; on this
-/// machine, measured, decoding on the card is several times *slower* than
-/// libavcodec threaded across every core, and the readback everybody blames for
-/// that is 3–4% of it. Saying nothing would be the dishonest option. The device
-/// is still offered, because the numbers are this machine's and somebody else's
-/// laptop with four cores and a QSV block has different ones — and because it is
-/// the only way to feed a hardware filter graph without an upload.
 function decodeRows(input) {
-    // Nothing to say about an input with no pictures in it. `-hwaccel`
-    // configures a video decoder, so "Decode on: CPU" over a file of cues or a
-    // soundtrack is a control that has never once been the answer to anything.
-    // Asked of the probe, so an input that has not been read yet still gets it.
     if (input.probe && !input.probe.video) return [];
 
     const codec = input.probe && input.probe.video && input.probe.video.codec;
     const usable = devicesFor(input);
     const rows = [head('Decoding')];
 
-    // Only what this machine has *and* can decode this codec with. A menu
-    // offering `cuda` for a ProRes file is a menu that fails at the last step,
-    // and the two RTX 4090s in this machine still have no CUDA ProRes decoder.
     const choices = [{ id: '', label: 'CPU' }]
         .concat(usable.map((d) => ({ id: d.name, label: d.name })));
     const picker = select({
         'data-f': 'srchw',
-        // The cost, measured, on the control that offers it. Every application
-        // with a "hardware acceleration" switch reads as offering an
-        // optimisation, and on this machine it is several times slower.
         title: usable.length
             ? `-hwaccel. ${decodeCost}`
             : codec ? `-hwaccel. Nothing on this machine decodes ${codec} on a device.`
                     : '-hwaccel. Nothing on this machine has a decoder for this input.',
         on: { change: () => change(input, {
             hwaccel: picker.value,
-            // The output format goes with the device that named it. Left
-            // behind, it is a pixel format belonging to a device this input no
-            // longer decodes on, which the native side refuses — correctly, and
-            // confusingly.
             hwaccelOutputFormat: '',
         }) },
     }, choices, input.hwaccel || '');
@@ -1018,73 +676,31 @@ function decodeRows(input) {
 
     if (input.hwaccel) {
         const dev = deviceNamed(input.hwaccel);
-        // **The cards this machine has, not a number typed into a box.**
-        // `-hwaccel_device` has been settable since an input grew a device and
-        // this was a text field, because nothing knew how many devices there
-        // were: libavutil has no count and no iterator over the devices of a
-        // type. It has one now — `bro.ffmpeg.hardware()` reports the indices it
-        // could create one of — so this is a picker built from the same measure
-        // the `Decode on` list above is, and a machine with one card sees that
-        // there is one.
         const indices = deviceIndices(input.hwaccel);
         const stored = String(input.hwaccelDevice || '');
         const absent = unknownDeviceIndex(input.hwaccel, stored);
-        // A type that does not address its devices by index answers with an
-        // empty list, and the default is then the only device anybody can name.
-        // The row stays and says so in its tooltip rather than disappearing:
-        // a control that vanished would leave a stored value invisible.
         const choices = [{ id: '', label: 'the default' }]
             .concat(indices.map((i) => ({ id: i, label: `${input.hwaccel} ${i}` })));
-        // **A value this machine cannot honour is shown, not snapped.** A
-        // document written where there were two cards, opened where there is
-        // one, carries `-hwaccel_device 1`; quietly selecting the default would
-        // be a render pointed at a different card from the one the file says.
-        // libav refuses it at the open either way — this is so the refusal is
-        // on screen before the render rather than after it.
         if (absent) choices.push({ id: stored, label: `${stored} — not on this machine` });
         const which = select({
             'data-f': 'srchwdev',
             cls: absent ? 'bad' : '',
-            title: indices.length > 1
-                ? `-hwaccel_device. This machine has ${indices.length} ${input.hwaccel} ` +
-                  'devices; a render is refused at the open if it names one that is not here.'
-                : indices.length === 1
-                    ? `-hwaccel_device. This machine has one ${input.hwaccel} device.`
-                    : `-hwaccel_device. ${input.hwaccel} does not address its devices by ` +
-                      'index here, so the default is the only one that can be named.',
+            title: `-hwaccel_device (${indices.length} available)`,
             on: { change: () => change(input, { hwaccelDevice: which.value }) },
         }, choices, stored);
         rows.push(row('Which one', which));
-        // The second decision, and the one that decides whether a render can
-        // keep the picture on the card at all. Off, every frame comes down as
-        // it is decoded, which is what the compositor, a software filter and
-        // the viewer all need. On, only a graph of this device's own filters —
-        // or an `hwdownload` — can read them.
-        //
-        // Two named states rather than a checkbox, because neither of them is
-        // "the default with a thing switched on": bringing the picture down and
-        // leaving it up are two different renders, and the second one is what
-        // the value of `-hwaccel_output_format` literally is.
+
         rows.push(row('Pictures', segmented('srchwkeep', [
-            { v: '', l: 'bring down',
-              title: 'Every frame comes down as it is decoded, which is what the ' +
-                     'compositor, a software filter and the viewer all need' },
-            { v: dev ? dev.pixelFormat : '', l: 'keep on the card',
-              title: `-hwaccel_output_format. Only ${input.hwaccel}'s own filters, or an ` +
-                     'hwdownload, can read them — the compositor and the viewer cannot, so ' +
-                     'a clip on the timeline goes black. It is what lets a render reach a ' +
-                     'hardware encoder without a copy.' },
+            { v: '', l: 'bring down', title: 'Decode to system memory' },
+            { v: dev ? dev.pixelFormat : '', l: 'keep on the card', title: '-hwaccel_output_format' },
         ], input.hwaccelOutputFormat || '',
             (v) => change(input, { hwaccelOutputFormat: v }))));
     }
     return rows;
 }
 
+// B5. Dual-handle range bar control for input read window
 function windowRows(input) {
-    // A field, its unit, and the ffmpeg name of the key it writes. The unit is
-    // beside the box rather than in the label because the label is now a word
-    // — "Start at 1" is a number of nothing in particular, and every one of
-    // these used to be labelled with the flag that said what it was.
     const number = (name, key, value, hint, why, unit) => {
         const field = el('input', {
             cls: 'num', 'data-f': name, type: 'text', value: value ? String(value) : '',
@@ -1094,72 +710,66 @@ function windowRows(input) {
         return [field, span(unit || 's', 'dim')];
     };
 
-    const len = lengthOf(input);
+    const dur = (input.probe && input.probe.format && input.probe.format.duration) ? input.probe.format.duration : lengthOf(input);
+    const windowControls = [];
+
+    if (dur > 0) {
+        const ssVal = Math.min(dur, Math.max(0, input.ss || 0));
+        const toVal = (input.to && input.to > 0) ? Math.min(dur, input.to) : dur;
+
+        const minSlider = el('input', {
+            cls: 'dual-range-min', type: 'range', min: '0', max: String(dur), step: '0.01',
+            value: String(ssVal),
+            on: { input: () => {
+                const val = Math.min(Number(minSlider.value) || 0, (input.to || dur) - 0.01);
+                change(input, { ss: Math.max(0, val) });
+            } }
+        });
+        const maxSlider = el('input', {
+            cls: 'dual-range-max', type: 'range', min: '0', max: String(dur), step: '0.01',
+            value: String(toVal),
+            on: { input: () => {
+                const val = Math.max(Number(maxSlider.value) || 0, (input.ss || 0) + 0.01);
+                change(input, { to: Math.min(dur, val) });
+            } }
+        });
+        const leftPct = (ssVal / dur) * 100;
+        const rightPct = 100 - (toVal / dur) * 100;
+        const fill = div('dual-range-fill');
+        fill.style.left = `${leftPct}%`;
+        fill.style.right = `${rightPct}%`;
+
+        windowControls.push(row('Range', div('src-window-range', [
+            div('dual-range', [
+                div('dual-range-track'),
+                fill,
+                minSlider,
+                maxSlider
+            ])
+        ])));
+    }
+
     return [
-        head('Window', { title: 'Which part of this input there is. Everything here is ' +
-                                'settled while the file is being opened, and the command ' +
-                                'bar prints all of it in front of the -i.' }),
-        // The sentence this stage exists to make sayable, on the field it is
-        // about. A clip's in-point and an input's `-ss` are both "start later"
-        // and they are not the same decision: one picks a moment out of an
-        // input, the other decides what the input is.
-        row('Start at', number('srcss', 'ss', input.ss, '0',
-            '-ss. An input seek is not a clip’s in-point: this moves the input’s zero, so ' +
-            'it is what a clip is cut *from*. Trimming a clip picks a moment out of an ' +
-            'input; this decides what the input is.')),
-        row('Stop at', number('srcto', 'to', input.to, 'the end',
-            '-to. Where the input stops, on its own clock.')),
-        row('Delay by', number('srcoffset', 'itsoffset', input.itsoffset, '0',
-            '-itsoffset. Shifts every timestamp, which is how a camera and a separately ' +
-            'recorded soundtrack are lined up.')),
-        // `-stream_loop` is the one thing here libavformat has never heard of:
-        // ffmpeg's own CLI implements it by seeking the input back to the
-        // start and shifting every timestamp forward, and so does this
-        // binary's `InputLoop`. It belongs beside the window because it is the
-        // other half of the same question — how much of this input there is.
-        row('Repeat', number('srcloop', 'streamLoop', input.streamLoop, '0',
-            '-stream_loop. How many more times to read this input after the first. -1 is ' +
-            'forever, and forever has no length — so an input that loops is as long as ' +
-            'Stop at says and no longer.', '× more')),
-        len ? row('Length', el('span', {
-            cls: 'mono', text: clock(len),
-            title: endless(input) ? 'This input never ends — Stop at is what gives it a length'
-                                  : 'What is left after the window',
+        head('Window'),
+        ...windowControls,
+        row('Start at', number('srcss', 'ss', input.ss, '0', '-ss')),
+        row('Stop at', number('srcto', 'to', input.to, 'the end', '-to')),
+        row('Delay by', number('srcoffset', 'itsoffset', input.itsoffset, '0', '-itsoffset')),
+        row('Repeat', number('srcloop', 'streamLoop', input.streamLoop, '0', '-stream_loop', '× more')),
+        dur ? row('Length', el('span', {
+            cls: 'mono', text: clock(lengthOf(input)),
+            title: endless(input) ? 'Input never ends' : 'Window duration',
         })) : null,
-        // An input with no length is `blocked()`'s to refuse, in the bar under
-        // this column — which is pinned, and says the same words. It was said
-        // here as well, and two copies of one sentence in one glance is what
-        // this rework was about.
     ].filter(Boolean);
 }
 
-/// The act, and where it cannot be performed the reason it cannot.
-///
-/// **`blocked()` mirrors `openInput()` in app.js exactly**, which is the rule
-/// the Capture stage's record bar follows for the same reason: a button that is
-/// alive and then refuses is a button that has told you nothing, and a button
-/// that is dead for a reason the model does not hold is worse. Both sides refuse
-/// a device on what it is, and then state the two ways an input can have no
-/// length, in the same order.
 function blocked(input) {
-    // Still opening is not "will not open", and the difference is the whole
-    // point of the asynchronous path: one is a fault and the other is a wait.
     if (opening(input))
         return waitingOn(input) === 'device' ? 'Still opening' : 'Still connecting';
     if (input.error || !input.probe) return 'Will not open';
     const p = input.probe;
     if (!p.video && !p.audio) return 'Nothing to play';
-    // Before the length, and not as one of its answers: `Stop at` gives a device
-    // a length, and a length was never the half that was missing. See the note
-    // in `openInput()` and `deviceRows()` below.
     if (kindOf(input) === 'device') return 'A device cannot be cut';
-    // A still on the same rule, and for the same reason it was moved: the
-    // length test let one through. `image2` — the demuxer this application
-    // forces for a picture — measures a still as one frame at the declared
-    // rate, 0.04 s at 25 fps, so only a picture opened *bare* through
-    // `png_pipe` measured zero. A still whose `-loop` had been cleared from the
-    // option column was laid out as a forty-millisecond clip. See `openInput()`
-    // in ui/app.js, which is the other end of this.
     if (kindOf(input) === 'still' && !endless(input)) return 'One picture, no time at all';
     if (lengthOf(input) <= 0)
         return endless(input) ? 'Never ends — set Stop at'
@@ -1178,12 +788,12 @@ function footRows(input) {
             title: why || 'Cut a clip of the whole window and lay it on the timeline',
             on: { click: () => { if (hooks.use) hooks.use(input); } },
         }),
-        why ? el('span', { cls: 'src-why', text: why, title: whyAt(input, why) }) : null,
+        why ? el('span', { cls: 'src-why', text: why }) : null,
         div('spacer'),
         ...localCopyButtons(input),
         el('button', {
             cls: 'tiny', 'data-f': 'srcreopen', text: 'Re-probe',
-            title: 'Open it again with exactly what it says now',
+            title: 'Re-probe input',
             on: { click: () => { reprobe(input); reopened(input); } },
         }),
         el('button', {
@@ -1191,10 +801,10 @@ function footRows(input) {
             text: used.length ? `In use by ${used.length}` : inGraph ? 'In the graph' : 'Remove',
             disabled: used.length > 0 || inGraph,
             title: used.length
-                ? 'Delete the clips cut from it first — a clip with no input has nothing to decode'
+                ? 'In use by timeline clips'
                 : inGraph
-                ? 'A node on the Graph stage reads this one — delete that node first'
-                : 'Take this input off the list',
+                ? 'Used by graph node'
+                : 'Remove input',
             on: { click: () => {
                 removeInput(input);
                 chosenId = '';
@@ -1205,37 +815,13 @@ function footRows(input) {
     ];
 }
 
-/// Saving a stream to this machine, and using the file once it is here.
-///
-/// **Offered for a stream and not for a file**, which is the whole distinction:
-/// a path on this machine is already local and a `Save a local copy` beside one
-/// would be an offer to duplicate a file for no reason. What makes it worth
-/// having is that everything downstream reads an input *repeatedly* — a scrub, a
-/// filmstrip, a waveform, a render — and for a URL every one of those is a
-/// network read of a five-hour recording.
-///
-/// **The press starts it rather than walking to the Write stage.** It used to
-/// fill the render in and take you there, on the argument that three quarters of
-/// an hour of bandwidth is worth reading the invocation for first — which was
-/// right about the cost and wrong about the answer. What it cost was the render:
-/// the one job slot, held for the length of a download, so the application you
-/// were pulling the recording into could not render anything until it finished.
-/// A fetch is not a render (src/native/fetch_queue.h), so this queues a fetch
-/// and stays where it is. The Write stage's own `Rewrap` is still there for a
-/// copy you want to describe by hand.
 function localCopyButtons(input) {
     if (!input.origin && !input.renditions) return [];
     const out = [];
-    // Once a copy has been written, the offer changes to using it. Kept on the
-    // input rather than guessed at from the filesystem, because "a file with
-    // about the right name exists" is not the same claim as "this is the copy
-    // this application wrote of this stream".
     if (input.localCopy)
         out.push(el('button', {
             cls: 'tiny', 'data-f': 'srclocaluse', text: 'Use the local copy',
-            title: `Point this input at ${input.localCopy} — the clips cut from it keep ` +
-                   'their times, which is right because it is a copy of these packets ' +
-                   'and not another rendition',
+            title: `Use local copy ${basename(input.localCopy)}`,
             on: { click: () => {
                 change(input, { path: input.localCopy });
                 if (hooks.flash) hooks.flash(`Reading ${basename(input.localCopy)} locally now`);
@@ -1249,82 +835,41 @@ function localCopyButtons(input) {
         cls: 'tiny', 'data-f': 'srclocal',
         text: busy ? 'Pulling…' : (job ? 'Pull it again' : 'Save a local copy'),
         disabled: !input.probe || !!busy,
-        title: input.probe
-            ? 'Copy this stream to a file on this machine. No decode and no encode, ' +
-              'and nothing here waits.'
-            : 'It has not opened yet',
+        title: input.probe ? 'Save local copy of stream' : 'Not opened yet',
         on: { click: () => { if (hooks.saveLocally) hooks.saveLocally(input); } },
     }));
-    // **And the same copy, by hand.** The press above takes every decision —
-    // Matroska, a name beside the document, the whole recording — and
-    // those are the right defaults and not the only answers. A section, another
-    // container, a stream left out, or simply reading the invocation before it
-    // runs are all the Write stage's, which is where this application describes
-    // renders; this is the door to it, carrying the same rows the press would
-    // have used.
     out.push(el('button', {
         cls: 'tiny', 'data-f': 'srclocalhand', text: 'Describe it…',
         disabled: !input.probe,
-        title: 'Set the Write stage up to copy this stream, without starting anything — ' +
-               'for a section, another container, or to read the command first',
+        title: 'Configure copy on Write stage',
         on: { click: () => { if (hooks.describeCopy) hooks.describeCopy(input); } },
     }));
     return out;
 }
 
-/// Where a copy of this stream goes, and where the two pulls have got to.
-///
-/// **The soundtrack's row is the one this whole ordering exists for**, so it
-/// says what it unlocks the moment it lands rather than only that it is there:
-/// the point of pulling the sound first is that the work which needs only sound
-/// can start while the picture is still arriving, and a row that said `done` and
-/// nothing else would leave that to be discovered.
-///
-/// The *pull* rows are drawn only once something has been asked for — an input
-/// nobody has pressed the button on gets no pair of rows saying `—`. The folder
-/// is the exception and is always here, because it is the one thing you want to
-/// know before pressing rather than after.
 function localCopySection(input) {
-    // Drawn for anything that *could* be pulled rather than only for something
-    // that has been, because the first question this feature was asked is where
-    // the file went — and the moment to answer it is before fourteen gigabytes
-    // are on their way somewhere, not after.
     if (!input.origin && !input.renditions) return [];
-    return [head('On this machine', {
-        title: 'Where a copy of this stream goes, what has been pulled already, ' +
-               'and where each pull has got to',
-    }), copyFolderRow(), ...localCopyRows(input)];
+    return [head('On this machine'), copyFolderRow(), ...localCopyRows(input)];
 }
 
-/// Where a copy will be written, said out loud, with the press that changes it.
-///
-/// **The folder and *why* it is that folder**, because the default has two
-/// cases and only one of them is a place somebody can find: beside the
-/// document is obvious once a document exists, and before that it is the
-/// directory the application happens to have been started in, which is a real
-/// answer and a useless one. So the row says which of the two is speaking, and
-/// the press that ends the question is right there.
 function copyFolderRow() {
     const dir = hooks.copiesGo ? hooks.copiesGo() : '.';
     const chosen = copyFolder();
     const why = chosen
         ? 'chosen — every copy goes here'
         : dir === '.'
-        ? 'the folder this application was started in — save the document, or ' +
-          'choose one'
+        ? 'the folder this application was started in — save the document, or choose one'
         : 'beside the document';
     const nodes = [
         span(dir, 'mono'),
         span(why, 'dim'),
         el('button', {
             cls: 'tiny', 'data-f': 'srccopydir', text: 'Choose…',
-            title: 'Pick the folder every local copy is written to. A five-hour ' +
-                   'stream is tens of gigabytes, so this is usually a question ' +
-                   'about which disk.',
+            title: 'Choose local copy folder',
             on: { click: () => {
                 if (typeof showOpenFolderDialog !== 'function') return;
                 const picked = showOpenFolderDialog(dir === '.' ? null : dir);
-                if (!picked || !picked.length) return;   // cancelled, not cleared
+                if (!picked || !picked.length) return;
                 useCopyFolder(String(picked[0]));
                 drawSources();
             } },
@@ -1333,7 +878,7 @@ function copyFolderRow() {
     if (chosen)
         nodes.push(el('button', {
             cls: 'tiny', 'data-f': 'srccopydirclear', text: 'Beside the document',
-            title: 'Forget the chosen folder and put copies beside the document again',
+            title: 'Use document folder',
             on: { click: () => { useCopyFolder(''); drawSources(); } },
         }));
     return row('Folder', nodes);
@@ -1354,15 +899,11 @@ function localCopyRows(input) {
                           pull.state === 'queued' || pull.state === 'running';
         rows.push(row(what, [
             span(`${word}${pct}${size}`, 'mono' + (pull.state === 'failed' ? ' warn' : '')),
-            // What it is called, since the folder is a row above and the two
-            // together are the whole answer to "where did it go". The name
-            // rather than the path: the path is on the row above and repeating
-            // it twice per pull is how a card stops being read.
             pull.path ? el('span', { cls: 'dim', text: basename(pull.path),
                                      title: pull.path }) : null,
             stoppable ? el('button', {
                 cls: 'tiny', 'data-f': `srcstop-${which}`, text: 'Stop',
-                title: 'Stop this pull. What has been written stays where it is.',
+                title: 'Stop pull',
                 on: { click: () => { cancelCopy(input, which); drawSources(); } },
             }) : null,
             pull.error ? note(pull.error) : null,
@@ -1371,48 +912,12 @@ function localCopyRows(input) {
     line('audio', 'Sound');
     line('video', 'Picture');
     if (job.audio.state === 'done')
-        rows.push(note('The soundtrack is on this machine — ' +
-                       'the picture can go on arriving.'));
-    // The fact a cut has to be told, said where the pair is made rather than
-    // left for whoever makes one. See ui/localcopy.js.
+        rows.push(note('The soundtrack is on this machine — the picture can go on arriving.'));
     if (!job.sameClock && job.audio.state === 'done')
-        rows.push(note('These are two renditions of one recording and they do not share a ' +
-                       'zero — measured at +0.80 s, +2.21 s and +2.57 s on one pair. So a ' +
-                       'time found in the sound is where to look in the picture and not ' +
-                       'where to cut it.'));
+        rows.push(note('These are two renditions of one recording and they do not share a zero.'));
     return rows;
 }
 
-/// What to do about it, for the things `blocked()` can say.
-function whyAt(input, why) {
-    if (why === 'Still connecting')
-        return 'The open is running on a thread of its own. It will give up by itself if ' +
-               'nothing answers, and Stop above abandons it now.';
-    if (why === 'Still opening')
-        return 'The device is being opened on a thread of its own, so nothing here is ' +
-               'blocked. Stop waiting above gives up on it; it cannot abort the driver.';
-    if (why === 'Will not open') return input.error || 'Nothing came back from the probe';
-    if (why === 'Nothing to play')
-        return 'No picture to lay out and no sound to mix. A file of cues travels as a ' +
-               'stream on the Write stage, or is burned in by a filter on the Graph stage.';
-    if (why === 'A device has no end')
-        return 'A clip is an in-point and a length, and a live input has neither. Record it ' +
-               'on the Capture stage, and the recording is a file.';
-    if (why === 'One picture, no time at all')
-        return 'A picture has no length of its own — Still above is where it is given one, ' +
-               'and -loop 1 with a -t is what that writes. Neither half alone is a clip: the ' +
-               'loop with no -t never ends, and a -t with no loop is a window on one frame.';
-    if (why === 'No length to cut')
-        return 'Nothing in this input says how long it is, so there is no window for a clip ' +
-               'to be cut from. Stop at says where to stop reading.';
-    return why;
-}
-
-/// The demuxer's options, and the protocol's when the path is a URL.
-///
-/// One bag, because that is what libavformat is handed: whatever the demuxer
-/// does not consume goes down to the AVIO layer, which is why `-rw_timeout`
-/// next to `-probesize` is an ordinary thing to write on a command line.
 function optionRows(input) {
     const demuxer = input.format || (input.probe ? input.probe.format.name : '');
     const out = [];
@@ -1421,10 +926,6 @@ function optionRows(input) {
         out.push(...optionColumn({
             name: 'demuxoptsearch',
             title: `${demuxer} options · ${all.length}`,
-            // No prose above the search box, for the reason the Capture stage's
-            // column has none: what it said is what the empty-search line
-            // already says, and three of these columns stacked was a screen of
-            // paragraphs with the tables underneath them.
             options: all,
             bag: input.options,
             hint: 'An unknown key stops the open rather than being ignored.',
@@ -1432,17 +933,6 @@ function optionRows(input) {
         }));
     }
 
-    // The decoders, which are a different object from the demuxer and have a
-    // different table. They belong here rather than on the Encode stage for the
-    // reason `-probesize` does: a decoder is opened *for this input*, ffmpeg
-    // writes `-skip_frame` in front of the same `-i`, and a bag that lived
-    // beside the encoder's would be describing the wrong end of the pipeline.
-    //
-    // One column per codec this input turned out to carry, because the tables
-    // are the codecs' — h264's `is_avc` and aac's `dual_mono_mode` are not the
-    // same list — and the bag is shared, exactly as the demuxer's and the
-    // protocol's share one: libavcodec is handed one dictionary per decoder and
-    // an option no decoder took is what stops the open.
     for (const codec of decoderNames(input)) {
         const all = decoderOptionsFor(codec);
         if (!all.length) continue;
@@ -1452,10 +942,6 @@ function optionRows(input) {
             options: all,
             bag: input.decoderOptions,
             hint: 'These reach playback and the render alike.',
-            // Through `reprobe` even though the probe itself will say the same
-            // thing: what it also does is re-register the input for playback,
-            // and the token is the only route an option has into the `<video>`
-            // elements the viewer is already holding.
             onChange: () => { reprobe(input); reopened(input); },
         }));
     }
@@ -1476,11 +962,6 @@ function optionRows(input) {
     return out;
 }
 
-/// Which decoders will read this input, by the names libavcodec answers to.
-///
-/// Out of the probe, so it is the codecs that are actually in the file rather
-/// than the ones a container usually holds. Distinct, because a file with two
-/// AAC tracks is one option table and not two.
 function decoderNames(input) {
     const p = input.probe;
     if (!p) return [];
@@ -1491,9 +972,6 @@ function decoderNames(input) {
     return out;
 }
 
-// Cached per decoder, for the reason the encoder's and the muxer's are: the
-// panel is rebuilt on every keystroke in a search box and h264 has forty-five
-// options.
 const decoderOptionCache = new Map();
 
 function decoderOptionsFor(name) {
@@ -1507,14 +985,16 @@ function decoderOptionsFor(name) {
     return decoderOptionCache.get(name);
 }
 
-/// Apply a change and put back everything downstream of it.
 function change(input, patch) {
     if (updateInput(input, patch)) reopened(input);
     else drawSources();
 }
 
+// B6. Re-probe feedback triggers OSD toast
 function reopened(input) {
-    if (input.error && hooks.flash) hooks.flash(input.error);
+    if (hooks.flash) {
+        hooks.flash(input.error || `Re-probed ${input.name}`);
+    }
     if (hooks.reopened) hooks.reopened(input);
     drawSources();
 }
@@ -1522,112 +1002,42 @@ function reopened(input) {
 // ── what it turned out to contain ──────────────────────────────────────────
 
 function contentRows(input) {
-    // Nothing has come back yet, and saying "no streams" would be describing a
-    // file nobody has read. The Opening rows above are what this input has to
-    // say about itself right now.
     if (opening(input)) return [];
     if (input.error)
         return [
-            head('Refused', {
-                title: 'The demuxer, the options and the window above are what this input ' +
-                       'is opened with. Change one and it is tried again.',
-            }),
+            head('Refused'),
             div('src-error', input.error),
         ];
     if (!input.probe) return [];
     return fileRows(input.probe, input);
 }
 
-/// What came back, in as many lines as there are streams plus one.
-///
-/// It was six rows a stream and six for the container — forty rows for an
-/// ordinary camera file with two soundtracks, and the readout most often looked
-/// at on this stage was the one you had to scroll for. Nothing is dropped: what
-/// is not on the line is on the line's tooltip, which is where a pixel aspect
-/// ratio of 1.0000 belongs.
 function fileRows(p, input) {
     return [
-        head('What came back', { title: 'Probed with the options above in force, so this ' +
-                                        'is the file as this input opens it' }),
+        head('What came back'),
         div('src-file', [
             el('span', { cls: 'mono src-file-name', text: p.format.name,
                          title: p.format.longName || p.format.name }),
-            // Each fact only where there is one. A device reports no duration
-            // and no size, and `00:00:00 · —` beside a screen grabber reads as
-            // a broken file rather than as a live input.
             span([p.format.duration ? clock(p.format.duration) : '',
                   p.format.size ? bytes(p.format.size) : '',
                   p.format.bitRate ? kbps(p.format.bitRate) : ''].filter(Boolean).join(' · '),
                  'dim'),
         ]),
-        // **Stream lines and nothing else.** Two readers used to hang off
-        // these — the telemetry parser under a data line, and the sound marks
-        // under the first audio line — each defensible on its own and wrong together. A probe answer
-        // is what libavformat said the moment this input was opened; a read is
-        // minutes of this machine, spent on purpose. Mixing
-        // them cut the one readout on this stage that is looked at most in half. They are
-        // `readRows` now, in a section that says what they are.
         ...p.streams.map(streamLine),
     ];
 }
 
-// ── what has been read out of it ───────────────────────────────────────────
-
-/// Every deep read of this input, in one section, in one vocabulary.
-///
-/// **A read is not what came back, and this section exists to stop the two
-/// being the same paragraph.** These two — what a data track carries and where
-/// something happens in the soundtrack — were each drawn
-/// *inside* the stream list, under the line of the stream they read. One at a
-/// time that is defensible and each of them argued it in its own header: the
-/// control that dispatches on a fourcc belongs beside the fourcc, the control
-/// that reads a soundtrack belongs beside the soundtrack. In aggregate it was
-/// wrong. A probe answer is what libavformat said the instant this input was
-/// opened, free and complete; a read is spent because somebody pressed a button.
-/// Drawing them as one thing cut the readout looked at more than anything else on this stage — what is in
-/// this file — in half.
-///
-/// So `What came back` is the probe and this is what has been spent on it.
-///
-/// **Each row names its stream**, which the old rows did not and could not.
-/// Marks are read from `av_find_best_stream`'s pick and were drawn
-/// under the *first* audio line, so the position asserted an answer neither
-/// reader had given. It reports the index it was actually handed
-/// (`sound_marks.h`), and `soundStream` says it.
-///
-/// **The presses stay on this stage.** A set of marks belongs to
-/// an *input*, and they cost time, so nothing should start one unasked.
-function readRows(input) {
-    return [];
-}
-
-/// One stream, on one line, in the terms that stream is described in.
-///
-/// Kept verbatim from `probe()`: "untagged" and "bt601" are different facts,
-/// and this is the screen where the difference is the point — which is why the
-/// colour tag is on the line itself and the pixel format beside it, while the
-/// profile and the language are in the tooltip.
 function streamLine(s) {
     const kind = s.kind === 'video' ? 'V' : s.kind === 'audio' ? 'A'
                : s.kind === 'data' ? 'D' : 'S';
     const bits = [];
     const more = [s.codecLong || s.codec];
-    // **On the line for a data stream and in the tooltip for the others**,
-    // which is this readout's own rule about where a fact goes. A telemetry
-    // track has nothing else to say — no size, no rate, no layout — and every
-    // one of them is called `bin_data`, so without the fourcc a file with two
-    // shows the same line twice. For a picture it is supporting detail that
-    // matters in one argument only: an mp4 tagged `hvc1` plays on an Apple
-    // device and the same HEVC tagged `hev1` does not.
     if (s.tag) (s.kind === 'data' ? bits : more).push(s.tag);
     if (s.kind === 'video') {
         bits.push(`${s.width}×${s.height}` +
                   (s.rotation ? ` → ${s.displayWidth}×${s.displayHeight}` : ''));
         if (s.fps) bits.push(`${s.fps.toFixed(2)} fps`);
         if (s.pixFmt) bits.push(s.pixFmt);
-        // What the render has to convert out of, and the reason the filtergraph
-        // can be written faithfully at all — worth 13 dB, and invisible
-        // everywhere else in the application.
         if (s.colorSpace || s.colorRange) {
             bits.push(s.colorSpace || 'untagged');
             more.push(`colour ${s.colorSpace || 'untagged'} · ` +

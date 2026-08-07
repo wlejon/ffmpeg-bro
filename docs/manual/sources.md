@@ -26,9 +26,11 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   deadline and a **Stop** — or **Opening** with a **Stop waiting**, when what is
   being opened is a device. See [While it is
   connecting](#while-it-is-connecting) below.
+- **Adding inputs.** Type a path or URL, click `Browse…`, or **drop media files anywhere on the stage**.
+- **Join mode.** Arming Join mode displays a visible status banner showing the number of inputs selected to join end-to-end with a cancel `✕` button to disarm.
 - **Read as** — the demuxer. What it probed as, `Change…` for a search over every
   demuxer this build has, and `Auto` to hand the choice back to libavformat.
-- **Window** — **Start at**, **Stop at**, **Delay by**, **Repeat**. **An input seek
+- **Window** — **Range bar**, **Start at**, **Stop at**, **Delay by**, **Repeat**. The in/out read window includes a dual-handle range bar spanning the input duration alongside numeric fields. **An input seek
   is not a clip's in-point**: `-ss` moves the input's zero, so the input becomes
   shorter and a clip is cut from what is left. Trimming a clip picks a moment out of
   an input; Start at decides what the input is. Delay by (`-itsoffset`) shifts every

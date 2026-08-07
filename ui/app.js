@@ -143,6 +143,7 @@ softcues.initSoftCues({ layer: el('cuelayer'), note: el('cuenote') });
 monitor.initMonitor({ levels: el('levels') });
 
 initSources({
+    stage: el('st-sources'),
     list: el('src-list'),
     detail: el('src-detail'),
     foot: el('src-foot'),
