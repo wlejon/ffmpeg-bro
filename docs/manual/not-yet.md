@@ -242,9 +242,7 @@ about it instead.
   distributed for academic, non-commercial use only, and this application is
   distributed under the GPL. Shipping a control wired to weights that cannot
   be shipped commercially isn't a smaller version of the problem, it's a
-  different one, so the feature stays off. [Transcribing
-  words](sources.md#finding-a-word) on the Sources stage is the
-  alternative today, and it has no such restriction.
+  different one, so the feature stays off.
 - **Two renders running at once.** This application runs one render at a
   time. Downloads and live monitoring are not affected — a background fetch
   (see [saving a stream to this

@@ -60,7 +60,6 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_marks.js -- <marks.m4a> [<no-audio>]
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_transcript.js -- [<whisper-model-dir>] [<no-audio>]  # every section that needs the weights is skipped without them
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -412,26 +411,6 @@ thing that cannot be seen in a screenshot and would make the whole feature a lie
 that **none of the three kinds is named after a source of sound**. The words come
 from one object in `ui/marks.js`, and the test reads them and looks for "bird",
 "speech", "voice", "word", "music" and the rest.
-
-`ui_transcript.js` is the words, and it is the one suite here whose fixture
-**cannot be generated**: there is no way to synthesise speech a recogniser will
-read back, and the weights are 3 GB and are not shipped. So it takes a model
-directory as an argument and every section that needs one is *skipped rather than
-failed* without it — this repository's rule for every suite, applied to the one
-case where the missing thing is a download rather than a file the generator
-writes.
-
-What it asserts, in the order it can fail: that an absent model is refused **by
-name** and that a file with no soundtrack at all is a *different* refusal; that
-the read is off the UI thread and the words arrive while it runs, checked by
-drawing during it rather than by trusting the word "thread"; that the times are
-**absolute**, asserted against a file built out of one clip repeated so every
-repetition's position is known in advance, because Whisper's own timestamps
-restart at zero every window; and that a search says how much it searched, since
-nothing found in ten minutes of six hours and nothing found in all six are
-different answers.
-
-One thing it asserts about the *screen*, and it is negative: that there is no per-input model path field, which was one machine-wide value drawn once per card. What is there instead is the `Reading it` row, and the suite requires it to name the stream it read, what it found and how much of the recording that was.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).

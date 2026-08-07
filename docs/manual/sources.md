@@ -40,8 +40,8 @@ hidden or collected: opening a file to see what is in it is a thing people do.
   Pasting a stream page's URL into **From** turns the page into the HLS renditions
   behind it — nothing is downloaded until something asks for a range of it. All of
   them are kept, not just the best: one recording is two different jobs, the picture
-  at full resolution for the cut and `Audio Only` at a fraction of the bytes for a
-  transcription pass, and picking one is an ordinary change of `-i`. What does
+  at full resolution for the cut and `Audio Only` at a fraction of the bytes for
+  finding sound marks, and picking one is an ordinary change of `-i`. What does
   **not** carry between two of them is *times* — a VOD's renditions do not resolve
   ad breaks identically and drift apart by seconds — so a cut made against one is a
   search hint against another and the row says so.
@@ -62,8 +62,8 @@ beside it where it is dead — `A device cannot be cut`, `One picture, no time a
 `Save a local copy` appears beside those for an input that came off a page, and
 it is worth pressing before anything else you plan to do more than once.
 Everything downstream reads an input *repeatedly* — a scrub, a filmstrip, a
-waveform, a transcription pass, a render — and for a URL every one of those is a
-network read. Word searches in particular want the media on this machine.
+waveform, a render — and for a URL every one of those is a
+network read.
 
 Nothing waits for the copy. A clip on a URL is [read for the span the timeline
 is showing](timeline.md), so you can explore a six-hour recording while it is
@@ -83,7 +83,7 @@ Render button goes on working the whole time.
 
 The press pulls **two** streams, one after the other: the audio-only stream,
 and then the picture. When the sound lands the card says so, because that is
-the moment work that needs only sound can start — a transcription, finding where
+the moment work that needs only sound can start — finding where
 something happens — while the picture is still arriving.
 
 The two are different transcodes of one stream and **do not share a zero** — a
@@ -195,23 +195,21 @@ input was opened, under the options set above it: the container, and one line pe
 stream. It costs nothing and it is complete.
 
 **`Reading it` is what this machine has been asked to work out**, beyond opening
-the file. There are three of those — what a data track carries, where something
-happens in the soundtrack, and what was said in it — and each is a press, because
+the file. There are two of those — what a data track carries, and where something
+happens in the soundtrack — and each is a press, because
 each costs real time: about thirty milliseconds for a telemetry track, about a
-minute per hour of sound for the marks, up to ninety minutes for a six-hour
-transcript. Nothing here starts on its own.
+minute per hour of sound for the marks. Nothing here starts on its own.
 
 Each is one row, and always the same four columns:
 
 ```
 READING IT
   SOUND       A1   51 transients, 1 tonal run                       [Forget]
-  WORDS       A1   large-v3 · nothing has read this for words yet   [Transcribe] [Model…]
   TELEMETRY   D2   HERO8 Black · 40 series · 708 packets             [Forget]
 ```
 
-Which read, **which stream it read**, how it went, and the door. `Sound` and
-`Words` both read the soundtrack libav picks as the best one, and a file with more
+Which read, **which stream it read**, how it went, and the door. `Sound` reads
+the soundtrack libav picks as the best one, and a file with more
 than one soundtrack says `best of N` until a read has run and reported which it
 actually was.
 
@@ -332,73 +330,6 @@ answers "does this change the clips", and a detected onset does not.
 The control is drawn under a soundtrack and nowhere else — a file with no audio
 stream is offered nothing, rather than a button that fails at the press.
 
-## Finding a word
-
-The `Words` row, directly under `Sound`: **Transcribe**.
-
-The two are beside each other because they answer the two halves of one question
-— where something happened, and what was said — and somebody who has just read
-one wants the other in the same place.
-
-`Find sounds` says *where* something happened. This says *what was said*. Six
-hours of somebody talking is a recording nobody is going to scrub through, and
-neither a waveform nor a set of onsets can find the minute a name was mentioned.
-This decodes the soundtrack and runs speech-to-text over it.
-
-**The words arrive while it is still reading.** A transcript of a six-hour VOD
-can be ninety minutes of work, and one you could only search at the end would be
-one nobody waits for — so it is searchable seconds after the press, over as much
-as has been read so far, and the row says how far down the recording that is:
-
-```
-WORDS   A0   1:12:30 of 5:34:30 · 22% · 1,204 segments · 4.0× realtime · about 68 min left   [Stop]
-```
-
-That readout is not decoration. A rate is what tells a read that is working from
-one that has silently stopped — 4.0× says a six-hour VOD is ninety minutes and
-0.05× says it will not finish today. When it is done the row says `all of it` or
-`only the first 1:12:30 of 5:34:30`, because "no results" over ten minutes of a
-six-hour recording and "no results" over all six hours are completely different
-answers.
-
-**A hit is a place to look. It is never a cut.** Pressing one moves the playhead
-to it; nothing is trimmed. A VOD's audio-only rendition and its picture
-rendition do not share a zero — measured up to a few seconds apart on real
-streams, and a *step* rather than a drift, because an ad break is discontinuous
-in one and not the other. So a transcript read from the cheap audio-only copy is
-on that copy's seconds, and a cut placed on a word boundary would land on the
-wrong file's clock. The transcript takes you to the right minute; your eyes do
-the rest.
-
-Two more things worth knowing before the first press.
-
-**The weights are not shipped, and their absence is said out loud.** A model is
-a directory of files between about 150 MB and 3 GB depending on the size, so
-there is nothing to choose until you have downloaded one —
-`scripts/download-whisper.sh --size large-v3` in brosoundml puts one on disk.
-Until then the control names the file it could not find, and pressing
-`Transcribe` with nothing chosen opens the model picker rather than failing.
-
-`Model…` picks the directory. The row **names** the one that is chosen, by the
-directory's own name — `large-v3`, `whisper-tiny` — with the full path on the
-tooltip. The choice is remembered between runs and is the same for every input
-in the list, since the weights are a property of this machine rather than of
-the edit.
-
-**Size is a real choice and it is yours.** `tiny` is about 150 MB and
-transcribes clean speech correctly; on a stream with game audio under it, it
-will not. `large-v3` is 3 GB and is the one to use if the transcript has to be
-right. On a good GPU large-v3 runs at several times realtime; on a CPU the same
-model can take days, and the build has to have been configured with CUDA
-support to use a GPU at all.
-
-Like a set of marks, a transcript belongs to the **input** rather than to a clip,
-so two clips cut from one recording share one, and a trim moves where the hits
-land without the soundtrack being read again. It is not in the document, not
-cached beside the app and not on the undo stack.
-
-The soundtrack it reads is the one your local copy has, if there is one — which
-is why **Save a local copy** offers the soundtrack on its own.
 
 ## While it is connecting
 

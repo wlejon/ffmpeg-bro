@@ -61,7 +61,6 @@ import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
 import * as telemetry from './telemetry.js';
 import * as marks from './marks.js';
-import * as transcript from './transcript.js';
 import * as graphPlayback from './graph/playback.js';
 import * as shell from './shell.js';
 import * as capture from './capture.js';
@@ -587,8 +586,7 @@ onChange((what) => {
     // three is the timeline, and even that is marked rather than drawn, because
     // a hundred and fifty redraws of the same lanes in one frame is the same
     // mistake one level down.
-    if (what === 'analysis' || what === 'telemetry' || what === 'marks' ||
-        what === 'transcript') {
+    if (what === 'analysis' || what === 'telemetry' || what === 'marks') {
         // ...and the readouts, which count how many clips are still being read.
         needs('timeline', 'readouts');
         return;
@@ -613,7 +611,6 @@ onChange((what) => {
     // a tick on the Marks lane naming a file nothing answers to, and a `.` that
     // jumps to it.
     marks.retain(inputsModel.inputs.map((i) => i.id));
-    transcript.retain(inputsModel.inputs.map((i) => i.id));
     // And the settings of a track the timeline no longer shows — a sync lock on
     // V4 after the last clip on it was deleted. Here for the same argument as the
     // line above and stated where that argument already is: a track can empty out
@@ -653,7 +650,7 @@ onChange((what) => {
     // measurement of a soundtrack, and undo answers "does this change the
     // clips".
     if (what !== 'selection' && what !== 'analysis' && what !== 'document' &&
-        what !== 'telemetry' && what !== 'marks' && what !== 'transcript')
+        what !== 'telemetry' && what !== 'marks')
         { doc.touch(); history.record(what); needs('document'); }
     if (what === 'selection' || what === 'move' || what === 'moved') {
         showProperties();
@@ -2441,7 +2438,6 @@ globalThis.__ffmpegBro = {
     // ask where the mark went. `timeline.marksLane()` is the reader for the
     // drawn half.
     marks,
-    transcript,
 
     // The jump, so a test can check where `,` and `.` land without synthesising
     // a key press — the press is the shell's and the arithmetic is this.

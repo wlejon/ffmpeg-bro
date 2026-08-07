@@ -58,10 +58,9 @@
 //
 // ── the probe and the reads are two sections ───────────────────────────────
 //
-// And then that readout was broken in half again, by the three controls that
+// And then that readout was broken in half again, by the controls that
 // had each been drawn under the stream they read: `Read it` under a `gpmd`
-// track, `Find sounds` and `Transcribe` under the first soundtrack, and under
-// those a word search with twelve hit rows and a full-width Whisper model path.
+// track, and `Find sounds` under the first soundtrack.
 // Each argued its position and each argument was locally right — the control
 // that dispatches on a fourcc belongs beside the fourcc.
 //
@@ -70,13 +69,11 @@
 // the instant the input was opened, under the options above. **A read is
 // between thirty milliseconds and ninety minutes of this machine**, spent
 // because somebody pressed a button, derived rather than part of the edit, and
-// forgettable. Interleaving them put a text box between `A0` and `V1`.
+// forgettable. Interleaving them put controls between `A0` and `V1`.
 // So `fileRows` is the probe and `readRows` is what has been spent on it, and
-// the section head is the whole of what makes the difference legible. Two
-// things came free with it: a read's row can **name the stream it read** (the
-// old ones sat under the first soundtrack and asserted by position an answer
-// `av_find_best_stream` had not given), and the Whisper model path stopped
-// being a per-input field for a value that is the same on every card.
+// the section head is the whole of what makes the difference legible. A read's row can
+// **name the stream it read** (the old ones sat under the first soundtrack and
+// asserted by position an answer `av_find_best_stream` had not given).
 
 import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
@@ -112,7 +109,6 @@ import { streamsWorthReading, readingOf, readStream, dropReading, tickTelemetry,
 // namespace keeps `marksModel.MARK_WORDS` visibly the *one* home of the
 // sentences that say what a mark claims.
 import * as marksModel from './marks.js';
-import * as transcriptModel from './transcript.js';
 
 let refs = {};
 let hooks = {};
@@ -248,17 +244,8 @@ export function tickSources() {
     const opened = tickInputs();
     const read = tickTelemetry();
     const heard = marksModel.tickMarks();
-    // Unlike the other four this one is true while it is still *going*, not only
-    // when it settles — a transcript grows a window at a time and the point of it
-    // is being searchable before it is finished. It is bounded either way: a
-    // window is thirty seconds of audio and several seconds of GPU, so this is a
-    // redraw every few seconds rather than every frame.
-    const said = transcriptModel.tickTranscripts();
-    // The window pulls, which are fetches rather than reads: a search hit
-    // copying twenty seconds of a six-hour recording to this machine.
-    const grabbed = transcriptModel.tickPulls();
     const pulled = tickLocalCopies();
-    const settled = opened || read || heard || said || grabbed || pulled;
+    const settled = opened || read || heard || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -1653,14 +1640,12 @@ function fileRows(p, input) {
                   p.format.bitRate ? kbps(p.format.bitRate) : ''].filter(Boolean).join(' · '),
                  'dim'),
         ]),
-        // **Stream lines and nothing else.** Three readers used to hang off
-        // these — the telemetry parser under a data line, the sound marks and
-        // the transcript under the first audio line, and the word search under
-        // that — each defensible on its own and wrong together. A probe answer
+        // **Stream lines and nothing else.** Two readers used to hang off
+        // these — the telemetry parser under a data line, and the sound marks
+        // under the first audio line — each defensible on its own and wrong together. A probe answer
         // is what libavformat said the moment this input was opened; a read is
-        // minutes to ninety minutes of this machine, spent on purpose. Mixing
-        // them put a full-width model-path field between `A0` and `V1` and cut
-        // the one readout on this stage that is looked at most in half. They are
+        // minutes of this machine, spent on purpose. Mixing
+        // them cut the one readout on this stage that is looked at most in half. They are
         // `readRows` now, in a section that says what they are.
         ...p.streams.map(streamLine),
     ];
@@ -1671,34 +1656,31 @@ function fileRows(p, input) {
 /// Every deep read of this input, in one section, in one vocabulary.
 ///
 /// **A read is not what came back, and this section exists to stop the two
-/// being the same paragraph.** These three — what a data track carries, where
-/// something happens in the soundtrack, what was said in it — were each drawn
+/// being the same paragraph.** These two — what a data track carries and where
+/// something happens in the soundtrack — were each drawn
 /// *inside* the stream list, under the line of the stream they read. One at a
 /// time that is defensible and each of them argued it in its own header: the
 /// control that dispatches on a fourcc belongs beside the fourcc, the control
 /// that reads a soundtrack belongs beside the soundtrack. In aggregate it was
 /// wrong. A probe answer is what libavformat said the instant this input was
-/// opened, free and complete; a read is between thirty milliseconds and ninety
-/// minutes of this machine, spent because somebody pressed a button. Drawing
-/// them as one thing put a full-width model-path field between `A0` and `V1`,
-/// and the readout looked at more than anything else on this stage — what is in
-/// this file — was cut in half by a text box.
+/// opened, free and complete; a read is spent because somebody pressed a button.
+/// Drawing them as one thing cut the readout looked at more than anything else on this stage — what is in
+/// this file — in half.
 ///
 /// So `What came back` is the probe and this is what has been spent on it.
 ///
 /// **Each row names its stream**, which the old rows did not and could not.
-/// Marks and words are read from `av_find_best_stream`'s pick and were drawn
+/// Marks are read from `av_find_best_stream`'s pick and were drawn
 /// under the *first* audio line, so the position asserted an answer neither
-/// reader had given. Both report the index they were actually handed
-/// (`sound_marks.h`, `transcribe.h`), and `soundStream` says it.
+/// reader had given. It reports the index it was actually handed
+/// (`sound_marks.h`), and `soundStream` says it.
 ///
-/// **The presses stay on this stage.** A transcript and a set of marks belong to
-/// an *input*, and they cost minutes to hours, so nothing should start one unasked.
+/// **The presses stay on this stage.** A set of marks belongs to
+/// an *input*, and they cost time, so nothing should start one unasked.
 function readRows(input) {
     if (!input || !input.probe) return [];
     const rows = [
         ...soundRow(input),
-        ...wordsRows(input),
         ...telemetryRows(input),
     ];
     if (!rows.length) return [];
@@ -1815,198 +1797,7 @@ function soundRow(input) {
         el('button', { cls: 'btn tiny', text: 'Forget',
                        title: 'Drop these marks and take them off the timeline.',
                        on: { click: () => { marksModel.dropMarks(input.id);
-                                            drawSources(); } } }),
-    ])];
-    // Which kinds are on the lane. Three chips rather than a list of every
-    // mark: a mark is a *place* and the place to look at one is the timeline,
-    // so what belongs here is the decision about which of them to draw and jump
-    // between. Each chip's tooltip is the sentence saying what that kind
-    // actually measures, because a colour on a lane cannot say it.
-    const kept = countByKind(e);
-    rows.push(readUnder(MARK_KINDS.map((kind) =>
-        el('button', {
-            cls: 'src-series' + (marksModel.isShown(kind) ? ' on' : ''),
-            title: marksModel.MARK_WORDS[kind],
-            on: { click: () => {
-                marksModel.showKind(kind, !marksModel.isShown(kind));
-                drawSources();
-            } },
-        }, [
-            span(kind, 'mono'),
-            span(String(kept[kind] || 0), 'dim'),
-        ]))));
-    return rows;
-}
-
-/// Ask for the weights when nothing has named them, and answer whether there are
-/// any now.
-///
-/// **A press that needs a model asks for one rather than failing.** Pressing
-/// `Transcribe` with nothing chosen used to make a *failed read* whose message
-/// was `no model has been chosen` — a true sentence, an `Again` button beside
-/// it, and a dead end: the application knew exactly what was missing and made
-/// the person go and find the control for it. Cancelling the picker is still an
-/// answer, and it is said rather than left as a press that did nothing.
-///
-/// A dialog is modal and waits for a person, so **a suite that presses one of
-/// these must choose a model first** — `tests/ui_transcript.js` does, through
-/// the model — or it will sit on a folder picker nobody is looking at.
-function ensureModel() {
-    if (transcriptModel.modelPath()) return true;
-    if (typeof showOpenFolderDialog !== 'function') return false;
-    const picked = showOpenFolderDialog(null);
-    const dir = picked && picked.length ? String(picked[0]) : '';
-    if (!dir) {
-        if (hooks.flash)
-            hooks.flash('Nothing was read: a Whisper model directory has to be ' +
-                        'chosen first — brosoundml\'s scripts/download-whisper.sh ' +
-                        'puts one on disk.');
-        return false;
-    }
-    transcriptModel.useModel(dir);
-    return true;
-}
-
-/// Which model is chosen, as the name of the directory it is in.
-///
-/// **A statement, not a field, and not once per input.** The path used to be an
-/// editable box on this card — wide, because a path is long — and it was drawn
-/// again for every input in the list while holding the same value for all of
-/// them: it is remembered in `localStorage` because the weights are a property
-/// of the machine and not of the edit. What somebody needs to know here is
-/// *which* model will run, which is the difference between a transcript that is
-/// right and 145 MB of guesses, and the directory's own name is that answer in
-/// one word — `large-v3`, `whisper-tiny`. The path in full is on the tooltip and
-/// the door to changing it is the press beside it.
-function modelName() {
-    const p = transcriptModel.modelPath();
-    if (!p) return '';
-    return basename(String(p).replace(/[\\/]+$/, '')) || p;
-}
-
-/// The press that chooses the weights. `showOpenFolderDialog` is bro's, the same
-/// door `ui/document.js` and `ui/export/form.js` open for a file, and **folders
-/// rather than files** because a Whisper model *is* the directory. It answers
-/// with a list and an empty one means cancelled — which is not the same as
-/// choosing nothing, so nothing is written.
-function modelButton() {
-    return el('button', {
-        cls: 'btn tiny', 'data-f': 'srcmodelpick', text: 'Model…',
-        title: 'Choose the directory the weights are in.\n' +
-               'It holds config.json, model.safetensors, vocab.json and ' +
-               'merges.txt.\nNothing is downloaded here: brosoundml\'s ' +
-               'scripts/download-whisper.sh --size large-v3 puts one on disk.\n' +
-               'tiny is 145 MB and reads clean speech; large-v3 is 3 GB and is ' +
-               'the one to use if the transcript has to be right.\n' +
-               'Remembered between runs — the weights are a property of the ' +
-               'machine rather than of the edit, so this is the same choice for ' +
-               'every input.',
-        on: { click: () => {
-            if (typeof showOpenFolderDialog !== 'function') return;
-            const picked = showOpenFolderDialog(transcriptModel.modelPath() || null);
-            const dir = picked && picked.length ? String(picked[0]) : '';
-            if (!dir) return;
-            transcriptModel.useModel(dir);
-            drawSources();
-        } },
-    });
-}
-
-/// What was *said* in this soundtrack, under the same head as the marks.
-///
-/// Beside `Sound` rather than anywhere else because they answer the two halves
-/// of one question — where something happened, and what was said — and a person
-/// who has just read one wants the other in the same place.
-///
-/// **The model is named before anything is read, and its absence is stated
-/// rather than hidden.** The weights are between 145 MB and 3 GB and are not
-/// shipped, so the ordinary state of a fresh checkout is that there is no model
-/// and there is nothing this can do about it. What it must not do is offer a
-/// button that appears to work: with no model chosen the row says so, the press
-/// opens the picker rather than failing (`ensureModel`), and the read itself
-/// names the file it could not find.
-///
-function wordsRows(input) {
-    if (!transcriptModel.worthReading(input)) return [];
-
-    const e = transcriptModel.readOf(input.id);
-    const { of, why } = soundStream(input, e);
-    const model = modelName();
-    const line = (said, acts) => readLine('Words', of, why, said, acts);
-
-    if (!e) {
-        const start = el('button', {
-            cls: 'btn tiny', text: 'Transcribe',
-            title: 'Decode this soundtrack and read what was said in it, on ' +
-                   'a thread. The words arrive while it reads, so it is ' +
-                   'searchable long before it finishes.\n' +
-                   'A transcript is a place to look, never a cut: the ' +
-                   'renditions of a stream do not share a zero, so a hit ' +
-                   'moves the playhead and you agree.',
-            on: { click: () => { if (ensureModel()) transcriptModel.transcribe(input);
-                                 drawSources(); } },
-        });
-        return [line(model ? `${model} · nothing has read this for words yet`
-                           : 'no model chosen — nothing has read this for words',
-                     [start, modelButton()])];
-    }
-
-    if (e.state === 'reading') {
-        const r = e.result;
-        const p = transcriptModel.progressOf(e);
-        // **How far, how fast, and how long left.** This used to be "starting…"
-        // until the first window landed and a bare `Ns of Ns` after it, and on
-        // the recording this feature exists for that is a line that does not
-        // visibly move for an hour and a half. There is no way to tell it from a
-        // read that has silently stopped, which is the question somebody
-        // actually has, and the answer to it is a **rate**: 4.0x says a six-hour
-        // VOD is ninety minutes and 0.05x says it will not finish today. Neither
-        // is knowable from a percentage.
-        //
-        // Measured rather than assumed — `read / elapsed` on this machine with
-        // this model — because what a card does with large-v3 depends on the
-        // card, and the number somebody wants is the one theirs is doing.
-        const bits = [];
-        if (p.duration > 0) {
-            bits.push(`${clock(p.read)} of ${clock(p.duration)}`);
-            bits.push(`${Math.round((p.read / p.duration) * 100)}%`);
-        } else bits.push('opening the soundtrack');
-        if (r && r.segments.length) bits.push(`${r.segments.length} segments`);
-        if (p.rate) bits.push(`${p.rate.toFixed(1)}× realtime`);
-        if (p.left) bits.push(`about ${transcriptModel.showLeft(p.left)} left`);
-        const rows = [line(bits.join(' · '), [
-            el('button', { cls: 'btn tiny', text: 'Stop',
-                           title: 'Stop here and keep the words already found.',
-                           on: { click: () => { transcriptModel.stopTranscribing(input.id);
-                                                drawSources(); } } }),
-        ])];
-        // Which device it is on, and why that matters. A *statement* rather than
-        // an explanation in `ui/export/explain.js`'s sense — it changes with the
-        // machine and is the answer to "why is this taking days" — so it is
-        // never folded. It is only said when it is bad news: on a card there is
-        // nothing to explain and a line saying so would be one more thing to
-        // read past.
-        const slow = transcriptModel.whySlow();
-        if (slow) rows.push(readUnder([span(slow, 'ex-note')]));
-        return rows;
-    }
-
-    if (e.state === 'failed')
-        return [line(span(e.error || 'will not read', 'src-read-v src-error'), [
-            el('button', { cls: 'btn tiny', text: 'Again',
-                           on: { click: () => {
-                               if (!ensureModel()) return drawSources();
-                               transcriptModel.dropTranscript(input.id);
-                               transcriptModel.transcribe(input);
-                               drawSources(); } } }),
-            modelButton(),
-        ])];
-
-    // Done, or stopped part way. Both keep their words, and a stopped one says
-    // so — because what it holds is a transcript of *part* of the recording and
-    // a search over it must not look like a search over all of it.
-    const r = e.result || { segments: [], read: 0, duration: 0 };
-    const part = e.state === 'stopped' || (r.duration > 0 && r.read < r.duration - 0.5);
+                                    uration > 0 && r.read < r.duration - 0.5);
     return [line(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
                  (part ? ` · only the first ${clock(r.read)} of ${clock(r.duration)}`
                        : ' · all of it'), [

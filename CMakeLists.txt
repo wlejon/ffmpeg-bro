@@ -561,15 +561,6 @@ add_test(NAME ui-telemetry COMMAND ffmpeg-bro-headless
 add_test(NAME ui-marks COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_marks.js"
          -- "${FIXTURE_MARKS}" "${FIXTURE_SILENT}")
-# What was said in a soundtrack, from the press to the search. The model is the
-# one fixture that cannot be generated — there is no synthesising speech a
-# recogniser will read back — so the suite refuses-by-name without one and skips
-# every section that needs one, which is this repository's rule for every suite.
-# The second file has no audio stream at all: "there is no sound in this input"
-# and "there is no model on this disk" must never be the same answer.
-add_test(NAME ui-transcript COMMAND ffmpeg-bro-headless
-         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_transcript.js"
-         -- "" "${FIXTURE_SILENT}")
 # The render on the program monitor instead of the clips. One file: what this is
 # about is the three things one element per clip cannot show, and all three of
 # them are about the *canvas* rather than about which file is on it.
@@ -588,7 +579,7 @@ set_tests_properties(decode export capabilities inputs sequences playback hardwa
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
                      ui-measure ui-subtitles ui-document ui-output ui-telemetry ui-marks
-                     ui-transcript ui-load
+                     ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
