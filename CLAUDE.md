@@ -258,15 +258,14 @@ parsing one out is inherently a fresh object. `open()` **reconciles** rather tha
 rebuilds for its sake — an input described exactly as it already is costs
 nothing, and a clip of one keeps its `<video>`.
 
-**Ids are part of it, and that is the load-bearing part.** A clip's id, an
-input's id and a cue track's id are names other files write down —
-`clip:7/after-scale` is a graph anchor, `in3` is a source node, `cues:3` is a
-subtitle row on the Write stage — so an open that renumbered would silently
-re-point a filter at a different shot or a row at somebody else's dialogue.
-`useClipId`/`useInputId`/`useCueId` are how the three counters are told what a
-document has already handed out.
+**Ids are part of it, and that is the load-bearing part.** A clip's id and an
+input's id are names other files write down — `clip:7/after-scale` is a graph
+anchor, `in3` is a source node — so an open that renumbered would silently
+re-point a filter at a different shot. `useClipId`/`useInputId` are how the two
+counters are told what a document has already handed out.
 
-`ui/softcues.js` is the *reader* of subtitle rows from imported tracks, drawing them over the program monitor
+`ui/softcues.js` is the *reader* of the output's soft subtitle rows (`copy:` and
+`decode:`), drawing them over the program monitor
 (`Cues`, `T`), and the one thing it must never grow is a **style**: a soft track
 is styled by whatever player opens the file, so it draws `text`, says on the
 canvas that this is what the cues say and not how they will look, and switches
@@ -406,11 +405,10 @@ A whole track is read once, on a thread (`async_open.h`, shared with
 one implementation), and **bucketed on the way in** — min, max and mean over a
 fixed grid, so a reading's size is a property of the grid and not of the file.
 `bro.ffmpeg` is not installed in worker realms, so this is a thread rather than a
-job for `ui/analyze-worker.js`. `ui/telemetry.js` is the model on the other side
-and `ui/timeline.js`'s Data lane draws it, per clip, through `sourceTime` — the
-same map `columnsOf` uses for a waveform, which is what makes a series follow a
-trim without being re-read. A reading is derived, so it is not in the document,
-for the reason `peaks` is not.
+job for `ui/analyze-worker.js`. Nothing in the UI currently draws a reading —
+the Data lane left with the ffmpeg-only pass — so `bro.ffmpeg.data` and
+`tests/data_test.cpp` are the whole surface until one returns. A reading is
+derived, so it would not be in the document, for the reason `peaks` is not.
 
 ### The sensors that are not libav's
 
@@ -460,7 +458,9 @@ with a sentence, the link and the sources are unconditional, and there is no
 left is the distinction that was always the point: a *silent file* gives back an
 empty list, and a file with no soundtrack at all is refused by name.
 
-Sound marks processing is implemented in native C++ (`sound_marks.h`, `bro.ffmpeg.marks`). Note that sound marks visualization and UI controls are currently not surfaced in the UI layer.
+Marks reach no UI at present — the Marks lane and the `,`/`.` walk left with the
+ffmpeg-only pass — so `bro.ffmpeg.marks` and `tests/marks_test.cpp` are the
+whole surface until one returns.
 
 ### The words, which are the other thing a soundtrack holds
 
@@ -509,7 +509,9 @@ loop would watch it vanish on the frame after it completed — so `forget` is
 required rather than tidy. `read` is carried beside the segments because without
 it nothing can tell "the last hour is silent" from "the last hour is unread".
 
-Whisper transcription is implemented in native C++ (`transcribe.h`, `bro.ffmpeg.transcript`). Note that transcription UI components and Find integration are currently not surfaced in the UI layer.
+The transcript reaches no UI at present — the Sources read rows and the Find
+stage left with the ffmpeg-only pass — and the surface that remains is
+`bro.ffmpeg.transcribe` and its native reader.
 
 The weights are not shipped and an absent model is refused **by name**;
 `brosoundml/scripts/download-whisper.sh --size large-v3` puts one on disk.

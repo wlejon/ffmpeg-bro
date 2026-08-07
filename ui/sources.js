@@ -1183,11 +1183,8 @@ function footRows(input) {
 /// a path on this machine is already local and a `Save a local copy` beside one
 /// would be an offer to duplicate a file for no reason. What makes it worth
 /// having is that everything downstream reads an input *repeatedly* — a scrub, a
-/// filmstrip, a waveform, a transcription pass, a render — and for a URL every
-/// one of those is a network read of a five-hour recording. `tools/montage.js`
-/// transcribes each hit's window a second time to place the cut on what the
-/// media itself said, and doing that over HLS is the same segments fetched
-/// twice.
+/// filmstrip, a waveform, a render — and for a URL every one of those is a
+/// network read of a five-hour recording.
 ///
 /// **The press starts it rather than walking to the Write stage.** It used to
 /// fill the render in and take you there, on the argument that three quarters of
@@ -1195,10 +1192,9 @@ function footRows(input) {
 /// right about the cost and wrong about the answer. What it cost was the render:
 /// the one job slot, held for the length of a download, so the application you
 /// were pulling the recording into could not render anything until it finished.
-/// A fetch is not a render (src/native/fetch_queue.h), so this queues two of them
-/// and stays where it is. The range is still yours: a window is what
-/// `Cut this out` on a hit takes, and the Write stage's own `Rewrap` is still
-/// there for a copy you want to describe by hand.
+/// A fetch is not a render (src/native/fetch_queue.h), so this queues a fetch
+/// and stays where it is. The Write stage's own `Rewrap` is still there for a
+/// copy you want to describe by hand.
 function localCopyButtons(input) {
     if (!input.origin && !input.renditions) return [];
     const out = [];
@@ -1226,14 +1222,13 @@ function localCopyButtons(input) {
         text: busy ? 'Pulling…' : (job ? 'Pull it again' : 'Save a local copy'),
         disabled: !input.probe || !!busy,
         title: input.probe
-            ? 'Copy this stream to a file on this machine — the soundtrack first, ' +
-              'because it is a few percent of the bytes and is what a word search needs, ' +
-              'and the picture behind it. No decode and no encode, and nothing here waits.'
+            ? 'Copy this stream to a file on this machine. No decode and no encode, ' +
+              'and nothing here waits.'
             : 'It has not opened yet',
         on: { click: () => { if (hooks.saveLocally) hooks.saveLocally(input); } },
     }));
-    // **And the same copy, by hand.** The press above takes every decision — both
-    // renditions, Matroska, a name beside the document, the whole recording — and
+    // **And the same copy, by hand.** The press above takes every decision —
+    // Matroska, a name beside the document, the whole recording — and
     // those are the right defaults and not the only answers. A section, another
     // container, a stream left out, or simply reading the invocation before it
     // runs are all the Write stage's, which is where this application describes
@@ -1348,7 +1343,7 @@ function localCopyRows(input) {
     line('audio', 'Sound');
     line('video', 'Picture');
     if (job.audio.state === 'done')
-        rows.push(note('The soundtrack is on this machine. A word search reads it now — ' +
+        rows.push(note('The soundtrack is on this machine — ' +
                        'the picture can go on arriving.'));
     // The fact a cut has to be told, said where the pair is made rather than
     // left for whoever makes one. See ui/localcopy.js.

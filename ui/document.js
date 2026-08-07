@@ -99,6 +99,7 @@ import { project, makeClip, makeGenerator, applyGenerator, isGenerator, placeCli
          SPEED_MIN, SPEED_MAX,
          isTrackLocked, setTrackLocked } from './project.js';
 import * as inputsModel from './inputs.js';
+import * as generators from './generator.js';
 import * as overlay from './graph/overlay.js';
 import { settings } from './export/state.js';
 import * as store from './export/store.js';

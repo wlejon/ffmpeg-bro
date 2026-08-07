@@ -404,11 +404,8 @@ export function streamSpecs(over = {}) {
         // A subtitle row with nowhere to read from is a row somebody added
         // before adding the file. Dropped rather than sent, exactly as a
         // pathless attachment is: `warnings()` says so where a refusal from
-        // the renderer would only say it about a form nobody can see. A row
-        // reading the document's own cues reads no input *yet* — `attachCueFiles`
-        // in export/spec.js gives it one — so it is the one subtitle row that
-        // legitimately passes this test with nothing behind it.
-        if (s.kind === 'subtitle' && !readsInput(s) && !isCueRow(s)) continue;
+        // the renderer would only say it about a form nobody can see.
+        if (s.kind === 'subtitle' && !readsInput(s)) continue;
         // The same for a data row somebody added and has not pointed anywhere:
         // `render.start` refuses one by name, and a refusal about a row nobody
         // can see is a refusal about the form rather than about the file.
@@ -896,12 +893,6 @@ function saysData(s) {
 /// it and a copy: it is an encoded stream whose pictures happen to come from the
 /// middle of a graph rather than from the composite. What it drops is the span,
 /// which belongs to a row that reads an input and means nothing here.
-/// The menu entry that is not a source but a press: make a track and read it.
-///
-/// A sentinel in the list rather than a button beside it, because "where do these
-/// cues come from" is one question and a second control for one of its answers
-/// would read as a second question. `setSource` turns it into a real `cues:<id>`
-/// before anything else sees it, so nothing downstream ever meets this string.
 function setSource(s, source) {
     s.source = source;
     if (isCopy(s)) {
@@ -998,8 +989,6 @@ function facetsOf(s) {
 /// composed stream takes the whole render range and has nothing to trim.
 function spanFacet(s) {
     if (s.kind === 'subtitle') {
-        if (isCueRow(s)) return { v: 'span', l: 'Cues',
-                                  title: 'The cues this document holds, and what is written' };
         if (!readsInput(s)) return null;
         return { v: 'span', l: 'Cues', title: 'What part of the track is read, and which ' +
                                               'cues survive it' };

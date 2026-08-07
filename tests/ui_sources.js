@@ -353,32 +353,18 @@ A.inputs.removeInput(url);
 pump(40);
 ok(A.inputs.inputs.length === 1, 'an input with no clip is removed by asking');
 
-// ── a stream off a page: its other renditions, and saving one locally ──────
+// ── a remote input, saved locally as the stream copy it is ─────────────────
 //
-// `ui/vod.js` turns a Twitch page into a list of HLS renditions — the picture at
-// 1080p60 for the cut, `Audio Only` at a fraction of the bytes for a
-// transcription pass — and until now everything but the first was resolved,
-// counted in a flash message and thrown away, so the second job meant leaving
-// the application for a script.
-//
-// **Driven without the network**, which is the only way this can be a test:
-// what `resolve()` produces is `{ path, name, origin, renditions }` and that
-// shape is handed to `addInput` directly, pointed at the fixture. What is
-// checked is everything downstream of the resolve — which is all of the part
-// that is this application's.
+// **Driven without the network**, which is the only way this can be a test: an
+// input shaped like a stream — an `origin` naming where it came from — is
+// handed to `addInput` directly, pointed at the fixture. What is checked is
+// everything downstream of opening it, which is all of the part that is this
+// application's.
 //
 // Three claims:
 //
-//   - **the other renditions are on the card**, and picking one is an ordinary
-//     change of `-i`;
-//   - **`Save a local copy` pulls both of them, the soundtrack first**, in the
-//     background and without walking anywhere. The order is the claim: the
-//     picture does not begin until the soundtrack is off the link, because the
-//     two sharing it cost the soundtrack a third of its rate — see the
-//     measurement in ui/localcopy.js;
-//   - **the soundtrack landing is said out loud**, since the whole point of
-//     pulling it first is that the work needing only sound can start while the
-//     picture is still arriving;
+//   - **`Save a local copy` pulls it in the background and without walking
+//     anywhere** — a fetch is not a render and takes no job slot;
 //   - **it is a copy and not a re-encode.** Every row is a `copy:`, or the whole
 //     point of doing it in this application rather than with a downloader is
 //     gone;
@@ -392,11 +378,6 @@ pump(100);
         path: media,
         name: 'Twitch VOD 123 1080p60',
         origin: 'https://www.twitch.tv/videos/123',
-        renditions: [
-            { name: '1080p60', url: media, bandwidth: 6000000 },
-            { name: 'Audio Only', url: media, bandwidth: 160000, audioOnly: true },
-        ],
-        rendition: '1080p60',
     });
     waitFor('the stream to open', () => !!streamed.probe || !!streamed.error);
     A.drawSources();
@@ -406,12 +387,6 @@ pump(100);
     // normally selects what it just made.
     const pickRow = () => { click(q(`[data-input="${streamed.id}"]`)); pump(60); };
     pickRow();
-
-    const pick = f('srcrendition');
-    ok(!!pick, 'an input that came from a page offers its other renditions');
-    ok(pick && pick.options.length === 2, 'both of them, not just the one being read');
-    ok(el('src-detail').textContent.indexOf('Audio Only') >= 0,
-       'the sound-only one is named as such — it is the one a transcription pass wants');
 
     // ── where it goes, before anything goes there ──────────────────────────
     //
@@ -441,31 +416,18 @@ pump(100);
 
     // ── the pull ───────────────────────────────────────────────────────────
     //
-    // The press starts two fetches and stays here. It used to lay a clip out,
+    // The press starts a fetch and stays here. It used to lay a clip out,
     // walk to the Write stage and fill a render in — right about a copy being a
     // render, wrong about the machinery, because the render is the one job slot
     // and a download held it for as long as it took.
     const wasStage = A.shell.currentStage();
     click(f('srclocal'));
 
-    // **Read before anything is pumped**, which is the only place the ordering
-    // is visible: these renditions are ten-second fixtures on a local disk and
-    // both pulls are over inside one frame. What the press *decides* is decided
-    // synchronously, so this is the state it decided.
     const job = A.localcopy.copiesOf(streamed);
-    ok(!!job, 'the card knows about this input’s pulls now');
-    ok(!job.sameClock,
-       'and knows the two are different renditions, so a time found in one is a ' +
-       'search hint in the other rather than a cut');
-    // **The order, which is the whole claim.** The picture is not started until
-    // the soundtrack is off the link: queued together the picture takes the
-    // bandwidth and the soundtrack falls to a third of its own rate, so what
-    // "audio first" buys is not a smaller file arriving sooner — it is the
-    // soundtrack arriving sooner than anything can if the two are sharing.
-    same(job.video.state, 'waiting',
-         'the picture waits: it does not begin until the soundtrack is off the link');
-    same(job.audio.state, 'probing',
-         'and the soundtrack is already being opened');
+    ok(!!job, 'the card knows about this input’s pull now');
+    ok(job.sameClock,
+       'one rendition, one clock: a moment found in the copy is the input’s own');
+    same(job.video.state, 'probing', 'and the stream is already being opened');
 
     pump(120);
     same(A.shell.currentStage(), wasStage,
@@ -473,35 +435,11 @@ pump(100);
     ok(!A.exporter.isRunning(),
        'and the render is untouched: a fetch is not in the job slot');
 
-    waitFor('the soundtrack to land', () => job.audio.state === 'done' ||
-                                            job.audio.state === 'failed', 60000);
-    same(job.audio.state, 'done', `the soundtrack is here (${job.audio.error || 'no error'})`);
-    ok(/\.audio\.mkv$/.test(streamed.localAudio || ''),
-       `and the input knows where it is: ${streamed.localAudio}`);
-    ok(A.localcopy.soundIsHere(streamed),
-       'which is the question the whole ordering exists to answer yes to early');
-
-    A.drawSources();
-    pump(60);
-    ok(el('src-detail').textContent.indexOf('soundtrack is on this machine') >= 0,
-       'and the card says so, rather than leaving it to be discovered');
-    ok(el('src-detail').textContent.indexOf(
-           String(streamed.localAudio).replace(/^.*[/\\]/, '')) >= 0,
-       'named, so the folder above it and this line are the whole answer to ' +
-       'where the file went');
-
-    waitFor('the picture to land', () => job.video.state === 'done' ||
-                                         job.video.state === 'failed', 60000);
-    same(job.video.state, 'done', `the picture follows it (${job.video.error || 'no error'})`);
-    ok(/\.mkv$/.test(streamed.localCopy || '') &&
-       streamed.localCopy !== streamed.localAudio,
-       `written to a name of its own: ${streamed.localCopy}`);
-    // The durable witness that the order held, rather than a timing that this
-    // fixture is far too small to show: the queue numbers fetches as they are
-    // asked for, so a picture queued after the soundtrack has the larger number.
-    ok(job.video.fetch > job.audio.fetch,
-       `the picture was queued after the soundtrack (fetch ${job.audio.fetch} then ` +
-       `${job.video.fetch})`);
+    waitFor('the copy to land', () => job.video.state === 'done' ||
+                                      job.video.state === 'failed', 60000);
+    same(job.video.state, 'done', `the copy is here (${job.video.error || 'no error'})`);
+    ok(/\.mkv$/.test(streamed.localCopy || ''),
+       `and the input knows where it is: ${streamed.localCopy}`);
 
     // What came out is the stream, copied. Read back rather than asserted from
     // the spec: "the rows said copy:" is not the same claim as "the file has the
@@ -515,8 +453,8 @@ pump(100);
     pump(60);
     pickRow();
     ok(!!f('srclocaluse'),
-       'once a copy is here the card offers to point the input at it, which is what ' +
-       'makes a word search run on local media');
+       'once a copy is here the card offers to point the input at it, so everything ' +
+       'after this reads local media');
 
     // ── and the same copy, by hand ─────────────────────────────────────────
     //
@@ -542,18 +480,15 @@ pump(100);
     ok(!S.streams.some((s) => s.kind === 'data'),
        'and no data row, which Matroska will not hold');
     ok(!A.exporter.isRunning(), 'nothing has been started — the invocation is there to read');
-    console.log(`  ${streamed.name}: sound → ${streamed.localAudio}, ` +
-                `picture → ${streamed.localCopy}`);
+    console.log(`  ${streamed.name}: copy → ${streamed.localCopy}`);
 
-    // The two files this section really wrote. They land beside the document,
-    // and a test with no document open has none — so they land in the working
+    // The file this section really wrote. It lands beside the document,
+    // and a test with no document open has none — so it lands in the working
     // directory, which for ctest is the repository. Cleaned up here rather than
     // gitignored: a pattern in .gitignore would hide the next thing that starts
     // writing there by accident.
     const fs = require('fs');
-    for (const path of [streamed.localAudio, streamed.localCopy]) {
-        try { fs.unlinkSync(path); } catch (e) { /* it is allowed not to be there */ }
-    }
+    try { fs.unlinkSync(streamed.localCopy); } catch (e) { /* it is allowed not to be there */ }
 }
 
 screenshot('out/sources.png');

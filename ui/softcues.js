@@ -40,10 +40,9 @@
 // exactly what that rule exists to prevent, and the way to obey it here is to
 // compute none.
 //
-// **Both kinds of row, one path.** A row on the Write stage reads its cues one
-// of three ways and this draws all three. `cues:3` is the document's own track,
-// already in timeline seconds. `copy:0:2` and `decode:1:0` read
-// a file, on that file's clock — and the map between the two clocks is not
+// **Both kinds of row, one path.** A row on the Write stage reads its cues as
+// a copy (`copy:0:2`) or a conversion (`decode:1:0`), and this draws both.
+// Either reads a file, on that file's clock — and the map between the two clocks is not
 // restated here: `cueWindow()` in ui/export/subtitles.js is where the rule lives
 // (a conversion's zero is the in-point exactly, a copy's is the stamp of the cue
 // it begins on), and the output's zero is where the render range begins. So a

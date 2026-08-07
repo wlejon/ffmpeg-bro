@@ -1,60 +1,18 @@
-// A stream pulled off a page and written to this machine — the soundtrack
-// first, and the picture after it.
-//
-// **Two pulls rather than one, and the order is the whole point.** A Twitch VOD
-// resolves to several renditions of one recording, and the audio-only one is a
-// few percent of the bytes: on the recording this was measured against, 0.4 GB
-// against 14.7. Everything you would do *first* with a five-hour stream needs
-// only the sound — transcribe it, search it for a phrase, find where something
-// happens — and everything that needs the picture needs it at a handful of
-// moments rather than all the way through. So the soundtrack comes first and the
-// application says when it has landed; the picture goes on arriving behind it
-// while you work.
+// A remote input's stream, copied to a file on this machine.
 //
 // The queue underneath is `bro.ffmpeg.fetch` (src/native/fetch_queue.h): a
 // stream copy per pull, running beside the application rather than in the
-// render's job slot, cancelable one at a time.
+// render's job slot, cancelable one at a time. The press returns immediately;
+// the card says where each pull has got to and where the file lands.
 //
-// ── They run one after the other, and the measurement is why ───────────────
-//
-// The obvious arrangement is to queue both and let the small one finish first.
-// It does not, and the reason is worth writing down because it is the opposite
-// of what the sizes suggest. Measured against a six-hour Twitch VOD, each
-// rendition pulled **alone**:
-//
-//   Audio Only   1.5 MB/s    78x realtime    ~0.4 GB    ~4.6 min
-//   1080p60     69.6 MB/s    95x realtime   ~15.0 GB    ~3.8 min
-//
-// The soundtrack is not the faster of the two per second of recording — it is
-// very slightly slower. It is **latency-bound**: forty times fewer bytes spread
-// over the same number of segments, so what it spends is round trips rather than
-// bandwidth. Queued together, the picture took the link and the soundtrack fell
-// to a third of its own rate — 11% done where alone it would have been at 32%.
-//
-// So the wins are not the same win, and only one of them is what this is for:
-// the soundtrack does not arrive *sooner than the picture would have*, it
-// arrives sooner than **anything** can if the two are sharing a link. One after
-// the other puts a searchable soundtrack on the machine in five minutes instead
-// of fourteen. That is also why the pair is not simply handed to the queue with
-// its two workers: the second worker is deliberately left for the short,
-// urgent pull a cut makes (`soon` in fetch_queue.h), which is the one thing that
-// must not wait behind either of these.
-//
-// ── The two clocks, carried rather than forgotten ──────────────────────────
-//
-// **The audio pull and the video pull are two transcodes of one stream and they
-// do not share a zero.** Measured over sixteen consecutive words of the same
-// recording, the audio-only rendition ran 0.80 s ahead of the 1080p60 one — and
-// at three points of the same pair it was +0.80 s, +2.21 s and +2.57 s. That is
-// a *step* rather than a drift: Twitch VODs carry discontinuities where the ads
-// were, the renditions do not resolve them identically, and no offset and no
-// slope corrects it. `tools/montage.js` is where the measurement lives.
-//
-// So a transcript of the audio pull is a **search hint** against the picture and
-// never the cut itself, and that fact travels on the model here (`sameClock`)
-// rather than being remembered by whoever comes to make a cut. A local copy made
-// from the *same* rendition — the whole-input `Save a local copy` of a file that
-// has no audio-only sibling — is on one clock and says so.
+// The job carries an `audio` slot beside the `video` one and the model carries
+// `sameClock`, and both are currently dormant: they existed for the
+// soundtrack-first pull of a page's audio-only rendition, and the page resolver
+// (`ui/vod.js`) left the UI with the ffmpeg-only pass. Nothing supplies a
+// second rendition now, so every pull reads the input's own path and
+// `sameClock` is always true. The pair shape stays because the card and
+// `tick()` read it and because the resolver is expected back; its story and
+// the measurements behind the ordering are in git history with the file.
 //
 // ── What this module is not ────────────────────────────────────────────────
 //
@@ -102,8 +60,8 @@ export function allCopies() {
 /// with a file search, and "where did it go" is the question this feature was
 /// asked the first time it was used.
 ///
-/// Remembered between runs under a key of its own, `ui/measure.js`'s rule and
-/// the same argument the Whisper model directory makes: which disk has room for
+/// Remembered between runs under a key of its own, `ui/measure.js`'s rule:
+/// which disk has room for
 /// a five-hour recording is a property of the machine rather than of the edit.
 /// Not in the document for the reason nothing else here is — a `.fbro` opened
 /// on another machine would name a folder that is not there.
@@ -149,11 +107,10 @@ function pathFor(dir, name, which) {
 
 /// The rendition each pull reads.
 ///
-/// The sound is `forListening`'s answer — the audio-only rendition where the
-/// site published one — and the picture is whichever the input is set to, which
-/// is the picker on the Sources card. When there is no audio-only rendition
-/// there is no separate sound pull at all: pulling the same rendition twice
-/// would be the same bytes twice, which is worse than not having the shortcut.
+/// The picture is the input's own path, and the sound is empty — there is no
+/// separate sound pull without an audio-only rendition, and nothing supplies
+/// one since the page resolver left the UI. Pulling the same bytes twice would
+/// be worse than not having the shortcut, so the audio slot stays unasked.
 function renditionsFor(input) {
     return {
         video: input ? input.path : '',

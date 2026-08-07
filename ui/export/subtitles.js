@@ -1,7 +1,7 @@
 // Subtitles: where a track comes from, and what it can be written as.
 //
 // A subtitle row on the Write stage says where its cues come from, and there are
-// three answers. Two of them read a file that already exists:
+// two answers. Both read a file that already exists:
 //
 //   - **Carried** (`copy:0:2`). The packets that are already there, into the new
 //     container unchanged. Instant, lossless, and only possible where the
@@ -11,15 +11,7 @@
 //     a Matroska file, `webvtt` in a `.vtt` beside the video. This is `-c:s
 //     mov_text` against `-c:s copy`, and it is the same `-map` either way.
 //
-// The third is **edited** (`cues:3`) — custom cues in document history. This is still not a *composed*
-// source in the way the canvas and the mix are: a render materialises the track
-// into a real subtitle file beside the output and reads it as an ordinary `-i`,
-// because ffmpeg has no way to receive cues except as a file. By the time a spec
-// reaches the renderer such a row has become a `decode:` of that file, which is
-// why nothing downstream of `ui/export/spec.js` has had to learn the third form
-// exists.
-//
-// The third thing people mean by "subtitles" is **burning them into the
+// The other thing people mean by "subtitles" is **burning them into the
 // picture**, which is not a stream at all: it is `subtitles=` on the Graph
 // stage, an ordinary filter node like every other. It lives there rather than
 // here on purpose — a burned-in subtitle is part of the picture, and a Write

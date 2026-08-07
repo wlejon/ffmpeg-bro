@@ -19,9 +19,8 @@
 //
 // And a fourth thing, which is about the first: the **monitor** draws a soft
 // track as the cues it is. Not through the engine — bro's `<video>` decodes
-// pictures and sound and a stream a player can switch off is neither, and the
-// cues a `cues:3` row holds are never in the file the element is playing anyway
-// — but as an overlay this application draws over the picture from what it is
+// pictures and sound and a stream a player can switch off is neither — but as
+// an overlay this application draws over the picture from what it is
 // about to write. What it must never claim is an *appearance*: a soft track is
 // styled by whatever player opens the file, so the words are a preview and their
 // look is not one, and the interface says so while the overlay is on. The
@@ -788,66 +787,6 @@ console.log('\ncues that are pictures');
     }
 }
 
-// ── cues of your own ───────────────────────────────────────────────────────
-//
-// The fourth thing, and the one that is not a file: cues the *document* holds.
-// What has to be true of them is a chain, and every link is checked here because
-// a break anywhere in it is a subtitle that silently is not in the output.
-//
-//   - **A fork keeps everything, including the styling.** `cueTextOf` was built
-//     for a panel and its `text` is the words with the dialogue fields and the
-//     override codes stripped, so a fork through that alone would flatten a
-//     styled track. `raw` and `header` are what stop it, and the way to check
-//     that is to write the file out and read the styles back — which is why this
-//     asserts on `cueFileText` rather than on a render.
-//   - **The row is repointed in place**, so the file stops being read. Both
-//     copies reaching one output without anybody asking for both is the failure
-//     this is the answer to.
-//   - **A render writes a real file and passes it as an `-i`.** ffmpeg has no
-//     other way to take cues, so this is not an implementation detail: the spec
-//     grows an input and the row becomes an ordinary `decode:`.
-//   - **The lane is the edit.** Dragging an end, splitting at the playhead and
-//     retyping are three gestures on one model, and the third is where styling
-//     is lost — one cue at a time and never quietly.
-
-console.log('\ncues the document holds');
-{
-    const styledFile = `${dir}/cues.ass`;
-    let has = false;
-    try { has = !!bro.ffmpeg.probe(styledFile); } catch (e) { has = false; }
-
-    A.graph.overlay.clear();
-    A.doc.reset();
-    pump(200);
-    A.open(media);
-    waitFor('a clip to work against', () => A.project.clips.length === 1);
-    pump(200);
-
-
-
-    // ── and a track of pictures cannot be typed into ──
-    const pics = `${dir}/picture-cues.mkv`;
-    let hasPics = false;
-    try { hasPics = !!bro.ffmpeg.probe(pics); } catch (e) { hasPics = false; }
-    if (hasPics) {
-        A.shell.goTo('sources');
-        pump(80);
-        type(el('src-path'), pics);
-        click(el('src-add'));
-        pump(250);
-        const at = A.inputs.inputs.length - 1;
-        const bitmapRow = { kind: 'subtitle', source: `copy:${at}:2` };
-        const why = A.cues.forkRefusal(bitmapRow);
-        ok(why.indexOf('optical character recognition') >= 0,
-           `a bitmap track is refused by name rather than typed into (${why.slice(0, 60)}…)`);
-    } else {
-        console.log(`  SKIP  no picture-cues.mkv in ${dir} — the refusal needs one`);
-    }
-
-    A.doc.reset();
-    pump(200);
-}
-
 // ── the soft track, on the monitor ─────────────────────────────────────────
 //
 // The overlay is a claim about two things and both are checked here: *which*
@@ -939,31 +878,6 @@ console.log('\nthe soft track on the monitor');
          'it is at the range’s start plus its own time, which is where the render puts it');
     same(A.softcues.showingAt(5).lines.length, 0,
          'and a cue past the end of the output is not in the file, so it is not drawn');
-    S.rangeIn = rangeWas.in;
-    S.rangeOut = rangeWas.out;
-
-    // ── the document's own cues, which are already on this clock ──
-    S.streams = A.exporter.defaultStreams();
-    const mine = A.cues.makeCueTrack({ name: 'Mine' });
-    A.cues.addCue(mine, 1, 3, 'typed here');
-    S.streams.push({ id: 9002, kind: 'subtitle', source: `cues:${mine.id}`, codec: '',
-                     language: '', title: '', disposition: '', copyFrom: 0, copyTo: 0,
-                     options: {} });
-    same(A.softcues.showingAt(2).lines[0].text, 'typed here',
-         'a row reading the document’s own track needs no map: it is already on this clock');
-    same(A.softcues.showingAt(3.5).lines.length, 0, 'and ends where it was typed to end');
-
-    // And *this* is the row the range clamps, because this is the one the render
-    // writes a file for: `cueFileText` drops what is outside it and clamps a cue
-    // straddling the start, which on the timeline's own ruler is the same
-    // statement said as "from the range's start onwards".
-    S.rangeIn = 2;
-    S.rangeOut = 2.5;
-    same(A.softcues.showingAt(1.5).lines.length, 0,
-         'before the range there is no output, so a typed cue is not on the monitor either');
-    same(A.softcues.showingAt(2.2).lines[0].text, 'typed here',
-         'inside it, the part of the cue that will be written is drawn where it will be');
-    same(A.softcues.showingAt(2.7).lines.length, 0, 'and past it, nothing');
     S.rangeIn = rangeWas.in;
     S.rangeOut = rangeWas.out;
 

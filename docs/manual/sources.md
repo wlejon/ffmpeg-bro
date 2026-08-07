@@ -100,9 +100,9 @@ Two more things about the pull:
   is to have the ten minutes.
 
 Once a copy is here the card offers **`Use the local copy`**, which points the
-input at the file. The clips cut from it keep their times, and that is correct
-here where it is not correct between renditions: this is a copy of these packets
-and not another transcode of the same stream.
+input at the file. The clips cut from it keep their times, which is correct
+because this is a copy of these packets and not another transcode of the same
+stream.
 
 ### Or take the decisions yourself
 

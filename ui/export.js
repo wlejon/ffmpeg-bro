@@ -102,8 +102,7 @@ export function initExport(refs, h) {
         restated: said(updateSummary),
         // Where the render's clock starts on the timeline. Handed in because
         // `ui/export/spec.js` reads the stream list, so the stream list cannot
-        // read it back for one number — and it is the number that makes taking a
-        // file's cues into the document invisible: a cue lands where it landed.
+        // read it back for one number.
         renderZero: () => range().start,
     });
     initPreview({ stage: byId('ex-pv-stage-host'), controls: byId('ex-pv-controls'),
@@ -562,9 +561,9 @@ export { buildSpec, previewSpec, specSources, range, togglePreviewPlay, stepPrev
 /// The whole render set up as a local copy of one input, ready to be looked at.
 ///
 /// **The one seam between "I pasted a link" and "I have this on disk".** A
-/// stream resolved off a page is an ordinary `-i` and always was, but reading it
-/// is a network read every time — five hours of HLS re-fetched by every scrub,
-/// every filmstrip and every transcription pass. Saving it locally is a stream
+/// stream URL is an ordinary `-i` and always was, but reading it
+/// is a network read every time — five hours of HLS re-fetched by every scrub
+/// and every filmstrip. Saving it locally is a stream
 /// copy of that input, which is a render, and this application already has one
 /// place where renders are described, warned about, printed as a command and
 /// run. So this fills that place in and the caller walks to it.

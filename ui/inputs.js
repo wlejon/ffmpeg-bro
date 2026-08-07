@@ -173,43 +173,27 @@ export function addInput(spec) {
         remote: false,
     };
     // **A name the caller gave, where there is one.** Every input on a path is
-    // named by its basename and that is right; a VOD resolved from a page URL is
-    // the case where it is not, because what `basename` has to work with is
+    // named by its basename and that is right; a stream URL is the case where
+    // it is not, because what `basename` has to work with can be
     // `index-dvr.m3u8?sig=…&token=…` — five hundred characters of signature
-    // naming a stream nobody typed. `ui/vod.js` knows the page it came from and
-    // hands the readable name over with it.
+    // naming a stream nobody typed.
     input.name = String((spec && spec.name) || '') ||
                  basename(input.path) || input.path;
     // Where a resolved input came *from*, when it was resolved rather than
-    // typed. Kept because the signed URL expires and the page does not, so this
-    // is the half worth writing into a document — see the note on `resolve` in
-    // ui/vod.js.
+    // typed. Kept because a signed stream URL expires and the page it named
+    // does not, so this is the half worth writing into a document.
     input.origin = String((spec && spec.origin) || '');
-    // The other streams of the same recording, where this input came out of a
-    // page that named several — `[{ name, url, bandwidth, audioOnly }]`, best
-    // first, exactly as `ui/vod.js` answered.
-    //
-    // **Kept because one VOD is two different jobs.** The picture at 1080p60 is
-    // what the cut is made against and `Audio Only` is a fraction of the bytes
-    // for a transcription pass, and until now every one but the first was
-    // resolved, counted in a flash message and thrown away — so the second job
-    // meant pasting the link into a script. Held in memory and never in a
-    // document: these URLs are signed and expire, which is what `origin` above
-    // is for.
+    // The other streams of the same recording, where a resolver named several —
+    // `[{ name, url, bandwidth, audioOnly }]`, best first. Dormant since the
+    // page resolver (`ui/vod.js`) left the UI with the ffmpeg-only pass:
+    // nothing supplies them now, and the fields stay because the resolver is
+    // expected back. Held in memory and never in a document — the URLs are
+    // signed and expire, which is what `origin` above is for.
     input.renditions = Array.isArray(spec && spec.renditions) ? spec.renditions : null;
     input.rendition = String((spec && spec.rendition) || '');
     // Where the local copies of this stream were written, once they have been.
-    // See `ui/localcopy.js`: a word search wants a file on this machine and not
-    // five hours of HLS.
-    //
-    // **Two, because they arrive at different times and answer different
-    // questions.** The soundtrack alone is a few percent of the bytes and is
-    // what a transcription pass wants, so it lands in a fraction of the time and
-    // the work that only needs the sound can start against it; the picture is
-    // what a cut is made of and goes on arriving behind it. They are also two
-    // transcodes of one stream and do not share a zero, which is why the pair is
-    // kept apart here rather than folded into one path — see the header of
-    // ui/localcopy.js for the measurement.
+    // See `ui/localcopy.js`. `localAudio` is the dormant half of the same pair:
+    // it named the audio-only rendition's copy, which nothing pulls now.
     input.localCopy = '';
     input.localAudio = '';
     inputs.push(input);

@@ -221,28 +221,6 @@ input's cues pad wired into an `overlay` and one without, compared before the cu
 paints each cue and never sends the cleared frame that ends one passes the first
 two and leaves the subtitle on screen for the rest of the render.
 
-The fourth section is the one that is **not** about a file: cues the document
-holds. It follows the whole chain, because a break anywhere in it is a subtitle
-that silently is not in the output — `+ Subtitle` with nothing open making a
-track to type into, the lane appearing because a track exists, `+ Cue`, a drag of
-an end through real `mousedown`/`mousemove`/`mouseup` on the lane, a split at the
-playhead, a merge, one `Ctrl`+`Z` taking back exactly one press, and then the
-spec: `cues:1` arriving at the renderer as an ordinary `decode:1:0`, one file
-named beside the output, that file among the `-i`s with its demuxer named, and a
-render that comes back with the typed line in it.
-
-The half of that section which is really a **test against losing work** is the
-fork. `cues.ass` is taken into the document and then the file it would write is
-read — not a render, because what has to be checked is the styling and a render
-only proves the words. The `[V4+ Styles]` block comes back, a cue nobody touched
-comes back as the byte-for-byte line it always was, and a cue that *is* retyped
-keeps its style, layer and margins while losing its own override codes. Then the
-file on disk is probed again and still says what it always said, because nothing
-here ever writes back to it. The split at the playhead asserts against
-`A.transport.t` rather than against the number it was sent, since the transport
-quantises to the frame interval and a test written the other way would be
-asserting that it does not.
-
 `ui_document.js` is the whole edit through a file and back — see
 [The document](document.md). The shape is a round trip, and the step that makes
 it mean anything is the one in the middle: after saving, the suite starts a new
