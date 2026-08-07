@@ -48,7 +48,7 @@ import { renamePad } from '../export/pads.js';
 // The same question about the same shape of data. There were two copies with
 // two thresholds and only one of them suppressed a `flags` range, so every
 // int32 AVOption printed ±2147483648 here and nowhere else.
-import { rangeOf } from '../opttable.js';
+import { rangeOf, buildOptionRow } from '../opttable.js';
 
 let refs = {};
 let hooks = {};
@@ -571,7 +571,7 @@ function namedRows(node, options) {
     const list = div('gp-opt-list');
     const field = el('input', {
         cls: 'wide', 'data-f': 'optsearch', type: 'text', value: search,
-        placeholder: 'name or description',
+        placeholder: `search ${options.length} options…`,
         on: { input: () => {
             search = field.value;
             // Only the list is rebuilt, so the field being typed into keeps its
@@ -592,10 +592,6 @@ function optionRows(node, options) {
     const shown = matching.slice(0, OPTION_LIMIT);
 
     const out = [];
-    if (!term && !shown.length)
-        out.push(div('gp-hint dim',
-                     `Nothing set by hand. Type above to search all ${options.length} — ` +
-                     'anything set here goes into the filtergraph as written.'));
     for (const o of shown) out.push(optionRow(node, o));
     if (matching.length > OPTION_LIMIT)
         out.push(div('gp-hint dim', `and ${matching.length - OPTION_LIMIT} more — narrow the search`));
@@ -603,42 +599,13 @@ function optionRows(node, options) {
 }
 
 function optionRow(node, o) {
-    const item = fromTemplate('tpl-option');
     const cur = node.params[o.name] !== undefined ? String(node.params[o.name]) : '';
-
-    item.querySelector('.opt-name').textContent = o.name;
-    item.querySelector('.opt-type').textContent = o.type;
-    item.querySelector('.opt-range').textContent = rangeOf(o);
-    item.querySelector('.ex-opt-help').textContent = o.help || '';
-    if (cur !== '') item.classList.add('set');
-
     const apply = (v) => {
         noteEdit();
         overlay.edit(node, { params: { [o.name]: v } });
         changed();
     };
-
-    let control;
-    if (o.values && o.values.length) {
-        control = el('select', {
-            cls: 'ex-opt', 'data-opt': o.name,
-            on: { change: (e) => apply(e.target.value.trim()) },
-        }, [{ id: '', label: `default (${o.default})` }, ...o.values.map((v) => v.name)]
-            .map((c) => {
-                const value = String(c && c.id !== undefined ? c.id : c);
-                const label = String(c && c.label !== undefined ? c.label : c);
-                return el('option', { value, text: label, selected: value === cur });
-            }));
-        control.value = cur;
-    } else {
-        control = el('input', {
-            cls: 'wide ex-opt', 'data-opt': o.name, type: 'text', value: cur,
-            placeholder: String(o.default),
-            on: { change: (e) => apply(e.target.value.trim()) },
-        });
-    }
-    item.querySelector('.opt-control').append(control);
-    return item;
+    return buildOptionRow(o, cur, apply);
 }
 
 // ── the palette ────────────────────────────────────────────────────────────

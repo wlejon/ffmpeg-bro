@@ -21,76 +21,184 @@
 import { el, div, row, head, select, put, fromTemplate } from './dom.js';
 
 /// What has been typed into each column's search box, by the column's name.
-///
-/// Module state rather than the caller's, because a column is rebuilt whenever
-/// anything it describes changes and the search term must survive that — it is
-/// about the *list*, not about the thing being configured.
 const searches = new Map();
 
 const OPTION_LIMIT = 40;
 
 /// The bounds, where they are worth stating.
-///
-/// libav gives every unbounded numeric option the whole of its type as a range,
-/// so a muxer's `movflags` reports ±2147483648 and `trim`'s `start` reports
-/// ±9223372036854775807 — which is not a range, it is the absence of one, and
-/// printing it at that length pushes the column about for no information at
-/// all.
-///
-/// Exported because the Graph stage's option column asks the same question of
-/// the same shape of data, and had its own copy with a threshold three orders
-/// of magnitude higher and no `flags` arm: every int32 option in libavfilter
-/// printed its whole type as a range there and was correctly suppressed here.
 export function rangeOf(o) {
-    if (!o.hasRange || o.type === 'enum' || o.type === 'flags') return '';
-    if (Math.abs(Number(o.min)) > 1e9 && Math.abs(Number(o.max)) > 1e9) return '';
-    return `[${o.min}…${o.max}]`;
+    if (!o || !o.hasRange || o.type === 'enum' || o.type === 'flags' || o.type === 'bool') return '';
+    const min = Number(o.min);
+    const max = Number(o.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return '';
+    if (Math.abs(min) > 1e6 || Math.abs(max) > 1e6) return '';
+    if (min <= -2147483647 || max >= 2147483647) return '';
+    if (min === -1 && max >= 1e8) return '';
+    return `[${min}…${max}]`;
 }
 
-/// One option: what it is called, what libav says it does, and somewhere to put
-/// a value. Setting it to nothing removes the key rather than passing an empty
-/// string, which is a different instruction.
-export function optionRow(o, bag, onChange) {
-    const node = fromTemplate('tpl-option');
-    const cur = bag[o.name] !== undefined ? String(bag[o.name]) : '';
+export function isSaneRange(o) {
+    if (!o || !o.hasRange || o.type === 'enum' || o.type === 'flags' || o.type === 'bool') return false;
+    const min = Number(o.min);
+    const max = Number(o.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return false;
+    if (Math.abs(min) > 1e6 || Math.abs(max) > 1e6) return false;
+    if (min <= -2147483647 || max >= 2147483647) return false;
+    if (max <= min) return false;
+    return true;
+}
 
+/// Synthesize a typed control from AVOption metadata. Shared between opttable and graph panel.
+export function buildOptionRow(o, cur, apply) {
+    const node = fromTemplate('tpl-option');
     node.querySelector('.opt-name').textContent = o.name;
-    node.querySelector('.opt-type').textContent = o.type;
-    node.querySelector('.opt-range').textContent = rangeOf(o);
+
+    const typeEl = node.querySelector('.opt-type');
+    if (typeEl) typeEl.textContent = ''; // C type name suppressed per plan
+
+    const rangeEl = node.querySelector('.opt-range');
+    if (rangeEl) rangeEl.textContent = rangeOf(o);
+
     node.querySelector('.ex-opt-help').textContent = o.help || '';
     if (cur !== '') node.classList.add('set');
 
+    const controlBox = node.querySelector('.opt-control');
+
+    const validate = (valStr, inputEl) => {
+        let valid = true;
+        if (o.hasRange && valStr !== '') {
+            const num = Number(valStr);
+            if (Number.isFinite(num)) {
+                if (o.min !== undefined && num < Number(o.min)) valid = false;
+                if (o.max !== undefined && num > Number(o.max)) valid = false;
+            }
+        }
+        if (inputEl && inputEl.classList) {
+            if (!valid) inputEl.classList.add('invalid');
+            else inputEl.classList.remove('invalid');
+        }
+        return valid;
+    };
+
+    let control;
+    if (o.values && o.values.length) {
+        control = select({
+            cls: 'ex-opt', 'data-opt': o.name,
+            on: { change: (e) => apply(e.target.value.trim()) }
+        }, [{ id: '', label: `default (${o.default})` }, ...o.values.map(v => v.name)], cur);
+    } else if (o.type === 'bool') {
+        control = select({
+            cls: 'ex-opt', 'data-opt': o.name,
+            on: { change: (e) => apply(e.target.value.trim()) }
+        }, [{ id: '', label: `default (${o.default})` }, '0', '1'], cur);
+    } else if (o.type === 'image_size') {
+        const parts = cur ? cur.split('x') : ['', ''];
+        const wInput = el('input', {
+            cls: 'tiny ex-opt', type: 'text', placeholder: 'W', value: parts[0] || '',
+            on: { input: () => updateImg() }
+        });
+        const hInput = el('input', {
+            cls: 'tiny ex-opt', type: 'text', placeholder: 'H', value: parts[1] || '',
+            on: { input: () => updateImg() }
+        });
+        const updateImg = () => {
+            const w = wInput.value.trim();
+            const h = hInput.value.trim();
+            if (w && h) apply(`${w}x${h}`);
+            else if (!w && !h) apply('');
+        };
+        control = div('opt-pair', [wInput, el('span', { text: '×' }), hInput]);
+    } else if (o.type === 'color') {
+        const textInput = el('input', {
+            cls: 'ex-opt wide', 'data-opt': o.name, type: 'text', value: cur, placeholder: String(o.default || ''),
+            on: { change: (e) => apply(e.target.value.trim()) }
+        });
+        const swatch = el('input', {
+            type: 'color', cls: 'opt-color-swatch', value: cur.startsWith('#') ? cur : '#000000',
+            on: { input: (e) => { textInput.value = e.target.value; apply(e.target.value); } }
+        });
+        control = div('opt-pair', [swatch, textInput]);
+    } else if (o.type === 'rational') {
+        const parts = cur ? cur.split('/') : ['', ''];
+        const numInput = el('input', {
+            cls: 'tiny ex-opt', type: 'text', placeholder: 'num', value: parts[0] || '',
+            on: { input: () => updateRat() }
+        });
+        const denInput = el('input', {
+            cls: 'tiny ex-opt', type: 'text', placeholder: 'den', value: parts[1] || '',
+            on: { input: () => updateRat() }
+        });
+        const updateRat = () => {
+            const n = numInput.value.trim();
+            const d = denInput.value.trim();
+            if (n && d) apply(`${n}/${d}`);
+            else if (!n && !d) apply('');
+        };
+        control = div('opt-pair', [numInput, el('span', { text: '/' }), denInput]);
+    } else if ((o.type === 'int' || o.type === 'float' || o.type === 'double' || o.type === 'int64') && isSaneRange(o)) {
+        const step = (o.type === 'float' || o.type === 'double') ? '0.01' : '1';
+        const numInput = el('input', {
+            cls: 'short ex-opt', 'data-opt': o.name, type: 'number',
+            min: String(o.min), max: String(o.max), step,
+            value: cur, placeholder: String(o.default !== undefined ? o.default : ''),
+            on: {
+                input: (e) => {
+                    const v = e.target.value.trim();
+                    validate(v, numInput);
+                    slider.value = v !== '' ? v : String(o.default || o.min);
+                    apply(v);
+                }
+            }
+        });
+        const slider = el('input', {
+            cls: 'opt-slider', type: 'range',
+            min: String(o.min), max: String(o.max), step,
+            value: cur !== '' ? cur : String(o.default !== undefined ? o.default : o.min),
+            on: {
+                input: (e) => {
+                    numInput.value = e.target.value;
+                    validate(e.target.value, numInput);
+                    apply(e.target.value);
+                }
+            }
+        });
+        validate(cur, numInput);
+        control = div('opt-pair', [slider, numInput]);
+    } else {
+        const isNum = (o.type === 'int' || o.type === 'float' || o.type === 'double' || o.type === 'int64');
+        const inputType = isNum ? 'number' : 'text';
+        control = el('input', {
+            cls: 'wide ex-opt', 'data-opt': o.name, type: inputType, value: cur,
+            placeholder: String(o.default !== undefined ? o.default : ''),
+            on: {
+                input: (e) => {
+                    const v = e.target.value.trim();
+                    validate(v, control);
+                },
+                change: (e) => {
+                    const v = e.target.value.trim();
+                    validate(v, control);
+                    apply(v);
+                }
+            }
+        });
+        validate(cur, control);
+    }
+
+    controlBox.append(control);
+    return node;
+}
+
+export function optionRow(o, bag, onChange) {
+    const cur = bag[o.name] !== undefined ? String(bag[o.name]) : '';
     const apply = (v) => {
         if (v === '') delete bag[o.name];
         else bag[o.name] = v;
         onChange();
     };
-
-    let control;
-    if (o.values && o.values.length) {
-        control = select({ cls: 'ex-opt', 'data-opt': o.name,
-                           on: { change: (e) => apply(e.target.value.trim()) } },
-                         [{ id: '', label: `default (${o.default})` },
-                          ...o.values.map((v) => v.name)], cur);
-    } else if (o.type === 'bool') {
-        control = select({ cls: 'ex-opt', 'data-opt': o.name,
-                           on: { change: (e) => apply(e.target.value.trim()) } },
-                         [{ id: '', label: `default (${o.default})` }, '0', '1'], cur);
-    } else {
-        control = el('input', {
-            cls: 'wide ex-opt', 'data-opt': o.name, type: 'text', value: cur,
-            placeholder: String(o.default),
-            on: { change: (e) => apply(e.target.value.trim()) },
-        });
-    }
-    node.querySelector('.opt-control').append(control);
-    return node;
+    return buildOptionRow(o, cur, apply);
 }
 
-/// The rows themselves: what is set, or what a search matches.
-///
-/// With nothing searched for the list is what has been set — the rest is eighty
-/// rows of noise until somebody goes looking for one of them.
 export function bagRows(all, bag, searchText, hint, onChange) {
     const term = String(searchText || '').trim().toLowerCase();
     const matching = term
@@ -100,9 +208,6 @@ export function bagRows(all, bag, searchText, hint, onChange) {
     const shown = matching.slice(0, OPTION_LIMIT);
 
     const out = [];
-    if (!term && !shown.length)
-        out.push(div('ex-note dim', `Type above to search all ${all.length} options. ${hint}`));
-
     for (const o of shown) out.push(optionRow(o, bag, onChange));
 
     if (matching.length > OPTION_LIMIT)
@@ -110,21 +215,12 @@ export function bagRows(all, bag, searchText, hint, onChange) {
     return out;
 }
 
-/// A whole column: a heading, a sentence about where the table came from, a
-/// search box and the rows.
-///
-/// `name` is the `data-f` the search field carries — the only thing about a
-/// column anything outside can name, and what a test points at.
-///
-/// The list is rebuilt on search and the field is not, so the caret never moves
-/// under the person typing: replacing the field between keystrokes is the bug
-/// this shape exists to avoid.
 export function optionColumn({ name, title, note, options, bag, hint, onChange }) {
     const list = div('ex-opt-list');
     const redraw = () => put(list, () => bagRows(options, bag, searches.get(name), hint, onChange));
     const search = el('input', {
         cls: 'wide', 'data-f': name, type: 'text', value: searches.get(name) || '',
-        placeholder: 'name or description',
+        placeholder: `search ${options.length} options…`,
         on: { input: () => { searches.set(name, search.value); redraw(); } },
     });
     redraw();
