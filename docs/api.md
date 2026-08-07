@@ -947,9 +947,9 @@ bro.ffmpeg.render.start({ path,
 // produces at its own moments while one walk has one timestamp to hand over. A
 // recording refuses anything but `cfr` for the same kind of reason — its clock is
 // the wall clock.
-bro.ffmpeg.render.poll()    // → { state, progress, frames, totalFrames, openEnded,
-                            //     packets, elapsed, fps, bytes, pieces, path,
-                            //     stage, error, job, pass, passes, passLabel }
+bro.ffmpeg.render.poll()    // → { state, running, progress, frames, totalFrames,
+                            //     openEnded, packets, elapsed, fps, bytes, pieces,
+                            //     path, stage, error, job, pass, passes, passLabel }
 // `packets` says what `frames` is counting: packets of a copy rather than output
 // frames. It used to be inferable from `totalFrames == 0` and is not any more —
 // an `fpsMode: "vfr"` render counts frames and cannot say how many there will be
@@ -1175,7 +1175,13 @@ bro.ffmpeg.live.open({ sources: [{ path: 'desktop', format: 'gdigrab' },
                                  { path: 'video=Elgato Facecam', format: 'dshow' }],
                        filterGraph: '[1:v]scale=480:-2[pip];' +
                                     '[0:v][pip]overlay=W-w-32:H-h-32[vout]',
-                       fps: 30 })
+                       fps: 30,
+                       // The graph's own sound, not any one device's: default
+                       // 48000/2/on. `scaler` is swscale's preference where a
+                       // conversion is unavoidable — the same key a render's
+                       // spec takes, because it is the same question.
+                       audioSampleRate: 48000, audioChannels: 2,
+                       includeAudio: true, scaler: '' })
 // → 7, the session's id. Throws with the device named when one will not open,
 //   on this thread, for the reason `record.start` does.
 
