@@ -56,10 +56,6 @@ import { socketAt } from './graph/canvas.js';
 import { initGraphView, drawGraph, chaseGraph, graphSummary, graphPlacement,
          outrankedControls, tickGraph, graphKey, measureTo,
          currentGraph } from './graph/view.js';
-import * as findModel from './find.js';
-import * as findStack from './find/stack.js';
-import * as findNodes from './find/nodes.js';
-import { initFindView, drawFind, arriveFind, openFindNode } from './find/view.js';
 import * as graphPreview from './graph/preview.js';
 import { previewGraph, measureGraph } from './graph/subgraph.js';
 import * as graphOverlay from './graph/overlay.js';
@@ -173,23 +169,6 @@ initSources({
         return clip;
     },
     clipsOf,
-    // Look for words in this recording, on the stage that looks for things.
-    //
-    // **The door, and it opens onto a rule rather than onto a canvas.** The
-    // Sources card's own field is gone — a search is the Find stage's question
-    // and it grew to a screenful inside a probe readout — so this is what stands
-    // in its place, and a door that landed somebody on an empty canvas with
-    // three nodes to place and wire would be a worse control than the field it
-    // replaced. `find.searchFor` builds the chain, reusing one already wired to
-    // this recording, and the view opens it with the phrase field ready.
-    searchWords: (input) => {
-        const node = findModel.searchFor(input);
-        if (!node) return flash('That input has not been opened yet');
-        if (!shell.goTo('find')) return;
-        openFindNode(node);
-        flash(`Looking in ${input.name} — type a word or a phrase`);
-    },
-
     // Where a copy would go, for the card to say before anybody presses. The
     // resolver is here rather than in `ui/sources.js` for `saveLocally`'s
     // reason: one of the three answers is the document's own directory, and
@@ -312,132 +291,7 @@ capture.initCapture({
 // What was inserted and locked last time, before anything asks for a graph.
 graphOverlay.restore();
 
-initFindView({
-    viewport: el('fn-viewport'),
-    wires: el('fn-wires'),
-    nodes: el('fn-nodes'),
-    mini: el('fn-mini'),
-    panel: el('fn-panel'),
-    menu: el('fn-menu'),
-    status: el('fn-status'),
-    add: el('fn-add'),
-    relayout: el('fn-relayout'),
-    fit: el('fn-fit'),
-    zoomIn: el('fn-zoom-in'),
-    zoomOut: el('fn-zoom-out'),
-    zoomLabel: el('fn-zoom'),
-}, {
-    flash,
-    // A stack that has just become clips is an edit, and the place to look at an
-    // edit is Compose. Walking there is the *answer* to the press rather than a
-    // convenience: the whole caution about the two clocks ends in "the trim is
-    // yours", and leaving somebody on a canvas of rules would be the one moment
-    // this stage refuses to hand over.
-    wentToTimeline: () => shell.goTo('compose'),
 
-    // A candidate, gone to. **The playhead and nothing else.**
-    //
-    // The transcript was read from whatever soundtrack was cheapest — for a VOD
-    // that is the audio-only rendition — and the picture rendition does not
-    // share its zero, so trimming a clip to a word boundary would place a cut on
-    // the wrong file's seconds. This takes you to the right minute; your eyes do
-    // the rest, and that restraint is the whole discipline of the feature.
-    //
-    // Was `goToHit` on the Sources stage's own hit list, which is where the
-    // search used to be. A candidate carries `at` — where the thing itself is
-    // inside its padded span — so this lands on the word rather than ten seconds
-    // before it.
-    goToCandidate: (cand) => {
-        const input = inputsModel.byId(cand.inputId);
-        if (!input) return flash('That recording is not in this document any more');
-        // Through a clip that covers it, because a candidate is on the input's
-        // clock and the timeline's is a different one — `timelineTime` is the
-        // map, the same one the waveform and the Marks lane use.
-        for (const clip of clipsOf(input)) {
-            const t = timelineTime(clip, cand.at);
-            if (t === null || t === undefined) continue;
-            if (!shell.goTo('compose')) return;
-            setPlayhead(t);
-            select(clip, 'auto');
-            flash(cand.detail || cand.rule);
-            return;
-        }
-        // No clip covers it. Saying so beats laying five hours of stream on the
-        // timeline as a side effect of clicking a candidate — `describeCopy`
-        // refuses for the same reason. The stack's own press is the way in.
-        flash(clipsOf(input).length
-                  ? 'That moment is outside every clip cut from this recording'
-                  : `Nothing off ${input.name} is on the timeline yet — send the ` +
-                    'stack, or use the recording on Sources');
-    },
-
-    // What the windows for a stack have got to, so the panel can offer the right
-    // press. Here rather than in the view for the reason the two presses below
-    // are: `whereCopiesGo()` is the document's directory and the Find stage does
-    // not own the document.
-    pullState: (list) => {
-        let have = 0, running = 0, done = 0, failed = 0;
-        for (const c of list) {
-            const p = transcript.pullFor(c.inputId, Math.max(0, c.in));
-            if (!p) continue;
-            have++;
-            if (p.state === 'failed') { failed++; have--; continue; }
-            if (p.state === 'done') done++;
-            else running++;
-        }
-        return { have, running, done, failed };
-    },
-
-    // Copy the spans a stack holds. The payoff of the whole feature: the
-    // transcript found the moments in a recording of tens of gigabytes, and this
-    // fetches the few megabytes each is in.
-    //
-    // **The candidate's own span**, through `pullSpan` rather than `pullWindow`:
-    // it is already padded by the rule that made it, and padding it again would
-    // write a file the card's number does not describe.
-    pullWindows: (list, atOnce) => {
-        const dir = whereCopiesGo();
-        let started = 0, why = '';
-        for (const c of list) {
-            if (started >= atOnce) break;
-            if (transcript.pullFor(c.inputId, Math.max(0, c.in))) continue;
-            const input = inputsModel.byId(c.inputId);
-            if (!input) continue;
-            const p = transcript.pullSpan(input, c.in, c.out, dir);
-            if (p.state === 'failed') { why = p.error; continue; }
-            started++;
-        }
-        if (!started)
-            return flash(why ? `Cannot copy those: ${why}` : 'Those windows are already here');
-        flash(`Pulling ${started} window${started === 1 ? '' : 's'} into ${dir} — ` +
-              'they jump the queue and run in the background.');
-    },
-
-    // The windows landed: open the local files as inputs of their own.
-    //
-    // **New inputs rather than the recording repointed**, because each *is* a
-    // different file — twenty seconds long, with its own zero — and quietly
-    // rewriting what a clip is cut from is the one thing this feature has spent
-    // its whole design avoiding.
-    //
-    // It stops at *opening* them, and lays no clip out. A window arrives through
-    // the ordinary door — it appears on the Sources stage with a card, and `Use
-    // on the timeline` is the press that puts it in the edit, exactly as for a
-    // file somebody dropped. One press more, and no second way in.
-    useWindows: (list) => {
-        let made = 0;
-        for (const c of list) {
-            const p = transcript.pullFor(c.inputId, Math.max(0, c.in));
-            if (!p || p.state !== 'done') continue;
-            if (inputsModel.inputs.some((i) => i.path === p.path)) continue;
-            if (inputsModel.addInput({ path: p.path })) made++;
-        }
-        flash(made
-            ? `${made} window${made === 1 ? '' : 's'} open on Sources — Use on the ` +
-              'timeline puts one in the edit'
-            : 'Those windows are already open on Sources');
-    },
-});
 
 initGraphView({
     viewport: el('gr-viewport'),
@@ -606,7 +460,7 @@ let resumeAfterScrub = false;
 // assert.
 const dirty = {
     playback: false, timeline: false, readouts: false, spine: false,
-    command: false, document: false, graph: false, find: false,
+    command: false, document: false, graph: false,
 };
 
 /// Mark one or more of them out of date.
@@ -625,12 +479,6 @@ const HEAVY = [
     // Only while it is up: everything the layout measures is zero behind a
     // `display:none`, and it is rebuilt on the way in anyway.
     ['graph',    () => { if (shell.currentStage() === 'graph') drawGraph(); }],
-    // Same condition and the same reason: the layout measures cards, and every
-    // height behind a `display:none` is zero. It is in this rotation rather than
-    // drawn directly because a transcription landing marks it on *every* frame
-    // for as long as a six-hour read is running, which is exactly the starvation
-    // the rotation exists to bound.
-    ['find',     () => { if (shell.currentStage() === 'find') drawFind(); }],
 ];
 let turn = 0;
 
@@ -652,7 +500,6 @@ const BUSY_WORDS = {
     spine: 'restating the render',
     command: 'restating the command',
     graph: 'laying out the graph',
-    find: 'running the rules',
 };
 
 /// Above this, a redraw is worth saying out loud. Well past a frame at 60 Hz, so
@@ -744,14 +591,6 @@ onChange((what) => {
         what === 'transcript') {
         // ...and the readouts, which count how many clips are still being read.
         needs('timeline', 'readouts');
-        // A rule on the Find stage reads the marks and the transcript, so words
-        // landing off a six-hour transcription genuinely change what a `Said`
-        // finds — that is the feature, a stack that fills in while the recording
-        // is still being read. It goes through `readsMoved` rather than through
-        // a redraw because the evaluation is memoised: this is the stamp that
-        // says the memo is stale, and the stage draws from it on its own frame.
-        findModel.readsMoved();
-        needs('find', 'spine');
         return;
     }
 
@@ -775,12 +614,6 @@ onChange((what) => {
     // jumps to it.
     marks.retain(inputsModel.inputs.map((i) => i.id));
     transcript.retain(inputsModel.inputs.map((i) => i.id));
-    // And a rule on the Find stage naming an input that has gone. Unlike the
-    // three above it, the rule is **kept** and only its recording is cleared —
-    // a set of marks is dead weight but a phrase somebody typed and wired into
-    // five other nodes is work, and deleting it because a file was removed on
-    // another stage would take the wires with it. `find.js` `retain` says so.
-    findModel.retain(inputsModel.inputs.map((i) => i.id));
     // And the settings of a track the timeline no longer shows — a sync lock on
     // V4 after the last clip on it was deleted. Here for the same argument as the
     // line above and stated where that argument already is: a track can empty out
@@ -2261,7 +2094,6 @@ shell.initShell({
     views: {
         capture: el('st-capture'),
         sources: el('st-sources'),
-        find: el('st-find'),
         compose: el('st-compose'),
         graph: el('st-graph'),
         encode: el('st-encode'),
@@ -2304,13 +2136,6 @@ shell.initShell({
         } else exporter.closeExport();
         if (id === 'compose') { viewer.layout(); timeline.draw(); }
         if (id === 'sources') drawSources();
-        // Drawn on the way in for the reason the graph is: every height its
-        // layout measures reads zero while the stage is `display:none`, which is
-        // the standing consequence of stage views never being unmounted. Drawn
-        // directly rather than marked, unlike the graph, because it is not
-        // priced in the size of the edit — a dozen rule cards is a dozen, on a
-        // montage of seventy-five clips as much as on one.
-        if (id === 'find') arriveFind();
         // The device is opened when you arrive and given back when you leave.
         // A camera held by a preview on a stage nobody is looking at is a
         // camera the recording — or another application — cannot open.
@@ -2432,11 +2257,7 @@ function stageState(id) {
                 `${v} V · ${clips.length} clip${clips.length === 1 ? '' : 's'} · ` +
                 clock(duration())];
     }
-    // Deliberately not gated on there being clips, unlike every card below it:
-    // this is the one stage whose whole purpose is to be used when the timeline
-    // is empty, and a card reading '—' over a graph that has just found four
-    // hundred candidates would be the spine disagreeing with the stage.
-    if (id === 'find') return findModel.findSummary();
+
     if (id === 'graph') {
         if (!clips.length) return ['—', ''];
         const g = graphSummary();
@@ -2621,19 +2442,7 @@ globalThis.__ffmpegBro = {
     // drawn half.
     marks,
     transcript,
-    // The rules that turn a recording into stacks of clips. On the surface whole
-    // because almost everything worth checking about this stage is **pure** — a
-    // graph, an evaluation context of four functions, and a list in and a list
-    // out — so a test builds a real graph, hands it a transcript that was never
-    // read from a file, and asserts the arrangement. That is deliberate and it
-    // is the shape `ui/find/model.js` `evaluate` was given: the alternative
-    // would be a suite that had to transcribe six hours to find out what a 1:3
-    // weave does. `find.stack` is the arithmetic on its own, which is what the
-    // ordering assertions go through.
-    find: findModel,
-    findStack,
-    findNodes,
-    drawFind,
+
     // The jump, so a test can check where `,` and `.` land without synthesising
     // a key press — the press is the shell's and the arithmetic is this.
     goToMark,

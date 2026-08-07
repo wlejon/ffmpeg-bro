@@ -137,13 +137,6 @@ Anything the app cannot yet express usually has an obvious home in that chain an
 no home in an NLE's timeline-plus-export-dialog model; put new capability where
 ffmpeg puts it.
 
-**Find is the one stage that is not part of that model, and it says so.**
-Sources answers "what is this file" and Compose answers "what is the edit";
-between them is a question a six-hour recording makes unavoidable and neither
-asks — *what is in it, and which of it do I want*. Nothing on that stage reaches
-the render: it produces clips, and the clips go to Compose exactly as a dropped
-file does. See [the manual](docs/manual/find.md) and the **second graph** section
-below for why it is not the Graph stage's graph.
 
 Stage views hide each other with `display:none` and are **never unmounted** —
 the viewer's `<video>` elements *are* the decoders. Consequence that keeps
@@ -424,28 +417,6 @@ placed and wired a `Recording`, a `Said` and a `Stack` (`searchFor` in
 growing one per press). A door onto an empty canvas with three nodes still to
 place would have been a worse control than the field it replaced.
 
-**The rules are in the document and the stacks are not.** This is the exact
-inverse of `marks`/`peaks`/`transcript` and the distinction that decides where
-everything on the stage lives: a rule is *authored* — "one of these for every
-three of those" is somebody's editorial decision — so it is in the `.fbro`, on
-the undo track and in the unsaved marker. What it computes is *derived from the
-rules* the way a waveform is derived from a file, so it is in none of them.
-`retain()` is the same inversion: a `source` naming a removed input is repointed
-to nothing rather than deleted, because the rule is work and the wires would go
-with it.
-
-**`evaluate` takes its world as four functions**, which is a seam and not a test
-hook. It is the whole of what makes a stack depend on anything outside the graph,
-so `tests/ui_find.js` evaluates a real graph against a transcript that was never
-read — the alternative was a suite that had to transcribe six hours to find out
-what a 1:3 weave does. `find.js` `evaluateWith` is that argument taken, and it is
-deliberately uncached.
-
-And the rule inherited from `ui/transcript.js` and never restated: **a transcript
-is a search hint and never the cut.** A `said` candidate carries `WINDOW_PAD`
-either side because the two renditions of a stream do not share a zero (+2.57 s
-at worst, measured), so what reaches the timeline *contains* the moment rather
-than cutting at it. `tests/ui_find.js` asserts the pad clears that number.
 
 ### The JS surface
 

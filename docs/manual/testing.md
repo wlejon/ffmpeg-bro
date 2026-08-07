@@ -61,7 +61,6 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_telemetry.js -- <telemetry.mp4>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_marks.js -- <marks.m4a> [<no-audio>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_transcript.js -- [<whisper-model-dir>] [<no-audio>]  # every section that needs the weights is skipped without them
-./build/Release/ffmpeg-bro-headless ui/ tests/ui_find.js -- <marks.m4a>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -432,53 +431,7 @@ restart at zero every window; and that a search says how much it searched, since
 nothing found in ten minutes of six hours and nothing found in all six are
 different answers.
 
-Two things it asserts about the *screen*, and both are negative. That there is no
-search field and no hit list on an input's card — the search moved to the Find
-stage, and an assertion is what stops it drifting back one control at a time —
-and that there is no per-input model path field, which was one machine-wide value
-drawn once per card. What is there instead is the `Reading it` row, and the suite
-requires it to name the stream it read, what it found and how much of the
-recording that was.
-
-And the door between the two stages, driven end to end: the press on the card
-places a `Recording`, a `Said` and a `Stack`, wires them to that recording, and a
-phrase typed into the rule finds a candidate per place it was said. Pressed twice
-it opens the rule it already made rather than growing a second chain. Forgetting
-the transcript takes the search with it and **leaves the rule standing** — a rule
-is authored and a transcript is derived, which is the inversion the whole Find
-stage is built on.
-
-`ui_find.js` is the stage that turns a recording into stacks of clips, and it is
-the suite most unlike the others here: **almost all of it is arithmetic**. A
-weave, a placement into every third, a merge of overlapping spans and a seeded
-shuffle are list-in/list-out, so they are asserted directly rather than through a
-screen. What makes that possible is that `ui/find/model.js`'s `evaluate` takes
-its world as four functions — look up an input, how long is it, what was said in
-it, what was marked in it — so a suite hands over a transcript that was never
-read from a file and checks what a 1:3 mix does. The alternative was a suite that
-had to transcribe six hours to find out.
-
-The **file** it opens is real and only the *read* is faked, and the split is not
-a shortcut: a `Recording` rule names an input by id, and `find.js` `retain()`
-deliberately clears one naming an id no input answers to, so a rule pointing at a
-file that is not there is exactly the state that must not survive.
-
-Four things it asserts that could each silently stop being true. That a wire
-carries one kind of thing and **refuses the other by name** — a recording does
-not go into a `Merge`, and a loop is refused rather than survived. That a finder
-over a recording nobody has listened to answers empty and **names the press that
-is missing** rather than starting a ninety-minute read. That the rules are in the
-document and what they found is not, version-tolerantly, so one stale node cannot
-refuse a `.fbro`. And that a candidate off a word search still carries the
-measured distance between a stream's two renditions either side of it — the
-assertion is that `PAD_MIN` clears the largest offset the two were measured
-apart, which is what stops a later hand tightening it to look neat.
-
-It also inherits `ui_marks.js`'s honesty check and points it at the place most
-likely to break it: **no rule on this stage is named after a source of sound**. A
-node called "find the monologues" would be this application claiming a
-classification an energy gate never made, and the Find stage is the most tempting
-place in the codebase to write one.
+One thing it asserts about the *screen*, and it is negative: that there is no per-input model path field, which was one machine-wide value drawn once per card. What is there instead is the `Reading it` row, and the suite requires it to name the stream it read, what it found and how much of the recording that was.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).

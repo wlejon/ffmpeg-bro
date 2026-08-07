@@ -2,8 +2,8 @@
 
 # Output
 
-`Encode` and `Write` are two of the seven stages on the spine — the row under
-the title bar that *is* the pipeline: **Capture → Sources → Find → Compose →
+`Encode` and `Write` are two of the six stages on the spine — the row under
+the title bar that *is* the pipeline: **Capture → Sources → Compose →
 Graph → Encode → Write**. Each card says what its stage is currently set to,
 so the bar reads as one statement of the whole render, and clicking the part
 that is wrong is how you go and change it. `E` goes to Encode, `[` and `]`

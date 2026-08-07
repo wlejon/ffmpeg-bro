@@ -71,18 +71,12 @@
 // between thirty milliseconds and ninety minutes of this machine**, spent
 // because somebody pressed a button, derived rather than part of the edit, and
 // forgettable. Interleaving them put a text box between `A0` and `V1`.
-//
 // So `fileRows` is the probe and `readRows` is what has been spent on it, and
 // the section head is the whole of what makes the difference legible. Two
 // things came free with it: a read's row can **name the stream it read** (the
 // old ones sat under the first soundtrack and asserted by position an answer
 // `av_find_best_stream` had not given), and the Whisper model path stopped
 // being a per-input field for a value that is the same on every card.
-//
-// The word search left the stage entirely. It was the Find stage's question
-// asked one file at a time; `searchWords` is the door, and it arrives there
-// with the rule already wired. See `wordsRows` below and `searchFor` in
-// ui/find.js.
 
 import { div, span, el, put, row, head, fromTemplate, show, segmented,
          select } from './dom.js';
@@ -1699,11 +1693,7 @@ function fileRows(p, input) {
 /// (`sound_marks.h`, `transcribe.h`), and `soundStream` says it.
 ///
 /// **The presses stay on this stage.** A transcript and a set of marks belong to
-/// an *input* rather than to a rule, and they cost minutes to hours, so nothing
-/// should start one unasked. `ui/find/` only ever reads them — which is what
-/// keeps a keystroke in a phrase field there cheap enough to re-evaluate the
-/// whole graph on — and a finder over an unheard recording names the press that
-/// is missing rather than making it.
+/// an *input*, and they cost minutes to hours, so nothing should start one unasked.
 function readRows(input) {
     if (!input || !input.probe) return [];
     const rows = [
@@ -1936,14 +1926,6 @@ function modelButton() {
 /// opens the picker rather than failing (`ensureModel`), and the read itself
 /// names the file it could not find.
 ///
-/// **What is *not* here is the search.** A field, a coverage sentence and twelve
-/// hit rows used to hang off this row, each hit offering a jump, a window pull
-/// and a press that opened the window as an input. Every one of those was worth
-/// having and none of them was a description of an input: it is the Find stage's
-/// question — what is in this, and which of it do I want — asked one file at a
-/// time, three levels deep inside a probe readout, in a list that grew to a
-/// screenful. It is on that stage now, where the `said` rule already ran the
-/// same search, and `Search these words` is the door. See docs/manual/find.md.
 function wordsRows(input) {
     if (!transcriptModel.worthReading(input)) return [];
 
@@ -2028,21 +2010,6 @@ function wordsRows(input) {
     return [line(`${r.segments.length} segment${r.segments.length === 1 ? '' : 's'}` +
                  (part ? ` · only the first ${clock(r.read)} of ${clock(r.duration)}`
                        : ' · all of it'), [
-        // The door to what a transcript is *for*, and it arrives with the rule
-        // already built. Walking somebody to an empty canvas and asking them to
-        // place a Recording, a Said and a Stack and wire the three together is a
-        // door in the sense that a corridor is a door — `strip()` above exists
-        // because this application decided a paragraph naming a stage is not
-        // one. See `searchWords` in ui/app.js.
-        el('button', {
-            cls: 'btn tiny', 'data-f': 'srcsearchwords', text: 'Search these words…',
-            title: 'Look for a word or a phrase in what was said, on the Find ' +
-                   'stage — where every place it was said becomes a stack of ' +
-                   'candidate clips you can weigh, weave and send to the ' +
-                   'timeline.\nThis takes you there with the rule already wired ' +
-                   'to this recording; type the phrase into it.',
-            on: { click: () => { if (hooks.searchWords) hooks.searchWords(input); } },
-        }),
         part ? el('button', { cls: 'btn tiny', text: 'Carry on',
                               title: 'Read the rest of the soundtrack.',
                               on: { click: () => {

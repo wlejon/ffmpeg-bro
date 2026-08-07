@@ -83,8 +83,8 @@ Render button goes on working the whole time.
 
 The press pulls **two** streams, one after the other: the audio-only stream,
 and then the picture. When the sound lands the card says so, because that is
-the moment work that needs only sound can start — a transcription, a word
-search, finding where something happens — while the picture is still arriving.
+the moment work that needs only sound can start — a transcription, finding where
+something happens — while the picture is still arriving.
 
 The two are different transcodes of one stream and **do not share a zero** — a
 Twitch VOD's ad-break discontinuities put them up to a few seconds apart — so a
@@ -343,17 +343,7 @@ one wants the other in the same place.
 `Find sounds` says *where* something happened. This says *what was said*. Six
 hours of somebody talking is a recording nobody is going to scrub through, and
 neither a waveform nor a set of onsets can find the minute a name was mentioned.
-This decodes the soundtrack and runs speech-to-text over it. What you then *do*
-with the words is the [Find stage](find.md)'s, and `Search these words…` on this
-row is the door — it walks there with the rule already wired to this recording,
-and typing a phrase into it is the only thing left to do.
-
-**The reading is here and the searching is there.** A transcript belongs to an
-*input* — it costs minutes to hours, and nothing should spend that unasked —
-so the press that starts one is on this stage and nowhere else. A rule on the
-Find stage only ever *reads* what has been read, and a finder wired to a
-recording nobody has transcribed says which press is missing rather than making
-it.
+This decodes the soundtrack and runs speech-to-text over it.
 
 **The words arrive while it is still reading.** A transcript of a six-hour VOD
 can be ninety minutes of work, and one you could only search at the end would be
@@ -409,33 +399,6 @@ cached beside the app and not on the undo stack.
 
 The soundtrack it reads is the one your local copy has, if there is one — which
 is why **Save a local copy** offers the soundtrack on its own.
-
-### Pulling just the window
-
-The payoff of the whole feature, and it is on the [Find stage](find.md) —
-because what it acts on is a *selection*, and a stack of candidates is what a
-selection is here.
-
-A six-hour VOD is tens of gigabytes; the twenty seconds you actually want is a
-few megabytes. The transcript found the moments, so `Pull N windows` on a stack
-copies only those — a stream copy each, so they run in the background, take
-none of the render slot, and jump ahead of any whole-recording copy already
-queued.
-
-**The pad either side is not slack.** It is the two clocks again: the
-transcript was read from the soundtrack rendition and the picture rendition
-does not share its zero. A window that hugged the words would sometimes not
-contain them. The span pulled is the candidate's own, pad and all, so the file
-matches the number the rule's card shows — which is why `Either side` on a
-`Said` rule is the one place that number is decided.
-
-When they land, `Open N here` opens them as inputs of their own — new ones, not
-the recording repointed, because each genuinely is a different file with its own
-zero. They appear on **this** stage with cards like anything else, and `Use on
-the timeline` puts one in the edit.
-
-A recording already on this machine is offered no windows to pull. There is
-nothing to fetch.
 
 ## While it is connecting
 
