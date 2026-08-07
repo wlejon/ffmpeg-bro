@@ -565,7 +565,7 @@ function burnIn(input) {
 function deviceRows(input) {
     return [
         strip('Live', 'plays now and cannot be cut',
-              '',
+              'Stop at gives one a length, but a device cannot seek. Record a segment on the Capture stage and use that file instead.',
               doorTo('Capture', 'capture', 'Watch it, compose it, record or stream it')),
     ];
 }
