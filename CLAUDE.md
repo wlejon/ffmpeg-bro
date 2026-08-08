@@ -138,7 +138,14 @@ ffmpeg puts it.
 
 
 Stage views hide each other with `display:none` and are **never unmounted** —
-the viewer's `<video>` elements *are* the decoders. Consequence that keeps
+the viewer's `<video>` elements *are* the decoders — each one owns a
+`VideoPipeline`, which demuxes and decodes on a thread of its own and hands
+pictures back through a bounded queue. **Off-thread is not free-running**: the
+worker decodes a few frames past the moment being shown and then parks, because
+the producer at the other end of a live source reads "the screen has asked for a
+picture" as "the screen has reached that moment" — that is bro's
+`decodeCeiling_`, and without it the output preview stopped making pictures
+altogether. Consequence that keeps
 biting: anything in the frame loop that measures a panel must ignore a
 measurement of zero, because most of the window is `display:none` at any moment.
 

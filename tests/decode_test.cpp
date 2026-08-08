@@ -89,7 +89,7 @@ void testFile(const std::string& path) {
            "frame rate reported (%.3f fps)", pipe.frameRate());
 
     // ── the first frame decodes and is not blank ───────────────────────────
-    pipe.advanceTo(0);
+    pipe.settleAt(0);
     check(pipe.hasFrame(), "first frame decoded at t=0");
     check(hasContent(pipe.currentRgba()), "first frame has image content");
     checkf(pipe.currentRgba().size() ==
@@ -102,7 +102,7 @@ void testFile(const std::string& path) {
     TimeNs last = -1;
     int backwards = 0, decoded = 0;
     for (TimeNs t = 0; t < dur && t < 5 * 1000000000LL; t += step) {
-        if (pipe.advanceTo(t)) decoded++;
+        if (pipe.settleAt(t)) decoded++;
         if (pipe.currentPts() < last) backwards++;
         last = pipe.currentPts();
     }
@@ -118,6 +118,7 @@ void testFile(const std::string& path) {
     if (dur > 2 * 1000000000LL) {
         const TimeNs target = dur / 2;
         pipe.seekTo(target);
+        pipe.settleAt(target);
         check(pipe.hasFrame(), "frame available after seek");
         check(hasContent(pipe.currentRgba()), "post-seek frame has image content");
         // The contract is the frame the instant falls INSIDE: the last one at
@@ -174,6 +175,7 @@ void testFile(const std::string& path) {
 
         // And all the way to the start, however many keyframes are in the way.
         pipe.seekTo(dur / 8);
+        pipe.settleAt(dur / 8);
         TimeNs prev = pipe.currentPts();
         int steps = 0, stalls = 0;
         while (pipe.stepFrame(-1) && steps < 100000) {
@@ -187,6 +189,7 @@ void testFile(const std::string& path) {
 
         // Nothing before the first frame.
         pipe.seekTo(0);
+        pipe.settleAt(0);
         check(!pipe.stepFrame(-1), "no frame before the first");
 
         // And the file really ends where it says it does. H.264 and HEVC hand
@@ -195,7 +198,9 @@ void testFile(const std::string& path) {
         // that buffer — sixteen pictures for HEVC — is simply never shown, and
         // the last second of the file does not exist as far as playback is
         // concerned.
-        pipe.seekTo(dur > 3000000000LL ? dur - 3000000000LL : 0);
+        const TimeNs nearEnd = dur > 3000000000LL ? dur - 3000000000LL : 0;
+        pipe.seekTo(nearEnd);
+        pipe.settleAt(nearEnd);
         TimeNs lastPts = pipe.currentPts();
         int forward = 0;
         while (pipe.stepFrame(1) && forward < 100000) {
@@ -213,6 +218,7 @@ void testFile(const std::string& path) {
         // Seeking backwards must not resurrect frames from ahead of the
         // target — that is what decoder flush() is for.
         pipe.seekTo(0);
+        pipe.settleAt(0);
         checkf(pipe.currentPts() < 1000000000LL,
                "seek back to 0 landed at %.3f s", pipe.currentPts() / 1e9);
     }
@@ -299,7 +305,7 @@ void testRotated(const std::string& path) {
 
     // A rotated file still decodes like any other: the correction is
     // presentation and the pictures are untouched.
-    pipe.advanceTo(0);
+    pipe.settleAt(0);
     check(pipe.hasFrame(), "first frame decoded");
     check(hasContent(pipe.currentRgba()), "and it has image content");
     checkf(pipe.currentRgba().size() ==
@@ -336,11 +342,11 @@ void testSoundOnly(const std::string& path) {
     // The clock is the media clock: there are no pictures for it to be the
     // timestamps of. Advancing has to move it and never move it backwards.
     const TimeNs dur = pipe.durationNs();
-    pipe.advanceTo(0);
+    pipe.settleAt(0);
     TimeNs last = -1;
     int backwards = 0;
     for (TimeNs t = 0; t < dur; t += 100 * 1000000LL) {
-        pipe.advanceTo(t);
+        pipe.settleAt(t);
         if (pipe.currentPts() < last) backwards++;
         last = pipe.currentPts();
     }
@@ -351,6 +357,7 @@ void testSoundOnly(const std::string& path) {
 
     // A seek re-arms the end, which is what makes playing it twice work.
     pipe.seekTo(0);
+    pipe.settleAt(0);
     checkf(pipe.currentPts() < 500 * 1000000LL, "seek back to 0 landed at %.3f s",
            pipe.currentPts() / 1e9);
 }

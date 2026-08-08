@@ -493,8 +493,8 @@ int main(int argc, char* argv[]) {
               "both renders open for comparison");
         double worst = 99.0;
         for (double at : {0.3, 0.8, 1.3}) {
-            a.advanceTo(static_cast<TimeNs>(at * 1e9));
-            b.advanceTo(static_cast<TimeNs>(at * 1e9));
+            a.settleAt(static_cast<TimeNs>(at * 1e9));
+            b.settleAt(static_cast<TimeNs>(at * 1e9));
             if (!a.hasFrame() || !b.hasFrame()) { worst = -1.0; break; }
             const double db = psnr(a.currentRgba(), b.currentRgba(), kW, kH);
             std::printf("        %.1fs: %.1f dB\n", at, db);

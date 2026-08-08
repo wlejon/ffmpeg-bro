@@ -828,7 +828,7 @@ int main(int argc, char* argv[]) {
 
     // Halfway in, so a fade from black at the head of the source cannot
     // decide the answer.
-    pipe.advanceTo(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
+    pipe.settleAt(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
     check(pipe.hasFrame(), "a frame decodes out of the middle");
     const auto& px = pipe.currentRgba();
 
@@ -860,7 +860,7 @@ int main(int argc, char* argv[]) {
 
     VideoPipeline pipeB;
     check(pipeB.open(outB), "the result opens");
-    pipeB.advanceTo(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
+    pipeB.settleAt(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
     check(pipeB.hasFrame(), "a frame decodes");
     const double clearHalf = meanLuma(pipeB.currentRgba(), kW, kH, kW / 2 + 8, 0, kW, kH);
     checkf(clearHalf >= 0 && clearHalf < 6.0,
@@ -879,7 +879,7 @@ int main(int argc, char* argv[]) {
 
     VideoPipeline pipeC;
     check(pipeC.open(outC), "the result opens");
-    pipeC.advanceTo(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
+    pipeC.settleAt(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
     check(pipeC.hasFrame(), "a frame decodes");
     const double coveredPeak =
         brightestIn(pipeC.currentRgba(), kW, kH, kW / 2 + 8, 0, kW, kH);
@@ -903,7 +903,7 @@ int main(int argc, char* argv[]) {
 
     VideoPipeline pipeE;
     check(pipeE.open(outE), "the result opens");
-    pipeE.advanceTo(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
+    pipeE.settleAt(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
     check(pipeE.hasFrame(), "a frame decodes");
     const double solid = meanLuma(px, kW, kH, 8, 8, kW / 2 - 8, kH - 8);
     const double half = meanLuma(pipeE.currentRgba(), kW, kH, 8, 8, kW / 2 - 8, kH - 8);
@@ -1430,8 +1430,8 @@ int main(int argc, char* argv[]) {
             // them for the same reason.
             double worst = 99.0;
             for (double at : {0.3, 0.8, 1.3}) {
-                a.advanceTo(static_cast<TimeNs>(at * 1e9));
-                b.advanceTo(static_cast<TimeNs>(at * 1e9));
+                a.settleAt(static_cast<TimeNs>(at * 1e9));
+                b.settleAt(static_cast<TimeNs>(at * 1e9));
                 if (!a.hasFrame() || !b.hasFrame()) { worst = -1.0; break; }
                 const double db = psnr(a.currentRgba(), b.currentRgba(), kW, kH);
                 std::printf("        %.1fs: %.1f dB\n", at, db);
@@ -1497,8 +1497,8 @@ int main(int argc, char* argv[]) {
             if (sst.state == ExportStatus::State::Done && a.open(outG) && b.open(outS)) {
                 double worst = 99.0;
                 for (double at : {0.3, 0.8, 1.3}) {
-                    a.advanceTo(static_cast<TimeNs>(at * 1e9));
-                    b.advanceTo(static_cast<TimeNs>(at * 1e9));
+                    a.settleAt(static_cast<TimeNs>(at * 1e9));
+                    b.settleAt(static_cast<TimeNs>(at * 1e9));
                     if (!a.hasFrame() || !b.hasFrame()) { worst = -1.0; break; }
                     const double db = psnr(a.currentRgba(), b.currentRgba(), kW, kH);
                     std::printf("        %.1fs: %.1f dB\n", at, db);
@@ -1566,8 +1566,8 @@ int main(int argc, char* argv[]) {
             VideoPipeline a, b;
             if (est.state == ExportStatus::State::Done && a.open(outG) && b.open(outE)) {
                 const auto at = [&](double t) {
-                    a.advanceTo(static_cast<TimeNs>(t * 1e9));
-                    b.advanceTo(static_cast<TimeNs>(t * 1e9));
+                    a.settleAt(static_cast<TimeNs>(t * 1e9));
+                    b.settleAt(static_cast<TimeNs>(t * 1e9));
                     return (a.hasFrame() && b.hasFrame())
                         ? psnr(a.currentRgba(), b.currentRgba(), kW, kH) : -1.0;
                 };
@@ -1687,9 +1687,9 @@ int main(int argc, char* argv[]) {
                     // 20 and 32 of the 1× render. Sampling at 0.15 asked the two
                     // for different source frames and measured nothing but that.
                     for (double at : {0.16, 0.40, 0.64}) {
-                        a.advanceTo(static_cast<TimeNs>(at * 1e9));
-                        b.advanceTo(static_cast<TimeNs>(at * 1e9));
-                        plain.advanceTo(static_cast<TimeNs>(at * kSpeed * 1e9));
+                        a.settleAt(static_cast<TimeNs>(at * 1e9));
+                        b.settleAt(static_cast<TimeNs>(at * 1e9));
+                        plain.settleAt(static_cast<TimeNs>(at * kSpeed * 1e9));
                         if (!a.hasFrame() || !b.hasFrame() || !plain.hasFrame()) {
                             exact = nearest = wrongRate = -1.0;
                             break;
@@ -1701,7 +1701,7 @@ int main(int argc, char* argv[]) {
                         for (double o : {-srcFrame, srcFrame}) {
                             VideoPipeline p;
                             if (!p.open(outG)) break;
-                            p.advanceTo(static_cast<TimeNs>((at * kSpeed + o) * 1e9));
+                            p.settleAt(static_cast<TimeNs>((at * kSpeed + o) * 1e9));
                             if (p.hasFrame())
                                 best = std::max(best,
                                                 psnr(b.currentRgba(), p.currentRgba(), kW, kH));
@@ -1712,7 +1712,7 @@ int main(int argc, char* argv[]) {
                         VideoPipeline unsped;
                         double dropped = -1.0;
                         if (unsped.open(outG)) {
-                            unsped.advanceTo(static_cast<TimeNs>(at * 1e9));
+                            unsped.settleAt(static_cast<TimeNs>(at * 1e9));
                             if (unsped.hasFrame())
                                 dropped = psnr(b.currentRgba(), unsped.currentRgba(), kW, kH);
                         }
@@ -1888,7 +1888,7 @@ int main(int argc, char* argv[]) {
             // one side — which the size check above cannot see.
             VideoPipeline v;
             if (v.open(outH)) {
-                v.advanceTo(static_cast<TimeNs>(0.5 * 1e9));
+                v.settleAt(static_cast<TimeNs>(0.5 * 1e9));
                 if (v.hasFrame()) {
                     const auto& rgba = v.currentRgba();
                     const int w = ov ? ov->width : 0;
@@ -1982,7 +1982,7 @@ int main(int argc, char* argv[]) {
                    tv ? tv->height : 0);
             VideoPipeline v;
             if (v.open(outTiny)) {
-                v.advanceTo(static_cast<TimeNs>(0.2 * 1e9));
+                v.settleAt(static_cast<TimeNs>(0.2 * 1e9));
                 if (v.hasFrame()) {
                     const auto& rgba = v.currentRgba();
                     // Green all the way down, not green over rubbish. The rows
@@ -2056,7 +2056,7 @@ int main(int argc, char* argv[]) {
             // for once the content is not somebody's footage.
             VideoPipeline v;
             if (v.open(outS)) {
-                v.advanceTo(static_cast<TimeNs>(0.4 * 1e9));
+                v.settleAt(static_cast<TimeNs>(0.4 * 1e9));
                 if (v.hasFrame()) {
                     const auto& rgba = v.currentRgba();
                     const size_t at = (size_t(kH / 2) * kW + kW / 2) * 4;
@@ -2399,8 +2399,8 @@ int main(int argc, char* argv[]) {
         if (st.state == ExportStatus::State::Done) {
             VideoPipeline a, b;
             if (a.open(outP) && b.open(outM)) {
-                a.advanceTo(static_cast<TimeNs>(0.4 * 1e9));
-                b.advanceTo(static_cast<TimeNs>(0.4 * 1e9));
+                a.settleAt(static_cast<TimeNs>(0.4 * 1e9));
+                b.settleAt(static_cast<TimeNs>(0.4 * 1e9));
                 if (a.hasFrame() && b.hasFrame()) {
                     const auto& fa = a.currentRgba();
                     const auto& fb = b.currentRgba();
@@ -3082,7 +3082,7 @@ int main(int argc, char* argv[]) {
             VideoPipeline two, flipped, plain;
             if (two.open(outP) && flipped.open(sf.path) && plain.open(su.path)) {
                 const TimeNs at = static_cast<TimeNs>(0.3 * 1e9);
-                two.advanceTo(at); flipped.advanceTo(at); plain.advanceTo(at);
+                two.settleAt(at); flipped.settleAt(at); plain.settleAt(at);
                 if (two.hasFrame() && flipped.hasFrame() && plain.hasFrame()) {
                     const double same = psnr(two.currentRgba(), flipped.currentRgba(), kW, kH);
                     const double other = psnr(two.currentRgba(), plain.currentRgba(), kW, kH);
@@ -4208,7 +4208,7 @@ int main(int argc, char* argv[]) {
         // render, and the cheapest way to say so is to decode one and look.
         VideoPipeline teePipe;
         check(teePipe.open("out/tee-a.mkv"), "ffmpeg-bro can open a tee destination");
-        teePipe.advanceTo(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
+        teePipe.settleAt(static_cast<TimeNs>(kSpan * 0.5 * 1e9));
         if (teePipe.hasFrame()) {
             const auto& tpx = teePipe.currentRgba();
             const double empty = meanLuma(tpx, kW, kH, kW / 2 + 8, 0, kW, kH);
@@ -4859,8 +4859,8 @@ int main(int argc, char* argv[]) {
                 VideoPipeline a, b;
                 if (a.open(outPlain) && b.open(outBurn)) {
                     auto at = [&](double t) {
-                        a.advanceTo(static_cast<TimeNs>(t * 1e9));
-                        b.advanceTo(static_cast<TimeNs>(t * 1e9));
+                        a.settleAt(static_cast<TimeNs>(t * 1e9));
+                        b.settleAt(static_cast<TimeNs>(t * 1e9));
                         if (!a.hasFrame() || !b.hasFrame()) return -1.0;
                         return psnr(a.currentRgba(), b.currentRgba(), kW, kH);
                     };
@@ -4969,8 +4969,8 @@ int main(int argc, char* argv[]) {
                 VideoPipeline a, b;
                 if (a.open(plainPath) && b.open(drawnPath)) {
                     auto at = [&](double t) {
-                        a.advanceTo(static_cast<TimeNs>(t * 1e9));
-                        b.advanceTo(static_cast<TimeNs>(t * 1e9));
+                        a.settleAt(static_cast<TimeNs>(t * 1e9));
+                        b.settleAt(static_cast<TimeNs>(t * 1e9));
                         if (!a.hasFrame() || !b.hasFrame()) return -1.0;
                         return psnr(a.currentRgba(), b.currentRgba(), kW, kH);
                     };
