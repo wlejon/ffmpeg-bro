@@ -33,9 +33,20 @@ consumer GPUs and is why the advice defaults the way it does.
 was two to six times slower than software decode across all core counts, and
 copying the frame back to system memory was not the reason — the decode
 engine itself is a throughput accelerator being asked for one frame at a
-time, while software decode is threaded across every core. Hardware decode is
-still offered, because it is the only way to feed a hardware filter graph
-without an upload step, and it may win on hardware with fewer CPU cores.
+time, while software decode is threaded across every core. That holds when
+several clips are playing at once, which is the case a timeline is: eight 4K
+streams decoded together took 2.7 s on the CPU against 8.2 s on the card,
+because a card has two decode engines and a CPU here has thirty-two threads.
+Hardware decode is still offered, because it is the only way to feed a
+hardware filter graph without an upload step, it may win on hardware with
+fewer CPU cores, and it leaves the CPU free — see AV1 below.
+
+**AV1 is the one where the trade is different**, and the only codec here whose
+`Decode on` menu was offering devices that then refused. Ten seconds of
+1440p60 AV1 decodes in the same wall clock either way on this machine, but the
+card does it with about a fifth of the CPU time — so choosing a device for an
+AV1 input buys headroom for everything else rather than speed. It works now;
+before, the picker offered it and the input would not open.
 
 **Hardware encode is the opposite: usually a real win, above a certain
 resolution.** On the measured machine, above standard definition the card

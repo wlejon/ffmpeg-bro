@@ -66,6 +66,7 @@
 #include "ffmpeg_export.h"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavutil/display.h>
 }
 
@@ -186,6 +187,68 @@ bool write(const Recipe& r, const std::filesystem::path& path) {
                                      : std::string("no audio stream");
     std::printf("  %s  %dx%d %.0f fps %.1fs %s  %lld bytes\n", r.name, r.width, r.height,
                 r.fps, r.seconds, tone.c_str(),
+                static_cast<long long>(writer.bytesSoFar()));
+    return true;
+}
+
+/// A file in a codec whose **default decoder cannot use a graphics card**.
+///
+/// Every other picture here is H.264, and H.264's ordinary decoder carries a
+/// hardware configuration for every device type there is — so nothing in this
+/// directory could tell "the card cannot decode this" from "the decoder this
+/// build reaches for cannot be pointed at a card". AV1 is exactly that
+/// distinction: `avcodec_find_decoder(AV_CODEC_ID_AV1)` answers `libdav1d`,
+/// which is software and has no hardware configuration at all, while the native
+/// `av1` decoder exists only to be driven through one. Asking the default
+/// decoder therefore said "no hardware AV1 in this build" on a machine whose
+/// card decodes AV1, and `-hwaccel` on such an input was refused by name.
+/// `hwDecoderFor` is the fix and this is the only fixture that reaches it.
+///
+/// Tiny and short on purpose: `libaom-av1` is the only AV1 encoder that can be
+/// relied on to exist in this build, and it is slow enough that the size and the
+/// length are the whole cost of this fixture. `cpu-used=8` with the realtime
+/// usage is what makes it a second rather than a minute; nothing here is about
+/// how it looks.
+bool writeAv1(const std::filesystem::path& path) {
+    if (!avcodec_find_encoder_by_name("libaom-av1")) {
+        std::printf("  av1.mp4  skipped: this build has no libaom-av1 encoder\n");
+        return true;      // a fixture that cannot be made is skipped, not failed
+    }
+    ExportSettings s;
+    s.path = path.string();
+    s.width = 320;
+    s.height = 240;
+    s.fps = 25.0;
+    s.startTime = 0;
+    s.endTime = 2.0;
+    s.videoCodec = "libaom-av1";
+    s.crf = 40;
+    s.includeAudio = false;
+    s.videoOptions.push_back({"cpu-used", "8"});
+    s.videoOptions.push_back({"usage", "realtime"});
+
+    Writer writer;
+    std::string err;
+    if (!writer.open(s, true, &err)) {
+        std::fprintf(stderr, "av1.mp4: %s\n", err.c_str());
+        return false;
+    }
+    Rgba canvas;
+    canvas.resize(s.width, s.height);
+    const int64_t frames = static_cast<int64_t>(std::llround(s.endTime * s.fps));
+    for (int64_t n = 0; n < frames; ++n) {
+        paint(canvas, double(n) / double(frames > 1 ? frames - 1 : 1), 1);
+        if (!writer.writeVideo(canvas, {n}, &err)) {
+            std::fprintf(stderr, "av1.mp4: %s\n", err.c_str());
+            return false;
+        }
+    }
+    if (!writer.finish(&err)) {
+        std::fprintf(stderr, "av1.mp4: %s\n", err.c_str());
+        return false;
+    }
+    std::printf("  av1.mp4  %dx%d %.0f fps %.1fs  no audio stream  %lld bytes\n",
+                s.width, s.height, s.fps, s.endTime,
                 static_cast<long long>(writer.bytesSoFar()));
     return true;
 }
@@ -984,6 +1047,9 @@ int main(int argc, char* argv[]) {
     // replaced by content.
     if (!writeMarkable(dir / "marks.m4a")) return 1;
     if (!writeRotated(dir / "landscape.mp4", dir / "rotated.mp4", 90)) return 1;
+    // The one picture here that is not H.264, and the only one that reaches the
+    // question of *which* decoder a codec has. See `writeAv1`.
+    if (!writeAv1(dir / "av1.mp4")) return 1;
     if (!writeTelemetry(dir / "landscape.mp4", dir / "telemetry.mp4")) return 1;
 
     // Stills, in the arrangement a sequence scan has to make sense of: a

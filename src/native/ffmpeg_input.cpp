@@ -66,6 +66,22 @@ AVPixelFormat wantedHwFormat(AVCodecContext* ctx, const AVPixelFormat* offered) 
     return AV_PIX_FMT_NONE;
 }
 
+/// Which decoder this input's video stream is opened with.
+///
+/// libavcodec's own answer for every input that asks for nothing, which is all
+/// of them but one: an input that names an `-hwaccel` is asking for the picture
+/// to be made on a device, and **the decoder a codec's default is not always one
+/// that can be**. `hwDecoderFor` is where that is decided and why; the fallback
+/// here is deliberate rather than a refusal, because the message `attachDevice`
+/// gives for a codec no decoder can put on the card is the better one.
+const AVCodec* decoderFor(AVCodecID id, const MediaInput& in) {
+    if (!in.hwaccel.empty()) {
+        const AVHWDeviceType type = hwTypeNamed(in.hwaccel);
+        if (const AVCodec* hw = hwDecoderFor(id, type, nullptr)) return hw;
+    }
+    return avcodec_find_decoder(id);
+}
+
 /// The device this input asks for, on this decoder, or a sentence saying why
 /// not. Leaves the context untouched when the input asks for nothing.
 bool attachDevice(AVCodecContext* ctx, const AVCodec* codec, const MediaInput& in,
@@ -83,11 +99,18 @@ bool attachDevice(AVCodecContext* ctx, const AVCodec* codec, const MediaInput& i
     // questions and only the second one matters. Asked before a device is made,
     // because the answer is a property of the build and the codec and does not
     // need a driver to be consulted.
+    //
+    // Of *this* decoder, which is the one `decoderFor` has already chosen for
+    // the device — so what this catches is the codec the card genuinely cannot
+    // decode, and the message names the codec rather than whichever decoder of
+    // it happened to be the default.
     AVPixelFormat hwFmt = AV_PIX_FMT_NONE;
     if (!decoderTakesDevice(codec, type, &hwFmt)) {
         if (err)
-            *err = in.path + ": " + in.hwaccel + " cannot decode " + codec->name +
-                   " in this build — the decoder reports no " + in.hwaccel +
+            *err = in.path + ": " + in.hwaccel + " cannot decode " +
+                   avcodec_get_name(codec->id) +
+                   " in this build — no " + avcodec_get_name(codec->id) +
+                   " decoder reports an " + in.hwaccel +
                    " configuration, so the picture would have to come off the CPU anyway";
         return false;
     }
@@ -259,7 +282,7 @@ bool openDecoder(AVCodecContext** out, const AVCodecParameters* par,
     *out = nullptr;
     if (!par) return false;
 
-    const AVCodec* codec = avcodec_find_decoder(par->codec_id);
+    const AVCodec* codec = decoderFor(par->codec_id, in);
     if (!codec) {
         if (err) *err = in.path + ": this build has no " +
                         avcodec_get_name(par->codec_id) + " decoder";

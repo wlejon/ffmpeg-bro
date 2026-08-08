@@ -151,6 +151,25 @@ bool decoderTakesDevice(const AVCodec* codec, AVHWDeviceType type, AVPixelFormat
 /// The type an `-hwaccel` name means, or `AV_HWDEVICE_TYPE_NONE`.
 AVHWDeviceType hwTypeNamed(const std::string& name);
 
+/// The decoder for `id` that can be pointed at a device of `type`, or null when
+/// this build has none. Null `type` questions answer null.
+///
+/// **Which decoder a codec has is not one decoder, and AV1 is where that
+/// stopped being a detail.** `avcodec_find_decoder(AV_CODEC_ID_AV1)` answers
+/// `libdav1d` in this build — a software decoder, with no hardware
+/// configuration of any kind — while the *native* `av1` decoder exists solely to
+/// be driven through one. So asking the default decoder whether it takes a
+/// device answered "no hardware AV1 here" on a machine whose card decodes AV1,
+/// and `-hwaccel d3d11va` on an AV1 input was refused with a sentence naming
+/// `libdav1d`, which is not even the name of a codec.
+///
+/// The default decoder is preferred when it can take the device, so nothing
+/// changes for H.264, HEVC, VP9 or any other codec whose ordinary decoder
+/// carries the hardware configurations. Everything here is asked of libavcodec —
+/// `av_codec_iterate` for the decoders of an id, `avcodec_get_hw_config` for
+/// what each can do — so a build with one more of either needs no edit.
+const AVCodec* hwDecoderFor(AVCodecID id, AVHWDeviceType type, AVPixelFormat* fmt);
+
 /// True when a pixel format is a handle to a picture on a device rather than
 /// pixels in system memory — `AV_PIX_FMT_FLAG_HWACCEL`.
 bool isHwPixelFormat(AVPixelFormat fmt);

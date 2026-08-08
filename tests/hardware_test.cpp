@@ -758,6 +758,81 @@ int main(int argc, char* argv[]) {
                st.error.empty() ? "no error" : st.error.c_str());
     }
 
+    // ── a codec whose default decoder cannot use a card ───────────────────
+    //
+    // **Which decoder a codec has is not one decoder**, and until this section
+    // existed nothing here could tell that apart from "the card cannot decode
+    // this". H.264 — every other fixture in this repository — has one ordinary
+    // decoder and it carries a hardware configuration for every device type
+    // there is, so `avcodec_find_decoder` answered every question correctly by
+    // accident. AV1 does not: the default is `libdav1d`, which is software and
+    // has no configuration at all, while the native `av1` decoder exists only to
+    // be driven through a device. So `-hwaccel` on an AV1 input was refused with
+    // a sentence naming `libdav1d` — on a machine whose card decodes AV1
+    // perfectly well.
+    //
+    // Skipped rather than failed where there is no AV1 file to try (the fixture
+    // wants `libaom-av1` in the build that wrote it) or where nothing here
+    // decodes AV1 on a device.
+    if (argc > 2) {
+        const std::string av1 = argv[2];
+        std::printf("\nA codec whose default decoder is software only\n");
+
+        const AVCodec* def = avcodec_find_decoder(AV_CODEC_ID_AV1);
+        const HwDevice* card = nullptr;
+        for (const auto& d : hwDevices()) {
+            if (!d.present) continue;
+            if (hwDecoderFor(AV_CODEC_ID_AV1, hwTypeNamed(d.name), nullptr)) { card = &d; break; }
+        }
+        if (!std::filesystem::exists(av1)) {
+            std::printf("  (skipped: no AV1 fixture at %s)\n", av1.c_str());
+        } else if (!card) {
+            std::printf("  (skipped: no device here decodes AV1)\n");
+        } else {
+            const AVCodec* through =
+                hwDecoderFor(AV_CODEC_ID_AV1, hwTypeNamed(card->name), nullptr);
+            checkf(def && through && def != through,
+                   "AV1's default decoder is %s and the one %s can be given is %s",
+                   def ? def->name : "?", card->name.c_str(), through ? through->name : "?");
+
+            MediaInput soft;
+            soft.path = av1;
+            SourceVideo a;
+            std::string err;
+            checkf(a.open(soft, &err), "the AV1 fixture opens in software (%s)",
+                   err.empty() ? "no error" : err.c_str());
+
+            MediaInput hw;
+            hw.path = av1;
+            hw.hwaccel = card->name;
+            SourceVideo b;
+            const bool opened = b.open(hw, &err);
+            checkf(opened,
+                   "and -hwaccel %s opens it too, on the decoder that can take a device (%s)",
+                   card->name.c_str(), opened ? "no error" : err.c_str());
+
+            if (opened) {
+                // The same assertion the render pair above makes, one layer down
+                // and on a decoder nothing else here reaches: two conformant
+                // decoders of one bitstream are the same picture.
+                double worst = 99.0;
+                int compared = 0;
+                for (double at : {0.2, 0.8, 1.4}) {
+                    const Rgba* pa = a.rgbaAt(at);
+                    const Rgba* pb = b.rgbaAt(at);
+                    if (!pa || !pb || pa->width != pb->width || pa->height != pb->height) continue;
+                    const double db = psnr(pa->data, pb->data, pa->width, pa->height);
+                    std::printf("        %.1fs: %.1f dB\n", at, db);
+                    worst = std::min(worst, db);
+                    ++compared;
+                }
+                checkf(compared > 0, "and hands back pictures to compare (%d)", compared);
+                checkf(compared > 0 && worst > 40.0,
+                       "which are the same pictures the CPU decoded (%.1f dB)", worst);
+            }
+        }
+    }
+
     std::printf("\n%d checks, %d failures\n\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

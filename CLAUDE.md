@@ -70,7 +70,13 @@ alone, since every data stream probes as `bin_data`, and carrying **real GPMF**
 now that there is a parser, because `SCAL` is a divisor and a value reported
 without it is off by orders of magnitude while still looking plausible
 (`tests/gpmf_write.h` builds the payload for the fixture and for the parser test
-both) — `marks.m4a` is the only soundtrack here in which anything ever
+both) — `av1.mp4` is the only picture here that is not H.264, and it is about
+*which decoder a codec has* rather than about AV1: this build's default AV1
+decoder is `libdav1d`, which is software and can be given no device, while the
+native `av1` decoder exists only to be driven through one, so it is the only
+fixture that can tell "the card cannot decode this" from "the decoder this build
+reaches for cannot be given a card" (`hwDecoderFor`) — `marks.m4a` is the only
+soundtrack here in which anything ever
 *happens* (transients at 1, 3 and 5 s, a 1000 Hz tone from 6.0 to 7.5, over a bed
 of **stationary** noise, because a bed that swells is a bed with spectral flux in
 it and the first version of it manufactured eight onsets in the first second of

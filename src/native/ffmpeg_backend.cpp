@@ -1204,6 +1204,42 @@ public:
         // and the same decision has to reach the timeline and the render), and
         // every frame is brought back down in `nextFrame`. The input's own
         // decoder options are applied after this and therefore win.
+        //
+        // **Deciding it automatically was measured and refused, and AV1 is why
+        // it was measured again.** The argument above was made against 4K AVC,
+        // and the case that should have broken it is a long recording of AV1 —
+        // the codec whose software decode is supposed to be at realtime, which
+        // is the one condition a pipeline cannot recover a seek's head start
+        // from. On this machine (RTX 4090, Windows 11) it is not, and the card
+        // is slower at everything measured. One pass per row, decode plus the
+        // readback playback always pays, in ms per picture:
+        //
+        //     1440p60 AV1  (mandelbrot, 63 Mbps)   software 2.11   [1]
+        //     1440p60 AV1  (+ film grain)          software 2.23   [1]
+        //     4K AVC                               software 1.47   cuda 4.37
+        //                                                          dxva2 4.84
+        //                                                          d3d11va 5.28
+        //     640x360 AVC                          software 0.06   cuda 0.30
+        //
+        //     [1] no hardware column: every AV1 *decoder* in this build that
+        //         takes a device is reachable only by asking for one by name —
+        //         see `hwDecoderFor`. Through ffmpeg's CLI, which can, d3d11va
+        //         and libdav1d decode this file in the same wall clock and the
+        //         card uses 4.6x less CPU (1.4 s against 6.3 s for ten seconds).
+        //
+        // And the many-streams case, which is the one this application is,
+        // does not reverse it either: eight 4K AVC decoders at once are 2.7 s
+        // of wall clock in software against 8.2 s on cuda and 10.1 s on
+        // d3d11va, because a card has two decode engines and a CPU here has
+        // thirty-two threads. Twelve 640x360 decoders are 0.17 s against 0.86 s.
+        //
+        // So the automatic choice is the CPU, which is what it already was, and
+        // the numbers are here rather than in a commit message because the next
+        // person to think "surely the GPU" should be able to see what was run.
+        // What the measurements did change is one layer down: an input that
+        // *asks* for a device now gets one for AV1 too, which it could not
+        // before — the saving there is CPU rather than time, and it is the
+        // caller's decision to make.
         std::string why;
         if (!openDecoder(&ctx_, priv->par, timeBase_, priv->input,
                          /*threaded=*/true, &why)) {

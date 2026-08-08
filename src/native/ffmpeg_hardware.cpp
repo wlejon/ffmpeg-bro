@@ -275,4 +275,26 @@ bool decoderTakesDevice(const AVCodec* codec, AVHWDeviceType type, AVPixelFormat
     return false;
 }
 
+const AVCodec* hwDecoderFor(AVCodecID id, AVHWDeviceType type, AVPixelFormat* fmt) {
+    if (type == AV_HWDEVICE_TYPE_NONE || id == AV_CODEC_ID_NONE) return nullptr;
+
+    // The ordinary decoder first: it is the one every other part of this binary
+    // opens, and preferring it means a codec whose default decoder already
+    // carries the configuration behaves exactly as it did.
+    if (const AVCodec* def = avcodec_find_decoder(id))
+        if (decoderTakesDevice(def, type, fmt)) return def;
+
+    const AVCodec* best = nullptr;
+    void* it = nullptr;
+    while (const AVCodec* c = av_codec_iterate(&it)) {
+        if (c->id != id || !av_codec_is_decoder(c)) continue;
+        // `decoderTakesDevice` is what rules out the standalone `*_cuvid`
+        // decoders: they take a device through their own options rather than
+        // through `hw_device_ctx`, so a caller that set one would get a decoder
+        // ignoring the device it was handed.
+        if (decoderTakesDevice(c, type, fmt)) { best = c; break; }
+    }
+    return best;
+}
+
 } // namespace ffmpegbro

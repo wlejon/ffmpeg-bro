@@ -429,6 +429,15 @@ set(FIXTURE_DATA "${FIXTURE_DIR}/telemetry.mp4")
 # check wants and is useless for a detector — in a tone nothing ever happens, so
 # "found nothing" and "was never called" are the same result.
 set(FIXTURE_MARKS "${FIXTURE_DIR}/marks.m4a")
+# The one picture here that is not H.264, and it is about *which decoder* a
+# codec has rather than about AV1: this build's default AV1 decoder is libdav1d,
+# which is software and can be pointed at no card at all, while the native `av1`
+# decoder exists only to be driven through one. Every other fixture's codec has
+# a single ordinary decoder that carries every hardware configuration, so
+# nothing else here can tell "the card cannot decode this" from "the decoder
+# this build reaches for cannot be given a card". Written only where the build
+# that makes the fixtures has an AV1 encoder; the section that uses it skips.
+set(FIXTURE_AV1 "${FIXTURE_DIR}/av1.mp4")
 
 # A real camera file, if this machine has one. Nothing in the suite requires it
 # — every section that uses it says what it found and skips otherwise — but a
@@ -476,7 +485,7 @@ add_test(NAME telemetry COMMAND ffmpeg-bro-datatest "${FIXTURE_DATA}" "${GOPRO_F
 # run and no transients.
 add_test(NAME marks COMMAND ffmpeg-bro-markstest "${FIXTURE_MARKS}"
          "${FIXTURE_SILENT}" "${FIXTURE_SOUND}")
-add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}")
+add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}" "${FIXTURE_AV1}")
 # The device it records from is `lavfi`, which produces its own pictures, so
 # most of this needs no fixture at all. What does is the half about a file laid
 # *over* a device — a title card is a file, and there has to be one — so the
