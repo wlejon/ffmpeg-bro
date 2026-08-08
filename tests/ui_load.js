@@ -543,4 +543,56 @@ pump(200);
     A.graph.draw();
 }
 
+// ── synthetic timeline drag: zero seeks between frames, worst frame within budget ──
+{
+    A.shell.goTo('compose');
+    pump(300);
+    const clip = A.project.clips[0];
+    assert(clip, 'clip available for synthetic drag test');
+
+    const mouse = (target, type, x, y, buttons) => target.dispatchEvent(
+        new MouseEvent(type, { clientX: x, clientY: y, buttons, button: 0, bubbles: true }));
+
+    const lane = document.querySelector('#tracks .track-lane');
+    assert(lane, 'timeline lane element exists');
+    const box = lane.getBoundingClientRect();
+    const startX = box.left + 50;
+    const startY = box.top + 20;
+
+    // Start drag
+    mouse(lane, 'mousedown', startX, startY, 1);
+
+    // Fire multiple mousemove events between frame ticks without calling pump()
+    const initialSeeks = A.seekCount();
+    const MOVES = 30;
+    const dragBegan = performance.now();
+    let maxMoveMs = 0;
+
+    for (let i = 0; i < MOVES; i++) {
+        const t0 = performance.now();
+        mouse(document, 'mousemove', startX + (i + 1) * 5, startY, 1);
+        const dt = performance.now() - t0;
+        if (dt > maxMoveMs) maxMoveMs = dt;
+    }
+
+    const seeksDuringMove = A.seekCount() - initialSeeks;
+    assert(seeksDuringMove === 0,
+           `expected 0 seeks between frame ticks during mousemove stream, got ${seeksDuringMove}`);
+
+    // Now pump 1 frame tick: at most 1 seek should be issued for the queued target
+    const seekBeforeFrame = A.seekCount();
+    pump(20);
+    const seeksOnFrame = A.seekCount() - seekBeforeFrame;
+    assert(seeksOnFrame <= 1,
+           `expected at most 1 seek issued on frame tick, got ${seeksOnFrame}`);
+
+    // Finish drag gesture (mouseup)
+    mouse(document, 'mouseup', startX + MOVES * 5, startY, 0);
+    pump(100);
+
+    assert(maxMoveMs < 17, `worst-frame move processing time was ${maxMoveMs.toFixed(2)} ms, expected < 17 ms`);
+    console.log(`synthetic timeline drag: 0 seeks between frames, ${seeksOnFrame} seek on frame tick, worst move ${maxMoveMs.toFixed(2)} ms`);
+}
+
 console.log('ui_load: ok');
+

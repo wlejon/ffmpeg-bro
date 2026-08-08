@@ -217,6 +217,18 @@ not priced in the project's size (7 ms at 75 inputs, because the list is one row
 each and the detail column is the selected input only), so it is drawn directly
 and a dropped file's card does not arrive a frame late.
 
+**A seek is marked on the same list, and it is drawn first.** A hand dragging the
+playhead hands over a position per pixel and `setPlayhead` opens, seeks and
+settles every clip under it, so a scrub answered move by move did that work tens
+of times between two drawn frames. So `scheduleSeek` marks and `drawPending`
+performs the last one, before the five — a redraw of a position that is about to
+change is a redraw thrown away. The end of the gesture is *performed* rather than
+marked (`finalSeek`), because a stopped hand causes no further frames. The same
+distinction runs through the model's change channel: `move` is a clip being
+dragged and `moved` is one that has moved, so everything that is a pass over the
+whole edit — the overlay's retain, the Write stage's copied rows, the Sources
+cards, the unsaved marker — waits for the second, which always follows.
+
 **Playback runs on the render rather than on the clips**, and that is the other
 half of the same measurement. Compositing with an element per clip means crossing
 from one decoder to the next at every cut, and a crossing is a file opened and

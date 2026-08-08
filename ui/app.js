@@ -375,9 +375,17 @@ timeline.initTimeline({
     zoomLabel: el('tl-zoom'),
     playheadTime: () => transport.t,
     onSeek: (t, press, release) => {
-        if (release) { if (resumeAfterScrub) { resumeAfterScrub = false; play(); } return; }
-        if (press && transport.playing) { resumeAfterScrub = true; pause(); }
-        setPlayhead(t);
+        if (release) {
+            finalSeek(t !== undefined ? t : transport.t);
+            if (resumeAfterScrub) { resumeAfterScrub = false; play(); }
+            return;
+        }
+        if (press) {
+            if (transport.playing) { resumeAfterScrub = true; pause(); }
+            setPlayhead(t);
+            return;
+        }
+        scheduleSeek(t);
     },
 });
 
@@ -464,8 +472,47 @@ let resumeAfterScrub = false;
 // assert.
 const dirty = {
     playback: false, timeline: false, readouts: false, spine: false,
-    command: false, document: false, graph: false,
+    command: false, document: false, graph: false, seek: false,
 };
+
+// ── one seek per frame, and one more at the end of the gesture ─────────────
+//
+// **A drag is a stream of positions; a seek is a decode.** A mouse hands over a
+// move per pixel and `setPlayhead` opens, seeks and settles every clip under the
+// playhead, so a scrub that answered each one did that work tens of times
+// between two drawn frames and the window stopped answering — the thing the
+// worker thread underneath cannot fix, because the work was asked for rather
+// than being slow.
+//
+// So a moving hand *marks* where it wants to be and the frame loop performs the
+// last one (`drawPending`, with the five redraws), which is the same rule
+// everything else on that list follows. The gesture's end is not marked but
+// performed: `finalSeek` is where the playhead actually settles, and a release
+// that only marked would leave the last position waiting on a frame that a
+// stopped hand no longer causes.
+let targetPlayheadTime = null;
+/// How many seeks have actually been performed. Read by tests/ui_load.js, which
+/// asserts the whole of the above: no seeks between two frames however many
+/// moves arrive, and at most one on the frame that follows.
+let seekCount = 0;
+
+/// Where the playhead wants to be, to be answered on the next frame.
+function scheduleSeek(t) {
+    if (t === undefined || t === null) return;
+    targetPlayheadTime = Number(t);
+    needs('seek');
+}
+
+/// Where the playhead is, now — the end of a gesture, and anything else that is
+/// a decision rather than a hand moving. Cancels a marked one: the last position
+/// is this one.
+function finalSeek(t) {
+    targetPlayheadTime = null;
+    dirty.seek = false;
+    const target = (t !== undefined && t !== null && !Number.isNaN(Number(t))) ? Number(t) : transport.t;
+    seekCount++;
+    setPlayhead(target);
+}
 
 /// Mark one or more of them out of date.
 function needs(...what) { for (const k of what) dirty[k] = true; }
@@ -551,6 +598,18 @@ function busyWord() {
 /// the last one stopped means every marked thing is drawn within a turn of the
 /// wheel, whatever else is being marked.
 function drawPending() {
+    // Before the five, and in full rather than in rotation: it is what the rest
+    // of the frame draws *from*, and a redraw of a playhead position that is
+    // about to change is a redraw thrown away. See `scheduleSeek`.
+    if (dirty.seek) {
+        dirty.seek = false;
+        if (targetPlayheadTime !== null) {
+            const t = targetPlayheadTime;
+            targetPlayheadTime = null;
+            seekCount++;
+            setPlayhead(t);
+        }
+    }
     // The cheap two, always and in full: a readout is a line of text and the
     // document's name is two words.
     if (dirty.readouts) { dirty.readouts = false; syncUI(); }
@@ -597,42 +656,52 @@ onChange((what) => {
         return;
     }
 
-    // Nodes pinned to a clip that is no longer open. Here rather than in each
-    // place a clip can go away — delete, a batch drop that clears the timeline,
-    // a project reset — because there are several and the one that is missed is
-    // the one that grows the stored overlay forever.
-    // ...and a source node naming an input that has been taken off the Sources
-    // stage. The inputs are passed as well as the clips because the graph can
-    // now read a file no clip is cut from, which is exactly the file nothing
-    // else in this call would have noticed going away.
-    graphOverlay.retain(project.clips.map((c) => c.id),
-                        inputsModel.inputs.map((i) => i.id));
-    // And the settings of a track the timeline no longer shows — a sync lock on
-    // V4 after the last clip on it was deleted. Here for the same argument as the
-    // line above and stated where that argument already is: a track can empty out
-    // through a delete, a drag to another lane, a batch drop that clears the
-    // timeline, an undo and an opened document, and the one that gets missed is
-    // the one that leaves a lock nothing on screen accounts for. Before
-    // `history.record` below, so the pruning is part of the step that caused it
-    // rather than a change that arrives on its own afterwards.
-    retainTracks();
-    // And the copied rows on the Write stage that follow a clip. Same shape of
-    // problem as the line above and answered in the same place for the same
-    // reason: a trim, a move, a ripple, an undo and an opened document all arrive
-    // here, and a row updated in four of those and not the fifth would be a span
-    // that is right most of the time. A clip that has gone breaks the link and is
-    // said out loud — a row left naming an id nothing answers to is the invisible
-    // mode the press this replaces was written against.
-    const followed = exporter.followTimeline();
-    if (followed.broke.length)
-        flash(followed.broke.length === 1
-                  ? followed.broke[0].why
-                  : `${followed.broke.length} copied rows stopped following a clip that has gone`);
-    // The Write stage's settings have just changed without anybody having decided
-    // anything, so the encode side's history takes them as the baseline rather than
-    // offering to go back to a span that describes a trim the timeline no longer
-    // has. Same call and same reason as arriving on the encode side.
-    if (followed.moved || followed.broke.length) history.rebaseOutput();
+    // **A clip being dragged is not a clip that has moved**, and the difference
+    // is what this whole block costs. `move` arrives per mouse move and `moved`
+    // once, at the end of the gesture, so everything here that is a pass over
+    // the *whole* edit waits for the second one — the overlay's retain, the
+    // Write stage's copied rows, the encode side's baseline, the Sources cards
+    // and the unsaved marker below. None of it can miss anything: a `moved`
+    // always follows, and `history.record` already ignores a `move` for the same
+    // reason and says so.
+    if (what !== 'move') {
+        // Nodes pinned to a clip that is no longer open. Here rather than in each
+        // place a clip can go away — delete, a batch drop that clears the timeline,
+        // a project reset — because there are several and the one that is missed is
+        // the one that grows the stored overlay forever.
+        // ...and a source node naming an input that has been taken off the Sources
+        // stage. The inputs are passed as well as the clips because the graph can
+        // now read a file no clip is cut from, which is exactly the file nothing
+        // else in this call would have noticed going away.
+        graphOverlay.retain(project.clips.map((c) => c.id),
+                            inputsModel.inputs.map((i) => i.id));
+        // And the settings of a track the timeline no longer shows — a sync lock on
+        // V4 after the last clip on it was deleted. Here for the same argument as the
+        // line above and stated where that argument already is: a track can empty out
+        // through a delete, a drag to another lane, a batch drop that clears the
+        // timeline, an undo and an opened document, and the one that gets missed is
+        // the one that leaves a lock nothing on screen accounts for. Before
+        // `history.record` below, so the pruning is part of the step that caused it
+        // rather than a change that arrives on its own afterwards.
+        retainTracks();
+        // And the copied rows on the Write stage that follow a clip. Same shape of
+        // problem as the line above and answered in the same place for the same
+        // reason: a trim, a move, a ripple, an undo and an opened document all arrive
+        // here, and a row updated in four of those and not the fifth would be a span
+        // that is right most of the time. A clip that has gone breaks the link and is
+        // said out loud — a row left naming an id nothing answers to is the invisible
+        // mode the press this replaces was written against.
+        const followed = exporter.followTimeline();
+        if (followed.broke.length)
+            flash(followed.broke.length === 1
+                      ? followed.broke[0].why
+                      : `${followed.broke.length} copied rows stopped following a clip that has gone`);
+        // The Write stage's settings have just changed without anybody having decided
+        // anything, so the encode side's history takes them as the baseline rather than
+        // offering to go back to a span that describes a trim the timeline no longer
+        // has. Same call and same reason as arriving on the encode side.
+        if (followed.moved || followed.broke.length) history.rebaseOutput();
+    }
     // The unsaved marker, for everything on this channel that is an *edit*.
     // Three things here are not one, and each for its own reason: a `selection`
     // is not in the document at all, an `analysis` is a waveform and a
@@ -645,14 +714,16 @@ onChange((what) => {
     // `marks` is the fifth and joins it exactly: a detected onset is a
     // measurement of a soundtrack, and undo answers "does this change the
     // clips".
-    if (what !== 'selection' && what !== 'analysis' && what !== 'document')
+    if (what !== 'selection' && what !== 'analysis' && what !== 'document' && what !== 'move')
         { doc.touch(); history.record(what); needs('document'); }
-    if (what === 'selection' || what === 'move' || what === 'moved') {
+    if (what === 'selection' || what === 'moved') {
         showProperties();
         // The selection ring lives on the picture, so a change of selection is
         // a change to the stage as well as to the panel.
         if (what === 'selection') viewer.refreshAll();
-        else setPlayhead(transport.t);
+        else finalSeek(transport.t);
+    } else if (what === 'move') {
+        scheduleSeek(transport.t);
     }
     // The spine states the whole render and the command states it exactly, so
     // both are downstream of every change to the model — not just the ones
@@ -667,7 +738,7 @@ onChange((what) => {
     // Drawn rather than marked — see `dirty`: it is cheap, and a card that
     // arrived a frame after the file did would be a worse thing to explain than
     // the 7 ms it costs.
-    drawSources();
+    if (what !== 'move') drawSources();
     // And so is what the viewer is playing: a clip's filters are part of the
     // graph, and a clip moved along the timeline changes which moment its
     // filters think they are looking at.
@@ -1534,25 +1605,43 @@ function draggable(surface, onFraction, opts) {
         return Math.max(0, Math.min(1, (clientX - r.left) / r.width));
     };
 
+    // `(fraction, press, release)`, which is the timeline's `onSeek` contract
+    // and is one contract on purpose: the two surfaces that scrub are the only
+    // callers that care, and both have to tell a hand that is still moving from
+    // one that has stopped — the first marks a seek and the frame loop performs
+    // it, the last performs it there and then, because a stopped hand causes no
+    // further frames. A caller that does not care (the volume slider) reads the
+    // fraction and ignores the rest.
     surface.addEventListener('mousedown', (e) => {
         dragging = true;
         // Dragging a playhead stops playback, the way every edit suite does.
         // It is also what keeps a drag cheap: while paused, a seek costs one
         // decode instead of also tearing down and refilling the audio ring.
         if (scrubs && transport.playing) { resume = true; pause(); }
-        onFraction(fractionAt(e.clientX));
+        onFraction(fractionAt(e.clientX), true, false);
         e.preventDefault();
     });
-    document.addEventListener('mousemove', (e) => { if (dragging) onFraction(fractionAt(e.clientX)); });
+    document.addEventListener('mousemove', (e) => {
+        if (dragging) onFraction(fractionAt(e.clientX), false, false);
+    });
     document.addEventListener('mouseup', (e) => {
         if (!dragging) return;
         dragging = false;
-        onFraction(fractionAt(e.clientX));
+        onFraction(fractionAt(e.clientX), false, true);
         if (resume) { resume = false; play(); }
     });
 }
 
-draggable(scrub, (f) => setPlayhead(f * duration()), { scrubs: true });
+draggable(scrub, (f, press, release) => {
+    const t = f * duration();
+    if (release) {
+        finalSeek(t);
+    } else if (press) {
+        setPlayhead(t);
+    } else {
+        scheduleSeek(t);
+    }
+}, { scrubs: true });
 draggable(volume, (f) => {
     transport.volume = f;
     if (f > 0 && transport.muted) transport.muted = false;
@@ -2363,7 +2452,10 @@ globalThis.__ffmpegBro = {
     video: () => { const c = viewer.activeClip(); return c ? c.video : null; },
     activeClip: () => viewer.activeClip(),
     activeClips: () => viewer.activeClips(),
-    setPlayhead, play, pause, step,
+    setPlayhead, scheduleSeek, finalSeek,
+    targetPlayheadTime: () => targetPlayheadTime,
+    seekCount: () => seekCount,
+    play, pause, step,
     timeline, viewer, levels,
     setCropMode, cropMode: () => cropMode,
     // The render on the program monitor. `setOutputPreview` rather than
