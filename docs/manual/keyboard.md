@@ -27,7 +27,7 @@
 | `Space` `←` `→` | on the Encode stage: play / pause and step the comparison |
 | `Ctrl`+`A` | select every clip (`Esc` narrows back to one) |
 | `Ctrl`+`S` | save the document (`Ctrl`+`Shift`+`S` to save it somewhere else) |
-| `Ctrl`+`O` | open a document |
+| `Ctrl`+`O` | open a document, or add a media file to this one |
 | `Ctrl`+`N` | start a new one |
 | `Ctrl`+`Z` | undo (`Ctrl`+`Shift`+`Z` or `Ctrl`+`Y` to redo) |
 | `Delete` | remove the selection |

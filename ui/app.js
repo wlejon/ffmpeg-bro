@@ -983,9 +983,21 @@ function openDocument() {
         return null;
     }
     if (!result) return null;
-    documentOpened(result);
-    flash(`Opened ${doc.documentName()}`);
-    return result;
+    if (result.isDocument) {
+        documentOpened(result.data);
+        flash(`Opened ${doc.documentName()}`);
+        return result.data;
+    }
+    if (result.path) {
+        const clip = open(result.path);
+        if (clip) {
+            needs('timeline', 'readouts', 'spine', 'command');
+            viewer.refreshAll();
+            flash(`Added ${basename(result.path)}`);
+        }
+        return clip;
+    }
+    return null;
 }
 
 function saveDocument(askWhere) {

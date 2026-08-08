@@ -753,7 +753,30 @@ export function save(path) {
 // behaviour and not something this file can improve on; what it means here is
 // that a dialog is opened from a press and never from the frame loop.
 
-const FILTER = `ffmpeg-bro documents|${EXTENSION}`;
+/// Every extension a demuxer in this build claims, as an SDL filter list.
+///
+/// **Asked, not written down.** A list here would be the same mistake
+/// `containersFor` names in ffmpeg_capabilities.cpp: "the containers we
+/// support" is how MPEG-TS, MXF, AVI, FLV and image2 came to be compiled in and
+/// unreachable, and a file dialog that hides a format this binary can open is
+/// the same unreachability by another route. `bro.ffmpeg.demuxers` answers for
+/// the build. The final "All files" entry is what covers the demuxers that
+/// claim no extension at all — a raw stream, an `.mkv` named anything — so
+/// nothing is *only* reachable through the list.
+function mediaExtensions() {
+    const seen = new Set();
+    for (const d of bro.ffmpeg.demuxers || [])
+        for (const e of d.extensions || []) if (e) seen.add(e.toLowerCase());
+    return [...seen].sort().join(';');
+}
+
+function openFilter() {
+    const media = mediaExtensions();
+    return `ffmpeg-bro files|${EXTENSION};${media}` +
+           `|ffmpeg-bro documents|${EXTENSION}` +
+           `|Media files|${media}` +
+           `|All files|*`;
+}
 
 /// Where a Save As should start. The document's own directory when it has one,
 /// and otherwise a name in whatever the dialog defaults to — SDL takes this as a
@@ -765,7 +788,7 @@ function suggestion() {
 
 /// Ask for a path and save to it. Returns the path, or '' if it was cancelled.
 export function saveAs() {
-    const path = showSaveFileDialog(FILTER, suggestion());
+    const path = showSaveFileDialog(`ffmpeg-bro documents|${EXTENSION}`, suggestion());
     if (!path) return '';
     return save(withExtension(path));
 }
@@ -775,11 +798,22 @@ export function saveHere() {
     return currentPath ? save(currentPath) : saveAs();
 }
 
-/// Ask for a document and open it. Returns null if it was cancelled.
+/// Ask for a document or a media file and say which was picked.
+///
+/// One Open, two things it can open. The extension decides, and it decides here
+/// rather than in the caller because it is this file that knows what a document
+/// is called. `{ isDocument: false }` is a path and nothing more: importing a
+/// file is the timeline's business, not this one's.
+///
+/// Returns null if it was cancelled.
 export function openDialog() {
-    const picked = showOpenFileDialog(FILTER);
+    const picked = showOpenFileDialog(openFilter());
     if (!picked || !picked.length) return null;
-    return load(picked[0]);
+    const path = picked[0];
+    if (path.toLowerCase().endsWith(`.${EXTENSION}`)) {
+        return { isDocument: true, path, data: load(path) };
+    }
+    return { isDocument: false, path };
 }
 
 /// A path a person typed without the extension gets it. The dialog's filter

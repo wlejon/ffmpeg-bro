@@ -10,13 +10,18 @@ one file, and opened again.
 | | |
 |---|---|
 | `Ctrl`+`S` | save (`Ctrl`+`Shift`+`S` to save somewhere else) |
-| `Ctrl`+`O` | open one |
+| `Ctrl`+`O` | open one, or add a media file |
 | `Ctrl`+`N` | start again |
 | `Ctrl`+`Z` | undo (`Ctrl`+`Shift`+`Z` or `Ctrl`+`Y` to redo) |
 
 The name is in the top bar, with a dot beside it while there is something
 unsaved. A document named on the command line opens as one:
 `ffmpeg-bro my-edit.fbro`.
+
+`Ctrl`+`O` takes a media file as well as a `.fbro`, and does the obvious thing
+with each: a document replaces what you have open, a media file is added to the
+edit you already have. The dialog offers the extensions this build's demuxers
+claim, plus **All files** for the formats that claim none.
 
 ## What is in it
 
