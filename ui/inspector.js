@@ -72,11 +72,11 @@ export function showProperties() {
     const clip = project.selected;
     if (!clip) {
         if (panel.filename) {
-            panel.filename.textContent = 'no media';
+            panel.filename.textContent = 'No selection';
             panel.filename.classList.add('dim');
         }
         put(panel.chips, () => []);
-        put(panel.transform, () => []);
+        showDisabledTransform();
         return;
     }
     if (panel.filename) {
@@ -85,6 +85,72 @@ export function showProperties() {
     }
     showChips(clip.probe);
     showTransform(clip);
+}
+
+/// The panel with nothing selected: every control a clip has, drawn and
+/// disabled.
+///
+/// An empty column said nothing about what selecting a clip would give you, and
+/// a panel that appears only once something is selected is a panel whose
+/// existence has to be discovered. Disabled controls are the affordance —
+/// they show what is there and that it is not available yet, which is the
+/// no-prose rule's answer to "select a clip to edit it". The strings here are
+/// the same labels the live panel uses; nothing instructs.
+///
+/// The rows go through `deadened` rather than each control being built
+/// disabled, because three of them cannot be: `percentSlider`, `slider` and
+/// `toggleButton` build their own nodes and take no such flag. Passing them a
+/// no-op `apply` looks equivalent and is not — the slider still moves under the
+/// pointer and the readout still counts up, so the panel would show a control
+/// answering a drag by changing a number that means nothing. A control that
+/// lies is worse than one that is plainly unavailable, and threading a flag
+/// through each helper leaves every control added later free to forget it.
+function showDisabledTransform() {
+    put(panel.transform, () => deadened([
+        head('Properties'),
+        controlRow('Opacity', percentSlider('opacity', 1, () => {}, 0, 100)),
+        controlRow('Speed', div('btns', [
+            el('input', { cls: 'num', type: 'number', placeholder: '1.0' }),
+            ...[0.25, 0.5, 1, 2].map((sp, i) =>
+                el('button', { cls: 'tiny', text: ['¼×', '½×', '1×', '2×'][i], 'data-speed-preset': sp })
+            )
+        ])),
+        controlRow('Audio', div('btns', [
+            toggleButton('Mute', false, () => {}, 'data-mute'),
+            slider('clipvol', 100, () => {}),
+        ])),
+        head('Transform'),
+        controlRow('Fit', div('seg', ['Fit', 'Fill', 'Stretch', '1:1'].map((id) =>
+            el('button', { cls: 'tiny', text: id })
+        ))),
+        controlRow('Scale', percentSlider('zoom', 1, () => {}, 5, 400)),
+        controlRow('Position', div('btns', [
+            span('—', 'mono dim'),
+            el('button', { cls: 'tiny', text: 'Reset' }),
+        ])),
+        head('Crop'),
+        controlRow('Left / Top', div('btns', [
+            el('input', { type: 'number', placeholder: '0' }),
+            el('input', { type: 'number', placeholder: '0' }),
+        ])),
+        controlRow('Right / Bot', div('btns', [
+            el('input', { type: 'number', placeholder: '0' }),
+            el('input', { type: 'number', placeholder: '0' }),
+        ])),
+    ]));
+}
+
+/// Every control in these rows, disabled. Returns the rows.
+///
+/// The one home for "this panel is not available": a control built here says
+/// what it is and nothing about whether it can be used, so no control added to
+/// the panel above can be left live by forgetting a flag. `disabled` set as a
+/// property is reflected to the attribute by the engine, which is what bro's
+/// hit testing and its styling both read.
+function deadened(rows) {
+    for (const row of rows)
+        for (const node of row.querySelectorAll('input, button, select')) node.disabled = true;
+    return rows;
 }
 
 // ── the chips, in the title bar ────────────────────────────────────────────
