@@ -92,6 +92,15 @@ let reason = '';          ///< why there is no picture, when there is none
 let showing = 0;          ///< where the current source's first frame sits
 let want = 0;             ///< where it is supposed to sit
 let dirty = false;
+/// The source has to be handed over again even though the range has not changed.
+///
+/// A src carries the range and nothing else, so re-pointing an element at the
+/// range it already holds is a no-op — and the element has *played on* from
+/// where that range begins. Putting the playhead back to the start of the range
+/// the render is already of (pressing play at the top of a range it has run to
+/// the end of, clicking where playback began) is therefore a rebuild that looks
+/// like nothing to do. `apply()` clears the src first when this is set.
+let restart = false;
 let since = 0;            ///< when the want last changed
 let settledKey = '';      ///< the graph last put to libavfilter
 let facts = null;         ///< what the render on screen turned out to be
@@ -155,6 +164,29 @@ export function isShowing() { return ready() && current() && (holders.has('user'
 /// clips are the truth until the rebuild lands.
 function current() { return !dirty && Math.abs(showing - want) < 1e-6; }
 
+/// How far the picture may be from a moment before it counts as somewhere else.
+///
+/// Half a frame, because what the element reports is where a picture *is* rather
+/// than where one was asked for. It is the tolerance on "is the render already
+/// sitting here", which is the question that decides between resuming a kept
+/// render — the whole point of keeping one, see `KEEP_MS` in ui/transport.js —
+/// and building another.
+const AT_TOLERANCE = 0.05;
+
+/// Is the source in the element already the render of the moment `t`?
+///
+/// **Not `want === t`.** `want` is where the source *begins* and the element has
+/// played on from there, so a render begun at 0 and played to 5 s answers this
+/// for 5 s and not for 0 — which is both halves of what the transport needs.
+/// Resuming after a pause must not rebuild, and a playhead put back to where the
+/// range began must, because a graph cannot be seeked back to its own start.
+/// A stale source is not asked at all: it answers from a range nobody wanted.
+function sittingAt(t) {
+    if (!current()) return false;
+    const here = at();
+    return here !== null && Math.abs(here - t) <= AT_TOLERANCE;
+}
+
 /// Why the preview has no picture, or '' when it has one. Shown on the stage,
 /// so it is libavfilter's own sentence where libavfilter is the one refusing.
 export function why() { return reason; }
@@ -217,38 +249,66 @@ export function setOn(value, t, who = 'user') {
     else if (value) holders.add(who);
     else holders.delete(who);
     const next = holders.size > 0;
-    if (next === on) return false;
-    on = next;
-    reason = '';
-    if (!on) {
-        running = false;
-        drop();
+    if (next !== on) {
+        on = next;
+        reason = '';
+        if (!on) {
+            running = false;
+            drop();
+            tell();
+            return true;
+        }
+        // **Marked, not built, and `since = 0` is what says "there is nothing to
+        // wait for".** `chase()` builds it on the very next frame rather than
+        // after the quiet period, so this is still a press being answered rather
+        // than a gesture being settled — but it is not built *inside the press*,
+        // because building opens every input the render reads and that is 1.2 s
+        // on a 75-clip edit. Playback engages this itself now, and a play button
+        // that did not come back for over a second would be worse than the
+        // stutter it is curing.
+        pointAt(t, false);
         tell();
         return true;
     }
-    // **Marked, not built, and `since = 0` is what says "there is nothing to
-    // wait for".** `chase()` builds it on the very next frame rather than after
-    // the quiet period, so this is still a press being answered rather than a
-    // gesture being settled — but it is not built *inside the press*, because
-    // building opens every input the render reads and that is 1.2 s on a 75-clip
-    // edit. Playback engages this itself now, and a play button that did not
-    // come back for over a second would be worse than the stutter it is curing.
-    want = Number(t) || 0;
-    dirty = true;
-    since = 0;
-    tell();
-    return true;
+    // **"Engage at `t`" means that whether or not this is the press that turned
+    // it on, and silently ignoring it was the seek-during-playback bug.** The
+    // holder set being unchanged says nothing about where the render is: playback
+    // keeps its claim across a pause, so the scrub in the middle of a
+    // press-pause-seek-release-play gesture left a render of the moment playback
+    // had *stopped* at, and returning here without re-pointing it meant the
+    // resume below started that one. What came back was the old picture and the
+    // old sound, over a playhead somebody had just moved.
+    if (value) pointAt(t, false);
+    return false;
 }
 
 /// The playhead moved. Recorded rather than acted on — see the note at the top
 /// about a moving hand.
 export function moveTo(t) {
     if (!on) return;
-    const next = Math.max(0, Number(t) || 0);
-    if (Math.abs(next - want) < 1e-6) return;
-    want = next;
+    pointAt(t, true);
+}
+
+/// Point the source at `t`. The one place `want` moves.
+///
+/// `settle` is true for a hand that is still moving — a scrub re-points per
+/// pixel and rebuilding per pixel is unusable, so those wait `QUIET_MS`. A press
+/// has nothing to settle and is built on the next frame.
+function pointAt(t, settle) {
+    const target = Math.max(0, Number(t) || 0);
+    if (dirty && Math.abs(target - want) < 1e-6) {
+        // Already on its way here. A press may bring the rebuild forward but a
+        // moving hand may not push it back, or a value arriving every frame
+        // would be a rebuild that never happens.
+        if (!settle) since = 0;
+        return;
+    }
+    if (sittingAt(target)) return;
+    // The same range and still a rebuild — see `restart`.
+    if (Math.abs(target - want) < 1e-6) restart = true;
+    want = target;
     dirty = true;
-    since = Date.now();
+    since = settle ? Date.now() : 0;
 }
 
 /// The edit changed under the preview: whatever is on the screen is of a render
@@ -273,6 +333,11 @@ function element() {
     // they are hidden by the viewer and this must be in front of them even for
     // the frame between the two happening.
     el.style.zIndex = '900';
+    // Built hidden. It is in front of every clip, so a source that is not open
+    // yet — or is open at a moment nobody asked for — would be a blank or a
+    // stale picture over the one thing that *is* current, which is the clips.
+    // `reveal()` is what puts it on the screen, and only ever while `isShowing()`.
+    el.style.display = 'none';
     stage.appendChild(el);
     // Sized on the way in as well as on every resize. An element built by a
     // rebuild rather than by the press — the first spec having had nothing to
@@ -290,9 +355,35 @@ function drop() {
     try { el.pause(); el.src = ''; } catch (e) { /* already gone */ }
     stage.removeChild(el);
     el = null;
+    seen = false;
+    restart = false;
     try { bro.ffmpeg.output.forget(ID); } catch (e) { /* never defined */ }
     settledKey = '';
     facts = null;
+}
+
+/// Whether the element is currently on the screen. Remembered so that the frame
+/// loop writes the style only when the answer changes.
+let seen = false;
+
+/// Put the element on the canvas, or take it off — `isShowing()` and nothing
+/// else.
+///
+/// **The element is `z-index: 900`, in front of every clip**, and the clips are
+/// hidden by the viewer on exactly the same answer (`syncOutputPicture` in
+/// ui/app.js). Left up while the render is stale, it is a picture of a moment
+/// nobody asked for covering the one that is: seeking during playback showed the
+/// clicked frame for an instant and then snapped back to where playback had
+/// been, because the rebuild takes the quiet period plus an open of every input
+/// and the old element went on playing over the clips for all of it. Being *seen*
+/// and being *heard* are two switches and both are needed — `play()` below holds
+/// the other one — since sound does not come out of the layout.
+function reveal() {
+    if (!el) { seen = false; return; }
+    const show = isShowing();
+    if (show === seen) return;
+    seen = show;
+    el.style.display = show ? 'block' : 'none';
 }
 
 /// Size the preview to the output canvas.
@@ -311,10 +402,19 @@ export function place() {
 
 // ── transport ──────────────────────────────────────────────────────────────
 
+/// Run the render, or stop it. `running` is remembered because an element handed
+/// a new src is a paused one — see `chase()`.
+///
+/// **A source that is not the one wanted is never started.** The element carries
+/// the render's own soundtrack, so resuming a stale one is the old sound played
+/// over a playhead that has moved — the audible half of the same failure
+/// `reveal()` describes, and the one that survives being hidden. `chase()` starts
+/// it the frame the rebuild lands instead.
 export function play(yes) {
     running = !!yes && on;
     if (!on || !el) return;
-    try { if (yes) el.play(); else el.pause(); } catch (e) { /* not open yet */ }
+    try { if (running && current()) el.play(); else el.pause(); } catch (e) { /* not open yet */ }
+    reveal();
 }
 
 /// One frame of the render. `stepFrame` moves by decoded pictures, which for
@@ -352,13 +452,20 @@ export function chase() {
     // finished element to play starts it again from the top — a preview that
     // looped instead of stopping, which is a decision the transport makes and
     // not this file.
-    if (running && el && el.paused && !el.ended && el.duration > 0) {
+    // Not a stale one either, which is the frame-by-frame half of the rule
+    // `play()` states: between a moved playhead and the rebuild landing, the
+    // element still holds the previous range and starting it would be the old
+    // sound under the new position.
+    if (running && el && el.paused && !el.ended && el.duration > 0 && current()) {
         try { el.play(); } catch (e) { /* still not open */ }
     }
 
-    if (!dirty) return;
-    if (since && Date.now() - since < QUIET_MS) return;
-    apply();
+    if (dirty && !(since && Date.now() - since < QUIET_MS)) apply();
+
+    // Last, and on every frame: what makes the element the picture is
+    // `isShowing()`, which moves when the source finishes opening as much as when
+    // it is re-pointed.
+    reveal();
 }
 
 /// The spec for a render starting here, or null when there is nothing to render.
@@ -376,6 +483,11 @@ function specFrom(t) {
 
 function apply() {
     dirty = false;
+    // Taken here rather than read below, so that every way out of this function
+    // clears it: a src dropped for a spec that will not render is an element
+    // that has to be re-pointed anyway.
+    const again = restart;
+    restart = false;
     const spec = specFrom(want);
     if (!spec) {
         reason = 'there is nothing in the range to render';
@@ -423,13 +535,23 @@ function apply() {
     const src = bro.ffmpeg.output.define(ID, spec);
     const v = element();
     showing = spec.start;
-    if (v.src !== src) {
+    if (v.src !== src || again) {
         try { v.pause(); } catch (e) {}
+        // **The same string is still a new source when `restart` says so.** A
+        // token carries the range, so re-asking for the range the element already
+        // holds writes the src it already has and opens nothing — while the
+        // element sits wherever it played on to. The `define` above bumped the
+        // definition and `attachOutput` keys a run by it, so clearing the src
+        // first is all that is needed to make the element open the new run.
+        if (v.src === src) { try { v.src = ''; } catch (e) {} }
         v.src = src;
         // Apply transport audio settings. Said on every re-point rather than once,
         // because an element handed a new src is a fresh one in every respect.
         applyAudio();
     }
+    // The element that has just been handed a source is not on the screen until
+    // it is open and current, which is `reveal()`'s answer and not this one's.
+    reveal();
     tell();
 }
 

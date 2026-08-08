@@ -158,17 +158,19 @@ export function play() {
     if (transport.t >= duration() - 1e-4) setPlayhead(0);
     transport.playing = true;
     idleSince = 0;
+    // **Engaged at the playhead, and that is one call rather than two.**
+    // `setOn` re-points a render that is already held — resuming a cached one
+    // where it stopped, which is what makes stop-and-go free, and rebuilding it
+    // wherever the playhead has been moved to since. It used to answer nothing
+    // at all when the holder set was unchanged, so a click on the timeline
+    // during playback (press → `pause()` → seek → release → here) resumed the
+    // render of the moment playback had stopped at, over a playhead somebody had
+    // just moved: the picture and the sound both snapped back.
     output.setOn(true, transport.t, 'play');
-    // **Resume rather than rebuild when the cached render is already sitting
-    // here**, which is exactly what a pause is: the element stopped, its range
-    // still covers where it stopped, and starting it again costs nothing.
-    // Anything else — a scrub taken while it was cached, an edit — is a
-    // different moment, and a different moment is a different source because a
-    // graph cannot seek. Half a frame of tolerance, since what the element
-    // reports is where a picture is rather than where one was asked for.
-    const here = output.at();
-    if (here === null || Math.abs(here - transport.t) > 0.05)
-        output.moveTo(transport.t);
+    // After it, never before: `output.play` starts nothing that is not the
+    // render of where the playhead is now, so what this resumes is a render that
+    // was already right — and what it does not resume is one waiting to be
+    // rebuilt. The clips carry both halves until it lands.
     output.play(true);
     // Not `else`: while the render is still being built there is nothing else to
     // hear or see, and `advance()` parks these the moment it takes over.

@@ -419,6 +419,94 @@ console.log('\nan edit made while it is playing');
     pump(600);
 }
 
+console.log('\na click on the timeline while it is playing');
+{
+    // **The gesture, in the order the timeline sends it**: press (pause, seek),
+    // release (final seek, play again). Driven through the ruler rather than
+    // through `setPlayhead`, because what was wrong lived in those three calls
+    // meeting each other — `pause()` deliberately keeps the render cached and
+    // lets it go stale, the scrub deliberately does not rebuild it, and `play()`
+    // was therefore the one thing responsible for moving it and answered nothing
+    // at all when playback already held one. What resumed was the render of the
+    // moment playback had *stopped* at: the clicked frame for an instant, and
+    // then the picture and the sound both snapped back.
+    //
+    // Playback's own hold rather than the mode, since that is where it happened:
+    // the button is off for all of this.
+    A.setOutputPreview(false);
+    pump(200);
+    A.setPlayhead(0);
+    pump(200);
+    A.play();
+    waitFor('playback to reach its own render', () => A.output.isShowing());
+    pump(400);
+    const before = A.transport.t;
+    const wasSrc = out().src;
+    ok(before > 0.05, `playback is running on the render (${before.toFixed(2)} s)`);
+
+    const ruler = el('ruler');
+    const box = ruler.getBoundingClientRect();
+    const x = box.left + box.width * 0.6;
+    const y = box.top + box.height / 2;
+    const at = (type, target) => target.dispatchEvent(
+        new MouseEvent(type, { clientX: x, clientY: y, button: 0, buttons: 1, bubbles: true }));
+    at('mousedown', ruler);
+    at('mouseup', document);
+
+    const landed = A.transport.t;
+    ok(landed > before + 1,
+       `the click moved the playhead well away from where it was playing ` +
+       `(${before.toFixed(2)} → ${landed.toFixed(2)} s)`);
+    ok(A.transport.playing, 'and playback carried on rather than stopping there');
+
+    // The rebuild is the quiet period plus an open of every input the render
+    // reads, and the clips carry the picture and the sound for the whole of it.
+    // Two things are watched over those frames, and they are the two halves of
+    // "a stale render must never be seen or heard": where the playhead goes, and
+    // what is on the screen while it goes there.
+    let earliest = Infinity;
+    let stale = '';
+    let took = false;
+    for (let i = 0; i < 24; i++) {
+        pump(50);
+        earliest = Math.min(earliest, A.transport.t);
+        took = took || A.output.isShowing();
+        const v = out();
+        // `display`, because the element is in front of every clip at z-index
+        // 900 — it is on the screen unless it has been taken off it.
+        if (!v || v.style.display === 'none') continue;
+        const shown = A.output.at();
+        if (shown !== null && shown < landed - 0.5 && !stale)
+            stale = `the render of ${shown.toFixed(2)} s was on the screen with the ` +
+                    `playhead at ${A.transport.t.toFixed(2)} s`;
+    }
+    ok(earliest > landed - 0.5,
+       `the playhead never went back to where playback had been ` +
+       `(earliest ${earliest.toFixed(2)} s against ${landed.toFixed(2)})`);
+    ok(!stale, stale || 'and the render of the moment it left was never on the screen');
+    ok(A.transport.t > landed,
+       `playback went on from the new position (${A.transport.t.toFixed(2)} s)`);
+    ok(took, 'and a render of the new position took the picture back over');
+    ok(out().src !== wasSrc, `which is a new source: ${out().src}`);
+
+    A.pause();
+    pump(200);
+    // And the other half of the same rule: stopping and starting again where it
+    // stopped is the kept render resuming, not another one — which is what
+    // `KEEP_MS` is for and the thing easiest to break while fixing the above.
+    const kept = out().src;
+    A.play();
+    pump(100);
+    same(out().src, kept, 'a resume where it stopped is the kept render, not a rebuild');
+    ok(!out().paused, 'and it is running again straight away');
+    A.pause();
+    pump(200);
+
+    A.setPlayhead(0);
+    A.setOutputPreview(true);
+    opened('the preview back on for what follows');
+}
+
 console.log('\nturning it off');
 {
     click(el('btn-output'));

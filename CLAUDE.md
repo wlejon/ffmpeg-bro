@@ -253,7 +253,18 @@ a kept render exists and answers `at()` without anybody watching it, and letting
 it answer put a still picture over the clips and dragged every scrub back to
 wherever playback had stopped. A **stale** one is the same trap one layer down —
 a graph cannot seek, so a moved playhead is a new source, and between the two the
-element still holds the old range — which is what `current()` is for. And
+element still holds the old range — which is what `current()` is for, and a stale
+render is therefore neither **seen** (`reveal()`, the element being `z-index: 900`
+over the clips) nor **heard** (`play()` and `chase()` start nothing that is not
+`current()`); the clips carry both halves until the rebuild lands. "Engage at
+`t`" for a render already held is `setOn`'s, and the question it asks is
+`sittingAt()` rather than `want === t` — `want` is where the *range* begins and
+the element has played on from there, so a resume where playback stopped is free
+and a playhead that has moved is a rebuild, including one moved back to the
+range's own start, which is the same src and still a new source (`restart`).
+Answering nothing there was the click-during-playback bug: press → `pause()` →
+seek → release → `play()`, and what came back was the render of the moment
+playback had *stopped* at, over a playhead somebody had just moved. And
 `holders` is a set because `O` and playback are two reasons for one mechanism:
 pausing must not close a preview somebody opened, pressing `O` during playback
 must not close it when playback ends, and turning it off *by hand* must turn it

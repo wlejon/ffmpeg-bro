@@ -41,7 +41,10 @@ export would. Building that takes a moment, so the clips carry playback until it
 is ready — normally well before you have looked away from the mouse — and it is
 kept for a short while after you stop, so pausing and resuming is instant.
 Dragging the playhead is unaffected and stays just as quick; starting playback
-from a new position takes a brief moment to begin. What you see during playback
+from a new position takes a brief moment to begin. **Clicking the timeline while
+it is playing moves playback there** — the clips carry the picture and the sound
+from the new position for the moment it takes to rebuild, and what you are
+watching is never a moment you have just moved away from. What you see during playback
 can differ from what the clips alone would show only where the clips genuinely
 cannot show something — a generated source, a filter over the whole canvas —
 and in that case the difference is always toward what will actually render.
@@ -71,7 +74,8 @@ render range even when the timeline continues past that point.
 
 **Moving the playhead rebuilds it.** There is no seeking inside a render — only
 building a new one starting from where you want to be — so scrubbing while `O`
-is on takes a moment to catch up rather than being instant.
+is on takes a moment to catch up rather than being instant. The clips are what
+you see and hear while it catches up, rather than a render of where you were.
 
 **It carries the render's own soundtrack.** An `-af` chain, a `loudnorm`, an
 `amix` against a generator — none of that is anything a clip's own element can
