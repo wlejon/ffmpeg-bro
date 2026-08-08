@@ -44,7 +44,10 @@ Dragging the playhead is unaffected and stays just as quick; starting playback
 from a new position takes a brief moment to begin. **Clicking the timeline while
 it is playing moves playback there** — the clips carry the picture and the sound
 from the new position for the moment it takes to rebuild, and what you are
-watching is never a moment you have just moved away from. What you see during playback
+watching is never a moment you have just moved away from. **Sound and picture
+start together**, so a jump deep into a long recording in an expensive codec
+begins when the picture is there rather than with the sound running on ahead of
+it. What you see during playback
 can differ from what the clips alone would show only where the clips genuinely
 cannot show something — a generated source, a filter over the whole canvas —
 and in that case the difference is always toward what will actually render.
