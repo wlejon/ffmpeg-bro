@@ -99,7 +99,7 @@
 //     --out <path>       the montage. Default: build/montage/<name>.mp4
 //     --doc <path>       also save the edit as a .fbro. Default: beside --out.
 
-import { loadSpeech, wordsOf, renderAudio, measureShift, bare } from './speech.js';
+import { heardOnTimeline, measureShift, bare } from './speech.js';
 import { readSrt, streamOf, find } from './transcript.js';
 import { ROOT, abs, argv, positionals, opt, driver, clock } from './drive.js';
 
@@ -252,11 +252,9 @@ const AUDIO_WAS = { codec: before.audioCodec,
 /// ordinary speech and cheap on the GPU; the expensive half is decoding the
 /// picture to get at the sound, which is why this is done twice and not fifty
 /// times.
-function shiftAt(where, speech) {
-    const wav = `${segDir}/.sync.wav`;
-    const audio = renderAudio(A, { pump, until }, where, where + 30, wav);
-    const local = wordsOf(speech, speech.model.transcribe(audio), where);
-    try { fs.unlinkSync(wav); } catch (e) { /* gone */ }
+function shiftAt(where) {
+    const local = heardOnTimeline(A, { pump, until }, where, where + 30,
+                                  `${segDir}/.sync.wav`);
     if (local.length < 10) return null;
     return measureShift(local, words);
 }
@@ -268,13 +266,12 @@ function measureSync() {
     if (Number.isFinite(stated) && syncArg.trim() !== 'auto')
         return { shift: -stated, how: `stated as ${stated.toFixed(3)} s` };
 
-    const speech = loadSpeech(ROOT);
     // Two points, well apart, because a constant offset and a drift look the
     // same from one of them — and a drift would have to be corrected as a slope
     // rather than a number.
     const span = source.probe.format.duration;
     const probes = [span * 0.25, span * 0.75]
-        .map((t) => shiftAt(Math.max(0, Math.min(t, span - 35)), speech))
+        .map((t) => shiftAt(Math.max(0, Math.min(t, span - 35))))
         .filter(Boolean);
     if (!probes.length) {
         console.log('  could not match this file against the transcript — ' +
@@ -388,14 +385,12 @@ const onMedia = (t) => t + sync.shift;
 /// between renditions can survive it. Null when the phrase is not there, which
 /// is a hit to drop: cutting it anyway is how a montage comes to be full of
 /// moments nobody says anything in.
-function locate(phrase, near, speech) {
+function locate(phrase, near) {
     const wanted = phrase.split(/\s+/).filter(Boolean).map(bare);
     const from = Math.max(0, near - SEARCH);
     const to = Math.min(mediaEnd, near + SEARCH);
-    const wav = `${segDir}/.locate.wav`;
-    const audio = renderAudio(A, { pump, until }, from, to, wav);
-    const heard = wordsOf(speech, speech.model.transcribe(audio), from);
-    try { fs.unlinkSync(wav); } catch (e) { /* gone */ }
+    const heard = heardOnTimeline(A, { pump, until }, from, to,
+                                  `${segDir}/.locate.wav`);
 
     let best = null;
     for (let i = 0; i + wanted.length <= heard.length; i++) {
@@ -412,14 +407,13 @@ function locate(phrase, near, speech) {
     return best;
 }
 
-const speech = loadSpeech(ROOT);
 const segments = [];
 const missed = [];
 const beganCutting = Date.now();
 for (let i = 0; i < order.length; i++) {
     const o = order[i];
     const hint = onMedia(o.hit.at);
-    const found = locate(o.hit.phrase, hint, speech);
+    const found = locate(o.hit.phrase, hint);
     if (!found) {
         missed.push(o);
         console.log(`  – ${clock(o.hit.at)} "${o.hit.phrase}" is not in the ` +

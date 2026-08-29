@@ -1,12 +1,4 @@
-// A transcript on disk, and the two counting passes only a tool ever asks for.
-//
-// The transcript this repository writes is **one cue per word** — that is what
-// `transcribe.js` produces and what everything downstream reads — so an `.srt`
-// here is a word list with times rather than a subtitle file in the ordinary
-// sense. It is still an `.srt` because this application already opens a subtitle
-// file as an ordinary `-i`, already draws its cues over the program monitor and
-// already knows how to burn them in, so a transcript that arrives as cues is one
-// every part of the app can already use.
+// The two counting passes over a transcript that only a tool ever asks for.
 //
 // ── Where the search itself lives ─────────────────────────────────────────
 //
@@ -19,44 +11,23 @@
 // rather than over words, and why a match has to begin and end on a word
 // boundary.
 //
-// What stays here is everything that is about a transcript *on disk*: reading
-// one, writing one, and the counting that ranks a corpus.
+// ── Where the file itself went ────────────────────────────────────────────
+//
+// `stamp`, `readSrt` and `writeSrt` were here and are **`corpus/srt.js`'s** now.
+// They describe a file the *store* is made of — `corpus/words.js` writes one at
+// the end of every transcription and `ui/library.js` reads one on every search —
+// and a module set both applications import cannot reach into `tools/` for them.
+// They are re-exported here so that the older importers in this directory keep
+// working and so that a tool still has one namespace to look in; the definitions
+// are not here, and neither is the reason they are what they are.
 
-import { bare, parseSrt, streamOf, find, monologues, spaced } from '/app/phrase.js';
+import { bare, streamOf, find, monologues, spaced } from '/app/phrase.js';
+import { stamp, readSrt, writeSrt } from '../corpus/srt.js';
 
-const fs = require('fs');
-
-// Re-exported so that a tool has one place to look and the older importers here
-// keep working. The definitions are not here; the names are.
+// Re-exported so that a tool has one place to look. The definitions are not
+// here; the names are.
 export { bare, streamOf, find, monologues, spaced };
-
-// ── the file ───────────────────────────────────────────────────────────────
-
-/// `hh:mm:ss,mmm` for a number of seconds.
-export function stamp(s) {
-    const ms = Math.max(0, Math.round(s * 1000));
-    const p = (n, w = 2) => String(n).padStart(w, '0');
-    return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:` +
-           `${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
-}
-
-/// Every word in an `.srt`, as `{ from, to, text }`.
-export function readSrt(path) {
-    return parseSrt(fs.readFileSync(path, 'utf-8'));
-}
-
-/// Words out as cues, one per word.
-///
-/// The 0.08 s floor is Parakeet's frame — two tokens from the same frame would
-/// otherwise produce a cue that ends before it starts, which some readers refuse
-/// and none of them draw.
-export function writeSrt(path, words) {
-    const srt = words.map((w, i) =>
-        `${i + 1}\n${stamp(w.from)} --> ${stamp(Math.max(w.to, w.from + 0.08))}\n` +
-        `${w.text}\n`).join('\n');
-    fs.writeFileSync(path, srt, 'utf-8');
-    return path;
-}
+export { stamp, readSrt, writeSrt };
 
 /// Every place a phrase is said in a transcript file.
 export function findIn(path, phrase, opts = {}) {

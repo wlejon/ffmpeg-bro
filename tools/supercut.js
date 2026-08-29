@@ -36,22 +36,25 @@
 // `corpus/pull.js`.
 //
 // What still drives an application through its own surface (`__ffmpegBro`) is
-// `transcribe`, `clips`, `flipbook` and `weave` — every render one of those
-// performs is a render a person could have performed by hand on the Write
-// stage, and the printed command would be theirs. `pull` is a
-// `bro.ffmpeg.fetch` and holds no job slot at all.
+// `clips`, `flipbook` and `weave` — every render one of those performs is a
+// render a person could have performed by hand on the Write stage, and the
+// printed command would be theirs. `pull` is a `bro.ffmpeg.fetch` and
+// `transcribe` is a `bro.ffmpeg.words` read; neither holds a job slot and
+// neither touches the application at all.
 
-import { refresh, loadChannel, vodsOf, transcribed, transcribeVod,
-         clearEdit, vodPaths, search as searchCorpus, twitchTime, dirFor,
-         probeQuietly, isPulled } from './corpus.js';
+import { refresh, loadChannel, vodsOf, transcribed,
+         vodPaths, search as searchCorpus, twitchTime, dirFor,
+         isPulled } from './corpus.js';
 import { planPull, startPull, pollPull, running } from '../corpus/pull.js';
-import { loadSpeech } from './speech.js';
+import { startTranscribe, pollTranscribe, running as transcribing,
+         SPEECH_MODEL } from '../corpus/words.js';
+import { writeManifest } from '../corpus/index.js';
 import { readSrt, countPhrases, ranked } from './transcript.js';
 import { cutClips } from './clips.js';
 import { build as buildFlipbook } from './flipbook.js';
 import { weave as buildWeave } from './weave.js';
-import { ROOT, abs, argv, positionals, opt, num, flag, driver, exists, sizeOf,
-         mkdirp, writeJson, readJson, clock, span, gb, mb } from './drive.js';
+import { abs, positionals, opt, num, flag, driver, exists, sizeOf,
+         mkdirp, writeJson, clock, span, gb, mb } from './drive.js';
 
 const A = globalThis.__ffmpegBro;
 const args = positionals();
@@ -80,7 +83,6 @@ const USAGE = `usage: ffmpeg-bro-headless ui/ tools/supercut.js -- <verb> …
   --limit N       stop after N hits.
   --spacing S     collapse hits closer together than S seconds. Default 2.
   --device cpu|cuda   which device the model runs on.
-  --from S --to S     transcribe only part of each recording.
   --again         redo a step the store has already finished.
   --brief         print hits without the words either side of them.
 
@@ -111,20 +113,11 @@ function need(what) {
     if (!channel) { console.log(USAGE); throw new Error(`${what} needs a channel`); }
 }
 
-/// The model, loaded once and only when a verb actually needs it.
-///
-/// 2.5 GB off disk and onto the GPU is several seconds, and `search` — the verb
-/// anybody runs twenty times — needs none of it.
-let _speech = null;
-function speech() {
-    if (_speech) return _speech;
-    console.log('loading Parakeet…');
-    const t0 = Date.now();
-    _speech = loadSpeech(ROOT, device ? { device } : {});
-    console.log(`  ready in ${((Date.now() - t0) / 1000).toFixed(1)} s · ` +
-                `${_speech.sampleRate} Hz · ${_speech.frameSeconds} s per frame`);
-    return _speech;
-}
+// The model is no longer loaded here and no verb waits for it. It is loaded once
+// per directory by the native reader and kept for the life of the process
+// (`spoken_words.cpp`), so the 2.4 GB goes onto the card on the first read and
+// the next four recordings pay nothing — and `search`, the verb anybody runs
+// twenty times, never touches it.
 
 // ── list ───────────────────────────────────────────────────────────────────
 
@@ -234,6 +227,17 @@ async function doPull() {
 
 // ── transcribe ─────────────────────────────────────────────────────────────
 
+/// Every word of each, with a time — one recording at a time.
+///
+/// **One at a time, unlike `pull`, and for the opposite reason.** A pull is the
+/// network and the queue runs two; a read is the GPU, and brotensor's pool is a
+/// process-wide singleton that `analysisLock()` serialises anyway — so starting
+/// five would buy nothing and would hide which one is moving.
+///
+/// The progress lines are drawn from the job: `read`/`duration` is the percent
+/// and the position, `realtime` is audio seconds per wall second, and the time
+/// left is what is unread divided by that. All four come off one poll, which is
+/// the whole point of `bro.ffmpeg.words` filling `result` in while it reads.
 function doTranscribe() {
     need('transcribe');
     const vods = vodsOf(channel, last, skip);
@@ -244,20 +248,73 @@ function doTranscribe() {
     if (ready.length < vods.length)
         console.log(`  ${vods.length - ready.length} of ${vods.length} not pulled yet ` +
                     '— transcribing the rest');
-    const s = speech();
+    console.log(`  ${SPEECH_MODEL}`);
     const began = Date.now();
     let words = 0;
     for (let i = 0; i < ready.length; i++) {
         const v = ready[i];
         console.log(`[${i + 1}/${ready.length}] ${v.id} · ${v.title.slice(0, 56)}`);
-        const got = transcribeVod(A, driver, s, channel, v, {
-            from: num('from', 0), to: num('to', 0), again: flag('again'),
+        const job = startTranscribe(channel, v, {
+            again: flag('again'), device: device || undefined,
         });
-        words += got.words;
+        if (job.state === 'skipped') {
+            console.log(`  already transcribed · ${job.words} words`);
+            words += job.words;
+            continue;
+        }
+        console.log(`  ${span(job.duration)} · reading the whole soundtrack`);
+
+        // Started at now, and only once something has been read: the first poll
+        // lands before the reader has opened the file, and a line saying 0% at
+        // 0.0× realtime is wrong about everything in it.
+        let said = Date.now();
+        driver.until(`${v.id} to be transcribed`, () => {
+            pollTranscribe(job);
+            const now = Date.now();
+            // Every thirty seconds. A five-hour recording is half an hour of
+            // work and a tool that said nothing until the end would be
+            // indistinguishable from one that had hung.
+            if (transcribing(job) && job.read > 0 && now - said > 30000) {
+                said = now;
+                const pct = 100 * job.read / Math.max(0.001, job.duration);
+                const left = (job.duration - job.read) / Math.max(0.01, job.realtime);
+                console.log(`    ${pct.toFixed(0)}% · ${clock(job.read)} · ` +
+                            `${job.words} words · ${job.realtime.toFixed(1)}× realtime · ` +
+                            `${span(left)} left`);
+            }
+            return !transcribing(job);
+        }, 13 * 60 * 60 * 1000);
+
+        if (job.state !== 'done') {
+            // Nothing was written, deliberately — see `corpus/words.js`. Said
+            // out loud, because "0 words" beside a recording that was read for
+            // twenty minutes is the confusing way to report this.
+            console.log(`  ${v.id} ${job.state}${job.error ? `: ${job.error}` : ''} ` +
+                        `after ${clock(job.read)} — no transcript written`);
+            continue;
+        }
+        words += job.words;
+        console.log(`  ${job.words} words in ${span(job.elapsed)} ` +
+                    `(${job.realtime.toFixed(1)}× realtime)`);
+        if (job.truncated)
+            console.log(`  the list was capped — ${job.total} words were heard`);
     }
-    clearEdit(A, driver);
     console.log(`${words} words across ${ready.length} recording` +
                 `${ready.length === 1 ? '' : 's'} in ${span((Date.now() - began) / 1000)}`);
+
+    // **The manifest is refreshed here rather than left for `index`.** A
+    // transcript nothing points at is invisible to every view of the corpus, and
+    // the failure when somebody forgets the step is the quietest one this store
+    // has — the panel simply finds nothing, with nothing anywhere saying that
+    // the recording it would have found was transcribed an hour ago. It is one
+    // walk of the directories and a megabyte of cues per recording; `index`
+    // stays a verb for a store built by an older version of this.
+    try {
+        const got = writeManifest(channel);
+        console.log(`  indexed · ${got.vods.length} recordings · ${got.words} words`);
+    } catch (e) {
+        console.log(`  not indexed: ${(e && e.message) || e}`);
+    }
 }
 
 // ── status ─────────────────────────────────────────────────────────────────
@@ -430,53 +487,21 @@ async function doFlipbook() {
 
 /// Write the manifest the application's Find panel reads.
 ///
-/// **A file is the seam, and it is deliberately a small one.** The panel needs
-/// to know which recordings exist, what they are called, where their words are
-/// and where their media is; it does not need to know this store's layout, and
-/// `ui/` must not come to depend on `tools/` to find out. So the layout stays a
-/// fact of `corpus.js` and what crosses over is a list of absolute paths — the
-/// same shape of seam a `.fbro` is.
-///
-/// The word data itself is *not* copied in. The transcripts are a megabyte each
-/// and already on disk in a format the application can read; duplicating ninety
-/// thousand words into a second file would make a stale copy the first time a
-/// recording was transcribed again, and the panel reads the `.srt` directly for
-/// the same reason `clips` does.
+/// **The writing itself is `corpus/index.js`'s**, so that a window which has
+/// just finished transcribing a recording can refresh the manifest without
+/// anybody remembering to run this. That block says why a file is the seam and
+/// why the words are not copied into it. What is here is the printing.
 function doIndex() {
     need('index');
     const have = transcribed(channel);
     assert(have.length, `no transcripts for ${channel} yet — run \`build ${channel}\``);
 
-    let total = 0;
-    const vods = have.map((v) => {
-        const words = readSrt(v.srt).length;
-        total += words;
-        return {
-            id: v.id, title: v.title || '', publishedAt: v.publishedAt || '',
-            seconds: v.seconds || 0, page: v.page || '',
-            srt: abs(v.srt), media: v.hasMedia ? abs(v.media) : '', words,
-        };
-    });
-    const built = new Date().toISOString();
-    const at = abs(`build/corpus/${channel}/find.json`);
-    writeJson(at, { channel, built, vods });
-
-    // The roll-up, at a path the application can look for without being told
-    // which channels exist. One well-known file, so a corpus that has never been
-    // indexed is simply an absent file and the panel is absent with it.
-    const rollPath = abs('build/corpus/find.json');
-    const roll = readJson(rollPath) || {};
-    const others = (roll.channels || []).filter((c) => c && c.channel !== channel);
-    others.push({ channel, manifest: at, vods: vods.length, words: total, built });
-    others.sort((a, b) => String(a.channel).localeCompare(String(b.channel)));
-    writeJson(rollPath, { channels: others });
-
-    console.log(`${channel} · ${vods.length} recordings · ${total} words`);
-    console.log(`  ${at}`);
-    console.log(`  ${rollPath}`);
-    const without = vods.filter((v) => !v.media).length;
-    if (without)
-        console.log(`  ${without} have words but no recording on disk — the panel ` +
+    const got = writeManifest(channel);
+    console.log(`${got.channel} · ${got.vods.length} recordings · ${got.words} words`);
+    console.log(`  ${got.path}`);
+    console.log(`  ${got.roll}`);
+    if (got.without)
+        console.log(`  ${got.without} have words but no recording on disk — the panel ` +
                     'will find their hits and cannot play them');
 }
 

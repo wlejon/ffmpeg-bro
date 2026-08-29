@@ -15,7 +15,9 @@ application's job *starts* with getting a recording, so page resolution, the
 store's layout and the pull itself are now a module set with no interface in
 them, imported by this directory and by that window both. What forced the split
 was one concrete thing: `pullMedia` used to drive the workbench's Write stage,
-so a window without one could not pull a recording at all.
+so a window without one could not pull a recording at all. Transcribing followed
+for the same reason and is `corpus/words.js` now — a window that can search six
+hours of somebody talking has to be able to make the transcript it searches.
 
 | | |
 |---|---|
@@ -24,7 +26,7 @@ so a window without one could not pull a recording at all.
 | [`transcribe.js`](transcribe.js) | one file's words, with times, as cues |
 | [`montage.js`](montage.js) | a rhythmic montage of a phrase, on a beat grid |
 | `corpus.js` `clips.js` `flipbook.js` `weave.js` `speech.js` `transcript.js` `drive.js` | the parts they share |
-| [`../corpus/`](../corpus/) `vod.js` `store.js` `pull.js` `files.js` | the parts they share with the supercut application |
+| [`../corpus/`](../corpus/) `vod.js` `store.js` `pull.js` `srt.js` `words.js` `index.js` `files.js` | the parts they share with the supercut application |
 
 ## supercut.js
 
@@ -64,7 +66,8 @@ the file and a wider `--pad` is a new file rather than a silent overwrite.
 
 ### The two applications that read it
 
-`index <channel>` writes the manifest, and **two** things read it. The
+`transcribe` writes the manifest when it finishes and `index <channel>` writes it
+on its own, and **two** things read it. The
 [supercut application](../docs/manual/supercut.md) —
 `./build/Release/ffmpeg-bro-supercut`, its own window over the same engine — is
 where this store is meant to be used: a search down the left, the mix along the
@@ -121,9 +124,11 @@ and logs `[stt] Parakeet loaded on CUDA` when it has worked:
 build-cuda/Release/ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe turk
 ```
 
-Measured: **10.5× realtime** on a 4090, so an hour of broadcast is about six
+Measured: **11.3× realtime** on a 4090, so an hour of broadcast is about five
 minutes. Everything else — pulling, searching, the flipbook — is happy on either
-build.
+build. The read runs on a thread and the words arrive while it is running, so the
+percentage a run prints is how far down the recording it has got rather than how
+many chunks it has been through.
 
 **Pull today's broadcast last.** A recording Twitch is still finalising reads at
 about **1.2 MB/s**; a settled one reads at **14–40 MB/s** through the identical

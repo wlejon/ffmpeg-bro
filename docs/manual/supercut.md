@@ -211,8 +211,8 @@ which is deliberately not part of either application:
 ```
 ffmpeg-bro-headless ui/ tools/supercut.js -- pull turk
 ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe turk
-ffmpeg-bro-headless ui/ tools/supercut.js -- index turk
 ```
 
-`index` is the one that writes the manifest both applications read. **Re-run it
-after transcribing anything new**, or the finder reads a stale list.
+`transcribe` writes the manifest both applications read when it finishes, so
+there is nothing to remember after it. `index turk` writes the same file on its
+own, which is what a store built by an older version of these tools needs once.

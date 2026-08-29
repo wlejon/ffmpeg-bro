@@ -49,7 +49,7 @@
 // **If it ever does, this loop moves there**, exactly as Whisper's did.
 //
 // The three lengths below came out of `tools/speech.js`, which measured them,
-// and they live here now so there is one home for them. `tests/speech_test.cpp`
+// and they live here now so there is one home for them. `tests/words_test.cpp`
 // asserts them for `marks_test.cpp`'s reason: a change to the recipe should fail
 // loudly rather than move every word in every future transcript quietly.
 //

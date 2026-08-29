@@ -12,21 +12,25 @@
 //
 // What is left here is what genuinely needs an application to be driven:
 //
-//   openMedia      open a path as an input and lay it out as a clip
-//   clearEdit      put the application back to an empty edit
-//   transcribeVod  the words of a pulled recording, through the render path
+//   openMedia   open a path as an input and lay it out as a clip
+//   clearEdit   put the application back to an empty edit
 //
 // and the reading half that has no reason to move — `search`, `streamFor`,
 // `twitchTime` — which answers questions off the transcripts on disk.
 //
+// **`transcribeVod` was the third and is `corpus/words.js` now.** It was here
+// because it drove the Write stage: it rendered five-minute wavs of the
+// recording and handed each to a synchronous `bro.stt` call, which is a command
+// line and could never have been anything else. `bro.ffmpeg.words` reads a
+// soundtrack on a thread, so the whole step became a job a frame loop can poll,
+// and it moved for `pullMedia`'s reason exactly — a window that can search six
+// hours of somebody talking has to be able to make the transcript it searches.
+//
 // See the block at the top of `corpus/store.js` for the layout, and
 // `corpus/vod.js` for why page resolution is in neither application's `ui/`.
 
-import { vodPaths, loadState, saveState, isPulled,
-         transcribed } from '../corpus/store.js';
-import { transcribeSpan } from './speech.js';
-import { writeSrt, readSrt, streamOf, find, spaced } from './transcript.js';
-import { exists, unlink, span, clock } from './drive.js';
+import { transcribed } from '../corpus/store.js';
+import { readSrt, streamOf, find, spaced } from './transcript.js';
 
 // The store's own calls, re-exported so that a tool importing "the corpus"
 // still gets one namespace. **Re-exported and not reimplemented**: every one of
@@ -35,6 +39,8 @@ export { dirFor, channelFile, vodPaths, loadState, saveState, refresh,
          loadChannel, vodsOf, transcribed, isPulled,
          probeQuietly } from '../corpus/store.js';
 export { planPull, startPull, pollPull, stopPull, running } from '../corpus/pull.js';
+export { startTranscribe, pollTranscribe, stopTranscribe } from '../corpus/words.js';
+export { writeManifest } from '../corpus/index.js';
 
 // ── driving the application ────────────────────────────────────────────────
 
@@ -87,73 +93,6 @@ export function clearEdit(A, drive) {
     // itself — copied before the walk, because `removeInput` splices it.
     for (const input of A.inputs.inputs.slice()) A.inputs.removeInput(input);
     drive.pump(300);
-}
-
-// ── the words ──────────────────────────────────────────────────────────────
-
-/// Transcribe one VOD's pulled recording into the store.
-///
-/// Read from the same file the pictures will be cut from, which is the whole
-/// point of pulling the picture — see the block at the top of
-/// `corpus/store.js`. Only the audio stream is rendered, so the pictures are
-/// demuxed past rather than decoded.
-///
-/// Resumable at the level of the whole VOD rather than the chunk: a transcript
-/// is either finished or absent. Part of one is worse than none, because a
-/// search over it would answer "he never said that" about the half that was
-/// never read — and unlike a truncated download there is nothing in the file
-/// itself that says so.
-export function transcribeVod(A, drive, speech, login, meta, opts = {},
-                              log = console.log) {
-    const p = vodPaths(login, meta.id);
-    const state = loadState(login, meta.id);
-
-    if (exists(p.srt) && !opts.again) {
-        const had = readSrt(p.srt).length;
-        log(`  already transcribed · ${had} words`);
-        return { path: p.srt, words: had, skipped: true };
-    }
-    // Not `exists` — see `isPulled`. A pull in flight has a valid, growing file
-    // on disk, and transcribing that produces a transcript of half a broadcast
-    // with nothing in it that says so.
-    assert(isPulled(login, meta.id),
-           `${meta.id} has not been pulled completely yet`);
-
-    clearEdit(A, drive);
-    const input = openMedia(A, drive, p.media, { name: `${meta.id}` });
-    assert(input.probe.audio, `${p.media} has no soundtrack`);
-    const total = input.probe.format.duration;
-    const from = opts.from || 0;
-    const to = opts.to > 0 ? Math.min(opts.to, total) : total;
-    log(`  ${span(total)} · transcribing ${clock(from)}–${clock(to)}`);
-
-    const began = Date.now();
-    const res = transcribeSpan(A, drive, speech, {
-        from, to, wav: p.scratch,
-        chunkSeconds: opts.chunkSeconds, windowSeconds: opts.windowSeconds,
-        overlapSeconds: opts.overlapSeconds,
-        onChunk: (c) => {
-            const pct = 100 * (c.at - from) / Math.max(0.001, to - from);
-            const left = (to - c.at) / Math.max(0.01, c.realtime);
-            log(`    ${pct.toFixed(0)}% · ${clock(c.at)} · ${c.words} words · ` +
-                `${c.realtime.toFixed(1)}× realtime · ${span(left)} left`);
-        },
-    });
-    unlink(p.scratch);
-
-    writeSrt(p.srt, res.words);
-    const wall = (Date.now() - began) / 1000;
-    log(`  ${res.words.length} words in ${span(wall)} ` +
-        `(${res.realtime.toFixed(1)}× realtime)`);
-
-    saveState(login, meta.id, {
-        ...state, id: meta.id, title: meta.title, page: meta.page,
-        seconds: meta.seconds, publishedAt: meta.publishedAt,
-        transcript: { path: p.srt, words: res.words.length, from, to,
-                      realtime: res.realtime, seconds: wall,
-                      at: new Date().toISOString() },
-    });
-    return { path: p.srt, words: res.words.length, realtime: res.realtime };
 }
 
 // ── the store, asked a question ────────────────────────────────────────────

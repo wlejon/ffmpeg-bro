@@ -14,13 +14,11 @@ finding is the job. They are two views of one library, so they cannot disagree
 about what was said or where.
 
 **It is there only when a corpus is.** A corpus is built by
-[`tools/supercut.js`](../../tools/README.md), which pulls a channel's broadcasts
-and transcribes them, and `index` is the verb that writes the manifest this
-reads:
+[`tools/supercut.js`](../../tools/README.md), which pulls a channel's broadcasts,
+transcribes them and writes the manifest this reads:
 
 ```
 ffmpeg-bro-headless ui/ tools/supercut.js -- build turk
-ffmpeg-bro-headless ui/ tools/supercut.js -- index turk
 ```
 
 Without that file there is no panel and `/` does nothing. That is the ordinary
