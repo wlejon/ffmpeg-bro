@@ -11,12 +11,18 @@
 // list and `hls` is in the demuxer list, so once the playlist URL is in hand it
 // is an ordinary `-i` and nothing downstream has to learn anything.
 //
-// **This used to be `ui/vod.js` and it is deliberately not any more.** Resolving
-// a web page is not a part of ffmpeg's model — it is one HTTP request that
-// happens before ffmpeg's model starts — so the ffmpeg-only pass over the UI
-// took it out of the application (commit 3d09af1) and it belongs here, beside
-// the tools that are the only things that ever wanted it. Nothing in `ui/`
-// imports this file and nothing should.
+// **This used to be `ui/vod.js`, and it is in `corpus/` rather than in `ui/` or
+// in `tools/` for two separate reasons.** Resolving a web page is still not a
+// part of ffmpeg's model — it is one HTTP request that happens before ffmpeg's
+// model starts — so the ffmpeg-only pass over the UI took it out of the
+// workbench (commit 3d09af1), the workbench still does not import it, and it
+// must not come back in: the six stages are ffmpeg's pipeline and that is their
+// whole value. But the supercut application's job *starts* with getting a
+// recording — type a channel's name, see what it has, pull one — so this is no
+// longer wanted only by the command line. `corpus/` is the module set both
+// faces import: the mechanics of building a corpus, with no interface in them,
+// which is `ui/`'s own rule for the modules `supercut/` shares. `tools/` keeps
+// the batch verbs that drive these.
 //
 // Four things about it are load-bearing.
 //
@@ -357,6 +363,15 @@ export function forListening(resolved) {
 /// Preferred over the `lengthSeconds` Twitch's API reports, which is the
 /// *broadcast's* length rather than this transcode's, and which is a whole
 /// number of seconds where this is exact.
+///
+/// **A probe of the same URL now answers it too, and that was not true when the
+/// paragraph above was written.** `bro.ffmpeg.probe(rendition.url)` reported
+/// `duration = 9350` for a 935-segment VOD whose `#EXTINF` values sum to
+/// 9350 — the same number, in 0.71 s — so the `hls` demuxer in this build does
+/// total the segment list up. The reasoning above stays because it is still
+/// what the numbers are *made of*: this sum is the manifest's own arithmetic
+/// and is exact, where a probe is a demuxer's report about a stream it has
+/// opened, and `corpus/pull.js` says which of the two it takes for what.
 export async function mediaDuration(url) {
     let text;
     try {

@@ -3,14 +3,19 @@
 # tools/
 
 Scripted jobs, run through `ffmpeg-bro-headless` against the same `ui/` the
-application is. Each drives the app through its own surface (`__ffmpegBro`), so
-every render one of these performs is a render a person could have performed by
+application is. Most drive the app through its own surface (`__ffmpegBro`), so
+every render one of those performs is a render a person could have performed by
 hand on the Write stage.
 
-**These are not part of the application and deliberately not in `ui/`.**
-Resolving a Twitch page is one HTTP request that happens *before* ffmpeg's model
-starts, so the ffmpeg-only pass took it out of the app (commit `3d09af1`) and it
-lives here, beside the only things that ever wanted it.
+**These are the batch verbs, and the mechanics under them are
+[`corpus/`](../corpus/).** Resolving a Twitch page is one HTTP request that
+happens *before* ffmpeg's model starts, so the ffmpeg-only pass took it out of
+the workbench (commit `3d09af1`) and it has not gone back. But the supercut
+application's job *starts* with getting a recording, so page resolution, the
+store's layout and the pull itself are now a module set with no interface in
+them, imported by this directory and by that window both. What forced the split
+was one concrete thing: `pullMedia` used to drive the workbench's Write stage,
+so a window without one could not pull a recording at all.
 
 | | |
 |---|---|
@@ -18,7 +23,8 @@ lives here, beside the only things that ever wanted it.
 | [`pull_vod.js`](pull_vod.js) | one VOD, or one window of one, as a stream copy |
 | [`transcribe.js`](transcribe.js) | one file's words, with times, as cues |
 | [`montage.js`](montage.js) | a rhythmic montage of a phrase, on a beat grid |
-| `vod.js` `corpus.js` `clips.js` `flipbook.js` `weave.js` `speech.js` `transcript.js` `drive.js` | the parts they share |
+| `corpus.js` `clips.js` `flipbook.js` `weave.js` `speech.js` `transcript.js` `drive.js` | the parts they share |
+| [`../corpus/`](../corpus/) `vod.js` `store.js` `pull.js` `files.js` | the parts they share with the supercut application |
 
 ## supercut.js
 
@@ -69,15 +75,23 @@ Compose stage, for a moment wanted inside a larger edit.
 Either way it is the part a terminal cannot do: hearing a hit before committing
 to it.
 
-**A file is the whole of the seam.** The manifest is a list of recordings with
-absolute paths to their words and their media; `ui/` never imports anything from
-here, and this never learns anything about the timeline. What they share is the
-matching itself, which lives in `ui/phrase.js` and is imported back into
-`transcript.js`, and the corpus reading around it, which is `ui/library.js` —
-three views of one library. Two copies of a search are two chances for the list
-on the screen and the clips on disk to describe different sets of moments, and
-that is not a theoretical worry: when one rule about what counts as an instance
-lived only here, the panel found fifteen of a phrase this found fourteen of.
+**A file is the whole of the seam for the words.** The manifest is a list of
+recordings with absolute paths to their words and their media; `ui/` never
+imports anything from here, and this never learns anything about the timeline.
+What they share is the matching itself, which lives in `ui/phrase.js` and is
+imported back into `transcript.js`, and the corpus reading around it, which is
+`ui/library.js` — three views of one library. Two copies of a search are two
+chances for the list on the screen and the clips on disk to describe different
+sets of moments, and that is not a theoretical worry: when one rule about what
+counts as an instance lived only here, the panel found fifteen of a phrase this
+found fourteen of.
+
+What is *not* a file seam is making the corpus in the first place, and that is
+what [`corpus/`](../corpus/) is: shared modules rather than a shared file,
+because "pull this recording" is a verb both faces perform rather than an answer
+one of them writes down. Nothing in it touches the DOM at import time and
+nothing in it drives an application — the same property that lets `supercut/`
+import `ui/project.js`.
 
 The words are not copied into the manifest. The transcripts are a megabyte each
 and already in a form the applications read, so they read the `.srt` directly; a

@@ -7,6 +7,14 @@
 // three files before this one existed, which is three chances for a `pump` that
 // pumps a different amount and a `--flag` that parses differently.
 //
+// **Half of that list now lives in `corpus/files.js` and is re-exported from
+// here**, so a tool still asks this file for all six and there is still one
+// implementation of each. The split is by what the thing means rather than by
+// what it does: `pump`, `until` and the command line are *this* runner — a loop
+// that stops the world for a slice of wall time, and a parse of `argv` — and
+// neither exists inside a window. A windowed application needs `mkdirp` and
+// `readJson` and must never import the thing that stops the world to get them.
+//
 // **`pump` is not a sleep and the difference is the whole reason it exists.**
 // The engine is single-threaded and cooperative: a render running on a worker
 // reports progress by posting onto the JS thread, and a tool that blocked would
@@ -21,21 +29,11 @@
 // to be told at hour two. Every call passes a phrase that completes the sentence
 // "timed out waiting for …".
 
-const fs = require('fs');
-
-/// The repository root, with forward slashes.
-///
-/// **`require('fs')` resolves a relative path against the *app* directory**
-/// (`ui/`), not the working directory the command was typed in — so `--out
-/// out/x.mp4` writes to `ui/out/x.mp4` and the printed path and the written path
-/// are different files. Everything here is made absolute against this instead,
-/// which is what makes those two the same again.
-export const ROOT = fs.realpathSync(`${bro.appDir}/..`).replace(/\\/g, '/');
-
-/// A path as given if it is already absolute, and against the repo root if not.
-export const abs = (p) =>
-    (/^([a-z]:[\\/]|[\\/])/i.test(String(p)) ? String(p) : `${ROOT}/${p}`)
-        .replace(/\\/g, '/');
+// Where the repo root is, how to make a directory, how to keep a small JSON
+// file, and how to print a size or a length — all of it `corpus/files.js`'s
+// now, and re-exported so every tool here still has one place to ask.
+export { ROOT, abs, mkdirp, exists, sizeOf, readJson, writeJson, unlink, rename,
+         gb, mb, clock, span } from '../corpus/files.js';
 
 // ── the command line ───────────────────────────────────────────────────────
 
@@ -115,70 +113,3 @@ export function until(what, predicate, timeoutMs, onTick = null) {
 
 /// The drive pair the shared helpers in `speech.js` take.
 export const driver = { pump, until };
-
-// ── saying how big and how long ────────────────────────────────────────────
-
-export const gb = (n) => `${(n / 1e9).toFixed(2)} GB`;
-export const mb = (n) => `${(n / 1e6).toFixed(1)} MB`;
-
-/// Seconds as `h:mm:ss`, which is how a VOD's own player writes a timestamp and
-/// therefore what a person can paste back into one.
-export const clock = (t) =>
-    `${Math.floor(t / 3600)}:${String(Math.floor(t / 60) % 60).padStart(2, '0')}` +
-    `:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-
-/// Seconds as a length a person reads rather than a timestamp they seek to.
-export const span = (t) => (t >= 3600 ? `${(t / 3600).toFixed(1)} h`
-                          : t >= 60 ? `${(t / 60).toFixed(1)} min`
-                          : `${t.toFixed(1)} s`);
-
-// ── small files beside the media ───────────────────────────────────────────
-
-/// Make a directory and every parent of it.
-///
-/// Walked segment by segment rather than passed `{ recursive: true }`, because
-/// this has to work on whatever `mkdirSync` this engine has rather than on the
-/// one Node documents — and an already-existing segment is the ordinary case
-/// here, not an error.
-export function mkdirp(dir) {
-    const parts = abs(dir).split('/');
-    let at = parts[0];
-    for (let i = 1; i < parts.length; i++) {
-        at += `/${parts[i]}`;
-        if (!parts[i]) continue;
-        try { fs.mkdirSync(at); } catch (e) { /* there already, or a parent is */ }
-    }
-    return abs(dir);
-}
-
-export const exists = (p) => {
-    try { return fs.existsSync(abs(p)); } catch (e) { return false; }
-};
-
-/// How big a file is, or 0 if it is not there.
-export function sizeOf(p) {
-    try { return fs.statSync(abs(p)).size || 0; } catch (e) { return 0; }
-}
-
-/// A JSON file, or `fallback` if it is absent or unreadable.
-///
-/// **Unreadable counts as absent on purpose.** These files are written by a
-/// tool that can be interrupted halfway through a two-hour run, so a truncated
-/// one is a thing that genuinely happens — and the useful response is to do the
-/// step again, not to stop with a parse error.
-export function readJson(p, fallback = null) {
-    try { return JSON.parse(fs.readFileSync(abs(p), 'utf-8')); }
-    catch (e) { return fallback; }
-}
-
-export function writeJson(p, value) {
-    const at = abs(p);
-    mkdirp(at.slice(0, at.lastIndexOf('/')));
-    fs.writeFileSync(at, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
-    return at;
-}
-
-/// Delete a file, and do not complain that it was already gone.
-export function unlink(p) {
-    try { fs.unlinkSync(abs(p)); } catch (e) { /* gone */ }
-}

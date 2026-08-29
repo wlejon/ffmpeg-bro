@@ -26,18 +26,25 @@
 // Welding them into one command would mean re-pulling seventeen gigabytes to try
 // a different phrase, which is the whole thing this store exists to avoid.
 //
-// **This is deliberately not in `ui/`.** Resolving a Twitch page is not a part of
-// ffmpeg's model, and the application is an ffmpeg UI — see the block at the top
-// of `vod.js`. What is here drives that application through its own surface
-// (`__ffmpegBro`), so every render this performs is a render a person could have
-// performed by hand on the Write stage, and the printed command would be theirs.
+// **This is the batch face and no longer the only one.** The mechanics — page
+// resolution, the store's layout, pulling a recording — are `corpus/`, which has
+// no interface in it and which the supercut application imports too; what is
+// here is the verbs, the arguments and the printing. That split was forced by
+// one concrete thing rather than chosen for tidiness: `pullMedia` used to drive
+// the *workbench's* Write stage (`shell.goTo('write')`, a click on `#ex-go`), so
+// a window without one could not pull a recording. See the block at the top of
+// `corpus/pull.js`.
 //
-// A UI over this is the obvious next thing and every verb above is shaped for
-// one: the work is in the modules, the printing is here.
+// What still drives an application through its own surface (`__ffmpegBro`) is
+// `transcribe`, `clips`, `flipbook` and `weave` — every render one of those
+// performs is a render a person could have performed by hand on the Write
+// stage, and the printed command would be theirs. `pull` is a
+// `bro.ffmpeg.fetch` and holds no job slot at all.
 
-import { refresh, loadChannel, vodsOf, transcribed, planPull, pullMedia, transcribeVod,
+import { refresh, loadChannel, vodsOf, transcribed, transcribeVod,
          clearEdit, vodPaths, search as searchCorpus, twitchTime, dirFor,
          probeQuietly, isPulled } from './corpus.js';
+import { planPull, startPull, pollPull, running } from '../corpus/pull.js';
 import { loadSpeech } from './speech.js';
 import { readSrt, countPhrases, ranked } from './transcript.js';
 import { cutClips } from './clips.js';
@@ -138,6 +145,20 @@ async function doList() {
 
 // ── pull ───────────────────────────────────────────────────────────────────
 
+/// The recording of each, by stream copy — all of them at once.
+///
+/// **They are all started and the queue decides how many run**, which is the
+/// gain from a pull no longer being a render: a fetch holds no job slot, so
+/// there is nothing here that has to be done one at a time. No number is stated
+/// in this file on purpose. The pool is two workers wide and that is
+/// `fetch_queue.h`'s, measured there — every fetch is a download, they share one
+/// link, and three concurrent pulls of one CDN finish later in total than two
+/// do — so a second number here would be a second answer to one question, and
+/// the one that is wrong would be this one.
+///
+/// Starting them all costs nothing a sequential loop would not: a queued fetch
+/// has opened nothing. And it does not make the signed URLs any staler, because
+/// every one of them is resolved up front either way — see below.
 async function doPull() {
     need('pull');
     const vods = vodsOf(channel, last, skip);
@@ -146,24 +167,69 @@ async function doPull() {
     // **Every `await` first, then every copy.** A `fetch` issued after a long
     // stretch of synchronous pumping never starts — the run dies with "top-level
     // await did not settle" — so the signed URLs and the playlist durations for
-    // the whole batch are resolved here, while nothing long has run yet. See
-    // `planPull` in corpus.js, which is the only async half of a pull.
+    // the whole batch are resolved here, while nothing long has run yet. That is
+    // a rule about *this driver*, which stands on the JS thread inside
+    // `drive.until` for as long as the pull takes; it is not a rule about
+    // pulling, and a window is under no such constraint. `planPull` says so.
     console.log('resolving…');
     const plans = [];
     for (const v of vods) plans.push(await planPull(channel, v));
 
-    let bytes = 0;
+    const jobs = [];
     for (let i = 0; i < vods.length; i++) {
         const v = vods[i];
         console.log(`[${i + 1}/${vods.length}] ${v.id} · ${span(v.seconds)} · ` +
                     v.title.slice(0, 56));
-        clearEdit(A, driver);
-        const got = pullMedia(A, driver, channel, v, plans[i]);
-        bytes += got.bytes;
+        const job = startPull(channel, v, plans[i]);
+        if (job.dropped)
+            console.log(`  leaving out ${job.dropped} data stream` +
+                        `${job.dropped === 1 ? '' : 's'} ` +
+                        '(Twitch segment metadata, which Matroska will not hold)');
+        if (job.state === 'failed') console.log(`  ${v.id} refused: ${job.error}`);
+        jobs.push(job);
     }
-    clearEdit(A, driver);
-    console.log(`${vods.length} recording${vods.length === 1 ? '' : 's'} ` +
-                `on disk · ${gb(bytes)}`);
+
+    let said = 0;
+    const began = Date.now();
+    driver.until('the recordings', () => {
+        for (const job of jobs) pollPull(job);
+        const now = Date.now();
+        // Every thirty seconds, a line per copy that is actually moving. The
+        // queued ones say nothing: "0.0% · 0.00 GB" repeated for four recordings
+        // that have not started is a report that hides the one that has.
+        if (now - said > 30000) {
+            said = now;
+            const secs = (now - began) / 1000;
+            for (const job of jobs) {
+                if (!running(job) || !job.bytes) continue;
+                const rate = job.bytes / Math.max(0.001, job.elapsed || secs);
+                const pct = job.progress > 0 ? `${(job.progress * 100).toFixed(1)}% · ` : '';
+                const left = job.progress > 0
+                    ? ` · ${span((job.elapsed || secs) / job.progress -
+                                 (job.elapsed || secs))} left` : '';
+                console.log(`    ${job.meta.id} · ${pct}${gb(job.bytes)} ` +
+                            `(${(rate / 1e6).toFixed(1)} MB/s)${left}`);
+            }
+        }
+        return !jobs.some(running);
+    }, 8 * 60 * 60 * 1000);
+
+    let bytes = 0;
+    let done = 0;
+    for (const job of jobs) {
+        if (job.state === 'failed') {
+            console.log(`  ${job.meta.id} failed: ${job.error}`);
+            continue;
+        }
+        bytes += job.bytes;
+        done++;
+        const secs = job.elapsed || (Date.now() - began) / 1000;
+        if (job.state === 'done')
+            console.log(`  ${job.meta.id} · ${gb(job.bytes)} in ${span(secs)} ` +
+                        `(${(job.bytes / 1e6 / Math.max(0.001, secs)).toFixed(1)} MB/s) · ` +
+                        `${span(job.seconds)}`);
+    }
+    console.log(`${done} recording${done === 1 ? '' : 's'} on disk · ${gb(bytes)}`);
 }
 
 // ── transcribe ─────────────────────────────────────────────────────────────

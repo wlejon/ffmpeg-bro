@@ -16,10 +16,13 @@
 //
 // **A file is the seam.** `tools/supercut.js index <channel>` writes
 // `build/corpus/find.json`, a list of channels and the manifests describing
-// them; this reads that and nothing else. The store's layout, the Twitch API,
-// the pulling and the transcribing all stay in `tools/`, which is deliberately
-// not part of either application — see the block at the top of
-// `tools/README.md`. An absent file is the ordinary case and not an error.
+// them; this reads that and nothing else. The store's layout, the Twitch API and
+// the pulling are `corpus/`, a module set the batch verbs in `tools/` and the
+// supercut window both drive — see the block at the top of `corpus/store.js`.
+// **This file is still on the reading side of that and stays there**: the
+// workbench searches a corpus and has no business making one, which is why
+// nothing in `ui/` imports `corpus/`. An absent manifest is the ordinary case
+// and not an error.
 //
 // The manifest carries paths and counts, **not words**. The transcripts are a
 // megabyte each and already on disk in a form this can read, so they are read

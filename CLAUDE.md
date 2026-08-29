@@ -323,12 +323,37 @@ them because they are).
 `ui/library.js` is the corpus of transcripts — which recordings there are, what
 was said in them and where — and it has **three views over it**: `ui/find.js`
 (the panel over Compose), `supercut/results.js` (the second application's whole
-left-hand side) and `tools/`. Everything that *makes* a corpus — the Twitch API,
-the pulling, the transcribing, the store's layout — is `tools/`, which is
-deliberately not part of either application, so what crosses over is one file:
-`build/corpus/find.json`, written by `supercut.js index`, listing channels and
-absolute paths. **An absent file is the ordinary case**: no corpus, no panel, and
-`/` does nothing.
+left-hand side) and `tools/`. What *makes* a corpus — the Twitch API, the
+pulling, the store's layout — is **`corpus/`**, which is a module set rather
+than a face: it is imported by `tools/supercut.js`'s batch verbs and by the
+supercut window both, exactly as `ui/`'s model modules are imported by two
+windows. `build/corpus/find.json` is still the manifest a view reads, and **an
+absent file is still the ordinary case**: no corpus, no panel, and `/` does
+nothing.
+
+That directory used to be `tools/` outright, on the rule that nothing which
+builds a corpus belongs in an application. What overturned it is that the
+supercut application's job *starts* with getting a recording: a window that can
+search six hours of somebody talking and cannot go and get the six hours is a
+window that sends you to a command line to use it. Two properties keep the split
+honest and both are easy to break. **Nothing in `corpus/` may touch the DOM at
+import time or drive an application**, which is the same property that lets
+`supercut/` share `ui/`'s model modules — `pullMedia` used to click `#ex-go` on
+the Write stage, and that is precisely what made it unimportable. And **`assert`
+is a headless-only global**, installed by `headless_bindings.cpp` and absent in a
+window, so a refusal in `corpus/` throws an `Error` carrying the same sentence.
+Anything moved in here next will hit that.
+
+**A pull is a `bro.ffmpeg.fetch`, not a render.** The old one drove the Write
+stage and so held the one job slot, which is why the command line pulls one
+recording at a time; the queue takes several at once, cancels one at a time and
+leaves the Render button alone. Measured against a real VOD: 60 s of 1080p60 in
+2.7 s, 17 MB/s, with `position`/`span`/`progress` live on the output's clock, so
+a progress bar needs no second request. `mediaDuration`'s comment says
+libavformat reports zero for a Twitch playlist; the *probe* now answers 22 960 s
+for a 2296-segment VOD, matching the manifest's own `#EXTINF` sum exactly — the
+playlist sum is kept anyway, because it is arithmetic where a probe is a report
+and because `segments` is a fact only the manifest holds.
 
 The split between `library.js` and its views is the load-bearing part and was
 learned the expensive way: **everything that decides what the answer is lives in
