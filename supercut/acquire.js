@@ -77,7 +77,7 @@ import { loadChannel, refresh, transcribed, isPulled, loadState,
 import { planPull, startPull, pollPull, stopPull } from '../corpus/pull.js';
 import { startTranscribe, pollTranscribe, stopTranscribe } from '../corpus/words.js';
 import { writeManifest } from '../corpus/index.js';
-import { exists, sizeOf } from '../corpus/files.js';
+import { exists, sizeOf, gb } from '../corpus/files.js';
 import * as library from '../ui/library.js';
 
 /// How many of the newest broadcasts a look-up asks Twitch for.
@@ -453,6 +453,64 @@ function published(chan) {
     } catch (e) {
         said = String((e && e.message) || e);
     }
+}
+
+// ── what is running, for the place that lists all of it ────────────────────
+
+/// Every job this file has in flight, as the one list in `inflight.js` takes it.
+///
+/// **The sentence is written here because the states are named here.** A
+/// Recordings row draws a condition as *what to do next* and this draws the same
+/// condition as *what is happening*, which are two sentences about one fact — and
+/// a second `switch` over the eight states, in a panel, is exactly the second
+/// home this repository keeps paying for. So `results.js` draws whichever list it
+/// is showing and neither of them decides what a state means.
+///
+/// Only the conditions something is *happening* in are listed. `listed`,
+/// `pulled`, `transcribed` and `failed` are rows waiting for a press, and a
+/// panel about what is running that filled up with things that are not is a
+/// panel nobody would open twice.
+export function inFlight() {
+    const out = [];
+    // A look-up is a round trip and belongs here for the same reason a pull does
+    // — it is the one job with no row of its own to sit on, because until it
+    // answers there may be no rows at all.
+    if (looking)
+        out.push({ key: `look:${looking}`, kind: 'Looking up', name: looking,
+                   note: 'asking Twitch', progress: 0, stop: null });
+
+    for (const r of rows) {
+        const pct = `${Math.round((r.progress || 0) * 100)}%`;
+        let kind = '';
+        let note = '';
+        let stoppable = true;
+        switch (r.state) {
+        case 'resolving':
+            kind = 'Getting'; note = 'asking Twitch'; stoppable = false; break;
+        case 'pulling':
+            kind = 'Getting'; note = `${pct} · ${gb(r.bytes)}`; break;
+        case 'joining':
+            // No stop, here as on the row: stopping mid-join leaves two halves
+            // and no recording. See `corpus/pull.js`.
+            kind = 'Getting'; note = `${pct} · joining`; stoppable = false; break;
+        case 'queued':
+            kind = 'Reading'; note = 'queued'; break;
+        case 'transcribing':
+            kind = 'Reading';
+            note = `${pct} · ${(r.vod.words || 0).toLocaleString()} words · ` +
+                   `${(r.realtime || 0).toFixed(1)}×`;
+            break;
+        default:
+            continue;
+        }
+        out.push({
+            key: `${kind}:${r.id}`, kind,
+            name: r.detail || String(r.id),
+            note, progress: r.progress || 0,
+            stop: stoppable ? () => stop(r.id) : null,
+        });
+    }
+    return out;
 }
 
 // ── stopping ───────────────────────────────────────────────────────────────

@@ -379,6 +379,20 @@ to go stale. `monologues()` is in the same file and is named after its
 measurement for `sound_marks.h`'s reason: it is a run of words with no gap wider
 than *n*, and nothing in that decided anything was a monologue.
 
+**Which recordings a search runs over is the library's too** (`choose`/`chosen`/
+`searching`, and `searched()` beneath every search): a corpus is not one
+question, and twenty broadcasts of one streamer are twenty afternoons. Three
+parts of it are decisions. The confinement is asked of the *manifest* rather than
+of the chosen ids, so an id from another channel or from a recording that has
+gone narrows to nothing instead of leaking or throwing. There is deliberately no
+way to express "search nothing" — a finder that could be put into that state and
+would say so only by finding nothing is a finder people learn not to trust, which
+is also why `supercut/results.js` refuses to untick the last box rather than
+letting it bounce back on. And **re-reading the same channel keeps the choice
+while moving to another drops it**: a transcription landing calls `reload()`, and
+a search that quietly went back to everything on that frame would be the tool
+changing the question under somebody.
+
 **Auditioning is one `<video>` that every row shares**, which is `ui/residency.js`'s
 rule arriving in a second place: two hundred results with a player each is two
 hundred decoders on six-hour files. And an input added by the panel has no probe

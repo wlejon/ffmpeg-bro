@@ -223,6 +223,46 @@ export function pending() {
     return n;
 }
 
+/// Everything this file has in flight, as the one list in `inflight.js` takes it.
+///
+/// **Read out of the two Maps rather than reported into a register**, for the
+/// reason every other "what is running" answer here is read: these are the only
+/// record of a cut and a proxy, and a copy kept beside them for a panel is a copy
+/// that goes stale on the frame something fails.
+///
+/// A **proxy has no stop**, and that is not an omission: `settleProxies` asks for
+/// the proxy of every clip in the mix on every frame, so one stopped by hand
+/// would start again immediately. What stops a proxy is taking the clip out,
+/// which that pass already does.
+export function running() {
+    const out = [];
+    for (const job of jobs.values()) {
+        if (job.state === 'done' || job.state === 'failed') continue;
+        const clip = project.clips.find((c) => c.id === job.clip);
+        out.push({
+            key: `cut:${job.clip}`, kind: 'Cutting',
+            name: (clip && clip.name) || `clip ${job.clip}`,
+            note: job.state === 'cutting'
+                ? `${Math.round((job.progress || 0) * 100)}%` : job.state,
+            progress: job.progress || 0,
+            // Stopping one leaves the clip on the recording, which works and is
+            // slow — the same place every failure leaves it, and the reason
+            // there is nothing to confirm.
+            stop: job.state === 'cutting' ? () => forget(job.clip) : null,
+        });
+    }
+    for (const [path, rec] of proxies) {
+        if (rec.state !== 'making') continue;
+        out.push({
+            key: `proxy:${path}`, kind: 'Proxy',
+            name: path.split(/[\\/]/).pop(),
+            note: `${Math.round((rec.progress || 0) * 100)}%`,
+            progress: rec.progress || 0, stop: null,
+        });
+    }
+    return out;
+}
+
 /// The proxy to scrub `path` with, or `''` for "use the file itself".
 ///
 /// `supercut/screen.js` is the one caller: the picture it parks is the only

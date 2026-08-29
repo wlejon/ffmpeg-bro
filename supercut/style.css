@@ -147,6 +147,17 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
    live thing rather than as another dim column. */
 .row.rec.getting .where { color: var(--text); }
 
+/* Which recordings a search runs over. A recording with no words in it cannot be
+   one of them and gets no box — but it gets the box's width, because four rows
+   whose dates do not line up read as four different kinds of thing. */
+.row.rec .pick, .row.rec .pick-gap { flex: 0 0 13px; width: 13px; margin: 0; }
+.row.rec .pick { accent-color: var(--accent); cursor: pointer; }
+/* Dimmed until it is the thing being decided: every box is ticked in the
+   ordinary case, and twenty bright ticks would be twenty things shouting about a
+   choice nobody has made yet. */
+.row.rec .pick:checked { opacity: .45; }
+#finder:hover .row.rec .pick:checked, .row.rec .pick:hover { opacity: 1; }
+
 /* ── the picture ──────────────────────────────────────────────────────── */
 
 #right { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
@@ -303,6 +314,45 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 #empty {
     color: var(--dim); font-size: 12px; padding: 40px 0 0 4px;
 }
+
+/* ── what is running ──────────────────────────────────────────────────── */
+
+/* Over the window and hard against the button that opens it, so the list reads
+   as that button's answer rather than as a fifth region. Wide enough for a
+   recording's title and a percentage, and no wider — every row is three short
+   columns and a bar. */
+#flight {
+    position: fixed; top: 39px; right: 12px; width: 420px; max-height: 60%;
+    overflow-y: auto; z-index: 120;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+}
+.fl-row {
+    display: flex; align-items: baseline; gap: 8px;
+    position: relative; padding: 7px 6px 9px;
+    border-bottom: 1px solid var(--line);
+}
+.fl-row:last-child { border-bottom: 0; }
+.fl-row .kind { font-size: 11px; color: var(--accent); flex: 0 0 62px; }
+.fl-row .name {
+    flex: 1 1 auto; min-width: 0; font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fl-row .note { font-size: 11px; flex: 0 0 auto; }
+/* The room a Stop would take, kept by the rows that have none, so the numbers
+   above and below one line up as a column. */
+.fl-row .fl-gap { flex: 0 0 42px; }
+.fl-row button.tiny { flex: 0 0 42px; }
+.fl-row .getbar {
+    position: absolute; left: 6px; right: 6px; bottom: 2px; height: 2px;
+    background: rgba(255,255,255,.06);
+}
+.fl-row .getbar .fill {
+    height: 100%; width: 0; background: var(--accent);
+    transition: width .2s linear;
+}
+.fl-empty { padding: 8px 6px; font-size: 12px; }
 
 /* ── the flash line ───────────────────────────────────────────────────── */
 

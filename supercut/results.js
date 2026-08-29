@@ -135,15 +135,37 @@ export function refresh() {
 
 /// Hear it. One element, shared with everything else on the screen — see
 /// `screen.js`, where the rule about a decoder being a property of a *file* is.
+/// Hear it — or stop hearing it, if this is the row already playing.
+///
+/// **The same control, because it is the same thing.** An audition ends by
+/// itself at the end of the moment, which is right for a two-second hit and
+/// useless for a six-hour recording: pressing `▶` on one and then having no way
+/// to stop it is the window carrying on talking over everything done next. So
+/// the button on the row that is playing is the stop, in the place the hand is
+/// already on.
 export function play(n) {
     const item = results[n];
     if (!item || !item.vod.media) return false;
+    if (isPlaying(item)) { hush(); return true; }
     const lead = item.kind === 'word' ? library.WORD_PAD : 0;
     playing = item;
     hooks.audition(item.vod.media, Math.max(0, item.at - lead), item.to + lead);
     drawRows();
     return true;
 }
+
+/// Stop the audition, whichever row it is on. The app's `Space` reaches this too.
+export function hush() {
+    if (!playing) return false;
+    if (hooks.hush) hooks.hush();
+    playing = null;
+    drawRows();
+    return true;
+}
+
+/// Is anything being auditioned? For the caller that has to decide what a key
+/// means — see `app.js`.
+export function auditioning() { return !!playing; }
 
 /// Put it at the end of the mix.
 export function add(n) {
@@ -241,7 +263,17 @@ function drawControls() {
                     drawChannel();
                 });
             }
-            return [box, btn];
+            const kids = [box, btn];
+            // The way back, and only when there is something to come back from.
+            // What is *currently* being searched is said by `about()` in the
+            // header — a statement that changes — so this is the control and
+            // nothing here restates the count.
+            if (library.chosen().length)
+                kids.push(el('button', {
+                    cls: 'text', text: 'All', title: 'Search every recording',
+                    on: { click: () => { library.choose([]); search(); draw(); } },
+                }));
+            return kids;
         }
         if (tab === 'words') {
             const box = el('input', {
@@ -304,6 +336,52 @@ function drawNote() {
         `${results.length} found` +
         (results.length > SHOWN ? ` · ${SHOWN} shown` : '') +
         (gone ? ` · ${gone} not on disk` : '');
+}
+
+// ── which recordings a search runs over ───────────────────────────────────
+
+/// Every recording that has words in it, which is every one a search can reach.
+const searchable = () => acquire.list().filter((r) => r.state === 'transcribed');
+
+/// Tick or untick one recording, and say what the search is now over.
+///
+/// **The unconfined state renders as every box ticked**, because that is what is
+/// true — a search does run over all of them — and a row of empty boxes above a
+/// list of results would be a lie about where they came from. So the first
+/// untick starts from everything and takes one away, and a selection that grows
+/// back to cover every recording goes back to being unconfined rather than being
+/// a list that happens to name them all.
+///
+/// **The last ticked box cannot be unticked.** `ui/library.js` has no way to
+/// express "search nothing" on purpose, and the alternative here — treating it
+/// as "search everything" — would make the box bounce back on, which reads as a
+/// bug rather than as a rule.
+function toggleSearch(id, on) {
+    const all = searchable().map((r) => String(r.id));
+    let sel = library.chosen();
+    if (!sel.length) sel = all.slice();
+    sel = on ? [...new Set([...sel, String(id)])]
+             : sel.filter((x) => String(x) !== String(id));
+    if (!sel.length) return;
+    library.choose(sel.length >= all.length ? [] : sel);
+    search();
+    draw();
+}
+
+/// The tick, or the room where it would be.
+///
+/// A recording with no transcript is not something a search can be confined to,
+/// so it gets no box — and it gets the width of one anyway, because four rows
+/// whose dates do not line up read as four different kinds of thing.
+function searchBox(item) {
+    if (item.state !== 'transcribed')
+        return el('span', { cls: 'pick-gap' });
+    const box = el('input', {
+        cls: 'pick', type: 'checkbox', checked: library.searching(item.id),
+        title: 'Search this recording',
+        on: { change: () => toggleSearch(item.id, !!box.checked) },
+    });
+    return box;
 }
 
 // ── a recording, in whatever condition it is in ────────────────────────────
@@ -393,6 +471,7 @@ function recording(item, listen, put_) {
     if (!item.vod.media && item.state === 'transcribed') where += ' · not on disk';
 
     const kids = [
+        searchBox(item),
         listen,
         el('span', { cls: 'at mono', text: item.label }),
         el('span', { cls: 'detail', text: item.detail }),
@@ -423,8 +502,10 @@ function span(seconds) {
 function drawRows() {
     put(nodes.list, () => results.slice(0, SHOWN).map((item, n) => {
         const dead = !item.vod.media;
+        const on = isPlaying(item);
         const listen = el('button', {
-            cls: 'tiny', text: '▶', title: 'Listen',
+            cls: 'tiny' + (on ? ' on' : ''), text: on ? '■' : '▶',
+            title: on ? 'Stop' : 'Listen',
             // A recording deleted to reclaim the disk still has its words, so
             // the row is real and only the playing is impossible. Refused on
             // the control rather than by leaving the row out, which would make

@@ -47,10 +47,29 @@ but a stack is not a sequence, and saving afterwards saves the flattened one.
 
 The last two are the same questions the workbench's panel asks, with the same
 answers, because [the search is one implementation](find.md). All three list the
-same way: `▶` plays it, `+` puts it at the end of the mix. Adding a whole
+same way: `▶` plays it — and becomes `■`, which stops it, as does `Space` — and
+`+` puts it at the end of the mix. A moment stops on its own at the end of
+itself; a whole recording is six hours and does not. Adding a whole
 recording adds the whole of it — six hours if that is what it is — because
 trimming it down is one gesture away and taking the first minute instead would
 be deciding something nobody asked for.
+
+### What is running
+
+Four kinds of work run in the background here — a recording being copied off
+Twitch, a transcription, the cut a `+` starts, and the small file a card is
+scrubbed with — and each of them used to be visible only in its own corner. The
+count in the top bar is all of them: **`3 running`** appears there whenever
+something is, and opening it lists every job with what it is, how far it has got,
+and a **Stop** where stopping is a thing that can be done.
+
+Nothing is running is not a state it says out loud — the button is simply not
+there. `Esc` closes the list.
+
+Two jobs have no Stop, and it is the same reason both times: a download in its
+last minute is putting two halves back into one file, and stopping there leaves
+neither; a scrubbing copy asked for by a clip in the mix would only start again
+on the next frame. Take the clip out and that one goes with it.
 
 ### Getting the recordings
 
@@ -82,6 +101,18 @@ far down the recording it has got, and the multiplier is how fast. Six hours at
 
 **When one finishes it is searchable immediately.** The Words and Talking tabs
 pick up the new transcript with nothing to press and nothing to restart.
+
+**The tick at the left of a row says whether searches run over it.** They all
+start ticked, because they are all being searched. Untick the ones you do not
+mean and the Words and Talking tabs answer about the rest only — the line at the
+top says `3 of 20 recordings` while they do, and **All** beside the channel box
+puts them back. Twenty broadcasts are twenty different afternoons, and a phrase
+found four hundred times across the lot is a list nobody can read.
+
+Three things about it. Only a recording that has been transcribed has a tick;
+there is nothing to search in one that has not. The last ticked box will not come
+off — there is no way to ask for nothing. And the choice is dropped when you move
+to another channel, but not when a transcription lands.
 
 **A download that was interrupted carries on where it stopped.** Close the
 window, press **Stop**, lose the machine — press **Get** again and it picks up
@@ -245,7 +276,7 @@ The render is the same one the workbench performs, from the same spec.
 
 | | |
 |---|---|
-| `Space` | play / stop |
+| `Space` | play / stop — or stop what a row is playing, if a row is playing |
 | `Home` `End` | start, end |
 | `←` `→` | one frame; with `Shift`, one second |
 | `+` `-` | zoom the mix in, out |
@@ -253,6 +284,7 @@ The render is the same one the workbench performs, from the same spec.
 | `M` | mute |
 | `Delete` | remove the selected clip and close the gap |
 | `/` | jump to the search box |
+| `Esc` | close the list of what is running |
 | `Ctrl+S` `Ctrl+O` `Ctrl+R` | save, open, render |
 
 ## Getting a corpus in a batch

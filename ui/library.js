@@ -53,6 +53,15 @@ let rollPath = ROLL;
 let roll = null;            // the parsed roll-up, false if there is none
 let channel = null;         // the manifest in hand
 const streams = new Map();  // vodId → search stream, built once
+/// The recordings a search is confined to, as a Set of ids — or null, which is
+/// **every** recording and is not the same thing as an empty Set. See `choose`.
+let only = null;
+/// The channel's *name*, held apart from its parsed manifest because `reload`
+/// drops the manifest and must not look like a channel switch: a transcription
+/// landing re-reads the corpus, and a confined search that quietly went back to
+/// everything on the frame that happened would be the tool changing the question
+/// under somebody. See `pick`.
+let picked = '';
 
 /// Read a corpus from somewhere other than the well-known path.
 ///
@@ -65,6 +74,8 @@ export function useCorpus(path) {
     rollPath = path || ROLL;
     roll = null;
     channel = null;
+    picked = '';
+    only = null;
     streams.clear();
 }
 
@@ -114,6 +125,12 @@ export function current() { return channel; }
 
 /// Open a channel by name. Called with nothing to open the first one, which is
 /// what a single-channel corpus — the ordinary case — never has to think about.
+///
+/// **Moving to a different channel drops a confined search** and re-reading the
+/// same one does not. The ids belong to the channel they were chosen in, so
+/// carrying them across would confine the new channel to nothing at all and say
+/// so only by finding nothing; `reload` re-reads this same channel by name and
+/// must leave the question alone.
 export function pick(name) {
     if (!available()) return false;
     const entry = name ? roll.channels.find((c) => c.channel === name)
@@ -122,17 +139,70 @@ export function pick(name) {
     if (channel && channel.channel === entry.channel) return true;
     try { channel = JSON.parse(fs.readFileSync(entry.manifest, 'utf-8')); }
     catch (e) { channel = null; return false; }
+    if (picked && picked !== entry.channel) only = null;
+    picked = entry.channel;
     streams.clear();
     return true;
 }
 
+/// Confine every search to these recordings, by id.
+///
+/// **A corpus is not one question.** Twenty broadcasts of one streamer are
+/// twenty different afternoons, and "where did he say that" is usually asked
+/// about three of them rather than about all six hundred hours — so a phrase
+/// found four hundred times across the lot is a list nobody can use, while the
+/// same phrase inside the two recordings somebody has in mind is the answer.
+///
+/// Called with nothing, or with an empty list, goes back to every recording.
+/// **That is deliberately not the same as choosing none**: a finder that could
+/// be put into a state where it searched nothing at all, and said so only by
+/// finding nothing, would be a finder people learned not to trust. There is no
+/// way to express "none" here, and the view has one fewer state to draw.
+///
+/// The choice is a fact about what is being *looked at*, so it lives here beside
+/// the search rather than in either view — and it is not in a document and not
+/// in `ui/.storage.json`, for the reason `peaks` is not: it describes a session,
+/// not an edit.
+export function choose(ids) {
+    const list = Array.isArray(ids) ? ids : ids ? [...ids] : [];
+    only = list.length ? new Set(list.map(String)) : null;
+    return chosen();
+}
+
+/// The ids a search is confined to, as an array — empty when it is not confined.
+///
+/// An array rather than the Set itself, because a view that could mutate this
+/// would be a view deciding what the answer is.
+export function chosen() { return only ? [...only] : []; }
+
+/// Is this recording one of the ones being searched?
+export const searching = (id) => !only || only.has(String(id));
+
+/// The recordings a search actually walks.
+///
+/// **Asked of the manifest rather than of the Set**, so a chosen id that is no
+/// longer in the corpus — a channel refreshed, a recording transcribed away —
+/// narrows to nothing rather than throwing, and an id chosen in another channel
+/// cannot leak into this one's results.
+function searched() {
+    if (!channel) return [];
+    return only ? channel.vods.filter((v) => only.has(String(v.id))) : channel.vods;
+}
+
 /// One line about what is loaded, for a view that has to say so.
+///
+/// **Says when a search is confined, because that is the fact most likely to
+/// make somebody doubt the tool.** "Nothing says that" over four recordings when
+/// twenty are on disk is indistinguishable from a broken search unless the line
+/// above it says which four.
 export function about() {
     if (!channel) return '';
-    const hours = channel.vods.reduce((n, v) => n + (v.seconds || 0), 0) / 3600;
-    const words = channel.vods.reduce((n, v) => n + (v.words || 0), 0);
-    return `${channel.vods.length} recordings · ${hours.toFixed(1)} h · ` +
-           `${words.toLocaleString()} words`;
+    const vods = searched();
+    const hours = vods.reduce((n, v) => n + (v.seconds || 0), 0) / 3600;
+    const words = vods.reduce((n, v) => n + (v.words || 0), 0);
+    const what = only ? `${vods.length} of ${channel.vods.length} recordings`
+                      : `${vods.length} recordings`;
+    return `${what} · ${hours.toFixed(1)} h · ${words.toLocaleString()} words`;
 }
 
 /// The search stream for one recording, built once and kept.
@@ -177,7 +247,7 @@ export function searchWords(phrase, opts = {}) {
     const out = [];
     if (!channel || !phrase) return out;
     if (phrase.replace(/[^a-z0-9|]/gi, '').length < 2) return out;
-    for (const v of channel.vods) {
+    for (const v of searched()) {
         // Spaced for the same reason `tools/corpus.js` spaces: a phrase said
         // three times for emphasis is one moment, and the two must not come to
         // disagree about that any more than about the matching.
@@ -203,7 +273,7 @@ export function searchWords(phrase, opts = {}) {
 export function searchTalking(opts = {}) {
     const out = [];
     if (!channel) return out;
-    for (const v of channel.vods) {
+    for (const v of searched()) {
         for (const m of monologues(streamFor(v).words, opts)) {
             out.push({
                 kind: 'run', vod: v, at: m.at, to: m.to,

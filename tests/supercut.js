@@ -23,6 +23,15 @@ const args = (globalThis.scriptArgs || []).filter((a) => a !== '--');
 const media = args[0];
 assert(media, 'pass a media file: ... tests/supercut.js -- <file>');
 
+// The corpus itself, for the two assertions that are about *it* rather than
+// about a control: which kinds of re-read keep a confined search and which drop
+// it. Modules are one instance to a realm, so this is the library the window is
+// using and not a second copy of it.
+import * as library from '/app/../ui/library.js';
+// Where this checkout is, which is the one thing the fixture paths below have to
+// agree with the application about — see `dir`.
+import { ROOT } from '/app/../corpus/files.js';
+
 const fs = require('fs');
 const A = globalThis.__supercut;
 assert(A, 'the application did not start');
@@ -87,7 +96,14 @@ function packed(where) {
 
 // ── a corpus of our own ────────────────────────────────────────────────────
 
-const dir = 'build/fixtures/supercut';
+// **Absolute, and that is not tidiness.** A relative path given to `fs` in a bro
+// realm is resolved against the *application* directory, and one given to
+// `corpus/files.js` is resolved against the repository root — so a manifest
+// written here with a relative `srt` in it was findable by the library and
+// invisible to `corpus/store.js`, and every row came up `pulled` with the words
+// sitting right there. A real manifest holds absolute paths, so the fixture does
+// too, and the two halves are asked the same question.
+const dir = `${ROOT}/build/fixtures/supercut`;
 try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* there already */ }
 
 const stamp = (s) => {
@@ -176,6 +192,146 @@ console.log('\nfinding');
     type(document.getElementById('f-phrase'), 'you cross');
 }
 
+// ── confining the search to some recordings ────────────────────────────────
+//
+// **A second corpus rather than a second recording in the first one**, because
+// every count asserted above is a count over one recording and adding another
+// would move all of them — the assertions would still pass and would have
+// stopped being about what they say they are about. This one has what the
+// feature needs and nothing else: two recordings saying the same thing, so
+// confining the search to one has to halve the answer, and two channels, so the
+// rule about which switch drops a choice can be exercised at all.
+//
+// Driven through the tick itself and not through the library underneath it: the
+// press is what somebody actually does, and a test that called `choose` would
+// pass on a row whose box was never wired to it.
+
+console.log('\nconfining the search');
+{
+    const two = { channel: 'twofer', built: new Date().toISOString(),
+                  vods: [{ id: 'a', title: 'the first', publishedAt: '2026-02-02',
+                           seconds: 60, srt: `${dir}/words.srt`, media,
+                           words: WORDS.length },
+                         { id: 'b', title: 'the second', publishedAt: '2026-02-01',
+                           seconds: 60, srt: `${dir}/words.srt`, media,
+                           words: WORDS.length }] };
+    fs.writeFileSync(`${dir}/twofer.json`, JSON.stringify(two), 'utf-8');
+    fs.writeFileSync(`${dir}/both.json`, JSON.stringify({
+        channels: [{ channel: 'twofer', manifest: `${dir}/twofer.json`,
+                     vods: 2, words: 2 * WORDS.length, built: '' },
+                   { channel: 'turkey', manifest: `${dir}/turkey.json`,
+                     vods: 1, words: WORDS.length, built: '' }],
+    }), 'utf-8');
+
+    A.results.useCorpus(`${dir}/both.json`);
+    A.results.start();
+    pump(80);
+
+    const boxes = () => [...document.querySelectorAll('#f-list .row.rec .pick')];
+    const found = (phrase) => {
+        A.results.setTab('words');
+        pump(60);
+        type(document.getElementById('f-phrase'), phrase);
+        pump(80);
+        return A.results.found().length;
+    };
+
+    A.results.setTab('recordings');
+    pump(80);
+    ok(boxes().length === 2, `both recordings offer a tick (${boxes().length})`);
+    ok(boxes().every((b) => b.checked),
+       'and every one is ticked, because every one is being searched');
+
+    const all = found('you cross');
+    ok(all === 4, `unconfined, the phrase is found in both (${all})`);
+
+    // Untick the second: the first untick starts from everything and takes one
+    // away, which is the only reading of a row of ticked boxes that is true.
+    A.results.setTab('recordings');
+    pump(60);
+    const off = boxes()[1];
+    off.checked = false;
+    off.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(80);
+
+    const half = found('you cross');
+    ok(half === all / 2, `one recording finds half of it (${half} of ${all})`);
+    ok(A.results.found().every((h) => String(h.vod.id) === 'a'),
+       'and every hit comes from the recording that is still ticked');
+
+    A.results.setTab('recordings');
+    pump(60);
+    ok(boxes().length === 2,
+       'the list still shows both — it is where the choice is made');
+    ok(document.getElementById('about').textContent.includes('1 of 2'),
+       `the header says which (${document.getElementById('about').textContent})`);
+
+    // The last ticked box cannot be unticked: there is no "search nothing".
+    const last = boxes()[0];
+    last.checked = false;
+    last.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(80);
+    ok(found('you cross') === half,
+       'unticking the last one is refused rather than searching nothing');
+
+    // A transcription landing re-reads the corpus, and must not change the
+    // question underneath somebody.
+    A.results.setTab('recordings');
+    pump(60);
+    library.reload();
+    pump(80);
+    ok(found('you cross') === half, 'a reload leaves a confined search alone');
+
+    // Moving to another channel does, because the ids belong to the one they
+    // were chosen in.
+    library.pick('turkey');
+    pump(80);
+    ok(found('you cross') === 2,
+       `another channel is searched whole (${A.results.found().length})`);
+
+    A.results.useCorpus(`${dir}/find.json`);
+    A.results.start();
+    A.results.setTab('words');
+    pump(80);
+    type(document.getElementById('f-phrase'), 'you cross');
+    pump(80);
+    ok(A.results.found().length === 2, 'and the suite is back where it was');
+}
+
+// ── hearing one, and stopping ──────────────────────────────────────────────
+//
+// The stop is the half that was missing: an audition ends by itself at the end
+// of the moment, which is nothing at all for a six-hour recording pressed by
+// mistake. Driven on the button rather than through `screen`, because what is
+// asserted is that the row's own control is both halves of it.
+
+console.log('\nauditioning');
+{
+    const press = (node) => {
+        node.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        pump(120);
+    };
+    const listen = () => document.querySelector('#f-list .row button.tiny');
+
+    ok(listen().textContent === '▶', 'a row offers to play the moment');
+    press(listen());
+    ok(A.screen.isAuditioning(), 'and pressing it plays');
+    ok(listen().textContent === '■', 'the same button is now the stop');
+
+    press(listen());
+    ok(!A.screen.isAuditioning(), 'which stops it');
+    ok(listen().textContent === '▶', 'and offers to play it again');
+
+    // Space is the key everything else stops with, so it is this one's stop too
+    // — starting the mix over the top of it would be two things playing.
+    press(listen());
+    ok(A.screen.isAuditioning(), 'playing again');
+    A.togglePlay();
+    pump(60);
+    ok(!A.screen.isAuditioning() && !A.screen.isPlaying(),
+       'Space stops the audition rather than starting the mix under it');
+}
+
 // ── two moments in the mix ─────────────────────────────────────────────────
 
 console.log('\nthe mix');
@@ -191,6 +347,66 @@ console.log('\nthe mix');
 
     ok(!packed('two clips'), packed('two clips') || 'the mix is packed end to end');
     ok(cardEls().length === 2, 'and there are two cards to grab');
+}
+
+// ── one place for everything that is running ───────────────────────────────
+//
+// Whatever is in flight on this file — the cuts, the proxies, or both, which
+// depends on how long the recording is exactly as the cutting section below
+// depends on it — is here. What is asserted is the *view*: one row per job and
+// no row without one, and a header button that is not there at all when nothing
+// is running.
+
+console.log('\nwhat is running');
+{
+    const button = document.getElementById('btn-flight');
+    const panel = document.getElementById('flight');
+    const rows = () => document.querySelectorAll('#flight .fl-row').length;
+
+    A.inflight.toggle(true);
+    ok(!panel.hidden, 'the list opens');
+    // No `pump` between the two: a frame in the middle is a job settling in the
+    // middle, and this is about the drawing rather than about the timing.
+    const n = A.inflight.count();
+    ok(rows() === n, `one row per job and no more (${rows()} of ${n})`);
+    ok(n > 0 || document.querySelectorAll('#flight .fl-empty').length === 1,
+       'and nothing running says so rather than showing an empty box');
+
+    for (let i = 0; i < 600 && A.inflight.count(); i++) pump(25);
+    ok(A.inflight.count() === 0, `everything settles (${A.inflight.count()} left)`);
+    ok(rows() === 0 && document.querySelectorAll('#flight .fl-empty').length === 1,
+       'and the list says so');
+
+    // A job of its own, handed in the way the render is: the three background
+    // jobs this fixture can produce are all over in under a second and a suite
+    // that waited for one would be asserting about a race. What is checked here
+    // is the row — the columns, the bar and the Stop that calls back into
+    // whatever owns the job, which is the whole of what this file does.
+    let stopped = 0;
+    const fake = { key: 'render', kind: 'Render', name: 'supercut.mp4',
+                   note: '50%', progress: 0.5, stop: () => { stopped++; } };
+    let live = fake;
+    A.inflight.initFlight({ button, panel }, { render: () => live });
+    A.inflight.toggle(true);
+    ok(rows() === 1, `a job in flight is a row (${rows()})`);
+    ok(panel.querySelector('.fl-row .kind').textContent === 'Render' &&
+       panel.querySelector('.fl-row .name').textContent === 'supercut.mp4' &&
+       panel.querySelector('.fl-row .note').textContent === '50%',
+       'saying what it is, what it is of and how far it has got');
+    ok(panel.querySelector('.fl-row .fill').style.width === '50%',
+       `with a bar that says the same (${panel.querySelector('.fl-row .fill').style.width})`);
+    ok(!button.hidden && button.textContent === '1 running',
+       `and the header carries the count (${button.textContent})`);
+
+    panel.querySelector('.fl-row button').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, button: 0 }));
+    ok(stopped === 1, 'the Stop on the row is the job\'s own stop');
+
+    live = null;
+    A.inflight.toggle(false);
+    pump(40);
+    ok(panel.hidden, 'it closes');
+    ok(button.hidden, 'and with nothing running the button is not there either');
 }
 
 // ── and each of them is cut out of the recording ───────────────────────────

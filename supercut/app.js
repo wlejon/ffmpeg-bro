@@ -57,6 +57,7 @@ import * as acquire from './acquire.js';
 import * as mix from './mix.js';
 import * as screen from './screen.js';
 import * as cuts from './cuts.js';
+import * as inflight from './inflight.js';
 
 // **The analysis worker is `ui/`'s and is not copied here.** bro resolves a
 // worker path against the running application's directory by plain
@@ -67,6 +68,7 @@ useWorker('../ui/analyze-worker.js');
 const nodes = {
     about: byId('about'), doc: byId('doc'),
     open: byId('btn-open'), save: byId('btn-save'), render: byId('btn-render'),
+    flight: byId('btn-flight'), flightList: byId('flight'),
     chanWrap: byId('chan-wrap'),
     tabs: byId('f-tabs'), controls: byId('f-controls'),
     note: byId('f-note'), list: byId('f-list'),
@@ -217,6 +219,11 @@ function adopt() {
 
 let rendering = false;
 
+/// The render as `inflight.js` takes a job, or null. **Written by the poll that
+/// already happens** rather than by a second `render.poll()` from the panel:
+/// there is one render and one place that asks it how it is doing.
+let renderJob = null;
+
 function doRender() {
     if (rendering) {
         try { bro.ffmpeg.render.cancel(); } catch (e) { /* already finished */ }
@@ -248,11 +255,17 @@ function watchRender() {
     const p = bro.ffmpeg.render.poll();
     if (p.state === 'running') {
         const pct = Math.round((p.progress || 0) * 100);
-        nodes.render.textContent = p.totalFrames
-            ? `Stop · ${pct}%` : `Stop · frame ${p.frames || 0}`;
+        const said = p.totalFrames ? `${pct}%` : `frame ${p.frames || 0}`;
+        nodes.render.textContent = `Stop · ${said}`;
+        renderJob = {
+            key: 'render', kind: 'Render',
+            name: settings.path || 'the mix', note: said,
+            progress: p.progress || 0, stop: doRender,
+        };
         return;
     }
     rendering = false;
+    renderJob = null;
     nodes.render.textContent = 'Render';
     if (p.state === 'done') flash(`wrote ${settings.path}`);
     else if (p.state === 'cancelled') flash('render stopped');
@@ -266,7 +279,14 @@ function seek(t) {
     drawBar();
 }
 
+/// `Space` is *the* stop, and what it stops is whatever is making a noise.
+///
+/// An audition owns the screen and the sound while it runs, so the mix is not
+/// playing and starting it would be the second thing playing over the first.
+/// Pressing the one key everything else stops with, and being answered by a
+/// second recording, is the failure this avoids.
 function togglePlay() {
+    if (results.auditioning()) { results.hush(); drawBar(); return; }
     if (screen.isPlaying()) screen.play(false);
     else if (!screen.play(true)) flash('nothing in the mix');
     drawBar();
@@ -310,8 +330,12 @@ results.initResults({
     list: nodes.list, channel: nodes.chanWrap, about: nodes.about,
 }, {
     audition: (path, from, until) => { screen.audition(path, from, until); drawBar(); },
+    hush: () => { screen.stopAudition(); drawBar(); },
     add: addMoment,
 });
+
+inflight.initFlight({ button: nodes.flight, panel: nodes.flightList },
+                    { render: () => renderJob });
 
 documentModel.initDocument({ detach: () => {} });
 onChange(() => drawDoc());
@@ -383,6 +407,9 @@ document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') e.target.blur();
         return;
     }
+    // The list of what is running is a thing put over the window, so it closes
+    // the way everything put over a window closes.
+    if (e.key === 'Escape' && inflight.isOpen()) { inflight.toggle(false); return; }
     if (e.key === ' ') { togglePlay(); e.preventDefault(); return; }
     if (e.key === 'Home') { seek(0); return; }
     if (e.key === 'End') { seek(duration()); return; }
@@ -478,10 +505,17 @@ function frame() {
     if (acquire.tick()) results.refresh();
 
     screen.tick();
+    // An audition that ran to the end of its moment stops itself, and the row it
+    // was on has no other way to hear about it — so it kept its highlight and its
+    // `■`, and the next press on it was a stop of something that had already
+    // stopped. One question a frame, asked of the thing that actually knows.
+    if (results.auditioning() && !screen.isAuditioning()) { results.stopped(); drawBar(); }
     mix.placePlayhead(transport.t);
     if (screen.isPlaying()) { mix.follow(transport.t); drawBar(); }
 
     watchRender();
+    // After `watchRender`, which is what the render's row is written by.
+    inflight.tick();
 
     if (flashUntil && Date.now() > flashUntil) {
         flashUntil = 0;
@@ -525,7 +559,7 @@ requestAnimationFrame(frame);
 /// door, kept to what a test actually has to reach.
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
-    results, acquire, mix, screen, cuts, doc: documentModel,
+    results, acquire, mix, screen, cuts, inflight, doc: documentModel,
     addMoment, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,

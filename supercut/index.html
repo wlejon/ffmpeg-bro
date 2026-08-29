@@ -18,10 +18,19 @@
     <span id="about" class="dim"></span>
     <span class="spacer"></span>
     <span id="doc" class="dim"></span>
+    <!-- What is running, anywhere: a download, a transcription, a cut, a proxy,
+         the render. Absent while nothing is — see `inflight.js`. -->
+    <button id="btn-flight" class="text" hidden></button>
     <button id="btn-open" class="text" title="Open (Ctrl+O)">Open</button>
     <button id="btn-save" class="text" title="Save (Ctrl+S)">Save</button>
     <button id="btn-render" class="go" title="Render (Ctrl+R)">Render</button>
 </header>
+
+<!-- The list behind that button. Over the window rather than in the layout: it
+     is the answer to a question asked for a moment, and a region that pushed the
+     finder down every time a proxy started would be four kinds of work
+     rearranging the window they are running behind. -->
+<div id="flight" hidden></div>
 
 <div id="body">
 
