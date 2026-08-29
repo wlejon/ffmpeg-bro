@@ -22,6 +22,8 @@ no reader looking for the command bar would have gone.
   session is and what a recording is
 - **[Sources](sources.md)** — an input, its streams, the demuxer options that
   decide how it is read, and reading what a data track carries
+- **[Finding the material](find.md)** — searching a corpus of transcripts for a
+  word or for a stretch of talking, and putting what it finds on the timeline
 - **[The timeline](timeline.md)** — clips, tracks, the sync lock, the When lane, and the edits that are about a cut rather than a clip
 - **[The picture](picture.md)** — fit, scale, position, crop and the grid
 - **[The graph](graph.md)** — the node graph, which is `-filter_complex` with

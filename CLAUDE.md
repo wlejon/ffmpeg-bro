@@ -314,6 +314,37 @@ has two reads for exactly this reason: `restore()` (localStorage, drops input
 nodes because the inputs are not coming back) and `adopt()` (a document, keeps
 them because they are).
 
+### The corpus is a third seam, and it points the other way
+
+`ui/find.js` searches a corpus of transcripts and puts what it finds on the
+timeline. Everything that *makes* one — the Twitch API, the pulling, the
+transcribing, the store's layout — is `tools/`, which is deliberately not part of
+this application, so what crosses over is one file:
+`build/corpus/find.json`, written by `supercut.js index`, listing channels and
+absolute paths. **An absent file is the ordinary case**: no corpus, no panel, and
+`/` does nothing.
+
+Three things about it are load-bearing. **The finder is not a stage**, and must
+not become one — the spine is ffmpeg's pipeline and its whole value is that it
+stays exactly that, so the panel opens *over* Compose the way the crop handles
+do. **The matching is `ui/phrase.js`'s and `tools/transcript.js` imports it back**
+(`/app/phrase.js`), which is the one place the dependency runs app→tool-ward
+rather than the reverse: the panel says where the moments are and `tools/clips.js`
+cuts them, so two copies of the search would be two chances for the list and the
+files to describe different sets of moments with nothing saying so. And **the
+words are not copied into the manifest** — the transcripts are already on disk in
+a form the app reads, so the panel reads the `.srt` directly and there is no copy
+to go stale. `monologues()` is in the same file and is named after its
+measurement for `sound_marks.h`'s reason: it is a run of words with no gap wider
+than *n*, and nothing in that decided anything was a monologue.
+
+**Auditioning is one `<video>` that every row shares**, which is `ui/residency.js`'s
+rule arriving in a second place: two hundred results with a player each is two
+hundred decoders on six-hour files. And an input added by the panel has no probe
+on the frame it is added — a six-hour file is probed on a thread — so the add is
+finished by `settleProbes()` on the frame loop rather than refused on the press,
+which is the one thing `openSpec`'s refusal would get wrong here.
+
 ### The spec is the seam
 
 `ui/export/spec.js` `buildSpec()` produces one plain JS object describing the

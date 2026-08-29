@@ -31,9 +31,10 @@ ffmpeg-bro-headless ui/ tools/supercut.js -- search turk "you cross"
 ffmpeg-bro-headless ui/ tools/supercut.js -- clips turk "you cross" --pad 2
 ffmpeg-bro-headless ui/ tools/supercut.js -- flipbook turk "you cross" --hold 6
 ffmpeg-bro-headless ui/ tools/supercut.js -- weave turk "you cross"
+ffmpeg-bro-headless ui/ tools/supercut.js -- index turk
 ```
 
-Nine verbs, none of which redoes what a previous run finished. They are
+Eleven verbs, none of which redoes what a previous run finished. They are
 separate because their costs are: `pull` is the network, `transcribe` is the
 GPU, and `search`, `phrases` and `clips` are cheap and are the ones you actually
 iterate on. Welding them together would mean re-pulling seventeen gigabytes to
@@ -45,6 +46,8 @@ build/corpus/<login>/<id>/media.mkv        the recording, picture and sound
 build/corpus/<login>/<id>/words.srt        one cue per word
 build/corpus/<login>/<id>/state.json       what has been done to it
 build/corpus/<login>/clips/<phrase>/       a clip per hit, cached
+build/corpus/<login>/find.json            what the app's Find panel reads
+build/corpus/find.json                    which channels have been indexed
 ```
 
 Once a channel is built, every later question is answered off disk. Nothing
@@ -52,6 +55,25 @@ after `transcribe` touches the network, and `clips` re-run on a search you have
 already cut writes nothing — a clip is named `<vodId>-<seconds>.mp4`, which is
 exactly what identifies the moment, so two searches landing on one moment share
 the file and a wider `--pad` is a new file rather than a silent overwrite.
+
+### The panel in the application
+
+`index <channel>` writes the manifest the application's
+[Find panel](../docs/manual/find.md) reads, and `/` on the Compose stage opens
+it. There you search the same words, play a hit, and put it straight on the
+timeline — which is the part a terminal cannot do.
+
+**A file is the whole of the seam.** The manifest is a list of recordings with
+absolute paths to their words and their media; `ui/` never imports anything from
+here, and this never learns anything about the timeline. What the two do share is
+the matching itself, which lives in `ui/phrase.js` and is imported back into
+`transcript.js` — the list on the screen and the clips this cuts have to be the
+same set of moments, and two copies of a search are two chances for them not to
+be.
+
+The words are not copied into the manifest. The transcripts are a megabyte each
+and already in a form the application reads, so the panel reads the `.srt`
+directly; a copy would go stale the first time a recording was transcribed again.
 
 ### Picking the phrase
 

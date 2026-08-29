@@ -1,6 +1,6 @@
 // Every time somebody said a thing, found and cut — the tool, as one command.
 //
-// A pipeline in eight verbs, each of which can be run on its own and none of
+// A pipeline in eleven verbs, each of which can be run on its own and none of
 // which redoes what a previous run finished:
 //
 //   list        ask Twitch what the channel has, and write it down
@@ -8,10 +8,12 @@
 //   transcribe  every word in each, with a time, as cues
 //   build       pull then transcribe — the two above, in order
 //   status      what the store holds and what is still missing
+//   index       the manifest the application's Find panel reads
 //   phrases     what this channel says a lot — how you pick something to cut
 //   search      one phrase across every transcript
 //   clips       the seconds around every hit, as files, cached
 //   flipbook    one video frame per instance, assembled
+//   weave       the phrase said once, every fragment from a different instance
 //
 //   ffmpeg-bro-headless ui/ tools/supercut.js -- list turk --last 5
 //   ffmpeg-bro-headless ui/ tools/supercut.js -- build turk
@@ -42,7 +44,7 @@ import { cutClips } from './clips.js';
 import { build as buildFlipbook } from './flipbook.js';
 import { weave as buildWeave } from './weave.js';
 import { ROOT, abs, argv, positionals, opt, num, flag, driver, exists, sizeOf,
-         mkdirp, writeJson, clock, span, gb, mb } from './drive.js';
+         mkdirp, writeJson, readJson, clock, span, gb, mb } from './drive.js';
 
 const A = globalThis.__ffmpegBro;
 const args = positionals();
@@ -55,6 +57,7 @@ const USAGE = `usage: ffmpeg-bro-headless ui/ tools/supercut.js -- <verb> …
   transcribe <channel> [--last N]  every word of each, with a time
   build <channel> [--last N]       pull, then transcribe
   status <channel>                 what the store holds
+  index <channel>                  the manifest the app's Find panel reads
   search <channel> <phrase>        one phrase across every transcript
   phrases <channel> [--n 3]        what he says a lot — how you pick one
   clips <channel> <phrase>         the seconds around every hit, as files
@@ -357,6 +360,60 @@ async function doFlipbook() {
     console.log(`  stills in ${res.frames}`);
 }
 
+// ── index ──────────────────────────────────────────────────────────────────
+
+/// Write the manifest the application's Find panel reads.
+///
+/// **A file is the seam, and it is deliberately a small one.** The panel needs
+/// to know which recordings exist, what they are called, where their words are
+/// and where their media is; it does not need to know this store's layout, and
+/// `ui/` must not come to depend on `tools/` to find out. So the layout stays a
+/// fact of `corpus.js` and what crosses over is a list of absolute paths — the
+/// same shape of seam a `.fbro` is.
+///
+/// The word data itself is *not* copied in. The transcripts are a megabyte each
+/// and already on disk in a format the application can read; duplicating ninety
+/// thousand words into a second file would make a stale copy the first time a
+/// recording was transcribed again, and the panel reads the `.srt` directly for
+/// the same reason `clips` does.
+function doIndex() {
+    need('index');
+    const have = transcribed(channel);
+    assert(have.length, `no transcripts for ${channel} yet — run \`build ${channel}\``);
+
+    let total = 0;
+    const vods = have.map((v) => {
+        const words = readSrt(v.srt).length;
+        total += words;
+        return {
+            id: v.id, title: v.title || '', publishedAt: v.publishedAt || '',
+            seconds: v.seconds || 0, page: v.page || '',
+            srt: abs(v.srt), media: v.hasMedia ? abs(v.media) : '', words,
+        };
+    });
+    const built = new Date().toISOString();
+    const at = abs(`build/corpus/${channel}/find.json`);
+    writeJson(at, { channel, built, vods });
+
+    // The roll-up, at a path the application can look for without being told
+    // which channels exist. One well-known file, so a corpus that has never been
+    // indexed is simply an absent file and the panel is absent with it.
+    const rollPath = abs('build/corpus/find.json');
+    const roll = readJson(rollPath) || {};
+    const others = (roll.channels || []).filter((c) => c && c.channel !== channel);
+    others.push({ channel, manifest: at, vods: vods.length, words: total, built });
+    others.sort((a, b) => String(a.channel).localeCompare(String(b.channel)));
+    writeJson(rollPath, { channels: others });
+
+    console.log(`${channel} · ${vods.length} recordings · ${total} words`);
+    console.log(`  ${at}`);
+    console.log(`  ${rollPath}`);
+    const without = vods.filter((v) => !v.media).length;
+    if (without)
+        console.log(`  ${without} have words but no recording on disk — the panel ` +
+                    'will find their hits and cannot play them');
+}
+
 // ── weave ──────────────────────────────────────────────────────────────────
 
 /// The phrase said once, with every fragment of it from a different instance.
@@ -397,6 +454,7 @@ function doWeave() {
 const VERBS = {
     list: doList, pull: doPull, transcribe: doTranscribe, status: doStatus,
     search: doSearch, phrases: doPhrases, clips: doClips, flipbook: doFlipbook,
+    index: doIndex,
     weave: doWeave,
     build: async () => { await doPull(); doTranscribe(); },
 };

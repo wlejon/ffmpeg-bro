@@ -561,6 +561,13 @@ add_test(NAME ui-document COMMAND ffmpeg-bro-headless
 add_test(NAME ui-output COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_output.js"
          -- "${FIXTURE_A}")
+# Searching a corpus of transcripts and putting what it finds on the timeline.
+# It writes its own store beside the fixtures rather than reading the real one:
+# a corpus is tens of gigabytes and is not in this repository, and the panel
+# reads one fixed path that a suite must not overwrite.
+add_test(NAME ui-find COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_find.js"
+         -- "${FIXTURE_A}")
 # Opening an edit of many clips without opening every file in it. One file, cut
 # thirty times: what this is about is how many decoders are open, and that is the
 # same question whether or not two clips read the same path.
@@ -572,7 +579,7 @@ set_tests_properties(decode export capabilities inputs sequences playback hardwa
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document ui-output ui-load
+                     ui-measure ui-subtitles ui-document ui-output ui-find ui-load
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -602,5 +609,5 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-hardware ui-export
-                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output
+                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

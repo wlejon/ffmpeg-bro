@@ -14,7 +14,7 @@ import { project, projectFps, makeClip, makeGenerator, applyGenerator, isGenerat
          resolveOverlaps, onChange, changed, select,
          selectMany, isSelected, splitClip, trackCount,
          applyInput, clipsOf, hasPicture, retainTracks,
-         isTrackLocked, setTrackLocked, ripplesWith,
+         isTrackLocked, setTrackLocked, ripplesWith, sortClips,
          rippleTrim, rollCut, slipClip, rateStretch, trimClip,
          SPEED_MIN, SPEED_MAX, setSpeed, speedOf, sourceSpan, sourceTime, timelineTime } from './project.js';
 import * as inputsModel from './inputs.js';
@@ -29,6 +29,7 @@ import { initResidency, tick as tickResidency,
 import * as output from './output.js';
 import * as softcues from './softcues.js';
 import * as monitor from './monitor.js';
+import * as find from './find.js';
 import * as timeline from './timeline.js';
 import * as levels from './levels.js';
 import * as exporter from './export.js';
@@ -141,6 +142,36 @@ softcues.initSoftCues({ layer: el('cuelayer'), note: el('cuenote') });
 // mix while the preview is on and bro's master bus while it is not, which are two
 // different claims and are labelled as such — see ui/monitor.js.
 monitor.initMonitor({ levels: el('levels') });
+
+// Finding the material, which is the half of a supercut that is not editing.
+// It knows where a moment is and nothing about how a clip is made, so laying
+// one out is handed back here — see the block at the top of ui/find.js.
+find.initFind({
+    addToMix: (item) => {
+        const input = inputsModel.inputs.find((i) => i.path === item.path)
+            || inputsModel.addInput({ path: item.path, name: item.name });
+        // The input may be opening still — a six-hour file probed cold — so the
+        // clip is laid out when it can be, rather than refused for arriving
+        // early. A found moment that silently added nothing would be the worst
+        // failure this panel could have.
+        const lay = () => {
+            const clip = openInput(input, { quiet: true });
+            if (!clip) return;
+            clip.inPoint = Math.max(0, item.from);
+            clip.length = Math.max(1 / Math.max(1, clip.fps), item.to - item.from);
+            // After everything already there: the finder appends, because a list
+            // auditioned in order is a mix assembled in that order.
+            clip.start = project.clips.reduce(
+                (n, c) => (c === clip || c.track !== clip.track
+                           ? n : Math.max(n, c.start + c.length)), 0);
+            sortClips();
+            needs('timeline', 'spine', 'command', 'playback');
+            changed('open');
+        };
+        if (input.probe) lay();
+        else waitForProbe(input, lay);
+    },
+});
 
 initSources({
     stage: el('st-sources'),
@@ -1229,6 +1260,36 @@ function openSpec(spec, opts = {}) {
     return clip;
 }
 
+// ── an input that has not answered yet ─────────────────────────────────────
+//
+// A six-hour recording is probed on a thread of its own, so an input added this
+// frame has no `probe` on it and nothing can be cut from it yet. `openSpec`
+// answers that by refusing and saying the input will be on the Sources stage,
+// which is right for a URL somebody pasted and wrong for the finder: every file
+// it adds is a long local recording, so refusing on the press would be an Add
+// button that reliably did nothing the first time it was used.
+//
+// So the intent is held and finished when the answer lands. Checked on the frame
+// loop rather than by polling, because that is the one place this application
+// already looks at things that were not ready last time.
+const awaitingProbe = [];
+
+/// Do `then` once `input` can be read, or say why it never will be.
+function waitForProbe(input, then) { awaitingProbe.push({ input, then }); }
+
+function settleProbes() {
+    for (let i = awaitingProbe.length - 1; i >= 0; i--) {
+        const w = awaitingProbe[i];
+        if (w.input.error) {
+            awaitingProbe.splice(i, 1);
+            flash(`cannot read ${w.input.name}: ${w.input.error}`);
+        } else if (w.input.probe) {
+            awaitingProbe.splice(i, 1);
+            w.then();
+        }
+    }
+}
+
 /// A clip of an input already on the list. Everything `open()` does past
 /// deciding which input that is.
 function openInput(input, opts = {}) {
@@ -1868,6 +1929,11 @@ document.addEventListener('keydown', (e) => {
         // What a drag on a clip means. The letters are the ones every editor
         // uses for these four, which is worth more than any letter this
         // application could pick on its own.
+        // The finder, on the key every list of things has used for a search box
+        // since before this application existed. Silently nothing when there is
+        // no corpus, because the absence of one is the ordinary case and not a
+        // condition worth a message.
+        case '/':          if (shell.currentStage() === 'compose') find.setOn(!find.isOn()); else return; break;
         case 'v':          if (shell.currentStage() === 'compose') timeline.setEditMode('select'); else return; break;
         case 'b':          if (shell.currentStage() === 'compose') timeline.setEditMode('ripple'); else return; break;
         case 'y':          if (shell.currentStage() === 'compose') timeline.setEditMode('slip'); else return; break;
@@ -1944,6 +2010,11 @@ function frame(now) {
     // monitor — see ui/residency.js. What is under the playhead is opened either
     // way, which is what `tick` does before it looks at anything else.
     tickResidency(transport.t, !output.isShowing());
+
+    // Two things that were not ready last frame: an input the finder is waiting
+    // on, and an audition that has reached the end of the moment it was playing.
+    if (awaitingProbe.length) settleProbes();
+    find.tick();
 
     // A panel that changed size (window resize, fullscreen) has to be redrawn
     // from the analysis rather than stretched — a stretched waveform lies
@@ -2425,7 +2496,7 @@ function flash(message) {
 // Tests drive the app through this rather than reaching for a DOM id that
 // only exists while one particular clip is selected.
 globalThis.__ffmpegBro = {
-    project, transport, resolveOverlaps,
+    project, transport, resolveOverlaps, find,
     open, openBatch, openInput, removeSelection,
     // A generator laid out on the timeline, and its arguments retyped. On the
     // surface because everything a test wants to check about one is downstream of

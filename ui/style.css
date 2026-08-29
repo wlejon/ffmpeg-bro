@@ -4006,3 +4006,50 @@ select.when-op { height: 22px; font-size: 11px; }
     border-radius: 50%;
     margin-left: 6px;
 }
+
+/* ── the finder ──────────────────────────────────────────────────────────
+   Over the Compose stage rather than beside it: it is a thing you open, use
+   and close, and the timeline it feeds has to stay visible behind it. */
+#find {
+    position: absolute;
+    top: 52px;
+    right: 12px;
+    bottom: 232px;
+    width: 480px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    z-index: 940;
+    padding: 8px;
+}
+#find-head { display: flex; align-items: center; margin-bottom: 8px; }
+#find-controls { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+#find-controls input[type="text"] { flex: 1; }
+#find-controls input[type="number"] { width: 58px; }
+.find-check { display: flex; align-items: center; gap: 4px; font-size: var(--fs-sm); }
+/* Sized rather than hidden when idle: a player that appears on the first press
+   moves every row under the pointer that made it. */
+#find-video {
+    width: 100%;
+    height: 240px;
+    background: #000;
+    border-radius: 3px;
+    margin-bottom: 8px;
+}
+#find-note { font-size: var(--fs-sm); margin-bottom: 6px; }
+#find-list { flex: 1; overflow-y: auto; }
+.find-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 2px;
+    border-bottom: 1px solid var(--line);
+    font-size: var(--fs-sm);
+}
+.find-row.playing { background: var(--panel-hi); }
+.find-at { width: 62px; flex: none; }
+.find-label { flex: none; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-detail { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-where { width: 80px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

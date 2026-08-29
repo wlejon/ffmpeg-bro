@@ -7,6 +7,8 @@
 // eats, the wav reader, and — the subtle one — how a token sequence becomes
 // words.
 
+import { bare } from '/app/phrase.js';
+
 const fs = require('fs');
 
 /// A 16-bit PCM wav as the floats the model wants.
@@ -141,7 +143,11 @@ export function renderAudio(A, drive, start, end, wav) {
 
 /// Compared with the punctuation and the case taken out, because a transcript
 /// writes "you," and "Thank" and a search means both.
-export const bare = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
+///
+/// Re-exported rather than defined: the flattening rule is one of the facts the
+/// application's Find panel and these tools have to agree on exactly, so it
+/// lives in `/app/phrase.js` with the search it belongs to.
+export { bare };
 
 /// How far a transcript's clock is from this media's, in seconds, or null.
 ///

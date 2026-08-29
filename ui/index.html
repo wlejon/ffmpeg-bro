@@ -229,6 +229,29 @@
             </div>
         </div>
 
+        <!-- Finding the material, which is the half of a supercut that is not
+             editing. Over the Compose stage rather than on the spine, because
+             the spine is ffmpeg's pipeline and finding is not one of its
+             stages — see the block at the top of ui/find.js. Present only when
+             a corpus is, and `tools/supercut.js index` is what makes one. -->
+        <aside id="find" hidden>
+            <div id="find-head">
+                <div class="group">
+                    <button class="text on" data-find-tab="words">Words</button>
+                    <button class="text" data-find-tab="talking">Talking</button>
+                </div>
+                <span class="spacer"></span>
+                <button id="find-close" class="text" title="Close (/ or Esc)">Close</button>
+            </div>
+            <div id="find-controls"></div>
+            <!-- One element for every row in the list. Two hundred results with
+                 a player each would be two hundred decoders on six-hour files,
+                 which is the cost ui/residency.js exists to refuse. -->
+            <video id="find-video" preload="metadata"></video>
+            <div id="find-note" class="dim"></div>
+            <div id="find-list"></div>
+        </aside>
+
         <div id="timeline">
             <div id="tl-bar">
                 <!-- Same gutter the ruler and the lanes use, so the zoom

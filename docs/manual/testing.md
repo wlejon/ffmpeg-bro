@@ -58,6 +58,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_subtitles.js -- <fixture-dir>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_document.js -- <file> [<file2>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
+./build/Release/ffmpeg-bro-headless ui/ tests/ui_find.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
@@ -368,6 +369,24 @@ for a reason worth remembering — the branch was never once configured, built o
 run, only checked by compiling two files with the macro forced off, so the suite
 that asserted it was asserting a claim nothing had ever exercised.
 
+
+`ui_find.js` is the [Find panel](find.md), and it is the one suite here that
+**builds its own store**. A corpus is tens of gigabytes and is not in this
+repository, so a suite reading the real one would be testing whatever happened to
+be on the machine — and the panel reads a single fixed path, so writing a fixture
+there would overwrite somebody's actual manifest. `useCorpus` exists for exactly
+that: the suite writes a manifest and a nineteen-word transcript beside the
+fixtures and points the panel at it.
+
+Every word in that transcript is there for one assertion. The phrase is said
+three times and one of them is written `youcross`, which is the flattening; a
+fourth is `you crossing`, which the boundary rule has to exclude; and the last
+three words sit forty seconds after the rest, so there are two stretches of
+talking and the gap between them is what decides whether that is one run or two.
+The cues point at the ordinary fixture, so `Add` really opens a file and really
+lays out a clip — **what is not checked is that the words match the sound**, and
+they do not. Whether a transcript is right is `transcribe`'s question; the
+panel's is whether a time in one becomes a clip of that time.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).

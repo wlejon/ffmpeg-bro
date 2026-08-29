@@ -15,6 +15,7 @@
 | `C` | crop handles on the picture (`Esc` leaves) |
 | `S` | split the selection at the playhead |
 | `V` `B` `Y` `X` | what a drag on a clip does: select, ripple, slip, rate |
+| `/` | [find](find.md) a word, or a stretch of talking, in a corpus |
 | `Alt` | while dragging: the other reading of whatever the bar is showing |
 | `G` | grid / stacked layout |
 | `O` | the output on the monitor instead of the clips |
