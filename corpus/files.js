@@ -102,6 +102,15 @@ export function sizeOf(p) {
     try { return fs.statSync(abs(p)).size || 0; } catch (e) { return 0; }
 }
 
+/// When a file was last written, in milliseconds, or 0 if it is not there.
+///
+/// One caller and a real one: a `.part` is a pull that stopped, *unless*
+/// something is still writing it, and the only evidence available across two
+/// processes is that it changed a moment ago. See `resumable` in `pull.js`.
+export function modifiedAt(p) {
+    try { return fs.statSync(abs(p)).mtimeMs || 0; } catch (e) { return 0; }
+}
+
 /// A JSON file, or `fallback` if it is absent or unreadable.
 ///
 /// **Unreadable counts as absent on purpose.** These files are written by a
@@ -114,9 +123,22 @@ export function readJson(p, fallback = null) {
 }
 
 export function writeJson(p, value) {
+    return writeText(p, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/// A text file, written whole, answering the absolute path it went to.
+///
+/// `writeJson`'s sibling for the one thing written here that is not JSON: the
+/// `concat` demuxer's list, which **libavformat parses itself**, so it has to be
+/// exactly the format libavformat expects rather than anything of ours. The
+/// absolute path matters and is not a tidiness: `fs.writeFileSync` here resolves
+/// a relative path against something other than this process's idea of the
+/// working directory, and a list file written to the wrong place fails as "no
+/// such file" at the *demuxer*, three steps from the mistake.
+export function writeText(p, text) {
     const at = abs(p);
     mkdirp(at.slice(0, at.lastIndexOf('/')));
-    fs.writeFileSync(at, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+    fs.writeFileSync(at, text, 'utf-8');
     return at;
 }
 
