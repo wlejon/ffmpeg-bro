@@ -18,7 +18,7 @@ lives here, beside the only things that ever wanted it.
 | [`pull_vod.js`](pull_vod.js) | one VOD, or one window of one, as a stream copy |
 | [`transcribe.js`](transcribe.js) | one file's words, with times, as cues |
 | [`montage.js`](montage.js) | a rhythmic montage of a phrase, on a beat grid |
-| `vod.js` `corpus.js` `clips.js` `flipbook.js` `speech.js` `transcript.js` `drive.js` | the parts they share |
+| `vod.js` `corpus.js` `clips.js` `flipbook.js` `weave.js` `speech.js` `transcript.js` `drive.js` | the parts they share |
 
 ## supercut.js
 
@@ -30,9 +30,10 @@ ffmpeg-bro-headless ui/ tools/supercut.js -- phrases turk --n 3
 ffmpeg-bro-headless ui/ tools/supercut.js -- search turk "you cross"
 ffmpeg-bro-headless ui/ tools/supercut.js -- clips turk "you cross" --pad 2
 ffmpeg-bro-headless ui/ tools/supercut.js -- flipbook turk "you cross" --hold 6
+ffmpeg-bro-headless ui/ tools/supercut.js -- weave turk "you cross"
 ```
 
-Eight verbs, none of which redoes what a previous run finished. They are
+Nine verbs, none of which redoes what a previous run finished. They are
 separate because their costs are: `pull` is the network, `transcribe` is the
 GPU, and `search`, `phrases` and `clips` are cheap and are the ones you actually
 iterate on. Welding them together would mean re-pulling seventeen gigabytes to
@@ -145,3 +146,39 @@ hit was really the phrase.
 
 The frame is taken `--into` seconds after the word starts (default 0.10), not at
 the attack: a frame at the exact start catches a mouth still opening.
+
+**A flipbook has no sound**, and cannot: a frame is a frame. If what you wanted
+was to *hear* every instance, that is the weave.
+
+### The weave
+
+The phrase said **once**, with every fragment of it taken from a different
+instance — picture and sound. Where the flipbook answers "how many times", this
+answers "how many ways", and it is the one that keeps the audio.
+
+Instance *i* of *N* contributes exactly the *i*-th *N*-th **of its own
+utterance**: the first take gives its first fourteenth, the second take its
+second fourteenth, and so on. The takes are cut at the same point *through the
+word* rather than at the same number of milliseconds in, which is what leaves
+the result still sounding like somebody saying the word instead of fourteen
+unrelated syllables in a row.
+
+**The split is by fraction because the takes are different lengths.** Measured
+across these recordings the same word runs 0.48 s in one instance and over a
+second in another; a fixed 57 ms cut lands mid-vowel in the short one and barely
+past the consonant in the long one, while a fraction lands in the same place in
+both.
+
+Nothing is time-stretched, so the finished word is exactly the **mean** of the
+utterances it came from — a number that falls out of the material rather than
+one to choose, which is why there is no `--length`. Fourteen instances of
+"ucross" gave 1.00 s, with fragments from 34 ms to about 110 ms.
+
+`--rounds R` walks the instances R times instead of once, so the cut is R times
+faster and the word stays the same length. Watch the *shortest fragment* the run
+reports rather than the average: it is the number that decides between something
+watchable and a strobe, and at one video frame it is neither seen nor heard.
+
+The edit is saved beside the video as a `.fbro`. A weave is a judgement call — a
+fragment landing on a cough is obvious once you hear it and invisible before —
+so what you get is an edit to open and nudge, not only a file to watch.

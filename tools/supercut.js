@@ -40,6 +40,7 @@ import { loadSpeech } from './speech.js';
 import { readSrt, countPhrases, ranked } from './transcript.js';
 import { cutClips } from './clips.js';
 import { build as buildFlipbook } from './flipbook.js';
+import { weave as buildWeave } from './weave.js';
 import { ROOT, abs, argv, positionals, opt, num, flag, driver, exists, sizeOf,
          mkdirp, writeJson, clock, span, gb, mb } from './drive.js';
 
@@ -58,6 +59,8 @@ const USAGE = `usage: ffmpeg-bro-headless ui/ tools/supercut.js -- <verb> …
   phrases <channel> [--n 3]        what he says a lot — how you pick one
   clips <channel> <phrase>         the seconds around every hit, as files
   flipbook <channel> <phrase>      one frame per instance, assembled
+  weave <channel> <phrase>         the phrase said once, every fragment of it
+                                   from a different instance — with the sound
 
   --last N        how many of the newest recordings to work on. Default 5.
   --skip N        leave out the N newest. A broadcast Twitch is still
@@ -81,6 +84,11 @@ flipbook also takes:
   --fps N         the output rate. Default 30.
   --hold N        output frames each instance is held for. Default 1.
   --into S        how far inside the word to take the frame. Default 0.10.
+
+weave also takes:
+  --out PATH      where the video goes. Default: build/supercut/<channel>-<phrase>-weave.mp4
+  --rounds R      walk the instances R times, so the cut is R times faster.
+                  The word stays the same length whatever R is. Default 1.
 
 A phrase may carry alternatives: "you cross|ya cross" is one search for either.`;
 
@@ -349,11 +357,47 @@ async function doFlipbook() {
     console.log(`  stills in ${res.frames}`);
 }
 
+// ── weave ──────────────────────────────────────────────────────────────────
+
+/// The phrase said once, with every fragment of it from a different instance.
+///
+/// The flipbook's sibling and its opposite: that one is a frame per instance
+/// and silent, this one keeps the sound and is the length of a single saying.
+function doWeave() {
+    need('weave');
+    const phrase = args[2];
+    assert(phrase, 'which phrase? — `weave <channel> "you cross"`');
+    const hits = hitsFor(phrase);
+    assert(hits.length, `"${phrase}" is never said in ${channel}'s transcripts`);
+    const slug = `${channel}-${phrase}-weave`.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    const out = abs(opt('out', `build/supercut/${slug}.mp4`));
+
+    console.log(`"${phrase}" — ${hits.length} instance${hits.length === 1 ? '' : 's'} ` +
+                `across ${new Set(hits.map((h) => h.vodId)).size} recording(s)`);
+    const res = buildWeave(A, driver, {
+        hits, out, rounds: num('rounds', 1),
+        fps: num('fps', 0), width: num('width', 0), height: num('height', 0),
+    });
+    console.log(`weave: ${res.placed.length} fragments from ${res.instances} instances` +
+                (res.rounds > 1 ? ` · ${res.rounds} rounds` : '') +
+                ` · ${res.seconds.toFixed(2)} s · ${res.width}×${res.height}` +
+                ` · ${res.hasAudio ? 'with sound' : 'SILENT'} · ${mb(res.bytes)}`);
+    // The shortest fragment is the number that decides whether this is watchable
+    // or a strobe, and it is not knowable before the takes are measured.
+    console.log(`  shortest fragment ${(res.shortest * 1000).toFixed(0)} ms`);
+    if (res.missed.length)
+        console.log(`  ${res.missed.length} dropped: ` +
+                    res.missed.map((m) => clock(m.at)).join(' '));
+    console.log(`  ${res.out}`);
+    console.log(`  the edit ${res.doc}`);
+}
+
 // ── go ─────────────────────────────────────────────────────────────────────
 
 const VERBS = {
     list: doList, pull: doPull, transcribe: doTranscribe, status: doStatus,
     search: doSearch, phrases: doPhrases, clips: doClips, flipbook: doFlipbook,
+    weave: doWeave,
     build: async () => { await doPull(); doTranscribe(); },
 };
 
