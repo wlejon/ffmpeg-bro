@@ -72,16 +72,37 @@ everything else, and none of them blocks the next.
 
 What you get for it is a mix that is its own footage. Thirteen moments taken out
 of four six-hour recordings read **270 MB** instead of sixty gigabytes, and the
-recordings are not needed again — you can put the drive away. What you do *not*
-get is a faster window: a twenty-megabyte cut opens and seeks in about the same
-time as the recording it came from, because almost all of that is the decoder
-starting rather than the file being long.
+recordings are not needed again — you can put the drive away.
 
-The cuts are written under `build/cuts/`, named after the recording and the
-window, so adding the same moment twice writes one file. **They are not inside
-the document** — a `.fbro` names them, so deleting `build/cuts/` breaks the
-documents that point at it. Keep it beside the project, or render before you
-clear it.
+### And then it gets a file you can drag over
+
+A cut is small but it is the same *kind* of file as the recording, and that is
+what decides how a scrub feels: dragging a trim edge asks for a different frame
+every few pixels, and each one costs a decode from the last keyframe. On the
+footage this is for that was 50 ms a frame, which is a picture that arrives after
+your hand has stopped.
+
+So a second file is made behind each cut: the same piece, 720p, with **every
+frame a keyframe**. Nothing is rendered from it and nothing else changes — it is
+only what the picture on the right is read out of while you work. Dragging an
+edge went from 50 ms a position to **7 ms**, which is a picture that keeps up.
+
+The bar on the card covers both stages, and the row above says `preparing N`
+while anything is still being made. It takes about **three seconds per cut**,
+one at a time, and the clip is fully usable throughout — at the old speed until
+its file lands, then at the new one.
+
+A recording you have *not* cut down — anything over five minutes — does not get
+one, because making it would take longer than the scrubbing it would speed up.
+Those still work; they are just as slow as they were.
+
+Both kinds of file are written under `build/cuts/`, named after what they were
+made from, so adding the same moment twice writes one file and reopening a
+document finds them already there. **The cuts are inside the document and the
+scrub files are not** — a `.fbro` names its cuts, so deleting `build/cuts/`
+breaks the documents that point at it. Deleting only the `-p720.mkv` files costs
+nothing: they are made again next time, and everything works meanwhile at the
+speed it worked at before there were any.
 
 If a cut cannot be made — the recording will not answer, the copy fails — the
 card turns amber and the clip stays a clip of the recording, which works and is

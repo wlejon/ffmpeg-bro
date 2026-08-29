@@ -40,13 +40,39 @@
 import { project, clipsAt, sourceTime, duration } from '../ui/project.js';
 import { transport } from '../ui/transport.js';
 import * as output from '../ui/output.js';
+import { proxyFor } from './cuts.js';
 
-/// The most recordings that may be open at once, whatever the mix asks for.
+/// The file to *show* a clip from, which is not always the file it is of.
 ///
-/// At about 120 MB of demuxer and decoder per open six-hour recording, eight is
-/// a gigabyte — the same ceiling `ui/output.js` accepts for a kept render, and
-/// past the point where a supercut is drawing on that many sources at once.
-const MAX_OPEN = 8;
+/// A proxy is all-keyframe and about the size of the stage, so a seek into one
+/// costs 11 ms against 50 for the recording or the cut it was made from — and a
+/// seek is synchronous on the UI thread (`ElVideo::seekTo` settles), so that
+/// difference is the whole of whether a trim edge can be dragged. `cuts.js` is
+/// where they come from and why; here it is one substitution.
+///
+/// **Not for an audition.** A proxy carries no soundtrack — it exists to be
+/// looked at while a hand moves — and a row played from one would be a silent
+/// row. `audition()` therefore takes the path it was given, and the pool holds
+/// both files when both are being used.
+function pathFor(clip) {
+    return (clip && (proxyFor(clip.path) || clip.path)) || '';
+}
+
+/// The most files that may be open at once, whatever the mix asks for.
+///
+/// A gigabyte, which is the same ceiling `ui/output.js` accepts for a kept
+/// render — and what a gigabyte buys changed when the pool stopped holding
+/// recordings. **Eight was the answer for four six-hour files at about 120 MB
+/// of demuxer and decoder each**; what is in it now is one proxy per cut, which
+/// is a 720p pipeline rather than a 1080p60 one and about half that. Sixteen of
+/// those is the same gigabyte and it is the number that matters: a thirteen-cut
+/// supercut with a pool of eight evicted the file it was about to need again on
+/// every other click, which measured as **80 ms of opening on a click that
+/// should be a seek**. Sixteen *recordings* would be two gigabytes and cannot
+/// arise — thirteen moments of four recordings is four paths before the cuts
+/// land and thirteen proxies afterwards, and the many-files case is by
+/// construction the cheap one.
+const MAX_OPEN = 16;
 
 /// How many to actually hold: what the mix is made of, plus one for an audition.
 ///
@@ -58,7 +84,7 @@ const MAX_OPEN = 8;
 /// hold the whole mix or it holds none of it.
 function room() {
     const paths = new Set();
-    for (const c of project.clips) paths.add(c.path);
+    for (const c of project.clips) paths.add(pathFor(c));
     return Math.min(MAX_OPEN, Math.max(2, paths.size + 1));
 }
 
@@ -118,7 +144,10 @@ function elementFor(path) {
 /// waiting for a probe and one more open is invisible.
 export function warm() {
     const paths = [];
-    for (const c of project.clips) if (paths.indexOf(c.path) < 0) paths.push(c.path);
+    for (const c of project.clips) {
+        const p = pathFor(c);
+        if (p && paths.indexOf(p) < 0) paths.push(p);
+    }
     // Never more than the pool will hold, or warming one would evict another and
     // the last few would be worse off than if nothing had been done at all.
     for (const p of paths.slice(0, Math.max(1, room() - 1))) elementFor(p);
@@ -190,16 +219,23 @@ export function stopAudition() {
 /// was already on the screen.
 let parked = { path: '', at: -1 };
 
-/// The shortest gap between two seeks of the parked picture, in milliseconds.
+/// The shortest gap between two seeks of the parked picture, in milliseconds —
+/// **measured rather than chosen**, and it is the last seek's own cost.
 ///
-/// A hand dragging a card asks for a different frame *per pixel*, and a seek
-/// into a long recording is a keyframe plus everything up to the target — up to
-/// a couple of hundred frames of 1080p60. Answering every one of them puts the
-/// decode thread permanently behind the hand, which is what a scrub that lags
-/// and then catches up in jumps is. Dropping the ones in between costs nothing:
-/// the frame loop calls `park` again every frame, so the position the hand
-/// stopped at is picked up on the next tick either way.
-const SEEK_MS = 120;
+/// A hand dragging a card asks for a different frame *per pixel*, and answering
+/// every one of them puts the window permanently behind the hand, because
+/// `ElVideo::seekTo` settles: the cost lands on this thread. So there has to be
+/// a floor, and what it should be is exactly what one seek costs here — no
+/// faster, because that is spending a frame's budget twice, and no slower,
+/// because every millisecond of it is picture the hand is not being shown.
+///
+/// **A fixed 120 was that number for the wrong file.** It was measured against a
+/// 1080p60 recording at 50 ms a seek and rounded up for safety, and it stayed
+/// the answer for a proxy that answers in 11 — which is a scrub capped at eight
+/// positions a second on a file that could give sixty. Reading it back off the
+/// clock makes the same line right for both, and right again for whatever the
+/// next machine does.
+let seekCost = 0;
 let lastSeek = 0;
 
 /// Park the picture at `t` on the timeline: the topmost clip covering it, seeked.
@@ -215,18 +251,25 @@ function park(t) {
         reveal('');
         return null;
     }
+    // The *resolved* path, so that a proxy landing for a file already on screen
+    // reads as a different picture and is seeked to rather than waited for.
+    const path = pathFor(clip);
     const want = sourceTime(clip, t);
-    if (parked.path === clip.path && Math.abs(parked.at - want) < 0.02) return clip;
+    if (parked.path === path && Math.abs(parked.at - want) < 0.02) return clip;
     const now = Date.now();
     // Not this frame. The next one that is far enough from the last takes
-    // whatever position the hand has reached by then — see `SEEK_MS`.
-    if (parked.path === clip.path && now - lastSeek < SEEK_MS) return clip;
+    // whatever position the hand has reached by then — see `seekCost`.
+    if (parked.path === path && now - lastSeek < seekCost) return clip;
     lastSeek = now;
-    parked = { path: clip.path, at: want };
-    const video = elementFor(clip.path);
+    parked = { path, at: want };
+    const video = elementFor(path);
     video.muted = true;
-    reveal(clip.path);
+    reveal(path);
+    // Timed here and nowhere else: this is the one seek a hand waits on, and
+    // what it costs is what the next one may not be asked for sooner than.
+    const began = Date.now();
     seek(video, want);
+    if (video.readyState >= 1) seekCost = Date.now() - began;
     return clip;
 }
 
@@ -377,6 +420,16 @@ export function tick() {
 /// The one call an edit makes: a trim, a slip or a reorder changes what is under
 /// the playhead without the playhead moving, and the frame on screen is then of
 /// a moment that is no longer there.
+/// The *file* a clip is shown from has changed and the edit has not.
+///
+/// A proxy landing, and nothing else. Deliberately not `refresh()`: that
+/// invalidates the render, and a render of an unchanged edit is still exactly
+/// right — throwing away a kept one because a picture got sharper would be a
+/// second of rebuilding for nothing.
+export function repoint() {
+    if (!auditioning && !transport.playing) park(transport.t);
+}
+
 export function refresh() {
     invalidate();
     // **`park`'s own comparison decides**, and clearing it here was the second

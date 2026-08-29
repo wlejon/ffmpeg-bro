@@ -48,6 +48,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-hwtest <file> [<av1.mp4>]  # the GPU: what is here, is it the same picture, what does each path cost — and, with an AV1 file, that a codec whose default decoder is software-only still opens on a device
 ./build/Release/ffmpeg-bro-datatest <telemetry.mp4> [<real-gopro.MP4>]  # a data track: which parser, what GPMF says, and a payload it may not trust
 ./build/Release/ffmpeg-bro-markstest <marks.m4a> [<silent.mp4>] [<sound.m4a>]  # a soundtrack: is a transient found, is it at the right second, is the tone the frequency it was written at
+./build/Release/ffmpeg-bro-proxytest <file> [<portrait>]  # the file a scrub is answered out of: is every frame really a keyframe, is it the size and shape asked for, is it the same length
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_player.js -- <file> [<file2>] [<rotated>] [<sound-only>]
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_sources.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_hardware.js -- <file>

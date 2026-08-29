@@ -39,7 +39,7 @@ ctest --test-dir build -C Release
 ```
 
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
-`sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `ui-player`,
+`sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `proxy`, `ui-player`,
 `ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
 `ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
 `ui-document`, `ui-output`, `ui-load`):
@@ -395,9 +395,14 @@ the result. Do not reimplement a trim here to avoid it.
 the opposite hard case. The workbench's is a montage — many clips of many files —
 so it holds a decoder per clip near the playhead. This one's is forty clips of
 four recordings, so an element per clip would open one six-hour file forty times.
-`supercut/screen.js` keys its pool by path, caps it at three, and a cut inside a
-recording is a seek. Both rules say a decoder belongs to what is being *watched*;
-they differ on what counts as the same thing.
+`supercut/screen.js` keys its pool by path and a cut inside a recording is a
+seek. Both rules say a decoder belongs to what is being *watched*; they differ on
+what counts as the same thing. **The pool has to be able to hold the whole mix or
+it holds none of it** — `room()` is the distinct files plus one, and the cap is a
+gigabyte's worth rather than a number of clips: a fixed three evicted the file it
+was about to need again on every crossing, and a fixed eight did the same once
+every clip had a proxy of its own (80 ms of opening on a click that should be a
+seek).
 
 **A moment added to the mix is cut out of its recording** (`supercut/cuts.js`).
 `+` puts the clip in the row on the frame it is pressed, against the recording,
@@ -418,6 +423,32 @@ of it is `avformat_find_stream_info` and the decoder, neither of which cares how
 long a file is. It also makes thirteen clips *thirteen* distinct inputs where
 there were four, which is why `TimelineSource::openTheFirstOfEach` opens them at
 once (1.4 s in a row, 0.2 s together).
+
+**And the file a scrub is answered out of is a third file, because a cut is
+not one** (`src/native/proxy_queue.h`, `bro.ffmpeg.proxy`, `PROXY_HEIGHT` in
+`supercut/cuts.js`). `ElVideo::seekTo` calls `VideoPipeline::settleAt` —
+deliberately, because the documented answer to "what is at t?" is read back on
+the line after the assignment — so a hand dragging a trim edge pays a decode per
+position, on the UI thread. Forty seeks over 25 s of 1080p60: **50 ms** with the
+recording's two-second GOP, 46 ms at a GOP of four, 24 ms all-keyframe, 40 ms at
+720p with the long GOP, **11 ms at 720p all-keyframe**. Two facts decide the
+design: shortening a GOP buys nothing until it reaches *none* (the walk is ~0.45
+ms a picture almost regardless of size), and the rest is per pixel. So a proxy is
+all-keyframe at about the size it is looked at, `supercut/screen.js`'s `pathFor`
+is the only reader, and a trim drag went 50 ms → 7 ms a position. Four things
+about it. It is **not a render** and could not be: the export half's currency is
+RGBA, so the same output through `render.start` is 29.7 s against 1.9 s for a
+loop that scales planes to planes — and it holds no job slot, for the reason
+`fetch_queue.h` gives. `gop_size = 1` is **refused by NVENC** ("Gop Length should
+be greater than number of B frames + 1"), and the mark that replaces it makes a
+non-IDR I frame — which is not flagged as a keyframe — unless the encoder's own
+`forced-idr` is on too, so `tests/proxy_test.cpp` counts rather than trusts. Both
+kinds of file are written `.part` and **renamed on Done**, and the terminal state
+is published only after the muxer has closed, because a rename of a file libav
+still holds fails silently on Windows. And a proxy is `ui/localcopy.js`'s rule
+where the cut is the exception to it: nothing renders from one, none is in a
+document, and deleting every one of them costs a slower drag until they are made
+again.
 
 One decision worth not undoing: **playback is the render preview and only that**
 (`ui/output.js`). The workbench plays the clips and uses the render to smooth the
@@ -508,7 +539,7 @@ and a closed tab carries a count so it summarises rather than hides.
 ### The JS surface
 
 `bro.ffmpeg` is `bindings_*.cpp`, one file per part of ffmpeg's model — probe,
-data, render, capture, capabilities, playback, sequences, expressions — each owning its calls, the
+data, render, fetch, proxy, capture, capabilities, playback, sequences, expressions — each owning its calls, the
 helpers that build its answers, and the paragraph saying why the calls are
 shaped that way; `bindings_install.h` lists them and `ffmpeg_bindings.cpp` is
 the assembly. Two are shared and neither may be duplicated: `bindings_value.h`

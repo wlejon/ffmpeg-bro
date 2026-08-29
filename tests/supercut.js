@@ -247,6 +247,53 @@ console.log('\ncutting');
     ok(!packed('after cutting'), packed('after cutting') || 'the mix is still packed');
 }
 
+// ── and each of them gets a file a hand can drag over ──────────────────────
+//
+// A proxy is the second thing made for a clip and the first that changes
+// nothing: the same clip, of the same file, at the same length, with one more
+// file on disk that `supercut/screen.js` shows it from. So what is asserted is
+// exactly that — there is one, it is not the clip's own file, and the edit did
+// not notice. `pending()` above already waited for it: it counts both stages.
+
+console.log('\nthe proxy');
+{
+    const before = order().map((c) => ({ id: c.id, path: c.path, len: c.length }));
+    for (let i = 0; i < 400 && A.cuts.pending(); i++) pump(25);
+
+    // **Frames first, then the wait.** A proxy is *asked for* by the frame loop
+    // — `cuts.tick()` is where a clip that has none is noticed — so `pending()`
+    // is zero until one has run, and a wait written the other way round would
+    // fall straight through and assert about proxies nobody had requested.
+    pump(60);
+    for (let i = 0; i < 400 && A.cuts.pending(); i++) pump(25);
+
+    const proxies = order().map((c) => A.cuts.proxyFor(c.path));
+    ok(proxies.every((p) => p), `every clip has one (${proxies.filter(Boolean).length}` +
+                                ` of ${proxies.length})`);
+    ok(proxies.every((p, i) => p !== order()[i].path),
+       'and it is a second file rather than the one the clip is of');
+    ok(proxies.every((p) => fileSize(p) > 0), 'which is on disk');
+    ok(proxies.every((p) => p.indexOf(`-p${A.cuts.PROXY_HEIGHT}.mkv`) > 0),
+       `named for the height it was made at (${A.cuts.PROXY_HEIGHT})`);
+
+    // **Nothing about the edit moved.** This is the whole reason a proxy landing
+    // is `'screen'` and not `'edit'` in `cuts.tick()`: a row rebuilt here would
+    // be a row destroyed under a hand, and a document marked unsaved here would
+    // be claiming an edit nobody made.
+    const after = order().map((c) => ({ id: c.id, path: c.path, len: c.length }));
+    ok(after.length === before.length &&
+       after.every((a, i) => a.id === before[i].id && a.path === before[i].path &&
+                             Math.abs(a.len - before[i].len) < 1e-6),
+       'and no clip changed its file, its length or its place');
+
+    // **It is not in the document**, which is `ui/localcopy.js`'s rule: a proxy
+    // is a fact about this machine. A `.fbro` that named one would be a document
+    // that opened differently on a machine where the file had been deleted.
+    const blob = JSON.stringify(A.doc.snapshot());
+    ok(blob.indexOf(`-p${A.cuts.PROXY_HEIGHT}.mkv`) < 0,
+       'and no proxy is named anywhere in the document');
+}
+
 // ── trimming, which ripples because a sequence has no holes ────────────────
 //
 // The regression that matters is **growing**. `ui/project.js` stops a trim at

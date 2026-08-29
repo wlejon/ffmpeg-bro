@@ -157,6 +157,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/bindings_capabilities.cpp
     src/native/bindings_expr.cpp
     src/native/bindings_fetch.cpp
+    src/native/bindings_proxy.cpp
     src/native/bindings_data.cpp
     src/native/bindings_marks.cpp
     src/native/bindings_playback.cpp
@@ -189,6 +190,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/export_timeline.cpp
     src/native/export_writer.cpp
     src/native/fetch_queue.cpp
+    src/native/proxy_queue.cpp
 )
 target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
@@ -367,6 +369,15 @@ target_include_directories(ffmpeg-bro-datatest
                            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                                    "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# The file a scrub can be answered out of: a small all-keyframe transcode. Every
+# assertion is against the file that came out rather than the request that went
+# in, because the one property it exists for — a keyframe on every frame — is
+# the one that two different encoder settings will quietly not produce.
+add_executable(ffmpeg-bro-proxytest tests/proxy_test.cpp)
+target_link_libraries(ffmpeg-bro-proxytest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-proxytest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # A soundtrack, read for where things happen in it: does the sensor bus find a
 # moment, and is it *the* moment. Almost every assertion is a number of seconds
 # against the fixture that was written with events at known ones — plus the one
@@ -495,6 +506,10 @@ add_test(NAME telemetry COMMAND ffmpeg-bro-datatest "${FIXTURE_DATA}" "${GOPRO_F
 add_test(NAME marks COMMAND ffmpeg-bro-markstest "${FIXTURE_MARKS}"
          "${FIXTURE_SILENT}" "${FIXTURE_SOUND}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}" "${FIXTURE_AV1}")
+# The proxy, which is the file a trim edge is dragged against. The portrait
+# fixture is what makes "it keeps the shape it came from" a real assertion
+# rather than one 16:9 restating another.
+add_test(NAME proxy COMMAND ffmpeg-bro-proxytest "${FIXTURE_A}" "${FIXTURE_B}")
 # The device it records from is `lavfi`, which produces its own pictures, so
 # most of this needs no fixture at all. What does is the half about a file laid
 # *over* a device — a title card is a file, and there has to be one — so the
@@ -592,6 +607,7 @@ add_test(NAME supercut COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/supercut/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/supercut.js"
          -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences playback hardware telemetry marks
+                     proxy
                      PROPERTIES FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
@@ -625,6 +641,6 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
-set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-hardware ui-export
+set_tests_properties(export capabilities sequences hardware proxy ui-player ui-sources ui-hardware ui-export
                      ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find supercut
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

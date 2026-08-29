@@ -1,4 +1,5 @@
-// A moment, cut out of the recording it came from.
+// A moment, cut out of the recording it came from — and made scrubbable, which
+// is a second file and not the same problem.
 //
 // ── Why a clip of a six-hour file is not good enough ──────────────────────
 //
@@ -23,6 +24,44 @@
 // rather than four. That is answered where it lands, by opening them at once
 // (`TimelineSource::openTheFirstOfEach`), and it is named here so nobody comes
 // looking for a speed-up this file does not provide.
+//
+// ── And a cut is still not something you can scrub ────────────────────────
+//
+// That paragraph was the answer to "make it instant" and it was the wrong
+// answer, because the cost it names is real and is not where the time goes.
+// **Setting `currentTime` blocks the UI thread until the picture arrives** —
+// bro's `ElVideo::seekTo` calls `VideoPipeline::settleAt`, deliberately, because
+// the documented answer to "what is at t?" is read back on the line after the
+// assignment — so a hand dragging a trim edge pays a decode per position. On a
+// 1080p60 recording with a two-second GOP that is **50 ms a seek**, and a stream
+// copy of it is the same file with the same GOP, so cutting changed nothing
+// about it.
+//
+// What does change it is the *format*, and only one property of it matters.
+// Measured, forty seeks in a row on the same twenty-five seconds:
+//
+//     1080p60, GOP 120 — the recording, and the cut of it          50 ms
+//     1080p60, GOP 4                                               46 ms
+//     1080p60, every frame a keyframe                              24 ms
+//      720p60, GOP 120                                             40 ms
+//      720p60, every frame a keyframe                              11 ms
+//
+// Shortening the GOP does nothing until it reaches *none*: a seek lands on a
+// keyframe and walks, and the walk is about 0.45 ms a picture whatever its size.
+// The rest is per pixel. So the file that can be scrubbed is all-keyframe and
+// about the size it is looked at, and it is a **proxy** — a second file beside
+// the cut, made once, never rendered from, never in a document, deletable at any
+// time. `src/native/proxy_queue.h` is why it is neither a render nor a fetch and
+// what it measured; `supercut/screen.js` is the only reader.
+//
+// Three things about the proxy stage here. It is of the **cut**, not of the
+// recording, so it reads twenty megabytes and takes about **1.9 s for a
+// twenty-five second piece** (`h264_nvenc`; libx264 is 2.6 s) — which is why it
+// waits for the cut rather than racing it. It is asked for **by file and not by
+// clip**, because that is what it is a fact about, which is `screen.js`'s own
+// rule and means two clips of one recording share one. And an input longer than
+// `PROXY_LONGEST` does not get one at all: a proxy of six hours is twenty-eight
+// minutes of encoding to speed up scrubbing somebody is doing *now*.
 //
 // ── The four decisions ────────────────────────────────────────────────────
 //
@@ -75,6 +114,14 @@
 // and a document naming twelve twenty-megabyte files is a document you can move.
 // Delete `build/cuts/` and the documents that name it stop opening; that is the
 // trade, and it is why they are named deterministically rather than by a counter.
+//
+// The proxies live there too and are the opposite case: **deleting one costs
+// nothing**, because the next session makes it again and everything works
+// meanwhile at the speed it worked at before there were any. That is what lets
+// them be adopted from disk on sight — and why both kinds are written to
+// `<name>.part` and renamed when the writer says Done, so a name that exists is
+// a file that finished. A session killed mid-copy used to leave a truncated file
+// under the name the next press looked for.
 
 import { project, applyInput, clipsOf, changed } from '../ui/project.js';
 import * as inputsModel from '../ui/inputs.js';
@@ -99,12 +146,38 @@ const SCAN_MS = 400;
 /// GOP is one this will decline to cut rather than one it will cut wrongly.
 const SCAN_BACK = 20;
 
+/// How tall a proxy is. The width follows the source's aspect.
+///
+/// 720 puts a seek at 11 ms — inside a 60 Hz frame, which is the whole
+/// requirement — against 24 ms at 1080 and 6 ms at 540. The picture is what you
+/// judge an edit by, so this is the largest of the three that still fits in a
+/// frame rather than the smallest that is fastest.
+export const PROXY_HEIGHT = 720;
+
+/// The longest input worth making a proxy of, in seconds.
+///
+/// A proxy runs at about thirteen times realtime here, so five minutes is under
+/// half a minute of background encoding and a six-hour recording would be
+/// twenty-eight. A clip of something that long stays on the file it is on and
+/// scrubs at that file's speed; nothing is refused and nothing is said, because
+/// what it costs is a slower drag rather than an answer somebody is missing.
+const PROXY_LONGEST = 300;
+
 const fs = require('fs');
 
 /// Every cut asked for, by clip id. Not on the clip: a cut is a fact about this
 /// machine and the clip is what gets written to the document — `peaks`'s rule
 /// and `ui/localcopy.js`'s, and the reason neither of those is a clip field.
 const jobs = new Map();
+
+/// Every proxy asked for, **by input path** and not by clip.
+///
+/// A proxy is a fact about a file, so two clips of one recording share one and a
+/// clip that moves from the recording to its cut asks for a different one. Same
+/// reason `supercut/screen.js` keys its decoder pool by path; the entry is
+/// `{ path, id, state, progress }` and `state` is
+/// `making` | `ready` | `failed` | `long`.
+const proxies = new Map();
 
 /// Where cuts are written. Under the repository root rather than beside the
 /// document, because `require('fs')` resolves a relative path against the *app*
@@ -128,15 +201,36 @@ function dir() {
 /// they are clips of, and neither is this file's business.
 export function stateOf(clipId) {
     const job = jobs.get(clipId);
+    if (job && job.state !== 'done') return job.state;
+    // The cut has landed and the proxy has not: the same wait as far as a card
+    // is concerned — something about this clip is still being made and the bar
+    // says how far. A *failed* proxy is deliberately not reported here: the clip
+    // is correct and playable and only scrubs at the speed it always did, which
+    // is not a thing to put an amber border round.
+    const clip = project.clips.find((c) => c.id === clipId);
+    const rec = clip && proxies.get(clip.path);
+    if (rec && rec.state === 'making') return 'proxying';
     return job ? job.state : null;
 }
 
-/// How many cuts are in flight, for the one line the mix head shows.
+/// How many clips have something still being made for them, for the mix head.
 export function pending() {
     let n = 0;
-    for (const job of jobs.values())
-        if (job.state === 'cutting' || job.state === 'copied' || job.state === 'opening') n++;
+    for (const clip of project.clips) {
+        const s = stateOf(clip.id);
+        if (s === 'cutting' || s === 'copied' || s === 'opening' || s === 'proxying') n++;
+    }
     return n;
+}
+
+/// The proxy to scrub `path` with, or `''` for "use the file itself".
+///
+/// `supercut/screen.js` is the one caller: the picture it parks is the only
+/// thing a proxy is for, and everything else in this application — the render,
+/// the export, the analysis, the document — reads the real file.
+export function proxyFor(path) {
+    const rec = proxies.get(path);
+    return rec && rec.state === 'ready' ? rec.path : '';
 }
 
 /// Forget what is known about a clip that has gone.
@@ -251,7 +345,7 @@ export function begin(clip, spec) {
     if (!rows.length) { jobs.delete(clip.id); return; }
     try {
         job.fetch = bro.ffmpeg.fetch.start({
-            path,
+            path: `${path}.part`,
             format: 'matroska',
             inputs: [{ path: clip.path }],
             streams: rows,
@@ -266,11 +360,27 @@ function size(path) {
     try { return fs.statSync(path).size; } catch (e) { return 0; }
 }
 
+/// Put a finished file under the name everything looks for.
+///
+/// **A name that exists is a file that finished**, which is what makes both
+/// kinds adoptable on sight. Everything here writes `<name>.part` and this is
+/// the only place either name is joined up; a session killed mid-write leaves a
+/// `.part` that the next press simply writes over.
+function finish(path) {
+    try { fs.renameSync(`${path}.part`, path); return true; }
+    catch (e) { return false; }
+}
+
 // ── taking the answer ──────────────────────────────────────────────────────
 
 /// The copy landed: open the file it wrote. The probe is a thread like every
 /// other one here, so this only starts it.
 function open(job) {
+    if (job.state === 'cutting' && !finish(job.path)) {
+        job.state = 'failed';
+        job.error = 'the cut could not be put in place';
+        return;
+    }
     job.state = 'opening';
     job.input = inputsModel.addInput({ path: job.path });
 }
@@ -316,7 +426,99 @@ function adopt(job) {
 /// How far the copy has got, 0 to 1, for the bar on the card.
 export function progressOf(clipId) {
     const job = jobs.get(clipId);
-    return job ? job.progress || 0 : 0;
+    if (job && job.state !== 'done') return job.progress || 0;
+    const clip = project.clips.find((c) => c.id === clipId);
+    const rec = clip && proxies.get(clip.path);
+    return rec && rec.state === 'making' ? rec.progress || 0 : (job ? job.progress || 0 : 0);
+}
+
+// ── the proxy ──────────────────────────────────────────────────────────────
+
+/// The proxy's name for a file: the file's own, plus the height.
+///
+/// Deterministic for `nameFor`'s reason and one more: a proxy adopted from disk
+/// costs nothing, so the second time a document is opened there is no wait at
+/// all. The height is in the name because changing `PROXY_HEIGHT` has to make
+/// the old ones stop being the answer rather than quietly leave a smaller
+/// picture on the screen.
+function proxyNameFor(path) {
+    const stem = String(path).replace(/\\/g, '/').split('/').pop()
+                             .replace(/\.[^.]*$/, '')
+                             .replace(/[^A-Za-z0-9_-]+/g, '_');
+    return `${stem}-p${PROXY_HEIGHT}.mkv`;
+}
+
+/// Ask for the proxies the mix is missing, and take in the ones that landed.
+///
+/// Walked over the clips every frame rather than driven by an event, for the
+/// reason `settleProxies()` in `ui/app.js` is: what a clip is a clip *of*
+/// changes without anything announcing it — a cut lands, a document opens, a
+/// file is dropped — and one pass over thirteen clips is nothing beside being
+/// wrong about which file is on the screen.
+function settleProxies() {
+    let touched = false;
+
+    const wanted = new Set();
+    for (const c of project.clips) {
+        const path = c.path;
+        if (!path) continue;
+        wanted.add(path);
+        if (proxies.has(path)) continue;
+        // Not probed yet: ask again next frame rather than deciding "too long"
+        // about a file nobody has measured.
+        const media = c.media || 0;
+        if (!(media > 0)) continue;
+        if (media > PROXY_LONGEST) { proxies.set(path, { state: 'long' }); continue; }
+
+        const out = `${dir()}/${proxyNameFor(path)}`;
+        if (size(out) > 0) {
+            proxies.set(path, { path: out, state: 'ready', progress: 1 });
+            touched = true;
+            continue;
+        }
+        const rec = { path: out, id: 0, state: 'making', progress: 0, error: '' };
+        proxies.set(path, rec);
+        try {
+            rec.id = bro.ffmpeg.proxy.start({
+                path: `${out}.part`,
+                input: path,
+                height: PROXY_HEIGHT,
+                label: `proxy ${c.name || ''}`,
+            });
+        } catch (e) {
+            rec.state = 'failed';
+            rec.error = String((e && e.message) || e);
+        }
+    }
+
+    let running = null;
+    for (const [path, rec] of proxies) {
+        if (rec.state !== 'making') continue;
+        // Nothing in the mix is of this file any more — a Clear, or a clip
+        // dropped while its proxy was being made. Stopping it is the point of
+        // this branch: thirteen encodes for an empty row is the one way this
+        // could be felt.
+        if (!wanted.has(path)) {
+            try { bro.ffmpeg.proxy.stop(rec.id); } catch (e) { /* already gone */ }
+            proxies.delete(path);
+            continue;
+        }
+        if (!running) {
+            running = new Map();
+            for (const p of bro.ffmpeg.proxy.list()) running.set(p.id, p);
+        }
+        const p = running.get(rec.id);
+        if (!p) continue;
+        rec.progress = p.progress || 0;
+        if (p.state === 'done') {
+            if (finish(rec.path)) { rec.state = 'ready'; touched = true; }
+            else { rec.state = 'failed'; rec.error = 'the proxy could not be put in place'; }
+        } else if (p.state === 'failed' || p.state === 'cancelled') {
+            rec.state = 'failed';
+            rec.error = p.error || p.state;
+        }
+    }
+    return touched;
 }
 
 /// Why a cut failed, for the card that is still a clip of the recording.
@@ -328,14 +530,20 @@ export function errorOf(clipId) {
 /// Take in whatever the threads have said. From the frame loop, for the reason
 /// every other poll in this application is: nothing calls back into JS.
 ///
-/// **Returns true only when a cut *settled***, which is the strip's cue to
-/// rebuild: a clip that has become a clip of another file has a new in-point and
-/// a new length. Progress moving is not that — the bar on the card is updated in
-/// place by `mix.markCuts()`, because rebuilding the row every frame a copy
+/// **Answers what settled, and the two are not the same event.** `'edit'` is a
+/// cut landing: the clip is now a clip of another file, with a new in-point and
+/// a new length, so the row is rebuilt and the document is dirty. `'screen'` is
+/// a proxy landing: nothing about the edit changed at all — only which file the
+/// picture should be read from — so the row is left exactly as it is and the
+/// document is not touched. `''` is neither.
+///
+/// Progress moving is neither of them: the bar on the card is written in place
+/// by `mix.markCuts()`, because rebuilding the row on every frame a copy
 /// advances would destroy the card a hand is dragging.
 export function tick() {
-    if (!jobs.size) return false;
+    const screen = settleProxies();
     let settled = false;
+    if (!jobs.size) return screen ? 'screen' : '';
 
     let running = null;
     for (const job of jobs.values()) {
@@ -372,5 +580,5 @@ export function tick() {
             }
         }
     }
-    return settled;
+    return settled ? 'edit' : (screen ? 'screen' : '');
 }

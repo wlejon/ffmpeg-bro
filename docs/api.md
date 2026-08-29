@@ -1010,6 +1010,47 @@ bro.ffmpeg.fetch.clearFinished()
 // have the ten minutes — and deleting somebody's partial file because they
 // pressed Stop is not a decision this is entitled to take.
 
+// ── a proxy, which is a transcode that is not a render either ─────────────
+//
+// The third thing that writes a file, and it is on this surface for the one
+// property nothing else here can give: **a file a hand can be dragged over**.
+// Setting `currentTime` on a media element blocks until the picture arrives —
+// bro's `ElVideo::seekTo` settles, deliberately — so a scrub costs a seek per
+// position, and a seek is a keyframe plus everything after it up to the target.
+// Measured on 25 s of 1080p60 H.264, forty seeks: 50 ms with a two-second GOP,
+// 46 ms with a GOP of four, 24 ms with every frame a keyframe, and **11 ms at
+// 720p with every frame a keyframe**. Shortening the GOP buys nothing until it
+// reaches none; the rest is per pixel. So a proxy is that file: all keyframes,
+// at the height asked for, the width from the source's aspect.
+//
+// It takes four fields and not a spec, because a render spec describes a
+// composite, a canvas, a range and a stream list and a proxy has an opinion
+// about none of them. It holds no job slot, for `fetch`'s reason — it is
+// background work you start so that you can get on — and it could not be a
+// render anyway: the export half's currency is RGBA, so the same output through
+// `render.start` is 29.7 s against 1.9 s for the loop here, which scales planes
+// to planes. One at a time, because the constraint is the encoder rather than a
+// shared link. src/native/proxy_queue.h is the reasoning and the numbers.
+bro.ffmpeg.proxy.start({ path,        // where to write; a Matroska file
+                         input,       // a path, or the same `-i` object as ever
+                         height,      // the tall side; the width follows the aspect
+                         label })     // what a UI calls it
+// **Never larger than the source**: a 480p input answers 480p, because what
+// makes a scrub instant is the keyframes and the size is only the second half.
+// The encoder is asked of libavcodec — every H.264 encoder in the build is
+// *opened* in turn, hardware first, because whether one works is a fact about
+// the machine and the driver rather than about the build.
+
+bro.ffmpeg.proxy.list()      // → [{ id, label, path, state, progress, position,
+                             //      span, elapsedSec, frames, bytes, error }, …]
+bro.ffmpeg.proxy.status(id)  // → one of the above; a zero `id` means no such proxy
+bro.ffmpeg.proxy.stop(id)    // queued: dropped. running: answers within a frame
+bro.ffmpeg.proxy.clearFinished()
+// The file is closed **before** a terminal state is published, which is
+// `ffmpeg_job.h`'s rule and matters here for a concrete reason: the obvious act
+// on seeing Done is to rename the file into place, and on Windows that fails
+// silently while the muxer still holds it.
+
 // A render that is more than one render. Two things in ffmpeg need a second
 // walk over the same frames, and both hand off through a file on disk:
 // `vidstabdetect` writes a .trf that `vidstabtransform` reads, and `-pass 1`

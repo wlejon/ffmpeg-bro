@@ -450,7 +450,8 @@ function cardFor(clip) {
 function markCut(clip, card) {
     if (!card) return;
     const state = cuts.stateOf(clip.id);
-    const busy = state === 'cutting' || state === 'copied' || state === 'opening';
+    const busy = state === 'cutting' || state === 'copied' || state === 'opening' ||
+                 state === 'proxying';
     card.classList.toggle('cutting', busy);
     card.classList.toggle('cutbad', state === 'failed');
     const fill = card.querySelector('.cutbar .fill');
@@ -577,13 +578,15 @@ function drawNote() {
     if (!nodes.note) return;
     const n = sequence().length;
     const total = duration();
-    // The cuts still being made are said here as well as on their own cards,
-    // because somebody who has just pressed `+` twelve times is looking at the
-    // row rather than at any one card in it.
+    // What is still being made is said here as well as on the cards, because
+    // somebody who has just pressed `+` twelve times is looking at the row
+    // rather than at any one card in it. "Preparing" and not "cutting": there
+    // are two stages behind it now — the copy out of the recording and the proxy
+    // that makes the piece scrubbable — and a clip is usable through both.
     const busy = cuts.pending();
     nodes.note.textContent = n
         ? `${n} ${n === 1 ? 'clip' : 'clips'} · ${total.toFixed(2)}s` +
-          (busy ? ` · cutting ${busy}` : '')
+          (busy ? ` · preparing ${busy}` : '')
         : '';
 }
 

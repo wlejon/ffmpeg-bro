@@ -28,6 +28,12 @@ void installRender(Table& ns);
 /// fetch_queue.h is why it is not a render.
 void installFetch(Table& ns);
 
+/// `proxy.*` — a small all-keyframe transcode of one input, queued the way a
+/// fetch is and off the render's job slot for the same reason. What it is *for*
+/// is the only thing a stream copy cannot give: a seek inside a frame.
+/// bindings_proxy.cpp; proxy_queue.h is the measurement behind it.
+void installProxy(Table& ns);
+
 /// `record.*` and `live.*` — reading devices, with and without a writer on the
 /// end. bindings_capture.cpp.
 void installCapture(Table& ns);

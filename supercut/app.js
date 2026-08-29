@@ -444,11 +444,21 @@ function frame() {
     // its length and what its lanes are read from — so the row is rebuilt for
     // that and only for that. A copy merely advancing is written onto the cards
     // that are already there; see `mix.markCuts`.
-    if (cuts.tick()) {
+    //
+    // **A proxy landing is the other answer and gets much less.** Nothing about
+    // the edit moved — the same clip, of the same file, at the same length — so
+    // rebuilding the row would destroy a card a hand might be on, and marking
+    // the document unsaved would claim an edit nobody made. All it changes is
+    // which file the picture comes from, which is `screen`'s alone.
+    const settled = cuts.tick();
+    if (settled === 'edit') {
         mix.draw();
         screen.refresh();
         screen.warm();
         touched();
+    } else if (settled === 'screen') {
+        screen.repoint();
+        screen.warm();
     }
     if (cuts.pending()) mix.markCuts();
 
