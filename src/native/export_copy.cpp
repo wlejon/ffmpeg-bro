@@ -70,12 +70,27 @@ int64_t streamOrigin(AVStream* st) {
     return st->start_time != AV_NOPTS_VALUE ? st->start_time : 0;
 }
 
-/// The same moment, as `av_seek_frame` wants to hear it. The arithmetic and
-/// the reason it is not `streamZero`'s live in `inputSeekTarget` — a demuxer's
-/// seek clock is not its index's clock, and the subtitle path needs the same
-/// answer this one does.
+/// The same moment, as `av_seek_frame` wants to hear it: the exact inverse of
+/// `streamZero`, which is the clock every number handed to this was measured on.
+///
+/// **It was `inputSeekTarget` alone, and the stream's own origin was missing.**
+/// `keyframesOf` answers `raw − streamZero`, a caller picks one of those
+/// numbers, hands it back as `copyFrom`, and this turned it into a target with
+/// `ss` and `itsoffset` on it but not the origin. On these recordings the video
+/// stream's origin is **34 milliseconds** — so the target came out 34 ms before
+/// the keyframe it was meant to be, `AVSEEK_FLAG_BACKWARD` did exactly what it
+/// says and landed on the one before *that*, and a copy asked for a window
+/// beginning at a keyframe began a whole GOP — two seconds — earlier. Nothing
+/// in the file said so; what noticed was `supercut/cuts.js` measuring a clip's
+/// new in-point against the moment it asked for and putting every clip two
+/// seconds off the word it was cut around.
+///
+/// A seek that is early is safe and a seek that is late loses packets, which is
+/// why this is the direction it can be wrong in — but "safe" here cost a
+/// two-second GOP for a thirty-millisecond mistake, and the fix is to be exact.
 int64_t seekTarget(AVStream* st, const MediaInput& in, double at) {
-    return inputSeekTarget(st->time_base, in, at);
+    return static_cast<int64_t>(std::llround((at + streamZero(st, in)) /
+                                             av_q2d(st->time_base)));
 }
 
 } // namespace
@@ -411,6 +426,33 @@ double CopyStreams::outSecondsOf(const Reader& r, const AVPacket* pkt) const {
 /// container and is a few hundred kilobytes at worst.
 static constexpr size_t kPrimePackets = 200;
 
+/// How much a *windowed* copy will hold while it looks for its own beginning.
+///
+/// Not the same bound and not the same job: this one buffers from a keyframe up
+/// to the in-point and throws the lot away every time a later keyframe arrives,
+/// so what it actually holds is one GOP — a hundred and twenty packets and a
+/// megabyte and a half on a 1080p60 recording with the two-second GOPs these
+/// have. Three thousand is the point at which the file has no keyframe coming
+/// and the search has to stop being one; it is a guard against a pathological
+/// stream rather than a number any real file reaches.
+static constexpr size_t kPrimeGopPackets = 3000;
+
+/// Does a packet from *before* a window's in-point still belong to the copy?
+///
+/// Two kinds of stream say yes and they say it for the same reason: their
+/// packets are still in force at the in-point. A picture before it is what makes
+/// the pictures after it decodable — that is the whole of why a copy begins at a
+/// keyframe — and a cue before it is still on the screen at it, which is
+/// `cueTimesOf`'s finding and what the Write stage means by a copied subtitle
+/// window starting at the cue rather than at the moment.
+///
+/// A sound packet is over before the in-point and a data sample is a reading
+/// taken before it. Neither was asked for, and taking a copy's zero from one was
+/// what made every windowed copy begin a GOP early.
+static bool keepsEarly(AVMediaType kind) {
+    return kind == AVMEDIA_TYPE_VIDEO || kind == AVMEDIA_TYPE_SUBTITLE;
+}
+
 void CopyStreams::prime(Reader& r) {
     if (r.haveEpoch) return;
 
@@ -447,24 +489,136 @@ void CopyStreams::prime(Reader& r) {
         if (!any || asked < earliest) { earliest = asked; any = true; }
     }
 
-    std::vector<int> want;
-    for (const auto& t : r.taps)
-        if (!t.finished &&
-            std::find(want.begin(), want.end(), t.stream) == want.end())
-            want.push_back(t.stream);
+    // **A window's zero is the moment it asked for; a whole file's is the
+    // earliest packet there is.** Those are two different questions, and this
+    // answered both with the second one — which put every windowed copy a GOP
+    // early. `supercut/cuts.js` measures a clip's new in-point against the
+    // moment it asked for, so every cut it made came out two seconds off and
+    // the word each one was cut around fell outside the clip.
+    r.trimsHead = false;
+    for (const auto& t : r.taps) if (!t.finished && t.from > 0.0) r.trimsHead = true;
 
-    for (size_t read = 0; read < kPrimePackets && !want.empty(); ++read) {
-        AVPacket* pkt = av_packet_alloc();
-        if (!pkt) break;
-        if (av_read_frame(r.fmt, pkt) < 0) { av_packet_free(&pkt); break; }
-        r.primed.push_back(pkt);
-        if (!haveStamp(pkt)) continue;
-        const auto at = std::find(want.begin(), want.end(), pkt->stream_index);
-        if (at == want.end()) continue;
-        want.erase(at);
-        const AVRational tb = r.fmt->streams[pkt->stream_index]->time_base;
-        const double raw = stampOf(pkt) * av_q2d(tb);
-        if (!any || raw < earliest) { earliest = raw; any = true; }
+    if (!r.trimsHead) {
+        // The whole of the input, so nothing is dropped and the zero is the
+        // earliest packet there is. The first packet of *every* tapped stream
+        // is looked at before it is chosen, because a container's streams do
+        // not all begin together and the earliest of them is the only answer a
+        // muxer will take.
+        std::vector<int> want;
+        for (const auto& t : r.taps)
+            if (!t.finished &&
+                std::find(want.begin(), want.end(), t.stream) == want.end())
+                want.push_back(t.stream);
+
+        for (size_t read = 0; read < kPrimePackets && !want.empty(); ++read) {
+            AVPacket* pkt = av_packet_alloc();
+            if (!pkt) break;
+            if (av_read_frame(r.fmt, pkt) < 0) { av_packet_free(&pkt); break; }
+            r.primed.push_back(pkt);
+            if (!haveStamp(pkt)) continue;
+            const auto at = std::find(want.begin(), want.end(), pkt->stream_index);
+            if (at == want.end()) continue;
+            want.erase(at);
+            const AVRational tb = r.fmt->streams[pkt->stream_index]->time_base;
+            const double raw = stampOf(pkt) * av_q2d(tb);
+            if (!any || raw < earliest) { earliest = raw; any = true; }
+        }
+    } else {
+        // **A window begins at the last keyframe at or before its in-point, and
+        // where the seek landed does not decide which one that is.** These
+        // recordings carry no index — `keyframesOf` says `how: "scan"` on them —
+        // so `av_seek_frame` binary-searches the file and comes back with
+        // whatever keyframe it happened to find: asked for the one at 1214.017
+        // it answered with the one at 1212.034, two seconds and a whole GOP
+        // early. Seeking more exactly cannot fix that; a file with nothing to
+        // look the answer up in has no exact seek in it.
+        //
+        // So the copy finds its own beginning. Every keyframe that is still at
+        // or before the in-point makes every picture read so far unnecessary —
+        // and the sound read with them is sound from before the window, which
+        // `fill` drops anyway — so they are thrown away and the read goes on.
+        // What is left when the in-point is reached is one GOP, which is the
+        // beginning of the copy.
+        int vstream = -1;
+        double vasked = 0.0;
+        for (const auto& t : r.taps) {
+            if (t.finished) continue;
+            if (r.fmt->streams[t.stream]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
+                continue;
+            vstream = t.stream;
+            vasked = t.from + t.zero;
+            break;
+        }
+
+        const auto timeOf = [&](const AVPacket* p) {
+            return stampOf(p) * av_q2d(r.fmt->streams[p->stream_index]->time_base);
+        };
+
+        while (vstream >= 0 && r.primed.size() < kPrimeGopPackets) {
+            AVPacket* pkt = av_packet_alloc();
+            if (!pkt) break;
+            if (av_read_frame(r.fmt, pkt) < 0) { av_packet_free(&pkt); break; }
+            const bool picture = pkt->stream_index == vstream && haveStamp(pkt);
+            if (picture && (pkt->flags & AV_PKT_FLAG_KEY) && timeOf(pkt) <= vasked + 1e-9) {
+                // A later beginning: every picture read so far is one nothing
+                // after it needs, and the sound read with them is sound from
+                // before the window. A **cue** read with them is not — it may
+                // still be on the screen at the in-point — so it stays, in the
+                // order it arrived, and `keepsEarly` is the one place that says
+                // which of the two a stream is.
+                std::deque<AVPacket*> keep;
+                for (AVPacket* old : r.primed) {
+                    AVPacket* p = old;
+                    if (r.fmt->streams[p->stream_index]->codecpar->codec_type ==
+                        AVMEDIA_TYPE_SUBTITLE)
+                        keep.push_back(p);
+                    else
+                        av_packet_free(&p);
+                }
+                r.primed.swap(keep);
+            }
+            r.primed.push_back(pkt);
+            // The in-point, and the end of the search: what is buffered now
+            // begins with the keyframe the copy begins at.
+            if (picture && timeOf(pkt) >= vasked - 1e-9) break;
+        }
+
+        // **A cue on the screen at the in-point is part of this copy too**, and
+        // a subtitle track with no picture beside it is read here and nowhere
+        // else — the loop above never ran for it. Bounded by `kPrimePackets`
+        // because a track may simply have no cue anywhere near, and the seek
+        // landed before the in-point, so the first one read is the one that
+        // straddles it.
+        std::vector<int> want;
+        for (const auto& t : r.taps)
+            if (!t.finished &&
+                r.fmt->streams[t.stream]->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE &&
+                std::find(want.begin(), want.end(), t.stream) == want.end())
+                want.push_back(t.stream);
+        for (const AVPacket* p : r.primed) {
+            const auto seen = std::find(want.begin(), want.end(), p->stream_index);
+            if (seen != want.end()) want.erase(seen);
+        }
+        for (size_t read = 0; read < kPrimePackets && !want.empty(); ++read) {
+            AVPacket* pkt = av_packet_alloc();
+            if (!pkt) break;
+            if (av_read_frame(r.fmt, pkt) < 0) { av_packet_free(&pkt); break; }
+            r.primed.push_back(pkt);
+            const auto seen = std::find(want.begin(), want.end(), pkt->stream_index);
+            if (seen != want.end()) want.erase(seen);
+        }
+
+        // The zero is the earliest thing this copy will emit, and now that is
+        // knowable rather than guessed at: everything it emits from before the
+        // in-point has been read and is in the buffer. Anything else early is
+        // dropped in `fill`, and everything from the in-point onward is at or
+        // after `earliest` already.
+        for (const AVPacket* p : r.primed) {
+            if (!haveStamp(p)) continue;
+            if (!keepsEarly(r.fmt->streams[p->stream_index]->codecpar->codec_type)) continue;
+            const double at = timeOf(p);
+            if (!any || at < earliest) { earliest = at; any = true; }
+        }
     }
 
     r.haveEpoch = true;
@@ -500,6 +654,13 @@ void CopyStreams::fill(Reader& r) {
             const AVRational tb = r.fmt->streams[t.stream]->time_base;
             const double when = stampOf(r.pending) * av_q2d(tb) - t.zero;
             if (t.to > 0.0 && when > t.to + 1e-9) { t.finished = true; continue; }
+            // The head of the window, which for years only the tail of it had.
+            // What is exempt and why is `keepsEarly`'s; `prime` reads the same
+            // rule to decide where the copy's zero is, and the two must agree or
+            // a packet is emitted before the file starts.
+            if (r.trimsHead && when < t.from - 1e-9 &&
+                !keepsEarly(r.fmt->streams[t.stream]->codecpar->codec_type))
+                continue;
             if (r.pendingTaps.empty()) at = when;
             r.pendingTaps.push_back(&t);
         }

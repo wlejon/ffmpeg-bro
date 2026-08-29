@@ -341,11 +341,24 @@ export function begin(clip, spec) {
     // press adds a piece and everything else catches up.
     if (size(path) > 0) { job.state = 'copied'; return; }
 
-    const rows = rowsFor(clip, cut, want.to);
-    if (!rows.length) { jobs.delete(clip.id); return; }
+    copy(job, clip);
+}
+
+/// Start the stream copy a settled job describes.
+///
+/// Two callers: the press, and the one re-ask `adopt` makes when the file under
+/// the job's name turns out not to be the window it is named for. Everything
+/// that decides *what* to copy — the window, the keyframe it starts at, the name
+/// it goes under — is settled before this runs, which is why re-asking is this
+/// call and not a second copy of `begin`.
+function copy(job, clip) {
+    const rows = rowsFor(clip, job.cut, job.to);
+    if (!rows.length) { jobs.delete(job.clip); return; }
+    job.state = 'cutting';
+    job.progress = 0;
     try {
         job.fetch = bro.ffmpeg.fetch.start({
-            path: `${path}.part`,
+            path: `${job.path}.part`,
             format: 'matroska',
             inputs: [{ path: clip.path }],
             streams: rows,
@@ -393,11 +406,57 @@ function open(job) {
 /// a slip made while the copy ran is carried through by the same subtraction,
 /// which is the reason this reads `clip.inPoint` now rather than remembering it
 /// at the press.
+/// How far a cut may be from the window it was asked for and still be that cut.
+///
+/// The tail is not exact — a copy stops at the last packet inside the window and
+/// that packet has a duration — so a few tens of milliseconds of slack is
+/// ordinary. Half a second is far inside the smallest thing that would be a
+/// *wrong* file: a copy that began a keyframe early is a GOP out, two seconds on
+/// these recordings.
+const SLACK = 0.5;
+
+/// Is this the file the job asked for, or something else under its name?
+///
+/// **The offset a clip's new in-point is measured against is `job.cut`, and
+/// nothing about the file itself says so** — so a file that is not the window it
+/// is named for repoints every clip of it silently, by however far it is wrong.
+/// It happened: `CopyStreams::prime` took a copy's zero from the earliest packet
+/// of any stream rather than from the moment asked for, and a Matroska seek
+/// hands over a second or two of soundtrack from before the video keyframe — so
+/// every cut was about two seconds long at the head, every clip landed two
+/// seconds early, and the word each one was cut around fell outside it.
+///
+/// That is fixed where it belongs (`src/native/export_copy.cpp`), and this is
+/// the check that says so out loud: a cut written by the version that had it
+/// wrong is on this machine already, under the name the right one would have,
+/// and re-cutting one is twenty megabytes and a moment.
+function isTheWindow(job, probe) {
+    const got = (probe && probe.format && probe.format.duration) || 0;
+    return got > 0 && Math.abs(got - (job.to - job.cut)) <= SLACK;
+}
+
 function adopt(job) {
     const clip = project.clips.find((c) => c.id === job.clip);
     const input = job.input;
     if (!clip || !input || !input.probe) { job.state = 'failed'; return; }
     const was = clip.input;
+
+    // Once, and then it is taken as it is: a file that comes back wrong twice is
+    // wrong for a reason re-cutting will not mend, and a clip of a slightly odd
+    // cut works, where a loop of re-cuts would eat the disk in the background.
+    if (!isTheWindow(job, input.probe) && !job.recut) {
+        job.recut = true;
+        inputsModel.removeInput(input);
+        job.input = null;
+        try { fs.unlinkSync(job.path); } catch (e) { /* gone already */ }
+        // And the proxy of it, which is a picture of the file just deleted and
+        // would be adopted on sight under a name that no longer describes it.
+        try { fs.unlinkSync(`${dir()}/${proxyNameFor(job.path)}`); }
+        catch (e) { /* never made one */ }
+        proxies.delete(job.path);
+        copy(job, clip);
+        return;
+    }
 
     clip.input = input;
     clip.inPoint = Math.max(0, clip.inPoint - job.cut);

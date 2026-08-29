@@ -1369,12 +1369,21 @@ streams: [
                                     // one is an error rather than a shrug.
     copyFrom: 0, copyTo: 0,         // the span it takes, in the input's own
                                     // seconds; 0 is the end of it. **A copy
-                                    // can only start at a keyframe**: the seek
-                                    // is AVSEEK_FLAG_BACKWARD, so it lands at
-                                    // or *before* `copyFrom` and never skips a
-                                    // frame the copy wanted. What that costs is
-                                    // the caller's to show — see
-                                    // `bro.ffmpeg.keyframes`.
+                                    // can only start at a keyframe**: it begins
+                                    // on the last one at or before `copyFrom`
+                                    // and never skips a frame the copy wanted.
+                                    // What that costs is the caller's to show —
+                                    // see `bro.ffmpeg.keyframes`, and ask for a
+                                    // keyframe if the offset has to be zero.
+                                    // **The output's zero is that keyframe and
+                                    // nothing earlier.** The seek behind it is
+                                    // approximate — on a file with no index it
+                                    // can land a GOP or more before the moment
+                                    // asked for — and the sound in front of the
+                                    // keyframe was not asked for, so neither
+                                    // reaches the file. A cue still on screen at
+                                    // `copyFrom` does, and moves the zero back
+                                    // to itself; see the subtitle note below.
     codec: "libx265",               // empty asks the muxer for its default
     options: { crf: 22 },           // this stream's encoder options
     metadata: { title: "Programme" },

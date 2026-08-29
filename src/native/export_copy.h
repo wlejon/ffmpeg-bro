@@ -254,6 +254,15 @@ private:
         bool haveEpoch = false;
         int64_t epochUs = 0;        ///< the input's zero, container clock
 
+        /// Is any tap of this reader a *window* rather than the whole input?
+        ///
+        /// It decides two things together, and they are two halves of one rule:
+        /// which streams may pull the zero back before the moment asked for
+        /// (video only) and whose packets before it are dropped (everything
+        /// else). A whole-file copy sets neither and keeps every packet there
+        /// is. Settled in `prime`, where the reasoning is.
+        bool trimsHead = false;
+
         /// Packets read while settling the epoch, waiting to be handed out.
         ///
         /// The epoch cannot be chosen from the first packet alone (see `prime`),

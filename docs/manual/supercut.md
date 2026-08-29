@@ -98,7 +98,9 @@ Those still work; they are just as slow as they were.
 
 Both kinds of file are written under `build/cuts/`, named after what they were
 made from, so adding the same moment twice writes one file and reopening a
-document finds them already there. **The cuts are inside the document and the
+document finds them already there. A file that turns out not to be the moment its
+name claims — one left by an older version that cut two seconds wide — is made
+again, once, the first time it is used. **The cuts are inside the document and the
 scrub files are not** — a `.fbro` names its cuts, so deleting `build/cuts/`
 breaks the documents that point at it. Deleting only the `-p720.mkv` files costs
 nothing: they are made again next time, and everything works meanwhile at the

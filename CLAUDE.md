@@ -726,6 +726,26 @@ first listed, and `copyRowsOf` lists a file's streams in the container's order �
 so a recording muxed soundtrack-first broke and one muxed picture-first worked,
 on the same call with the same window.
 
+**And a windowed copy begins where it was asked, which for years it did not.**
+The window's *tail* was enforced and its head was not, so the copy's zero was
+wherever the earliest packet of any stream happened to land — and that is a GOP
+before the in-point, routinely, for two reasons that stack: the seek is
+approximate (`keyframesOf` answers `how: "scan"` on a file with no index, and
+`av_seek_frame` then comes back with whatever keyframe its binary search finds),
+and a Matroska cluster hands over a second or two of soundtrack before the video
+keyframe in it. Both were invisible, because a copy two seconds long at the front
+plays perfectly. What noticed was `supercut/cuts.js`, which measures a clip's new
+in-point against *the moment it asked for*: every cut came out two seconds early
+and the word each one was cut around fell outside the clip. So `prime` now finds
+the copy's own beginning — reading forward from wherever the seek landed, keeping
+one GOP, discarding it at every later keyframe still at or before the in-point —
+and `keepsEarly` is the one home for which streams may precede it: a **picture**
+because the ones after it are predicted from it, a **cue** because it is still on
+the screen, and nothing else. A sound packet from before the window was not asked
+for. `seekTarget` was half of the same bug at a thirtieth of the size:
+`keyframesOf` answers on the stream-origin-relative clock and the seek was built
+without the origin put back, so a target 34 ms early landed a whole GOP early.
+
 **libavfilter has no subtitle input**, so `[0:s]` reaching an `overlay` is not a
 libavfilter link: it is ffmpeg's own sub2video, and `export_sub2video.h` is that
 mechanism here — a bitmap track decoded and painted into frames a `buffer` source

@@ -3746,14 +3746,20 @@ int main(int argc, char* argv[]) {
                     s.startTime = 0;
                     s.endTime = 1.0;
                     s.faststart = false;
+                    // A real window at both ends. `endTime` bounds the *frame
+                    // loop* and a copy-only render has none, so `copyTo` is the
+                    // only thing that says where a copied stream stops — which
+                    // is the same pair of numbers `supercut/cuts.js` sends.
                     ExportStream a;
                     a.kind = "audio";
                     a.source = "copy:0:" + std::to_string(srcAudio);
                     a.copyFrom = at;
+                    a.copyTo = at + 1.0;
                     ExportStream v;
                     v.kind = "video";
                     v.source = "copy:0:" + std::to_string(srcVideo);
                     v.copyFrom = at;
+                    v.copyTo = at + 1.0;
                     if (soundFirst) { s.streams.push_back(a); s.streams.push_back(v); }
                     else { s.streams.push_back(v); s.streams.push_back(a); }
                     return s;
@@ -3787,6 +3793,54 @@ int main(int argc, char* argv[]) {
                        "and it is the same picture either way, packet for packet — "
                        "which stream is listed first decides nothing (%zu of %zu)",
                        same, vidPicFirst.size());
+
+                // **The window's own zero is the moment it was asked for.**
+                // A copy can only begin at a keyframe, which is why the caller
+                // asks for one and then measures against it — `supercut/cuts.js`
+                // subtracts exactly this number to move a clip onto the cut. It
+                // was not this number: `prime` took the copy's zero from the
+                // earliest packet of *any* stream, and seeking a Matroska file
+                // to a video keyframe hands over a second or two of soundtrack
+                // from before it, so the file began a GOP early and every clip
+                // measured against it landed a GOP early.
+                //
+                // The picture starting at the front of the file is the whole of
+                // that, and it is asserted rather than the duration because it
+                // is the thing that is true of every window, aligned or not:
+                // sound before the in-point was not asked for and is dropped,
+                // pictures before it are what make the ones after it decodable
+                // and are kept. Weak on this fixture for the reason above — ten
+                // seconds of video has too little interleave to lead by — and
+                // exact on any real recording handed to this suite.
+                const double firstV = vidPicFirst.empty() || vidPicFirst[0].dts == AV_NOPTS_VALUE
+                    ? 0.0 : vidPicFirst[0].dts * av_q2d(vidPicFirst[0].timeBase);
+                checkf(std::fabs(firstV) < 0.05,
+                       "and the picture is at the front of it (%.3f s), which is "
+                       "what a caller measures its in-point against", firstV);
+
+                const auto sndPicFirst = packetsOf(pf.path, 1);
+                const double firstA = sndPicFirst.empty() || sndPicFirst[0].dts == AV_NOPTS_VALUE
+                    ? 0.0 : sndPicFirst[0].dts * av_q2d(sndPicFirst[0].timeBase);
+                checkf(firstA >= -0.05,
+                       "with no sound in front of it (%.3f s) — a packet from "
+                       "before the window is a packet nobody asked for", firstA);
+
+                // And the number that caught it: a window is about as long as it
+                // was asked for. Neither end is exact and they are inexact for
+                // different reasons — a copy stops at the last packet inside the
+                // window and that packet has a duration and a reorder delay
+                // behind it, which is two hundred milliseconds on this fixture —
+                // so what is asserted is the *order of magnitude* of the tail
+                // against a head that was out by a whole GOP. Two seconds is
+                // what a copy of these recordings used to gain at the front;
+                // half a second is comfortably inside it and comfortably outside
+                // anything a tail does.
+                Opened o(pf.path);
+                const double got = o && o.fc->duration != AV_NOPTS_VALUE
+                    ? o.fc->duration / double(AV_TIME_BASE) : 0.0;
+                checkf(got > 0.5 && got < 1.5,
+                       "and it is %.3f s long — the second it asked for and not the "
+                       "second plus the GOP in front of it", got);
             }
         }
 
