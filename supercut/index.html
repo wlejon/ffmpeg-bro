@@ -29,7 +29,8 @@
          to: in this application it is half the work, so it is half the window. -->
     <section id="finder">
         <div id="f-tabs" class="tabs">
-            <button data-tab="words" class="on">Words</button>
+            <button data-tab="recordings" class="on">Recordings</button>
+            <button data-tab="words">Words</button>
             <button data-tab="talking">Talking</button>
         </div>
         <div id="f-controls"></div>
@@ -45,13 +46,17 @@
             <div id="stage-note" class="dim"></div>
         </div>
         <div id="bar">
-            <button id="t-home" class="tiny" title="Start (Home)">⏮</button>
-            <button id="t-play" class="tiny" title="Play (Space)">▶</button>
-            <button id="t-end" class="tiny" title="End (End)">⏭</button>
+            <!-- Geometric glyphs rather than the media-control emoji (⏮ ⏭ 🔊),
+                 which the platform font draws in colour as little rounded
+                 boxes — three coloured stickers where the bar wants three
+                 controls. These are text at any size. -->
+            <button id="t-home" class="tiny mono" title="Start (Home)">|◀</button>
+            <button id="t-play" class="tiny mono" title="Play (Space)">▶</button>
+            <button id="t-end" class="tiny mono" title="End (End)">▶|</button>
             <span id="t-time" class="mono"></span>
             <span class="spacer"></span>
             <span id="t-what" class="dim"></span>
-            <button id="t-mute" class="tiny" title="Mute (M)">🔊</button>
+            <button id="t-mute" class="tiny mono" title="Mute (M)">♪</button>
         </div>
     </section>
 

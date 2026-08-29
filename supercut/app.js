@@ -258,7 +258,9 @@ function drawBar() {
     const total = duration();
     nodes.time.textContent = `${clock(transport.t)} / ${clock(total)}`;
     nodes.play.textContent = screen.isPlaying() ? '❚❚' : '▶';
-    nodes.mute.textContent = screen.muted() ? '🔇' : '🔊';
+    // The glyph does not change — a struck-through note is the same control
+    // saying it is off, where two different emoji are two things to recognise.
+    nodes.mute.classList.toggle('off', screen.muted());
     const st = screen.state();
     nodes.what.textContent =
         st === 'audition' ? 'auditioning' :
@@ -337,8 +339,13 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (e.key === '/') {
+        // The box only exists on the Words tab, so `/` is what *goes* there —
+        // a key that did nothing on two tabs out of three would be a key
+        // nobody could rely on.
+        results.setTab('words');
         const box = byId('f-phrase');
-        if (box) { box.focus(); box.select(); e.preventDefault(); }
+        if (box) { box.focus(); box.select(); }
+        e.preventDefault();
     }
 });
 

@@ -123,6 +123,11 @@ function seek(video, t) {
 export function audition(path, from, until) {
     if (!path) return false;
     stop();
+    // **The one already running, first.** A second row pressed while the first
+    // is playing takes a different element out of the pool, and the one it left
+    // behind is unmuted and still going — two recordings at once, only one of
+    // them on the screen.
+    stopAudition();
     const video = elementFor(path);
     auditioning = { path, until };
     video.muted = false;

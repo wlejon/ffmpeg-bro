@@ -37,10 +37,20 @@ but a stack is not a sequence, and saving afterwards saves the flattened one.
 
 ## The window
 
-**Left — the finder.** The same two questions the workbench's panel asks, and
-the same answers, because [the search is one implementation](find.md): **Words**
-for every place a phrase was said, **Talking** for the stretches where somebody
-talked without stopping. `▶` plays a result. `+` puts it at the end of the mix.
+**Left — the finder**, and three tabs because there are three questions:
+
+- **Recordings** — what is in the corpus at all: each broadcast with its date,
+  its length and how many words are in it. This is what the window opens on, so
+  there is something there before anybody types.
+- **Words** — every place a phrase was said.
+- **Talking** — the stretches where somebody talked without stopping.
+
+The last two are the same questions the workbench's panel asks, with the same
+answers, because [the search is one implementation](find.md). All three list the
+same way: `▶` plays it, `+` puts it at the end of the mix. Adding a whole
+recording adds the whole of it — six hours if that is what it is — because
+trimming it down is one gesture away and taking the first minute instead would
+be deciding something nobody asked for.
 
 **Right — the picture**, and it is one of three things at a time. The bar under
 it says which:

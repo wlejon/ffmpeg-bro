@@ -121,6 +121,23 @@ function streamFor(v) {
     return s;
 }
 
+/// What the corpus holds, newest first — one item per recording.
+///
+/// **The answer to a question nobody typed**, and the reason it exists: a finder
+/// whose list is empty until a phrase is entered shows nothing at all about four
+/// recordings and ninety thousand words that are right there. That is a search
+/// engine's front page, and it is the wrong shape for a tool over material you
+/// already own. Same item shape as a hit, so one list draws all three.
+export function recordings() {
+    if (!channel) return [];
+    return channel.vods.map((v) => ({
+        kind: 'vod', vod: v,
+        at: 0, to: v.seconds || 0,
+        label: String(v.publishedAt || '').slice(0, 10),
+        detail: v.title || '',
+    })).sort((a, b) => String(b.vod.publishedAt).localeCompare(String(a.vod.publishedAt)));
+}
+
 /// Every place a phrase is said, newest recording first.
 ///
 /// A phrase of one character finds most of the corpus and is nobody's question,
@@ -171,6 +188,10 @@ export function searchTalking(opts = {}) {
 }
 
 /// A result as the thing a timeline takes: a file, and a span of it.
+///
+/// A whole recording is taken whole — six hours of it — because that is what was
+/// asked for, and trimming it down is one gesture away. Refusing it, or taking
+/// the first minute of it, would both be deciding something nobody said.
 export function asClip(item) {
     const pad = item.kind === 'word' ? WORD_PAD : 0;
     return {

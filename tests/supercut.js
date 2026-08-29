@@ -130,6 +130,17 @@ console.log('\nfinding');
     A.results.start();
     pump(120);
 
+    // **A corpus is showing before anybody types.** This opened on an empty
+    // Words list, which meant a window reporting four recordings and ninety
+    // thousand words in the top bar and showing none of it.
+    ok(A.results.currentTab() === 'recordings', 'it opens on what is in the corpus');
+    ok(A.results.found().length === 1,
+       `and the recording is listed without a search (${A.results.found().length})`);
+    ok(document.querySelectorAll('#f-list .row.rec').length === 1,
+       'as a row of its own shape, not as a hit');
+
+    A.results.setTab('words');
+    pump(80);
     const box = document.getElementById('f-phrase');
     ok(!!box, 'there is a box to type in');
 
@@ -142,13 +153,23 @@ console.log('\nfinding');
     A.results.setTab('talking');
     pump(80);
     ok(A.results.currentTab() === 'talking', 'the other question is showing');
+    // **Answered on arrival at the tab's own settings**, rather than sitting
+    // empty behind a Find button. Nothing in this fixture is thirty seconds
+    // long, so the honest answer here is none — what is asserted is that the
+    // question was asked, which the two below then change the answer to.
+    ok(A.results.found().length === 0,
+       'and it answered on arrival: nothing here is thirty seconds of talking');
+
     // The fixture has one 2.9 s hole in it, which is the point: at a 3 s gap the
-    // whole thing is one stretch, and at 2 s it is two — neither long enough.
-    // A stretch is defined by its gaps and by nothing else.
-    ok(A.results.runsFor({ gap: 3, min: 5 }).length === 1,
-       'one stretch of talking at a three-second gap');
-    ok(A.results.runsFor({ gap: 2, min: 5 }).length === 0,
-       'and none at two, because the hole cuts it in half');
+    // whole thing is one stretch, and at 2 s it is two. A stretch is defined by
+    // its gaps and by nothing else — and these are the real controls, so this is
+    // also the assertion that they are wired to the search.
+    type(document.getElementById('f-least'), '5');
+    ok(A.results.found().length === 0,
+       'at a two-second pause the hole cuts the fixture in half, and neither half lasts');
+    type(document.getElementById('f-gap'), '3');
+    ok(A.results.found().length === 1,
+       `and a three-second pause welds it into one (${A.results.found().length})`);
     A.results.setTab('words');
     pump(80);
     type(document.getElementById('f-phrase'), 'you cross');
