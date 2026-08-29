@@ -99,24 +99,18 @@
 //     --out <path>       the montage. Default: build/montage/<name>.mp4
 //     --doc <path>       also save the edit as a .fbro. Default: beside --out.
 
-import { loadSpeech, wordsOf, renderAudio, measureShift } from './speech.js';
+import { loadSpeech, wordsOf, renderAudio, measureShift, bare } from './speech.js';
+import { readSrt, streamOf, find } from './transcript.js';
+import { ROOT, abs, argv, positionals, opt, driver, clock } from './drive.js';
 
-const argv = (globalThis.scriptArgs || []).filter((a) => a !== '--');
-const media = argv[0];
-const transcript = argv[1];
+const { pump, until } = driver;
+const [media, transcript] = positionals();
 assert(media && transcript,
        'usage: … tools/montage.js -- <media> <transcript.srt> ' +
        '[--pattern "thank you:4,fuck:2"] [--bpm 100]');
 
-function opt(name, fallback = '') {
-    const i = argv.indexOf(`--${name}`);
-    return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : fallback;
-}
-
 const A = globalThis.__ffmpegBro;
 const fs = require('fs');
-const ROOT = fs.realpathSync(`${bro.appDir}/..`).replace(/\\/g, '/');
-const abs = (p) => (/^([a-z]:[\\/]|[\\/])/i.test(p) ? p : `${ROOT}/${p}`);
 
 const bpm = Number(opt('bpm', '100'));
 const beat = bpm > 0 ? 60 / bpm : 0;
@@ -144,69 +138,22 @@ const steps = parsePattern(opt('pattern', '') || opt('phrase', 'thank you'),
                            Number(opt('beats', '2')) || 2);
 assert(steps.length, 'no phrases to look for');
 
-function pump(ms) {
-    const n = Math.max(1, Math.ceil(ms / 20));
-    for (let i = 0; i < n; i++) { wallSleep(20); advanceTime(20); flush(); }
-}
-function until(what, p, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) { if (p()) return true; pump(120); }
-    throw new Error(`timed out waiting for ${what}`);
-}
-const clock = (t) => `${t / 3600 | 0}:${String((t / 60 | 0) % 60).padStart(2, '0')}` +
-                     `:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-
 // ── the search ─────────────────────────────────────────────────────────────
-
-/// Every word in an `.srt`, as `{ from, to, text }`.
-///
-/// One cue per word is what `transcribe.js` writes, so this is a reader for its
-/// own output rather than a general subtitle parser.
-function readSrt(path) {
-    const text = fs.readFileSync(path, 'utf-8');
-    const stamp = (s) => {
-        const m = /(\d+):(\d+):(\d+)[,.](\d+)/.exec(s);
-        return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / 1000 : 0;
-    };
-    const out = [];
-    for (const block of text.split(/\r?\n\r?\n/)) {
-        const lines = block.split(/\r?\n/).filter((l) => l.trim());
-        const at = lines.findIndex((l) => l.includes('-->'));
-        if (at < 0 || at + 1 >= lines.length) continue;
-        const [a, b] = lines[at].split('-->');
-        out.push({ from: stamp(a), to: stamp(b), text: lines.slice(at + 1).join(' ') });
-    }
-    return out;
-}
-
-// Compared with the punctuation and the case taken out, because the transcript
-// writes "you," and "Thank" and a search for `thank you` means both.
-const bare = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+//
+// The reader, the flattening and the match all live in `transcript.js`, which
+// says why a phrase is looked for in a stream of characters rather than in a run
+// of words: an ASR does not put the spaces where you would, so `you cross`,
+// `youcross` and `you crossed` are three spellings of one utterance and a
+// word-by-word comparison finds only the first. A supercut built by searching
+// cannot afford to lose hits it will never know it missed.
 
 const words = readSrt(abs(transcript));
+const stream = streamOf(words);
 console.log(`${abs(transcript)}`);
 console.log(`  ${words.length} words`);
 
 /// Every place a phrase is said, in time order.
-function findPhrase(phrase) {
-    const wanted = phrase.split(/\s+/).filter(Boolean).map(bare);
-    const found = [];
-    for (let i = 0; i + wanted.length <= words.length; i++) {
-        let ok = true;
-        for (let j = 0; j < wanted.length; j++)
-            if (bare(words[i + j].text) !== wanted[j]) { ok = false; break; }
-        if (!ok) continue;
-        const last = words[i + wanted.length - 1];
-        found.push({
-            phrase,
-            at: words[i].from,          // the attack the cut is placed against
-            says: last.to,              // where the transcript thinks it ends
-            context: words.slice(Math.max(0, i - 4), i + wanted.length + 4)
-                .map((w) => w.text).join(' '),
-        });
-    }
-    return found;
-}
+const findPhrase = (phrase) => find(stream, phrase, { context: 4 });
 
 // One queue per distinct phrase, drawn from in time order. Two steps naming the
 // same phrase share a queue, which is what makes "fuck:2,fuck:2" take the next

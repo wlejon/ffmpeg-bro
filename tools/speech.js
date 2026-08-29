@@ -184,3 +184,128 @@ export function measureShift(local, words, runLength = 8) {
     }
     return null;
 }
+
+// ── a whole span of a file, window by window ───────────────────────────────
+
+/// The three lengths that govern a transcription pass, and why each is what it
+/// is. Overridable per call; these are the measured defaults.
+export const DEFAULTS = {
+    // **Chunked, because the model wants the clip in memory as floats.** 16 kHz
+    // mono float32 is 64 kB per second — five and a quarter hours is 1.2 GB in
+    // one allocation, before the model has touched it. Five minutes is 19 MB and
+    // is a unit a render can also be watched finishing.
+    chunkSeconds: 300,
+    // **The window the model listens to is not the window that gets decoded, and
+    // conflating them is the difference between half an hour and most of a day.**
+    // The encoder's self-attention is quadratic in the length of what it is
+    // handed, measured on a 4090 at about 2.3 ms per second²:
+    //
+    //      10 s →     543 ms      120 s →  30 064 ms
+    //      30 s →   2 472 ms      180 s →  73 681 ms
+    //      60 s →   9 113 ms
+    //
+    // which is 18.4× realtime at ten seconds and 2.4× at three minutes — so cost
+    // *per second of audio* is `2.3·n + 300/n` and grows with n past about 11 s.
+    // Handing it the 300-second render window would be the slowest thing this
+    // file could do. A render, meanwhile, has a fixed setup cost that wants the
+    // opposite: few, large. So the two are separate numbers, the decode stays at
+    // five minutes, and the model is fed short slices of the buffer already in
+    // memory.
+    //
+    // **Fifteen seconds, because it is also the most accurate**, which was the
+    // surprise. The same two minutes of VOD, by window length:
+    //
+    //      15 s → 11.3× realtime, 82 words       30 s → 7.1×, 73 words
+    //      20 s → 11.0× realtime, 78 words       45 s → 7.1×, 61 words
+    //
+    // A longer window does not merely cost more, it *finds less* — the 45-second
+    // run loses a fifth of the words, and the 30-second run drops a whole closing
+    // sentence the 15-second one hears. Parakeet is a TDT transducer trained on
+    // short segments, so there is no accuracy being traded away here for speed.
+    windowSeconds: 15,
+    // **Padding, so no word is cut in half by a boundary.** Each window is
+    // decoded with `overlap` seconds of its neighbours on both sides as pure
+    // context, and keeps only the words whose *start* lands in its own span — so
+    // a word straddling a boundary is whole in exactly one window and counted
+    // once. Without it, 318 minutes at 30-second windows is 637 chances to lose
+    // the word being searched for, which for a supercut built by searching is the
+    // failure that matters.
+    overlapSeconds: 1.5,
+};
+
+/// Transcribe `from`–`to` of whatever is on the timeline, as words with times.
+///
+/// The one implementation of the decode-then-listen loop. `transcribe.js` runs
+/// it over a file a person named and `corpus.js` runs it over every VOD in a
+/// channel, and a second copy of it would be a second set of window lengths to
+/// keep in step with the numbers measured above.
+///
+/// `onChunk` is called after each decoded chunk with `{ at, from, to, words,
+/// realtime }` so a caller can print progress or persist a partial result; a
+/// five-hour VOD is half an hour of work and a tool that said nothing until the
+/// end would be indistinguishable from one that had hung.
+export function transcribeSpan(A, drive, speech, opts = {}) {
+    const from = opts.from || 0;
+    const to = opts.to;
+    assert(to > from, `nothing to transcribe: ${from}–${to}`);
+    const chunkSeconds = opts.chunkSeconds || DEFAULTS.chunkSeconds;
+    const windowSeconds = opts.windowSeconds || DEFAULTS.windowSeconds;
+    const overlapSeconds = opts.overlapSeconds === undefined
+        ? DEFAULTS.overlapSeconds : opts.overlapSeconds;
+    const wav = opts.wav;
+    assert(wav, 'transcribeSpan needs a scratch path to render the audio to');
+
+    const words = [];
+    let spentDecoding = 0;
+    let spentListening = 0;
+    let audioSeconds = 0;
+
+    for (let start = from; start < to; start += chunkSeconds) {
+        const end = Math.min(to, start + chunkSeconds);
+
+        const tDecode = Date.now();
+        const audio = renderAudio(A, drive, start, end, wav);
+        spentDecoding += Date.now() - tDecode;
+        // Checked rather than trusted: the model refuses anything but 16 kHz and
+        // says so, and the useful place to find out is here, naming what the
+        // render actually produced.
+        assert(audio.sampleRate === speech.sampleRate,
+               `the render produced ${audio.sampleRate} Hz, and the model wants ` +
+               `${speech.sampleRate} — the sample rate was clamped somewhere`);
+
+        const tHear = Date.now();
+        for (let winAt = start; winAt < end; winAt += windowSeconds) {
+            const winTo = Math.min(end, winAt + windowSeconds);
+            // Padded outwards, clamped to what was actually decoded.
+            const readFrom = Math.max(start, winAt - overlapSeconds);
+            const readTo = Math.min(end, winTo + overlapSeconds);
+            const at = (t) => Math.round((t - start) * audio.sampleRate);
+            // `subarray` is a view, so the padding costs nothing but the model's
+            // own time on it.
+            const res = speech.model.transcribe({
+                samples: audio.samples.subarray(at(readFrom), at(readTo)),
+                sampleRate: audio.sampleRate,
+            });
+            for (const w of wordsOf(speech, res, readFrom))
+                if (w.from >= winAt && w.from < winTo) words.push(w);
+        }
+        spentListening += Date.now() - tHear;
+        audioSeconds += end - start;
+
+        if (opts.onChunk)
+            opts.onChunk({
+                at: end,
+                from, to,
+                words: words.length,
+                realtime: audioSeconds / ((spentDecoding + spentListening) / 1000),
+            });
+    }
+
+    return {
+        words,
+        audioSeconds,
+        secondsDecoding: spentDecoding / 1000,
+        secondsListening: spentListening / 1000,
+        realtime: audioSeconds / ((spentDecoding + spentListening) / 1000),
+    };
+}

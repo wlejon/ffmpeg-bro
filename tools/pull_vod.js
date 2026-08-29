@@ -28,7 +28,11 @@
 // what is being copied and Matroska holds very nearly everything — an mp4 would
 // refuse the timed-ID3 track Twitch carries alongside the picture.
 
-import { resolve, forListening } from '/app/vod.js';
+// `./vod.js` rather than `/app/vod.js`: page resolution is not a part of
+// ffmpeg's model, so the ffmpeg-only pass over the UI took it out of the
+// application and it lives here beside the tools that want it. See the block at
+// the top of that file.
+import { resolve, forListening } from './vod.js';
 
 const argv = (globalThis.scriptArgs || []).filter((a) => a !== '--');
 const page = argv[0];

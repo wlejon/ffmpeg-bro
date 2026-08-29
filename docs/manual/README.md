@@ -41,3 +41,7 @@ no reader looking for the command bar would have gone.
 Beside the manual sits **[Use cases](../usecases/README.md)** — twelve ordinary
 jobs driven end to end by scripts that record what each one cost, and the work
 list that fell out of them.
+
+And **[tools/](../../tools/README.md)** — jobs that drive this same application
+through its scripting surface rather than being part of it, the largest being a
+searchable corpus of a channel's broadcasts.
