@@ -154,6 +154,31 @@ export function find(stream, phrase, opts = {}) {
     return hits.sort((a, b) => a.at - b.at);
 }
 
+/// Collapse hits closer together than `spacing` seconds into one.
+///
+/// **A phrase said three times for emphasis is one moment**, not three, and a
+/// list that says three is a list that cuts three clips of overlapping seconds
+/// out of the same breath. The first of a cluster is the one kept, because that
+/// is where the moment starts.
+///
+/// This is here rather than beside either caller because it is part of the
+/// answer to *what counts as an instance*, and the panel and the clip cutter
+/// have to agree on that as exactly as they agree on the matching. They did not:
+/// this rule lived in `tools/corpus.js` alone, and the panel found fifteen of a
+/// phrase the command line found fourteen of — the same corpus, the same search,
+/// and a different answer, with nothing anywhere saying which was right.
+export function spaced(hits, spacing = 2) {
+    if (!(spacing > 0)) return hits.slice();
+    const out = [];
+    let last = -Infinity;
+    for (const h of hits) {
+        if (h.at - last < spacing) continue;
+        last = h.at;
+        out.push(h);
+    }
+    return out;
+}
+
 // ── the other question a transcript can answer ─────────────────────────────
 //
 // A phrase search finds a moment. The other thing worth pulling out of six hours

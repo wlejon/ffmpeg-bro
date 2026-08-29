@@ -22,13 +22,13 @@
 // What stays here is everything that is about a transcript *on disk*: reading
 // one, writing one, and the counting that ranks a corpus.
 
-import { bare, parseSrt, streamOf, find, monologues } from '/app/phrase.js';
+import { bare, parseSrt, streamOf, find, monologues, spaced } from '/app/phrase.js';
 
 const fs = require('fs');
 
 // Re-exported so that a tool has one place to look and the older importers here
 // keep working. The definitions are not here; the names are.
-export { bare, streamOf, find, monologues };
+export { bare, streamOf, find, monologues, spaced };
 
 // ── the file ───────────────────────────────────────────────────────────────
 

@@ -49,9 +49,16 @@ it should have been there.
   because that is what it sounds like, and no amount of fuzzy matching would
   have guessed it. Stating the variants is honest where guessing at them is not.
 
+- Two hits less than two seconds apart are **one** moment. A phrase said three
+  times for emphasis is one thing that happened, and listing it three times means
+  cutting three clips out of the same breath.
+
 This is the same search `tools/supercut.js` cuts clips with — one
 implementation, so the list on the screen and the files on disk can never
-describe different sets of moments.
+describe different sets of moments. That is not a theoretical worry: when the
+collapsing rule above lived only in the tool, the panel found fifteen of a phrase
+the command line found fourteen of, on the same corpus, with nothing anywhere
+saying which was right.
 
 ## Talking
 

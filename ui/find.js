@@ -48,7 +48,7 @@
 
 import { el, div, put } from './dom.js';
 import { clock } from './format.js';
-import { parseSrt, streamOf, find, monologues } from './phrase.js';
+import { parseSrt, streamOf, find, spaced, monologues } from './phrase.js';
 
 const fs = require('fs');
 
@@ -60,6 +60,10 @@ let rollPath = ROLL;
 // A found list is long and the interesting part is the top of it. The cap is on
 // what is *drawn* rather than on what is found, so the count stays honest.
 const SHOWN = 300;
+
+// How close two hits have to be to count as one moment. The same default
+// `tools/supercut.js` uses for `--spacing`, and the same rule — see `spaced`.
+const SPACING = 2;
 
 let host = null;          // { addToMix, note }
 let roll = null;          // the parsed roll-up, or null
@@ -163,7 +167,10 @@ function runWords(phrase, loose) {
     results = [];
     if (!channel || !phrase || phrase.replace(/[^a-z0-9|]/gi, '').length < 2) return;
     for (const v of channel.vods) {
-        for (const h of find(streamFor(v), phrase, { loose })) {
+        // Spaced for the same reason `tools/corpus.js` spaces: a phrase said
+        // three times for emphasis is one moment, and the two must not come to
+        // disagree about that any more than about the matching.
+        for (const h of spaced(find(streamFor(v), phrase, { loose }), SPACING)) {
             results.push({
                 kind: 'word', vod: v, at: h.at, to: h.says,
                 label: h.matched, detail: h.context,

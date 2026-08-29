@@ -72,6 +72,8 @@ const WORDS = [
     ['and', 7.0, 7.2], ['you', 7.3, 7.5], ['cross', 7.55, 8.0],
     ['once', 8.1, 8.4], ['more', 8.5, 8.9],
     ['much', 50.0, 50.3], ['later', 50.4, 50.8], ['indeed', 50.9, 51.4],
+    // A word said twice within the spacing window: two matches, one moment.
+    ['stop', 52.0, 52.2], ['stop', 53.0, 53.2],
 ];
 fs.writeFileSync(`${dir}/words.srt`,
     WORDS.map((w, i) => `${i + 1}\n${stamp(w[1])} --> ${stamp(w[2])}\n${w[0]}\n`).join('\n'),
@@ -140,6 +142,15 @@ console.log('\nwords');
     // ways is searched for at all.
     type(box, 'crossing|indeed');
     ok(A.find.found().length === 2, 'alternates are one search for either');
+
+    // **A phrase said twice in a breath is one moment**, and the panel has to
+    // collapse it exactly as the command line does. It did not: on the real
+    // corpus the panel found fifteen of a phrase `search` found fourteen of,
+    // because this rule lived only in tools/corpus.js. It is `spaced` in
+    // phrase.js now, and this is the assertion that keeps them together.
+    type(box, 'stop');
+    ok(A.find.found().length === 1,
+       'two matches a second apart are one moment, the same as at the command line');
 
     type(box, 'nobody ever says this');
     ok(A.find.found().length === 0, 'and a phrase nobody says finds nothing');

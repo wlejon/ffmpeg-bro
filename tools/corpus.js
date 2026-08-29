@@ -52,7 +52,7 @@
 import { resolve, forWatching, mediaDuration, channel as listChannel,
          pageFor } from './vod.js';
 import { transcribeSpan } from './speech.js';
-import { writeSrt, readSrt, streamOf, find } from './transcript.js';
+import { writeSrt, readSrt, streamOf, find, spaced } from './transcript.js';
 import { ROOT, abs, mkdirp, exists, sizeOf, readJson, writeJson, unlink,
          mb, gb, span, clock } from './drive.js';
 
@@ -450,10 +450,10 @@ export function search(login, phrase, opts = {}) {
         const hits = find(streamFor(vod.srt), phrase, {
             loose: opts.loose, context: opts.context,
         });
-        let last = -Infinity;
-        for (const h of hits) {
-            if (h.at - last < spacing) continue;
-            last = h.at;
+        // The same rule the Find panel applies, and shared for the reason the
+        // matching is: the two must not come to disagree about what counts as
+        // one instance. They did — see `spaced` in /app/phrase.js.
+        for (const h of spaced(hits, spacing)) {
             out.push({
                 ...h,
                 vodId: vod.id, page: vod.page, title: vod.title,
