@@ -52,6 +52,41 @@ recording adds the whole of it — six hours if that is what it is — because
 trimming it down is one gesture away and taking the first minute instead would
 be deciding something nobody asked for.
 
+### `+` cuts the moment out
+
+Pressing `+` puts the clip in the row **on the frame you press it**, and starts
+a stream copy of that moment — the words, with **ten seconds either side** — out
+of the recording into a file of its own. A thin line along the bottom of the card
+says how far that has got; on a local recording it is gone before you look at it
+(70 ms for a 25-second cut of a six-hour file). You can play, drag and trim the
+card the whole time it is happening.
+
+**Ten seconds either side is what makes the cut fixable.** A transcript says
+roughly where a word is, not where the sentence starts, so a piece taken to the
+word cannot be widened — and widening it is the first thing you want. The handles
+are what trim and slip have to work with.
+
+Walking a list pressing `+` on one row after another is what this is for and what
+it is built around: each press is its own copy, they run several at a time beside
+everything else, and none of them blocks the next.
+
+What you get for it is a mix that is its own footage. Thirteen moments taken out
+of four six-hour recordings read **270 MB** instead of sixty gigabytes, and the
+recordings are not needed again — you can put the drive away. What you do *not*
+get is a faster window: a twenty-megabyte cut opens and seeks in about the same
+time as the recording it came from, because almost all of that is the decoder
+starting rather than the file being long.
+
+The cuts are written under `build/cuts/`, named after the recording and the
+window, so adding the same moment twice writes one file. **They are not inside
+the document** — a `.fbro` names them, so deleting `build/cuts/` breaks the
+documents that point at it. Keep it beside the project, or render before you
+clear it.
+
+If a cut cannot be made — the recording will not answer, the copy fails — the
+card turns amber and the clip stays a clip of the recording, which works and is
+slower. Nothing is lost either way.
+
 **Right — the picture**, and it is one of three things at a time. The bar under
 it says which:
 
@@ -63,13 +98,29 @@ it says which:
 That last one is the whole of playback here. The workbench plays the clips and
 uses the render only to smooth over the cuts; this plays **only** the render,
 because a supercut is nothing but cuts — fourteen fragments of a second each is
-the ordinary case — and playing the clips would be almost entirely seams. The
-cost is a wait when you press play while the render is built, and the bar says
-so while it happens.
+the ordinary case — and playing the clips would be almost entirely seams.
+
+The cost is a pause when you press play, while the render opens the files it
+reads — about a fifth of a second on a mix of a dozen cuts. **Pressing play
+again without having changed anything does not pay it** — the render is kept for
+half a minute after you stop, so stopping to look at something and going on is
+free. Changing the edit or moving the playhead is what makes a new one.
 
 **Along the bottom — the mix.** One row of cards in the order they play. A card's
 width is its length and its left edge is its moment, so the row is its own
-ruler: click anywhere on it to put the playhead there.
+ruler: click anywhere on it to put the playhead there. Each card carries a strip
+of pictures over the shape of its sound, which is what you aim a trim with — the
+pictures say where you are and the waveform says where the words are.
+
+**Drag the divider above it** to give the mix more or less of the window; where
+you leave it is remembered. It starts at about a third, because editing is the
+job here and the picture is what you check it against.
+
+**Zoom with the wheel** over the strip, which zooms about the pointer rather
+than about the start, so the piece under the cursor stays under it. `+` and `-`
+do the same about the playhead, and `0` — or **Fit** — puts the whole mix on the
+screen. Two pixels a second up to twelve hundred: the whole of a long supercut,
+or a single frame wide enough to aim at.
 
 ## The four gestures
 
@@ -122,6 +173,8 @@ The render is the same one the workbench performs, from the same spec.
 | `Space` | play / stop |
 | `Home` `End` | start, end |
 | `←` `→` | one frame; with `Shift`, one second |
+| `+` `-` | zoom the mix in, out |
+| `0` | fit the whole mix on the screen |
 | `M` | mute |
 | `Delete` | remove the selected clip and close the gap |
 | `/` | jump to the search box |

@@ -41,13 +41,26 @@ import { project, clipsAt, sourceTime, duration } from '../ui/project.js';
 import { transport } from '../ui/transport.js';
 import * as output from '../ui/output.js';
 
-/// How many recordings may be open at once.
+/// The most recordings that may be open at once, whatever the mix asks for.
 ///
-/// Three, and the number is about what is *being used*, not about memory: the
-/// clip under the playhead, the one on either side of a cut, and an audition.
-/// A fourth is somebody having moved on, and a six-hour recording held open is
-/// a demuxer and a decode thread that nothing is reading.
-const MAX_OPEN = 3;
+/// At about 120 MB of demuxer and decoder per open six-hour recording, eight is
+/// a gigabyte — the same ceiling `ui/output.js` accepts for a kept render, and
+/// past the point where a supercut is drawing on that many sources at once.
+const MAX_OPEN = 8;
+
+/// How many to actually hold: what the mix is made of, plus one for an audition.
+///
+/// **A fixed three was a stutter and not a saving.** A thirteen-clip mix of four
+/// recordings walked the playhead through four paths and a pool of three, so
+/// every crossing evicted the file it was about to need again — closing and
+/// reopening a fifteen-gigabyte demuxer per cut, which is exactly the cost
+/// keying the pool by file was supposed to remove. The pool has to be able to
+/// hold the whole mix or it holds none of it.
+function room() {
+    const paths = new Set();
+    for (const c of project.clips) paths.add(c.path);
+    return Math.min(MAX_OPEN, Math.max(2, paths.size + 1));
+}
 
 let stage = null;
 let note = null;
@@ -76,7 +89,7 @@ function elementFor(path) {
     // Evict before opening rather than after, so the peak is `MAX_OPEN` files
     // and not one more. A file about to be opened is the least useful moment to
     // be holding the one nobody has looked at in longest.
-    while (pool.size >= MAX_OPEN) {
+    while (pool.size >= room()) {
         let oldest = null;
         for (const [p, h] of pool) if (!oldest || h.used < pool.get(oldest).used) oldest = p;
         if (oldest === null) break;
@@ -93,6 +106,22 @@ function elementFor(path) {
     stage.appendChild(video);
     pool.set(path, { video, used: ++clock });
     return video;
+}
+
+/// Open the recordings the mix is made of, before anybody clicks on one.
+///
+/// **The open is the click delay, and it does not have to be.** Pointing an
+/// element at a fifteen-gigabyte recording costs about 300 ms the first time,
+/// and doing it inside `park` means the first click on each card pays for it —
+/// which reads as a window that hesitates every time you touch a different part
+/// of the mix. Called instead when a clip lands, where somebody is already
+/// waiting for a probe and one more open is invisible.
+export function warm() {
+    const paths = [];
+    for (const c of project.clips) if (paths.indexOf(c.path) < 0) paths.push(c.path);
+    // Never more than the pool will hold, or warming one would evict another and
+    // the last few would be worse off than if nothing had been done at all.
+    for (const p of paths.slice(0, Math.max(1, room() - 1))) elementFor(p);
 }
 
 /// Show exactly one pooled element, or none.
@@ -161,6 +190,18 @@ export function stopAudition() {
 /// was already on the screen.
 let parked = { path: '', at: -1 };
 
+/// The shortest gap between two seeks of the parked picture, in milliseconds.
+///
+/// A hand dragging a card asks for a different frame *per pixel*, and a seek
+/// into a long recording is a keyframe plus everything up to the target — up to
+/// a couple of hundred frames of 1080p60. Answering every one of them puts the
+/// decode thread permanently behind the hand, which is what a scrub that lags
+/// and then catches up in jumps is. Dropping the ones in between costs nothing:
+/// the frame loop calls `park` again every frame, so the position the hand
+/// stopped at is picked up on the next tick either way.
+const SEEK_MS = 120;
+let lastSeek = 0;
+
 /// Park the picture at `t` on the timeline: the topmost clip covering it, seeked.
 ///
 /// Called every frame while nothing is playing, and per mouse-move under a drag,
@@ -176,6 +217,11 @@ function park(t) {
     }
     const want = sourceTime(clip, t);
     if (parked.path === clip.path && Math.abs(parked.at - want) < 0.02) return clip;
+    const now = Date.now();
+    // Not this frame. The next one that is far enough from the last takes
+    // whatever position the hand has reached by then — see `SEEK_MS`.
+    if (parked.path === clip.path && now - lastSeek < SEEK_MS) return clip;
+    lastSeek = now;
     parked = { path: clip.path, at: want };
     const video = elementFor(clip.path);
     video.muted = true;
@@ -195,6 +241,10 @@ export function play(on) {
         if (transport.t >= duration() - 1e-3) transport.t = 0;
         transport.playing = true;
         building = true;
+        // Everything the edit and the playhead did while this was stopped,
+        // settled in one go — see `moveTo`. Before `setOn`, because that is
+        // what decides whether there is anything to rebuild.
+        if (stale) { output.invalidate(); stale = false; }
         output.setOn(true, transport.t, 'play');
         output.play(true);
         return true;
@@ -219,13 +269,30 @@ let idleSince = 0;
 export function stop() { if (transport.playing) play(false); }
 export function isPlaying() { return transport.playing; }
 
+/// The kept render is of an edit, or a position, that is no longer the one on
+/// screen. See `refresh` for why this is a flag and not a rebuild.
+let stale = false;
+
 /// The mix is not what it was: whatever the render is of, it is not this.
-export function invalidate() { output.invalidate(); }
+export function invalidate() {
+    if (transport.playing) output.invalidate();
+    else stale = true;
+}
 
 /// The playhead was moved by hand.
+///
+/// **The render is deliberately not told while playback is stopped.** Repointing
+/// it hands the element a new src, and opening one is an open of every recording
+/// in the mix — four fifteen-gigabyte files on an ordinary supercut. Doing that
+/// on every click made clicking the strip take about a second, and the render
+/// being *kept* for half a minute after playback stopped meant it went on
+/// happening long after anything was playing. Nothing is looking at the render
+/// while it is stopped: the parked picture is. So the move is remembered, and
+/// `play()` is where it is paid for.
 export function moveTo(t) {
     transport.t = Math.max(0, Math.min(t, duration()));
-    output.moveTo(transport.t);
+    if (transport.playing) output.moveTo(transport.t);
+    else stale = true;
     park(transport.t);
 }
 
@@ -312,8 +379,11 @@ export function tick() {
 /// a moment that is no longer there.
 export function refresh() {
     invalidate();
-    // The playhead has not moved and the picture under it has, so the guard in
-    // `park` would say there was nothing to do. Cleared rather than compared.
-    parked = { path: '', at: -1 };
+    // **`park`'s own comparison decides**, and clearing it here was the second
+    // half of the drag stutter: this is called per mouse-move, and a cleared
+    // comparison is a demuxer seek into a fifteen-gigabyte file per mouse-move
+    // — which is what made fine-tuning an edge impossible. `park` already reads
+    // the edit (`clipsAt`, `sourceTime`), so an edit that moved the picture
+    // under the playhead moves the answer and an edit that did not, does not.
     if (!auditioning && !transport.playing) park(transport.t);
 }

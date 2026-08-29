@@ -399,11 +399,36 @@ four recordings, so an element per clip would open one six-hour file forty times
 recording is a seek. Both rules say a decoder belongs to what is being *watched*;
 they differ on what counts as the same thing.
 
+**A moment added to the mix is cut out of its recording** (`supercut/cuts.js`).
+`+` puts the clip in the row on the frame it is pressed, against the recording,
+and starts a `bro.ffmpeg.fetch` stream copy of the moment with `PAD` (10 s)
+either side; when it lands the clip is repointed at the cut and the recording
+leaves the input list. Four things about it. The in-point is snapped to a
+**keyframe asked for before the copy** (`bro.ffmpeg.keyframes`, 60 ms over a
+twenty-second window) rather than inferred from the result afterwards, because a
+copy begins at or before what it was asked for and the offset is what the clip's
+new in-point is measured against. The pad is what makes a cut *fixable* — a
+transcript says where a word is, not where the sentence starts, so a piece taken
+to the word cannot be widened and widening it is the first thing anybody wants.
+Every failure leaves the clip on the recording, which works and is slow. And the
+**measured win is bytes and portability, not speed**: thirteen moments of four
+six-hour recordings go from 60 GB to 270 MB, but a 20 MB cut opens in ~110 ms and
+seeks in ~55 ms against ~129 ms and ~59 ms for the 15 GB recording — nearly all
+of it is `avformat_find_stream_info` and the decoder, neither of which cares how
+long a file is. It also makes thirteen clips *thirteen* distinct inputs where
+there were four, which is why `TimelineSource::openTheFirstOfEach` opens them at
+once (1.4 s in a row, 0.2 s together).
+
 One decision worth not undoing: **playback is the render preview and only that**
 (`ui/output.js`). The workbench plays the clips and uses the render to smooth the
 cuts; a supercut is nothing *but* cuts, so playing the clips would be almost
 entirely seams. The cost is a visible wait while the render builds, which the bar
-says out loud — a wait somebody can see beats a stutter they cannot fix.
+says out loud — a wait somebody can see beats a stutter they cannot fix. That
+wait is ~200 ms on a thirteen-cut mix, and getting there needed the one-time
+**781 ms of `bro.ffmpeg.hardware()`** — which `buildSpec()` reaches through
+`deviceForRender` — moved off the press onto an early frame of the app's own
+loop. Nothing about that answer depends on the edit; the only question was which
+moment paid for it.
 
 ### The spec is the seam
 
@@ -660,6 +685,16 @@ runs), `export_copy` (stream copy), `export_subtitle`, `export_compositor`,
 `export_source`, `export_frame` (RGBA is the currency of this half, plus the
 shared libav helpers).
 
+**A windowed copy seeks on the picture, and which stream that is was once decided
+by the order of the stream rows.** Only video has sparse keyframes; every audio
+packet is one, so `av_seek_frame` on a soundtrack lands anywhere and the video
+packets after it start mid-GOP — Matroska then reports "File is broken, keyframes
+not correctly marked", a non-monotonic dts, and the copy fails with nothing on
+disk. `CopyStreams::build` took the tap holding the earliest in-point, ties to the
+first listed, and `copyRowsOf` lists a file's streams in the container's order —
+so a recording muxed soundtrack-first broke and one muxed picture-first worked,
+on the same call with the same window.
+
 **libavfilter has no subtitle input**, so `[0:s]` reaching an `overlay` is not a
 libavfilter link: it is ffmpeg's own sub2video, and `export_sub2video.h` is that
 mechanism here — a bitmap track decoded and painted into frames a `buffer` source
@@ -738,6 +773,35 @@ reads and what puts a meter of the output's own channels beside the viewer
 strip says so by reading bro's master bus instead. `playback_filter.h` is the same registry one
 turn earlier — one input with one chain — and the two prefixes (`/@fx/`, `/@out/`)
 are deliberately distinct.
+
+**Pressing play must not stop the window, and both halves of that were bugs.**
+The two opens above happen on bro's UI thread inside `<video>.src`, and a
+preview's source is a *render*: what a file demuxer has lying on a disk, this has
+to make. Measured on a thirteen-cut supercut of four six-hour recordings, the
+press cost **one frame of 6.0 s**, and it was two separate things.
+
+**A source that makes its packets needs a way to say "not yet".**
+`MediaSource::readPacket` has only true and false, and false means the stream
+ended — so `OutputSource` waited, and bro's `pumpStreamingAudio` waits inside it,
+once a frame, from `pumpEvents`, on the UI thread: 4.0 s of the 6.0 filling the
+audio ring for the first time. `MediaSource::packetReady()` is the answer, in
+bro: a demuxer says true always and nothing about it changes, a tap-backed source
+says whether a block is queued, and the pump comes back next frame. **The wake is
+part of it and not a tidy-up** — the run produces only while it is being asked,
+and the asking used to live in `readPacket` alone, so a `packetReady` that did
+not wake the run would be the reason it stayed "not yet" for ever. Waiting never
+made the block arrive sooner; it only decided who stood still.
+
+**And whether a render has a soundtrack is a question about its inputs, not
+about its clips.** `TimelineSource` opened a `SourceAudio` per clip in its
+constructor, because `hasAudio()` is asked once before the first frame — thirteen
+opens of fifteen-gigabyte files, 1.9 s. One clip of each distinct input answers
+the same question; the rest open in `mixInto`, which is the run's own thread. The
+picture already worked this way in `canvasAt` and the sound now matches it.
+Together: 6.0 s → 1.5 s cold and ~0.5 s for a rebuild after an edit. The runs of
+~210 ms frames that show up around this in a headless probe are
+`VideoPipeline::flush`'s `kFrameWait`, which `engine.cpp` calls in
+`DisplayMode::Headless` **only** — do not read them as window stutter.
 
 ## Conventions that are load-bearing
 

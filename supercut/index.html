@@ -62,6 +62,12 @@
 
 </div>
 
+<!-- Drag to give the mix more room, or less. **The default is not "as little as
+     will do"**: editing is the job here and the picture is what you check it
+     against, so the row of cards gets a third of the window rather than a strip
+     at the bottom, and anybody who wants to look at a frame can take it back. -->
+<div id="split" title="Drag"></div>
+
 <!-- The mix. A single row of cards in the order they play, because that is what
      a supercut is — there is no second track to put anything on and no ruler to
      read, so the cards are the ruler. -->
@@ -71,7 +77,7 @@
         <span id="mix-note" class="dim"></span>
         <span class="spacer"></span>
         <button id="btn-fit" class="text" title="Fit">Fit</button>
-        <input id="zoom" type="range" min="10" max="600" step="1" value="120">
+        <input id="zoom" type="range" min="2" max="1200" step="1" value="120">
         <button id="btn-clear" class="text" title="Remove every clip">Clear</button>
     </div>
     <div id="strip">

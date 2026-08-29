@@ -42,6 +42,7 @@ import {
 import { analyzeClip, frameAt, showing } from '../ui/analysis.js';
 import { el, div, put } from '../ui/dom.js';
 import { clock } from '../ui/format.js';
+import * as cuts from './cuts.js';
 
 /// Far enough that no edit can reach a neighbour. Seconds — a clip cannot be
 /// grown past its own file and no file is eleven days long.
@@ -66,12 +67,26 @@ export function initMix(refs, h) {
     nodes = refs;
     hooks = h || {};
     nodes.zoom.addEventListener('input', () => {
-        pxPerSec = Number(nodes.zoom.value) || 120;
+        setZoom(Number(nodes.zoom.value) || 120);
         draw();
     });
     nodes.fit.addEventListener('click', () => { fit(); draw(); });
+    // **The wheel zooms, and it zooms about the pointer.** Trimming to a frame
+    // means about a hundred pixels a second on the strip and the whole mix is
+    // then metres wide, so getting close to a cut has to be one gesture rather
+    // than a slider and a scrollbar. Holding the moment under the pointer still
+    // is what makes it one: you point at the edge you care about and turn.
+    nodes.strip.addEventListener('wheel', (e) => {
+        const box = nodes.strip.getBoundingClientRect();
+        const held = timeAt(e);
+        const off = e.clientX - box.left;
+        setZoom(pxPerSec * (e.deltaY < 0 ? 1.25 : 1 / 1.25));
+        draw();
+        nodes.strip.scrollLeft = Math.max(0, xOf(held) - off);
+        e.preventDefault();
+    });
     nodes.clear.addEventListener('click', () => {
-        for (const c of project.clips.slice()) removeClip(c);
+        for (const c of project.clips.slice()) { cuts.forget(c.id); removeClip(c); }
         reflow();
         edited();
     });
@@ -137,8 +152,13 @@ function unwalled(clip, edit) {
 export function append(clip, spec) {
     clip.track = 0;
     clip.inPoint = Math.max(0, spec.from || 0);
-    clip.length = Math.max(1 / Math.max(1, clip.fps),
-                           Math.min(spec.to - spec.from, clip.media - clip.inPoint));
+    const rest = clip.media - clip.inPoint;
+    // **No end named is the whole of what is left**, which is a file opened
+    // rather than a moment found — `doOpen` in app.js passes a bare path with no
+    // span. Read as a span it is a span of nothing, and what went into the mix
+    // was a single frame of the file somebody had just opened.
+    const span = (spec.to || 0) > (spec.from || 0) ? spec.to - spec.from : rest;
+    clip.length = Math.max(1 / Math.max(1, clip.fps), Math.min(span, rest));
     clip.start = duration();
     addClip(clip);
     reflow();
@@ -170,13 +190,43 @@ export function timeAt(e) {
     return Math.max(0, Math.min(x / pxPerSec, duration()));
 }
 
+/// The range the strip can be scaled over, in pixels per second.
+///
+/// The top end is what "fine tune an edge" needs: at 1200 px/s a pixel is 0.8 ms
+/// and a frame of 60 fps footage is twenty pixels wide, so a trim is a gesture
+/// rather than an aim. The bottom is a six-hour recording dropped in whole,
+/// which at 2 px/s is a card forty-eight thousand pixels wide and still
+/// scrollable.
+const ZOOM_MIN = 2;
+const ZOOM_MAX = 1200;
+
+/// The one place the scale is written, so the slider, the wheel and Fit cannot
+/// come to disagree about the range or about what the readout says.
+function setZoom(v) {
+    pxPerSec = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v));
+    if (nodes.zoom) nodes.zoom.value = String(Math.round(pxPerSec));
+    return pxPerSec;
+}
+
 /// A zoom at which the whole mix is on the screen.
 export function fit() {
     const total = duration();
     const room = nodes.strip.clientWidth - pad() * 2;
     if (!(total > 0) || !(room > 0)) return;
-    pxPerSec = Math.max(10, Math.min(600, room / total));
-    nodes.zoom.value = String(Math.round(pxPerSec));
+    setZoom(room / total);
+}
+
+/// Closer in, or further out, about the playhead — what `+` and `-` do.
+export function nudgeZoom(dir, t) {
+    const box = nodes.strip.getBoundingClientRect();
+    const off = xOf(t) - nodes.strip.scrollLeft;
+    setZoom(pxPerSec * (dir > 0 ? 1.4 : 1 / 1.4));
+    draw();
+    // Keep the playhead where it was on the screen, unless it was off it, in
+    // which case put it in the middle — zooming towards something you cannot
+    // see is how a strip ends up scrolled to nowhere.
+    const keep = off > 0 && off < box.width ? off : box.width / 2;
+    nodes.strip.scrollLeft = Math.max(0, xOf(t) - keep);
 }
 
 export function zoom() { return pxPerSec; }
@@ -292,6 +342,10 @@ function reorderTo(clip, index) {
 
 /// Remove a piece and close the gap.
 export function drop(clip) {
+    // **Before the clip goes**, because a cut still being copied has a fetch to
+    // stop: a card removed while its copy ran would go on writing a file nothing
+    // was ever going to point at.
+    cuts.forget(clip.id);
     removeClip(clip);
     reflow();
     edited();
@@ -353,12 +407,19 @@ function cardFor(clip) {
         if (drag) drag.clickTime = timeAt(e);
     });
 
+    // The copy this clip is waiting for, when there is one — see `cuts.js`. A
+    // bar rather than a word, because what it is saying is *how far*, and it is
+    // inside the card because the thing being waited for is this clip and not
+    // the mix.
+    const bar = div('cutbar', [div('fill')]);
+
     const card = div('card' + (isSelected(clip) ? ' sel' : ''), [
         el('div', { cls: 'grip', title: 'Reorder',
                     on: { mousedown: (e) => onDown(e, clip, 'reorder') } }),
         el('div', { cls: 'edge l', title: 'Trim',
                     on: { mousedown: (e) => onDown(e, clip, 'trim', 'start') } }),
         canvas,
+        bar,
         el('div', { cls: 'edge r', title: 'Trim',
                     on: { mousedown: (e) => onDown(e, clip, 'trim', 'end') } }),
         div('foot', [
@@ -376,7 +437,40 @@ function cardFor(clip) {
         ]),
     ]);
     cards.set(clip.id, card);
+    markCut(clip, card);
     return card;
+}
+
+/// Say on one card what its cut is doing.
+///
+/// Written onto the element that is already there rather than through a rebuild,
+/// which is the whole reason this is separate from `draw()`: a copy advances on
+/// every frame and the row must not be destroyed under a hand that is dragging
+/// part of it.
+function markCut(clip, card) {
+    if (!card) return;
+    const state = cuts.stateOf(clip.id);
+    const busy = state === 'cutting' || state === 'copied' || state === 'opening';
+    card.classList.toggle('cutting', busy);
+    card.classList.toggle('cutbad', state === 'failed');
+    const fill = card.querySelector('.cutbar .fill');
+    if (fill) {
+        // An opening probe has no progress of its own and is the short half of
+        // the wait, so it reads as a full bar rather than as a stalled one.
+        const at = (state === 'opening' || state === 'copied')
+            ? 1 : cuts.progressOf(clip.id);
+        fill.style.width = `${Math.round(Math.max(0, Math.min(1, at)) * 100)}%`;
+    }
+    const err = cuts.errorOf(clip.id);
+    if (err) card.title = err;
+    else if (card.title) card.removeAttribute('title');
+}
+
+/// The same, for every card there is. From the frame loop while anything is
+/// being cut; costs nothing on the frames when nothing is.
+export function markCuts() {
+    for (const clip of sequence()) markCut(clip, cards.get(clip.id));
+    drawNote();
 }
 
 /// What a piece looks and sounds like, in its own card.
@@ -400,41 +494,66 @@ function paint(clip, canvas) {
     // span this card is showing rather than for all six hours of the file.
     showing(clip, clip.inPoint, clip.inPoint + span, w);
 
-    // The picture, as a strip of frames at the card's own height. One thumbnail
-    // per its own aspect, laid out from the card's left edge — the same shape
-    // `ui/timeline.js` reads, since it is the same sheet the worker wrote.
-    if (clip.film && clip.film.strips.length) {
-        const { width: tw, height: th } = clip.film;
-        const slot = Math.max(8, h * (tw / Math.max(1, th)));
-        for (let x = 0; x < w; x += slot) {
-            const f = frameAt(clip.film, at(x + slot / 2));
-            if (!f) continue;
-            const dw = Math.min(slot, w - x);
-            try {
-                ctx.drawImage(f.bitmap, f.i * tw, 0, Math.max(1, tw * (dw / slot)), th,
-                              x, 0, dw, h);
-            } catch (e) { /* a strip being replaced under us */ }
+    // **The picture gets a band and the sound gets the rest**, rather than the
+    // sound being drawn faintly over the bottom of the picture. This is a tool
+    // for cutting *speech*: what you trim against is where the words start and
+    // stop, and that is a thing you read off an envelope. The picture is here to
+    // say which moment this is, which one frame does as well as ten — so it is
+    // capped, and every pixel the card grows goes to the waveform.
+    const film = clip.width ? Math.min(88, Math.round(h * 0.4)) : 0;
+    const wave = h - film;
+
+    if (film) {
+        if (clip.film && clip.film.strips.length) {
+            // One thumbnail per its own aspect, laid out from the card's left
+            // edge — the same sheet `ui/timeline.js` reads, since it is the one
+            // the worker wrote.
+            const { width: tw, height: th } = clip.film;
+            const slot = Math.max(8, film * (tw / Math.max(1, th)));
+            for (let x = 0; x < w; x += slot) {
+                const f = frameAt(clip.film, at(x + slot / 2));
+                if (!f) continue;
+                const dw = Math.min(slot, w - x);
+                try {
+                    ctx.drawImage(f.bitmap, f.i * tw, 0, Math.max(1, tw * (dw / slot)), th,
+                                  x, 0, dw, film);
+                } catch (e) { /* a strip being replaced under us */ }
+            }
+        } else {
+            ctx.fillStyle = '#2a2f38';
+            ctx.fillRect(0, 0, w, film);
         }
-    } else {
-        ctx.fillStyle = '#2a2f38';
-        ctx.fillRect(0, 0, w, h);
     }
 
-    // The sound, over it. Not a mix and not a scale — one clip's own envelope,
-    // which is the only thing a card can be asked about.
+    // The sound: one clip's own envelope, on its own ground. Not a mix and not a
+    // scale — those are questions about a whole edit and this is a card.
+    ctx.fillStyle = '#14171c';
+    ctx.fillRect(0, film, w, wave);
+    const mid = film + wave / 2;
+    ctx.fillStyle = '#242a33';
+    ctx.fillRect(0, Math.round(mid), w, 1);
+
     const p = clip.peaks;
     if (p && p.buckets && p.duration) {
-        ctx.fillStyle = 'rgba(74,158,255,.55)';
-        const mid = h - 1;
+        const half = wave / 2 - 1;
         for (let x = 0; x < w; x++) {
             const b = Math.floor((at(x) / p.duration) * p.buckets);
             if (b < 0 || b >= p.buckets) continue;
             // **A bucket nobody has read is not a bucket that was quiet** — the
             // rule `ui/analysis.js` states — so an unread column is left blank
-            // rather than drawn flat.
+            // rather than drawn flat, which would claim the recording went
+            // silent where in fact nothing has looked.
             if (p.have && !p.have[b]) continue;
-            const a = Math.min(1, p.rms[b] * 3) * (h * 0.42);
-            ctx.fillRect(x, mid - a, 1, a);
+            // The envelope behind, the rms in front: the outline is what the
+            // waveform *is*, and the body is where the energy actually is, which
+            // is what tells a word from a click at the same peak.
+            const lo = Math.max(-1, p.min[b]) * half;
+            const hi = Math.min(1, p.max[b]) * half;
+            ctx.fillStyle = 'rgba(74,158,255,.40)';
+            ctx.fillRect(x, mid + lo, 1, Math.max(1, hi - lo));
+            const r = Math.min(1, p.rms[b]) * half;
+            ctx.fillStyle = 'rgba(120,190,255,.85)';
+            ctx.fillRect(x, mid - r, 1, Math.max(1, r * 2));
         }
     }
 }
@@ -458,8 +577,13 @@ function drawNote() {
     if (!nodes.note) return;
     const n = sequence().length;
     const total = duration();
+    // The cuts still being made are said here as well as on their own cards,
+    // because somebody who has just pressed `+` twelve times is looking at the
+    // row rather than at any one card in it.
+    const busy = cuts.pending();
     nodes.note.textContent = n
-        ? `${n} ${n === 1 ? 'clip' : 'clips'} · ${total.toFixed(2)}s`
+        ? `${n} ${n === 1 ? 'clip' : 'clips'} · ${total.toFixed(2)}s` +
+          (busy ? ` · cutting ${busy}` : '')
         : '';
 }
 

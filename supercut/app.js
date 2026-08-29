@@ -55,6 +55,7 @@ import { byId } from '../ui/dom.js';
 import * as results from './results.js';
 import * as mix from './mix.js';
 import * as screen from './screen.js';
+import * as cuts from './cuts.js';
 
 // **The analysis worker is `ui/`'s and is not copied here.** bro resolves a
 // worker path against the running application's directory by plain
@@ -71,6 +72,8 @@ const nodes = {
     stage: byId('stage'), stageNote: byId('stage-note'),
     home: byId('t-home'), play: byId('t-play'), end: byId('t-end'),
     time: byId('t-time'), what: byId('t-what'), mute: byId('t-mute'),
+    split: byId('split'),
+    mix: byId('mix'),
     mixNote: byId('mix-note'), strip: byId('strip'), cards: byId('cards'),
     playhead: byId('playhead'), zoom: byId('zoom'),
     fit: byId('btn-fit'), clear: byId('btn-clear'),
@@ -114,9 +117,15 @@ function addMoment(spec) {
             project.fps = clip.fps || projectFps();
         }
         mix.append(clip, spec);
+        // **The clip is in the row before the cut exists**, which is the whole
+        // shape of this: a press adds a piece and the copy that makes it cheap
+        // catches up. See `cuts.js`.
+        cuts.begin(clip, spec);
         touched();
         mix.draw();
         screen.refresh();
+        // Here rather than at the first click on the card — see `screen.warm`.
+        screen.warm();
     };
     if (input.probe) lay();
     else waiting.push({ input, then: lay });
@@ -190,6 +199,7 @@ function adopt() {
     mix.fit();
     mix.draw();
     screen.refresh();
+    screen.warm();
     drawDoc();
     if (flattened)
         flash(`${before} clips, ${flattened} brought down from higher tracks into one row`);
@@ -306,6 +316,47 @@ nodes.home.addEventListener('click', () => seek(0));
 nodes.end.addEventListener('click', () => seek(duration()));
 nodes.mute.addEventListener('click', () => { screen.setMuted(!screen.muted()); drawBar(); });
 
+// ── how much room the mix gets ─────────────────────────────────────────────
+//
+// **Remembered, because it is a working preference and not a fact about the
+// edit.** It has nothing to do with what is being cut, so it does not belong in
+// the document — the same split `ui/document.js` draws between the workspace and
+// the edit, one storey down.
+
+const SPLIT_KEY = 'supercut.mixHeight';
+
+function setMixHeight(px) {
+    const lo = 140;
+    const hi = Math.max(lo, window.innerHeight - 260);
+    const h = Math.round(Math.max(lo, Math.min(px, hi)));
+    nodes.mix.style.flexBasis = `${h}px`;
+    try { localStorage.setItem(SPLIT_KEY, String(h)); } catch (e) { /* no store */ }
+    // The cards are as tall as the strip and their pictures are drawn at that
+    // height, so a canvas painted at the old one is a stretched thumbnail until
+    // something else happens to touch it.
+    mix.repaint();
+    mix.placePlayhead(transport.t);
+}
+
+try {
+    const saved = Number(localStorage.getItem(SPLIT_KEY));
+    if (saved > 0) setMixHeight(saved);
+} catch (e) { /* no store, and the default in the stylesheet stands */ }
+
+{
+    let from = 0, base = 0;
+    nodes.split.addEventListener('mousedown', (e) => {
+        from = e.clientY;
+        base = nodes.mix.getBoundingClientRect().height;
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (!from) return;
+        setMixHeight(base + (from - e.clientY));
+    });
+    document.addEventListener('mouseup', () => { from = 0; });
+}
+
 // ── keys ───────────────────────────────────────────────────────────────────
 //
 // Few, and none of them a mode. Everything an edit does has a grab point on a
@@ -330,6 +381,9 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') { seek(transport.t - (e.shiftKey ? 1 : 1 / projectFps())); return; }
     if (e.key === 'ArrowRight') { seek(transport.t + (e.shiftKey ? 1 : 1 / projectFps())); return; }
     if (e.key === 'm') { screen.setMuted(!screen.muted()); drawBar(); return; }
+    if (e.key === '+' || e.key === '=') { mix.nudgeZoom(1, transport.t); return; }
+    if (e.key === '-' || e.key === '_') { mix.nudgeZoom(-1, transport.t); return; }
+    if (e.key === '0') { mix.fit(); mix.draw(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
         for (const c of project.selection.slice()) removeClip(c);
         mix.reflow();
@@ -353,7 +407,22 @@ document.addEventListener('keydown', (e) => {
 
 let lastReads = -1;
 
+/// Has the hardware been asked about yet — see the frame loop.
+let warmed = 0;
+
 function frame() {
+    // **The 0.8 s that would otherwise land on the first press of play.**
+    // `buildSpec()` asks `deviceForRender` which card a render would use, which
+    // asks `bro.ffmpeg.hardware()`, which opens every hardware device there is to
+    // find out: 781 ms here, once, cached natively afterwards. Nothing about it
+    // depends on the edit, so the only question is which moment pays — and a
+    // hitch on the second frame of a window nobody has touched is a hitch nobody
+    // is waiting through, while the same hitch on Play is a button that does not
+    // answer. Two frames in, so the finder is on the screen before it happens.
+    if (warmed < 3 && ++warmed === 3) {
+        try { bro.ffmpeg.hardware(); } catch (e) { /* asked again by buildSpec */ }
+    }
+
     // **A probe is a thread and this is the only thing that reaps it.** An input
     // is added the moment a row is pressed and answers whenever a six-hour file
     // gets around to answering; without this the mix would stay empty for ever
@@ -370,6 +439,18 @@ function frame() {
     // arrives is the cost this loop exists to avoid.
     const reads = readCount();
     if (reads !== lastReads) { lastReads = reads; mix.repaint(); }
+
+    // A cut landing changes which file a clip is of, and therefore its in-point,
+    // its length and what its lanes are read from — so the row is rebuilt for
+    // that and only for that. A copy merely advancing is written onto the cards
+    // that are already there; see `mix.markCuts`.
+    if (cuts.tick()) {
+        mix.draw();
+        screen.refresh();
+        screen.warm();
+        touched();
+    }
+    if (cuts.pending()) mix.markCuts();
 
     screen.tick();
     mix.placePlayhead(transport.t);
@@ -415,7 +496,7 @@ requestAnimationFrame(frame);
 /// door, kept to what a test actually has to reach.
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
-    results, mix, screen, doc: documentModel,
+    results, mix, screen, cuts, doc: documentModel,
     addMoment, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,

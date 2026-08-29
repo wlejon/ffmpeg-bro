@@ -153,18 +153,31 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 
 /* ── the mix ──────────────────────────────────────────────────────────── */
 
+/* The handle between the picture and the mix. Tall enough to hit without being
+   a band of its own, and it is the only chrome in the window whose whole job is
+   to be grabbed — hence the ridge, which is the same one a card's grip has. */
+#split {
+    flex: 0 0 7px; cursor: ns-resize; background: var(--line);
+    background-image: repeating-linear-gradient(90deg,
+        #4a5361 0 2px, transparent 2px 6px);
+    background-position: center; background-repeat: no-repeat;
+    background-size: 60px 3px;
+}
+#split:hover { background-color: var(--accent-dim); }
+
 #mix {
-    flex: 0 0 auto; background: var(--panel);
-    border-top: 1px solid var(--line); display: flex; flex-direction: column;
+    flex: 0 0 340px; background: var(--panel);
+    display: flex; flex-direction: column; min-height: 0;
 }
 #mix-head {
     display: flex; align-items: center; gap: 10px;
-    padding: 7px 12px 4px; font-size: 11px;
+    padding: 7px 12px 4px; font-size: 11px; flex: 0 0 auto;
 }
 #mix-head .label { color: var(--dim); text-transform: lowercase; letter-spacing: .5px; }
 
 #strip {
-    position: relative; height: 156px; overflow-x: auto; overflow-y: hidden;
+    position: relative; flex: 1 1 auto; min-height: 0;
+    overflow-x: auto; overflow-y: hidden;
     padding: 6px 12px 12px;
 }
 /* No gap, on purpose: with the cards butted, a card's left edge is exactly its
@@ -182,6 +195,28 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .card.gone { opacity: .45; }
 
+/* Being cut out of its recording — see supercut/cuts.js. The card is a working
+   card the whole time: it plays, it drags and it trims, off the six-hour file,
+   and what the bar says is only how much longer that will be true for. So this
+   is a line along the bottom rather than a veil over the top; a card greyed out
+   would be claiming it could not be used, which is the opposite of the case. */
+.cutbar {
+    position: absolute; left: 0; right: 0; bottom: 24px; height: 2px;
+    background: rgba(255,255,255,.06); z-index: 4;
+    opacity: 0; transition: opacity .15s;
+}
+.card.cutting .cutbar { opacity: 1; }
+.cutbar .fill {
+    height: 100%; width: 0; background: var(--accent);
+    transition: width .2s linear;
+}
+/* The cut did not happen and the clip is still a clip of the recording — which
+   works, and is slow. Said on the card because that is the one this is true of;
+   the reason is the card's `title`. */
+.card.cutbad { border-color: #7a4a2a; }
+.card.cutbad .cutbar { opacity: 1; }
+.card.cutbad .cutbar .fill { width: 100%; background: #7a4a2a; }
+
 /* Reorder. The one gesture that moves the card itself, so it gets the top of
    the card and the hand cursor everything else in the world uses for it. */
 .card .grip {
@@ -193,14 +228,23 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .card.dragging .grip { cursor: grabbing; }
 .card.dragging { opacity: .8; }
 
-/* Trim. Both edges, and everything after the clip closes up behind it. */
+/* Trim. Both edges, and everything after the clip closes up behind it.
+   Twelve pixels, because this is the gesture that gets asked for a frame at a
+   time and a hairline is a target you have to aim at. */
 .card .edge {
-    position: absolute; top: 16px; bottom: 24px; width: 9px;
+    position: absolute; top: 16px; bottom: 24px; width: 12px;
     cursor: ew-resize; z-index: 3;
 }
 .card .edge.l { left: 0; }
 .card .edge.r { right: 0; }
-.card .edge:hover { background: rgba(255,140,66,.35); }
+.card .edge:hover { background: rgba(255,140,66,.4); }
+.card .edge::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 2px;
+    background: rgba(255,255,255,.12);
+}
+.card .edge.l::after { left: 2px; }
+.card .edge.r::after { right: 2px; }
+.card .edge:hover::after { background: var(--accent); }
 
 /* Slip: the contents move, the card does not. Dragging the picture is the
    gesture, and the picture moving under the frame is the feedback. */

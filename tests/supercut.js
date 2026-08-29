@@ -71,6 +71,7 @@ function drag(target, dx) {
 
 const cardEls = () => [...document.querySelectorAll('#cards .card')];
 const order = () => A.mix.sequence();
+const fileSize = (p) => { try { return fs.statSync(p).size; } catch (e) { return 0; } };
 
 /// The one rule this application adds to the model: the mix has no holes and no
 /// overlaps. Asserted after every edit, because every edit could break it.
@@ -188,11 +189,62 @@ console.log('\nthe mix');
     for (let i = 0; i < 200 && order().length < 2; i++) pump(50);
     ok(order().length === 2, 'and a second one');
 
-    ok(A.inputs.length === 1,
-       `both are clips of one input rather than the file being opened twice ` +
-       `(${A.inputs.length})`);
     ok(!packed('two clips'), packed('two clips') || 'the mix is packed end to end');
     ok(cardEls().length === 2, 'and there are two cards to grab');
+}
+
+// ── and each of them is cut out of the recording ───────────────────────────
+//
+// The clip is in the row on the frame the button was pressed, against the
+// recording; the copy that makes it a piece of its own catches up. What is
+// asserted here is the *end* of that, because the beginning is a race by design
+// — see supercut/cuts.js.
+
+console.log('\ncutting');
+{
+    const before = order().map((c) => ({ id: c.id, len: c.length, at: c.start }));
+    for (let i = 0; i < 400 && A.cuts.pending(); i++) pump(25);
+    ok(!A.cuts.pending(), `every cut settled (${A.cuts.pending()} left)`);
+
+    const isCut = (c) => c.path.replace(/\\/g, '/').indexOf('/build/cuts/') >= 0;
+    // **Which branch this is depends on the file, and both are the right
+    // answer.** A moment plus twenty seconds of handles is a piece of a
+    // six-hour recording and worth taking out of it; of a ten-second fixture it
+    // is the whole file, and copying a file to itself is the one thing `MOST`
+    // exists to refuse. So the fixture asserts the refusal and a real recording
+    // asserts the cut — the same shape as every other suite here, which runs
+    // against whatever it is given and skips what that file cannot show.
+    const long = order().every((c) => c.media > (c.length + 2 * A.cuts.PAD) * 2);
+    if (long) {
+        const states = order().map((c) => A.cuts.stateOf(c.id));
+        ok(states.every((s) => s === 'done'),
+           `both moments were cut out rather than refused (${states.join(', ')})`);
+        ok(order().every(isCut), 'and each clip is now a clip of its own cut');
+        ok(order().every((c) => fileSize(c.path) > 0), 'which is a file on disk');
+        // **The recording is off the list.** Left on it, it would be an `-i` in
+        // every spec built from this document and a fifteen-gigabyte file the
+        // document could not be opened without.
+        ok(A.inputs.length === 2 && A.inputs.every(isCut),
+           `the inputs are the two cuts and not the recording (${A.inputs.length})`);
+    } else {
+        ok(order().every((c) => A.cuts.stateOf(c.id) === null),
+           'a moment that is most of its recording is not worth cutting out of it');
+        ok(order().every((c) => !isCut(c)),
+           'so the clips are clips of the recording, which is what was asked for');
+        ok(A.inputs.length === 1,
+           `both are clips of one input rather than the file being opened twice ` +
+           `(${A.inputs.length})`);
+    }
+
+    // Either way the edit is the edit it was: a cut moves which file a clip is
+    // of and where its zero is, and must move nothing else.
+    const after = order().map((c) => ({ id: c.id, len: c.length, at: c.start }));
+    ok(after.length === before.length &&
+       after.every((a, i) => a.id === before[i].id &&
+                             Math.abs(a.len - before[i].len) < 1e-6 &&
+                             Math.abs(a.at - before[i].at) < 1e-6),
+       'and neither clip changed its length or its place in the row');
+    ok(!packed('after cutting'), packed('after cutting') || 'the mix is still packed');
 }
 
 // ── trimming, which ripples because a sequence has no holes ────────────────
