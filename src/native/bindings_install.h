@@ -71,6 +71,16 @@ void installMarks(Table& ns);
 /// rather than with nothing. bindings_transcribe.cpp says why.
 void installTranscribe(Table& ns);
 
+/// `words.*` — what was said in a soundtrack, one **word** at a time, read by
+/// Parakeet over a soundtrack libav decoded. The third entry that is not a part
+/// of ffmpeg's model, and it is a second speech table rather than an option on
+/// the first because the two answer differently shaped questions: Whisper times
+/// a phrase and this times a word, and everything this application does with
+/// speech — `WORD_PAD`, `ui/phrase.js`, the moment a cut is taken around — is
+/// built on the second. bindings_words.cpp says why a flag would have been
+/// worse.
+void installWords(Table& ns);
+
 /// `expr.evaluate` — libavutil's expression evaluator, so a filter option
 /// written as an expression can be drawn as the curve libavfilter will perform.
 /// bindings_expr.cpp.

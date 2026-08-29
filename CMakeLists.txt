@@ -178,6 +178,8 @@ add_library(ffmpeg-bro-core STATIC
     src/native/sound_marks.cpp
     src/native/transcribe.cpp
     src/native/bindings_transcribe.cpp
+    src/native/spoken_words.cpp
+    src/native/bindings_words.cpp
     src/native/sound_meter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
@@ -248,6 +250,14 @@ target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
 # byte-level BPE plus ~1600 special tokens read out of the checkpoint's own
 # vocab.json, and a second implementation that disagreed about a single merge
 # would silently transcribe different words.
+#
+# `src/native/spoken_words.cpp` needs the same thing one model along, and more
+# sharply. `brosoundml::Parakeet` also emits ids, and where a word *begins* is
+# visible only to the tokenizer: SentencePiece's boundary marker survives the
+# detokenization of a run and not of a single id, so `brolm::t5::Tokenizer` is
+# what turns ids into words at all. A word-timed transcript is the whole point of
+# that file — spoken_words.h says why — and there is no version of it that does
+# not go through this library.
 #
 # Costs nothing to add: `BRO_WITH_LM` is already ON in this build tree — bro's
 # `_bro_require` chain pulls it in behind `BRO_WITH_SOUNDML` (see the block at
@@ -387,6 +397,15 @@ target_link_libraries(ffmpeg-bro-markstest PRIVATE ffmpeg-bro-core bro_video)
 target_include_directories(ffmpeg-bro-markstest
                            PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
 
+# The same soundtrack, read for what was *said* in it. Most of it asserts things
+# that need no weights on the disk: the framing recipe, and the two refusals in
+# the order they have to happen in. tests/words_test.cpp says why that is most of
+# what can go wrong.
+add_executable(ffmpeg-bro-wordstest tests/words_test.cpp)
+target_link_libraries(ffmpeg-bro-wordstest PRIVATE ffmpeg-bro-core bro_video)
+target_include_directories(ffmpeg-bro-wordstest
+                           PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS})
+
 # The GPU: what this machine has, whether a hardware decode is the same
 # picture, and what each path costs. Most of it is a measurement rather than an
 # assertion, and every assertion has to pass on a machine with no card at all.
@@ -464,6 +483,11 @@ set(FIXTURE_AV1 "${FIXTURE_DIR}/av1.mp4")
 # parser for somebody else's format is only really tested by somebody else's
 # file, so there is a way to point at one.
 set(GOPRO_FILE "" CACHE FILEPATH "a real GoPro .MP4 to check the gpmd parser against")
+# The weights are not shipped and nothing here downloads them; brosoundml's
+# scripts/download-parakeet.sh puts a checkpoint on disk. Absent, the sections of
+# the `words` suite that need a real transcription say so and skip.
+set(PARAKEET_DIR "" CACHE PATH "a Parakeet checkpoint directory to transcribe with")
+set(SPEECH_FILE "" CACHE FILEPATH "a recording with speech in it, for the words suite")
 
 add_test(NAME fixtures COMMAND ffmpeg-bro-mkfixture "${FIXTURE_DIR}")
 set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP media)
@@ -505,6 +529,15 @@ add_test(NAME telemetry COMMAND ffmpeg-bro-datatest "${FIXTURE_DATA}" "${GOPRO_F
 # run and no transients.
 add_test(NAME marks COMMAND ffmpeg-bro-markstest "${FIXTURE_MARKS}"
          "${FIXTURE_SILENT}" "${FIXTURE_SOUND}")
+# What was *said* in a soundtrack, word by word. Most of this runs with no model
+# on the disk and that is the point — the weights are not shipped, so a suite
+# that needed them would be a suite nobody runs. What is checked without one is
+# the framing recipe (a change to it moves every word in every future transcript)
+# and the two refusals, including which of them comes first. `-DPARAKEET_DIR=` and
+# `-DSPEECH_FILE=` at configure time turn on the sections that need a real run,
+# the way `-DGOPRO_FILE=` does for the telemetry parser.
+add_test(NAME words COMMAND ffmpeg-bro-wordstest "${FIXTURE_SILENT}"
+         "${FIXTURE_SOUND}" "${PARAKEET_DIR}" "${SPEECH_FILE}")
 add_test(NAME hardware COMMAND ffmpeg-bro-hwtest "${FIXTURE_A}" "${FIXTURE_AV1}")
 # The proxy, which is the file a trim edge is dragged against. The portrait
 # fixture is what makes "it keeps the shape it came from" a real assertion
@@ -607,7 +640,7 @@ add_test(NAME supercut COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/supercut/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/supercut.js"
          -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences playback hardware telemetry marks
-                     proxy
+                     words proxy
                      PROPERTIES FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.

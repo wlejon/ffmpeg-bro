@@ -3,6 +3,7 @@
 
 #include "transcribe.h"
 
+#include "analysis_device.h"
 #include "async_open.h"
 #include "export_source.h"
 #include "sound_marks.h"     // analysisLock()
@@ -68,19 +69,6 @@ bool fileThere(const std::string& p) {
     return true;
 }
 
-/// Pick the device the same way bro's `stt` bindings do, and by the same
-/// precedence, so a model loaded here and one loaded through `bro.stt` land in
-/// the same place. Asking brotensor rather than deciding is the "ask libav"
-/// convention one layer over.
-brotensor::Device deviceFor(const std::string& want) {
-    if (want == "cpu") return brotensor::Device::CPU;
-    if (want == "cuda") return brotensor::Device::CUDA;
-    if (want == "metal") return brotensor::Device::Metal;
-    if (brotensor::is_available(brotensor::Device::CUDA)) return brotensor::Device::CUDA;
-    if (brotensor::is_available(brotensor::Device::Metal)) return brotensor::Device::Metal;
-    return brotensor::Device::CPU;
-}
-
 /// Load, or hand back what is already loaded. `err` is filled in and the result
 /// is empty on failure — **by name**, because a transcription that quietly does
 /// nothing is worse than one that says the weights are not there.
@@ -119,7 +107,7 @@ Loaded loadModel(const TranscribeOptions& opts, std::string& err) {
         out.tok = std::make_shared<brolm::whisper::Tokenizer>(
             brolm::whisper::Tokenizer::load(voc, mrg, added));
         out.model = std::make_shared<brosoundml::Whisper>();
-        out.model->load(opts.modelDir, deviceFor(opts.device));
+        out.model->load(opts.modelDir, analysisDeviceFor(opts.device));
     } catch (const std::exception& e) {
         err = std::string("the model would not load: ") + e.what();
         return {};

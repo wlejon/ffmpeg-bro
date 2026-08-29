@@ -427,6 +427,54 @@ bro.ffmpeg.transcribe.reads.forget(id)  // stop it and drop the transcript
 ```
 
 ```js
+// The same soundtrack, read for one WORD at a time — Parakeet over a soundtrack
+// libav decoded, on a thread. `transcribe`'s shape exactly, with a different
+// answer.
+bro.ffmpeg.words.reads.start(path | input, {
+    model,        // REQUIRED. a directory of config.json + model.safetensors +
+                  // tokenizer.json. Nothing is downloaded and nothing is
+                  // shipped; brosoundml's scripts/download-parakeet.sh puts one
+                  // there. Absent -> the read fails naming the missing file.
+    device,       // 'cuda' | 'cpu' | 'metal'; absent = the best available.
+})                // -> id
+// No `language`: Parakeet is English and has nothing to be told.
+
+bro.ffmpeg.words.reads.poll(id)
+// -> { state: "reading" | "done" | "failed" | "stopped", reading, elapsed,
+//      timeout, error,
+//      result: { streamIndex, duration, read, total, truncated,
+//                words: [{ start, end, text }, ...] } }
+
+bro.ffmpeg.words.reads.cancel(id)   // stop at the next window, keep the words
+bro.ffmpeg.words.reads.forget(id)   // stop it and drop them
+//
+// **Why this is a second call and not `transcribe` with an option.** The two
+// answer differently shaped questions and a flag would hide that. Whisper times
+// a SEGMENT — a phrase of several seconds — deliberately, because claiming a
+// position inside one would be a measurement nothing made. This times a WORD:
+// `token_frames` is the encoder frame a token was emitted at, and an encoder
+// frame is 0.08 s. Everything this repository does with speech is built on the
+// second — `WORD_PAD` in ui/library.js, `at` and `says` in ui/phrase.js, the
+// moment supercut/cuts.js cuts around — and a segment-timed hit would put a
+// found moment back to plus or minus several seconds. One call whose result
+// shape changed with a string would be one call making two different promises
+// about how well a time is known.
+//
+// `end` is where the NEXT token arrived, not where the speaker stopped: the
+// start is a measurement on a 0.08 s grid and the end is a bound.
+//
+// Everything else is `transcribe`'s, including the rule that looks like a bug:
+// `result` is filled in WHILE it reads, so a terminal answer is not handed over
+// exactly once and `forget` is required rather than tidy. `read` says how far
+// down the recording it has got, without which a caller cannot tell "nothing was
+// said in the last hour" from "the last hour has not been read" — and a
+// cancelled run never rounds it up.
+//
+// Measured on an RTX 4090: 11.3x realtime, so a six-hour recording is about half
+// an hour and is searchable from the first fifteen-second window.
+```
+
+```js
 // What this build can write — asked of libavcodec, not hardcoded.
 bro.ffmpeg.encoders       // [{ id: "libx264", label, longName,
                           //    codecName: "h264",   // the codec, not the encoder
