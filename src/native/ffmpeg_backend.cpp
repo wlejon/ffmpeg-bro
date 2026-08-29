@@ -373,6 +373,16 @@ public:
 
     const std::vector<TrackInfo>& tracks() const override { return tracks_; }
 
+    /// A camera produces in real time, so there is a stretch of every frame in
+    /// which the next block genuinely does not exist yet — and the caller that
+    /// asks this is the one that must not stand still for it.
+    bool packetReady() const override {
+        if (!pad_) return true;   // gone: readPacket says so at once
+        if (pending_) return true;
+        if (ears_) return pad_->soundReady(*ears_);
+        return true;   // the picture is read on the pipeline's own thread
+    }
+
     bool readPacket(MediaPacket& out) override {
         if (!pad_) return false;
         AVFrame* f = pending_;
@@ -617,6 +627,21 @@ public:
 
     const std::vector<TrackInfo>& tracks() const override { return tracks_; }
 
+    /// Is there a block for the ring right now — and, because asking is what
+    /// makes one, the ask itself.
+    ///
+    /// **The wake is not a side effect to be tidied away.** The run idles a
+    /// quarter of a second after the asking stops, and the only asking there is
+    /// happens in `readPacket`. A caller that checked this, was told "not yet"
+    /// and went away would be the reason it stayed "not yet" for ever.
+    bool packetReady() const override {
+        if (!run_) return true;   // gone: readPacket says so at once
+        if (!wantSound_ || !soundPad_) return true;   // the picture has its own thread
+        run_->wake();
+        if (!ears_) ears_ = soundPad_->listen();
+        return soundPad_->soundReady(*ears_);
+    }
+
     bool readPacket(MediaPacket& out) override {
         if (!run_) return false;
         // **Asked for, every time.** The run produces while it is being asked and
@@ -711,8 +736,10 @@ private:
     std::shared_ptr<LivePadTap> soundPad_;
     /// This reader's queue of the mix, made on the first read that wants it — so
     /// a reader that only ever wanted the picture never causes a block to be
-    /// queued at all.
-    std::shared_ptr<LiveSoundQueue> ears_;
+    /// queued at all. Mutable because `packetReady` is the first read now: it
+    /// asks whether there is a block, and there can be none until something is
+    /// listening for one.
+    mutable std::shared_ptr<LiveSoundQueue> ears_;
     std::vector<TrackInfo> tracks_;
     uint64_t seen_ = 0;
     bool wantPicture_ = true;

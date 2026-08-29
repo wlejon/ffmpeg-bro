@@ -357,6 +357,19 @@ public:
         return f;
     }
 
+    /// Is there a block for this listener to take right now?
+    ///
+    /// The question `takeSound` cannot answer without either waiting or ending,
+    /// asked by a caller that must not do the first and must not be told the
+    /// second — bro's audio ring is topped up from the UI thread once a frame,
+    /// so "not yet" has to come back as itself. Ended counts as ready, because
+    /// what is ready then is the end: the caller reads it and stops.
+    /// See `MediaSource::packetReady` in bro.
+    bool soundReady(const LiveSoundQueue& q) const {
+        std::lock_guard<std::mutex> lock(m_);
+        return ended_ || !q.blocks_.empty();
+    }
+
     bool ended() const { std::lock_guard<std::mutex> lock(m_); return ended_; }
     /// What this pad turned out to be, once a frame has been through it.
     void size(int* w, int* h) const {

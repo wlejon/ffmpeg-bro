@@ -234,6 +234,13 @@ public:
     bool exhausted(double t) const override;
 
 private:
+    /// Open the one clip of each distinct input that settles `hasAudio()`, all
+    /// of them at once. See the definition for why that is worth a thread pool
+    /// and why the rest of the clips are not opened here at all.
+    void openTheFirstOfEach(const ExportSettings& s,
+                            const std::vector<class ClipSources*>& firsts,
+                            const std::vector<MediaInput>& theirInputs);
+
     ExportSettings settings_;
     std::vector<std::unique_ptr<ClipSources>> clips_;
     std::unique_ptr<class Compositor> comp_;
