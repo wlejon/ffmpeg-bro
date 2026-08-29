@@ -264,6 +264,13 @@ add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
 target_link_libraries(ffmpeg-bro PRIVATE ffmpeg-bro-core bro_engine)
 target_include_directories(ffmpeg-bro PRIVATE "${BRO_DIR}/src")
 
+# The second application, over the same core and the same UI *model*: finding
+# what was said in a long recording and cutting it together. A separate
+# executable rather than a mode, for the reason its own main.cpp gives.
+add_executable(ffmpeg-bro-supercut WIN32 src/native/supercut_main.cpp)
+target_link_libraries(ffmpeg-bro-supercut PRIVATE ffmpeg-bro-core bro_engine)
+target_include_directories(ffmpeg-bro-supercut PRIVATE "${BRO_DIR}/src")
+
 # The same engine and the same backend, driven by a script. This is what the
 # UI tests run against, and a usable scripted media tool in its own right.
 add_executable(ffmpeg-bro-headless src/native/headless_main.cpp)
@@ -274,10 +281,12 @@ if(MSVC)
     # Same reason bro.exe needs it: QuickJS's interpreter frame is large and
     # deep JS recursion overflows the default 1 MB stack.
     target_link_options(ffmpeg-bro PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
+    target_link_options(ffmpeg-bro-supercut PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
     target_link_options(ffmpeg-bro-headless PRIVATE /STACK:8388608)
 endif()
 if(WIN32)
     target_link_libraries(ffmpeg-bro PRIVATE ws2_32)
+    target_link_libraries(ffmpeg-bro-supercut PRIVATE ws2_32)
     target_link_libraries(ffmpeg-bro-headless PRIVATE ws2_32)
 endif()
 
@@ -574,12 +583,20 @@ add_test(NAME ui-find COMMAND ffmpeg-bro-headless
 add_test(NAME ui-load COMMAND ffmpeg-bro-headless
          "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_load.js"
          -- "${FIXTURE_A}")
+# The *other* application, over the same core: a phrase found, two moments put in
+# the mix, all four card gestures driven with real mouse events, the document
+# round-tripped, and a file written with sound in it. Note the app directory —
+# this is `supercut/` rather than `ui/`, which is what makes it a second
+# application rather than a mode of the first.
+add_test(NAME supercut COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/supercut/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/supercut.js"
+         -- "${FIXTURE_A}")
 set_tests_properties(decode export capabilities inputs sequences playback hardware telemetry marks
                      PROPERTIES FIXTURES_REQUIRED media TIMEOUT 900)
 # The same, plus clean storage — the split is that a native test never loads
 # `ui/`, so the blob beside the app is nothing to do with it.
 set_tests_properties(ui-player ui-sources ui-hardware ui-export ui-sequence ui-report
-                     ui-measure ui-subtitles ui-document ui-output ui-find ui-load
+                     ui-measure ui-subtitles ui-document ui-output ui-find ui-load supercut
                      PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 900)
 
 # Needs no media at all: buildSpec()'s output is a plain object and the
@@ -609,5 +626,5 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences hardware ui-player ui-sources ui-hardware ui-export
-                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find
+                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find supercut
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

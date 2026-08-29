@@ -144,9 +144,27 @@ function stateOf(clip) {
     return st;
 }
 
+/// Where the worker script is, relative to the running application's directory.
+///
+/// A second application shares this file and does *not* share a copy of the
+/// worker beside its own index.html — 47 lines duplicated is 47 lines that can
+/// come to disagree about what a reading means. bro resolves a worker path
+/// against the app's base directory by plain concatenation, so `../ui/…` is a
+/// path out of the app and into the one home this script has.
+let workerPath = 'analyze-worker.js';
+
+/// Read from somewhere else, for an application whose directory is not `ui/`.
+/// Must be called before the first analysis, which is what building the worker
+/// is; after that it is the path already in use.
+export function useWorker(path) {
+    if (worker) return false;
+    workerPath = path || 'analyze-worker.js';
+    return true;
+}
+
 function ensureWorker() {
     if (worker) return worker;
-    worker = new Worker('analyze-worker.js');
+    worker = new Worker(workerPath);
     worker.onmessage = (e) => receive(e.data);
     return worker;
 }

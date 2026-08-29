@@ -1,11 +1,15 @@
-// Finding the material: every place a word was said, and every stretch where
-// somebody talked without stopping.
+// Finding the material, as a panel over the Compose stage.
 //
 // A supercut is two jobs and only one of them is editing. The other is *finding*
 // — six hours of recording is not something anybody scrubs through, so the words
 // have to be searchable and the search has to hand back moments you can hear
 // before you commit to them. That is what this panel is: a search box, a list,
 // something to play a hit with, and a button that puts it on the timeline.
+//
+// **What the answer is belongs to `library.js`; this file decides only how it
+// is drawn.** There is a second view over the same library — the whole
+// left-hand side of `ffmpeg-bro-supercut` — and the one thing the two must
+// never do is disagree about what was said and where.
 //
 // ── Why this is a panel and not a stage ───────────────────────────────────
 //
@@ -17,21 +21,6 @@
 // handles and the cue layer do, and closes again — and the answer to "where does
 // a found moment go" is the timeline that is already on the screen behind it.
 //
-// ── Where the corpus comes from ───────────────────────────────────────────
-//
-// **A file is the seam.** `tools/supercut.js index <channel>` writes
-// `build/corpus/find.json`, a list of channels and the manifests describing
-// them; this reads that and nothing else. The store's layout, the Twitch API,
-// the pulling and the transcribing all stay in `tools/`, which is deliberately
-// not part of this application — see the block at the top of `tools/README.md`.
-// An absent file is the ordinary case and not an error: there is no corpus, so
-// there is no panel, and nothing anywhere has to explain why.
-//
-// The manifest carries paths and counts, not words. The transcripts are a
-// megabyte each and already on disk in a form this application can read, so they
-// are read from here directly — copying ninety thousand words into a second file
-// would make a stale copy the first time a recording was transcribed again.
-//
 // ── One element, however many results ─────────────────────────────────────
 //
 // **Auditioning uses a single `<video>` that every row shares.** A list of two
@@ -41,34 +30,16 @@
 // is being watched, not of what is being listed. So the panel owns one element,
 // points it at whichever recording the pressed row is in, and seeks. Rows are
 // plain markup and cost nothing.
-//
-// The search itself is `phrase.js`'s, which is also what `tools/clips.js` cuts
-// with. The two must not be able to disagree: this list says where the moments
-// are and that file turns them into files.
 
 import { el, div, put } from './dom.js';
 import { clock } from './format.js';
-import { parseSrt, streamOf, find, spaced, monologues } from './phrase.js';
+import * as library from './library.js';
 
-const fs = require('fs');
-
-// The one well-known path. Relative to the working directory, which is where
-// `build/` is for anybody running this out of the repository.
-const ROLL = 'build/corpus/find.json';
-let rollPath = ROLL;
-
-// A found list is long and the interesting part is the top of it. The cap is on
-// what is *drawn* rather than on what is found, so the count stays honest.
+/// A found list is long and the interesting part is the top of it. The cap is on
+/// what is *drawn* rather than on what is found, so the count stays honest.
 const SHOWN = 300;
 
-// How close two hits have to be to count as one moment. The same default
-// `tools/supercut.js` uses for `--spacing`, and the same rule — see `spaced`.
-const SPACING = 2;
-
-let host = null;          // { addToMix, note }
-let roll = null;          // the parsed roll-up, or null
-let channel = null;       // the manifest in hand
-const streams = new Map();  // vodId → search stream, built once
+let host = null;          // { addToMix }
 let tab = 'words';
 let results = [];
 let audition = null;      // { item, stopAt, from }
@@ -94,29 +65,15 @@ export function initFind(opts) {
     if (close) close.addEventListener('click', () => setOn(false));
 }
 
-/// Read a corpus from somewhere other than the well-known path.
-///
-/// The default is one fixed path, which is what makes "there is no corpus" an
-/// absent file rather than a setting. It is overridable for the two callers a
-/// fixed path would otherwise shut out: a suite, which must not write over
-/// somebody's real manifest to prove the panel works, and a corpus kept
-/// somewhere other than beside the repository.
+/// Read a corpus from somewhere other than the well-known path — see
+/// `library.useCorpus`, which is where the reason for it is.
 export function useCorpus(path) {
-    rollPath = path || ROLL;
-    roll = null;
-    channel = null;
-    streams.clear();
+    library.useCorpus(path);
     results = [];
 }
 
 /// Is there a corpus at all? An absent file is the ordinary case.
-export function available() {
-    if (roll === null) {
-        try { roll = JSON.parse(fs.readFileSync(rollPath, 'utf-8')); }
-        catch (e) { roll = false; }
-    }
-    return !!(roll && roll.channels && roll.channels.length);
-}
+export function available() { return library.available(); }
 
 export function isOn() { return !!(nodes && nodes.panel && !nodes.panel.hidden); }
 
@@ -130,84 +87,25 @@ export function setOn(on) {
     // nobody is looking at it.
     if (!on) stopAudition();
     else {
-        if (!channel) pick(roll.channels[0].channel);
+        library.pick();
         draw();
     }
-}
-
-// ── the corpus ─────────────────────────────────────────────────────────────
-
-function pick(name) {
-    const entry = (roll.channels || []).find((c) => c.channel === name);
-    if (!entry) return;
-    try { channel = JSON.parse(fs.readFileSync(entry.manifest, 'utf-8')); }
-    catch (e) { channel = null; return; }
-    streams.clear();
-    results = [];
-}
-
-/// The search stream for one recording, built once and kept.
-///
-/// A megabyte of cues parsed per recording, which is why this is memoised rather
-/// than done per search: somebody typing into the box asks a new phrase of the
-/// same words on every keystroke.
-function streamFor(v) {
-    let s = streams.get(v.id);
-    if (!s) {
-        try { s = streamOf(parseSrt(fs.readFileSync(v.srt, 'utf-8'))); }
-        catch (e) { s = streamOf([]); }
-        streams.set(v.id, s);
-    }
-    return s;
 }
 
 // ── searching ──────────────────────────────────────────────────────────────
 
 function runWords(phrase, loose) {
-    results = [];
-    if (!channel || !phrase || phrase.replace(/[^a-z0-9|]/gi, '').length < 2) return;
-    for (const v of channel.vods) {
-        // Spaced for the same reason `tools/corpus.js` spaces: a phrase said
-        // three times for emphasis is one moment, and the two must not come to
-        // disagree about that any more than about the matching.
-        for (const h of spaced(find(streamFor(v), phrase, { loose }), SPACING)) {
-            results.push({
-                kind: 'word', vod: v, at: h.at, to: h.says,
-                label: h.matched, detail: h.context,
-            });
-        }
-    }
-    // Newest recording first, then in time order inside it, which is the order
-    // somebody thinks about their own recordings in.
-    results.sort((a, b) => String(b.vod.publishedAt).localeCompare(String(a.vod.publishedAt))
-                        || a.at - b.at);
+    results = library.searchWords(phrase, { loose });
 }
 
 /// Every stretch of talking in the corpus at these settings, longest first.
 ///
 /// Separate from the drawing so that a caller can ask the question without the
 /// panel having to be showing an answer to it.
-export function runsFor(opts = {}) {
-    const out = [];
-    if (!channel) return out;
-    for (const v of channel.vods) {
-        for (const m of monologues(streamFor(v).words, opts)) {
-            out.push({
-                kind: 'run', vod: v, at: m.at, to: m.to,
-                label: `${Math.round(m.seconds)}s · ${m.words} words · ` +
-                       `${m.rate.toFixed(1)}/s`,
-                detail: m.opening,
-                seconds: m.seconds,
-            });
-        }
-    }
-    // Longest first: the whole point of the list is that you cannot know what is
-    // in a stretch before playing it, so the only ranking available is size.
-    return out.sort((a, b) => b.seconds - a.seconds);
-}
+export function runsFor(opts = {}) { return library.searchTalking(opts); }
 
 function runTalking(gap, min) {
-    results = runsFor({ gap, min });
+    results = library.searchTalking({ gap, min });
 }
 
 // ── auditioning ────────────────────────────────────────────────────────────
@@ -220,7 +118,7 @@ function runTalking(gap, min) {
 function playItem(item) {
     const video = nodes.video;
     if (!video || !item.vod.media) return;
-    const lead = item.kind === 'word' ? 1.5 : 0;
+    const lead = item.kind === 'word' ? library.WORD_PAD : 0;
     const from = Math.max(0, item.at - lead);
     // Stop where the thing being auditioned stops, plus a little: a hit is over
     // in a second and the element would otherwise play on into the recording.
@@ -292,12 +190,14 @@ function draw() {
 
     put(nodes.controls, () => {
         const bits = [];
-        if (roll && roll.channels.length > 1) {
+        const chans = library.channels();
+        const here = library.current();
+        if (chans.length > 1) {
             const sel = el('select', {
-                on: { change: () => { pick(sel.value); results = []; draw(); } },
-            }, roll.channels.map((c) => el('option', {
+                on: { change: () => { library.pick(sel.value); results = []; draw(); } },
+            }, chans.map((c) => el('option', {
                 value: c.channel, text: c.channel,
-                selected: channel && c.channel === channel.channel,
+                selected: here && c.channel === here.channel,
             })));
             bits.push(sel);
         }
@@ -362,10 +262,8 @@ function rerun() {
 /// explanation: the numbers change with every search.
 function drawNote() {
     if (!nodes.note) return;
-    if (!channel) { nodes.note.textContent = ''; return; }
-    const hours = channel.vods.reduce((n, v) => n + (v.seconds || 0), 0) / 3600;
-    const words = channel.vods.reduce((n, v) => n + (v.words || 0), 0);
-    const base = `${channel.vods.length} recordings · ${hours.toFixed(1)} h · ${words} words`;
+    const base = library.about();
+    if (!base) { nodes.note.textContent = ''; return; }
     if (!results.length) {
         nodes.note.textContent = tab === 'words' && phraseValue
             ? `nothing says that · ${base}` : base;
@@ -399,25 +297,10 @@ function drawRows() {
             el('button', {
                 cls: 'tiny', text: 'Add', title: 'Put this on the timeline',
                 disabled: !item.vod.media,
-                on: { click: () => host && host.addToMix(asClip(item)) },
+                on: { click: () => host && host.addToMix(library.asClip(item)) },
             }),
         ]);
     }));
-}
-
-/// A result as the thing a timeline takes: a file, and a span of it.
-///
-/// The padding is the same 1.5 s `tools/clips.js` cuts with, and for the same
-/// reason — a word with nothing before it arrives already half said. A stretch
-/// of talking is taken as it is: its edges are silences by construction.
-function asClip(item) {
-    const pad = item.kind === 'word' ? 1.5 : 0;
-    return {
-        path: item.vod.media,
-        name: `${item.vod.id} ${clock(item.at)}`,
-        from: Math.max(0, item.at - pad),
-        to: item.to + pad,
-    };
 }
 
 /// Put the nth result on the timeline — what the row's Add button does, reachable
@@ -425,7 +308,7 @@ function asClip(item) {
 export function addFound(n) {
     const item = results[n];
     if (!item || !item.vod.media || !host) return false;
-    host.addToMix(asClip(item));
+    host.addToMix(library.asClip(item));
     return true;
 }
 

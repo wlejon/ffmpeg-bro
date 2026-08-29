@@ -60,6 +60,7 @@ against footage the fixtures do not resemble:
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_output.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_find.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_load.js -- <file>
+./build/Release/ffmpeg-bro-headless supercut/ tests/supercut.js -- <file>
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_capture.js       # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_filtergraph.js   # needs no media
 ./build/Release/ffmpeg-bro-headless ui/ tests/ui_graph.js [-- <file>]  # media only for the last four sections
@@ -387,6 +388,27 @@ The cues point at the ordinary fixture, so `Add` really opens a file and really
 lays out a clip — **what is not checked is that the words match the sound**, and
 they do not. Whether a transcript is right is `transcribe`'s question; the
 panel's is whether a time in one becomes a clip of that time.
+
+`supercut.js` is the [other application](supercut.md), and it is the one suite
+whose first argument is a different app directory — `supercut/` rather than
+`ui/`, which is what makes it a second application rather than a mode of the
+first. It builds its own store for `ui_find.js`'s reasons and then does the
+whole job: a phrase found, two moments put in the mix, and a file written.
+
+**The four card gestures are driven with real `MouseEvent`s on the real cards**,
+down on the grab point and move/up on `<body>`. They are the whole point of that
+application and each of them is a *place to grab* — a suite that called the
+functions behind them would pass with every grab point wired to the wrong thing.
+Two moves per drag rather than one, because the first has to cross the few pixels
+that separate a click from a drag: a gesture that only works when the pointer
+teleports is not a gesture.
+
+The assertion to keep is the one about **growing** a clip. `ui/project.js` stops
+a trim at the neighbour, which is right on a timeline and would mean no clip
+could ever be made longer in a packed sequence — so `mix.js` moves the
+neighbours out of reach, runs the real edit and packs the result. Every section
+of that suite ends by checking the row is still butted end to end, because every
+edit in it could break that and nothing else would notice.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).

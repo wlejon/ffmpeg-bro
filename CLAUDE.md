@@ -95,12 +95,16 @@ the reason for the repo split: bro stays MIT and ffmpeg-free, libav reaches it
 only through `bro::video`'s codec-agnostic interfaces, and linking ffmpeg is what
 makes *this* binary GPL-3.0-or-later.
 
-Three layers:
+Four layers:
 
-- **`src/native/`** — C++ built as `ffmpeg-bro-core` (static), linked by both
-  executables and by every test.
-- **`ui/`** — the application, plain ES modules + DOM, run by bro's QuickJS
+- **`src/native/`** — C++ built as `ffmpeg-bro-core` (static), linked by every
+  executable and by every test. `app_main.h` is the bring-up both windowed
+  applications share; the two `*_main.cpp` beside it are a call each.
+- **`ui/`** — the workbench, plain ES modules + DOM, run by bro's QuickJS
   engine. `ui/bro.json` is the window manifest.
+- **`supercut/`** — the *second application*, its own window and its own
+  executable, over the same core and the same **model** modules out of `ui/`.
+  See "The second application" below.
 - **`docs/`** — `manual/`, one file per stage plus the document, the keyboard,
   the testing guide and an honest "Not yet" ([the
   index](docs/manual/README.md) lists them), and api.md (the `bro.ffmpeg` host
@@ -316,18 +320,30 @@ them because they are).
 
 ### The corpus is a third seam, and it points the other way
 
-`ui/find.js` searches a corpus of transcripts and puts what it finds on the
-timeline. Everything that *makes* one — the Twitch API, the pulling, the
-transcribing, the store's layout — is `tools/`, which is deliberately not part of
-this application, so what crosses over is one file:
+`ui/library.js` is the corpus of transcripts — which recordings there are, what
+was said in them and where — and it has **three views over it**: `ui/find.js`
+(the panel over Compose), `supercut/results.js` (the second application's whole
+left-hand side) and `tools/`. Everything that *makes* a corpus — the Twitch API,
+the pulling, the transcribing, the store's layout — is `tools/`, which is
+deliberately not part of either application, so what crosses over is one file:
 `build/corpus/find.json`, written by `supercut.js index`, listing channels and
 absolute paths. **An absent file is the ordinary case**: no corpus, no panel, and
 `/` does nothing.
 
-Three things about it are load-bearing. **The finder is not a stage**, and must
-not become one — the spine is ffmpeg's pipeline and its whole value is that it
-stays exactly that, so the panel opens *over* Compose the way the crop handles
-do. **The matching is `ui/phrase.js`'s and `tools/transcript.js` imports it back**
+The split between `library.js` and its views is the load-bearing part and was
+learned the expensive way: **everything that decides what the answer is lives in
+the library or in `phrase.js` beneath it, and a view may decide only how to draw
+it.** When one rule — that two hits under two seconds apart are one moment — lived
+in `tools/corpus.js` alone, the panel reported fifteen of a phrase the command
+line reported fourteen of, on the same corpus, with nothing anywhere saying which
+was right.
+
+Three more things are load-bearing. **The finder is not a stage of the
+workbench**, and must not become one — the spine is ffmpeg's pipeline and its
+whole value is that it stays exactly that, so the panel opens *over* Compose the
+way the crop handles do; a tool built *around* finding is a second application
+and not a seventh button. **The matching is `ui/phrase.js`'s and
+`tools/transcript.js` imports it back**
 (`/app/phrase.js`), which is the one place the dependency runs app→tool-ward
 rather than the reverse: the panel says where the moments are and `tools/clips.js`
 cuts them, so two copies of the search would be two chances for the list and the
@@ -344,6 +360,50 @@ hundred decoders on six-hour files. And an input added by the panel has no probe
 on the frame it is added — a six-hour file is probed on a thread — so the add is
 finished by `settleProbes()` on the frame loop rather than refused on the press,
 which is the one thing `openSpec`'s refusal would get wrong here.
+
+### The second application
+
+`supercut/` is a second window from a second executable
+(`src/native/supercut_main.cpp`, `ffmpeg-bro-supercut`), for one job: finding
+what somebody said across hours of recordings and cutting it together. It exists
+because that job is a loop between three things — find a moment, hear it, put it
+in the row — and **none of the workbench's six stages is on that loop**. A
+separate executable rather than a `--app` flag, because a mode of a larger tool
+is still that tool: same title, same icon, same thing to explain.
+
+**It shares every model module in `ui/` and not one line of its interface.**
+`project.js` (clips and what a trim, a slip and a speed change mean), `inputs.js`,
+`library.js`, `analysis.js`, `export/spec.js`, `output.js`, `document.js`,
+`transport.js`, `dom.js`, `format.js` — imported by relative path out of
+`supercut/`. That is possible at all because **no module in that closure touches
+the DOM at import time** and `viewer.placement()` is a pure function of a clip
+and a canvas size; keep both true. The payoff is not only that the two agree: a
+`.fbro` written in one **opens in the other**, so the simple tool is where an
+edit starts rather than a dead end.
+
+Two things it adds, and both are its own rather than the model's:
+
+**A mix is a packed sequence** — one lane, no gaps, no overlaps — and that is
+`supercut/mix.js`'s only arithmetic. The consequence that bites: `ui/project.js`
+stops every edit at the neighbour (`walls`), which is right on a timeline and in
+a packed sequence would mean **no clip could ever be made longer**. `unwalled()`
+moves the neighbours out of reach, runs the real primitive so its own limits
+still bite (the head of the file, one frame, `SPEED_MIN`/`SPEED_MAX`), and packs
+the result. Do not reimplement a trim here to avoid it.
+
+**Residency is per *file*, not per clip**, which is `ui/residency.js`'s rule with
+the opposite hard case. The workbench's is a montage — many clips of many files —
+so it holds a decoder per clip near the playhead. This one's is forty clips of
+four recordings, so an element per clip would open one six-hour file forty times.
+`supercut/screen.js` keys its pool by path, caps it at three, and a cut inside a
+recording is a seek. Both rules say a decoder belongs to what is being *watched*;
+they differ on what counts as the same thing.
+
+One decision worth not undoing: **playback is the render preview and only that**
+(`ui/output.js`). The workbench plays the clips and uses the render to smooth the
+cuts; a supercut is nothing *but* cuts, so playing the clips would be almost
+entirely seams. The cost is a visible wait while the render builds, which the bar
+says out loud — a wait somebody can see beats a stutter they cannot fix.
 
 ### The spec is the seam
 

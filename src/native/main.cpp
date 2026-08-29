@@ -12,32 +12,13 @@
 //      codec-agnostic interfaces, which exist for exactly this.
 //
 // One download, and <video src="anything.mkv"> works.
+//
+// The bring-up itself is `app_main.h`'s, shared with `ffmpeg-bro-supercut`.
 
-#include "engine/engine.h"
-#include "engine/launcher.h"
-#include "util/log.h"
-
-#include "ffmpeg_backend.h"
-#include "ffmpeg_bindings.h"
-#include "ffmpeg_report.h"
+#include "app_main.h"
 
 #include <cstdio>
 #include <cstring>
-#include <string>
-
-namespace {
-
-// Locate the UI directory: beside the executable in a packaged build, or up
-// in the source tree when running straight out of build/Release.
-bool locateUi(bro::engine::EngineConfig& config) {
-    const std::string exe = bro::engine::executableDir();
-    for (const char* rel : { "/ui", "/../../ui" }) {
-        if (bro::engine::resolveLaunchTarget(exe + rel, config)) return true;
-    }
-    return false;
-}
-
-} // namespace
 
 int main(int argc, char* argv[]) {
     if (argc >= 2 && (std::strcmp(argv[1], "--help") == 0 ||
@@ -48,42 +29,5 @@ int main(int argc, char* argv[]) {
             "Usage: ffmpeg-bro [media-file]\n");
         return 0;
     }
-
-    // First of all, because everything below this line logs: a build's
-    // configuration, a demuxer that could not probe a file, an encoder that
-    // clamped what it was given. Without the callback installed libav says all
-    // of that to stderr and nowhere the application can reach, which is why a
-    // render that came out wrong used to have nothing to look at.
-    ffmpegbro::installLogCapture();
-
-    // Before the Engine exists, so the first <video> in the first document
-    // already finds it. bro's own WebM backend stays registered underneath.
-    ffmpegbro::registerFfmpegBackend();
-
-    bro::engine::EngineConfig config;
-    config.title = "ffmpeg-bro";
-    config.displayMode = bro::engine::DisplayMode::Windowed;
-    config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
-    config.installHostBindings = ffmpegbro::installFfmpegBindings;
-
-    if (!locateUi(config)) {
-        LOG_ERROR("Cannot find the ffmpeg-bro UI next to %s",
-                  bro::engine::executableDir().c_str());
-        return 1;
-    }
-    bro::engine::publishLaunchEnv(config);
-
-    // A media file named on the command line reaches the UI as
-    // bro.ffmpeg.openOnStart: the engine's launch target is the UI, not the
-    // media, so it can't arrive the usual way.
-    if (argc >= 2) ffmpegbro::setInitialMedia(bro::engine::absolutePath(argv[1]));
-
-    try {
-        bro::engine::Engine engine(config);
-        engine.run();
-    } catch (const std::exception& e) {
-        LOG_ERROR("Fatal: %s", e.what());
-        return 1;
-    }
-    return 0;
+    return ffmpegbro::runApp("ui", "ffmpeg-bro", ".bro_settings.json", argc, argv);
 }

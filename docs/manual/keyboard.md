@@ -2,6 +2,9 @@
 
 # Keyboard
 
+Every key in `ffmpeg-bro`. The [supercut application](supercut.md) is a separate
+window with a much shorter list of its own, at the end of that part.
+
 | Key | Action |
 |---|---|
 | `Space` | play / pause |

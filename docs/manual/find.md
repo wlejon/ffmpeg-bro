@@ -6,6 +6,13 @@
 recording in a corpus and hands back moments you can play and put on the
 timeline.
 
+**There is a whole application built around this**, and it is usually the one to
+reach for: [supercut](supercut.md) is a second window whose entire left-hand side
+is this search, with a row of cards along the bottom instead of a timeline. Use
+the panel when you want one found moment *inside* a larger edit; use that when
+finding is the job. They are two views of one library, so they cannot disagree
+about what was said or where.
+
 **It is there only when a corpus is.** A corpus is built by
 [`tools/supercut.js`](../../tools/README.md), which pulls a channel's broadcasts
 and transcribes them, and `index` is the verb that writes the manifest this

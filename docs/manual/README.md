@@ -35,6 +35,9 @@ no reader looking for the command bar would have gone.
 - **[Rendering](rendering.md)** — the packet path, the printed command, the
   report, and what a render costs
 - **[The card](card.md)** — hardware decode and encode, with the measurements
+- **[The supercut application](supercut.md)** — the *other* executable: one
+  window over the same engine, the same edits and the same document, for cutting
+  speech out of long recordings
 - **[Keyboard](keyboard.md)** — every key
 - **[Testing](testing.md)** — every suite, what each is about, and how to run
   one on its own

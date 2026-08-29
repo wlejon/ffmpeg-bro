@@ -79,9 +79,28 @@ other build shows up nowhere until somebody presses something. Fix the clone
 rather than the flag.
 
 `x264`/`x265` are encoders, needed for export; playback works with the plain
-`ffmpeg` port too. Two binaries are built: `ffmpeg-bro` (the application) and
-`ffmpeg-bro-headless` (the same engine driven by a JS script — how the UI is
-tested, and a scriptable media tool in its own right).
+`ffmpeg` port too. Three binaries are built: `ffmpeg-bro` (the application),
+`ffmpeg-bro-supercut` (a second, single-purpose application over the same
+engine — see below) and `ffmpeg-bro-headless` (the same engine driven by a JS
+script — how the UI is tested, and a scriptable media tool in its own right).
+
+## The supercut application
+
+```
+./build/Release/ffmpeg-bro-supercut
+```
+
+One window for one job: search hours of transcribed recordings for a word or for
+a stretch of talking, hear what comes back, and cut it together. No stages, no
+node graph, no encode form — a list down the left, the picture on the right, and
+a row of cards along the bottom with four places to grab each (reorder, trim,
+slip, speed).
+
+It shares this application's clips, edits, render and **document** — a `.fbro`
+written in one opens in the other — and none of its interface. Run it from the
+repository root; the corpus it reads is built by
+[`tools/supercut.js`](tools/README.md). [The manual part](docs/manual/supercut.md)
+is the detail.
 
 ## Keyboard
 
@@ -116,6 +135,8 @@ tested, and a scriptable media tool in its own right).
   playback, capture, inputs, the timeline, the graph, exporting, subtitles,
   measurement, [the document](docs/manual/document.md) an edit is saved as,
   and an honest list of what does not work yet.
+- **[The supercut application](docs/manual/supercut.md)** — the second window:
+  what it is for, the four gestures, and what it shares with this one.
 - **[The `bro.ffmpeg` API](docs/api.md)** — the JS surface that headless scripts
   and the test suites drive.
 

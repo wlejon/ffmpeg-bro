@@ -4,5 +4,10 @@ build-cuda/
 # localStorage, written beside the app: remembered export settings, not source.
 .storage.json
 ui/.storage.json
+supercut/.storage.json
+# Window size and settings, written beside each executable — one per
+# application, so two of them running against one build tree do not overwrite
+# each other's. (`ffmpeg-bro`'s is `.bro_settings.json`, above.)
+.supercut_settings.json
 *.log
 out/

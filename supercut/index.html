@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>supercut</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Three regions and no navigation, which is the whole difference between this
+     and ffmpeg-bro: find on the left, watch on the right, cut along the bottom.
+     Everything is on the screen at once because the job is a loop between those
+     three and a stage you have to walk to is a loop you stop running. -->
+
+<header id="top">
+    <span id="brand">supercut</span>
+    <span id="chan-wrap"></span>
+    <span id="about" class="dim"></span>
+    <span class="spacer"></span>
+    <span id="doc" class="dim"></span>
+    <button id="btn-open" class="text" title="Open (Ctrl+O)">Open</button>
+    <button id="btn-save" class="text" title="Save (Ctrl+S)">Save</button>
+    <button id="btn-render" class="go" title="Render (Ctrl+R)">Render</button>
+</header>
+
+<div id="body">
+
+    <!-- The finder. Not a panel over something else and not a stage you walk
+         to: in this application it is half the work, so it is half the window. -->
+    <section id="finder">
+        <div id="f-tabs" class="tabs">
+            <button data-tab="words" class="on">Words</button>
+            <button data-tab="talking">Talking</button>
+        </div>
+        <div id="f-controls"></div>
+        <div id="f-note" class="note dim"></div>
+        <div id="f-list"></div>
+    </section>
+
+    <section id="right">
+        <!-- The picture. One element is on it at a time and `screen.js` decides
+             which: a recording being auditioned, the clip under the playhead, or
+             the render of the whole mix while it plays. -->
+        <div id="stage">
+            <div id="stage-note" class="dim"></div>
+        </div>
+        <div id="bar">
+            <button id="t-home" class="tiny" title="Start (Home)">⏮</button>
+            <button id="t-play" class="tiny" title="Play (Space)">▶</button>
+            <button id="t-end" class="tiny" title="End (End)">⏭</button>
+            <span id="t-time" class="mono"></span>
+            <span class="spacer"></span>
+            <span id="t-what" class="dim"></span>
+            <button id="t-mute" class="tiny" title="Mute (M)">🔊</button>
+        </div>
+    </section>
+
+</div>
+
+<!-- The mix. A single row of cards in the order they play, because that is what
+     a supercut is — there is no second track to put anything on and no ruler to
+     read, so the cards are the ruler. -->
+<footer id="mix">
+    <div id="mix-head">
+        <span class="label">the mix</span>
+        <span id="mix-note" class="dim"></span>
+        <span class="spacer"></span>
+        <button id="btn-fit" class="text" title="Fit">Fit</button>
+        <input id="zoom" type="range" min="10" max="600" step="1" value="120">
+        <button id="btn-clear" class="text" title="Remove every clip">Clear</button>
+    </div>
+    <div id="strip">
+        <div id="cards"></div>
+        <div id="playhead"></div>
+    </div>
+</footer>
+
+<div id="flash"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

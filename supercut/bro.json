@@ -1,0 +1,9 @@
+{
+    "app": ".",
+    "title": "supercut",
+    "width": 1440,
+    "height": 900,
+    "minWidth": 1040,
+    "minHeight": 660,
+    "resizable": true
+}

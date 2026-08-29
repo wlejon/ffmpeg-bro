@@ -56,24 +56,32 @@ already cut writes nothing — a clip is named `<vodId>-<seconds>.mp4`, which is
 exactly what identifies the moment, so two searches landing on one moment share
 the file and a wider `--pad` is a new file rather than a silent overwrite.
 
-### The panel in the application
+### The two applications that read it
 
-`index <channel>` writes the manifest the application's
-[Find panel](../docs/manual/find.md) reads, and `/` on the Compose stage opens
-it. There you search the same words, play a hit, and put it straight on the
-timeline — which is the part a terminal cannot do.
+`index <channel>` writes the manifest, and **two** things read it. The
+[supercut application](../docs/manual/supercut.md) —
+`./build/Release/ffmpeg-bro-supercut`, its own window over the same engine — is
+where this store is meant to be used: a search down the left, the mix along the
+bottom, four gestures on a card and a button that writes the file. And the
+[Find panel](../docs/manual/find.md) in `ffmpeg-bro` itself, on `/` over the
+Compose stage, for a moment wanted inside a larger edit.
+
+Either way it is the part a terminal cannot do: hearing a hit before committing
+to it.
 
 **A file is the whole of the seam.** The manifest is a list of recordings with
 absolute paths to their words and their media; `ui/` never imports anything from
-here, and this never learns anything about the timeline. What the two do share is
-the matching itself, which lives in `ui/phrase.js` and is imported back into
-`transcript.js` — the list on the screen and the clips this cuts have to be the
-same set of moments, and two copies of a search are two chances for them not to
-be.
+here, and this never learns anything about the timeline. What they share is the
+matching itself, which lives in `ui/phrase.js` and is imported back into
+`transcript.js`, and the corpus reading around it, which is `ui/library.js` —
+three views of one library. Two copies of a search are two chances for the list
+on the screen and the clips on disk to describe different sets of moments, and
+that is not a theoretical worry: when one rule about what counts as an instance
+lived only here, the panel found fifteen of a phrase this found fourteen of.
 
 The words are not copied into the manifest. The transcripts are a megabyte each
-and already in a form the application reads, so the panel reads the `.srt`
-directly; a copy would go stale the first time a recording was transcribed again.
+and already in a form the applications read, so they read the `.srt` directly; a
+copy would go stale the first time a recording was transcribed again.
 
 ### Picking the phrase
 
