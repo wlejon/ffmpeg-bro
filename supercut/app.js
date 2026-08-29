@@ -222,8 +222,15 @@ function doRender() {
         return;
     }
     if (!project.clips.length) { flash('nothing in the mix'); return; }
-    const path = showSaveFileDialog('MP4|mp4|All files|*',
-                                    settings.path || 'supercut.mp4');
+    // **One name and one extension.** The filter is SDL's, and it validates the
+    // pattern before it opens anything: `[a-zA-Z0-9_.-]` or a bare `*`, and
+    // nothing else. `'MP4|mp4|All files|*'` — the Windows spelling of two
+    // filters — is one filter whose pattern contains a `|`, which is refused,
+    // and a refused dialog is the one thing this call cannot report: it answers
+    // the callback once, with an error, and the window sat there until it was
+    // killed. Fixed in bro as well (`waitForDialog`), because a hang with
+    // nothing on the screen is the worst answer any call can give.
+    const path = showSaveFileDialog('MP4|mp4', settings.path || 'supercut.mp4');
     if (!path) return;
     settings.path = /\.[A-Za-z0-9]+$/.test(path) ? path : `${path}.mp4`;
     let spec;
