@@ -241,6 +241,18 @@
                     <button id="btn-zoom-fit" class="text" title="Fit the whole timeline (0)">Fit</button>
                 </div>
                 <span id="tl-zoom" class="mono dim"></span>
+                <!-- What a drag on a clip means. Every one of these four edits
+                     already worked and every one of them was reachable only by
+                     holding Alt, which is not an affordance: nothing on the
+                     screen said they existed. The bar is the affordance, and
+                     Alt still inverts whichever of them is showing — see the
+                     block above `MODES` in ui/timeline.js. -->
+                <div class="group" id="tl-modes">
+                    <button class="text on" data-edit-mode="select" title="Move and trim (V)">Select</button>
+                    <button class="text" data-edit-mode="ripple" title="Trim, and the neighbours close up (B)">Ripple</button>
+                    <button class="text" data-edit-mode="slip" title="Slide the footage inside the clip (Y)">Slip</button>
+                    <button class="text" data-edit-mode="rate" title="Drag an edge to change the speed (X)">Rate</button>
+                </div>
                 <div class="group">
                     <button id="btn-split" class="text" title="Split at the playhead (S)">Split</button>
                     <button id="btn-crop" class="text" title="Crop (C)">Crop</button>

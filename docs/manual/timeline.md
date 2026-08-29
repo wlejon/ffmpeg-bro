@@ -70,8 +70,25 @@ the head, so the pictures under the part you kept do not slide sideways, and a
 trim stops at its neighbours rather than growing over them. The two grips
 appear on the selected clip.
 
-**Hold `Alt`** and each of those three targets becomes the edit that is about
-the *cut* rather than about the clip:
+**The four buttons over the tracks say what a drag does** — Select, Ripple,
+Slip, Rate — and the pointer changes shape over a clip to say which of them this
+press would be, before you press it. `V` `B` `Y` `X` are the same four.
+
+| | |
+|---|---|
+| **Select** | drag the body to move it, drag an end to trim |
+| **Ripple** | drag an end and everything after closes up behind it |
+| **Slip** | drag the body and the footage slides inside a clip that does not move |
+| **Rate** | drag an end and the *speed* changes so the same footage fills the new length |
+
+Rate is the one that is not a trim: nothing is thrown away, the shot just takes
+longer or less long. When the speed it would need is past what the model holds
+(`0.05×` to `20×`) the edge stops short of the pointer rather than the rate being
+clamped quietly behind an edge that kept going.
+
+**Hold `Alt`** and each target becomes the other reading of itself — whichever
+mode the bar is showing. In **Select** that is the edit about the *cut* rather
+than about the clip:
 
 | | | |
 |---|---|---|
@@ -81,6 +98,12 @@ the *cut* rather than about the clip:
 
 A cut is only where two clips are butted end to end and share an edge; a clip
 with a gap after it has a loose end and no cut, and `Alt` on it ripples.
+
+`Alt` inverts rather than being a mode of its own, so it is also the way out of
+a mode you did not mean to be in: in **Ripple** it gives a plain trim, in
+**Slip** it moves the clip. Every one of these edits worked before there were
+buttons for them and `Alt` was the only way to reach any of them, which is why
+they are on the screen now.
 
 Slip drags the film under the window, so dragging **right shows earlier
 footage** — the convention every editor uses. It stops at the ends of the

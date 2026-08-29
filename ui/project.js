@@ -1044,6 +1044,60 @@ export function rollCut(left, right, t) {
     sort();
 }
 
+/// Drag an edge and change the *speed*, so the same footage fills the new length.
+///
+/// The fourth reading of a dragged edge, and the one that is not a trim at all.
+/// A trim asks "how much of this shot do I keep"; this asks "how long do I want
+/// this shot to take", and answers it by running the footage faster or slower
+/// rather than by throwing any of it away. `sourceSpan` is what is held — the
+/// first and last frame the clip covers do not move — which is exactly the
+/// invariant `setSpeed` holds, approached from the other end: `setSpeed` is
+/// given a rate and computes the length, and this is given a length and
+/// computes the rate.
+///
+/// **Two clamps, and they are different in kind.** The wall behind the
+/// neighbour is the same one every edit obeys and is a limit on where the edge
+/// may go. `SPEED_MIN`/`SPEED_MAX` is a limit on the *answer*, and when it
+/// binds the edge stops short of the pointer — a hand dragging a two-second
+/// clip out to a minute is asking for 0.03×, and the honest response is to stop
+/// at the slowest rate this model holds rather than to silently keep the
+/// footage and drop the rate on the floor.
+///
+/// Reads the edge the same way `trimClip` does, so the two are
+/// interchangeable under the pointer: dragging the head moves `start`, dragging
+/// the tail moves the end, and in both cases `inPoint` is untouched because the
+/// footage covered is what is being preserved.
+export function rateStretch(clip, edge, t) {
+    if (!clip) return;
+    const span = sourceSpan(clip);
+    if (!(span > 0)) return;
+    const { before, after } = walls(clip);
+    const min = 1 / Math.max(1, clip.fps);
+
+    const end = clip.start + clip.length;
+    // What the pointer is asking for, held off the neighbours and off zero
+    // length, before the rate it implies is asked whether it is expressible.
+    let length = edge === 'start' ? end - Math.max(before, Math.min(t, end - min))
+                                  : Math.min(t, after) - clip.start;
+    length = Math.max(min, length);
+    // The rate that fills it, and the length that rate can actually deliver.
+    // Going through the clamp in both directions is what makes the edge stop at
+    // the limit instead of the limit being applied invisibly behind it.
+    const speed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, span / length));
+    length = span / speed;
+    if (edge === 'start') {
+        // The tail is the fixed point when the head is dragged, exactly as in a
+        // trim — otherwise a rate change from the head would slide the whole
+        // clip along the timeline.
+        clip.start = Math.max(before, end - length);
+        clip.length = end - clip.start;
+    } else {
+        clip.length = Math.min(length, after - clip.start);
+    }
+    clip.speed = span / Math.max(min, clip.length);
+    sort();
+}
+
 /// Move the content inside a clip without moving the clip.
 ///
 /// The one edit that changes nothing about the arrangement: `start`, `length`

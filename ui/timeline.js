@@ -38,7 +38,7 @@
 //     they are on different lanes.
 
 import { project, projectFps, duration, moveClip, resolveOverlaps, changed, trackCount,
-         isSelected, select, trimClip, rippleTrim, rollCut, slipClip,
+         isSelected, select, trimClip, rippleTrim, rollCut, slipClip, rateStretch,
          hasPicture, isGenerator, isTrackLocked, setTrackLocked,
          ripplesWith, sourceTime, speedOf } from './project.js';
 import { frameAt, soundNote, showing } from './analysis.js';
@@ -1214,15 +1214,10 @@ function wireVideoLane(entry) {
         if (dragging) return;
         const x = localX(e, liveLane());
         const grab = grabAt(x, entry.track);
-        if (grab) {
-            if (grab.what === 'start' || grab.what === 'end') {
-                entry.lane.style.cursor = 'ew-resize';
-            } else {
-                entry.lane.style.cursor = 'grab';
-            }
-        } else {
-            entry.lane.style.cursor = 'default';
-        }
+        // The same question the press asks, asked a moment earlier: the pointer
+        // shows which of the four edits this press would be, including the one
+        // Alt is currently inverting it to.
+        entry.lane.style.cursor = grab ? cursorFor(editFor(grab.what, e.altKey)) : 'default';
     });
 
     tracked(entry.lane,
@@ -1245,17 +1240,20 @@ function wireVideoLane(entry) {
             // same one read two ways — at a butt join the left clip's out-point
             // and the right clip's in-point are one boundary — so which of the
             // two is under the pointer is asked, not assumed.
-            const other = grab && grab.what !== 'move' && e.altKey
+            // The edit this press is, decided once. Read per move it would
+            // change under a hand that let go of Alt half way through a drag,
+            // which is a gesture turning into a different gesture while it is
+            // being made.
+            let edit = grab ? editFor(grab.what, e.altKey) : null;
+            const other = grab && grab.what !== 'move' && edit === 'ripple'
                 ? buttedAt(grab.clip, grab.what) : null;
+            // A shared cut is a roll rather than a ripple: at a butt join the
+            // left clip's out-point and the right clip's in-point are one
+            // boundary, so which of the two is under the pointer is asked
+            // rather than assumed.
+            if (other) edit = 'roll';
             drag = grab ? {
-                clip: grab.clip, what: grab.what,
-                // The edit this press is, decided once. Read per move it would
-                // change under a hand that let go of Alt half way through a
-                // drag, which is a gesture turning into a different gesture
-                // while it is being made.
-                edit: !e.altKey ? 'plain' : other ? 'roll'
-                    : grab.what === 'move' ? 'slip' : 'ripple',
-                other,
+                clip: grab.clip, what: grab.what, edit, other,
                 grabTime: xToTime(x), origin: grab.clip.start,
                 originIn: grab.clip.inPoint,
                 originTrack: grab.clip.track, moved: false,
@@ -1290,7 +1288,9 @@ function wireVideoLane(entry) {
                 rollCut(left, right, snapTime(t, drag.clip));
             } else if (drag.edit === 'ripple') {
                 rippleTrim(drag.clip, drag.what, snapTime(t, drag.clip));
-            } else if (drag.what === 'move') {
+            } else if (drag.edit === 'rate') {
+                rateStretch(drag.clip, drag.what, snapTime(t, drag.clip));
+            } else if (drag.edit === 'move') {
                 const track = laneAtY(e.clientY);
                 moveClip(drag.clip, snapStart(drag.clip, drag.origin + delta, playheadTime()),
                          track === null ? drag.originTrack : track);
@@ -1307,7 +1307,7 @@ function wireVideoLane(entry) {
                 // slip moves nothing on the timeline at all — so resolving
                 // overlaps after any of them would be re-laying-out an
                 // arrangement nobody disturbed.
-                if (drag.edit === 'plain' && drag.what === 'move') resolveOverlaps(drag.clip);
+                if (drag.edit === 'move') resolveOverlaps(drag.clip);
                 changed('moved');
             }
             // Always release, even after an edit: the press paused playback to
@@ -1315,6 +1315,66 @@ function wireVideoLane(entry) {
             onSeek(undefined, false, true);
             drag = null;
         });
+}
+
+// ── which edit a drag is ───────────────────────────────────────────────────
+//
+// **Alt was the only way in, and one modifier is not an affordance.** Every one
+// of these edits already existed and was reachable by holding Alt — a body
+// slipped, an end rippled, a shared cut rolled — and none of them was on the
+// screen, in the keyboard map, or discoverable by any means other than being
+// told. A mode the bar shows is what makes them ordinary: the pointer says what
+// it will do before it is pressed, and the four edits stop being folklore.
+//
+// **Alt stays an inversion rather than becoming a fifth mode.** Whatever the bar
+// says, holding it gives the *other* reading of the same target. That keeps the
+// gesture that existed before this working exactly as it did in Select, and it
+// makes every mode escapable without going back to the bar — which matters most
+// in the mode you did not mean to be in.
+const MODES = {
+    select: { move: 'move', edge: 'trim' },
+    ripple: { move: 'move', edge: 'ripple' },
+    slip: { move: 'slip', edge: 'trim' },
+    rate: { move: 'move', edge: 'rate' },
+};
+// The other reading of each target. `rate` inverts to a plain trim because the
+// question it answers — how long should this take — has exactly one opposite
+// here, which is how much of it to keep.
+const INVERSE = { move: 'slip', slip: 'move', trim: 'ripple', ripple: 'trim', rate: 'trim' };
+let editMode = 'select';
+
+/// Which edit a press on `what` is, in the mode the bar is showing.
+export function editFor(what, alt) {
+    const m = MODES[editMode] || MODES.select;
+    const base = what === 'move' ? m.move : m.edge;
+    return alt ? (INVERSE[base] || base) : base;
+}
+
+/// Which mode the timeline is in, and what the pointer means in it.
+export function currentEditMode() { return editMode; }
+
+/// Put the timeline into one of the four modes.
+///
+/// Nothing about the edit changes — this is a statement about what the *next*
+/// press means — so it is not a document change, takes no undo step and marks
+/// nothing unsaved.
+export function setEditMode(mode) {
+    if (!MODES[mode] || mode === editMode) return;
+    editMode = mode;
+    for (const b of document.querySelectorAll('[data-edit-mode]'))
+        b.classList.toggle('on', b.dataset.editMode === editMode);
+    // The lanes carry the cursor, and a mode changed from the keyboard has to
+    // reach a pointer that is already sitting still over one.
+    for (const lane of document.querySelectorAll('.track-lane')) lane.style.cursor = '';
+}
+
+/// The pointer's shape for an edit, which is the mode made visible before the
+/// press rather than after it.
+function cursorFor(edit) {
+    if (edit === 'slip') return 'all-scroll';
+    if (edit === 'rate') return 'col-resize';
+    if (edit === 'ripple' || edit === 'roll' || edit === 'trim') return 'ew-resize';
+    return 'grab';
 }
 
 /// A whole span's move, snapped like a clip's.

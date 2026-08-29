@@ -15,8 +15,8 @@ import { project, projectFps, makeClip, makeGenerator, applyGenerator, isGenerat
          selectMany, isSelected, splitClip, trackCount,
          applyInput, clipsOf, hasPicture, retainTracks,
          isTrackLocked, setTrackLocked, ripplesWith,
-         rippleTrim, rollCut, slipClip, trimClip,
-         setSpeed, speedOf, sourceSpan, sourceTime, timelineTime } from './project.js';
+         rippleTrim, rollCut, slipClip, rateStretch, trimClip,
+         SPEED_MIN, SPEED_MAX, setSpeed, speedOf, sourceSpan, sourceTime, timelineTime } from './project.js';
 import * as inputsModel from './inputs.js';
 import * as generators from './generator.js';
 import * as localcopy from './localcopy.js';
@@ -1865,6 +1865,13 @@ document.addEventListener('keydown', (e) => {
         case 'g':          if (shell.currentStage() === 'compose') setLayout(project.layout === 'grid' ? 'stack' : 'grid'); else return; break;
         case 'o':          if (shell.currentStage() === 'compose') setOutputPreview(!output.isOn()); else return; break;
         case 't':          if (shell.currentStage() === 'compose') setSoftCues(!softcues.isOn()); else return; break;
+        // What a drag on a clip means. The letters are the ones every editor
+        // uses for these four, which is worth more than any letter this
+        // application could pick on its own.
+        case 'v':          if (shell.currentStage() === 'compose') timeline.setEditMode('select'); else return; break;
+        case 'b':          if (shell.currentStage() === 'compose') timeline.setEditMode('ripple'); else return; break;
+        case 'y':          if (shell.currentStage() === 'compose') timeline.setEditMode('slip'); else return; break;
+        case 'x':          if (shell.currentStage() === 'compose') timeline.setEditMode('rate'); else return; break;
         case 'a':          if ((e.ctrlKey || e.metaKey) && shell.currentStage() === 'compose') selectMany(project.clips.slice());
                            else return;
                            break;
@@ -2091,6 +2098,9 @@ function setCropMode(on) {
 el('btn-zoom-in').addEventListener('click', () => timeline.zoomBy(1 / 1.5, transport.t));
 el('btn-zoom-out').addEventListener('click', () => timeline.zoomBy(1.5, transport.t));
 el('btn-zoom-fit').addEventListener('click', () => timeline.fitView());
+for (const b of document.querySelectorAll('[data-edit-mode]'))
+    b.addEventListener('click', () => timeline.setEditMode(b.dataset.editMode));
+
 el('btn-split').addEventListener('click', splitAtPlayhead);
 el('btn-grid').addEventListener('click',
     () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
@@ -2479,14 +2489,14 @@ globalThis.__ffmpegBro = {
     // because they are pure model arithmetic — what each one holds constant is
     // the whole of what it is — and a test that had to synthesise an Alt-drag
     // to reach one would be testing the gesture rather than the edit.
-    rippleTrim, rollCut, slipClip, trimClip,
+    rippleTrim, rollCut, slipClip, rateStretch, trimClip,
     // How fast a clip runs, and the map that follows from it. On the surface for
     // the same reason those four are: it is pure model arithmetic, and what a
     // speed change *holds constant* — the footage the clip covers — is the whole
     // of what it is. `sourceTime`/`timelineTime` are the pair the two clocks are
     // read through, and a test that computed either for itself would be a fourth
     // copy of the map this commit exists to have one of.
-    setSpeed, speedOf, sourceSpan, sourceTime, timelineTime, duration,
+    SPEED_MIN, SPEED_MAX, setSpeed, speedOf, sourceSpan, sourceTime, timelineTime, duration,
     // The sync lock. On the surface for the same reason those three are — which
     // tracks move together is model arithmetic and `ripplesWith` is the whole of
     // it — plus one this side has that they do not: the record is deliberately not

@@ -14,6 +14,8 @@
 | `+` `-` `0` | zoom the timeline in / out / to fit |
 | `C` | crop handles on the picture (`Esc` leaves) |
 | `S` | split the selection at the playhead |
+| `V` `B` `Y` `X` | what a drag on a clip does: select, ripple, slip, rate |
+| `Alt` | while dragging: the other reading of whatever the bar is showing |
 | `G` | grid / stacked layout |
 | `O` | the output on the monitor instead of the clips |
 | `T` | the output's [soft subtitle tracks](subtitles.md#a-soft-track-on-the-monitor-as-the-cues-it-is) over the picture, as the cues they are |

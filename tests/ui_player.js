@@ -679,6 +679,66 @@ console.log('\nripple, roll and slip');
     ok(A.project.clips.length === 1, 'back to one clip, where we started');
 }
 
+// ── the fourth edit on an edge, which is not a trim ─────────────────────────
+//
+// A trim asks how much of a shot to keep; a rate stretch asks how long it should
+// take, and answers by running the footage faster rather than by throwing any of
+// it away. So the invariant is the one thing a trim never holds: the **source
+// span** is constant across the drag, and `speed` is whatever makes it fill the
+// new length. It is `setSpeed` approached from the other end — that one is given
+// a rate and computes a length — which is why the two are asserted against each
+// other here rather than only against themselves.
+//
+// The clamp is asserted because it is the half that is easy to get wrong: when
+// the rate the pointer implies is not expressible, the *edge* has to stop short
+// of the pointer. Letting the edge follow and clamping the rate silently behind
+// it would leave a clip whose length and speed no longer describe its footage.
+
+console.log('\nrate');
+{
+    const one = A.project.clips[0];
+    const was = one.length;
+    one.speed = 1;
+    one.inPoint = 0;
+    one.length = Math.min(one.media, 4);
+    one.start = 0;
+    A.select(one, 'auto');
+    pump(80);
+
+    const span = one.length * one.speed;
+    A.rateStretch(one, 'end', one.start + one.length / 2);
+    ok(Math.abs(one.length * one.speed - span) < 0.02,
+       `halving the bar keeps every frame of the footage (${
+           (one.length * one.speed).toFixed(2)}s of source, was ${span.toFixed(2)}s)`);
+    ok(Math.abs(one.speed - 2) < 0.05,
+       `and the clip runs at 2× to fit it (${one.speed.toFixed(2)}×)`);
+    ok(Math.abs(one.inPoint) < 1e-6,
+       'the in-point never moved, which is what makes this not a trim');
+
+    // The other end, and the tail is the fixed point exactly as in a trim.
+    const end = one.start + one.length;
+    A.rateStretch(one, 'start', one.start - one.length);
+    ok(Math.abs((one.start + one.length) - end) < 0.02,
+       'dragging the head leaves the out-point where it was');
+    ok(Math.abs(one.length * one.speed - span) < 0.05,
+       `and still covers the same footage (${(one.length * one.speed).toFixed(2)}s)`);
+
+    // Past what the model can express: the edge stops, rather than the rate
+    // being clamped out of sight behind an edge that kept going.
+    A.rateStretch(one, 'end', one.start + span / A.SPEED_MIN * 4);
+    ok(one.speed >= A.SPEED_MIN - 1e-9,
+       `a rate the model cannot hold stops at the limit (${one.speed.toFixed(3)}×)`);
+    ok(Math.abs(one.length * one.speed - span) < 0.05,
+       'and the footage is still all of it, with the edge stopped short');
+
+    one.speed = 1;
+    one.length = was;
+    one.start = 0;
+    one.inPoint = 0;
+    A.timeline.fitView();
+    pump(60);
+}
+
 // ── how fast a clip runs ───────────────────────────────────────────────────
 //
 // A speed is one number on the clip and the arithmetic around it is the whole of
