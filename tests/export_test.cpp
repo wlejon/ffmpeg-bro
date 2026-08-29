@@ -3710,6 +3710,84 @@ int main(int argc, char* argv[]) {
             } else {
                 check(false, "both streams read back for the sync comparison");
             }
+
+            // **The same window, with the soundtrack listed first.** A copy can
+            // only begin at a keyframe and only the picture has sparse ones, so
+            // the reader has to seek on the video stream whichever row happens
+            // to be at the top of the list. Seeking on the soundtrack instead
+            // lands anywhere, the video packets after it start mid-GOP, and the
+            // muxer refuses them — "File is broken, keyframes not correctly
+            // marked", then a non-monotonic dts, and a render that fails with
+            // nothing on disk.
+            //
+            // This is a regression test rather than a new rule: the reader took
+            // whichever tap held the earliest in-point, ties going to the first
+            // listed, so the *order of the stream rows* decided whether a
+            // windowed copy worked at all. `copyRowsOf` lists a file's streams
+            // in the container's order, which is soundtrack-first for the
+            // recordings supercut/cuts.js takes its moments out of.
+            //
+            // **What is asserted is that the row order changes nothing**, which
+            // is the invariant rather than the symptom — and it is asserted that
+            // way because the symptom needs a file this fixture is not. Ten
+            // seconds of video has one or two keyframes and a seek anywhere in
+            // it lands on the first; the failure was measured on a six-hour
+            // recording with two-second GOPs, where a seek on the soundtrack
+            // lands a GOP and a half from the picture's nearest keyframe. So a
+            // fixture that cannot reproduce it passes this trivially, and a real
+            // recording passed to this suite does not.
+            if (keys.times.size() >= 2) {
+                const double at = keys.times[1];
+                const auto windowed = [&](const char* path, bool soundFirst) {
+                    ExportSettings s;
+                    s.path = path;
+                    s.format = "matroska";
+                    s.inputs = {in};
+                    s.startTime = 0;
+                    s.endTime = 1.0;
+                    s.faststart = false;
+                    ExportStream a;
+                    a.kind = "audio";
+                    a.source = "copy:0:" + std::to_string(srcAudio);
+                    a.copyFrom = at;
+                    ExportStream v;
+                    v.kind = "video";
+                    v.source = "copy:0:" + std::to_string(srcVideo);
+                    v.copyFrom = at;
+                    if (soundFirst) { s.streams.push_back(a); s.streams.push_back(v); }
+                    else { s.streams.push_back(v); s.streams.push_back(a); }
+                    return s;
+                };
+
+                const ExportSettings sf = windowed("out/copy-sound-first.mkv", true);
+                st = render(sf, {});
+                checkf(st.state == ExportStatus::State::Done,
+                       "a windowed copy runs with the soundtrack listed before the "
+                       "picture (%s)", st.error.empty() ? "no error" : st.error.c_str());
+
+                const ExportSettings pf = windowed("out/copy-picture-first.mkv", false);
+                st = render(pf, {});
+                checkf(st.state == ExportStatus::State::Done,
+                       "and with the picture listed before the soundtrack (%s)",
+                       st.error.empty() ? "no error" : st.error.c_str());
+
+                // Stream 1 of the one, stream 0 of the other: the same picture,
+                // written into a different slot of the output.
+                const auto vidSoundFirst = packetsOf(sf.path, 1);
+                const auto vidPicFirst = packetsOf(pf.path, 0);
+                checkf(!vidSoundFirst.empty() && (vidSoundFirst[0].flags & AV_PKT_FLAG_KEY),
+                       "its picture begins on a keyframe (%zu packets)",
+                       vidSoundFirst.size());
+                size_t same = 0;
+                for (size_t i = 0; i < vidSoundFirst.size() && i < vidPicFirst.size(); ++i)
+                    if (vidSoundFirst[i].data == vidPicFirst[i].data) ++same;
+                checkf(!vidPicFirst.empty() &&
+                           vidSoundFirst.size() == vidPicFirst.size() &&
+                           same == vidPicFirst.size(),
+                       "and it is the same picture either way, packet for packet — "
+                       "which stream is listed first decides nothing (%zu of %zu)",
+                       same, vidPicFirst.size());
+            }
         }
 
         // A copied picture beside an encoded soundtrack: two paths into one

@@ -330,12 +330,43 @@ bool CopyStreams::build(const ExportSettings& s, const std::vector<ExportStream>
                                     ? inputDuration(r->in, r->fmt->duration / double(AV_TIME_BASE))
                                     : 0.0;
         for (const auto& t : r->taps) {
-            if (earliest < 0 || t.from < earliest) {
-                earliest = t.from;
-                earliestStream = t.stream;
-            }
+            if (earliest < 0 || t.from < earliest) earliest = t.from;
             const double end = t.to > 0.0 ? t.to : duration;
             if (end > 0.0) longest = std::max(longest, end - t.from);
+        }
+
+        // **Seeked on the picture wherever there is one, and that is not a
+        // preference.** Only the video stream has sparse keyframes; every audio
+        // packet is one, so `av_seek_frame` on a soundtrack lands *anywhere* and
+        // the video packets that follow start in the middle of a GOP. Matroska
+        // then reports what it was given — "File is broken, keyframes not
+        // correctly marked", then a non-monotonic dts — and the copy fails with
+        // nothing on disk.
+        //
+        // This used to be whichever tap held the earliest in-point, ties going
+        // to the first in the list, which made the *order of the stream rows*
+        // decide whether a windowed copy worked. `copyRowsOf` lists a file's
+        // streams in the container's order, so a recording muxed with its
+        // soundtrack as stream 0 — which Twitch's are — took the audio and
+        // broke, and one muxed picture-first took the video and worked.
+        //
+        // Safe whatever the in-points are, because every seek here is
+        // `AVSEEK_FLAG_BACKWARD` and the target is the moment as the timeline
+        // means it (`inputSeekTarget`, with none of the stream's own origin on
+        // it): landing at or before the earliest thing anybody asked for is the
+        // whole contract, and a picture keyframe at or before it satisfies it.
+        double fallbackFrom = 0.0;
+        for (const auto& t : r->taps) {
+            if (r->fmt->streams[t.stream]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                earliestStream = t.stream;
+                break;
+            }
+            // No picture in this input: the old rule, which is the best there is
+            // when every stream is keyframes all the way down.
+            if (earliestStream < 0 || t.from < fallbackFrom) {
+                earliestStream = t.stream;
+                fallbackFrom = t.from;
+            }
         }
         span_ = std::max(span_, longest);
         for (unsigned i = 0; i < r->fmt->nb_streams; ++i) {
