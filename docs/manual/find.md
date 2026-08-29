@@ -13,17 +13,18 @@ the panel when you want one found moment *inside* a larger edit; use that when
 finding is the job. They are two views of one library, so they cannot disagree
 about what was said or where.
 
-**It is there only when a corpus is.** A corpus is built by
-[`tools/supercut.js`](../../tools/README.md), which pulls a channel's broadcasts,
-transcribes them and writes the manifest this reads:
+**It is there only when a corpus is.** A corpus is a channel's broadcasts pulled
+onto this machine and transcribed, and there are two ways to make one — the
+Recordings tab of [the supercut application](supercut.md), or
+[`tools/supercut.js`](../../tools/README.md) for a batch:
 
 ```
 ffmpeg-bro-headless ui/ tools/supercut.js -- build turk
 ```
 
-Without that file there is no panel and `/` does nothing. That is the ordinary
-state of this application and not a fault: the tools are deliberately not part of
-it, and the manifest is the whole of the seam between them.
+Neither is *this* application: the workbench searches a corpus and does not make
+one. Without the manifest there is no panel and `/` does nothing, which is the
+ordinary state here and not a fault.
 
 ## Why it is not on the spine
 

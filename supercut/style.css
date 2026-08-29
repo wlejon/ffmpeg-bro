@@ -116,12 +116,36 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 
 /* A recording is a bigger thing than a hit and there are four of them rather
    than three hundred, so it gets the room to read as one. */
-.row.rec { padding: 9px 6px; border-bottom: 1px solid var(--line); }
+.row.rec { position: relative; padding: 9px 6px; border-bottom: 1px solid var(--line); }
 .row.rec .at { color: var(--accent); }
 .row.rec .detail {
     flex: 1 1 auto; font-size: 12px; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Why a press did not work, on the row it did not work on. It shares the
+   `where` column's place and takes room from the title rather than from the
+   controls, because a truncated error is worse than a truncated title. */
+.row.rec .why {
+    font-size: 10px; flex: 1 1 auto; min-width: 0; color: var(--bad);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Being fetched, or being read — `supercut/cuts.js`'s `.cutbar` one place over,
+   for the same reason and with the same shape. The row is a working row the
+   whole time: it plays and it adds, and what the line says is only how much
+   longer something about it will still be arriving. A spinner would say the row
+   was unusable; a line along the bottom says what is left. */
+.row.rec .getbar {
+    position: absolute; left: 6px; right: 6px; bottom: 2px; height: 2px;
+    background: rgba(255,255,255,.06);
+}
+.row.rec .getbar .fill {
+    height: 100%; width: 0; background: var(--accent);
+    transition: width .2s linear;
+}
+/* The percentage is the number that moves, so it is the one that reads as the
+   live thing rather than as another dim column. */
+.row.rec.getting .where { color: var(--text); }
 
 /* ── the picture ──────────────────────────────────────────────────────── */
 

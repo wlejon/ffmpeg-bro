@@ -68,6 +68,33 @@ export function useCorpus(path) {
     streams.clear();
 }
 
+/// Read the same corpus again, because it has changed underneath.
+///
+/// The roll-up, the manifest and every parsed transcript are read once and kept,
+/// which is right for a corpus built by a command line an hour ago and wrong the
+/// moment a *window* can add to one: `supercut/acquire.js` writes a manifest on
+/// the frame a transcription lands, and without this the words it just read are
+/// unfindable until the application is restarted — which is the quietest failure
+/// this corpus has.
+///
+/// **Everything is dropped, including the parsed streams**, which costs 1.4 s
+/// over four six-hour recordings on the next search. Keeping the ones whose ids
+/// survive would be an optimisation with a wrong answer in it: a recording
+/// transcribed a second time has the same id and different words, and a stream
+/// held over would answer the old ones for ever. That cost lands once, after a
+/// read that took half an hour.
+///
+/// The channel in hand is picked again by name, so a view that was searching one
+/// is still searching it. Answers false when the corpus has gone away entirely.
+export function reload() {
+    const was = channel && channel.channel;
+    roll = null;
+    channel = null;
+    streams.clear();
+    if (!available()) return false;
+    return pick(was || undefined);
+}
+
 /// Is there a corpus at all? An absent file is the ordinary case.
 export function available() {
     if (roll === null) {

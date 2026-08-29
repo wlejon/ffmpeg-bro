@@ -13,10 +13,10 @@ together — and it is separate from `ffmpeg-bro` because that job is a loop
 between three things (find a moment, hear it, put it in the row) and none of the
 workbench's six stages is on that loop.
 
-**Run it from the repository root**, because the corpus it reads is
-`build/corpus/find.json`, a path relative to the working directory. Without that
-file the finder says so and the rest of the application still works — you can
-open recordings by hand and cut them.
+**Run it from the repository root**, because the corpus it reads and writes is
+under `build/corpus/`, a path relative to the working directory. With no corpus
+there yet, type a channel's name into the Recordings tab and it will go and get
+one; you can also open recordings by hand and cut them.
 
 ## What is shared with ffmpeg-bro, and what is not
 
@@ -39,9 +39,9 @@ but a stack is not a sequence, and saving afterwards saves the flattened one.
 
 **Left — the finder**, and three tabs because there are three questions:
 
-- **Recordings** — what is in the corpus at all: each broadcast with its date,
-  its length and how many words are in it. This is what the window opens on, so
-  there is something there before anybody types.
+- **Recordings** — what a channel has: each broadcast with its date, its length,
+  and whether it is here yet. This is what the window opens on, so there is
+  something there before anybody types.
 - **Words** — every place a phrase was said.
 - **Talking** — the stretches where somebody talked without stopping.
 
@@ -51,6 +51,58 @@ same way: `▶` plays it, `+` puts it at the end of the mix. Adding a whole
 recording adds the whole of it — six hours if that is what it is — because
 trimming it down is one gesture away and taking the first minute instead would
 be deciding something nobody asked for.
+
+### Getting the recordings
+
+Type a channel's login into the box on the Recordings tab and press **Look up**.
+It asks Twitch for the twenty newest past broadcasts and lists them beside the
+ones already here. Nothing is downloaded by looking.
+
+Each row then carries the one thing left to do to it:
+
+| The row says | The button |
+|---|---|
+| a date, a title, a length | **Get** — copy the recording onto this machine |
+| a percentage, and how many gigabytes | **Stop** |
+| the size on disk | **Transcribe** — read every word of it |
+| `queued` | **Stop** |
+| a percentage, the words so far, and `11.3×` | **Stop** |
+| the word count | `▶` and `+`, which is where the editing starts |
+
+**A press comes straight back.** Getting a recording begins with a round trip to
+Twitch and the row says so while that happens; the copy itself runs beside
+everything else, several at a time, and you can search, audition and edit while
+they do.
+
+**Transcriptions go one at a time** and the rest say `queued` — the model runs on
+one device and starting ten would only be ten rows claiming to be reading. The
+two numbers on a running one answer different questions: the percentage is how
+far down the recording it has got, and the multiplier is how fast. Six hours at
+11× is about half an hour, which is what tells you whether to wait.
+
+**When one finishes it is searchable immediately.** The Words and Talking tabs
+pick up the new transcript with nothing to press and nothing to restart.
+
+**A download that was interrupted carries on where it stopped.** Close the
+window, press **Stop**, lose the machine — press **Get** again and it picks up
+from the last whole second it had, rather than starting a thirty-gigabyte
+recording over. It takes a few seconds to work out where that is (six on a
+twenty-gigabyte part, because a half-written file does not record its own
+length), then fetches only the rest and puts the two together. The row says
+`joining` while it does, which is a minute of local disk at the end and cannot
+be stopped — stopping there would leave two halves and no recording. The result
+is the same file to within a frame: measured 120.054 s against the 120 asked
+for.
+
+Two things follow from that. **Interrupting a resume costs only the resume** —
+what was underneath it is never at risk, though a second interruption does drop
+what the second attempt had fetched. And **do not run the batch command below
+against a channel this window is downloading**: a recording being written is
+refused rather than resumed, which is what stops two copies of one broadcast
+being poured into one file, but the two faces cannot coordinate beyond that.
+
+Where the files go and what a stopped job leaves behind is the same as the
+command line's, below — this is the same store.
 
 ### `+` cuts the moment out
 
@@ -203,16 +255,29 @@ The render is the same one the workbench performs, from the same spec.
 | `/` | jump to the search box |
 | `Ctrl+S` `Ctrl+O` `Ctrl+R` | save, open, render |
 
-## Getting a corpus
+## Getting a corpus in a batch
 
-The recordings and their transcripts are [`tools/supercut.js`](../../tools/README.md)'s,
-which is deliberately not part of either application:
+The Recordings tab above is the way in when you want *this* broadcast now. For
+five of them overnight there is [`tools/supercut.js`](../../tools/README.md),
+which reads and writes the same store:
 
 ```
-ffmpeg-bro-headless ui/ tools/supercut.js -- pull turk
-ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe turk
+ffmpeg-bro-headless ui/ tools/supercut.js -- pull turk --last 5
+ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe turk --last 5
 ```
 
-`transcribe` writes the manifest both applications read when it finishes, so
-there is nothing to remember after it. `index turk` writes the same file on its
-own, which is what a store built by an older version of these tools needs once.
+The command line is the one with the knobs on it — how many, how many to skip,
+which device, and redoing a step the store has already finished — and it can be
+left running with no window open. The tab has none of those and one channel at a
+time.
+
+Either way, `transcribe` writes the manifest both applications read when it
+finishes, so there is nothing to remember after it. `index turk` writes the same
+file on its own, which is what a store built by an older version of these tools
+needs once.
+
+**Do not pull the same recording from both at once.** A copy in flight is not
+finished, and neither side counts it as here — so the window will still offer
+`Get` on a recording a batch is already fetching, and the two would write over
+each other. Transcribing is safe either way: a recording that is not completely
+pulled is refused by name.

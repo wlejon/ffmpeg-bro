@@ -53,6 +53,7 @@ import { clock } from '../ui/format.js';
 import { byId } from '../ui/dom.js';
 
 import * as results from './results.js';
+import * as acquire from './acquire.js';
 import * as mix from './mix.js';
 import * as screen from './screen.js';
 import * as cuts from './cuts.js';
@@ -469,6 +470,13 @@ function frame() {
     }
     if (cuts.pending()) mix.markCuts();
 
+    // A pull advancing, a read landing, a look-up answering. **Ticked here and
+    // drawn only when it says so**, which is `needs()`/`drawPending()` in
+    // `ui/app.js` one storey down: the finder's list is rebuilt whole by `put()`,
+    // and doing that every frame to move a bar that advances a percent every few
+    // seconds is exactly the cost that discipline exists to avoid.
+    if (acquire.tick()) results.refresh();
+
     screen.tick();
     mix.placePlayhead(transport.t);
     if (screen.isPlaying()) { mix.follow(transport.t); drawBar(); }
@@ -484,8 +492,12 @@ function frame() {
 
 // ── start ──────────────────────────────────────────────────────────────────
 
-if (!results.start())
-    flash('no corpus — run tools/supercut.js index <channel> beside build/');
+// **No corpus is no longer a thing to be told about.** This flashed a command
+// line to go and run; the Recordings tab now carries the box that does the same
+// job, says `no corpus yet` on its own line, and is the first thing on the
+// screen — so a flash over it would be the window saying twice what one of the
+// two can act on.
+results.start();
 mix.draw();
 drawBar();
 drawDoc();
@@ -513,7 +525,7 @@ requestAnimationFrame(frame);
 /// door, kept to what a test actually has to reach.
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
-    results, mix, screen, cuts, doc: documentModel,
+    results, acquire, mix, screen, cuts, doc: documentModel,
     addMoment, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,
