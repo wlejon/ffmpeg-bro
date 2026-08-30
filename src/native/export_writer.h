@@ -80,6 +80,22 @@ namespace ffmpegbro {
 class CopyStreams;
 class SubtitleStreams;
 
+/// Is this a path on this machine, or somewhere else entirely?
+///
+/// Anything with a scheme libavformat would recognise as a protocol is the
+/// second kind — except `file:`, which is the long way of writing the first, and
+/// a Windows drive letter, which is a colon in a path and not a scheme. The same
+/// rule `urlScheme` applies in `ui/format.js`, and it has to stay the same rule.
+///
+/// **Two questions turn on it and they are not related.** The writer asks it of
+/// a *destination*, to decide what "how big is it" means — a file can be stat'd
+/// after it is closed and a socket cannot. `fetch_queue.cpp` asks it of a
+/// *source*, to decide whether a fetch is a download and therefore whether it is
+/// competing for the link. It is declared here because it was written here; a
+/// second copy in the queue would be a fetch that disagreed with the writer
+/// about what a path is.
+bool isLocalPath(const std::string& url);
+
 /// Which frame this is, and — where they are two different facts — when it is.
 ///
 /// **The ordinal is not the timestamp and neither replaces the other.** `n`

@@ -28,22 +28,32 @@
 // some other path, because a fetch that silently became a render would take the
 // job slot and the encoder somebody was avoiding.
 //
-// ── How many at once ───────────────────────────────────────────────────────
+// ── How many at once, and of what ──────────────────────────────────────────
 //
-// `WORKERS` of them, and the number is small on purpose. Every fetch here is a
-// download, they share one link, and three concurrent pulls of the same VOD
-// finish later in total than two do — the bandwidth is the constraint and
-// splitting it further only delays every one of them. Two is enough for the
-// shape of work this exists for: the soundtrack of a recording and its picture
-// are queued together and the soundtrack, being a few percent of the bytes,
-// lands long before the picture whether or not it had a lane to itself.
+// **Two lanes, because there are two constraints and they are not the same
+// constraint.** A pull of a VOD is limited by the link: three concurrent pulls
+// of the same recording finish later in total than two do, so `LINK_WORKERS` is
+// small and splitting the bandwidth further only delays every one of them. A cut
+// taken out of a recording already on this disk shares no link with anything —
+// it is a seek and twenty seconds of packets, measured at 70 ms — and counting
+// it against the downloads was counting the wrong thing.
 //
-// `soon` is the one departure from first-in-first-out, and it is for the case
-// the whole feature is about: a cut taken against a transcript needs a few
-// seconds of video *now*, and making it wait behind the forty-minute pull of
-// the same recording would defeat the reason the transcript was made first. It
-// jumps the **queue**, not a running fetch; nothing here preempts, because a
-// half-written file is worse than a wait.
+// It was counting it so hard that the feature stopped working. With one pool of
+// two and two multi-hour pulls running, **thirty-four cuts sat queued at 0% for
+// hours** and the window had nothing to say about why: `soon` jumps the
+// **queue** and nothing here preempts (a half-written file is worse than a
+// wait), so a flag that only reorders the waiting is worth nothing when every
+// worker is busy. The fix is not a third worker — a third pull would starve them
+// again next time — it is that a fetch reading a local file was never what the
+// pool existed to limit.
+//
+// So a fetch is admitted against `LINK_WORKERS` if any of its inputs is read
+// over a link and against `DISK_WORKERS` if none is, `isLocalPath` decides
+// which (one home for it, in `export_writer.h`), and `soon` orders the waiting
+// within whichever lane it is in. `DISK_WORKERS` is two rather than one because
+// a cut spends much of its short life in `avformat_find_stream_info` on a file
+// nobody else is reading, and rather than more because the proxy encoder is
+// already running beside it on the same disk.
 
 #pragma once
 
@@ -67,6 +77,10 @@ struct FetchStatus {
     std::string path;    ///< where it is going
     enum class State { Queued, Running, Done, Failed, Cancelled };
     State state = State::Queued;
+    /// Whether this one is competing for the link — which lane it waits in, and
+    /// the honest answer to "what is it queued behind". Settled from the inputs
+    /// when it is queued; see "How many at once, and of what" above.
+    bool overLink = false;
     double progress = 0.0;      ///< 0…1, or 0 when the span is unknown
     double position = 0.0;
     double span = 0.0;          ///< 0 when nobody knows how long it is

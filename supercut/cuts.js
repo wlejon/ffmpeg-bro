@@ -100,10 +100,15 @@
 // (src/native/fetch_queue.h) is the queue underneath, which is a stream copy
 // running beside the application rather than in the render's one slot — so
 // cutting goes on while the mix plays and while a render runs. `soon: true`,
-// because a cut is the case the flag was put there for: "a cut taken against a
-// transcript needs a few seconds of video *now*, and making it wait behind the
-// forty-minute pull of the same recording would defeat the reason the transcript
-// was made first."
+// because a cut is the case the flag was put there for.
+//
+// **That flag is not on its own enough and it was once believed to be.** `soon`
+// reorders what is waiting and nothing here preempts, so with two multi-hour
+// pulls holding both workers of a single pool, thirty-four cuts sat queued at 0%
+// for hours. What actually keeps a cut moving is that it reads a *local* file
+// and is therefore admitted against a different lane from the downloads — see
+// "How many at once, and of what" in `fetch_queue.h`. Nothing on this side asks
+// for that; it follows from what a cut reads.
 //
 // **The cut files are not the corpus and not the document's.** They are written
 // under `build/cuts/`, named after the recording and the window, so the same
@@ -242,8 +247,13 @@ export function running() {
         out.push({
             key: `cut:${job.clip}`, kind: 'Cutting',
             name: (clip && clip.name) || `clip ${job.clip}`,
-            note: job.state === 'cutting'
-                ? `${Math.round((job.progress || 0) * 100)}%` : job.state,
+            // **Waiting its turn is not the same as making no progress**, and
+            // saying `0%` for both is what made thirty-four queued cuts read as
+            // thirty-four stalled ones. `waiting` is the fetch's own state, off
+            // the poll in `tick()`.
+            note: job.state !== 'cutting' ? job.state
+                : job.waiting ? 'queued'
+                : `${Math.round((job.progress || 0) * 100)}%`,
             progress: job.progress || 0,
             // Stopping one leaves the clip on the recording, which works and is
             // slow — the same place every failure leaves it, and the reason
@@ -371,7 +381,7 @@ export function begin(clip, spec) {
 
     const path = `${dir()}/${nameFor(clip, cut, want.to)}`;
     const job = { clip: clip.id, path, cut, to: want.to, state: 'cutting',
-                  fetch: 0, input: null, progress: 0, error: '' };
+                  fetch: 0, input: null, progress: 0, waiting: false, error: '' };
     jobs.set(clip.id, job);
 
     // Already on disk from an earlier session or an earlier press of the same
@@ -659,6 +669,7 @@ export function tick() {
             const f = running.get(job.fetch);
             if (!f) continue;
             job.progress = f.progress || 0;
+            job.waiting = f.state === 'queued';
             if (f.state === 'done') open(job);
             else if (f.state === 'failed' || f.state === 'cancelled') {
                 job.state = 'failed';

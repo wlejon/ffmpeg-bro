@@ -20,9 +20,13 @@
 namespace ffmpegbro {
 namespace {
 
-/// See the header for why this is small. Changing it changes how a shared link
-/// is divided and nothing else — no rule below depends on the number.
-constexpr int WORKERS = 2;
+/// The two lanes. See the header for why there are two of them.
+///
+/// Changing either changes only how much of one resource is used at once — no
+/// rule below depends on the numbers, and a thread is started for each so that
+/// a full lane can never hold a worker the other lane could have used.
+constexpr int LINK_WORKERS = 2;
+constexpr int DISK_WORKERS = 2;
 
 /// How much of the output to ask the copy for before looking up.
 ///
@@ -40,15 +44,43 @@ struct Entry {
     bool soon = false;
 };
 
+/// Which lane an entry is admitted against — `st.overLink`, and there is
+/// deliberately no second copy of it on the Entry.
+///
+/// Settled once at `startFetch` off the inputs it was given, and a fetch does
+/// not change what it is reading, so nothing writes it again. Every read of it
+/// below is under `q().m`, which is also the lock `runOne`'s `publish` takes
+/// before it puts its snapshot back — so the wholesale assignment there cannot
+/// be seen half done.
+bool overLink(const std::shared_ptr<Entry>& e) { return e->st.overLink; }
+
 struct Queue {
     std::mutex m;
     std::condition_variable wake;
     std::vector<std::shared_ptr<Entry>> all;      ///< every entry, in arrival order
     std::deque<std::shared_ptr<Entry>> pending;   ///< what is waiting, in run order
     std::vector<std::thread> workers;
-    int busy = 0;
+    int busyLink = 0;
+    int busyDisk = 0;
     bool closing = false;
     uint64_t nextId = 1;
+
+    /// Whether this entry's lane has room. Called under the lock.
+    bool admits(const std::shared_ptr<Entry>& e) const {
+        return overLink(e) ? busyLink < LINK_WORKERS : busyDisk < DISK_WORKERS;
+    }
+
+    /// The first waiting entry whose lane has room, or nothing.
+    ///
+    /// **A scan rather than the front of the queue**, which is the whole of the
+    /// two-lane rule: the front may be a download with both link workers busy,
+    /// and the cut behind it is not waiting for anything that download holds.
+    /// The order within a lane is untouched — the first admissible entry is by
+    /// construction the oldest of its lane — so `soon` still means what it says.
+    std::shared_ptr<Entry> nextAdmissible() const {
+        for (const auto& e : pending) if (admits(e)) return e;
+        return nullptr;
+    }
 
     /// `job::Slot`'s rule, for `job::Slot`'s reason and with more threads to get
     /// it wrong with. A `std::thread` still joinable when it is destroyed calls
@@ -183,24 +215,33 @@ void worker() {
         std::shared_ptr<Entry> mine;
         {
             std::unique_lock<std::mutex> lock(q().m);
-            q().wake.wait(lock, [] { return q().closing || !q().pending.empty(); });
+            // Waits on *admissible* work rather than on any work at all. A
+            // worker woken by a download queued with both link workers busy has
+            // nothing to do and must go back to sleep rather than spin.
+            q().wake.wait(lock, [] {
+                return q().closing || q().nextAdmissible() != nullptr;
+            });
             if (q().closing && q().pending.empty()) return;
-            if (q().pending.empty()) continue;
-            mine = q().pending.front();
-            q().pending.pop_front();
+            mine = q().nextAdmissible();
+            if (!mine) continue;
+            q().pending.erase(std::find(q().pending.begin(), q().pending.end(), mine));
             // Cancelled while it was waiting: dropped where it stands, with the
             // state it was given, and no file is opened for it at all.
             if (mine->stop.load()) {
                 mine->st.state = FetchStatus::State::Cancelled;
                 continue;
             }
-            q().busy++;
+            if (overLink(mine)) q().busyLink++;
+            else q().busyDisk++;
         }
         runOne(mine);
         {
             std::lock_guard<std::mutex> lock(q().m);
-            q().busy--;
+            if (overLink(mine)) q().busyLink--;
+            else q().busyDisk--;
         }
+        // Every waiter, not one: the lane that just freed a slot may have
+        // several entries waiting behind a full one of the other kind.
         q().wake.notify_all();
     }
 }
@@ -209,7 +250,7 @@ void worker() {
 /// pulls anything off a page should not be paying for threads that never wake.
 void ensureWorkers() {
     if (!q().workers.empty()) return;
-    for (int i = 0; i < WORKERS; ++i) q().workers.emplace_back(worker);
+    for (int i = 0; i < LINK_WORKERS + DISK_WORKERS; ++i) q().workers.emplace_back(worker);
 }
 
 /// What this loop can and cannot perform, said before anything is queued.
@@ -247,6 +288,13 @@ uint64_t startFetch(const ExportSettings& s, const std::string& label, bool soon
     auto e = std::make_shared<Entry>();
     e->settings = s;
     e->soon = soon;
+    // Which lane, settled here and never asked again. **Any** input over a link
+    // makes the whole fetch a download: what matters is whether it competes for
+    // the bandwidth, and one remote input is enough for that. A device is not a
+    // download either, but it is not local and this is not the caller that reads
+    // one — `startFetch` is packets into a file.
+    for (const MediaInput& in : s.inputs)
+        if (!isLocalPath(in.path)) { e->st.overLink = true; break; }
     e->st.id = q().nextId++;
     e->st.label = label.empty() ? s.path : label;
     e->st.path = s.path;
@@ -307,7 +355,9 @@ void clearFinishedFetches() {
 
 void waitForFetches() {
     std::unique_lock<std::mutex> lock(q().m);
-    q().wake.wait(lock, [] { return q().pending.empty() && q().busy == 0; });
+    q().wake.wait(lock, [] {
+        return q().pending.empty() && q().busyLink == 0 && q().busyDisk == 0;
+    });
 }
 
 void stopAllFetches() {

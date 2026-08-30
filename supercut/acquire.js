@@ -308,6 +308,50 @@ function rowFor(draft, hasWords, fromManifest) {
     };
 }
 
+/// What one live job is doing, in the fields a row carries.
+///
+/// **One home for the derivation, because there are two readers of it and they
+/// are not looking at the same list.** `apply()` writes it onto the row of a
+/// recording that is on the screen; `inFlight()` describes a job whose recording
+/// is *not*, which is every job of a channel somebody has since typed away from.
+/// A pull goes on running when the list moves to another channel — deliberately,
+/// which is what `chan` on the record is for — and the panel that answers "what
+/// is running" is the one place that must never lose sight of one.
+///
+/// Cheap by construction — no file is touched — because it runs per job on every
+/// frame a job exists, which is what makes a progress line move.
+function conditionOf(w) {
+    const out = { state: '', progress: 0, bytes: 0, read: 0, realtime: 0,
+                  words: 0, error: '', failedAt: '' };
+    if (w.phase === 'failed') {
+        out.state = 'failed';
+        // Which press retries it: a pull that would not resolve and a read
+        // that would not start are two different buttons on one row.
+        out.failedAt = w.kind;
+        out.error = w.error;
+    } else if (w.kind === 'pull') {
+        // Three phases of one press, and they are genuinely different work:
+        // asking Twitch where the stream is, copying it, and — only when
+        // this was a resume — putting what was already on disk back together
+        // with what just arrived.
+        out.state = w.phase === 'resolving' ? 'resolving'
+                  : (w.job && w.job.state === 'joining') ? 'joining'
+                  : 'pulling';
+        out.progress = (w.job && w.job.progress) || 0;
+        out.bytes = (w.job && w.job.bytes) || 0;
+    } else if (w.phase === 'queued') {
+        out.state = 'queued';
+    } else {
+        out.state = 'transcribing';
+        const job = w.job;
+        out.read = (job && job.read) || 0;
+        out.realtime = (job && job.realtime) || 0;
+        out.words = (job && job.words) || 0;
+        out.progress = job && job.duration > 0 ? out.read / job.duration : 0;
+    }
+    return out;
+}
+
 /// Write what the live jobs say onto the rows they are about.
 ///
 /// Cheap by construction — no file is touched — because this runs on every frame
@@ -325,32 +369,17 @@ function apply() {
         row.error = '';
         row.failedAt = '';
         if (!w) continue;
-        if (w.phase === 'failed') {
-            row.state = 'failed';
-            // Which press retries it: a pull that would not resolve and a read
-            // that would not start are two different buttons on one row.
-            row.failedAt = w.kind;
-            row.error = w.error;
-        } else if (w.kind === 'pull') {
-            // Three phases of one press, and they are genuinely different work:
-            // asking Twitch where the stream is, copying it, and — only when
-            // this was a resume — putting what was already on disk back together
-            // with what just arrived.
-            row.state = w.phase === 'resolving' ? 'resolving'
-                      : (w.job && w.job.state === 'joining') ? 'joining'
-                      : 'pulling';
-            row.progress = (w.job && w.job.progress) || 0;
-            if (w.job && w.job.bytes) row.bytes = w.job.bytes;
-        } else if (w.phase === 'queued') {
-            row.state = 'queued';
-        } else {
-            row.state = 'transcribing';
-            const job = w.job;
-            row.read = (job && job.read) || 0;
-            row.realtime = (job && job.realtime) || 0;
-            row.vod.words = (job && job.words) || 0;
-            row.progress = job && job.duration > 0 ? row.read / job.duration : 0;
-        }
+        const now = conditionOf(w);
+        row.state = now.state;
+        row.progress = now.progress;
+        row.read = now.read;
+        row.realtime = now.realtime;
+        row.error = now.error;
+        row.failedAt = now.failedAt;
+        // Only when there is one: a pull that has not reported yet must not
+        // rub out the size of the copy already on disk.
+        if (now.bytes) row.bytes = now.bytes;
+        if (w.kind === 'words' && w.phase !== 'queued') row.vod.words = now.words;
         // The two signatures `tick()` compares. What decides a *control* goes in
         // the first; everything a row merely says goes in the second. Whole
         // percents and whole words even so: a fraction that moved in the eighth
@@ -488,6 +517,16 @@ function published(chan) {
 /// `pulled`, `transcribed` and `failed` are rows waiting for a press, and a
 /// panel about what is running that filled up with things that are not is a
 /// panel nobody would open twice.
+///
+/// **Read out of `work` and not out of `rows`, which was a real bug and a bad
+/// one.** `rows` is the inventory of the channel showing, so a pull started on
+/// one channel and still running after somebody typed another had no row and was
+/// therefore in no list anywhere — while going on holding a worker in
+/// `fetch_queue.h`'s pool. Two invisible multi-hour downloads once left
+/// thirty-four cuts queued at 0% for hours with the panel cheerfully listing the
+/// thirty-four and not the two, which is the exact question this panel exists to
+/// answer. `chan` and `meta` are on the record so that a job can be named
+/// without one, and the channel is said out loud when it is not the one showing.
 export function inFlight() {
     const out = [];
     // A look-up is a round trip and belongs here for the same reason a pull does
@@ -497,16 +536,17 @@ export function inFlight() {
         out.push({ key: `look:${looking}`, kind: 'Looking up', name: looking,
                    note: 'asking Twitch', progress: 0, stop: null });
 
-    for (const r of rows) {
-        const pct = `${Math.round((r.progress || 0) * 100)}%`;
+    for (const [id, w] of work) {
+        const c = conditionOf(w);
+        const pct = `${Math.round((c.progress || 0) * 100)}%`;
         let kind = '';
         let note = '';
         let stoppable = true;
-        switch (r.state) {
+        switch (c.state) {
         case 'resolving':
             kind = 'Getting'; note = 'asking Twitch'; stoppable = false; break;
         case 'pulling':
-            kind = 'Getting'; note = `${pct} · ${gb(r.bytes)}`; break;
+            kind = 'Getting'; note = `${pct} · ${gb(c.bytes)}`; break;
         case 'joining':
             // No stop, here as on the row: stopping mid-join leaves two halves
             // and no recording. See `corpus/pull.js`.
@@ -515,17 +555,21 @@ export function inFlight() {
             kind = 'Reading'; note = 'queued'; break;
         case 'transcribing':
             kind = 'Reading';
-            note = `${pct} · ${(r.vod.words || 0).toLocaleString()} words · ` +
-                   `${(r.realtime || 0).toFixed(1)}×`;
+            note = `${pct} · ${(c.words || 0).toLocaleString()} words · ` +
+                   `${(c.realtime || 0).toFixed(1)}×`;
             break;
         default:
             continue;
         }
+        // The channel only when it is not the one on the screen: a row that said
+        // it every time would be repeating the header, and a row that never said
+        // it is the bug above.
+        const title = (w.meta && w.meta.title) || String(id);
         out.push({
-            key: `${kind}:${r.id}`, kind,
-            name: r.detail || String(r.id),
-            note, progress: r.progress || 0,
-            stop: stoppable ? () => stop(r.id) : null,
+            key: `${kind}:${id}`, kind,
+            name: w.chan === login ? title : `${w.chan} · ${title}`,
+            note, progress: c.progress || 0,
+            stop: stoppable ? () => stop(id) : null,
         });
     }
     return out;

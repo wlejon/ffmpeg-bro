@@ -182,26 +182,6 @@ std::string fileName(const std::string& path) {
     return cut == std::string::npos ? path : path.substr(cut + 1);
 }
 
-/// Is this destination a path on this machine, or somewhere else entirely?
-///
-/// The distinction decides what "how big is it" means. A file can be stat'd
-/// after it is closed, which is the only correct answer for an mp4 that
-/// +faststart rewrote; a socket cannot be stat'd at all and the honest number
-/// is what was pushed through it. Anything with a scheme libavformat would
-/// recognise as a protocol is the second kind — except `file:`, which is the
-/// long way of writing the first, and a Windows drive letter, which is a colon
-/// in a path and not a scheme.
-bool isLocalPath(const std::string& url) {
-    const size_t colon = url.find(':');
-    if (colon == std::string::npos) return true;
-    if (colon <= 1) return true;                       // C:\ — a drive, not a scheme
-    const std::string scheme = url.substr(0, colon);
-    for (char c : scheme)
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.')
-            return true;                               // not a scheme at all
-    return scheme == "file";
-}
-
 /// The path behind a `file:` URL, which is what `std::filesystem` wants.
 std::string localPathOf(const std::string& url) {
     if (url.rfind("file:", 0) == 0) return url.substr(5);
@@ -307,6 +287,19 @@ int threadTypeNamed(const std::string& s, bool* ok) {
 }
 
 } // namespace
+
+// Out of the anonymous namespace above because the fetch queue asks the same
+// question of a fetch's *source*. See the declaration in the header.
+bool isLocalPath(const std::string& url) {
+    const size_t colon = url.find(':');
+    if (colon == std::string::npos) return true;
+    if (colon <= 1) return true;                       // C:\ — a drive, not a scheme
+    const std::string scheme = url.substr(0, colon);
+    for (char c : scheme)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.')
+            return true;                               // not a scheme at all
+    return scheme == "file";
+}
 
 // ── Forced keyframes ───────────────────────────────────────────────────────
 

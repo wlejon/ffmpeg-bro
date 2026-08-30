@@ -66,6 +66,17 @@ and a **Stop** where stopping is a thing that can be done.
 Nothing is running is not a state it says out loud — the button is simply not
 there. `Esc` closes the list.
 
+**A job of a channel you have moved away from is still in the list**, with the
+channel's name in front of it. Downloads and transcriptions go on running when
+you look up another channel — that is the point of starting them — and a list
+that showed only the channel on screen would leave you watching nothing happen
+with no way to see what was holding things up.
+
+**Downloads and cuts do not wait for each other.** Two of each run at once: the
+downloads are limited because they share one connection, and a cut reads a file
+already on this disk, so it is not queued behind one. Two long downloads and
+thirty cuts is thirty cuts that start immediately.
+
 Two jobs have no Stop, and it is the same reason both times: a download in its
 last minute is putting two halves back into one file, and stopping there leaves
 neither; a scrubbing copy asked for by a clip in the mix would only start again

@@ -36,6 +36,7 @@
 // Usage: ffmpeg-bro-exporttest <media-file> [<second-file>]
 
 #include "export_copy.h"
+#include "export_writer.h"
 #include "fetch_queue.h"
 #include "ffmpeg_backend.h"
 #include "ffmpeg_export.h"
@@ -4129,6 +4130,41 @@ int main(int argc, char* argv[]) {
                 check(!o || o.fc->nb_streams >= 1,
                       "and what is on disk, if anything, is a file that opens");
             }
+        }
+
+        // ── which lane a fetch waits in ────────────────────────────────────
+        //
+        // The pool limits two different resources and a fetch is admitted
+        // against one of them: the link if anything it reads is over one, the
+        // disk if nothing is. That is the rule that stops a cut of a local
+        // recording waiting behind a multi-hour download, and it once did not
+        // exist — thirty-four cuts sat queued at 0% for hours behind two pulls.
+        //
+        // **What is asserted is the classification and not the concurrency.**
+        // Same reason `soon`'s ordering is not asserted above: the fixtures
+        // drain in microseconds, so "three of these were running at once" has no
+        // observation point that is not a race. The classification is
+        // deterministic, it is the half that could silently drift, and
+        // `isLocalPath` is the one home for it.
+        {
+            check(isLocalPath("C:\\media\\a.mkv"),
+                  "a Windows path is local — the colon is a drive, not a scheme");
+            check(isLocalPath("/home/me/a.mkv"), "and so is a plain path");
+            check(isLocalPath("file:/tmp/a.mkv"),
+                  "and `file:` is the long way of writing one");
+            check(!isLocalPath("https://example.com/a.m3u8"),
+                  "an https URL is read over the link");
+            check(!isLocalPath("srt://host:9000"), "and so is anything else with a scheme");
+
+            // And the queue asks it of the *inputs*, which is what decides the
+            // lane — the destination is a local file either way.
+            const uint64_t local = startFetch(copySpec("out/fetch-lane.mkv", 0, 1),
+                                              "a local one", false, &err);
+            checkf(local != 0, "a fetch of a file on this disk is queued (%s)",
+                   local ? "started" : err.c_str());
+            check(!fetchStatus(local).overLink,
+                  "and does not wait in the lane the downloads share");
+            waitForFetches();
         }
 
         // The list is everything, which is the whole difference from a render's
