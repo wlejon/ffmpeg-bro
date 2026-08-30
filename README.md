@@ -62,6 +62,12 @@ into the binary, so there is nothing else to install and nothing on your `PATH`
 to conflict with. The Windows binaries are code-signed; the Linux and macOS ones
 are not, so macOS will need `xattr -dr com.apple.quarantine` on the folder.
 
+There is one download per platform and it runs with or without a graphics card.
+The nightly compiles brotensor's GPU backend in, CUDA on Windows and Linux and
+Metal on macOS, which is what makes supercut's transcription usable: about
+ninety minutes for a six-hour recording on an RTX 4090, against days on a CPU.
+The Whisper weights are not in the zip and are fetched separately.
+
 ## Building
 
 Requires a C++20 compiler (Visual Studio 2022 on Windows), [CMake

@@ -759,6 +759,17 @@ audio poorly — is 1.2x. **The default build has brotensor's CUDA backend off**
 (`BRO_WITH_TENSOR_CUDA`), which is what makes that difference; the feature works
 either way and is only worth using with a GPU.
 
+**The nightly turns it on and CI does not**, and the split is deliberate. A
+released binary that transcribes at days per recording ships a button nobody can
+press, so `.github/workflows/nightly.yml` builds CUDA on Windows and Linux and
+Metal on macOS — one download per platform, because brotensor falls back when
+there is no device and the runner that smoke-tests it has none. CI stays CPU-only
+because it is the fast signal on every push and 88 `.cu` files across four
+architectures is not; brotensor's own CUDA compile is covered by bro's nightly,
+so what this repository risks by not building it on every push is small. The
+consequence to know: **a CUDA-only compile break shows up at night**, and it
+holds the release the way a macOS break does.
+
 ### The native encode side
 
 `export_timeline.h` defines the seam: a `FrameSource` answers "what does the

@@ -15,6 +15,12 @@ name: Nightly
 # the same document format, so a .fbro written in one opens in the other. They
 # are two executables and not two downloads for exactly that reason.
 #
+# **And one download per platform, with the GPU backend in it.** CUDA on Windows
+# and Linux, Metal on macOS, because supercut's transcription is days per
+# recording without one. brotensor falls back when there is no device, so the
+# same zip serves a machine with a card and a machine without; the smoke test
+# below runs it on a runner that has none. See the CUDA toolkit step.
+#
 # **A macOS failure holds the release.** `publish` needs the whole matrix, so a
 # platform that stops compiling stops the night's release rather than quietly
 # shipping two thirds of one. Nightly is a signal as much as it is a channel; if
@@ -58,9 +64,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4 }
-          - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4 }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   jobs: 3 }
+          # `gpu` is which brotensor backend this platform's nightly compiles
+          # in; see the CUDA toolkit step for why there is only one download per
+          # platform rather than a CPU one and a GPU one. `cudapkgs` differs
+          # between Windows and Linux because the action maps those names onto
+          # each platform's own package names, and it is the first thing to look
+          # at if a nightly stops finding nvcc.
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4,
+              gpu: cuda,  cudapkgs: '["nvcc", "cudart-dev"]' }
+          - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4,
+              gpu: cuda,  cudapkgs: '["nvcc", "cudart"]' }
+          - { name: macos,   os: macos-14,     triplet: arm64-osx,   jobs: 3,
+              gpu: metal, cudapkgs: '' }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -96,6 +111,40 @@ jobs:
       - name: macOS build dependencies
         if: runner.os == 'macOS'
         run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config
+
+      # ── the GPU backend, which is what makes transcription usable ──────────
+      #
+      # `supercut` offers to transcribe a recording (`supercut/acquire.js`), and
+      # that is Whisper through brosoundml on brotensor. Measured on an RTX
+      # 4090, large-v3 runs at 4.0x realtime, so a six-hour VOD is about ninety
+      # minutes; the same model on the CPU is days. A nightly built without a
+      # backend therefore ships a button nobody can usefully press, which is
+      # what every nightly before this one did.
+      #
+      # **One download per platform, not a CPU one and a GPU one.** brotensor
+      # falls back when there is no device, and the runner proves it: there is
+      # no NVIDIA card on any GitHub-hosted machine, so the smoke test below
+      # runs this exact binary with no driver present. A second artifact would
+      # be two things to explain and two things to pick wrongly.
+      #
+      # **The architectures have to be named.** brotensor defaults
+      # `CMAKE_CUDA_ARCHITECTURES` to `native`, which asks the local card what
+      # it is, and there is not one here. These four are Turing, Ampere, Ada and
+      # PTX: real code for RTX 20/30/40, and virtual for anything newer to JIT
+      # from. Each real architecture is another pass of nvcc over 88 `.cu`
+      # files, which is why the list is short and why sccache covers nvcc too.
+      #
+      # The weights are still not shipped and cannot be: an absent model is
+      # refused by name, and `brosoundml/scripts/download-whisper.sh` is what
+      # puts one on disk. This makes the GPU path exist, not the download bigger
+      # by several gigabytes.
+      - name: CUDA toolkit
+        if: matrix.gpu == 'cuda'
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.6.3'
+          method: network
+          sub-packages: ${{ matrix.cudapkgs }}
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -143,12 +192,19 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
           fi
+          # See the CUDA toolkit step above for both of these.
+          GPU_ARGS=""
+          if [ "${{ matrix.gpu }}" = "cuda" ]; then
+            GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75-real;86-real;89-real;90-virtual"
+          elif [ "${{ matrix.gpu }}" = "metal" ]; then
+            GPU_ARGS="-DBRO_WITH_TENSOR_METAL=ON"
+          fi
           cmake -B build \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            $GEN_ARGS
+            $GEN_ARGS $GPU_ARGS
 
       - name: Save the vcpkg binary cache
         if: always()
@@ -182,6 +238,19 @@ jobs:
       #   * libx264 and libx265 are present. They are what `gpl` and `version3`
       #     in vcpkg.json buy, and a manifest that resolved without them
       #     produces an application that opens files and cannot export.
+      #   * `bro.tensor` is the real binding and not the stub, which is the one
+      #     readable-at-runtime proof that the GPU backend actually compiled in.
+      #     The failure it catches is silent by construction: a CUDA toolkit the
+      #     action did not install leaves brotensor building CPU-only, and the
+      #     result is a nightly that looks identical and transcribes at days per
+      #     recording. `=== false` is again the test rather than `typeof`, for
+      #     the reason bro.sense's line above gives.
+      #
+      # **This step is also the fallback test.** No GitHub-hosted runner has an
+      # NVIDIA card, so a probe that runs to completion here is this exact
+      # binary starting with the backend compiled in and no driver to talk to.
+      # That is the property the single-download decision rests on, and it is
+      # checked every night rather than assumed.
       #
       # It runs before signing, so a package that fails this is never signed.
       - name: Smoke test (the packaged application)
@@ -196,12 +265,16 @@ jobs:
                 throw new Error("libav is not linked into this build");
             if (!bro.sense || bro.sense.available === false)
                 throw new Error("bro.sense is absent or is the stub: BRO_WITH_SOUNDML did not survive");
+            if (!bro.tensor || bro.tensor.available === false)
+                throw new Error("bro.tensor is the stub: no GPU backend compiled into this build, "
+                                + "so transcription would run on the CPU at days per recording");
             const ids = bro.ffmpeg.encoders.map(function (e) { return e.id; });
             ["libx264", "libx265"].forEach(function (need) {
                 if (ids.indexOf(need) < 0)
                     throw new Error("encoder missing from this build: " + need);
             });
             console.log("linked " + bro.ffmpeg.version
+                        + " gpu-backend=yes (no device on this runner)"
                         + " encoders=" + ids.length
                         + " muxers=" + bro.ffmpeg.muxers.length
                         + " demuxers=" + bro.ffmpeg.demuxers.length
@@ -338,6 +411,8 @@ jobs:
           Unzip and run. ffmpeg is linked into these binaries rather than called as a subprocess, so there is nothing else to install and nothing on your PATH is used: 350+ demuxers, 180+ muxers, 500+ filters, x264 and x265, all in the one download.
 
           Two applications, one build. \`ffmpeg-bro\` is the workbench over ffmpeg's whole model, from capture through the filter graph to the muxer. \`supercut\` is the second one: search hours of transcribed recordings for what somebody said, hear it, and cut it together. They share the render and the document format, so a \`.fbro\` written in either opens in the other. \`ffmpeg-bro-headless\` is the same engine driven by a script.
+
+          Transcription runs on the GPU: CUDA on Windows and Linux, Metal on macOS. There is one download per platform and it runs with or without a card, falling back on its own. The Whisper weights are not in the zip and are fetched separately; supercut says so when you ask it to transcribe. On an RTX 4090 a six-hour recording is about ninety minutes, and on a CPU it is days, so a card is what makes that feature worth using.
 
           The Windows binaries are code-signed. The Linux and macOS ones are not, so macOS will quarantine them until you run \`xattr -dr com.apple.quarantine\` on the folder; the README.txt in each zip says so too.
 
