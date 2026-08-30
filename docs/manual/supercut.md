@@ -242,7 +242,10 @@ or a single frame wide enough to aim at.
 **The bar under the strip is where you are in the mix.** Zoomed in, most of the
 row is off the screen; drag the bar to get to the rest of it, or press the track
 to go straight there. It shows how much of the mix is on the strip, so it is
-absent while all of it is. Playback carries the strip along on its own.
+absent while all of it is. Playback carries the strip along on its own. While
+your hand is on a card the strip holds still — a trim changes how long the mix
+is on every move, and the bar and the window settle when you let go rather than
+sliding about under the edit.
 
 ## The four gestures
 

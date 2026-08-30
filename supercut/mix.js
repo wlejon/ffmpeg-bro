@@ -311,11 +311,22 @@ function maxLeft() {
 /// **The one writer of `left`**, so the offset the cards are drawn at and the
 /// offset `xOf` measures from cannot come apart — which is exactly what a second
 /// place setting a margin beside it would be.
+///
+/// **Under a gesture on a card the window is held still and the bar is not
+/// redrawn**, and both halves of that are the same complaint. A trim changes how
+/// long the mix is on every move: the range the window may sit in moves with it,
+/// so a window near the end was being pulled back a few pixels at a time — the
+/// content sliding out from under the hand that was editing it — and the thumb
+/// was growing and shrinking under the other hand at the same time. Neither is
+/// information anybody can use mid-gesture, and both are a picture that will not
+/// hold still. So the clamp and the bar wait: `onUp` clears the gesture before
+/// the redraw that follows it, so letting go is what settles them, once.
 export function setLeft(v) {
     if (!nodes) return;
-    left = Math.max(0, Math.min(Number(v) || 0, maxLeft()));
+    const cap = drag ? Infinity : maxLeft();
+    left = Math.max(0, Math.min(Number(v) || 0, cap));
     nodes.cards.style.marginLeft = `${(-left * pxPerSec).toFixed(2)}px`;
-    drawScroll();
+    if (!drag) drawScroll();
 }
 
 /// Where the window is, in seconds. For the suites and for `follow`.
@@ -543,9 +554,10 @@ function resize() {
             paint(c, canvas);
         }
     }
-    // The mix got longer or shorter under the hand, which is what the thumb is a
-    // measurement of — and a trim past the right-hand edge can leave the window
-    // beyond the end of what is left, so the clamp is re-applied here too.
+    // The mix got longer or shorter, which is what the thumb is a measurement of
+    // — and a trim can leave the window beyond the end of what is left, so the
+    // clamp is re-applied here too. Both are held back while a hand is on a card;
+    // see `setLeft`.
     setLeft(left);
     if (hooks.resized) hooks.resized();
 }

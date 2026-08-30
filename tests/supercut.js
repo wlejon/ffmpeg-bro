@@ -734,6 +734,59 @@ console.log('\nthe window');
     pump(40);
 }
 
+// ── and it holds still while a hand is on a card ───────────────────────────
+//
+// A trim changes how long the mix is on every move, which moves the range the
+// window may sit in and the width of the thumb that measures it. Neither is
+// anything anybody can use mid-gesture and both are a picture that will not hold
+// still, so both wait for the hand to come off.
+
+console.log('\nthe window under a gesture');
+{
+    const thumb = document.getElementById('mix-thumb');
+    const bar = () => `${thumb.style.width}|${thumb.style.left}`;
+
+    // Zoomed to half the mix, with the window pushed as far right as it goes —
+    // which is where a shortening trim would drag it back from.
+    type(document.getElementById('zoom'),
+         String(Math.round(Math.min(900, (document.getElementById('strip').clientWidth * 2)
+                                         / A.duration()))));
+    A.mix.setLeft(A.duration());
+    pump(40);
+    const wasLeft = A.mix.view().left, wasBar = bar(), wasTotal = A.duration();
+    ok(wasLeft > 0 && wasBar.indexOf('%') > 0,
+       `the window is at the end of the mix and the bar says so (${wasBar})`);
+
+    // A trim in three events, stopping before the hand comes off.
+    const edge = cardEls()[0].querySelector('.edge.r');
+    const box = edge.getBoundingClientRect();
+    const x = box.left + box.width / 2, y = box.top + box.height / 2;
+    const by = Math.round(order()[0].length * 0.3 * A.mix.zoom());
+    const at = (kind, node, cx) => node.dispatchEvent(
+        new MouseEvent(kind, { bubbles: true, button: 0, clientX: cx, clientY: y }));
+    at('mousedown', edge, x);
+    at('mousemove', document.body, x - 8);
+    at('mousemove', document.body, x - by);
+    pump(20);
+
+    ok(A.duration() < wasTotal - 0.01,
+       `mid-drag the mix is shorter (${wasTotal.toFixed(2)} → ${A.duration().toFixed(2)}s)`);
+    ok(A.mix.view().left === wasLeft,
+       'and the window has not been pulled back from under the hand');
+    ok(bar() === wasBar, 'and the bar has not moved or changed size');
+
+    at('mouseup', document.body, x - by);
+    pump(40);
+    ok(bar() !== wasBar, `letting go settles the bar (${wasBar} → ${bar()})`);
+    ok(A.mix.view().left <= A.duration() - A.mix.view().span + 1e-6,
+       'and the window with it, back inside the mix that is left');
+    ok(!packed('after a held gesture'), packed('after a held gesture') || 'still packed');
+
+    A.mix.fit();
+    A.mix.draw();
+    pump(40);
+}
+
 // ── the document is the workbench's ────────────────────────────────────────
 
 console.log('\nthe document');
