@@ -403,10 +403,18 @@ console.log('\nwhat is running');
     ok(stopped === 1, 'the Stop on the row is the job\'s own stop');
 
     live = null;
+    // Settle once more before asking whether the button is gone. The clips the
+    // section above put in the mix each ask for a proxy, and a proxy is a real
+    // encode whose length belongs to the machine rather than to this suite:
+    // NVENC where there is a card, libx264 on a runner where there is not, which
+    // is the difference between finished by this line and still going. The
+    // claim here is about the drawing, so wait for the state it is a drawing of.
+    for (let i = 0; i < 600 && A.inflight.count(); i++) pump(25);
     A.inflight.toggle(false);
     pump(40);
     ok(panel.hidden, 'it closes');
-    ok(button.hidden, 'and with nothing running the button is not there either');
+    ok(button.hidden && A.inflight.count() === 0,
+       `and with nothing running the button is not there either (${A.inflight.count()} running)`);
 }
 
 // ── and each of them is cut out of the recording ───────────────────────────
