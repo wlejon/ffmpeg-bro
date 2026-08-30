@@ -60,8 +60,12 @@ JSValue wordToJs(JSContext* ctx, const SpokenWord& w) {
     return o;
 }
 
-JSValue resultToJs(JSContext* ctx, const SpokenWords& t) {
+JSValue resultToJs(JSContext* ctx, const SpokenWords& t, int64_t from) {
     JSValue o = JS_NewObject(ctx);
+    // Where `words` starts in the whole transcript, which is 0 unless the caller
+    // asked for a tail. Answered always, so a caller that adds `since` later does
+    // not have to find out that the shape changed under it.
+    JS_SetPropertyStr(ctx, o, "from", JS_NewInt64(ctx, from));
     JS_SetPropertyStr(ctx, o, "streamIndex", JS_NewInt32(ctx, t.streamIndex));
     JS_SetPropertyStr(ctx, o, "duration", JS_NewFloat64(ctx, t.duration));
     // How far down the recording the reading has got. The one number that makes
@@ -148,19 +152,31 @@ const char* stateName(SpokenWordsProgress::State s) {
     return "reading";
 }
 
-// bro.ffmpeg.words.reads.poll(id) — where it has got to, and the words so far.
+// bro.ffmpeg.words.reads.poll(id, opts) — where it has got to, and the words.
 //
 // `null` only for an id nothing knows about, which here means one that was never
 // started or has been forgotten. Unlike every read on this surface but
 // `transcribe`, a finished one keeps answering.
+//
+// **`opts.since` is how a frame loop polls this.** Without it the answer carries
+// every word decoded so far, which costs more the longer the read runs — 5.7 ms
+// a poll at the twenty-four thousand words a six-hour recording ends with, sixty
+// times a second, for words the caller already has. Pass the number already held
+// and the answer is the ones after it, with `result.from` saying where it starts
+// and `result.total` giving the count either way. `spoken_words.h` has the
+// measurements.
 JSValue js_wordsPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "words.reads.poll(id) requires an id");
     int64_t id = 0;
     if (JS_ToInt64(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
 
+    int64_t since = 0;
+    if (argc >= 2 && JS_IsObject(argv[1]))
+        since = static_cast<int64_t>(numProp(ctx, argv[1], "since", 0.0));
+
     SpokenWordsProgress p;
-    if (!spokenWordsProgress(uint64_t(id), p)) return JS_NULL;
+    if (!spokenWordsProgress(uint64_t(id), p, since)) return JS_NULL;
 
     JSValue o = JS_NewObject(ctx);
     setStr(ctx, o, "state", stateName(p.state));
@@ -174,7 +190,7 @@ JSValue js_wordsPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
     // Always, including while reading and including after a failure — a run that
     // died an hour in still transcribed an hour, and throwing that away would
     // make a failure cost more than it has to.
-    JS_SetPropertyStr(ctx, o, "result", resultToJs(ctx, p.result));
+    JS_SetPropertyStr(ctx, o, "result", resultToJs(ctx, p.result, p.from));
     return o;
 }
 

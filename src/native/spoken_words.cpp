@@ -358,7 +358,27 @@ uint64_t startSpokenWords(const MediaInput& in, const SpokenWordsOptions& opts) 
     return id;
 }
 
-bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out) {
+/// Copy everything about a transcript except the words, then the words from
+/// `since` on. **The whole point of the split**: the caller's own lock is held
+/// for the copy, so a poll that carried the first twenty thousand words back
+/// every frame would be holding the reader out of its own list to hand over what
+/// the caller already had. A `since` past the end is not an error — it is what
+/// every poll after the last window looks like — and answers with nothing.
+static void tailInto(const SpokenWords& from, int64_t since,
+                     SpokenWordsProgress& out) {
+    out.result.streamIndex = from.streamIndex;
+    out.result.duration = from.duration;
+    out.result.read = from.read;
+    out.result.truncated = from.truncated;
+    out.result.total = from.total;
+    const int64_t have = static_cast<int64_t>(from.words.size());
+    const int64_t at = std::min(std::max<int64_t>(0, since), have);
+    out.from = at;
+    out.result.words.assign(from.words.begin() + static_cast<ptrdiff_t>(at),
+                            from.words.end());
+}
+
+bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out, int64_t since) {
     std::shared_ptr<Live> live;
     {
         std::lock_guard<std::mutex> guard(livesLock());
@@ -378,7 +398,7 @@ bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out) {
         out.state = live->err.empty() ? SpokenWordsProgress::State::Done
                                       : SpokenWordsProgress::State::Failed;
         out.error = live->err;
-        out.result = live->t;
+        tailInto(live->t, since, out);
         return true;
     }
 
@@ -386,7 +406,7 @@ bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out) {
     out.timeout = slot.timeout;
     if (live) {
         std::lock_guard<std::mutex> g(live->m);
-        out.result = live->t;
+        tailInto(live->t, since, out);
         out.error = live->err;
     }
 
@@ -394,7 +414,7 @@ bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out) {
         out.state = SpokenWordsProgress::State::Reading;
         return true;
     }
-    out.result = slot.result;
+    tailInto(slot.result, since, out);
     out.state = slot.stopped        ? SpokenWordsProgress::State::Stopped
                 : out.error.empty() ? SpokenWordsProgress::State::Done
                                     : SpokenWordsProgress::State::Failed;

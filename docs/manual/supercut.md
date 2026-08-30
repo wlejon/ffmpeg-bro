@@ -85,7 +85,7 @@ Each row then carries the one thing left to do to it:
 | a percentage, and how many gigabytes | **Stop** |
 | the size on disk | **Transcribe** — read every word of it |
 | `queued` | **Stop** |
-| a percentage, the words so far, and `11.3×` | **Stop** |
+| a percentage, the words so far, and `81×` | **Stop** |
 | the word count | `▶` and `+`, which is where the editing starts |
 
 **A press comes straight back.** Getting a recording begins with a round trip to
@@ -97,7 +97,7 @@ they do.
 one device and starting ten would only be ten rows claiming to be reading. The
 two numbers on a running one answer different questions: the percentage is how
 far down the recording it has got, and the multiplier is how fast. Six hours at
-11× is about half an hour, which is what tells you whether to wait.
+81× is about five minutes, which is what tells you whether to wait.
 
 **When one finishes it is searchable immediately.** The Words and Talking tabs
 pick up the new transcript with nothing to press and nothing to restart.

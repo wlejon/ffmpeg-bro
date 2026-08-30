@@ -226,6 +226,39 @@ int main(int argc, char** argv) {
         checkf(t.truncated || t.total == (int64_t)t.words.size(),
                "the count is the list when nothing was capped (%lld / %zu)",
                (long long)t.total, t.words.size());
+
+        // **The tail, which is how a frame loop asks.** Whole-answer polling
+        // costs more the longer the recording is — the list is copied and
+        // rebuilt every time — so a caller says how many it holds. What must be
+        // true of the answer: it begins where it says it begins, it is the same
+        // words the whole answer had at those positions, and asking from past
+        // the end is empty rather than an error.
+        const std::size_t n = t.words.size();
+        const std::vector<SpokenWord> whole = t.words;
+        if (n >= 2) {
+            const int64_t half = (int64_t)(n / 2);
+            SpokenWordsProgress tail;
+            check(spokenWordsProgress(id, tail, half), "a poll from a count answers");
+            checkf(tail.from == half, "starting where it was asked (%lld)",
+                   (long long)tail.from);
+            checkf(tail.result.words.size() == n - (std::size_t)half,
+                   "with the rest of the words (%zu of %zu)",
+                   tail.result.words.size(), n);
+            bool same = tail.result.words.size() == n - (std::size_t)half;
+            for (std::size_t i = 0; same && i < tail.result.words.size(); ++i)
+                same = tail.result.words[i].text == whole[(std::size_t)half + i].text;
+            check(same, "and they are the words the whole answer had there");
+            checkf(tail.result.read >= t.read - 0.001,
+                   "the scalars are the whole read's, not the tail's (%.1f)",
+                   tail.result.read);
+
+            SpokenWordsProgress past;
+            check(spokenWordsProgress(id, past, (int64_t)n + 1000),
+                  "a poll from past the end answers");
+            check(past.result.words.empty(), "with no words");
+            checkf(past.from == (int64_t)n, "and `from` at the end (%lld / %zu)",
+                   (long long)past.from, n);
+        }
         abandonSpokenWords(id);
     }
 

@@ -104,7 +104,7 @@ export function startRead(source, opts = {}) {
                   read: 0, duration: opts.duration || 0,
                   words: 0, total: 0, truncated: false,
                   realtime: 0, elapsed: 0, error: '',
-                  began: Date.now(), result: null };
+                  began: Date.now(), said: [], result: null };
     try {
         job.id = bro.ffmpeg.words.reads.start(source, {
             model: speechModel(opts.model),
@@ -130,17 +130,25 @@ export function startRead(source, opts = {}) {
 /// here it is load-bearing twice over, because a forgotten id polls as `null`
 /// and a second pass would otherwise turn a finished read into a failed one.
 ///
+/// **Only the words nobody has seen yet are asked for.** `since` is how a frame
+/// loop polls this: without it the answer carries every word read so far, copied
+/// out from under the reader's own lock and built into a JS object apiece, and
+/// that list only grows — 0.080 ms at 434 words, 0.660 ms at 2 824, and a
+/// six-hour recording ends at 24 343, which is 5.7 ms of a frame sixty times a
+/// second for words the caller was handed minutes ago. So the count already held
+/// is what is asked from, and `result.from` says where the answer starts.
+///
 /// The words are converted from the native shape (`{ start, end, text }`) to the
-/// one an `.srt` and `ui/phrase.js` are written in (`{ from, to, text }`) **once,
-/// on the frame the read turns terminal** — never while it is running. A
-/// six-hour recording is on the order of fifty thousand words and a poll is a
-/// frame of somebody's window; rebuilding that list sixty times a second to draw
-/// a number that is already in `read` would be the whole cost of the feature
-/// spent on nothing.
+/// one an `.srt` and `ui/phrase.js` are written in (`{ from, to, text }`) as they
+/// arrive, into `job.said`, which is the accumulated transcript and becomes
+/// `job.result` on the frame the read turns terminal. Converting a tail is a few
+/// objects; it was deferred to the end only because the whole list used to come
+/// back every time.
 export function pollRead(job) {
     if (!job || job.state !== 'reading') return job;
 
-    const p = bro.ffmpeg.words.reads.poll(job.id);
+    if (!job.said) job.said = [];
+    const p = bro.ffmpeg.words.reads.poll(job.id, { since: job.said.length });
     if (!p) {
         job.state = 'failed';
         job.error = 'the read this was waiting on is no longer known';
@@ -150,7 +158,15 @@ export function pollRead(job) {
     const r = p.result || {};
     job.read = r.read || 0;
     if (r.duration > 0) job.duration = r.duration;
-    job.words = (r.words && r.words.length) || 0;
+    // Placed at the index the reader says it started copying from rather than
+    // appended, so an answer that began further back than was asked for
+    // overwrites those words instead of doubling them.
+    const got = r.words || [];
+    for (let i = 0; i < got.length; i++) {
+        const w = got[i];
+        job.said[(r.from || 0) + i] = { from: w.start, to: w.end, text: w.text };
+    }
+    job.words = job.said.length;
     job.total = r.total || 0;
     job.truncated = !!r.truncated;
     job.elapsed = p.elapsed || (Date.now() - job.began) / 1000;
@@ -161,8 +177,7 @@ export function pollRead(job) {
 
     if (p.state === 'reading') return job;
 
-    job.result = (r.words || []).map((w) => ({ from: w.start, to: w.end,
-                                               text: w.text }));
+    job.result = job.said;
     job.state = p.state;
     if (p.state === 'failed') job.error = p.error || 'the read failed';
     // Required rather than tidy: a terminal read keeps answering until this.
@@ -214,7 +229,7 @@ export function startTranscribe(login, meta, opts = {}) {
                   read: 0, duration: (st.media && st.media.seconds) || 0,
                   words: 0, total: 0, truncated: false,
                   realtime: 0, elapsed: 0, error: '',
-                  began: Date.now(), result: null };
+                  began: Date.now(), said: [], result: null };
 
     if (exists(p.srt) && !opts.again) {
         job.state = 'skipped';

@@ -439,11 +439,23 @@ bro.ffmpeg.words.reads.start(path | input, {
 })                // -> id
 // No `language`: Parakeet is English and has nothing to be told.
 
-bro.ffmpeg.words.reads.poll(id)
+bro.ffmpeg.words.reads.poll(id, {
+    since,        // how many words the caller already holds; the answer is the
+                  // ones after it and `result.from` says where it starts.
+                  // Absent = 0 = every word read so far.
+})
 // -> { state: "reading" | "done" | "failed" | "stopped", reading, elapsed,
 //      timeout, error,
 //      result: { streamIndex, duration, read, total, truncated,
-//                words: [{ start, end, text }, ...] } }
+//                from, words: [{ start, end, text }, ...] } }
+//
+// **`since` is what makes polling this from a frame loop affordable.** The
+// answer is copied out from under the reader's own lock and built into a JS
+// object per word, and without `since` that list is everything read so far and
+// only grows: 0.080 ms at 434 words, 0.660 ms at 2 824, and a six-hour recording
+// ends at 24 343 — 5.7 ms of a frame, sixty times a second, for words the caller
+// was handed minutes ago. `from` is answered always, so a caller that adds
+// `since` later does not have to change how it reads the result.
 
 bro.ffmpeg.words.reads.cancel(id)   // stop at the next window, keep the words
 bro.ffmpeg.words.reads.forget(id)   // stop it and drop them
@@ -470,8 +482,9 @@ bro.ffmpeg.words.reads.forget(id)   // stop it and drop them
 // said in the last hour" from "the last hour has not been read" — and a
 // cancelled run never rounds it up.
 //
-// Measured on an RTX 4090: 11.3x realtime, so a six-hour recording is about half
-// an hour and is searchable from the first fifteen-second window.
+// Measured on an RTX 4090: 81x realtime over fifteen minutes of a real
+// broadcast, so a six-hour recording is about five minutes and is searchable
+// from the first fifteen-second window.
 ```
 
 ```js

@@ -34,10 +34,11 @@
 //
 // The third is this model's own. `bro.stt`'s Parakeet call is **synchronous on
 // the calling thread** — `tools/speech.js` runs it in a loop from the command
-// line, where a frozen process is nobody's problem. In a window it is a 1.4 s
-// freeze per window at the measured 11× realtime, 1260 times for a five-hour
-// recording. That is `sound_marks.h`'s argument exactly, and it is why the
-// windowing loop below is here rather than in JS.
+// line, where a frozen process is nobody's problem. In a window it is a freeze
+// per window — 0.2 s of one at the measured 81× realtime, 1260 times for a
+// five-hour recording, and it was 1.4 s before the encoder was made to go. That
+// is `sound_marks.h`'s argument exactly, and it is why the windowing loop below
+// is here rather than in JS.
 //
 // ── Why the windowing loop is in this file ─────────────────────────────────
 //
@@ -72,8 +73,11 @@
 //
 // Nothing here downloads anything, and an absent model is refused **by name**.
 // `brosoundml/scripts/download-parakeet.sh` puts one on disk. Measured on an
-// RTX 4090 at 11.3× realtime, so a six-hour recording is about half an hour and
-// is searchable from the first window.
+// RTX 4090 at 81× realtime over fifteen minutes of a real broadcast, so a
+// six-hour recording is about five minutes and is searchable from the first
+// window. It was 11.3× until three things were fixed one layer down and the
+// encoder went 1 134 ms → 136 ms on an eighteen-second window; the block on
+// `kWordsWindowSec` has the split.
 
 #pragma once
 
@@ -124,28 +128,35 @@ struct SpokenWordsOptions {
 /// anything else would be resampling into a front-end that resamples again.
 inline constexpr int kWordsRate = 16000;
 
-/// **The window the model listens to is not the window that gets read, and
-/// conflating them is the difference between half an hour and most of a day.**
-/// The encoder's self-attention is quadratic in what it is handed — measured on
-/// a 4090 at about 2.3 ms per second²:
+/// **The window the model listens to is not the window that gets read**, and
+/// what decides its length is what the model *hears*, not what the encoder
+/// costs. That is a correction: this number was chosen when a longer window was
+/// also much slower, and it no longer is.
 ///
-///     10 s →    543 ms      120 s → 30 064 ms
-///     30 s →  2 472 ms      180 s → 73 681 ms
-///     60 s →  9 113 ms
+/// The old reading was that self-attention made the encoder quadratic in the
+/// window — 543 ms at ten seconds against 73 681 ms at three minutes, "2.3 ms
+/// per second²". Almost none of that was attention. It was a relative-position
+/// bias built with a scalar loop **on the host**, which is
+/// num_heads·T²·head_dim multiply-adds and quadratic for that reason; it is a
+/// device op now (`brotensor::rel_pos_bias_xl_forward`). Two more followed it —
+/// a single-threaded double-precision STFT, and an FFN reading its whole weight
+/// matrix once per frame — and together they took an eighteen-second window's
+/// encoder from 1 134 ms to 136 ms. Measured cost per second of audio is now
+/// roughly flat from fifteen seconds up.
 ///
-/// which is 18.4× realtime at ten seconds and 2.4× at three minutes, so the cost
-/// per second of audio is `2.3·n + 300/n` and starts climbing past about 11 s.
+/// **Fifteen seconds, because of what it finds**, which is the only half of the
+/// old argument that survived. Two recordings, same run, words found:
 ///
-/// **Fifteen seconds, because it is also the most accurate**, which was the
-/// surprise. The same two minutes of a VOD, by window length:
+///     two minutes of speech      15 s → 186 words, 39×    30 s → 157, 44×
+///     fifteen minutes of a VOD   15 s → 1 558 words, 81×  30 s → 1 566, 95×
+///                                                         45 s → 1 529, 96×
 ///
-///     15 s → 11.3× realtime, 82 words      30 s → 7.1×, 73 words
-///     20 s → 11.0× realtime, 78 words      45 s → 7.1×, 61 words
-///
-/// A longer window does not merely cost more, it *finds less* — the 45-second
-/// run loses a fifth of the words and the 30-second run drops a whole closing
-/// sentence the 15-second one hears. Parakeet is a TDT transducer trained on
-/// short segments, so nothing is being traded here: this is both ends at once.
+/// So a longer window is now genuinely cheaper — 17% on the long recording — and
+/// on the short one it still drops a sixth of the words. Parakeet is a TDT
+/// transducer trained on short segments and that has not changed. **A word count
+/// is not accuracy and nothing here has ground truth**, so this stays where the
+/// one measurement that could go either way says it is safe, and the speed is
+/// taken from the encoder rather than from the window.
 inline constexpr double kWordsWindowSec = 15.0;
 
 /// **Padding, so no word is cut in half by a boundary.** Each window is decoded
@@ -162,8 +173,10 @@ inline constexpr double kWordsOverlapSec = 1.5;
 inline constexpr int kMaxWords = 500000;
 
 /// Long, because it is measured in the length of the recording rather than in
-/// anybody's patience: at 11× realtime a six-hour VOD is about half an hour, and
-/// the same run on a CPU is not. A run that hits this keeps its partial words.
+/// anybody's patience: at 81× realtime a six-hour VOD is about five minutes, and
+/// the same run on a CPU is not — which is what this bound is for, and why it
+/// did not move when the card got eight times faster. A run that hits this keeps
+/// its partial words.
 inline constexpr double kWordsTimeoutSec = 12.0 * 60.0 * 60.0;
 
 /// Where a run has got to. `words` is filled in **while it runs**, which is the
@@ -175,6 +188,9 @@ struct SpokenWordsProgress {
     double timeout = 0.0;
     std::string error;      ///< only when Failed
     SpokenWords result;     ///< partial while Reading, whole once Done
+    /// Where `result.words` begins in the whole transcript. Zero unless the
+    /// caller asked for a tail — see `spokenWordsProgress`.
+    int64_t from = 0;
 };
 
 /// Begin reading `in`'s soundtrack. Returns an id to poll, or 0 when the run
@@ -186,8 +202,19 @@ uint64_t startSpokenWords(const MediaInput& in, const SpokenWordsOptions& opts);
 /// Like `transcribeProgress` and unlike `marksReadProgress`, a *running* entry
 /// answers with every word decoded up to now rather than with nothing: half a
 /// list of onsets is worth nothing, and half a transcript of a six-hour
-/// recording is worth half an hour of somebody's afternoon.
-bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out);
+/// recording is worth the minutes it would take to read the other half.
+///
+/// **`since` is what makes that affordable, and without it the answer costs more
+/// the longer the read goes on.** A poll is a frame of somebody's window, and
+/// handing back every word decoded so far means copying the whole transcript out
+/// from under the reader's own lock and then building a JS object per word:
+/// measured at 0.23 µs a word, which is 0.66 ms at the 2 800 words two minutes
+/// holds and **5.7 ms at the 24 343 a six-hour recording ends with** — 340 ms of
+/// every second at sixty frames, spent on words the caller already had. Passing
+/// the number already held answers with the ones after it, and `from` says where
+/// the answer starts. `total` is the count either way, so a caller that only
+/// draws a number never carries a word at all.
+bool spokenWordsProgress(uint64_t id, SpokenWordsProgress& out, int64_t since = 0);
 
 /// Ask a run to give up. It stops at the next window boundary and keeps what it
 /// has, so the press that asked still gets the words that were read.
