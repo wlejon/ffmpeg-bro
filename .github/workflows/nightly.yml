@@ -302,6 +302,27 @@ jobs:
               echo "the packaged tree has no ffmpeg-bro-headless$EXE in it" >&2
               exit 1
           fi
+          # The file is there and Windows still refuses to start it: that is an
+          # import that did not resolve, and the loader names none of them. Ask
+          # the linker what the binary needs and check each one against what is
+          # beside it and what is in System32, which turns a silent 127 into a
+          # list. dumpbin is on PATH because the MSVC environment is set up for
+          # the build; `-dependents` rather than `/dependents` so MSYS does not
+          # rewrite it into a path.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+              missing=""
+              for dll in $(dumpbin -dependents "ffmpeg-bro-headless$EXE" 2>/dev/null \
+                           | tr -d '\r' | sed -n 's/^ *\([A-Za-z0-9_.+-]*\.[Dd][Ll][Ll]\)$/\1/p'); do
+                  [ -f "./$dll" ] && continue
+                  [ -f "/c/Windows/System32/$dll" ] && continue
+                  missing="$missing $dll"
+              done
+              if [ -n "$missing" ]; then
+                  echo "imports that resolve to nothing:$missing" >&2
+                  exit 1
+              fi
+              echo "every import resolves"
+          fi
           PROBE='
             if (!bro.ffmpeg || bro.ffmpeg.linked !== true)
                 throw new Error("libav is not linked into this build");
@@ -322,10 +343,21 @@ jobs:
                         + " demuxers=" + bro.ffmpeg.demuxers.length
                         + " filters=" + bro.ffmpeg.filters.length);
           '
+          # Run it with the shell's abort-on-error off and report the status by
+          # hand. `-e` would end the step on a non-zero exit with nothing said,
+          # and the whole difficulty here has been telling apart a shell that
+          # could not start the binary from a probe that ran and refused.
+          set +e
           if [ "$RUNNER_OS" = "Linux" ]; then
             xvfb-run -a "./ffmpeg-bro-headless$EXE" app/ui -e "$PROBE"
           else
             "./ffmpeg-bro-headless$EXE" app/ui -e "$PROBE"
+          fi
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "the packaged headless binary exited $rc" >&2
+            exit "$rc"
           fi
 
       # --- Windows code signing ---------------------------------------------
