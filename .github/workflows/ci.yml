@@ -151,6 +151,23 @@ jobs:
             vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-
             vcpkg-bin-${{ matrix.triplet }}-
 
+      # Put cl.exe on PATH so Windows can use Ninja below. The Visual Studio
+      # generator ignores CMAKE_*_COMPILER_LAUNCHER, so with it sccache sees zero
+      # compiles.
+      #
+      # **Before the vcpkg step, and that ordering is load-bearing.** This action
+      # exports the whole Visual Studio developer environment, and that includes
+      # a `VCPKG_ROOT` pointing at the vcpkg bundled with VS. Run after the step
+      # below, it overwrites the pin with whatever ships in the runner image, and
+      # nothing says so: the build still succeeds, because vcpkg.json's
+      # builtin-baseline still pins the ports. What is lost is the tool and the
+      # scripts, which is exactly half of what VCPKG_COMMIT exists to hold still.
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       # Clone vcpkg at the manifest's own baseline so tool, ports and scripts are
       # pinned together. The runner's preinstalled vcpkg drifts with the image.
       - name: vcpkg (pinned)
@@ -166,15 +183,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
-
-      # Put cl.exe on PATH so Windows can use Ninja below. The Visual Studio
-      # generator ignores CMAKE_*_COMPILER_LAUNCHER, so with it sccache sees zero
-      # compiles.
-      - name: MSVC dev environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
 
       - name: Configure
         shell: bash

@@ -181,6 +181,19 @@ jobs:
             vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-
             vcpkg-bin-${{ matrix.triplet }}-
 
+      # **Before the vcpkg step, and that ordering is load-bearing.** This action
+      # exports the Visual Studio developer environment, and that includes a
+      # `VCPKG_ROOT` pointing at the vcpkg bundled with VS. Run after the step
+      # below it silently overwrites the pin, and the build still succeeds
+      # because vcpkg.json's builtin-baseline still pins the ports; what is lost
+      # is the tool and the scripts. See ci.yml, which has the same ordering for
+      # the same reason.
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: vcpkg (pinned)
         shell: bash
         run: |
@@ -194,12 +207,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
-
-      - name: MSVC dev environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
 
       - name: Configure
         shell: bash
@@ -282,6 +289,19 @@ jobs:
           d=$(ls -d dist/ffmpeg-bro-${VERSION}-* | head -1)
           cd "$d"
           if [ "$RUNNER_OS" = "Windows" ]; then EXE=".exe"; else EXE=""; fi
+          # Say what is here before trying to run it. A binary that cannot be
+          # exec'd reports 127 and nothing else, and on Windows that is what a
+          # *missing DLL beside it* looks like too, so the bare exit code cannot
+          # tell an absent file from an unresolved import. This run's log is
+          # cheaper than the next run.
+          echo "package: $(pwd)"
+          ls -la | head -30
+          echo "binaries: $(ls -1 *"$EXE" 2>/dev/null | tr '\n' ' ')"
+          echo "libraries: $(ls -1 *.dll 2>/dev/null | wc -l)"
+          if [ ! -f "./ffmpeg-bro-headless$EXE" ]; then
+              echo "the packaged tree has no ffmpeg-bro-headless$EXE in it" >&2
+              exit 1
+          fi
           PROBE='
             if (!bro.ffmpeg || bro.ffmpeg.linked !== true)
                 throw new Error("libav is not linked into this build");
