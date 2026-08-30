@@ -120,11 +120,24 @@ let looking = '';
 /// replaced by the next thing and it is drawn beside the control it is about.
 let said = '';
 
-/// A description of every live job, for `tick()` to compare against.
-let stamp = '';
+/// What the rows *are*, and what their numbers *say* — two descriptions, because
+/// they change at completely different rates and cost completely different
+/// things to answer.
+///
+/// **A row's shape changes a handful of times in a pull and its numbers change
+/// several times a second.** The shape is which recordings there are and what
+/// condition each is in, which decides the controls on the row and therefore has
+/// to be built; the numbers are a percentage, a byte count, a word count and a
+/// rate, which are text inside elements that already exist. Answering both with
+/// one stamp meant a rebuild of the whole list every time a download crossed ten
+/// megabytes — and a rebuilt list is elements thrown away, which is the most
+/// expensive thing this window does per unit of nothing having happened.
+let shapeStamp = '';
+let numberStamp = '';
 
-/// Whether the frame loop still owes the caller a redraw.
-let dirty = false;
+/// What the frame loop still owes the caller. See `tick()`.
+let needRows = false;
+let needNumbers = false;
 
 // ── what is showing ────────────────────────────────────────────────────────
 
@@ -175,7 +188,7 @@ export async function lookUp(name) {
     if (!next || looking) return false;
     looking = next;
     said = '';
-    dirty = true;
+    needRows = true;
     let got = null;
     try {
         got = await refresh(next, LISTED);
@@ -189,7 +202,7 @@ export async function lookUp(name) {
     // finder somewhere nobody asked for.
     if (library.available()) library.pick(next);
     scan();
-    dirty = true;
+    needRows = true;
     return !!got;
 }
 
@@ -203,7 +216,7 @@ export async function lookUp(name) {
 /// progress fraction, a word count — is written onto the rows by `apply()`.
 function scan() {
     rows = [];
-    if (!login) { stamp = ''; return; }
+    if (!login) { shapeStamp = ''; numberStamp = ''; return; }
 
     // 1. the listing: the only source that knows about a broadcast nobody has.
     const drafts = new Map();
@@ -300,7 +313,8 @@ function rowFor(draft, hasWords, fromManifest) {
 /// Cheap by construction — no file is touched — because this runs on every frame
 /// a job exists, which is what makes a progress line move.
 function apply() {
-    const parts = [];
+    const shape = [];
+    const moving = [];
     for (const row of rows) {
         const w = work.get(row.id);
         // A job of another channel that happens to share an id is not this row's.
@@ -337,15 +351,19 @@ function apply() {
             row.vod.words = (job && job.words) || 0;
             row.progress = job && job.duration > 0 ? row.read / job.duration : 0;
         }
-        // The signature `tick()` compares. Whole percents and whole words: a
-        // fraction that moves in the eighth decimal every frame would make every
-        // frame a redraw, which is the cost `ui/app.js`'s `needs()` exists to
-        // avoid and the reason this is not simply "is anything running".
-        parts.push(`${row.id}:${row.state}:${Math.round(row.progress * 100)}:` +
-                   `${row.vod.words}`);
+        // The two signatures `tick()` compares. What decides a *control* goes in
+        // the first; everything a row merely says goes in the second. Whole
+        // percents and whole words even so: a fraction that moved in the eighth
+        // decimal would make every frame a repaint, which is the cost
+        // `ui/app.js`'s `needs()` exists to avoid.
+        shape.push(`${row.id}:${row.state}:${row.failedAt}`);
+        moving.push(`${row.id}:${Math.round(row.progress * 100)}:${row.vod.words}:` +
+                    `${row.bytes}:${(row.realtime || 0).toFixed(1)}:${row.error}`);
     }
-    const next = parts.join('|');
-    if (next !== stamp) { stamp = next; dirty = true; }
+    const nextShape = shape.join('|');
+    if (nextShape !== shapeStamp) { shapeStamp = nextShape; needRows = true; }
+    const nextMoving = moving.join('|');
+    if (nextMoving !== numberStamp) { numberStamp = nextMoving; needNumbers = true; }
 }
 
 // ── pulling ────────────────────────────────────────────────────────────────
@@ -364,7 +382,7 @@ export function get(id) {
     const rec = { chan, meta: metaOf(row), kind: 'pull', phase: 'resolving',
                   job: null, error: '' };
     work.set(id, rec);
-    dirty = true;
+    needRows = true;
     apply();
 
     // Nothing is printed: `planPull`'s log is the command line's running
@@ -385,13 +403,13 @@ export function get(id) {
         } else {
             rec.phase = 'running';
         }
-        dirty = true;
+        needRows = true;
         apply();
     }).catch((e) => {
         if (work.get(id) !== rec) return;
         rec.phase = 'failed';
         rec.error = String((e && e.message) || e);
-        dirty = true;
+        needRows = true;
         apply();
     });
 }
@@ -405,7 +423,7 @@ export function transcribe(id) {
     if (!row.vod.media) return;
     work.set(id, { chan: login, meta: metaOf(row), kind: 'words',
                    phase: 'queued', job: null, error: '' });
-    dirty = true;
+    needRows = true;
     apply();
 }
 
@@ -527,18 +545,21 @@ export function stop(id) {
     else stopTranscribe(w.job);
     work.delete(id);
     scan();
-    dirty = true;
+    needRows = true;
 }
 
 // ── the frame loop ─────────────────────────────────────────────────────────
 
-/// Poll every live job. Answers whether the list needs drawing again.
+/// Poll every live job. Answers what the list now needs: `'rows'`, `'numbers'`
+/// or `false`.
 ///
 /// **Answers rather than draws**, which is `ui/app.js`'s `needs()`/`drawPending()`
-/// discipline one storey down: the list is rebuilt from scratch by `put()`, and
-/// doing that sixty times a second to move a bar that advances a percent every
-/// few seconds is the cost this repository keeps finding. The answer is true when
-/// a *state* changed, when a whole percent changed, or when the word count did.
+/// discipline one storey down, and it answers with *which* redraw for
+/// `cuts.tick()`'s reason: a bar advancing and a recording changing condition are
+/// two different amounts of work and the caller cannot tell them apart from a
+/// boolean. `'rows'` rebuilds the list, `'numbers'` writes the moving text into
+/// the rows already on the screen — see the two stamps above for why that
+/// distinction is worth having a return value for.
 export function tick() {
     let settled = false;
 
@@ -569,7 +590,12 @@ export function tick() {
     if (settled) scan();
     else apply();
 
-    if (!dirty) return false;
-    dirty = false;
-    return true;
+    if (!needRows && !needNumbers) return false;
+    // Rows first when both are owed: building them writes the numbers on the way
+    // past, and a repaint of elements that are about to be thrown away is a
+    // repaint thrown away with them.
+    const what = needRows ? 'rows' : 'numbers';
+    needRows = false;
+    needNumbers = false;
+    return what;
 }

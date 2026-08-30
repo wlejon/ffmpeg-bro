@@ -82,12 +82,22 @@ export function add(node, children) {
 ///
 /// `replaceChildren` is fixed upstream (bro `83357173`) and this loop stays,
 /// because **`el.remove()` and `el.replaceWith()` still destroy the node they
-/// remove** — deliberately, since `remove()` is the only JS removal path that
-/// reclaims anything and making it spec-correct would pin every detached
-/// element for the document's lifetime. So the rule is: `removeChild` when you
-/// want the node back, `remove()` only for a node you are finished with.
-/// Detaching one child at a time is what the DOM says happens and is the only
-/// route here that leaves the elements alive.
+/// remove**, deliberately. So the rule is: `removeChild` when you want the node
+/// back, `remove()` only for a node you are finished with. Detaching one child
+/// at a time is what the DOM says happens and is the only route here that leaves
+/// the elements alive.
+///
+/// **What the second half of that rule used to cost, and no longer does.**
+/// `remove()` was the only removal path that reclaimed anything: bro's strong
+/// element map held a wrapper for every element it had ever cached, so a
+/// detached one could never be collected and every list this call rebuilt was
+/// retained for the life of the process — 1.5 kB an element, and both halves of
+/// the engine's once-a-second sweep and GC growing linearly with the pile until
+/// the window stopped answering. That is fixed in bro: the map now roots only
+/// elements that are in a tree, so a detached element lives exactly as long as
+/// something still points at it. Nothing here changed for it, and nothing here
+/// should — but the reason a rebuilt list is no longer a leak is over there, not
+/// in this loop.
 export function put(node, build) {
     if (!node) return node;
     while (node.firstChild) node.removeChild(node.firstChild);
@@ -103,6 +113,21 @@ export function fromTemplate(id) {
     const first = t.content.querySelector('*');
     if (!first) throw new Error(`<template id="${id}"> is empty`);
     return first.cloneNode(true);
+}
+
+/// Write text into a node, and only when it is different.
+///
+/// **`textContent =` is neither free nor idempotent.** It replaces the text node
+/// under the element and marks the subtree for layout, so a readout written on
+/// every frame of a frame loop was making a node and relaying itself sixty times
+/// a second to go on saying the same thing. Almost every caller is a readout in a
+/// frame loop and almost every frame changes none of them, so the comparison is
+/// the common case and the write is the exception.
+export function setText(node, text) {
+    if (!node) return node;
+    const s = String(text);
+    if (node.textContent !== s) node.textContent = s;
+    return node;
 }
 
 /// Shorthands for the two things almost every readout is.

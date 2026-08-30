@@ -50,7 +50,7 @@ import { buildSpec } from '../ui/export/spec.js';
 import { tickAnalysis, readCount, useWorker } from '../ui/analysis.js';
 import { transport } from '../ui/transport.js';
 import { clock } from '../ui/format.js';
-import { byId } from '../ui/dom.js';
+import { byId, setText } from '../ui/dom.js';
 
 import * as results from './results.js';
 import * as acquire from './acquire.js';
@@ -256,7 +256,7 @@ function watchRender() {
     if (p.state === 'running') {
         const pct = Math.round((p.progress || 0) * 100);
         const said = p.totalFrames ? `${pct}%` : `frame ${p.frames || 0}`;
-        nodes.render.textContent = `Stop · ${said}`;
+        setText(nodes.render, `Stop · ${said}`);
         renderJob = {
             key: 'render', kind: 'Render',
             name: settings.path || 'the mix', note: said,
@@ -292,19 +292,21 @@ function togglePlay() {
     drawBar();
 }
 
+// Written through `setText` because this runs on every frame of playback and
+// three of its four lines change on almost none of them.
 function drawBar() {
     const total = duration();
-    nodes.time.textContent = `${clock(transport.t)} / ${clock(total)}`;
-    nodes.play.textContent = screen.isPlaying() ? '❚❚' : '▶';
+    setText(nodes.time, `${clock(transport.t)} / ${clock(total)}`);
+    setText(nodes.play, screen.isPlaying() ? '❚❚' : '▶');
     // The glyph does not change — a struck-through note is the same control
     // saying it is off, where two different emoji are two things to recognise.
     nodes.mute.classList.toggle('off', screen.muted());
     const st = screen.state();
-    nodes.what.textContent =
+    setText(nodes.what,
         st === 'audition' ? 'auditioning' :
         st === 'render' ? 'the render' :
         st === 'building' ? 'building the render…' :
-        st === 'clip' ? 'the clip under the playhead' : '';
+        st === 'clip' ? 'the clip under the playhead' : '');
 }
 
 // ── wiring ─────────────────────────────────────────────────────────────────
@@ -498,11 +500,14 @@ function frame() {
     if (cuts.pending()) mix.markCuts();
 
     // A pull advancing, a read landing, a look-up answering. **Ticked here and
-    // drawn only when it says so**, which is `needs()`/`drawPending()` in
-    // `ui/app.js` one storey down: the finder's list is rebuilt whole by `put()`,
-    // and doing that every frame to move a bar that advances a percent every few
-    // seconds is exactly the cost that discipline exists to avoid.
-    if (acquire.tick()) results.refresh();
+    // drawn only when it says so, and only as much as it says**, which is
+    // `needs()`/`drawPending()` in `ui/app.js` one storey down and `cuts.tick()`
+    // beside it: a recording changing condition rebuilds the list, and a bar
+    // moving writes two numbers into the list that is already there. Rebuilding
+    // for the second is 140 elements thrown away per percentage point.
+    const moved = acquire.tick();
+    if (moved === 'rows') results.refresh();
+    else if (moved === 'numbers') results.repaint();
 
     screen.tick();
     // An audition that ran to the end of its moment stops itself, and the row it

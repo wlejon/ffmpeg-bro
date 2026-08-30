@@ -32,7 +32,7 @@
 // `Get` beside a recording that is already here. So the first tab draws
 // `acquire.list()` and decides only how a row looks.
 
-import { el, div, put } from '../ui/dom.js';
+import { el, div, put, setText } from '../ui/dom.js';
 import { clock } from '../ui/format.js';
 import { gb } from '../corpus/files.js';
 import * as library from '../ui/library.js';
@@ -46,6 +46,12 @@ let nodes = null;
 let hooks = {};
 let tab = 'recordings';
 let results = [];
+
+/// The nodes on each recording row that carry a number, by VOD id — what
+/// `repaint()` writes into. Rebuilt with the rows and cleared with them, so it
+/// can never name an element that has left the screen. Only recordings have any:
+/// a hit says a timecode and a phrase, and neither of those moves.
+const moving = new Map();
 let playing = null;      // the item being auditioned, for the row to show it
 
 let phrase = '';
@@ -129,6 +135,38 @@ export function refresh() {
     if (tab === 'recordings') results = acquire.list();
     drawNote();
     drawRows();
+}
+
+/// Write the moving numbers into the rows that are already on the screen.
+///
+/// **The redraw a progress bar is allowed to ask for.** A pull crosses ten
+/// megabytes a few times a second and a read lands a window of words about as
+/// often, and every one of those used to rebuild the whole list — twenty rows of
+/// seven elements each, thrown away and made again to move one percentage. That
+/// is 140 elements a redraw for text that fits in two writes, and elements
+/// thrown away are the expensive kind: they are detached, and detached is the
+/// state a document pays for until the engine collects them.
+///
+/// So `acquire.tick()` says which kind of change happened and this is the cheap
+/// one: `whereOf` for the sentence, one style write for the bar, and nothing
+/// built. A row whose *condition* changed — a pull that finished, a Transcribe
+/// button that became a Stop — is not this; that is `refresh()`, and
+/// `acquire.tick()` answers `'rows'` for it.
+export function repaint() {
+    if (tab !== 'recordings') return;
+    for (const item of results) {
+        const node = moving.get(item.id);
+        if (!node) continue;
+        const text = whereOf(item);
+        // Compared before writing: `textContent=` replaces the text node, so an
+        // unconditional write would be exactly the churn this call exists to
+        // stop, one node smaller.
+        setText(node.where, text);
+        if (node.fill) node.fill.style.width = `${(item.progress || 0) * 100}%`;
+    }
+    // The channel's own line carries counts that a landing read changes, and it
+    // is one write.
+    drawNote();
 }
 
 // ── the two things a row does ──────────────────────────────────────────────
@@ -311,19 +349,19 @@ function drawControls() {
 /// the numbers change with every search.
 function drawNote() {
     const base = library.about();
-    if (nodes.about) nodes.about.textContent = base;
+    if (nodes.about) setText(nodes.about, base);
     // **The first tab says its own line**, because it is the one that has
     // something to report before there is a corpus at all — what a look-up is
     // doing, what it refused, and how much of the channel is actually here.
-    if (tab === 'recordings') { nodes.note.textContent = acquire.note(); return; }
+    if (tab === 'recordings') { setText(nodes.note, acquire.note()); return; }
     if (!base) {
         // The other two questions cannot be asked of a corpus that does not
         // exist, and saying so is not the same as saying nothing.
-        nodes.note.textContent = 'no corpus';
+        setText(nodes.note, 'no corpus');
         return;
     }
     if (!results.length) {
-        nodes.note.textContent = tab === 'words' && phrase ? 'nothing says that' : '';
+        setText(nodes.note, tab === 'words' && phrase ? 'nothing says that' : '');
         return;
     }
     // A recording whose media has been deleted to reclaim the disk still has its
@@ -386,43 +424,69 @@ function searchBox(item) {
 
 // ── a recording, in whatever condition it is in ────────────────────────────
 
-/// One recording's row: the state as a **statement** and the next step as a
-/// **control**, and nothing anywhere telling anybody what to do.
-///
-/// The eight conditions `acquire.js` can report are eight different pairs of
-/// those, which is why this is a table rather than a chain of ifs — a row
-/// carrying the wrong button is the failure mode, and a table is the shape that
-/// can be read against `acquire.js`'s own list.
+/// The one moving line on a recording's row: what is happening to it, in
+/// numbers. **One home for the sentence**, because it is read twice — once when
+/// the row is built and again on every repaint — and two copies of it would be a
+/// row whose text stopped agreeing with itself the moment either was touched. A
+/// pure function of the row, which is what lets `repaint()` write it without
+/// rebuilding anything.
 ///
 /// **Transcribing shows two numbers because they answer two questions**: how far
 /// down the recording it has got, and how fast. A six-hour recording at 11× is
 /// half an hour, and the multiplier is the one that tells somebody whether to
 /// wait or to go and do something else.
-function recording(item, listen, put_) {
-    const id = item.id;
+function whereOf(item) {
     const pct = `${Math.round((item.progress || 0) * 100)}%`;
     const words = (item.vod.words || 0).toLocaleString();
+    let where = span(item.to);
+    switch (item.state) {
+    case 'resolving':    where = `${where} · asking Twitch`; break;
+    case 'pulling':      where = `${pct} · ${gb(item.bytes)}`; break;
+    case 'joining':      where = `${pct} · joining`; break;
+    case 'pulled':       where = `${where} · ${gb(item.bytes)}`; break;
+    case 'queued':       where = `${where} · queued`; break;
+    case 'transcribing':
+        where = `${pct} · ${words} words · ${(item.realtime || 0).toFixed(1)}×`;
+        break;
+    case 'transcribed':  where = `${where} · ${words} words`; break;
+    // The error as it was given, on the row it is about.
+    case 'failed':       where = item.error; break;
+    default: break;
+    }
+    if (!item.vod.media && item.state === 'transcribed') where += ' · not on disk';
+    return where;
+}
+
+/// One recording's row: the state as a **statement** and the next step as a
+/// **control**, and nothing anywhere telling anybody what to do. The statement
+/// is `whereOf` above; this builds the control beside it.
+///
+/// The eight conditions `acquire.js` can report are eight different pairs of
+/// those, which is why this is a table rather than a chain of ifs — a row
+/// carrying the wrong button is the failure mode, and a table is the shape that
+/// can be read against `acquire.js`'s own list.
+function recording(item, listen, put_) {
+    const id = item.id;
 
     const act = (text, title, on) =>
         el('button', { cls: 'tiny', text, title, on: { click: on } });
 
-    let where = span(item.to);
     let control = null;
     let running = false;
 
+    // What the row *does*, which is the half that needs building. What it
+    // *says* is `whereOf` above and is written in place.
     switch (item.state) {
     case 'listed':
         control = act('Get', 'Fetch this recording', () => { acquire.get(id); refresh(); });
         break;
     case 'resolving':
-        where = `${where} · asking Twitch`;
         // Pressed, and working on it: the same button with nothing behind it, so
         // the row shows the press landed and a second one does nothing.
         control = el('button', { cls: 'tiny', text: 'Get', disabled: true });
         running = true;
         break;
     case 'pulling':
-        where = `${pct} · ${gb(item.bytes)}`;
         control = act('Stop', 'Stop the copy', () => { acquire.stop(id); refresh(); });
         running = true;
         break;
@@ -432,11 +496,9 @@ function recording(item, listen, put_) {
         // `stopPull` refuses one anyway — stopping here would leave two halves
         // and no recording, which is worse than the place the press was trying
         // to leave.
-        where = `${pct} · joining`;
         running = true;
         break;
     case 'pulled':
-        where = `${where} · ${gb(item.bytes)}`;
         control = act('Transcribe', 'Read every word of it',
                       () => { acquire.transcribe(id); refresh(); });
         break;
@@ -444,22 +506,18 @@ function recording(item, listen, put_) {
         // **Not a throttle and not a wait to be apologised for**: one read runs
         // at a time because the pool underneath is process-wide. See
         // `acquire.js`.
-        where = `${where} · queued`;
         control = act('Stop', 'Take it out of the queue',
                       () => { acquire.stop(id); refresh(); });
         break;
     case 'transcribing':
-        where = `${pct} · ${words} words · ${(item.realtime || 0).toFixed(1)}×`;
         control = act('Stop', 'Stop reading', () => { acquire.stop(id); refresh(); });
         running = true;
         break;
     case 'transcribed':
-        where = `${where} · ${words} words`;
         break;
     case 'failed':
-        // The error as it was given, on the row it is about. The control beside
-        // it is the one that tries again, which is the press that failed.
-        where = item.error;
+        // The control beside the error is the one that tries again, which is the
+        // press that failed.
         control = item.failedAt === 'words'
             ? act('Transcribe', 'Try reading it again',
                   () => { acquire.transcribe(id); refresh(); })
@@ -468,14 +526,16 @@ function recording(item, listen, put_) {
     default:
         break;
     }
-    if (!item.vod.media && item.state === 'transcribed') where += ' · not on disk';
+    const where = whereOf(item);
 
+    const whereNode = el('span', {
+        cls: item.state === 'failed' ? 'why bad' : 'where dim', text: where });
     const kids = [
         searchBox(item),
         listen,
         el('span', { cls: 'at mono', text: item.label }),
         el('span', { cls: 'detail', text: item.detail }),
-        el('span', { cls: item.state === 'failed' ? 'why bad' : 'where dim', text: where }),
+        whereNode,
     ];
     if (control) kids.push(control);
     kids.push(put_);
@@ -483,9 +543,16 @@ function recording(item, listen, put_) {
     // card moved one place: the row is a working row the whole time — it plays,
     // it adds — and what the line says is only how much longer something about it
     // will still be arriving. A veil over it would claim it could not be used.
-    if (running) kids.push(div('getbar', [
-        el('div', { cls: 'fill', style: { width: `${(item.progress || 0) * 100}%` } }),
-    ]));
+    let fillNode = null;
+    if (running) {
+        fillNode = el('div', { cls: 'fill',
+                               style: { width: `${(item.progress || 0) * 100}%` } });
+        kids.push(div('getbar', [fillNode]));
+    }
+    // The two things a repaint writes. Held by id rather than looked up with a
+    // selector, so a repaint costs a map lookup and two writes per row instead
+    // of a query over the list.
+    moving.set(id, { where: whereNode, fill: fillNode });
 
     return div('row rec' + (isPlaying(item) ? ' playing' : '') +
                (running ? ' getting' : ''), kids);
@@ -500,6 +567,10 @@ function span(seconds) {
 }
 
 function drawRows() {
+    // Whatever the last list left behind is gone with it. Cleared here rather
+    // than in `repaint()` so that a row taken off the screen can never be
+    // written to afterwards.
+    moving.clear();
     put(nodes.list, () => results.slice(0, SHOWN).map((item, n) => {
         const dead = !item.vod.media;
         const on = isPlaying(item);

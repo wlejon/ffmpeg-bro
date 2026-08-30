@@ -39,6 +39,7 @@ import * as exporter from './export.js';
 import { onSettingsChange } from './export/state.js';
 import { initInspector, showProperties, showTransform, subjects } from './inspector.js';
 import { clock, timecode, basename, bytes } from './format.js';
+import { setText } from './dom.js';
 import { paintIcons, setIcon } from './icons.js';
 import { filtergraph, renderGraph } from './filtergraph.js';
 import { makeGraph, restore } from './graph/model.js';
@@ -2121,9 +2122,14 @@ function syncUI() {
     const t = transport.t;
     const d = duration();
 
+    // Through `setText` because this runs on every frame of playback and only
+    // the first of the three changes on one: `textContent =` replaces the text
+    // node and marks the subtree for layout whether or not the words differ, so
+    // the duration and the stats line were relaying themselves sixty times a
+    // second to go on saying exactly what they said before.
     setIcon(btnPlay, transport.playing ? 'pause' : 'play');
-    tcCurrent.textContent = timecode(t, projectFps());
-    tcDuration.textContent = timecode(d, projectFps());
+    setText(tcCurrent, timecode(t, projectFps()));
+    setText(tcDuration, timecode(d, projectFps()));
 
     const f = d > 0 ? Math.max(0, Math.min(1, t / d)) : 0;
     const pct = (f * 100).toFixed(3) + '%';
@@ -2138,12 +2144,12 @@ function syncUI() {
     // kind of sentence: this line is where this application says what it is
     // doing that you did not ask about and have not been given yet.
     const busy = busyWord();
-    stats.textContent = n
+    setText(stats, n
         ? `${project.width}×${project.height}  ${n} clip${n === 1 ? '' : 's'}` +
           (live > 1 ? `  ${live} playing` : '') +
           (waiting ? `  reading ${waiting}…` : '') +
           (busy ? `  ${busy}…` : '')
-        : '';
+        : '');
 }
 
 function syncVolume() {

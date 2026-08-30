@@ -22,7 +22,7 @@
 // explanation: `joining` and `resolving` are seconds to a minute, and a proxy
 // asked for again on the next frame would make a stop a lie.
 
-import { el, div, put } from '../ui/dom.js';
+import { el, div, put, setText } from '../ui/dom.js';
 import * as acquire from './acquire.js';
 import * as cuts from './cuts.js';
 
@@ -34,10 +34,22 @@ let hooks = null;
 /// back open over an empty list would be chrome rather than an answer.
 let open = false;
 
-/// What was drawn last, so the frame loop can draw only when it changed. Same
-/// discipline as `acquire.tick()`, one storey up: this list is rebuilt whole by
-/// `put()` and a percentage moves every few seconds, not sixty times each.
-let stamp = '';
+/// What was drawn last, split the way `acquire.tick()`'s two stamps are split
+/// and for the same reason.
+///
+/// **The list of jobs changes when one starts or ends; what each says changes
+/// several times a second.** A download's note is a percentage and a byte count
+/// rounded to ten megabytes, so at seventeen megabytes a second it is a new
+/// sentence about twice a second, per download — and rebuilding six rows of six
+/// elements for that is thirty-six elements thrown away to move two numbers.
+/// So `shape` decides whether the rows are built and `notes` decides whether the
+/// text in them is written.
+let shape = '';
+let notes = '';
+
+/// The note and bar of each row on the screen, by job key — what a redraw of the
+/// second kind writes into. Rebuilt with the rows.
+const moving = new Map();
 
 /// Wired once. A second `initFlight` is a caller handing over another source of
 /// jobs — which is what a suite does, having no render of its own to poll — and
@@ -74,17 +86,40 @@ export function isOpen() { return open; }
 /// Show the list, or stop showing it.
 export function toggle(on) {
     open = typeof on === 'boolean' ? on : !open;
-    stamp = '';
+    shape = '';
+    notes = '';
     draw();
 }
 
 /// Draw if anything moved. From the frame loop.
+///
+/// Two questions, cheapest first: is this a different set of jobs than the one on
+/// the screen, and if not, does any of them say something new? The first builds
+/// rows and the second writes text into the rows that are there.
 export function tick() {
     const list = jobs();
-    const now = `${open}|` + list.map((j) => `${j.key}:${j.note}`).join('|');
-    if (now === stamp) return;
-    stamp = now;
-    draw(list);
+    const nowShape = `${open}|` + list.map((j) => `${j.key}:${!!j.stop}`).join('|');
+    if (nowShape !== shape) {
+        shape = nowShape;
+        notes = list.map((j) => `${j.note}:${j.progress}`).join('|');
+        draw(list);
+        return;
+    }
+    if (!open) return;
+    const nowNotes = list.map((j) => `${j.note}:${j.progress}`).join('|');
+    if (nowNotes === notes) return;
+    notes = nowNotes;
+    paint(list);
+}
+
+/// Write what each job now says into the row it already has.
+function paint(list) {
+    for (const j of list) {
+        const node = moving.get(j.key);
+        if (!node) continue;
+        setText(node.note, j.note);
+        node.fill.style.width = `${(j.progress || 0) * 100}%`;
+    }
 }
 
 function draw(list) {
@@ -104,27 +139,29 @@ function draw(list) {
     nodes.panel.hidden = !open;
     if (!open) return;
 
+    moving.clear();
     put(nodes.panel, () => {
         if (!n) return [el('div', { cls: 'fl-empty dim', text: 'nothing running' })];
         return running.map((j) => {
+            const note = el('span', { cls: 'note mono dim', text: j.note });
             const kids = [
                 el('span', { cls: 'kind', text: j.kind }),
                 el('span', { cls: 'name', text: j.name }),
-                el('span', { cls: 'note mono dim', text: j.note }),
+                note,
             ];
             if (j.stop)
                 kids.push(el('button', {
                     cls: 'tiny', text: 'Stop', title: 'Stop this',
-                    on: { click: () => { j.stop(); stamp = ''; draw(); } },
+                    on: { click: () => { j.stop(); shape = ''; draw(); } },
                 }));
             else
                 // The width of the button that is not there, so that eight rows
                 // of numbers line up as a column rather than as eight lengths.
                 kids.push(el('span', { cls: 'fl-gap' }));
-            kids.push(div('getbar', [
-                el('div', { cls: 'fill',
-                            style: { width: `${(j.progress || 0) * 100}%` } }),
-            ]));
+            const fill = el('div', { cls: 'fill',
+                                     style: { width: `${(j.progress || 0) * 100}%` } });
+            kids.push(div('getbar', [fill]));
+            moving.set(j.key, { note, fill });
             return div('fl-row', kids);
         });
     });
