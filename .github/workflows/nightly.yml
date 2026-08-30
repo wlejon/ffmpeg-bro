@@ -65,17 +65,17 @@ jobs:
       matrix:
         include:
           # `gpu` is which brotensor backend this platform's nightly compiles
-          # in; see the CUDA toolkit step for why there is only one download per
-          # platform rather than a CPU one and a GPU one. `cudapkgs` differs
-          # between Windows and Linux because the action maps those names onto
-          # each platform's own package names, and it is the first thing to look
-          # at if a nightly stops finding nvcc.
-          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4,
-              gpu: cuda,  cudapkgs: '["nvcc", "cudart-dev"]' }
-          - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4,
-              gpu: cuda,  cudapkgs: '["nvcc", "cudart"]' }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   jobs: 3,
-              gpu: metal, cudapkgs: '' }
+          # in; see the CUDA toolkit step for why there is one download per
+          # platform rather than a CPU one and a GPU one.
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4, gpu: cuda  }
+          - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4, gpu: cuda  }
+          # **macos-15 and not macos-14, and that is brotensor's requirement
+          # rather than a preference.** Its Metal offset path calls MPSNDArray
+          # `-initWithBuffer:offset:descriptor:`, a selector the macOS 14 SDK
+          # does not declare, so the runner one version back does not fail to
+          # link or fail at runtime, it fails to compile. ci.yml stays on
+          # macos-14 because it builds no Metal backend at all.
+          - { name: macos,   os: macos-15,     triplet: arm64-osx,   jobs: 3, gpu: metal }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -127,12 +127,22 @@ jobs:
       # runs this exact binary with no driver present. A second artifact would
       # be two things to explain and two things to pick wrongly.
       #
-      # **The architectures have to be named.** brotensor defaults
-      # `CMAKE_CUDA_ARCHITECTURES` to `native`, which asks the local card what
-      # it is, and there is not one here. These four are Turing, Ampere, Ada and
-      # PTX: real code for RTX 20/30/40, and virtual for anything newer to JIT
-      # from. Each real architecture is another pass of nvcc over 88 `.cu`
-      # files, which is why the list is short and why sccache covers nvcc too.
+      # **The architectures have to be named, and the list is not a preference.**
+      # brotensor defaults `CMAKE_CUDA_ARCHITECTURES` to `native`, which asks the
+      # local card what it is and there is not one here. What replaces it is
+      # Ampere and later, because brotensor's WMMA kernels instantiate a
+      # `__nv_bfloat16 wmma::fragment` with no `__CUDA_ARCH__` guard and that
+      # fragment type only exists on sm_80+. Anything earlier does not run
+      # slowly, it fails to compile: this nightly's first run named `75-real`
+      # and got `incomplete type ... __nv_bfloat16` out of `fp16_matmul.cu`.
+      #
+      # **These two facts are bro's and are copied here**, from
+      # `bro/.github/workflows/nightly.yml`, which learned both the same way.
+      # That is a second home for something neither repository owns: the
+      # architectures a brotensor build can target, and the SDK its Metal path
+      # needs, are properties of brotensor, and every embedder that ships a
+      # binary has to rediscover them. Worth moving down rather than copying a
+      # third time.
       #
       # The weights are still not shipped and cannot be: an absent model is
       # refused by name, and `brosoundml/scripts/download-whisper.sh` is what
@@ -142,9 +152,16 @@ jobs:
         if: matrix.gpu == 'cuda'
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: '12.6.3'
+          cuda: "12.6.2"
           method: network
-          sub-packages: ${{ matrix.cudapkgs }}
+          use-github-cache: true
+          # Linux only: the full `cuda` meta-package pulls in nvidia-driver-*-open,
+          # whose DKMS post-install fails on a driverless runner and reds the job.
+          # brotensor links CUDA::cudart_static and compiles its own kernels, with
+          # no cuBLAS or cuFFT, so nvcc plus the cudart dev package is the whole
+          # requirement and naming them excludes the driver. Windows has no DKMS
+          # step and its full install works, so it stays on the default.
+          sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart-dev"]' || '[]' }}
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -195,7 +212,12 @@ jobs:
           # See the CUDA toolkit step above for both of these.
           GPU_ARGS=""
           if [ "${{ matrix.gpu }}" = "cuda" ]; then
-            GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75-real;86-real;89-real;90-virtual"
+            # Ampere and later, with a PTX tail for anything newer to JIT from.
+            # sccache caches nvcc too, and routing the CUDA compiler through it
+            # is what stops the heaviest translation units in the tree from
+            # recompiling every night while every C++ object hits the cache.
+            CUDA_ARCHS="80-real;86-real;89-real;90-real;90-virtual"
+            GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
           elif [ "${{ matrix.gpu }}" = "metal" ]; then
             GPU_ARGS="-DBRO_WITH_TENSOR_METAL=ON"
           fi
