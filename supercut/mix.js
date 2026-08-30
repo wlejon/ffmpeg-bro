@@ -216,8 +216,38 @@ function unwalled(clip, edit) {
 /// the card's edge is and for the start edge is where the cut lands — the head
 /// closes up behind a trim, so the left edge of a card never moves and the
 /// pointer is the only thing on the screen that does.
-function magnetTo(t) {
-    return Math.abs(xOf(t) - xOf(transport.t)) <= MAGNET_PX ? transport.t : t;
+///
+/// **`to` is the playhead as it stood when the gesture began**, and not where it
+/// is now. A head trim moves the playhead with the material it is on (see
+/// `holdMaterial`), so a magnet asked against the live one would be chasing a
+/// target moving away from the hand at the hand's own speed — while `from + dt`
+/// is measured on the timeline the gesture started on, where the clip's own start
+/// and everything before it are exactly where they were.
+function magnetTo(t, to) {
+    return Math.abs(xOf(t) - xOf(to)) <= MAGNET_PX ? to : t;
+}
+
+/// After a head trim, put the playhead back on the sound it was on.
+///
+/// **A head trim does not move the card, it moves everything inside and after
+/// it.** The mix closes up, so the clip keeps its left edge and loses `by`
+/// seconds off the front: material that was at `t` is at `t - by` afterwards, its
+/// own footage included. The playhead is a position on the *timeline*, so left
+/// alone it goes on pointing at the same second and therefore at different sound
+/// — park it on a word to trim up to, and the word is the thing that slides out
+/// from under it, which is exactly backwards for the one gesture whose whole
+/// purpose is to cut up to a word.
+///
+/// So the playhead goes with the material. Trimmed *past* it, there is no
+/// material left to hold and it lands on the clip's new head.
+///
+/// **The out-point is deliberately not given the same treatment.** It moves what
+/// is after the clip and nothing inside it, so the playhead you are trimming
+/// against — which is in the clip, or you could not see what you are cutting — is
+/// on sound that did not move.
+function holdMaterial(g, clip, by) {
+    if (!(g.wasT > clip.start) || !by) return;
+    hooks.seek(Math.max(clip.start, g.wasT - by));
 }
 
 /// Put a found moment at the end of the mix.
@@ -352,6 +382,11 @@ function onDown(e, clip, kind, edge) {
         // the clip exactly as it was — an accumulating one drifts, because every
         // step is separately clamped.
         was: { inPoint: clip.inPoint, length: clip.length, speed: clip.speed },
+        // Where the playhead was when the hand went down. Held for `was`'s own
+        // reason — every move re-applies the whole edit from the beginning — and
+        // read by both halves of the magnet: it is what a head trim puts the
+        // playhead back against, and it is the timeline the snap is measured on.
+        wasT: transport.t,
         index: sequence().indexOf(clip),
     };
     // **Not a redraw.** Rebuilding the row on the press would destroy the very
@@ -390,9 +425,14 @@ function onMove(e) {
         // clip off it — which is the frame the playhead is in, and therefore the
         // only one the magnet can be asked in.
         const from = edge === 'start' ? clip.start : clip.start + drag.was.length;
-        const want = magnetTo(from + dt);
+        const want = magnetTo(from + dt, drag.wasT);
         snapped(want !== from + dt);
         unwalled(clip, (by) => trimClip(clip, edge, want + by));
+        // What the head actually lost, which is the trim the model performed
+        // rather than the one the hand asked for: it stops at the start of the
+        // file and at one frame of length, and the playhead must follow the
+        // material by the distance it really moved.
+        if (edge === 'start') holdMaterial(drag, clip, drag.was.length - clip.length);
     } else if (drag.kind === 'slip') {
         // **Dragging right shows earlier footage** — the film moves under the
         // window rather than the window over the film, which is the sign every

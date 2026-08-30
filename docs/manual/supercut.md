@@ -262,6 +262,12 @@ that is a second gesture behind a mode, and rightly so — there a clip may be
 placed against a soundtrack and closing the gap would move it off. Here there is
 one lane and nothing to place anything against.
 
+One consequence you can see: **trimming the head does not move the card**, it
+moves everything inside and after it. The left edge stays where it was and the
+footage slides back to meet it. The playhead slides with it, so it goes on
+standing on the sound it was standing on — and if you trim past it, it ends up
+on the clip's new first frame.
+
 **The playhead is a magnet while you trim.** Park it on the word you want the
 piece to start or stop at — clicking the row puts it there, and `←` `→` walk it
 a frame at a time — then drag the edge to it and the last few pixels are taken

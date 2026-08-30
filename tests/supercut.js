@@ -547,6 +547,42 @@ console.log('\ntrim');
        'and the first clip is still at zero, because everything moved instead');
 }
 
+// ── a head trim keeps the playhead on its sound ────────────────────────────
+//
+// The mix closes up behind a trim, so a head trim moves the clip's own footage
+// out from under a playhead that stayed where it was. What is asserted is the
+// thing that matters and not the arithmetic that gets there: the *file* moment
+// under the playhead is the same one afterwards.
+
+console.log('\nthe head holds its sound');
+{
+    const a = order()[0];
+    /// Where in the file the playhead is standing, which is the whole question.
+    const under = (c, t) => c.inPoint + (t - c.start) * (c.speed || 1);
+
+    A.seek(a.start + a.length * 0.6);
+    pump(60);
+    const was = under(a, A.transport.t), at0 = A.transport.t, in0 = a.inPoint;
+
+    drag(cardEls()[0].querySelector('.edge.l'), 30);
+    ok(a.inPoint > in0 + 0.01,
+       `the head is trimmed (${in0.toFixed(3)} → ${a.inPoint.toFixed(3)}s into the file)`);
+    ok(A.transport.t < at0 - 0.01,
+       `and the playhead came back with the material (${at0.toFixed(3)} → ` +
+       `${A.transport.t.toFixed(3)}s)`);
+    ok(Math.abs(under(a, A.transport.t) - was) < 0.02,
+       `so it is standing on the same sound it was standing on (${was.toFixed(3)}s)`);
+
+    // Trimmed past, there is no material left to hold it on: it lands on what is
+    // now the head rather than being left inside the part that was removed.
+    A.seek(a.start + 10 / A.mix.zoom());
+    pump(60);
+    drag(cardEls()[0].querySelector('.edge.l'), 40);
+    ok(Math.abs(A.transport.t - order()[0].start) < 1e-6,
+       'and a trim that goes past it leaves it on the new head');
+    ok(!packed('after a head trim'), packed('after a head trim') || 'still packed');
+}
+
 // ── the magnet: a trim taken by the playhead ───────────────────────────────
 //
 // The one thing on the strip that is not a card and is worth landing on. Driven
