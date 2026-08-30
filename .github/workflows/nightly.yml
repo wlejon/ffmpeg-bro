@@ -302,26 +302,41 @@ jobs:
               echo "the packaged tree has no ffmpeg-bro-headless$EXE in it" >&2
               exit 1
           fi
-          # The file is there and Windows still refuses to start it: that is an
-          # import that did not resolve, and the loader names none of them. Ask
-          # the linker what the binary needs and check each one against what is
-          # beside it and what is in System32, which turns a silent 127 into a
-          # list. dumpbin is on PATH because the MSVC environment is set up for
-          # the build; `-dependents` rather than `/dependents` so MSYS does not
-          # rewrite it into a path.
+          # The file is there and Windows still refuses to start it, which looks
+          # like an import that did not resolve, and the loader names none of
+          # them. Ask the linker what each image needs and check the answers
+          # against what is beside them and what is in System32. Walked over the
+          # packaged libraries as well as the binary, because a direct import
+          # that is present can still fail on a dependency of its own. dumpbin is
+          # on PATH because the MSVC environment is set up for the build;
+          # `-dependents` rather than `/dependents` so MSYS does not rewrite it
+          # into a path.
+          #
+          # **`api-ms-win-*` is skipped, and that is not a shortcut.** Those are
+          # API set contracts, resolved by the loader through the apiset schema
+          # onto whichever DLL implements them, and they are not files anywhere.
+          # Looking for them on disk reported fifteen missing imports on a binary
+          # whose imports were all fine.
+          #
+          # This **reports and does not stop**: the question is what is wrong,
+          # and exiting here means never seeing what the binary itself says.
           if [ "$RUNNER_OS" = "Windows" ]; then
               missing=""
-              for dll in $(dumpbin -dependents "ffmpeg-bro-headless$EXE" 2>/dev/null \
-                           | tr -d '\r' | sed -n 's/^ *\([A-Za-z0-9_.+-]*\.[Dd][Ll][Ll]\)$/\1/p'); do
-                  [ -f "./$dll" ] && continue
-                  [ -f "/c/Windows/System32/$dll" ] && continue
-                  missing="$missing $dll"
+              for img in "ffmpeg-bro-headless$EXE" *.dll; do
+                  for dll in $(dumpbin -dependents "$img" 2>/dev/null | tr -d '\r' \
+                               | sed -n 's/^ *\([A-Za-z0-9_.+-]*\.[Dd][Ll][Ll]\)$/\1/p'); do
+                      case "$dll" in [aA][pP][iI]-ms-win-*|[aA][pP][iI]-MS-Win-*) continue ;; esac
+                      [ -f "./$dll" ] && continue
+                      [ -f "/c/Windows/System32/$dll" ] && continue
+                      case " $missing " in *" $dll "*) continue ;; esac
+                      missing="$missing $dll"
+                  done
               done
               if [ -n "$missing" ]; then
-                  echo "imports that resolve to nothing:$missing" >&2
-                  exit 1
+                  echo "imports that resolve to nothing:$missing"
+              else
+                  echo "every import of the binary and of the libraries beside it resolves"
               fi
-              echo "every import resolves"
           fi
           PROBE='
             if (!bro.ffmpeg || bro.ffmpeg.linked !== true)
