@@ -403,13 +403,19 @@ console.log('\nwhat is running');
     ok(stopped === 1, 'the Stop on the row is the job\'s own stop');
 
     live = null;
-    // Settle once more before asking whether the button is gone. The clips the
+    // Settle to *quiet* before asking whether the button is gone. The clips the
     // section above put in the mix each ask for a proxy, and a proxy is a real
     // encode whose length belongs to the machine rather than to this suite:
-    // NVENC where there is a card, libx264 on a runner where there is not, which
-    // is the difference between finished by this line and still going. The
-    // claim here is about the drawing, so wait for the state it is a drawing of.
-    for (let i = 0; i < 600 && A.inflight.count(); i++) pump(25);
+    // NVENC where there is a card, libx264 on a runner where there is not. It is
+    // also asked for on the frame the mix is drawn rather than on the frame the
+    // clip was added, so a single settle proves nothing — one ran green here
+    // with a count of zero and then watched a job start on the very next pump.
+    // What this needs is several frames in a row with nothing running, by which
+    // time every distinct file has its proxy and `pathFor` answers from the
+    // cache rather than starting an encode.
+    let quiet = 0;
+    for (let i = 0; i < 800 && quiet < 8; i++)
+        { pump(25); quiet = A.inflight.count() ? 0 : quiet + 1; }
     A.inflight.toggle(false);
     pump(40);
     ok(panel.hidden, 'it closes');
