@@ -719,16 +719,27 @@ int main(int argc, char* argv[]) {
 
     // ── an open that is going nowhere ──────────────────────────────────────
     //
-    // Port 9 on the loopback address: nothing is listening and nothing can be.
-    // On this platform libav does not learn that quickly — a refused connect
-    // sits in the poll until the protocol's own `open_timeout` — so this is a
-    // genuine blocking open, which is exactly the thing being tested. It is
-    // also why nothing here needs a server: what is asserted is that the
-    // deadline fires and that a stop lands, not that anything answered.
+    // **The open has to genuinely block, and picking a dead port does not make
+    // one.** This was `tcp://127.0.0.1:9` on the reasoning that nothing is
+    // listening there and nothing can be. That is a Windows measurement: a
+    // refused connect to loopback sits in the poll there until the protocol's
+    // own `open_timeout`, and on Linux the kernel answers with an RST in
+    // microseconds. So on a runner the connect failed on its own before either
+    // interruption landed, and both assertions below read back libav's
+    // `Connection refused` instead of the deadline's words and the stop's —
+    // which is correct behaviour by `openFailure` and a test asserting about a
+    // race it had already lost.
+    //
+    // `listen=1` is the fix and needs no server either: the tcp protocol binds
+    // and waits in `ff_accept` for a connection that is never made, on every
+    // platform, for as long as it is left alone — and it polls the interrupt
+    // callback while it waits, which is the entire thing being tested. What is
+    // asserted is still that the deadline fires and that a stop lands, not that
+    // anything answered.
     std::printf("\nan open that goes nowhere ends by itself, and can be stopped\n");
     {
         MediaInput nowhere;
-        nowhere.path = "tcp://127.0.0.1:9";
+        nowhere.path = "tcp://127.0.0.1:45907?listen=1";
 
         const auto began = std::chrono::steady_clock::now();
         const uint64_t id = startProbe(nowhere, 1.0);
