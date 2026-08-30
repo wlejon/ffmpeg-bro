@@ -210,11 +210,30 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 }
 #mix-head .label { color: var(--dim); text-transform: lowercase; letter-spacing: .5px; }
 
+/* The window onto the mix. **No horizontal padding**: x zero on this box is the
+   moment `mix.js` holds as `left`, which is what lets a card's left edge be its
+   moment with no term in between — a pad would be dead space the scroll
+   arithmetic carried at every zoom. Both axes clip, which is what keeps the row
+   off the rest of the window when it is scrolled. */
 #strip {
     position: relative; flex: 1 1 auto; min-height: 0;
     overflow-x: auto; overflow-y: hidden;
-    padding: 6px 12px 12px;
+    padding: 6px 0 12px;
 }
+
+/* The strip's own scroll, because the engine has none on this axis. The same
+   control `ui/timeline.js` draws under its lanes: press the thumb and it comes
+   with the hand, press the track and the window goes there. */
+#mix-scroll {
+    position: relative; flex: 0 0 auto; height: 9px; margin: 0 12px 8px;
+    background: #0e1014; border: 1px solid var(--line);
+    border-radius: 5px; cursor: pointer;
+}
+#mix-thumb {
+    position: absolute; top: 0; bottom: 0;
+    background: #3d4450; border-radius: 5px; min-width: 12px;
+}
+#mix-thumb:hover { background: #4c5563; }
 /* No gap, on purpose: with the cards butted, a card's left edge is exactly its
    moment in the mix, so the strip is its own ruler and the playhead needs no
    second measurement to agree with. A 1px border is the seam. */
@@ -309,6 +328,13 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
     position: absolute; top: 0; bottom: 12px; width: 2px;
     background: var(--accent); pointer-events: none; z-index: 5;
     box-shadow: 0 0 6px rgba(255,140,66,.6);
+}
+/* It has taken the edge being trimmed. The line is the thing doing the taking,
+   so the line is what says so — and it says it by being more of itself rather
+   than by turning into something else. */
+#playhead.magnet {
+    width: 3px; background: #ffd7a8;
+    box-shadow: 0 0 10px rgba(255,180,110,.95);
 }
 
 #empty {

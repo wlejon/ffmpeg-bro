@@ -79,6 +79,7 @@ const nodes = {
     mix: byId('mix'),
     mixNote: byId('mix-note'), strip: byId('strip'), cards: byId('cards'),
     playhead: byId('playhead'), zoom: byId('zoom'),
+    mixScroll: byId('mix-scroll'), mixThumb: byId('mix-thumb'),
     fit: byId('btn-fit'), clear: byId('btn-clear'),
     flash: byId('flash'),
 };
@@ -318,6 +319,7 @@ screen.initScreen({ stage: nodes.stage, note: nodes.stageNote }, {
 mix.initMix({
     strip: nodes.strip, cards: nodes.cards, playhead: nodes.playhead,
     note: nodes.mixNote, zoom: nodes.zoom, fit: nodes.fit, clear: nodes.clear,
+    scroll: nodes.mixScroll, thumb: nodes.mixThumb,
 }, {
     seek,
     // Under a moving hand: the picture follows the edit, and nothing is written

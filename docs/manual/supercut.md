@@ -239,6 +239,11 @@ do the same about the playhead, and `0` — or **Fit** — puts the whole mix on
 screen. Two pixels a second up to twelve hundred: the whole of a long supercut,
 or a single frame wide enough to aim at.
 
+**The bar under the strip is where you are in the mix.** Zoomed in, most of the
+row is off the screen; drag the bar to get to the rest of it, or press the track
+to go straight there. It shows how much of the mix is on the strip, so it is
+absent while all of it is. Playback carries the strip along on its own.
+
 ## The four gestures
 
 Each is a different grab point on the card. Nothing is modal, so there is
@@ -256,6 +261,13 @@ and the rest pulls back, lengthen it and the rest moves along. On the workbench
 that is a second gesture behind a mode, and rightly so — there a clip may be
 placed against a soundtrack and closing the gap would move it off. Here there is
 one lane and nothing to place anything against.
+
+**The playhead is a magnet while you trim.** Park it on the word you want the
+piece to start or stop at — clicking the row puts it there, and `←` `→` walk it
+a frame at a time — then drag the edge to it and the last few pixels are taken
+for you. The line brightens and thickens as it takes the edge, so you can see it
+happen. Nothing else on the strip snaps: in a packed mix every neighbour is
+already touching, so the playhead is the only thing there is to land on.
 
 **Slip is the one for a cut that landed wrong.** A word taken with a second and
 a half either side sometimes has the wrong second and a half; dragging the

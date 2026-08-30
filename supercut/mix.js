@@ -34,12 +34,39 @@
 // Nothing is modal, so nothing has to be remembered and nothing can be left
 // switched on. A click on the picture that did not move is a click, and it puts
 // the playhead there.
+//
+// ── The strip is a window onto the mix, and it owns it ────────────────────
+//
+// A mix trimmed to the frame is metres wide — at 600 px/s a two-minute supercut
+// is seventy thousand pixels — so most of it is off the screen most of the time
+// and the position of the window is a thing this file has to hold. It is held
+// here, in **seconds**, and not on the element as a scroll offset. Two reasons,
+// and the second would still stand if the first went away:
+//
+//   - This engine has no horizontal scrolling. `Element.scrollLeft` is a getter
+//     fixed at zero and a setter that does nothing (bro's `element_bindings.cpp`
+//     says so by name, and `layout_node_adapter.h` returns 0 for the layout's
+//     own read), so `overflow-x: auto` clips and nothing more. Every
+//     `strip.scrollLeft = ...` this file used to write did nothing and every one
+//     it read was a zero — which is why the mix could be zoomed and never
+//     scrolled, and why zooming about the pointer held nothing still.
+//   - Where the window is, is a fact about the *view of the edit* rather than
+//     about a box of pixels. It is in seconds, `showing()` is told a span in
+//     seconds, and the playhead is placed out of it. `ui/timeline.js` next door
+//     owns its `view` for exactly that reason and draws its own bar under it;
+//     this is the same decision, one lane wide.
+//
+// So `left` is the moment at the strip's left edge, `setLeft` is the only writer
+// of it, and the row is put where that says by a negative margin — which leaves
+// the cards in normal flow with their flex widths intact, and `#strip` clips both
+// axes, so what is outside the window is off the screen.
 
 import {
     project, addClip, sortClips, removeClip, select, isSelected,
     trimClip, slipClip, setSpeed, speedOf, sourceSpan, duration, changed,
 } from '../ui/project.js';
 import { analyzeClip, frameAt, showing } from '../ui/analysis.js';
+import { transport } from '../ui/transport.js';
 import { el, div, put } from '../ui/dom.js';
 import { clock } from '../ui/format.js';
 import * as cuts from './cuts.js';
@@ -55,10 +82,22 @@ const RATE_PX = 170;
 /// A press that moves less than this is a click, not a drag.
 const SLOP = 3;
 
+/// How near the playhead a trim has to come to be taken by it, in pixels.
+///
+/// **On the screen rather than in seconds**, so the magnet is the same size of
+/// gesture at every zoom — which is the whole reason to have one. At 600 px/s a
+/// frame is ten pixels and the thing being aimed at is a line two wide.
+const MAGNET_PX = 9;
+
 let nodes = null;
 let hooks = {};
 let pxPerSec = 120;
 let drag = null;
+/// A press on the scroll bar: where the hand went down and where the view was.
+let bar = null;
+/// The moment at the strip's left edge, in seconds — see the header. Written by
+/// `setLeft` and by nothing else.
+let left = 0;
 /// Card elements by clip id, so a drag can move one without rebuilding the row
 /// underneath the pointer — which would destroy the element the gesture is on.
 const cards = new Map();
@@ -74,15 +113,30 @@ export function initMix(refs, h) {
     // **The wheel zooms, and it zooms about the pointer.** Trimming to a frame
     // means about a hundred pixels a second on the strip and the whole mix is
     // then metres wide, so getting close to a cut has to be one gesture rather
-    // than a slider and a scrollbar. Holding the moment under the pointer still
-    // is what makes it one: you point at the edge you care about and turn.
+    // than a zoom and then a pan. Holding the moment under the pointer still is
+    // what makes it one: you point at the edge you care about and turn. The bar
+    // below is for the other journey — somewhere else entirely, at this zoom.
     nodes.strip.addEventListener('wheel', (e) => {
         const box = nodes.strip.getBoundingClientRect();
         const held = timeAt(e);
         const off = e.clientX - box.left;
         setZoom(pxPerSec * (e.deltaY < 0 ? 1.25 : 1 / 1.25));
+        // The moment that was under the pointer, put back under the pointer.
+        setLeft(held - off / pxPerSec);
         draw();
-        nodes.strip.scrollLeft = Math.max(0, xOf(held) - off);
+        e.preventDefault();
+    });
+    // The bar under the strip pans it. A press on the thumb takes it with the
+    // hand; a press on the track puts the window where it was pressed and then
+    // takes it with the hand too, so overshooting the jump is a correction
+    // rather than a second press.
+    if (nodes.scroll) nodes.scroll.addEventListener('mousedown', (e) => {
+        const track = nodes.scroll.getBoundingClientRect();
+        const thumb = nodes.thumb.getBoundingClientRect();
+        if (e.clientX < thumb.left || e.clientX > thumb.right)
+            setLeft(((e.clientX - track.left) / Math.max(1, track.width)) * duration()
+                    - viewSpan() / 2);
+        bar = { grab: e.clientX, was: left };
         e.preventDefault();
     });
     nodes.clear.addEventListener('click', () => {
@@ -132,6 +186,12 @@ export function reflow() {
 /// everything after it twice as far leaves both walls unreachable while keeping
 /// the order, so the primitive's *own* limits — the head of the file, the last
 /// frame, one frame of length, the speed range — are the only ones that bite.
+///
+/// **The edit is handed how far the clip was moved**, because a trim is given a
+/// moment and that moment is on the timeline the hand is pointing at rather than
+/// on the one the clip is briefly standing in. Handed over rather than read off
+/// `clip.start` inside the closure, which is the same number arrived at by
+/// knowing what this function did to it.
 function unwalled(clip, edit) {
     const order = sequence();
     const i = order.indexOf(clip);
@@ -140,8 +200,24 @@ function unwalled(clip, edit) {
         if (k === i) order[k].start += WAY;
         else if (k > i) order[k].start += 2 * WAY;
     }
-    edit();
+    edit(WAY);
     reflow();
+}
+
+/// The moment a trim asked for, or the playhead when it came near enough.
+///
+/// **Only the two trim edges ask.** A slip moves footage inside a card whose
+/// length is not changing and a speed drag is not a position at all, so a magnet
+/// on either would be the mix quietly altering something the hand was not on.
+/// Nothing snaps to a neighbour either, because in a packed sequence every
+/// neighbour is already touching and there is nothing to close up to.
+///
+/// What is snapped is where the *hand* is, which for the end edge is also where
+/// the card's edge is and for the start edge is where the cut lands — the head
+/// closes up behind a trim, so the left edge of a card never moves and the
+/// pointer is the only thing on the screen that does.
+function magnetTo(t) {
+    return Math.abs(xOf(t) - xOf(transport.t)) <= MAGNET_PX ? transport.t : t;
 }
 
 /// Put a found moment at the end of the mix.
@@ -175,20 +251,45 @@ function edited() {
 
 // ── geometry ───────────────────────────────────────────────────────────────
 
-/// Where the cards begin inside the strip, in pixels. The strip's own padding,
-/// asked of the element rather than written down twice.
-function pad() {
-    return nodes.cards.offsetLeft;
-}
-
-export function xOf(t) { return pad() + t * pxPerSec; }
+/// Where a moment is on the strip, in pixels from the strip's left edge.
+///
+/// **The strip has no horizontal padding**, which is what makes this two terms
+/// rather than three: x zero is the moment `left`, so a card's left edge is its
+/// moment and the playhead needs no second measurement to agree with it. A pad
+/// would be dead space the scroll arithmetic had to carry at every zoom.
+export function xOf(t) { return (t - left) * pxPerSec; }
 
 /// The moment under a pointer event, clamped to the mix.
 export function timeAt(e) {
     const box = nodes.strip.getBoundingClientRect();
-    const x = e.clientX - box.left + nodes.strip.scrollLeft - pad();
-    return Math.max(0, Math.min(x / pxPerSec, duration()));
+    return Math.max(0, Math.min(left + (e.clientX - box.left) / pxPerSec, duration()));
 }
+
+/// How much of the mix is on the strip, in seconds.
+export function viewSpan() {
+    return nodes.strip.clientWidth / pxPerSec;
+}
+
+/// The furthest the window can go: the end of the mix at the strip's right edge,
+/// or nowhere at all when the whole thing fits.
+function maxLeft() {
+    return Math.max(0, duration() - viewSpan());
+}
+
+/// Move the window, and put the row and the bar where the number says.
+///
+/// **The one writer of `left`**, so the offset the cards are drawn at and the
+/// offset `xOf` measures from cannot come apart — which is exactly what a second
+/// place setting a margin beside it would be.
+export function setLeft(v) {
+    if (!nodes) return;
+    left = Math.max(0, Math.min(Number(v) || 0, maxLeft()));
+    nodes.cards.style.marginLeft = `${(-left * pxPerSec).toFixed(2)}px`;
+    drawScroll();
+}
+
+/// Where the window is, in seconds. For the suites and for `follow`.
+export function view() { return { left, span: viewSpan() }; }
 
 /// The range the strip can be scaled over, in pixels per second.
 ///
@@ -205,28 +306,33 @@ const ZOOM_MAX = 1200;
 function setZoom(v) {
     pxPerSec = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v));
     if (nodes.zoom) nodes.zoom.value = String(Math.round(pxPerSec));
+    // The row's offset is in pixels and the window's position is in seconds, so
+    // a change of scale moves one and not the other until it is re-applied —
+    // and the range the window may sit in has changed with it.
+    setLeft(left);
     return pxPerSec;
 }
 
 /// A zoom at which the whole mix is on the screen.
 export function fit() {
     const total = duration();
-    const room = nodes.strip.clientWidth - pad() * 2;
+    const room = nodes.strip.clientWidth;
     if (!(total > 0) || !(room > 0)) return;
     setZoom(room / total);
+    setLeft(0);
 }
 
 /// Closer in, or further out, about the playhead — what `+` and `-` do.
 export function nudgeZoom(dir, t) {
-    const box = nodes.strip.getBoundingClientRect();
-    const off = xOf(t) - nodes.strip.scrollLeft;
+    const room = nodes.strip.clientWidth;
+    const off = xOf(t);
     setZoom(pxPerSec * (dir > 0 ? 1.4 : 1 / 1.4));
-    draw();
     // Keep the playhead where it was on the screen, unless it was off it, in
     // which case put it in the middle — zooming towards something you cannot
     // see is how a strip ends up scrolled to nowhere.
-    const keep = off > 0 && off < box.width ? off : box.width / 2;
-    nodes.strip.scrollLeft = Math.max(0, xOf(t) - keep);
+    const keep = off > 0 && off < room ? off : room / 2;
+    setLeft(t - keep / pxPerSec);
+    draw();
 }
 
 export function zoom() { return pxPerSec; }
@@ -259,6 +365,13 @@ function onDown(e, clip, kind, edge) {
 }
 
 function onMove(e) {
+    if (bar) {
+        // A hand on the bar moves the window in proportion to the whole mix,
+        // which is what makes the thumb stay under it.
+        const track = nodes.scroll.getBoundingClientRect();
+        setLeft(bar.was + ((e.clientX - bar.grab) / Math.max(1, track.width)) * duration());
+        return;
+    }
     if (!drag) return;
     const dx = e.clientX - drag.x0;
     if (!drag.moved && Math.abs(dx) < SLOP) return;
@@ -273,9 +386,13 @@ function onMove(e) {
 
     if (drag.kind === 'trim') {
         const edge = drag.edge;
-        unwalled(clip, () => trimClip(
-            clip, edge,
-            edge === 'start' ? clip.start + dt : clip.start + drag.was.length + dt));
+        // On the timeline the hand is pointing at, before `unwalled` moves the
+        // clip off it — which is the frame the playhead is in, and therefore the
+        // only one the magnet can be asked in.
+        const from = edge === 'start' ? clip.start : clip.start + drag.was.length;
+        const want = magnetTo(from + dt);
+        snapped(want !== from + dt);
+        unwalled(clip, (by) => trimClip(clip, edge, want + by));
     } else if (drag.kind === 'slip') {
         // **Dragging right shows earlier footage** — the film moves under the
         // window rather than the window over the film, which is the sign every
@@ -295,9 +412,11 @@ function onMove(e) {
 }
 
 function onUp() {
+    if (bar) { bar = null; return; }
     if (!drag) return;
     const was = drag;
     drag = null;
+    snapped(false);
     const card = cards.get(was.clip.id);
     if (card) card.classList.remove('dragging');
     if (!was.moved) {
@@ -384,6 +503,10 @@ function resize() {
             paint(c, canvas);
         }
     }
+    // The mix got longer or shorter under the hand, which is what the thumb is a
+    // measurement of — and a trim past the right-hand edge can leave the window
+    // beyond the end of what is left, so the clamp is re-applied here too.
+    setLeft(left);
     if (hooks.resized) hooks.resized();
 }
 
@@ -594,16 +717,40 @@ function drawNote() {
 /// which owns the clock.
 export function placePlayhead(t) {
     if (!nodes || !nodes.playhead) return;
-    nodes.playhead.style.left = `${xOf(t)}px`;
+    nodes.playhead.style.left = `${xOf(t).toFixed(1)}px`;
     nodes.playhead.hidden = !project.clips.length;
+}
+
+/// Say on the playhead that it has taken the edge being dragged.
+///
+/// **The signal is on the thing doing the taking**, not on the card and not in a
+/// word anywhere: a magnet that fires invisibly is an edit somebody did not ask
+/// for, and one that announces itself in prose is a sentence to read in the
+/// middle of a gesture. The line thickens and brightens; nothing else moves.
+function snapped(on) {
+    if (nodes && nodes.playhead) nodes.playhead.classList.toggle('magnet', !!on);
+}
+
+/// How much of the mix is on the strip, and where — drawn as the one control
+/// that can move the window a long way in one gesture.
+///
+/// **Hidden rather than removed** when the whole mix fits: `display: none` would
+/// give the strip nine more pixels of height, and the cards are as tall as the
+/// strip, so every canvas in the row would be repainted at a new height each time
+/// a clip was added or trimmed past the edge of the window.
+function drawScroll() {
+    if (!nodes.thumb) return;
+    const total = duration();
+    const f = total > 0 ? Math.min(1, viewSpan() / total) : 1;
+    nodes.thumb.style.width = `${(f * 100).toFixed(3)}%`;
+    nodes.thumb.style.left = `${total > 0 ? ((left / total) * 100).toFixed(3) : '0'}%`;
+    nodes.scroll.style.visibility = f >= 0.999 ? 'hidden' : 'visible';
 }
 
 /// Bring the playhead into view, for a mix wider than the strip.
 export function follow(t) {
     if (!nodes) return;
-    const x = xOf(t);
-    const view = nodes.strip.scrollLeft;
-    const room = nodes.strip.clientWidth;
-    if (x < view + 40) nodes.strip.scrollLeft = Math.max(0, x - 40);
-    else if (x > view + room - 40) nodes.strip.scrollLeft = x - room + 40;
+    const edge = Math.min(40, nodes.strip.clientWidth / 4) / pxPerSec;
+    if (t < left + edge) setLeft(t - edge);
+    else if (t > left + viewSpan() - edge) setLeft(t - viewSpan() + edge);
 }

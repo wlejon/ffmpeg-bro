@@ -547,6 +547,41 @@ console.log('\ntrim');
        'and the first clip is still at zero, because everything moved instead');
 }
 
+// ── the magnet: a trim taken by the playhead ───────────────────────────────
+//
+// The one thing on the strip that is not a card and is worth landing on. Driven
+// as a real drag, because the magnet is inside the move handler and a test that
+// called `trimClip` would pass with the magnet wired to nothing.
+
+console.log('\nthe magnet');
+{
+    const a = order()[0];
+    const px = A.mix.zoom();
+    // The playhead a little inside the out-point, and the drag aimed two pixels
+    // past it: near enough to be taken, and not so near that landing there would
+    // have happened anyway.
+    A.seek(a.length - 20 / px);
+    pump(60);
+    const at = A.transport.t;
+    drag(cardEls()[0].querySelector('.edge.r'), -22);
+    ok(Math.abs(a.length - at) < 1e-6,
+       `an out-point dragged to within two pixels of the playhead lands on it ` +
+       `(${a.length.toFixed(4)} = ${at.toFixed(4)}s)`);
+
+    // And the same drag from further off is not taken, which is the half that
+    // makes it a magnet rather than a rule.
+    const len0 = a.length;
+    A.seek(a.length - 60 / px);
+    pump(60);
+    const far = A.transport.t;
+    drag(cardEls()[0].querySelector('.edge.r'), -20);
+    ok(Math.abs(a.length - far) > 0.5 / px,
+       'and one that stops forty pixels short of it is left where the hand put it');
+    ok(Math.abs(a.length - (len0 - 20 / px)) < 0.02,
+       `— exactly where the hand put it (${a.length.toFixed(3)}s)`);
+    ok(!packed('after a magnet'), packed('after a magnet') || 'still packed');
+}
+
 // ── slip: the window holds still and the footage moves inside it ───────────
 
 console.log('\nslip');
@@ -589,6 +624,78 @@ console.log('\nreorder');
     ok(order()[0] === b && order()[1] === a, 'dragging the grip moves the card past its neighbour');
     ok(!packed('after a reorder'), packed('after a reorder') || 'still packed');
     ok(Math.abs(order()[0].start) < 1e-6, 'and what is now first starts at zero');
+}
+
+// ── the window onto the mix ────────────────────────────────────────────────
+//
+// **The row really moves**, which is the assertion the rest of this rests on:
+// the offset is a negative margin because this engine has no horizontal
+// scrolling, and a margin the layout declined to apply would leave every number
+// below correct and nothing on the screen where it says.
+
+console.log('\nthe window');
+{
+    const strip = document.getElementById('strip');
+    const zoomBox = document.getElementById('zoom');
+    const stripLeft = () => strip.getBoundingClientRect().left;
+    const firstCardX = () => cardEls()[0].getBoundingClientRect().left - stripLeft();
+
+    A.mix.fit();
+    A.mix.draw();
+    pump(40);
+    ok(A.mix.view().left === 0 && A.mix.view().span >= A.duration() - 1e-6,
+       'Fit puts the whole mix on the strip, starting at zero');
+    ok(document.getElementById('mix-scroll').style.visibility === 'hidden',
+       'and there is nothing to scroll, so the bar is not offering to');
+
+    // In far enough that the mix is three strips wide — computed from the mix
+    // rather than typed, so this says the same thing whatever is in it, and kept
+    // clear of the top of the range so the wheel below still has somewhere to go.
+    type(zoomBox, String(Math.round(Math.min(900, (strip.clientWidth * 3) / A.duration()))));
+    pump(40);
+    ok(A.mix.view().span < A.duration() / 2,
+       `zoomed in, half the mix does not fit (${A.mix.view().span.toFixed(2)}s ` +
+       `of ${A.duration().toFixed(2)}s)`);
+    ok(document.getElementById('mix-scroll').style.visibility === 'visible',
+       'and now the bar is there');
+    ok(Math.abs(firstCardX()) < 1.5,
+       'the first card is still against the left edge, which is where zero is');
+
+    const px = A.mix.zoom();
+    A.mix.setLeft(A.duration() / 3);
+    pump(40);
+    const to = A.mix.view().left;
+    ok(to > 0, `the window moved (${to.toFixed(2)}s)`);
+    ok(Math.abs(firstCardX() + to * px) < 2,
+       `and the row moved with it, by the pixels those seconds are ` +
+       `(${firstCardX().toFixed(1)} = -${(to * px).toFixed(1)})`);
+    ok(Math.abs(A.mix.xOf(to)) < 1e-6,
+       'so the moment at the left edge is at x zero, which is what a card measures from');
+
+    // Zooming about the pointer holds the moment under it still. This is the one
+    // that could never work before: the correction was a write to `scrollLeft`,
+    // which this engine ignores.
+    const off = 200;
+    const held = A.mix.view().left + off / A.mix.zoom();
+    strip.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true, deltaY: -1,
+        clientX: stripLeft() + off, clientY: strip.getBoundingClientRect().top + 10,
+    }));
+    pump(40);
+    const still = A.mix.view().left + off / A.mix.zoom();
+    ok(A.mix.zoom() > px * 1.2, `the wheel zoomed in (${px.toFixed(0)} → ${A.mix.zoom().toFixed(0)} px/s)`);
+    ok(Math.abs(still - held) < 0.01,
+       `and the moment under the pointer did not move (${held.toFixed(3)} → ${still.toFixed(3)}s)`);
+
+    // The window cannot be pushed past the end of the mix, which is what stops a
+    // strip full of nothing.
+    A.mix.setLeft(A.duration() * 10);
+    ok(Math.abs(A.mix.view().left + A.mix.view().span - A.duration()) < 1e-6,
+       'and it stops with the end of the mix at the right-hand edge');
+
+    A.mix.fit();
+    A.mix.draw();
+    pump(40);
 }
 
 // ── the document is the workbench's ────────────────────────────────────────
