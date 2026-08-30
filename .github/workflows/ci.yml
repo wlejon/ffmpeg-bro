@@ -10,15 +10,23 @@ name: CI
 # `<this>/../bro` and the workspace has to have that shape. Both repos are
 # checked out under $GITHUB_WORKSPACE and every build step runs from ffmpeg-bro/.
 #
-# **There is no pin on bro, and that is a real property of this build.** With no
-# submodule pointer, CI compiles against bro's main as it is this morning, so a
-# breaking change over there turns this red without a commit here. That is the
-# intended trade for a two-repo layout being edited as one tree; when it stops
-# being worth it, the answer is a pinned ref in this file, not a submodule.
+# **Which bro is `BRO_REF` below, and it is deliberately a branch.** With no
+# submodule pointer there is nothing pinning the engine, so CI compiles against
+# bro's main as it stands this morning and a breaking change over there turns
+# this red without a commit here. That is the trade a two-repo layout edited as
+# one tree is making, and it is the right one while the two move together: a pin
+# would mean every bro fix this repository needs also needs a commit here to be
+# picked up, which is the friction the split was supposed to avoid. It is a
+# variable rather than a literal so that pinning is one line when a bro
+# regression needs to be waited out (`BRO_REF: <sha>`), and so that the choice
+# is visible at the top of the file instead of buried in a `with:` block.
 #
-# bro must be cloned `--recursive`: this build turns BRO_WITH_SOUNDML on, and
+# bro is cloned `--recursive`: this build turns BRO_WITH_SOUNDML on, and
 # brotensor, brolm and brosoundml reach it through bro's own submodules. Without
-# them the configure fails naming a missing CMakeLists.txt.
+# them the configure fails naming a missing CMakeLists.txt. Those submodules are
+# pinned even though bro is not, which is why a runner and a developer's machine
+# can disagree: this repository resolves `../<sibling>` against ITSELF, so a
+# standalone checkout beside ffmpeg-bro wins locally and bro's pointer wins here.
 #
 # **Tests run on Linux only.** They are the same suites everywhere and the cost
 # of running them three times is three times the runner minutes for one answer.
@@ -49,6 +57,8 @@ env:
   # sccache falls back to per-runner local disk, which is wiped between runs, so
   # every object is recompiled and every write thrown away.
   SCCACHE_GHA_ENABLED: "true"
+  # Which bro this builds against. A branch, not a pin; see the header.
+  BRO_REF: main
 
 jobs:
   build:
@@ -84,19 +94,25 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: wlejon/bro
-          ref: main
+          ref: ${{ env.BRO_REF }}
           path: bro
           submodules: recursive
 
       # SDL3 builds from bro's third_party/SDL and needs the X11/Wayland/GL and
       # audio dev headers. nasm is not optional here the way it is for bro: x264,
       # x265, aom and dav1d all assemble. xvfb + mesa-dri are for the test step.
+      #
+      # The autotools four are vcpkg's, not bro's: several ports here build
+      # through `vcpkg_make`, which refuses up front unless it can find
+      # autoconf, autoconf-archive, automake and libtoolize. `autoconf-archive`
+      # is the one that is not pulled in by the others and is easy to leave out;
+      # speex is what stopped on it.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm yasm autoconf automake libtool pkg-config bison flex \
+            ninja-build nasm yasm autoconf autoconf-archive automake libtool pkg-config bison flex \
             xvfb libgl1-mesa-dri \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
@@ -105,7 +121,7 @@ jobs:
 
       - name: macOS build dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja nasm automake autoconf libtool pkg-config
+        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -115,8 +131,19 @@ jobs:
       # rebuild anything (a runner-image compiler bump changing ABIs) then SAVES
       # the new archives, instead of hitting the "exact key exists, skip save"
       # trap and rebuilding again next time.
-      - name: vcpkg binary cache
-        uses: actions/cache@v6
+      #
+      # **Restore and save are separate steps, and that is what makes this cache
+      # worth having here.** `actions/cache` declares its save as
+      # `post-if: success()`, so a job that dies after the configure throws away
+      # every archive vcpkg just spent an hour building. bro can use the combined
+      # action because its dependency set is small; ours is ffmpeg, x265, aom and
+      # openssl from source, and paying for that again on every red run is the
+      # difference between a cache and a decoration. The save below is
+      # `if: always()`, placed straight after the configure, which is the step
+      # that fills the directory.
+      - name: Restore the vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/vcpkg-bincache
           key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-${{ github.run_id }}
@@ -165,6 +192,16 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             $GEN_ARGS
+
+      # Straight after the configure, and unconditionally: this is the moment
+      # the archive directory is full, and a failure in the build or the tests
+      # below must not throw an hour of vcpkg away. See the restore step.
+      - name: Save the vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/vcpkg-bincache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Build
         working-directory: ffmpeg-bro

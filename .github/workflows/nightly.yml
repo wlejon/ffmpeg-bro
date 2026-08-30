@@ -37,6 +37,11 @@ env:
   # Must match vcpkg.json's builtin-baseline; see the same pin in ci.yml.
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
   SCCACHE_GHA_ENABLED: "true"
+  # Which bro a nightly is built against; see ci.yml's header for why this is a
+  # branch and not a pin. A release built from a moving engine is a real thing
+  # to know about this channel: the smoke test on the packaged tree is what
+  # stands in for the pointer nobody records.
+  BRO_REF: main
 
 jobs:
   build:
@@ -66,13 +71,13 @@ jobs:
           fetch-depth: 0        # tags, for package-release.sh's version fallback
 
       # bro is a sibling checkout rather than a submodule, so there is no pointer
-      # pinning it: a nightly is this repository against bro's main as it stands
-      # this morning. See ci.yml's header for why that trade is deliberate.
+      # pinning it. See ci.yml's header for why that trade is deliberate, and
+      # BRO_REF above for how to hold it still.
       - name: Check out bro beside it
         uses: actions/checkout@v7
         with:
           repository: wlejon/bro
-          ref: main
+          ref: ${{ env.BRO_REF }}
           path: bro
           submodules: recursive
 
@@ -81,7 +86,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm yasm autoconf automake libtool pkg-config bison flex \
+            ninja-build nasm yasm autoconf autoconf-archive automake libtool pkg-config bison flex \
             xvfb libgl1-mesa-dri \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
@@ -90,15 +95,19 @@ jobs:
 
       - name: macOS build dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja nasm automake autoconf libtool pkg-config
+        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
       # Shared with ci.yml: the key is content-addressed per package, not per
-      # workflow, so a warm CI run warms the nightly and the reverse.
-      - name: vcpkg binary cache
-        uses: actions/cache@v6
+      # workflow, so a warm CI run warms the nightly and the reverse. Restore
+      # and save are separate for the reason ci.yml's comment gives: the
+      # combined action saves only on success, and a nightly that fails at the
+      # signing step would otherwise rebuild ffmpeg from source tomorrow.
+      - name: Restore the vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/vcpkg-bincache
           key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-${{ github.run_id }}
@@ -140,6 +149,13 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             $GEN_ARGS
+
+      - name: Save the vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/vcpkg-bincache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Build
         working-directory: ffmpeg-bro
