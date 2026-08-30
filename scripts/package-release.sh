@@ -119,14 +119,25 @@ for t in "${TARGETS[@]}"; do
 done
 
 # --- What they load (Windows) ---------------------------------------------
+# **`nocaseglob`, and it is not tidiness.** vcpkg's mp3lame port installs
+# `libmp3lame.DLL`, the one library in this set whose extension is upper case,
+# and bash matches a glob case-sensitively even where the filesystem does not.
+# So `*.dll` copied forty-four of forty-five and avcodec's import of the
+# forty-fifth resolved to nothing. Every Windows package this script has ever
+# made was missing it. What hid it is that it only fails on a machine that has
+# never built this: a developer has `<vcpkg>/installed/x64-windows/bin` on PATH,
+# the loader finds it there, and the packaged tree appears to run. On a clean
+# runner the binary does not start at all, with no message and exit 127 — the
+# loader names no import it failed to resolve, so the symptom says nothing about
+# the cause.
 if [[ "$PLATFORM" == "win" ]]; then
-    shopt -s nullglob
+    shopt -s nullglob nocaseglob
     for t in "${TARGETS[@]}"; do
         for lib in "$(dirname "$(bin_path "$t")")"/*.dll; do
             cp -a "$lib" "$OUT_DIR/"
         done
     done
-    shopt -u nullglob
+    shopt -u nullglob nocaseglob
 fi
 
 # --- Strip our own binaries (Linux/macOS) ---------------------------------
