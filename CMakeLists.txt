@@ -130,6 +130,48 @@ if(NOT BRO_WITH_SOUNDML)
         "-DBRO_WITH_SOUNDML=ON.")
 endif()
 
+# ── four of bro's renderer features, which this application does not have ──
+#
+# bro's `app` profile turns on the 3D scene graph (bromesh, terrain, tile,
+# gizmo), Jolt rigid-body physics, the game-AI core and the flora simulation,
+# because the profile is named for a game runtime and that is what one is. This
+# is a video workbench whose interface is `ui/`'s DOM and canvas, and the whole
+# JS closure — `ui/`, `supercut/`, `corpus/`, `tools/` — names `bro.scene`,
+# `bro.physics`, `bro.mesh`, `bro.tile` and `bro.flora` exactly zero times.
+#
+# So this was **471 of 1676 objects compiled on every clean build for a set of
+# namespaces no line here has ever written**: Jolt is 143 of them, bromesh with
+# the draco, osqp and meshoptimizer it vendors is 249, `bro/src/scene` and
+# `bro/src/tile` are 50, brogameagent 24 and broflora 10, with manifold, vhacd,
+# xatlas, openfbx, tinygltf and par_shapes behind them. Measured with the four
+# off: 1205 objects, and a shipped binary of 24.9 MB against 31.6. All thirty
+# suites pass on it.
+#
+# **The saving is stated in translation units and bytes rather than in seconds,
+# because a local clock could not measure it honestly.** Two clean builds on
+# this machine came out 1664 files in 199 s and 1197 files in 272 s — the
+# *smaller* one slower, because it ran first and the second reused a warm
+# filesystem cache for the Skia and SDL headers. Whatever the four cost, that
+# effect is bigger, so the number worth watching is CI's own build step, which
+# is the only place a cold build is timed twice under the same conditions.
+#
+# **This is not the same kind of decision as the SOUNDML one above, and it
+# deliberately does not get the same refusal.** That flag is a feature this
+# application *calls*, so a build without it is a build that lies about what it
+# is; these are features it does not, so a build with them is only bigger and
+# slower. `-DBRO_WITH_3D=ON` on the command line beats these cache entries and
+# gets the whole renderer back, which is exactly what somebody putting a 3D
+# panel in this window would want, and is the reason to write these as cache
+# entries rather than as a hard `set()`. The same mechanism means **a build
+# directory that already exists keeps the build it already had**: bro's
+# `option()` wrote those entries the first time it was configured and nothing
+# here overwrites one. Delete the directory to pick this up, which is also the
+# only way to observe it, a clean build being the only build it changes.
+set(BRO_WITH_3D      OFF CACHE BOOL "bro's 3D scene graph — nothing here draws in it")
+set(BRO_WITH_PHYSICS OFF CACHE BOOL "Jolt physics — nothing here simulates one")
+set(BRO_WITH_GAMEAI  OFF CACHE BOOL "brogameagent — nothing here paths or plans")
+set(BRO_WITH_FLORA   OFF CACHE BOOL "broflora — nothing here grows anything")
+
 # bro builds as static libraries; BRO_BUILD_EXECUTABLES defaults OFF when bro
 # is not the top-level project, so this does NOT produce a second bro.exe.
 add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")

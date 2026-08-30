@@ -34,6 +34,16 @@ realms**: bro's `worker.cpp` builds its context from an explicit list and
 `installSenseBindings` is called only from `Engine::initAppRealm`, exactly as
 `bro.ffmpeg` is only installed by `installHostBindings`.
 
+The same block turns **four of bro's renderer features off** for the opposite
+reason, and the asymmetry is the point. `BRO_WITH_3D`, `BRO_WITH_PHYSICS`,
+`BRO_WITH_GAMEAI` and `BRO_WITH_FLORA` are on in the `app` profile because that
+profile is a game runtime; the whole JS closure here names `bro.scene`,
+`bro.physics`, `bro.mesh`, `bro.tile` and `bro.flora` zero times, so they were
+471 of 1676 objects on every clean build and 6.7 MB of the shipped binary. Off,
+that is 1205 objects and 24.9 MB. **These are cache entries and not a refusal**:
+SOUNDML off is a build that lies about what it is, and 3D on is only a build
+that is slower, so `-DBRO_WITH_3D=ON` deliberately still wins.
+
 ```
 cmake -B build
 cmake --build build --config Release
