@@ -1,0 +1,54 @@
+name: CodeQL
+
+# Static analysis for this repository's own code, both halves of it.
+#
+# **Two languages, because this application is genuinely two.** `src/native` is
+# the libav* backend and the `bro.ffmpeg` binding surface; `ui/`, `supercut/`,
+# `corpus/` and `tools/` are the application itself, in plain ES modules. A
+# C++-only analysis here would cover the smaller half and call it the codebase.
+#
+# **Build-mode: none for C++.** For a *built* C/C++ analysis CodeQL extracts
+# whatever the compiler touches, and path filters have no effect on it. This
+# repository cannot be compiled without also compiling bro and everything vcpkg
+# installs, so a traced build would drag the engine and ffmpeg into these
+# results and hand this repository somebody else's findings. Build-free
+# extraction is the one mode that sees this repository alone, and it needs no
+# vcpkg, no bro checkout and no toolchain.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"   # Monday 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [c-cpp, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

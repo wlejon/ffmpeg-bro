@@ -1,10 +1,21 @@
 # ffmpeg-bro
 
+[![CI](https://github.com/wlejon/ffmpeg-bro/actions/workflows/ci.yml/badge.svg)](https://github.com/wlejon/ffmpeg-bro/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wlejon/ffmpeg-bro/actions/workflows/codeql.yml/badge.svg)](https://github.com/wlejon/ffmpeg-bro/actions/workflows/codeql.yml)
+[![Nightly](https://github.com/wlejon/ffmpeg-bro/actions/workflows/nightly.yml/badge.svg)](https://github.com/wlejon/ffmpeg-bro/actions/workflows/nightly.yml)
+[![Download nightly](https://img.shields.io/github/v/release/wlejon/ffmpeg-bro?label=download%20nightly)](https://github.com/wlejon/ffmpeg-bro/releases/latest)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 A friendly GUI for ffmpeg, built on the [bro](https://github.com/wlejon/bro) engine.
 
 ffmpeg is extraordinarily capable and extraordinarily hard to drive. This is a real
-GUI over it: open a file, see what is actually in it, play it at full quality with 
-cut it on a timeline, filter it through a node graph, and export it.
+GUI over it: open a file, see what is actually in it, play it at full quality
+through the real decoder, cut it on a timeline, filter it through a node graph,
+and export it.
+
+Pre-alpha, and the nightly is the release channel. The nightly builds Windows,
+Linux and macOS; Windows is the one it is used on daily, so treat the badge as
+what the other two are backed by.
 
 ## What it does
 
@@ -43,9 +54,18 @@ cut it on a timeline, filter it through a node graph, and export it.
   encoding) and what it does not (usually decoding) — measured on your machine,
   not assumed.
 
+## Installing
+
+Grab the [latest nightly](https://github.com/wlejon/ffmpeg-bro/releases/latest)
+for your platform and unzip it. Everything is in the download: ffmpeg is linked
+into the binary, so there is nothing else to install and nothing on your `PATH`
+to conflict with. The Windows binaries are code-signed; the Linux and macOS ones
+are not, so macOS will need `xattr -dr com.apple.quarantine` on the folder.
+
 ## Building
 
-Requires Visual Studio 2022, [vcpkg](https://vcpkg.io), and a checkout of
+Requires a C++20 compiler (Visual Studio 2022 on Windows), [CMake
+3.21+](https://cmake.org), [vcpkg](https://vcpkg.io), and a checkout of
 [bro](https://github.com/wlejon/bro) beside this one (or `-DBRO_DIR=<path>`).
 
 `cmake -B build` finds vcpkg through **`VCPKG_ROOT`**; set it, or pass
@@ -53,15 +73,21 @@ Requires Visual Studio 2022, [vcpkg](https://vcpkg.io), and a checkout of
 With neither, the configure stops and says so.
 
 ```
-git clone <this repo>
+git clone https://github.com/wlejon/ffmpeg-bro
 git clone --recursive https://github.com/wlejon/bro
 
-vcpkg install "ffmpeg[core,gpl,version3,avcodec,avdevice,avfilter,avformat,swresample,swscale,x264,x265,nvcodec,amf,dav1d,aom,vpx,opus,mp3lame,vorbis,theora,webp,openjpeg,zlib,bzip2,lzma,xml2,soxr,speex,snappy,ass,freetype,fontconfig,fribidi,drawtext,openssl,srt,iconv]:x64-windows"
-
+cd ffmpeg-bro
 cmake -B build
 cmake --build build --config Release
 ./build/Release/ffmpeg-bro [media-file]
 ```
+
+There is no `vcpkg install` step: [`vcpkg.json`](vcpkg.json) is the list of what
+this build links, and the toolchain installs it into `build/vcpkg_installed`
+during the configure. That list is pinned by `builtin-baseline` to the same
+microsoft/vcpkg commit bro pins, so your build and CI's link the same libraries
+at the same versions. The first configure builds ffmpeg and its dependencies
+from source and takes a while; every one after it is cached.
 
 `--recursive` matters: this build turns bro's `BRO_WITH_SOUNDML` on, which
 reaches brotensor, brolm and brosoundml in bro's tree. They are MIT like bro,
@@ -78,16 +104,15 @@ than an extra, and a build without it would be one whose difference from every
 other build shows up nowhere until somebody presses something. Fix the clone
 rather than the flag.
 
-`x264`/`x265` are encoders, needed for export; playback works with the plain
-`ffmpeg` port too. Three binaries are built: `ffmpeg-bro` (the application),
-`ffmpeg-bro-supercut` (a second, single-purpose application over the same
-engine — see below) and `ffmpeg-bro-headless` (the same engine driven by a JS
-script — how the UI is tested, and a scriptable media tool in its own right).
+Three binaries are built: `ffmpeg-bro` (the application), `supercut` (a second,
+single-purpose application over the same engine, see below) and
+`ffmpeg-bro-headless` (the same engine driven by a JS script: how the UI is
+tested, and a scriptable media tool in its own right).
 
 ## The supercut application
 
 ```
-./build/Release/ffmpeg-bro-supercut
+./build/Release/supercut
 ```
 
 One window for one job: search hours of transcribed recordings for a word or for

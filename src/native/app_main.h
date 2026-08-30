@@ -2,11 +2,12 @@
 //
 // There are two, and they are two *executables* rather than two directories one
 // launcher chooses between: `ffmpeg-bro` is the workbench over ffmpeg's whole
-// model, and `ffmpeg-bro-supercut` is a single-purpose tool for cutting speech
-// out of long recordings. A tool that opens on the job it does is worth more
-// than a mode of a larger one, and a mode is what a `--app` flag would have
-// made it — the same window title, the same icon on the taskbar, the same
-// thing to explain.
+// model, and `supercut` is a single-purpose tool for cutting speech out of long
+// recordings. A tool that opens on the job it does is worth more than a mode of
+// a larger one, and a mode is what a `--app` flag would have made it — the same
+// window title, the same icon on the taskbar, the same thing to explain. The
+// second one is named `supercut` rather than `ffmpeg-bro-supercut` for the same
+// reason: a name with the workbench's in it reads as a variant of it.
 //
 // What they share is everything below the UI: the same `ffmpeg-bro-core`, the
 // same libav* registration, the same host bindings, the same engine. So the
@@ -15,10 +16,18 @@
 // either side of it is a call.
 //
 // **Locating the UI is the part that must not be duplicated.** A packaged build
-// puts the app beside the executable and a build tree puts it two levels up
-// (`build/Release/../../<app>`), and getting that wrong is an application that
-// runs from one and not the other. It was written twice for about an hour and
-// that is exactly what happened.
+// puts the app under `app/` beside the executable and a build tree puts it two
+// levels up (`build/Release/../../<app>`), and getting that wrong is an
+// application that runs from one and not the other. It was written twice for
+// about an hour and that is exactly what happened.
+//
+// **Why a package nests them under `app/` rather than putting them beside the
+// binaries.** The second executable is called `supercut` and the directory
+// holding its interface is called `supercut`, and on a case-sensitive
+// filesystem those are the same name: a package with both at its root is a
+// package that cannot be written on Linux or macOS. Nesting is the fix that
+// costs nothing, because the build tree keeps working through the second probe
+// below and a user still finds two binaries and nothing else at the top.
 
 #pragma once
 
@@ -34,10 +43,16 @@
 
 namespace ffmpegbro {
 
-/// Find `<dir>` beside the executable, or up in the source tree.
+/// Find `<dir>` under `app/` beside the executable, or up in the source tree.
+///
+/// The order is the order the two cases are distinguishable in: a package has
+/// an `app/` and a build tree does not, so `app/` first can never shadow a
+/// checkout. The bare `/` is kept behind both because a tree assembled by hand
+/// (an executable dropped beside a `ui/`) is a reasonable thing to have and
+/// used to be the packaged layout.
 inline bool locateApp(const char* dir, bro::engine::EngineConfig& config) {
     const std::string exe = bro::engine::executableDir();
-    for (const char* rel : { "/", "/../../" }) {
+    for (const char* rel : { "/app/", "/../../", "/" }) {
         if (bro::engine::resolveLaunchTarget(exe + rel + dir, config)) return true;
     }
     return false;

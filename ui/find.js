@@ -8,7 +8,7 @@
 //
 // **What the answer is belongs to `library.js`; this file decides only how it
 // is drawn.** There is a second view over the same library — the whole
-// left-hand side of `ffmpeg-bro-supercut` — and the one thing the two must
+// left-hand side of `supercut` — and the one thing the two must
 // never do is disagree about what was said and where.
 //
 // ── Why this is a panel and not a stage ───────────────────────────────────

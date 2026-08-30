@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 
-# vcpkg supplies ffmpeg (and, transitively, what bro's own services need).
+# vcpkg supplies ffmpeg (and, transitively, what bro's own services need), from
+# the manifest in `vcpkg.json` beside this file — that is the one home for what
+# this build links, and the toolchain installs it during the configure below.
 # Set before project() so the toolchain file is picked up.
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
     set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
@@ -33,7 +35,8 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
         "No vcpkg toolchain, and nothing else saying where the dependencies are.\n"
         "ffmpeg and bro's services come from vcpkg here. Either set VCPKG_ROOT, or pass\n"
         "  -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake\n"
-        "See README.md for the `vcpkg install ffmpeg[...]` feature list this build needs.\n"
+        "vcpkg.json beside this file lists what gets installed, and the toolchain is\n"
+        "what reads it — without one, nothing does.\n"
         "If the dependencies are genuinely somewhere else, pass -DCMAKE_PREFIX_PATH=<dir>\n"
         "and this check will stand aside.")
 endif()
@@ -279,9 +282,16 @@ target_include_directories(ffmpeg-bro PRIVATE "${BRO_DIR}/src")
 # The second application, over the same core and the same UI *model*: finding
 # what was said in a long recording and cutting it together. A separate
 # executable rather than a mode, for the reason its own main.cpp gives.
-add_executable(ffmpeg-bro-supercut WIN32 src/native/supercut_main.cpp)
-target_link_libraries(ffmpeg-bro-supercut PRIVATE ffmpeg-bro-core bro_engine)
-target_include_directories(ffmpeg-bro-supercut PRIVATE "${BRO_DIR}/src")
+#
+# Named `supercut` and not `ffmpeg-bro-supercut`. The prefix was there because
+# every target in this file has it, which is a reason about the build tree and
+# not about the thing being built: this ships in the same download as
+# `ffmpeg-bro`, opens its own window under its own name, and is a tool somebody
+# types the name of. `ffmpeg-bro-supercut` reads as a variant of the workbench,
+# which is exactly what supercut_main.cpp says it is not.
+add_executable(supercut WIN32 src/native/supercut_main.cpp)
+target_link_libraries(supercut PRIVATE ffmpeg-bro-core bro_engine)
+target_include_directories(supercut PRIVATE "${BRO_DIR}/src")
 
 # The same engine and the same backend, driven by a script. This is what the
 # UI tests run against, and a usable scripted media tool in its own right.
@@ -293,12 +303,12 @@ if(MSVC)
     # Same reason bro.exe needs it: QuickJS's interpreter frame is large and
     # deep JS recursion overflows the default 1 MB stack.
     target_link_options(ffmpeg-bro PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
-    target_link_options(ffmpeg-bro-supercut PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
+    target_link_options(supercut PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
     target_link_options(ffmpeg-bro-headless PRIVATE /STACK:8388608)
 endif()
 if(WIN32)
     target_link_libraries(ffmpeg-bro PRIVATE ws2_32)
-    target_link_libraries(ffmpeg-bro-supercut PRIVATE ws2_32)
+    target_link_libraries(supercut PRIVATE ws2_32)
     target_link_libraries(ffmpeg-bro-headless PRIVATE ws2_32)
 endif()
 

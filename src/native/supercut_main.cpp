@@ -1,4 +1,4 @@
-// ffmpeg-bro-supercut — one job, one window.
+// supercut — one job, one window.
 //
 // The other executable is a workbench over the whole of ffmpeg's model, and its
 // navigation *is* that model: Capture → Sources → Compose → Graph → Encode →
@@ -28,9 +28,9 @@ int main(int argc, char* argv[]) {
     if (argc >= 2 && (std::strcmp(argv[1], "--help") == 0 ||
                       std::strcmp(argv[1], "-h") == 0)) {
         std::fprintf(stderr,
-            "ffmpeg-bro-supercut -- find what was said, and cut it together\n"
+            "supercut -- find what was said, and cut it together\n"
             "\n"
-            "Usage: ffmpeg-bro-supercut [document.fbro]\n"
+            "Usage: supercut [document.fbro]\n"
             "\n"
             "Reads the corpus written by `tools/supercut.js index <channel>`\n"
             "at build/corpus/find.json, relative to the working directory.\n");

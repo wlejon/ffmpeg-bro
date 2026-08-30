@@ -6,6 +6,14 @@
 cmake --build build --config Release && ctest --test-dir build -C Release
 ```
 
+Every push and pull request builds on Windows, Linux and macOS and runs this
+same line on Linux, under Xvfb so the headless binary uses the GL path that
+ships. So a suite that only passes on the machine that wrote it will be caught,
+and a suite whose fixture, device or model weights are absent has to *skip* and
+say so rather than fail: a runner has no camera, no graphics card and no Whisper
+checkpoint, and every section here is written to survive that. Keep that
+property when adding tests.
+
 `ctest` generates its own media — two files with known content, a moving bar over a
 gradient and a tone at a known level, differing in size, aspect, frame rate and length,
 and a third with **no audio stream in it at all**, which is not the same file as one

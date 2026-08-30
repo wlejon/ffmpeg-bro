@@ -4,11 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build and test
 
-Requires Visual Studio 2022, vcpkg (`VCPKG_ROOT` set, or pass the toolchain
-yourself), and a checkout of [bro](https://github.com/wlejon/bro) beside this
-repo — or `-DBRO_DIR=<path>`, **cloned `--recursive`**. The vcpkg `ffmpeg[...]`
-feature list is in README.md; `x264`/`x265` are needed for export, not for
-playback.
+Requires a C++20 compiler (Visual Studio 2022 on Windows), vcpkg (`VCPKG_ROOT`
+set, or pass the toolchain yourself), and a checkout of
+[bro](https://github.com/wlejon/bro) beside this repo — or `-DBRO_DIR=<path>`,
+**cloned `--recursive`**. There is no `vcpkg install` step: `vcpkg.json` is the
+one home for what this build links, the toolchain installs it during the
+configure, and `builtin-baseline` pins it to the same microsoft/vcpkg commit
+bro's own manifest pins. bro's five ports are copied into it rather than
+inherited, because vcpkg reads the top-level manifest only; the `!osx` entry
+exists because `nvcodec` and `amf` do not build there. `x264`/`x265` are needed
+for export, not for playback.
 
 `CMakeLists.txt` turns bro's `BRO_WITH_SOUNDML` on before `add_subdirectory`,
 which is what makes `bro.sense` a working namespace here rather than the
@@ -39,10 +44,10 @@ ctest --test-dir build -C Release
 ```
 
 One test, by ctest name (`decode`, `export`, `capabilities`, `inputs`,
-`sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `proxy`, `ui-player`,
-`ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`, `ui-report`,
-`ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`, `ui-graph`,
-`ui-document`, `ui-output`, `ui-load`):
+`sequences`, `playback`, `capture`, `hardware`, `telemetry`, `marks`, `words`,
+`proxy`, `ui-player`, `ui-sources`, `ui-hardware`, `ui-export`, `ui-sequence`,
+`ui-report`, `ui-measure`, `ui-subtitles`, `ui-capture`, `ui-filtergraph`,
+`ui-graph`, `ui-document`, `ui-output`, `ui-find`, `ui-load`, `supercut`):
 
 ```
 ctest --test-dir build -C Release -R ui-graph --output-on-failure
@@ -403,8 +408,8 @@ which is the one thing `openSpec`'s refusal would get wrong here.
 ### The second application
 
 `supercut/` is a second window from a second executable
-(`src/native/supercut_main.cpp`, `ffmpeg-bro-supercut`), for one job: finding
-what somebody said across hours of recordings and cutting it together. It exists
+(`src/native/supercut_main.cpp`, `supercut`), for one job: finding what somebody
+said across hours of recordings and cutting it together. It exists
 because that job is a loop between three things — find a moment, hear it, put it
 in the row — and **none of the workbench's six stages is on that loop**. A
 separate executable rather than a `--app` flag, because a mode of a larger tool

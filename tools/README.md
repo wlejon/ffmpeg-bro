@@ -69,7 +69,7 @@ the file and a wider `--pad` is a new file rather than a silent overwrite.
 `transcribe` writes the manifest when it finishes and `index <channel>` writes it
 on its own, and **two** things read it. The
 [supercut application](../docs/manual/supercut.md) —
-`./build/Release/ffmpeg-bro-supercut`, its own window over the same engine — is
+`./build/Release/supercut`, its own window over the same engine — is
 where this store is meant to be used: a search down the left, the mix along the
 bottom, four gestures on a card and a button that writes the file. And the
 [Find panel](../docs/manual/find.md) in `ffmpeg-bro` itself, on `/` over the

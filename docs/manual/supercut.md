@@ -5,7 +5,7 @@
 A second application, in a second window, from a second executable:
 
 ```
-./build/Release/ffmpeg-bro-supercut [document.fbro]
+./build/Release/supercut [document.fbro]
 ```
 
 It does one job — find what somebody said across hours of recordings and cut it

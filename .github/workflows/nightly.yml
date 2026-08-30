@@ -1,0 +1,334 @@
+name: Nightly
+
+# Builds all three platforms every night and publishes them to a single rolling
+# "nightly" release, marked Latest. The tag is re-pointed each run, so a
+# downloader always finds one "latest nightly". Nightly is the only channel this
+# repository ships, which is why --latest below is unconditional.
+#
+# **Everything is in the download.** libav* is linked into these binaries rather
+# than called as a subprocess, so there is no ffmpeg to install, nothing on a
+# PATH to conflict with, and no version of it to be wrong. That is the same fact
+# that makes this binary GPL-3.0-or-later while bro stays MIT.
+#
+# **Both applications ship, from one build.** `ffmpeg-bro` is the workbench over
+# ffmpeg's model and `supercut` is the second application over the same core and
+# the same document format, so a .fbro written in one opens in the other. They
+# are two executables and not two downloads for exactly that reason.
+#
+# **A macOS failure holds the release.** `publish` needs the whole matrix, so a
+# platform that stops compiling stops the night's release rather than quietly
+# shipping two thirds of one. Nightly is a signal as much as it is a channel; if
+# that trade stops being worth it, the change is a per-platform publish here.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC daily, an hour after bro's
+  workflow_dispatch:
+
+# One nightly at a time; a newer trigger cancels an in-flight run.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Must match vcpkg.json's builtin-baseline; see the same pin in ci.yml.
+  VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    # id-token lets the Windows job mint a GitHub OIDC token and exchange it for
+    # an Azure one (see the signing steps). Declared per-job rather than at the
+    # top level so only this job can request it.
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4 }
+          - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4 }
+          - { name: macos,   os: macos-14,     triplet: arm64-osx,   jobs: 3 }
+    steps:
+      - name: Rewrite SSH submodule URLs to HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v7
+        with:
+          path: ffmpeg-bro
+          fetch-depth: 0        # tags, for package-release.sh's version fallback
+
+      # bro is a sibling checkout rather than a submodule, so there is no pointer
+      # pinning it: a nightly is this repository against bro's main as it stands
+      # this morning. See ci.yml's header for why that trade is deliberate.
+      - name: Check out bro beside it
+        uses: actions/checkout@v7
+        with:
+          repository: wlejon/bro
+          ref: main
+          path: bro
+          submodules: recursive
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build nasm yasm autoconf automake libtool pkg-config bison flex \
+            xvfb libgl1-mesa-dri \
+            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
+            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
+
+      - name: macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja nasm automake autoconf libtool pkg-config
+
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Shared with ci.yml: the key is content-addressed per package, not per
+      # workflow, so a warm CI run warms the nightly and the reverse.
+      - name: vcpkg binary cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/vcpkg-bincache
+          key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-
+            vcpkg-bin-${{ matrix.triplet }}-
+
+      - name: vcpkg (pinned)
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout "$VCPKG_COMMIT"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          else
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
+
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        shell: bash
+        working-directory: ffmpeg-bro
+        run: |
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          fi
+          cmake -B build \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            $GEN_ARGS
+
+      - name: Build
+        working-directory: ffmpeg-bro
+        run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
+
+      - name: Package
+        shell: bash
+        working-directory: ffmpeg-bro
+        run: |
+          VERSION="nightly-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          scripts/package-release.sh --version "$VERSION" --build-dir build --config Release
+
+      # Prove the packaged tree runs, from the packaged tree and nowhere else.
+      # Three things are asserted, and each of them has silently not been true
+      # of a build before:
+      #
+      #   * libav is linked in. A binary that loads and reports `linked: false`
+      #     is a GUI over nothing.
+      #   * `bro.sense` is the real binding and not the stub. CLAUDE.md's rule:
+      #     the real one does NOT set `available`, only the stub does, so `=== false`
+      #     is the test and `typeof analyze` is not (the stub has that too).
+      #     This is what catches a build that lost BRO_WITH_SOUNDML.
+      #   * libx264 and libx265 are present. They are what `gpl` and `version3`
+      #     in vcpkg.json buy, and a manifest that resolved without them
+      #     produces an application that opens files and cannot export.
+      #
+      # It runs before signing, so a package that fails this is never signed.
+      - name: Smoke test (the packaged application)
+        shell: bash
+        working-directory: ffmpeg-bro
+        run: |
+          d=$(ls -d dist/ffmpeg-bro-${VERSION}-* | head -1)
+          cd "$d"
+          if [ "$RUNNER_OS" = "Windows" ]; then EXE=".exe"; else EXE=""; fi
+          PROBE='
+            if (!bro.ffmpeg || bro.ffmpeg.linked !== true)
+                throw new Error("libav is not linked into this build");
+            if (!bro.sense || bro.sense.available === false)
+                throw new Error("bro.sense is absent or is the stub: BRO_WITH_SOUNDML did not survive");
+            const ids = bro.ffmpeg.encoders.map(function (e) { return e.id; });
+            ["libx264", "libx265"].forEach(function (need) {
+                if (ids.indexOf(need) < 0)
+                    throw new Error("encoder missing from this build: " + need);
+            });
+            console.log("linked " + bro.ffmpeg.version
+                        + " encoders=" + ids.length
+                        + " muxers=" + bro.ffmpeg.muxers.length
+                        + " demuxers=" + bro.ffmpeg.demuxers.length
+                        + " filters=" + bro.ffmpeg.filters.length);
+          '
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a "./ffmpeg-bro-headless$EXE" app/ui -e "$PROBE"
+          else
+            "./ffmpeg-bro-headless$EXE" app/ui -e "$PROBE"
+          fi
+
+      # --- Windows code signing ---------------------------------------------
+      # Signs the packaged tree before it is zipped, so what users download is
+      # what was signed. Authenticode covers PE files only; the Linux and macOS
+      # zips ship unsigned (macOS notarization needs an Apple Developer ID,
+      # which is a separate thing entirely, and package-release.sh's README.txt
+      # tells a macOS downloader what to do about Gatekeeper).
+      #
+      # No key or secret exists in this repo or on the runner. Auth is GitHub
+      # OIDC federation against the same Entra app bro and bronze use, whose
+      # federated credential for this repository only trusts subject
+      # repo:wlejon/ffmpeg-bro:ref:refs/heads/main, and the signing key never
+      # leaves Azure's HSM: the action uploads a digest and gets a signature
+      # back. The three AZURE_* values are identifiers, not credentials, which
+      # is why they are `vars` and not `secrets`.
+      #
+      # Timestamping is load-bearing, not optional: Artifact Signing issues
+      # ~3-day certificates, so an untimestamped signature stops validating
+      # almost immediately. The RFC3161 countersignature pins validity to
+      # signing time and keeps old nightlies verifiable after rotation.
+      - name: Resolve package directory (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: ffmpeg-bro
+        run: |
+          d=$(ls -d dist/ffmpeg-bro-${VERSION}-* | head -1)
+          # Absolute Windows path: the signing action is .NET and does not
+          # understand MSYS-style /d/... paths.
+          echo "PKG_DIR=$(cygpath -w "$(pwd)/$d")" >> "$GITHUB_ENV"
+
+      - name: Azure login (OIDC, no stored secret)
+        if: runner.os == 'Windows'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows binaries
+        if: runner.os == 'Windows'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://cus.codesigning.azure.net/
+          signing-account-name: brosigning
+          certificate-profile-name: broPublicTrust
+          files-folder: ${{ env.PKG_DIR }}
+          # The three executables plus the vcpkg DLLs loaded into our process.
+          # Every PE in this package is at its root (the interfaces under app/
+          # are JavaScript and CSS), so there is nothing to recurse into.
+          # Basic SKU allows 5,000 signatures/month; a nightly uses a few dozen.
+          files-folder-filter: exe,dll
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Fail the job rather than publish silently-unsigned binaries if the step
+      # above ever soft-fails. Get-AuthenticodeSignature rather than signtool
+      # because it is built into PowerShell and needs no SDK path hunt. Both
+      # applications are checked by name: an unsigned executable inside a signed
+      # package is the one a machine blocks.
+      - name: Verify signatures (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($exe in @('ffmpeg-bro.exe','supercut.exe','ffmpeg-bro-headless.exe')) {
+            $p = Join-Path $env:PKG_DIR $exe
+            if (-not (Test-Path $p)) { Write-Host "MISSING $exe"; $bad += $exe; continue }
+            $sig = Get-AuthenticodeSignature $p
+            Write-Host "$exe -> $($sig.Status) | $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { $bad += $exe }
+          }
+          if ($bad.Count) { throw "unsigned or invalid: $($bad -join ', ')" }
+
+      - name: Zip
+        shell: bash
+        working-directory: ffmpeg-bro
+        run: |
+          cd dist
+          d=$(ls -d ffmpeg-bro-${VERSION}-* | head -1)
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "${d}.zip" "$d" >/dev/null
+          else
+            zip -qr "${d}.zip" "$d"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-bro-${{ matrix.name }}
+          path: ffmpeg-bro/dist/ffmpeg-bro-nightly-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish rolling nightly
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7      # for the commit sha the release targets
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Re-point the single "nightly" tag and release at this run's commit and
+      # replace its assets. Deleting first, with --cleanup-tag, is the reliable
+      # way to move the tag.
+      #
+      # --latest is explicit and load-bearing: nightly is the only release this
+      # repository publishes, so it must be what GitHub serves at
+      # /releases/latest and shows at the top of the releases page. Without it,
+      # GitHub falls back to "most recent non-prerelease" and picks whatever
+      # else happens to exist.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          NOTES="Automated nightly build from \`${GITHUB_SHA::7}\` on $(date -u +%Y-%m-%d).
+
+          Unzip and run. ffmpeg is linked into these binaries rather than called as a subprocess, so there is nothing else to install and nothing on your PATH is used: 350+ demuxers, 180+ muxers, 500+ filters, x264 and x265, all in the one download.
+
+          Two applications, one build. \`ffmpeg-bro\` is the workbench over ffmpeg's whole model, from capture through the filter graph to the muxer. \`supercut\` is the second one: search hours of transcribed recordings for what somebody said, hear it, and cut it together. They share the render and the document format, so a \`.fbro\` written in either opens in the other. \`ffmpeg-bro-headless\` is the same engine driven by a script.
+
+          The Windows binaries are code-signed. The Linux and macOS ones are not, so macOS will quarantine them until you run \`xattr -dr com.apple.quarantine\` on the folder; the README.txt in each zip says so too.
+
+          Pre-alpha. \`docs/manual/not-yet.md\` in the zip is the honest list of what does not work yet."
+          gh release create nightly \
+            --target "$GITHUB_SHA" \
+            --title "Nightly ($(date -u +%Y-%m-%d))" \
+            --notes "$NOTES" \
+            --latest \
+            artifacts/*.zip

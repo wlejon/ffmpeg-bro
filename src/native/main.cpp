@@ -13,7 +13,7 @@
 //
 // One download, and <video src="anything.mkv"> works.
 //
-// The bring-up itself is `app_main.h`'s, shared with `ffmpeg-bro-supercut`.
+// The bring-up itself is `app_main.h`'s, shared with `supercut`.
 
 #include "app_main.h"
 

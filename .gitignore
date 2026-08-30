@@ -1,5 +1,7 @@
 build/
 build-cuda/
+# Staged release trees and their zips, written by scripts/package-release.sh.
+dist/
 .bro_settings.json
 # localStorage, written beside the app: remembered export settings, not source.
 .storage.json

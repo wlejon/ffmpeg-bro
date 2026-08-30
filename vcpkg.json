@@ -1,0 +1,64 @@
+{
+  "$comment": [
+    "The dependency list, in one place, pinned.",
+    "",
+    "This used to be a `vcpkg install ffmpeg[...]` line in README.md that every",
+    "machine ran by hand into a shared classic-mode tree, which meant the set of",
+    "libraries this application links was whatever each machine happened to have",
+    "installed on the day it last read that line. A manifest is the same list as a",
+    "fact the build reads: with the vcpkg toolchain active these install into",
+    "<build>/vcpkg_installed at configure time, and `builtin-baseline` pins every",
+    "port and every transitive (openssl, protobuf, harfbuzz, ...) to the versions at",
+    "that microsoft/vcpkg commit, so a local build and a CI build link the same",
+    "libraries at the same versions.",
+    "",
+    "The baseline is the same commit bro's own vcpkg.json pins, deliberately: bro is",
+    "added with add_subdirectory here, so its services are configured against these",
+    "ports rather than against its own manifest, which vcpkg never reads (only the",
+    "top-level one counts). Two baselines would be two answers to the question of",
+    "which protobuf bro links. The workflows clone vcpkg at this same commit, so",
+    "keep VCPKG_COMMIT in .github/workflows/*.yml in step when bumping it.",
+    "",
+    "ffmpeg is listed twice on purpose. vcpkg merges the feature sets, and the",
+    "second entry carries the two vendor accelerations that do not exist on Apple",
+    "hardware: `nvcodec` is `supports: linux | (!osx & ...)` and `amf` pulls",
+    "amd-amf, which is `supports: !osx`. Qualifying them is what lets one manifest",
+    "serve all three platforms instead of macOS failing to resolve.",
+    "",
+    "`default-features: false` is the manifest spelling of the `core` that leads a",
+    "classic-mode bracket list, because ffmpeg's defaults drag in ports nothing here",
+    "asks for. `gpl` and `version3` are what x264 and x265 require, and are the",
+    "whole reason this binary is GPL-3.0-or-later; see LICENSE.",
+    "",
+    "The last five are bro's, copied from bro/vcpkg.json rather than inherited,",
+    "because a nested manifest is not read. If bro's list changes, this one has to."
+  ],
+  "name": "ffmpeg-bro",
+  "version": "0.1.0",
+  "builtin-baseline": "0b88aacde46a853151730fbe7d0b7ee45f4b6864",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": [
+        "avcodec", "avdevice", "avfilter", "avformat", "swresample", "swscale",
+        "gpl", "version3",
+        "x264", "x265", "dav1d", "aom", "vpx", "openjpeg", "webp", "theora",
+        "opus", "mp3lame", "vorbis", "speex", "soxr",
+        "ass", "freetype", "fontconfig", "fribidi", "drawtext",
+        "openssl", "srt", "xml2", "iconv", "zlib", "bzip2", "lzma", "snappy"
+      ]
+    },
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": ["nvcodec", "amf"],
+      "platform": "!osx"
+    },
+    "gamenetworkingsockets",
+    "libvpx",
+    "libwebm",
+    "opus",
+    "recastnavigation"
+  ]
+}

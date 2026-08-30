@@ -1,0 +1,180 @@
+name: CI
+
+# Build on every push and PR, on all three platforms, and run the suites on one.
+# This is the signal behind the "CI" badge. The nightly builds the same thing and
+# publishes it; nothing here packages or signs.
+#
+# **Two checkouts, not one.** bro is a sibling repo rather than a submodule here
+# (the repo split is the whole point: bro stays MIT and ffmpeg-free, and linking
+# libav* is what makes this binary GPL), so CMake's default BRO_DIR is
+# `<this>/../bro` and the workspace has to have that shape. Both repos are
+# checked out under $GITHUB_WORKSPACE and every build step runs from ffmpeg-bro/.
+#
+# **There is no pin on bro, and that is a real property of this build.** With no
+# submodule pointer, CI compiles against bro's main as it is this morning, so a
+# breaking change over there turns this red without a commit here. That is the
+# intended trade for a two-repo layout being edited as one tree; when it stops
+# being worth it, the answer is a pinned ref in this file, not a submodule.
+#
+# bro must be cloned `--recursive`: this build turns BRO_WITH_SOUNDML on, and
+# brotensor, brolm and brosoundml reach it through bro's own submodules. Without
+# them the configure fails naming a missing CMakeLists.txt.
+#
+# **Tests run on Linux only.** They are the same suites everywhere and the cost
+# of running them three times is three times the runner minutes for one answer.
+# Linux gets Xvfb, so the headless binary exercises the GL path that ships
+# rather than a raster fallback. The suites are written to skip a section whose
+# fixture, device or model weights are absent, which is what lets a runner with
+# no camera and no GPU run all of them.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Must match vcpkg.json's builtin-baseline. The manifest pins the port
+  # versions; this pins the vcpkg tool and its scripts to the same commit, so a
+  # runner-image update cannot drift them apart.
+  VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  # Persist sccache's object cache in the GitHub Actions cache. Without it
+  # sccache falls back to per-runner local disk, which is wiped between runs, so
+  # every object is recompiled and every write thrown away.
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # A cold vcpkg cache builds ffmpeg, x265, aom, openssl and the rest from
+    # source before this repo compiles a line. That is well over the default
+    # 360-minute ceiling's worth of risk on a first run; every run after it
+    # restores the archives in seconds.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # jobs: bounded parallelism. A bare --parallel hands make unlimited -j
+          # and OOM-kills the runner. macOS has ~7 GB, so 3; the others 16 GB.
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4, test: true  }
+          - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4, test: false }
+          - { name: macos,   os: macos-14,     triplet: arm64-osx,   jobs: 3, test: false }
+    steps:
+      # bro's AI-tower and flora submodules use git@github.com: URLs. Rewrite
+      # them before checkout, while every sibling repo is public, so the default
+      # token can fetch them. Must run before actions/checkout syncs submodule
+      # URLs into .git/config.
+      - name: Rewrite SSH submodule URLs to HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v7
+        with:
+          path: ffmpeg-bro
+
+      - name: Check out bro beside it
+        uses: actions/checkout@v7
+        with:
+          repository: wlejon/bro
+          ref: main
+          path: bro
+          submodules: recursive
+
+      # SDL3 builds from bro's third_party/SDL and needs the X11/Wayland/GL and
+      # audio dev headers. nasm is not optional here the way it is for bro: x264,
+      # x265, aom and dav1d all assemble. xvfb + mesa-dri are for the test step.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build nasm yasm autoconf automake libtool pkg-config bison flex \
+            xvfb libgl1-mesa-dri \
+            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
+            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
+
+      - name: macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja nasm automake autoconf libtool pkg-config
+
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Persist vcpkg's built-package archives across runs. The key is unique per
+      # run and restore-keys pick the newest prior cache: a run that had to
+      # rebuild anything (a runner-image compiler bump changing ABIs) then SAVES
+      # the new archives, instead of hitting the "exact key exists, skip save"
+      # trap and rebuilding again next time.
+      - name: vcpkg binary cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/vcpkg-bincache
+          key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('ffmpeg-bro/vcpkg.json') }}-
+            vcpkg-bin-${{ matrix.triplet }}-
+
+      # Clone vcpkg at the manifest's own baseline so tool, ports and scripts are
+      # pinned together. The runner's preinstalled vcpkg drifts with the image.
+      - name: vcpkg (pinned)
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout "$VCPKG_COMMIT"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          else
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
+
+      # Put cl.exe on PATH so Windows can use Ninja below. The Visual Studio
+      # generator ignores CMAKE_*_COMPILER_LAUNCHER, so with it sccache sees zero
+      # compiles.
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        shell: bash
+        working-directory: ffmpeg-bro
+        run: |
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Embedded debug info (/Z7) rather than a separate PDB (/Zi) is what
+            # lets sccache cache MSVC objects at all.
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          fi
+          cmake -B build \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            $GEN_ARGS
+
+      - name: Build
+        working-directory: ffmpeg-bro
+        run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
+
+      # ctest generates its own fixture media first (the `fixtures` setup test),
+      # so -R on any suite pulls the generator in and nothing is checked in.
+      # Run from the repo root: the headless binary writes screenshots and
+      # renders relative to the working directory.
+      - name: Test (headless, GPU path under Xvfb)
+        if: matrix.test
+        working-directory: ffmpeg-bro
+        run: xvfb-run -a ctest --test-dir build -C Release --output-on-failure
