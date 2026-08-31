@@ -73,12 +73,14 @@
 // broadcast now.
 
 import { loadChannel, refresh, transcribed, isPulled, loadState,
-         vodPaths } from '../corpus/store.js';
+         vodPaths, mediaOf } from '../corpus/store.js';
 import { planPull, startPull, pollPull, stopPull } from '../corpus/pull.js';
 import { startTranscribe, pollTranscribe, stopTranscribe } from '../corpus/words.js';
 import { writeManifest } from '../corpus/index.js';
 import { exists, sizeOf, gb } from '../corpus/files.js';
+import * as local from '../corpus/local.js';
 import * as library from '../ui/library.js';
+import { mediaExtensions } from '../ui/inputs.js';
 
 /// How many of the newest broadcasts a look-up asks Twitch for.
 ///
@@ -162,7 +164,9 @@ export function note() {
     if (!rows.length) return `nothing listed for ${login} yet`;
     const disk = rows.filter((r) => r.vod.media).length;
     const words = rows.filter((r) => r.state === 'transcribed').length;
-    return `${rows.length} recordings · ${disk} on disk · ${words} transcribed`;
+    const being = local.measuring();
+    return `${rows.length} recordings · ${disk} on disk · ${words} transcribed` +
+           (being ? ` · measuring ${being}` : '');
 }
 
 /// Show what is already known about a channel. Synchronous, and touches no
@@ -172,6 +176,11 @@ export function open(name) {
     const next = String(name || '').trim().toLowerCase().replace(/^@/, '');
     if (next !== login) said = '';
     login = next;
+    // A folder adopted in an earlier session whose probes never finished — the
+    // window was closed while they ran — picks them up again on the frame it is
+    // opened, because a recording with no length is one nothing offers to
+    // transcribe and there would otherwise be no press that mends it.
+    if (next && local.isLocal(next)) local.measure(next);
     scan();
 }
 
@@ -186,6 +195,16 @@ export function open(name) {
 export async function lookUp(name) {
     const next = String(name || '').trim().toLowerCase().replace(/^@/, '');
     if (!next || looking) return false;
+    // **A folder is not a broadcaster.** Its listing is its own directories
+    // (`corpus/local.js`), and `refresh` would write Twitch's answer about a
+    // channel of that name — which is nobody's, so an empty one — straight over
+    // it, taking every adopted recording off the screen. Re-scanning the folder
+    // is what the press means here, and it is the same press.
+    if (local.isLocal(next)) {
+        login = next;
+        said = '';
+        return refold(next);
+    }
     looking = next;
     said = '';
     needRows = true;
@@ -205,6 +224,99 @@ export async function lookUp(name) {
     needRows = true;
     return !!got;
 }
+
+// ── footage that is already here ───────────────────────────────────────────
+//
+// The two presses `corpus/local.js` exists for. Both are dialogs, which
+// **block the JS thread while they are up** — that is SDL's behaviour and
+// `ui/document.js` says so where the other dialogs live — so both are opened
+// from a press and never from the frame loop. What they must not do is the
+// *work* on the press: adopting writes a state file per recording and nothing
+// more, and the probe that measures each one is a thread `tick()` advances.
+
+/// Take in every media file directly inside a folder somebody picks.
+///
+/// The channel is the folder's own name, so `D:/footage/interviews` becomes the
+/// channel `interviews` and a second press of the same folder a week later picks
+/// up what has been added to it without disturbing anything transcribed.
+///
+/// Answers the sentence to say, or '' when the dialog was cancelled.
+export function addFolder() {
+    let picked = null;
+    try { picked = showOpenFolderDialog('Add a folder of footage', false); }
+    catch (e) { said = String((e && e.message) || e); return said; }
+    if (!picked || !picked.length) return '';
+    return take(() => local.adoptFolder(picked[0]));
+}
+
+/// Take in files somebody picks one by one, into the `local` channel.
+///
+/// Several at once — the dialog allows it — because picking four clips out of a
+/// directory is the case this is for, and one at a time would be four dialogs.
+export function addFiles() {
+    let picked = null;
+    try {
+        picked = showOpenFileDialog(
+            `Media files|${[...mediaExtensions()].sort().join(';')}|All files|*`, true);
+    } catch (e) { said = String((e && e.message) || e); return said; }
+    if (!picked || !picked.length) return '';
+    return take(() => local.adopt(picked, local.LOOSE));
+}
+
+/// Run an adoption, show the channel it went into, and say what happened.
+///
+/// **The channel is switched to and the corpus is re-pointed at it**, because
+/// the press means "show me this footage" and a list that stayed on the
+/// broadcaster showing before would be an adoption with no visible effect. The
+/// same two calls a landed transcription makes, for the same reason.
+function take(run) {
+    let got = null;
+    try { got = run(); }
+    catch (e) { said = String((e && e.message) || e); needRows = true; return said; }
+
+    login = got.channel;
+    local.measure(login);
+    if (library.available()) library.pick(login);
+    scan();
+    needRows = true;
+
+    const bits = [];
+    if (got.added.length) bits.push(`${got.added.length} added`);
+    if (got.already.length) bits.push(`${got.already.length} already here`);
+    for (const r of got.refused)
+        bits.push(`${r.path.split(/[\\/]/).pop()} ${r.why}`);
+    said = bits.length ? `${login} · ${bits.join(' · ')}`
+                       : `nothing to add in ${got.dir || login}`;
+    return said;
+}
+
+/// Look at an adopted folder again. The look-up press, for a local channel.
+function refold(name) {
+    try {
+        const got = local.rescan(name);
+        local.measure(name);
+        scan();
+        needRows = true;
+        said = got.added.length ? `${got.added.length} new in ${got.dir}`
+                                : `nothing new in ${got.dir}`;
+        return true;
+    } catch (e) {
+        said = String((e && e.message) || e);
+        needRows = true;
+        return false;
+    }
+}
+
+/// Is the channel showing a folder of footage rather than a broadcaster?
+///
+/// What the tab asks to decide whether the box beside it says `Look up` or
+/// `Re-scan`, and whether a row offers `Get`. The answer is the store's
+/// (`corpus/local.js`), read through here so that `results.js` goes on having
+/// exactly one opinion about a recording's condition.
+export function showingFolder() { return !!login && local.isLocal(login); }
+
+/// Every folder already adopted, for the picker beside the box.
+export function folders() { return local.localChannels(); }
 
 // ── the merge ──────────────────────────────────────────────────────────────
 
@@ -270,7 +382,10 @@ function rowFor(draft, hasWords, fromManifest) {
     const st = loadState(login, draft.id);
 
     const pulled = isPulled(login, draft.id);
-    const media = pulled ? p.media
+    // **`mediaOf` and not `p.media`**, which is the one line that makes a folder
+    // of footage searchable: a pulled recording is in the store and an adopted
+    // one was never moved into it. See `corpus/local.js`.
+    const media = pulled ? mediaOf(login, draft.id)
                 : fromManifest && fromManifest.media && exists(fromManifest.media)
                     ? fromManifest.media : '';
     const srt = hasWords ? p.srt
@@ -294,6 +409,20 @@ function rowFor(draft, hasWords, fromManifest) {
         seconds, media, srt, words: wordCount,
     };
 
+    // **A recording that was adopted rather than fetched has no `Get`**, and the
+    // three conditions it can be in that a broadcast cannot are named here
+    // because this is where a condition is decided. `measuring` is a probe in
+    // flight; `unreadable` is a file that would not open — kept on the list
+    // saying why, rather than dropped, which is `corpus/local.js`'s rule; and
+    // `missing` is a file that has been moved or deleted since, which keeps its
+    // words and loses its picture exactly as a dropped broadcast does.
+    const adopted = !!(st && st.local);
+    const state = srt ? 'transcribed'
+                : media ? (adopted && st.silent ? 'silent' : 'pulled')
+                : adopted ? (st.error ? 'unreadable'
+                          : exists(st.local.path) ? 'measuring' : 'missing')
+                : 'listed';
+
     return {
         // The `ui/library.js` item shape, so one list draws recordings and hits.
         kind: 'vod', vod, at: 0, to: seconds,
@@ -302,7 +431,17 @@ function rowFor(draft, hasWords, fromManifest) {
         // And this file's half of it.
         id: draft.id,
         listed: !!draft.listed,
-        state: srt ? 'transcribed' : media ? 'pulled' : 'listed',
+        local: adopted,
+        // Where it is, for a row that has to say so: a folder's files are named
+        // by their basename and two folders can hold the same one.
+        where: adopted ? st.local.path : '',
+        state,
+        // **Why this file will not open, which is not `error`.** `error` is a
+        // *job's* and `apply()` clears it on every frame from the jobs it finds;
+        // this is a property of the recording, written by the probe and read
+        // back out of the state file, and it has to survive a frame in which
+        // nothing is running.
+        why: adopted ? (st.error || '') : '',
         bytes: media ? sizeOf(media) : 0,
         progress: 0, read: 0, realtime: 0, error: '', failedAt: '',
     };
@@ -606,6 +745,13 @@ export function stop(id) {
 /// distinction is worth having a return value for.
 export function tick() {
     let settled = false;
+
+    // The adopted files still being measured. Not in `work`, and deliberately:
+    // `work` is what this window started and holds a job whose `chan` decides
+    // whose row it lands on, and a probe queue is process-wide and belongs to
+    // the store rather than to a channel. Its answer goes on disk, so the only
+    // thing owed here is to read the disk again when one lands.
+    if (local.tick()) settled = true;
 
     for (const [id, w] of [...work]) {
         if (w.phase !== 'running') continue;

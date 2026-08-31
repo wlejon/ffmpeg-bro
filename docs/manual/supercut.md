@@ -15,8 +15,9 @@ workbench's six stages is on that loop.
 
 **Run it from the repository root**, because the corpus it reads and writes is
 under `build/corpus/`, a path relative to the working directory. With no corpus
-there yet, type a channel's name into the Recordings tab and it will go and get
-one; you can also open recordings by hand and cut them.
+there yet, either type a channel's name into the Recordings tab and it will go
+and get one, or point it at a folder of footage you already have; you can also
+open recordings by hand and cut them.
 
 ## What is shared with ffmpeg-bro, and what is not
 
@@ -37,17 +38,20 @@ but a stack is not a sequence, and saving afterwards saves the flattened one.
 
 ## The window
 
-**Left — the finder**, and three tabs because there are three questions:
+**Left — the finder**, and four tabs because there are four questions:
 
 - **Recordings** — what a channel has: each broadcast with its date, its length,
   and whether it is here yet. This is what the window opens on, so there is
-  something there before anybody types.
+  something there before anybody types. It is also where you point it at a
+  folder of footage you already have.
 - **Words** — every place a phrase was said.
 - **Talking** — the stretches where somebody talked without stopping.
+- **Rhythm** — words and a beat, typed; it finds each word and cuts the mix to
+  the grid.
 
-The last two are the same questions the workbench's panel asks, with the same
-answers, because [the search is one implementation](find.md). All three list the
-same way: `▶` plays it — and becomes `■`, which stops it, as does `Space` — and
+Words and Talking are the same questions the workbench's panel asks, with the
+same answers, because [the search is one implementation](find.md). All four list
+the same way: `▶` plays it — and becomes `■`, which stops it, as does `Space` — and
 `+` puts it at the end of the mix. A moment stops on its own at the end of
 itself; a whole recording is six hours and does not. Adding a whole
 recording adds the whole of it — six hours if that is what it is — because
@@ -145,6 +149,42 @@ being poured into one file, but the two faces cannot coordinate beyond that.
 
 Where the files go and what a stopped job leaves behind is the same as the
 command line's, below — this is the same store.
+
+### Footage you already have
+
+Beside the channel box are **Folder…** and **Files…**. A folder becomes a
+channel of its own, named after the folder — point it at `D:/footage/interviews`
+and you get a channel called `interviews` holding every video directly inside it.
+**Files…** takes files you pick one by one, into a channel called `local`.
+
+**Nothing is copied.** The files stay exactly where they are; what goes into
+`build/corpus/` is a small record per file and, once you transcribe one, its
+words. Two things follow. Moving or deleting a file later leaves its row and its
+words and takes away its picture, which is the same state a broadcast Twitch has
+dropped ends up in. And a corpus of your own footage describes *this* machine's
+disk — a pulled channel can be carried to another machine and one of these
+cannot.
+
+Each row then reads the same way a broadcast's does, minus the **Get** — the
+recording is already here — and with three conditions a download cannot be in:
+
+| The row says | What it means |
+|---|---|
+| `measuring` | it is being opened to find out how long it is; a moment |
+| `no soundtrack` | it plays and it adds, and no search will ever find it |
+| `would not open`, `not where it was` | say which; **Re-scan** is what mends both |
+
+**Transcribe** appears once a file has been measured, and from there it is a
+recording like any other: the words are searchable, `+` cuts a moment out of it,
+and the Rhythm tab can build out of it.
+
+**Press the same button again to look at the folder again.** Where a broadcaster
+gets **Look up**, a folder gets **Re-scan**: it takes in whatever has appeared
+since and leaves everything already transcribed alone. Nothing is ever removed by
+a re-scan.
+
+For a folder of five hundred clips, `adopt` on the command line below does the
+same thing without a window to watch it in.
 
 ### `+` cuts the moment out
 
@@ -294,6 +334,63 @@ Anything a gesture cannot do, it stops short of doing rather than refusing: an
 edge that will not go further has run out of footage, and a speed that will not
 go further has hit the range the model holds (0.05× to 20×).
 
+## Words on a beat
+
+The **Rhythm** tab is for the mix you can already hear: you know what it should
+say and when each word should land, and what you need is for somebody to go and
+find every one of them.
+
+Type a **tempo**, how many **steps a beat**, and the words:
+
+```
+no  no  no  no
+what . the -  hell . . -
+```
+
+A token is one step. At 120 with four steps a beat, a step is an eighth of a
+second.
+
+| Token | Does |
+|---|---|
+| a word | starts a new piece on this step |
+| `.` | **holds** — the piece before it lasts one step longer |
+| `-` | **rests** — a step of black and silence |
+
+Two spellings of the same word go in one token: `what\|wot` finds either. A
+phrase with a space in it goes in quotes: `"you cross"`. Lines are only lines —
+the grid runs straight across them, so use one per bar if that helps you read it.
+
+The list under the box is what the score resolved to, a row a step, in the order
+it will play. `▶` plays a step before anything is built and `+` drops that one
+piece into the mix on its own, which is what you want when one take is wrong and
+the rest is right. **The same word typed twice takes two different takes** — that
+is the whole point of it, and `hell#2` pins a particular one when the walk gives
+you the wrong one.
+
+**Build** puts the lot in the mix. Every piece comes out an exact number of
+steps long, so the words land on the grid rather than near it.
+
+**A word nothing said refuses the whole build**, naming every one of them at
+once. A rhythm with a hole in it and nothing saying which word went missing is
+worse than a rhythm that will not build.
+
+**The words are cut to the step, not stretched into it.** A word longer than its
+step is cut off; a short one runs on into whatever followed it in the recording.
+Nothing changes pitch. If you want a particular piece stretched to fill its step,
+drag its rate badge afterwards.
+
+**Where the word starts is measured, not guessed.** A transcript knows roughly
+where a word is — near enough to find it, not near enough to hit a beat with —
+so after the pieces are laid, each one is moved onto the loudest change in the
+sound nearest its word. That is the difference between on the beat and nearly on
+it. It happens quietly in the background, moves the footage inside each card and
+never the card itself, and the row says `finding the beat in 6` while it is going
+on. Whatever it finds, the grid does not move.
+
+The score is remembered between sessions but it is **not in the document** — what
+a `.fbro` holds is the mix it built. Building again appends; **Clear** empties
+the mix.
+
 ## Writing the file
 
 One button. H.264 and AAC into an mp4, at the canvas's own size and rate — the
@@ -328,6 +425,14 @@ which reads and writes the same store:
 ```
 ffmpeg-bro-headless ui/ tools/supercut.js -- pull turk --last 5
 ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe turk --last 5
+```
+
+`adopt` is the folder half of the same thing, and the verb to reach for when the
+folder is large:
+
+```
+ffmpeg-bro-headless ui/ tools/supercut.js -- adopt D:/footage/interviews
+ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe interviews
 ```
 
 The command line is the one with the knobs on it — how many, how many to skip,

@@ -759,19 +759,18 @@ export function save(path) {
 /// `containersFor` names in ffmpeg_capabilities.cpp: "the containers we
 /// support" is how MPEG-TS, MXF, AVI, FLV and image2 came to be compiled in and
 /// unreachable, and a file dialog that hides a format this binary can open is
-/// the same unreachability by another route. `bro.ffmpeg.demuxers` answers for
-/// the build. The final "All files" entry is what covers the demuxers that
-/// claim no extension at all — a raw stream, an `.mkv` named anything — so
-/// nothing is *only* reachable through the list.
-function mediaExtensions() {
-    const seen = new Set();
-    for (const d of bro.ffmpeg.demuxers || [])
-        for (const e of d.extensions || []) if (e) seen.add(e.toLowerCase());
-    return [...seen].sort().join(';');
+/// the same unreachability by another route. The set is `ui/inputs.js`'s, which
+/// is where it moved when a second caller appeared — `corpus/local.js` scans a
+/// folder with it — and what is here is only the punctuation SDL wants. The
+/// final "All files" entry is what covers the demuxers that claim no extension
+/// at all — a raw stream, an `.mkv` named anything — so nothing is *only*
+/// reachable through the list.
+function extensionFilter() {
+    return [...inputsModel.mediaExtensions()].sort().join(';');
 }
 
 function openFilter() {
-    const media = mediaExtensions();
+    const media = extensionFilter();
     return `ffmpeg-bro files|${EXTENSION};${media}` +
            `|ffmpeg-bro documents|${EXTENSION}` +
            `|Media files|${media}` +

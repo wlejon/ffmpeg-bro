@@ -1,8 +1,9 @@
 // Every time somebody said a thing, found and cut — the tool, as one command.
 //
-// A pipeline in eleven verbs, each of which can be run on its own and none of
+// A pipeline in twelve verbs, each of which can be run on its own and none of
 // which redoes what a previous run finished:
 //
+//   adopt       a folder of footage already on this disk, as a channel
 //   list        ask Twitch what the channel has, and write it down
 //   pull        the recording of each, into the store, by stream copy
 //   transcribe  every word in each, with a time, as cues
@@ -15,6 +16,7 @@
 //   flipbook    one video frame per instance, assembled
 //   weave       the phrase said once, every fragment from a different instance
 //
+//   ffmpeg-bro-headless ui/ tools/supercut.js -- adopt D:/footage/interviews
 //   ffmpeg-bro-headless ui/ tools/supercut.js -- list turk --last 5
 //   ffmpeg-bro-headless ui/ tools/supercut.js -- build turk
 //   ffmpeg-bro-headless ui/ tools/supercut.js -- search turk "you cross"
@@ -49,6 +51,7 @@ import { planPull, startPull, pollPull, running } from '../corpus/pull.js';
 import { startTranscribe, pollTranscribe, running as transcribing,
          SPEECH_MODEL } from '../corpus/words.js';
 import { writeManifest } from '../corpus/index.js';
+import * as local from '../corpus/local.js';
 import { readSrt, countPhrases, ranked } from './transcript.js';
 import { cutClips } from './clips.js';
 import { build as buildFlipbook } from './flipbook.js';
@@ -62,6 +65,7 @@ const verb = (args[0] || '').toLowerCase();
 
 const USAGE = `usage: ffmpeg-bro-headless ui/ tools/supercut.js -- <verb> …
 
+  adopt <folder>                   the videos in it, as a channel of its own
   list <channel> [--last N]        what the channel has, newest first
   pull <channel> [--last N]        the recording of each, by stream copy
   transcribe <channel> [--last N]  every word of each, with a time
@@ -491,6 +495,46 @@ async function doFlipbook() {
 /// just finished transcribing a recording can refresh the manifest without
 /// anybody remembering to run this. That block says why a file is the seam and
 /// why the words are not copied into it. What is here is the printing.
+/// Take a folder of footage into the corpus, under the folder's own name.
+///
+/// **The same call the window's `Folder…` press makes**, which is why this is
+/// eight lines: `corpus/local.js` owns what a folder becomes and both faces
+/// drive it, exactly as `pull` and `transcribe` drive `corpus/pull.js` and
+/// `corpus/words.js`. Here rather than only in the window because a folder of
+/// five hundred clips is a batch job — the probes are one at a time, and a
+/// window is somewhere to watch that happen rather than somewhere to start it
+/// and walk away.
+///
+/// It waits for the probes rather than leaving them, because the next verb
+/// somebody types is `transcribe` and a recording with no measured length is one
+/// `startTranscribe` refuses by name.
+async function doAdopt() {
+    const where = args[1];
+    assert(where, 'adopt takes a folder: `adopt D:/footage/interviews`');
+
+    const got = local.adoptFolder(where);
+    console.log(`${got.channel} · ${got.dir}`);
+    console.log(`  ${got.looked} media files · ${got.added.length} added · ` +
+                `${got.already.length} already here`);
+    for (const r of got.refused) console.log(`  refused ${r.path} — ${r.why}`);
+    if (!got.added.length && !got.already.length) return;
+
+    const n = local.measure(got.channel);
+    if (n) {
+        driver.until('the recordings to be measured', () => !local.tick() && !local.measuring(),
+                     Math.max(60000, n * 30000),
+                     (s) => console.log(`  measuring · ${local.measuring()} left · ` +
+                                        `${s.toFixed(0)}s`));
+    }
+    // Said out loud, because it is the one condition a folder produces that a
+    // pulled channel cannot and the next verb will refuse without explaining
+    // where the file went.
+    const here = transcribed(got.channel);
+    console.log(`  ${got.added.length + got.already.length} in the channel · ` +
+                `${here.length} already transcribed`);
+    console.log(`  next: \`transcribe ${got.channel}\``);
+}
+
 function doIndex() {
     need('index');
     const have = transcribed(channel);
@@ -543,6 +587,7 @@ function doWeave() {
 // ── go ─────────────────────────────────────────────────────────────────────
 
 const VERBS = {
+    adopt: doAdopt,
     list: doList, pull: doPull, transcribe: doTranscribe, status: doStatus,
     search: doSearch, phrases: doPhrases, clips: doClips, flipbook: doFlipbook,
     index: doIndex,

@@ -57,7 +57,7 @@
 // to say how far it got — which it should not, because every reader in this
 // repository would then have to check.
 
-import { vodPaths, loadState, saveState, isPulled } from './store.js';
+import { vodPaths, loadState, saveState, isPulled, mediaOf } from './store.js';
 import { readSrt, writeSrt } from './srt.js';
 import { ROOT, exists } from './files.js';
 
@@ -242,9 +242,14 @@ export function startTranscribe(login, meta, opts = {}) {
 
     // The length comes off the state file rather than off a probe, and it is the
     // same number a probe would give: `corpus/pull.js` wrote it from the local
-    // file's own `format.duration` on the frame the copy landed, deliberately,
-    // because that is what everything downstream measures a transcript against.
-    const read = startRead(p.media, { ...opts, duration: job.duration });
+    // file's own `format.duration` on the frame the copy landed — and
+    // `corpus/local.js` writes the same field from the same place when a file is
+    // adopted — deliberately, because that is what everything downstream
+    // measures a transcript against.
+    //
+    // **Which file is read is `mediaOf`'s and not `vodPaths`'.** A pulled
+    // recording is in the store; an adopted one was never moved into it.
+    const read = startRead(mediaOf(login, meta.id), { ...opts, duration: job.duration });
     job.id = read.id;
     job.state = read.state;
     job.error = read.error;

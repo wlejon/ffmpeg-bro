@@ -31,6 +31,7 @@ hours of somebody talking has to be able to make the transcript it searches.
 ## supercut.js
 
 ```
+ffmpeg-bro-headless ui/ tools/supercut.js -- adopt D:/footage/interviews
 ffmpeg-bro-headless ui/ tools/supercut.js -- list turk --last 5
 ffmpeg-bro-headless ui/ tools/supercut.js -- pull turk --last 4 --skip 1
 ffmpeg-bro-headless ui/ tools/supercut.js -- transcribe turk
@@ -42,15 +43,22 @@ ffmpeg-bro-headless ui/ tools/supercut.js -- weave turk "you cross"
 ffmpeg-bro-headless ui/ tools/supercut.js -- index turk
 ```
 
-Eleven verbs, none of which redoes what a previous run finished. They are
+Twelve verbs, none of which redoes what a previous run finished. They are
 separate because their costs are: `pull` is the network, `transcribe` is the
 GPU, and `search`, `phrases` and `clips` are cheap and are the ones you actually
 iterate on. Welding them together would mean re-pulling seventeen gigabytes to
 try a different phrase.
 
+`adopt` is `pull` for footage that is already on this disk: a folder becomes a
+channel named after itself, and **the files are not copied** — the store keeps a
+record and the transcript, and the recordings stay where they are. Everything
+after it is the same, `transcribe` included.
+
 ```
 build/corpus/<login>/channel.json          what the channel has, newest first
 build/corpus/<login>/<id>/media.mkv        the recording, picture and sound
+                                           — absent for an adopted folder, whose
+                                             files stay where they already were
 build/corpus/<login>/<id>/words.srt        one cue per word
 build/corpus/<login>/<id>/state.json       what has been done to it
 build/corpus/<login>/clips/<phrase>/       a clip per hit, cached

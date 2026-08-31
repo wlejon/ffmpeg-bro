@@ -584,6 +584,40 @@ export function isImagePath(path) {
     return (bro.ffmpeg.imageExtensions || []).indexOf(m[1].toLowerCase()) >= 0;
 }
 
+/// Every extension a demuxer in this build claims, lower case, as a Set.
+///
+/// **Asked, not written down**, which is the convention — but it is here rather
+/// than beside either caller because there are two of them and they would
+/// otherwise be two answers to one question. `ui/document.js` builds the Open
+/// dialog's filter out of this, and `corpus/local.js` decides with it which
+/// files in a folder somebody dropped are worth probing; a list that grew an
+/// entry in one and not the other would be a folder whose `.mxf` was invisible
+/// to the scan and openable by hand, with nothing saying why.
+///
+/// The answer is a property of the build and cannot change while it runs, so it
+/// is built once. Empty is a real answer — a demuxer that claims no extension at
+/// all is reached by the dialog's "All files" entry and by a probe, which is
+/// what stops this from being the *only* way in.
+let claimed = null;
+export function mediaExtensions() {
+    if (claimed) return claimed;
+    claimed = new Set();
+    for (const d of bro.ffmpeg.demuxers || [])
+        for (const e of d.extensions || []) if (e) claimed.add(String(e).toLowerCase());
+    return claimed;
+}
+
+/// Does this path carry an extension some demuxer in this build claims?
+///
+/// A pre-filter over a directory and never a verdict: a file that passes may
+/// still fail to open, and one that fails may open perfectly when named on the
+/// command line. `corpus/local.js` probes what passes and refuses by name what
+/// does not open.
+export function looksLikeMedia(path) {
+    const m = /\.([A-Za-z0-9]+)$/.exec(String(path || ''));
+    return !!m && mediaExtensions().has(m[1].toLowerCase());
+}
+
 /// The scheme a URL names, or '' for a plain path.
 ///
 /// The parse is `format.js`'s — there were two of them and only one carried the

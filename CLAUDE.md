@@ -338,8 +338,12 @@ them because they are).
 `ui/library.js` is the corpus of transcripts — which recordings there are, what
 was said in them and where — and it has **three views over it**: `ui/find.js`
 (the panel over Compose), `supercut/results.js` (the second application's whole
-left-hand side) and `tools/`. What *makes* a corpus — the Twitch API, the
-pulling, the store's layout — is **`corpus/`**, which is a module set rather
+left-hand side) and `tools/`. `supercut/rhythm.js` is a fourth *reader* and
+deliberately not a fourth view: it resolves a score through `searchWords` like
+everything else and draws nothing, which is why a score and the Words tab can
+never come to disagree about where a word was said. What *makes* a corpus — the
+Twitch API, the pulling, the store's layout, and now a folder of footage already
+on the disk — is **`corpus/`**, which is a module set rather
 than a face: it is imported by `tools/supercut.js`'s batch verbs and by the
 supercut window both, exactly as `ui/`'s model modules are imported by two
 windows. `build/corpus/find.json` is still the manifest a view reads, and **an
@@ -358,6 +362,27 @@ the Write stage, and that is precisely what made it unimportable. And **`assert`
 is a headless-only global**, installed by `headless_bindings.cpp` and absent in a
 window, so a refusal in `corpus/` throws an `Error` carrying the same sentence.
 Anything moved in here next will hit that.
+
+**A folder of footage is a channel whose listing is the folder** (`corpus/local.js`),
+and that is the whole of what local files needed: everything downstream of a
+transcript asks the corpus which recordings there are, what was said in them and
+where, and not one part of it is about Twitch. What is about Twitch is the
+listing and the pull, so those are the two steps this replaces — `adopt` is
+synchronous and answers what it did, `tick` is idempotent, in `corpus/pull.js`'s
+shape. Four things are load-bearing. **The file is not copied**: it is already on
+the disk and it is tens of gigabytes, so the store holds a `state.json` and a
+`words.srt` and `store.mediaOf` is the one home for "where is this recording's
+picture" — a second answer would be a recording that transcribes and will not
+play. **Ids are allocated and must be stable**, so the path is written into the
+state file and a second adoption of the same folder finds its own work rather
+than re-transcribing everything. **The probe is a thread**, because a press may
+not open fifty files (`bro.ffmpeg.probes`, one at a time), so a file with no
+length yet is one `isPulled` refuses and nothing offers to transcribe. And a file
+with **no soundtrack is kept and flagged rather than refused** — b-roll plays and
+adds and can never be searched, which is a fact about the file and is said on the
+row. The prices, both named where they land: an adopted corpus describes *this*
+machine's disk where a pulled one is portable, and a file that moves keeps its
+words and loses its picture — the state a dropped broadcast is already in.
 
 **A pull is a `bro.ffmpeg.fetch`, not a render.** The old one drove the Write
 stage and so held the one job slot, which is why the command line pulls one
@@ -457,6 +482,42 @@ gigabyte's worth rather than a number of clips: a fixed three evicted the file i
 was about to need again on every crossing, and a fixed eight did the same once
 every clip had a proxy of its own (80 ms of opening on a click that should be a
 seek).
+
+**A score is the other way to make a mix, and it is the shape deciding the
+material rather than the reverse** (`supercut/rhythm.js`). The rest of that
+application assembles by finding — a hit, a listen, a press — which is right
+until you can already hear the thing: `no no no no, on the beat` is twenty
+presses and then a trim per piece to a length nobody hits by eye. So a **score**
+is a tempo, a grid and a line of words, and a token is one step: a word starts a
+piece, `.` holds, `-` rests. Five decisions. A **rest is a generator clip**
+(`color`), because `mix.js`'s sequence is packed and there is nowhere for an
+absence to be. A word is **cut to the step and never stretched** — the speed
+alternative moves the pitch, and `setSpeed` is one drag away for the one piece
+that wants it. Repeats **walk the takes** rather than repeating one clip, which
+is the whole point of building it out of a corpus. A missing word **refuses the
+whole build, naming every one**, because a rhythm with a hole in it and nothing
+saying which word went missing is worse than one that will not build. And the
+score is a workspace preference and **not in the document**: what a `.fbro` holds
+is the mix it produced, which is a mix like any other from the moment it exists.
+
+**Where the beat is, is measured** — and it is the first reader
+`bro.ffmpeg.marks` has ever had. A transcript's time is Parakeet's frame (0.08 s)
+and is where the *token* was emitted; at 120 bpm a sixteenth is 125 ms, so
+cutting on that number is nearly on the beat and sounds like a mistake. So each
+piece asks for the onsets in a short window around its word and **slips** to the
+nearest transient. Four things. It is a **slip, not a trim**, so the grid is
+untouched whatever the answer is and a read that never lands leaves the
+transcript's timing. The window **leads by 0.6 s** because the flux baseline is
+an EMA starting at zero — the first half-second of anything analysed carries
+marks that are not in it, and the lead puts that before the word rather than on
+it. The offset is applied **relative**, so it composes with `cuts.js` repointing
+the clip mid-flight. And **an onset is a transient and is not "the word"**:
+what is claimed is that the piece moved to the loudest change nearby, which is
+what `TOLERANCE` keeps small. Finding this needed a real fix one layer down —
+`SourceAudio::open` moved the clock for an input's `-ss` and never seeked, so a
+windowed `marks` read analysed the file from zero to `ss + t` and put every `at`
+on the wrong clock. Silent for as long as nothing asked for a window; measured at
+940 ms against 28 for the same answer.
 
 **A moment added to the mix is cut out of its recording** (`supercut/cuts.js`).
 `+` puts the clip in the row on the frame it is pressed, against the recording,
@@ -695,9 +756,15 @@ with a sentence, the link and the sources are unconditional, and there is no
 left is the distinction that was always the point: a *silent file* gives back an
 empty list, and a file with no soundtrack at all is refused by name.
 
-Marks reach no UI at present — the Marks lane and the `,`/`.` walk left with the
-ffmpeg-only pass — so `bro.ffmpeg.marks` and `tests/marks_test.cpp` are the
-whole surface until one returns.
+**Marks have exactly one reader and it is not a lane.** The Marks lane and the
+`,`/`.` walk left with the ffmpeg-only pass and have not come back;
+`supercut/rhythm.js` is what arrived instead, and the shape of it is worth
+noticing before adding a lane. It never shows a mark and never lets anybody pick
+one — it asks for the onsets in a 0.8 s window around a word and moves a clip
+onto the nearest one, so the measurement is *used* rather than drawn, which is
+the form that turned out to be worth having. It is also what found the windowing
+bug in `SourceAudio::open` above: nothing had ever asked this surface for a
+window before.
 
 ### The words, which are the other thing a soundtrack holds
 

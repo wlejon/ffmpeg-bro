@@ -30,7 +30,13 @@ assert(media, 'pass a media file: ... tests/supercut.js -- <file>');
 import * as library from '/app/../ui/library.js';
 // Where this checkout is, which is the one thing the fixture paths below have to
 // agree with the application about — see `dir`.
-import { ROOT } from '/app/../corpus/files.js';
+import { ROOT, abs } from '/app/../corpus/files.js';
+// The two halves of "footage that is already on this disk": what makes a folder
+// into a channel, and where the store then says that channel's recordings are.
+// Reached the same way `library` is, so this drives the modules the window is
+// using rather than second copies of them.
+import * as local from '/app/../corpus/local.js';
+import * as store from '/app/../corpus/store.js';
 
 const fs = require('fs');
 const A = globalThis.__supercut;
@@ -856,6 +862,189 @@ console.log('\nwriting');
     ok(Math.abs(got.format.duration - A.duration()) < 0.5,
        `and it is as long as the mix (${got.format.duration.toFixed(2)} vs ` +
        `${A.duration().toFixed(2)}s)`);
+}
+
+// ── footage that is already on this disk ───────────────────────────────────
+//
+// A folder of video files, made into a channel of the corpus. **The assertion
+// that matters is that nothing was copied**: the store holds a `state.json` and
+// will hold a `words.srt`, and the recording itself stays exactly where it was.
+// A corpus that duplicated tens of gigabytes to index it would be one nobody
+// could afford to make, and the failure would be invisible until the disk filled.
+//
+// Driven through `corpus/local.js` and `supercut/acquire.js` rather than through
+// the two dialogs: `showOpenFolderDialog` blocks the thread this suite runs on,
+// so what is exercised here is everything both presses do after a path comes
+// back — which is the whole of the mechanism.
+
+console.log('\nfootage already here');
+{
+    // **Its own channel, deleted first.** The store's root is one fixed path and
+    // it is somebody's real corpus, so a suite may write only under a name it
+    // made up and must not leave that behind either. `sc-fixture` is not a
+    // Twitch login anybody has pulled.
+    const CHAN = 'sc-fixture';
+    const rmrf = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); }
+                          catch (e) { /* never existed */ } };
+    rmrf(`${ROOT}/build/corpus/${CHAN}`);
+
+    const got = local.adopt([media], CHAN);
+    ok(got.added.length === 1, `the file was adopted (${got.added.length})`);
+    const id = got.added[0].id;
+    ok(/^\d+$/.test(id), `and given a numeric id, which every reader of one expects (${id})`);
+
+    // The whole point, in one line.
+    ok(store.mediaOf(CHAN, id).toLowerCase() === abs(media).toLowerCase(),
+       'the recording is where it always was — nothing was copied into the store');
+    ok(!fs.existsSync(store.vodPaths(CHAN, id).media),
+       'and there is no media.mkv in the store beside its state');
+
+    // Not yet measured, so not yet transcribable: `isPulled` is the guard and it
+    // is asked of the state rather than of the file existing, for the reason
+    // `corpus/store.js` gives at length.
+    ok(!store.isPulled(CHAN, id), 'a file nobody has probed yet is not ready to read');
+
+    // The probe is a thread. Pumped rather than waited on, because a press that
+    // probed a folder of fifty files would be five seconds of frozen window.
+    ok(local.measuring() === 0, 'nothing is queued until something asks');
+    ok(local.measure(CHAN) === 1, 'and asking queues exactly the one that needs it');
+    for (let i = 0; i < 200 && local.measuring(); i++) { local.tick(); pump(20); }
+    ok(!local.measuring(), 'the probe landed');
+    ok(store.isPulled(CHAN, id), 'and now the recording has a length and can be read');
+
+    const again = local.adopt([media], CHAN);
+    ok(again.added.length === 0 && again.already.length === 1,
+       'adopting the same file twice finds its own work rather than duplicating it');
+    ok(again.already[0].id === id, 'under the id it already had, so a transcript survives');
+
+    // A file that is not media at all. The refusal names it, which is the
+    // difference between a folder that adopted eleven of twelve and one that
+    // said why about the twelfth.
+    const junk = `${dir}/not-a-video.zzz`;
+    fs.writeFileSync(junk, 'this is not a video', 'utf-8');
+    const no = local.adopt([junk], CHAN);
+    ok(no.refused.length === 1 && no.refused[0].path.endsWith("not-a-video.zzz"),
+       'a file no demuxer claims is refused by name rather than silently skipped');
+
+    // What the window then shows. `open` is synchronous and touches no network,
+    // which is what makes this drivable at all.
+    A.acquire.open(CHAN);
+    pump(40);
+    ok(A.acquire.showingFolder(),
+       'the tab knows this channel is a folder and not a broadcaster');
+    const row = A.acquire.list().find((r) => r.id === id);
+    ok(!!row && row.local, 'its row says so');
+    ok(row.state === 'pulled' || row.state === 'silent',
+       `and the recording is here rather than something to fetch (${row && row.state})`);
+    ok(row.vod.media && row.vod.media.toLowerCase().indexOf('build/corpus/') < 0,
+       'with the row pointing at the original file and not into the store');
+
+    rmrf(`${ROOT}/build/corpus/${CHAN}`);
+    try { fs.unlinkSync(junk); } catch (e) { /* fine */ }
+}
+
+// ── words on a beat ────────────────────────────────────────────────────────
+//
+// The score, resolved and built. **What is asserted is the grid**: every piece's
+// length is an exact multiple of the step, because that is the one property that
+// makes the mix play on the beat and the one a hand trimming by eye cannot
+// produce. The words themselves are the fixture's, whose transcript is not the
+// sound — which does not matter here for `tests/ui_find.js`'s reason, and does
+// mean that whatever the onset pass finds, it must not move a card: a slip is a
+// slip whether or not there was a transient to slip to.
+
+console.log('\nwords on a beat');
+{
+    // Back to the one-recording corpus: the counts below are counts of takes.
+    A.results.useCorpus(`${dir}/find.json`);
+    A.results.start();
+    pump(120);
+
+    // A clean mix, so the pieces asserted are the pieces the score made.
+    document.getElementById('btn-clear').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(60);
+    ok(A.mix.sequence().length === 0, 'the mix is empty to build into');
+
+    A.results.setTab('rhythm');
+    pump(80);
+
+    const score = document.getElementById('r-score');
+    const tempo = document.getElementById('r-tempo');
+    const steps = document.getElementById('r-steps');
+    ok(!!score && !!tempo && !!steps, 'the score has a field and the grid has two numbers');
+
+    type(tempo, '120');
+    type(steps, '4');
+    ok(Math.abs(A.rhythm.stepSeconds() - 0.125) < 1e-9,
+       `120 bpm in sixteenths is an eighth of a second (${A.rhythm.stepSeconds()})`);
+
+    // Three kinds of token, one line. `cross` is said twice in the fixture and
+    // typed twice, so it is the one that proves takes are walked rather than
+    // repeated.
+    type(score, 'cross . cross -  line . . .');
+    pump(60);
+
+    const plan = A.rhythm.plan();
+    ok(plan.pieces.length === 4,
+       `four pieces: three words and a rest (${plan.pieces.length})`);
+    ok(plan.steps === 8, `over eight steps (${plan.steps})`);
+    ok(Math.abs(plan.seconds - 1) < 1e-9, `which is one second (${plan.seconds})`);
+    ok(plan.pieces[0].steps === 2 && plan.pieces[3].steps === 4,
+       'a hold makes the piece before it longer rather than repeating it');
+    ok(plan.pieces[2].kind === 'rest', 'and a dash is a rest of its own');
+    ok(plan.pieces[0].hit && plan.pieces[1].hit &&
+       plan.pieces[0].hit.at !== plan.pieces[1].hit.at,
+       'the same word typed twice takes two different moments');
+
+    // The list is the plan, drawn — one row a step, and the rows work.
+    ok(document.querySelectorAll('#f-list .row.step').length === 4,
+       'the list under it is what the score resolved to, a row a step');
+
+    // A word nothing said refuses the whole build, naming it. **Refuses rather
+    // than approximating**: a build that quietly left a hole would be a rhythm
+    // with a gap in it and nothing on the screen saying which word went missing.
+    type(score, 'cross zebra line');
+    pump(60);
+    const why = A.rhythm.build();
+    ok(/zebra/.test(why), `a word nothing said refuses the build by name (${why})`);
+    ok(A.mix.sequence().length === 0, 'and builds nothing at all');
+
+    type(score, 'cross . cross -  line . . .');
+    pump(60);
+    ok(A.rhythm.build() === '', 'a score that resolves builds');
+
+    // The press returns and the frame loop finishes it: the inputs are opened on
+    // a thread, so the pieces are laid when every one of them has answered.
+    for (let i = 0; i < 200 && A.mix.sequence().length < 4; i++) pump(30);
+    const seq = A.mix.sequence();
+    ok(seq.length === 4, `four clips on the grid (${seq.length})`);
+
+    const step = A.rhythm.stepSeconds();
+    const off = seq.map((c) => Math.abs(c.length / step - Math.round(c.length / step)))
+                   .reduce((a, b) => Math.max(a, b), 0);
+    ok(off < 1e-6, `every piece is an exact number of steps (worst ${off})`);
+    ok(Math.abs(seq[0].length - 2 * step) < 1e-9 &&
+       Math.abs(seq[3].length - 4 * step) < 1e-9,
+       'and the ones that were held are as long as they were held for');
+    ok(Math.abs(A.duration() - 1) < 1e-6,
+       `the whole thing is the second it said it would be (${A.duration()})`);
+    ok(!packed('after a build'), packed('after a build') || 'the mix is still packed');
+
+    // The rest is a generator clip, because a packed sequence has nowhere to put
+    // an absence. It is the third piece.
+    ok(!!seq[2].generator, 'the rest is a generator clip and not a gap');
+    ok(!seq[2].path, 'with no file behind it');
+
+    // **The onset pass is a slip.** It moves the footage inside a card and never
+    // the card, so however it answers the grid is the grid — which is what makes
+    // it safe to run after the mix is already on the screen.
+    const before = seq.map((c) => `${c.start}:${c.length}`).join('|');
+    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
+    ok(!A.rhythm.snapping(), 'every onset read finished');
+    const after = A.mix.sequence().map((c) => `${c.start}:${c.length}`).join('|');
+    ok(before === after,
+       'and not one card moved or changed length — snapping to the beat is a slip');
 }
 
 console.log(`\n${checks} checks passed`);

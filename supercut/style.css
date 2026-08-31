@@ -59,12 +59,14 @@ button.go {
 button.go:hover:not(:disabled) { background: #ffa063; border-color: #ffa063; }
 button.on { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
 
-input[type=text], input[type=number], select {
+input[type=text], input[type=number], textarea, select {
     font: inherit; color: var(--text);
     background: #14161a; border: 1px solid var(--line);
     border-radius: 4px; padding: 5px 8px;
 }
-input[type=text]:focus, input[type=number]:focus { outline: none; border-color: var(--blue); }
+input[type=text]:focus, input[type=number]:focus, textarea:focus {
+    outline: none; border-color: var(--blue);
+}
 input[type=range] { accent-color: var(--accent); width: 130px; }
 label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); }
 
@@ -157,6 +159,32 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
    choice nobody has made yet. */
 .row.rec .pick:checked { opacity: .45; }
 #finder:hover .row.rec .pick:checked, .row.rec .pick:hover { opacity: 1; }
+
+/* ── the score ───────────────────────────────────────────────────────── */
+
+/* The words and the rhythm, which is the one field in this window that is
+   several lines long — a score is read as lines, and a line is a bar. It takes
+   the whole width under the two numbers rather than sitting between them,
+   because it is the thing being written and they are two settings. */
+#r-score {
+    flex: 1 1 100%; min-height: 62px; resize: vertical;
+    font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5;
+}
+/* Two pickers for one offer — they wrap together or not at all. */
+#f-controls .pair { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+
+/* A step of the score. Denser than a recording and lighter than a hit: there
+   are as many rows as there are steps and they are read as a column of words,
+   so the step's own moment leads in the accent and everything else recedes. */
+.row.step .at { color: var(--dim); }
+.row.step .label { font-size: 12px; color: var(--text); max-width: 160px; }
+/* A rest has nothing in it and says so by being the quietest row on the list —
+   it is a step of black, and a row that shouted would be a silence competing
+   with the words around it. */
+.row.step.rest .label, .row.step.rest .detail { opacity: .45; }
+/* A word nothing said. The one row on this tab that is a refusal, and it is
+   drawn as one because a build will refuse for exactly these. */
+.row.step.bad .label { color: var(--bad); }
 
 /* ── the picture ──────────────────────────────────────────────────────── */
 

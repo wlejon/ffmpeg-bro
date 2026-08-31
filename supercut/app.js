@@ -57,6 +57,7 @@ import * as acquire from './acquire.js';
 import * as mix from './mix.js';
 import * as screen from './screen.js';
 import * as cuts from './cuts.js';
+import * as rhythm from './rhythm.js';
 import * as inflight from './inflight.js';
 
 // **The analysis worker is `ui/`'s and is not copied here.** bro resolves a
@@ -104,33 +105,52 @@ function flash(text, bad) {
 /// silently added nothing — so the add is *finished* on the frame loop instead.
 const waiting = [];
 
+/// The `-i` for a path — the one already open, or a new one.
+///
+/// **Split out of `addMoment` for the builder next door.** `supercut/rhythm.js`
+/// lays a whole score at once and therefore has to ask for every recording it
+/// needs *before* it lays anything, so that the pieces go in the order they were
+/// typed rather than in the order the probes land. Two callers, one rule about
+/// what counts as the same input.
+function openInput(spec) {
+    return inputsModel.inputs.find((i) => i.path === spec.path)
+        || inputsModel.addInput({ path: spec.path, name: spec.name });
+}
+
+/// Put a moment in the mix against an input that has already answered.
+///
+/// Answers the clip, which is what a caller that has more to do with it needs —
+/// the rhythm builder measures each piece's onsets afterwards and holds the id.
+/// Answers null when the input never opened.
+function placeMoment(spec, input) {
+    if (!input || !input.probe) return null;
+    const clip = makeClip(input);
+    // The canvas is the first thing put on it, which is what makes a mix of
+    // one recording come out at that recording's size rather than at a
+    // number this application chose. Everything after it is placed inside
+    // that, exactly as on the workbench's timeline.
+    if (!project.width && clip.width) {
+        project.width = clip.width;
+        project.height = clip.height;
+        project.fps = clip.fps || projectFps();
+    }
+    mix.append(clip, spec);
+    // **The clip is in the row before the cut exists**, which is the whole
+    // shape of this: a press adds a piece and the copy that makes it cheap
+    // catches up. See `cuts.js`.
+    cuts.begin(clip, spec);
+    touched();
+    mix.draw();
+    screen.refresh();
+    // Here rather than at the first click on the card — see `screen.warm`.
+    screen.warm();
+    return clip;
+}
+
 function addMoment(spec) {
     if (!spec.path) return;
-    const input = inputsModel.inputs.find((i) => i.path === spec.path)
-        || inputsModel.addInput({ path: spec.path, name: spec.name });
-    const lay = () => {
-        if (!input.probe) return;
-        const clip = makeClip(input);
-        // The canvas is the first thing put on it, which is what makes a mix of
-        // one recording come out at that recording's size rather than at a
-        // number this application chose. Everything after it is placed inside
-        // that, exactly as on the workbench's timeline.
-        if (!project.width && clip.width) {
-            project.width = clip.width;
-            project.height = clip.height;
-            project.fps = clip.fps || projectFps();
-        }
-        mix.append(clip, spec);
-        // **The clip is in the row before the cut exists**, which is the whole
-        // shape of this: a press adds a piece and the copy that makes it cheap
-        // catches up. See `cuts.js`.
-        cuts.begin(clip, spec);
-        touched();
-        mix.draw();
-        screen.refresh();
-        // Here rather than at the first click on the card — see `screen.warm`.
-        screen.warm();
-    };
+    const input = openInput(spec);
+    const lay = () => placeMoment(spec, input);
     if (input.probe) lay();
     else waiting.push({ input, then: lay });
 }
@@ -327,6 +347,7 @@ mix.initMix({
     moved: () => screen.refresh(),
     edited: () => { touched(); screen.refresh(); },
     resized: () => mix.placePlayhead(transport.t),
+    cleared: () => rhythm.forget(),
 });
 
 results.initResults({
@@ -336,6 +357,18 @@ results.initResults({
     audition: (path, from, until) => { screen.audition(path, from, until); drawBar(); },
     hush: () => { screen.stopAudition(); drawBar(); },
     add: addMoment,
+});
+
+// The builder, which is the one part of this application that lays several
+// pieces in one frame — so it gets the two halves of `addMoment` rather than
+// `addMoment` itself. See `openInput` above for why the split exists.
+rhythm.initRhythm({
+    openInput,
+    place: (spec) => placeMoment(spec, openInput(spec)),
+    // A rest is a clip added straight to the model rather than through
+    // `mix.append`, so the one rule the mix adds has to be applied after it.
+    packed: () => mix.reflow(),
+    edited: () => { touched(); mix.draw(); mix.fit(); screen.refresh(); },
 });
 
 inflight.initFlight({ button: nodes.flight, panel: nodes.flightList },
@@ -511,6 +544,13 @@ function frame() {
     if (moved === 'rows') results.refresh();
     else if (moved === 'numbers') results.repaint();
 
+    // The score's two jobs: the inputs a build is waiting on, and the onset read
+    // that puts each piece on the transient nearest its word. A slip moves no
+    // card and changes no length — the grid is the same grid — so what it owes
+    // is a repaint of the pictures and never a rebuild of the row.
+    if (rhythm.tick()) { mix.repaint(); touched(); }
+    if (results.currentTab() === 'rhythm') results.repaint();
+
     screen.tick();
     // An audition that ran to the end of its moment stops itself, and the row it
     // was on has no other way to hear about it — so it kept its highlight and its
@@ -566,7 +606,7 @@ requestAnimationFrame(frame);
 /// door, kept to what a test actually has to reach.
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
-    results, acquire, mix, screen, cuts, inflight, doc: documentModel,
+    results, acquire, mix, screen, cuts, rhythm, inflight, doc: documentModel,
     addMoment, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,

@@ -2,8 +2,8 @@
 // over something else.
 //
 // Six hours of somebody talking is not a thing anybody scrubs through, so the
-// words are the index and the list is where every edit starts. Three tabs,
-// because there are three questions and they are not the same shape:
+// words are the index and the list is where every edit starts. Four tabs,
+// because there are four questions and they are not the same shape:
 //
 //   - **Recordings** — what is in the corpus at all, and what a channel has that
 //     is not in it yet. The one this opens on.
@@ -12,6 +12,11 @@
 //     worth listening to. A stretch is defined by its *gaps* and by nothing
 //     else; see `monologues` in `ui/phrase.js` for why it is named after the
 //     measurement and claims nothing about what is in it.
+//   - **Rhythm** — you know what it should say and when each word should land.
+//     The one tab whose text is an *instruction* rather than a search, and the
+//     list under it is what that instruction resolved to: one row a step, in the
+//     order they will play. `supercut/rhythm.js` decides every word of that and
+//     this draws it, which is the same split the other three keep.
 //
 // **The list is never empty when there is a corpus, and that is the point of the
 // first tab.** This opened on Words with nothing typed, which meant a window
@@ -37,6 +42,7 @@ import { clock } from '../ui/format.js';
 import { gb } from '../corpus/files.js';
 import * as library from '../ui/library.js';
 import * as acquire from './acquire.js';
+import * as rhythm from './rhythm.js';
 
 /// A found list is long and the interesting part is the top of it. The cap is on
 /// what is *drawn* rather than on what is found, so the count stays honest.
@@ -119,9 +125,49 @@ function search() {
     // which is why one list still draws all three tabs.
     results = tab === 'recordings' ? acquire.list()
             : tab === 'words'      ? library.searchWords(phrase, { loose })
+            : tab === 'rhythm'     ? steps()
                                    : library.searchTalking({ gap, min: least });
     drawNote();
     drawRows();
+}
+
+/// The score, resolved, as rows this list can already draw.
+///
+/// **A step of the score is a hit with a step number on it**, which is why the
+/// same row, the same `▶` and the same `+` work on it without any of them
+/// learning what a score is: `resolve()` hands back `ui/library.js`'s own item
+/// for the moment each word is taken from. So a word can be auditioned before
+/// anything is built, and one of them can be dropped straight into the mix on
+/// its own — which is what somebody does when a take is wrong and the rest is
+/// right.
+///
+/// A rest and an unresolved word have no moment, so they carry an item shaped
+/// the same way with nothing in it: the controls go dead on `vod.media` exactly
+/// as they do for a recording that has been deleted off the disk.
+function steps() {
+    const plan = rhythm.replan();
+    const step = rhythm.stepSeconds();
+    let at = 0;
+    let onStep = 1;
+    return plan.pieces.map((p) => {
+        const seconds = p.steps * step;
+        const was = at;
+        const wasStep = onStep;
+        at += seconds;
+        onStep += p.steps;
+        const base = {
+            kind: 'step', piece: p, from: was, step: wasStep, seconds,
+            at: p.hit ? p.hit.at : 0,
+            to: p.hit ? p.hit.at + seconds : seconds,
+        };
+        if (p.kind === 'rest')
+            return { ...base, vod: { id: '', media: '', title: '' },
+                     label: '—', detail: 'rest' };
+        if (!p.hit)
+            return { ...base, vod: { id: '', media: '', title: '' },
+                     label: p.phrase, detail: p.why || 'nothing says that' };
+        return { ...base, vod: p.hit.vod, label: p.phrase, detail: p.hit.detail };
+    });
 }
 
 /// Draw the list again because something landed — a copy advanced, a read
@@ -153,6 +199,12 @@ export function refresh() {
 /// button that became a Stop — is not this; that is `refresh()`, and
 /// `acquire.tick()` answers `'rows'` for it.
 export function repaint() {
+    // **The Rhythm tab's moving part is one line and no rows.** A build's inputs
+    // opening and its onset reads landing change the note and nothing else — the
+    // steps are what the score says and the score has not been typed into — so
+    // this is one write per frame rather than a list rebuilt to say that two
+    // fewer reads are outstanding.
+    if (tab === 'rhythm') { drawNote(); return; }
     if (tab !== 'recordings') return;
     for (const item of results) {
         const node = moving.get(item.id);
@@ -276,6 +328,7 @@ function drawControls() {
         // built. The question the tab asks is now "what has this channel got",
         // and a channel nobody has pulled is a valid answer to it.
         if (tab === 'recordings') {
+            const folder = acquire.showingFolder();
             const box = el('input', {
                 type: 'text', id: 'f-channel', value: acquire.channelName(),
                 placeholder: 'a Twitch channel',
@@ -285,8 +338,14 @@ function drawControls() {
                 // that a field which can commit per keystroke should.
                 on: { keydown: (e) => { if (e.key === 'Enter') go(); } },
             });
+            // **The same press, and a different word for it.** A broadcaster is
+            // looked up over the network and a folder is looked at again on this
+            // disk; both are "what has this channel got now", both are
+            // `acquire.lookUp`, and a second button for the second one would be
+            // a control that is dead for every channel the other is alive for.
             const btn = el('button', {
-                cls: 'text', text: 'Look up', disabled: acquire.busy(),
+                cls: 'text', text: folder ? 'Re-scan' : 'Look up',
+                disabled: acquire.busy(),
                 on: { click: () => go() },
             });
             function go() {
@@ -301,7 +360,38 @@ function drawControls() {
                     drawChannel();
                 });
             }
-            const kids = [box, btn];
+            // **Footage that is already here is one press, beside the one that
+            // goes and gets some.** This tab's whole question is "what is there
+            // to search", and until now the only answer it could take was a
+            // broadcaster's — so a folder of footage on this disk was a corpus
+            // the application could search and had no way to be told about.
+            //
+            // Two buttons and not one, because they are two different pickers:
+            // SDL has a folder dialog and a file dialog and neither can do the
+            // other's job. What happens after them is the same call.
+            const adopt = (run) => {
+                const line = run();
+                if (!line) return;       // cancelled: nothing to say
+                search();
+                drawControls();
+                drawChannel();
+                drawNote();
+            };
+            // Wrapped together, because they are one offer in two pickers: the
+            // controls row wraps, and a `Folder…` on one line with its `Files…`
+            // on the next reads as two unrelated buttons.
+            const kids = [box, btn, el('span', { cls: 'pair' }, [
+                el('button', {
+                    cls: 'text', id: 'f-folder', text: 'Folder…',
+                    title: 'Add every video in a folder',
+                    on: { click: () => adopt(acquire.addFolder) },
+                }),
+                el('button', {
+                    cls: 'text', id: 'f-files', text: 'Files…',
+                    title: 'Add video files',
+                    on: { click: () => adopt(acquire.addFiles) },
+                }),
+            ])];
             // The way back, and only when there is something to come back from.
             // What is *currently* being searched is said by `about()` in the
             // header — a statement that changes — so this is the control and
@@ -312,6 +402,59 @@ function drawControls() {
                     on: { click: () => { library.choose([]); search(); draw(); } },
                 }));
             return kids;
+        }
+        if (tab === 'rhythm') {
+            // **The two numbers are controls and the score is a field**, which
+            // is the split that keeps the notation to three tokens: a tempo and
+            // a subdivision typed into the same box as the words would be a
+            // header line to get wrong, and they are the two things somebody
+            // changes without touching a word.
+            const bpm = el('input', {
+                type: 'number', id: 'r-tempo', step: '1', min: '20', max: '600',
+                value: String(rhythm.tempoOf()),
+                on: { change: () => { rhythm.setTempo(bpm.value); search(); drawNote(); } },
+            });
+            const sub = el('input', {
+                type: 'number', id: 'r-steps', step: '1', min: '1', max: '16',
+                value: String(rhythm.stepsPerBeat()),
+                on: { change: () => { rhythm.setStepsPerBeat(sub.value); search(); drawNote(); } },
+            });
+            // **Committed on `input`, per keystroke.** The score is not a
+            // network round trip and the list under it is the answer to what has
+            // been typed so far — a field that waited for `change` would be a
+            // list describing the score before the last word, which is the exact
+            // failure CLAUDE.md's note about `change` names.
+            const box = el('textarea', {
+                id: 'r-score', rows: '4', value: rhythm.score(),
+                placeholder: 'no no no no\nwhat . the -  hell . . -',
+                on: { input: () => { rhythm.setScore(box.value); search(); } },
+            });
+            const go = el('button', {
+                cls: 'go', id: 'r-build', text: 'Build',
+                disabled: rhythm.busy(),
+                on: { click: () => {
+                    const why = rhythm.build();
+                    if (why) { setText(nodes.note, why); nodes.note.classList.add('bad'); }
+                    else { nodes.note.classList.remove('bad'); drawNote(); }
+                    drawControls();
+                } },
+            });
+            // **Build comes after the box, not before it.** The order on the
+            // screen is the order of the work: set the grid, write the words,
+            // press it.
+            return [
+                el('span', { cls: 'dim', text: 'tempo' }), bpm,
+                el('span', { cls: 'dim', text: '· steps a beat' }), sub,
+                el('label', { cls: 'check' }, [
+                    el('input', {
+                        type: 'checkbox', checked: rhythm.looseOf(),
+                        on: { change: (e) => { rhythm.setLoose(e.target.checked); search(); } },
+                    }),
+                    'inside longer words',
+                ]),
+                box,
+                go,
+            ];
         }
         if (tab === 'words') {
             const box = el('input', {
@@ -354,6 +497,27 @@ function drawNote() {
     // something to report before there is a corpus at all — what a look-up is
     // doing, what it refused, and how much of the channel is actually here.
     if (tab === 'recordings') { setText(nodes.note, acquire.note()); return; }
+    // **The score's line is a statement about the score**, and every number in
+    // it changes as it is typed: how long it will be, how many words nothing
+    // said, and what a build is still doing. The one thing it must always carry
+    // is the length, because that is the number nobody can work out by eye and
+    // is the whole reason for typing a rhythm rather than trimming to one.
+    if (tab === 'rhythm') {
+        nodes.note.classList.remove('bad');
+        const plan = rhythm.plan();
+        const bits = [];
+        if (!library.available()) bits.push('no corpus');
+        if (plan.steps) bits.push(`${plan.steps} steps · ${plan.seconds.toFixed(2)}s`);
+        bits.push(`${(rhythm.stepSeconds() * 1000).toFixed(0)} ms a step`);
+        if (plan.missing.length)
+            bits.push(`nothing says ${plan.missing.map((w) => `"${w}"`).join(', ')}`);
+        const snapping = rhythm.snapping();
+        if (snapping) bits.push(`finding the beat in ${snapping}`);
+        const said = rhythm.note();
+        if (said) bits.push(said);
+        setText(nodes.note, bits.join(' · '));
+        return;
+    }
     if (!base) {
         // The other two questions cannot be asked of a corpus that does not
         // exist, and saying so is not the same as saying nothing.
@@ -449,6 +613,16 @@ function whereOf(item) {
         where = `${pct} · ${words} words · ${(item.realtime || 0).toFixed(1)}×`;
         break;
     case 'transcribed':  where = `${where} · ${words} words`; break;
+    // The three a folder's file can be in and a broadcast cannot. `measuring` is
+    // the probe that has not landed, which is why this row has no length yet;
+    // the other two are files that will not open and files that have moved, and
+    // both say which rather than going quiet.
+    case 'measuring':    where = 'measuring'; break;
+    // Playable and addable and never searchable, which is a fact about the file
+    // and not a failure — see `settle` in `corpus/local.js`.
+    case 'silent':       where = `${where} · no soundtrack`; break;
+    case 'unreadable':   where = item.why || 'would not open'; break;
+    case 'missing':      where = 'not where it was'; break;
     // The error as it was given, on the row it is about.
     case 'failed':       where = item.error; break;
     default: break;
@@ -515,6 +689,23 @@ function recording(item, listen, put_) {
         break;
     case 'transcribed':
         break;
+    // **A file that is already here has no `Get`**, and the three conditions
+    // below are the ones a fetch cannot be the answer to. `measuring` is a probe
+    // in flight and is over in a moment; the other two are conditions of the
+    // *disk*, and the press that mends either is the folder's own re-scan rather
+    // than anything on the row — which is why they carry the statement and no
+    // control. Left on the list saying so, because a file dropped into a folder
+    // and silently ignored is the failure this whole tab is arranged against.
+    case 'measuring':
+        running = true;
+        break;
+    // **No Transcribe, because there is nothing to read.** A button that started
+    // a read of a soundless file would fail a minute later with a sentence
+    // nobody could have predicted from the row; the row says it now instead.
+    case 'silent':
+    case 'unreadable':
+    case 'missing':
+        break;
     case 'failed':
         // The control beside the error is the one that tries again, which is the
         // press that failed.
@@ -528,8 +719,12 @@ function recording(item, listen, put_) {
     }
     const where = whereOf(item);
 
-    const whereNode = el('span', {
-        cls: item.state === 'failed' ? 'why bad' : 'where dim', text: where });
+    // A refusal reads as one wherever it came from: a fetch that failed, a file
+    // that would not open, and a file that has moved are three sentences of the
+    // same kind and are drawn the same way.
+    const bad = item.state === 'failed' || item.state === 'unreadable'
+             || item.state === 'missing';
+    const whereNode = el('span', { cls: bad ? 'why bad' : 'where dim', text: where });
     const kids = [
         searchBox(item),
         listen,
@@ -595,6 +790,33 @@ function drawRows() {
         // what it has is a date, a name, a size and a *condition*, and those are
         // what the columns are.
         if (item.kind === 'vod') return recording(item, listen, put_);
+
+        // A step of the score. **The columns are the ones a rhythm is read in**
+        // — where it lands, what it says, which take it is — and the timecode a
+        // hit's row leads with is deliberately not among them: on this tab the
+        // number that matters is the moment in the *mix*, and where in a
+        // six-hour recording the word came from is the last thing you look at.
+        if (item.kind === 'step') {
+            const p = item.piece;
+            const takes = p.kind === 'word' && p.takes
+                ? ` · take ${p.take} of ${p.takes}` : '';
+            return div('row step' + (isPlaying(item) ? ' playing' : '') +
+                       (p.kind === 'rest' ? ' rest' : '') +
+                       (p.kind === 'word' && !p.hit ? ' bad' : ''), [
+                listen,
+                // **The step it lands on, not the second.** `clock()` is what
+                // every other row in this window leads with and it is the wrong
+                // number here — a mix on a sixteenth grid puts eight pieces
+                // inside one second, and all eight read `00:00:00`. What the
+                // rhythm is counted in is steps, so that is what the column says.
+                el('span', { cls: 'at mono', text: String(item.step) }),
+                el('span', { cls: 'label', text: item.label }),
+                el('span', { cls: 'detail dim', text: item.detail }),
+                el('span', { cls: 'where dim',
+                             text: `${p.steps} step${p.steps === 1 ? '' : 's'}${takes}` }),
+                put_,
+            ]);
+        }
 
         return div('row' + (isPlaying(item) ? ' playing' : ''), [
             listen,

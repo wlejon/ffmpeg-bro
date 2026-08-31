@@ -84,6 +84,24 @@ export function vodPaths(login, id) {
 export const loadState = (login, id) => readJson(vodPaths(login, id).state, {}) || {};
 export const saveState = (login, id, s) => writeJson(vodPaths(login, id).state, s);
 
+/// Where a recording's picture actually is.
+///
+/// **A pulled recording is at `vodPaths().media` and an adopted one is wherever
+/// it already was**, and this is the one place that difference is decided. A
+/// folder of footage somebody points this at is not copied — it is tens of
+/// gigabytes that are already on the disk, and a corpus that duplicated it would
+/// be a corpus nobody could afford to make — so `corpus/local.js` writes the
+/// path into the state file and everything that opens a recording asks here.
+///
+/// Every reader of a recording's media goes through this: `isPulled`,
+/// `transcribed`, `startTranscribe`, and the row `supercut/acquire.js` draws. A
+/// second answer would be a recording that transcribes and will not play, or
+/// plays and cannot be read.
+export function mediaOf(login, id) {
+    const st = loadState(login, id);
+    return (st && st.local && st.local.path) || vodPaths(login, id).media;
+}
+
 // ── the channel ────────────────────────────────────────────────────────────
 
 /// Ask Twitch what the channel has and write it down.
@@ -136,10 +154,19 @@ export function transcribed(login) {
         if (!/^\d+$/.test(id)) continue;
         const p = vodPaths(login, id);
         if (!exists(p.srt)) continue;
-        const meta = titles[id] || { id, page: pageFor(id), title: '', seconds: 0,
-                                     publishedAt: '' };
-        out.push({ ...meta, id, srt: p.srt, media: p.media,
-                   hasMedia: exists(p.media), state: loadState(login, id) });
+        const st = loadState(login, id);
+        // **A recording adopted from a folder has no page and its own title**,
+        // and both come off the state file rather than out of a listing: there
+        // is no listing for one. `pageFor` would otherwise hand a local file a
+        // Twitch URL built from a number this store allocated.
+        const meta = titles[id] || (st.local
+            ? { id, page: '', title: st.local.name || '',
+                seconds: (st.media && st.media.seconds) || 0,
+                publishedAt: st.publishedAt || '' }
+            : { id, page: pageFor(id), title: '', seconds: 0, publishedAt: '' });
+        const media = mediaOf(login, id);
+        out.push({ ...meta, id, srt: p.srt, media,
+                   hasMedia: exists(media), state: st });
     }
     return out.sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
 }
@@ -169,7 +196,14 @@ export function probeQuietly(path) {
 /// that exists at all is now a finished one — but the state is still what is
 /// asked, because a store on this machine holds recordings written by the
 /// version that wrote straight to the final name.
+/// **An adopted file is "pulled" the moment it has been probed**, which is the
+/// same statement this makes about a fetch and not a weaker one: the question is
+/// whether the whole recording is on this disk and how long it is, and for a
+/// file somebody already had, the answer to the first is yes and the second is
+/// what the probe said. `corpus/local.js` writes `media.seconds` when the probe
+/// lands and not before, so a file being probed is not yet transcribable — which
+/// is the condition this guards.
 export function isPulled(login, id) {
     const st = loadState(login, id);
-    return !!(st && st.media && st.media.seconds > 0 && exists(vodPaths(login, id).media));
+    return !!(st && st.media && st.media.seconds > 0 && exists(mediaOf(login, id)));
 }
