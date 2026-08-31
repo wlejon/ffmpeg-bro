@@ -288,6 +288,46 @@ int main(int argc, char** argv) {
                static_cast<long long>(justClicks.tonalRuns));
     }
 
+    section("a window is a window");
+    // **The input's `-ss` is a seek, and for this reader it was only ever a
+    // subtraction.** `SourceAudio::open` moved the clock and left the demuxer at
+    // the start of the file, and this reader walks a soundtrack from wherever the
+    // reader is — so a window asked for at 2.4 s analysed everything from zero,
+    // reported `t1` as `ss + t`, and put every `at` on the file's clock while
+    // `t0` said nothing had been skipped. It was invisible for as long as
+    // nothing asked for a window; `supercut/rhythm.js` asks for one per word, and
+    // on a six-hour recording the old behaviour is hours of DSP for a second of
+    // sound.
+    //
+    // The fixture's transients are at 1, 3 and 5 s, so a window over the middle
+    // one distinguishes the two behaviours completely: right, it holds one
+    // transient at 0.6 s of the window; wrong, it holds the 1 s one as well and
+    // runs four times as long.
+    MediaInput windowed = inputFor(fixture);
+    windowed.ss = 2.4;
+    windowed.duration = 0.8;
+    SoundMarkOptions clicks;
+    clicks.wantTonal = false;
+    clicks.wantSound = false;
+    const SoundMarks win = readSoundMarks(windowed, clicks);
+    if (win.ok) {
+        checkf(win.t1 < 1.0,
+               "a 0.8 s window reads 0.8 s and not the file up to it (%.3f s)", win.t1);
+        const std::vector<SoundMark> hits = ofKind(win, MarkKind::Onset);
+        const SoundMark* mid = nearest(hits, 0.6);
+        checkf(mid && std::fabs(mid->at - 0.6) < kNear,
+               "the transient at 3 s of the file is 0.6 s into a window "
+               "beginning at 2.4 (%.3f s)",
+               mid ? mid->at : -1.0);
+        // The one that would be there if the window's start were being ignored.
+        bool early = false;
+        for (const SoundMark& x : hits)
+            if (x.flux > 1.0 && std::fabs(x.at - (1.0 - 2.4)) < kNear) early = true;
+        check(!early, "and the transient at 1 s of the file is not in it at all");
+    } else {
+        checkf(false, "a windowed read failed: %s", win.error.c_str());
+    }
+
     SoundMarkOptions longRuns;
     longRuns.minRunSec = 5.0;
     const SoundMarks few = readSoundMarks(inputFor(fixture), longRuns);

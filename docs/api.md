@@ -344,6 +344,16 @@ bro.ffmpeg.marks.reads.poll(id)
 //          periodicity,   // tonal only, [0,1] — the run's own evidence
 //          flux }         // onset only — the measurement the mark *is*
 //
+// **A window is a window.** `{ path, ss, t }` seeks: the read analyses that span
+// and nothing before it, `t0` is zero because the input's zero is `ss`, and
+// every `at` is measured from there. It did not, and the bug was silent — the
+// `-ss` moved the clock and nothing moved the demuxer, so the DSP ran from the
+// file's own beginning to `ss + t` and reported the marks on the file's clock.
+// Asking about one second an hour into a recording was an hour of decoding, and
+// `supercut/rhythm.js` asks per word. Fixed in `SourceAudio::open`
+// (`export_source.cpp`), which is where every sequential reader of a soundtrack
+// gets its start.
+//
 // **`at` is the start of the analysis window the sensor fired on, not its end.**
 // A frame is 25 ms and the hub timestamps the end of it, so this subtracts the
 // window: a jump lands up to 25 ms *early*, which plays the whole of what was

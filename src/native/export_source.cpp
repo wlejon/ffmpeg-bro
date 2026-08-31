@@ -262,7 +262,29 @@ bool SourceAudio::open(const MediaInput& in, int outRate, int outChannels, doubl
     av_channel_layout_default(&outLayout_, outChannels_);
     pkt_ = av_packet_alloc();
     frame_ = av_frame_alloc();
-    return pkt_ && frame_;
+    if (!pkt_ || !frame_) return false;
+
+    // **An input's `-ss` is a seek, and until this line it was only a
+    // subtraction.** `startOffset_` moves the clock so that this reader's zero
+    // is the moment `-ss` names — which every timestamp above and below is
+    // measured against — but nothing put the demuxer there, so a reader that
+    // simply pulls from the start of an input got the file from its own
+    // beginning with negative timestamps on the front of it.
+    //
+    // Every other caller here seeks before it reads and so never saw it: the
+    // mixer opens a clip and seeks to the clip's in-point on the next line. The
+    // one that does not is `sound_marks.cpp`, which walks a soundtrack from
+    // wherever the reader is — so `bro.ffmpeg.marks.reads.start({ path, ss, t })`
+    // analysed `[0, ss + t]` of the file and reported every `at` on the file's
+    // clock while `t0` said zero. Measured: a 0.8 s window at `ss: 2.4` came back
+    // with the transients at 1 s and 3 s of the file in it. On a six-hour
+    // recording that is hours of DSP to answer a question about one second.
+    //
+    // Seeking to this reader's own zero is the whole fix, and it is free for the
+    // callers that were already seeking — a backward seek to a keyframe they are
+    // about to seek away from.
+    if (startOffset_ > 0.0) seekTo(0.0);
+    return true;
 }
 
 void SourceAudio::seekTo(double srcSeconds) {
