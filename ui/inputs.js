@@ -607,6 +607,27 @@ export function mediaExtensions() {
     return claimed;
 }
 
+/// The same set as a native file dialog's pattern, minus what one cannot say.
+///
+/// SDL validates a pattern *before* it opens anything — `[a-zA-Z0-9_.-]`
+/// extensions separated by `;`, or a bare `*` and nothing beside it — and one
+/// bad character refuses the **whole** filter. A refused dialog never appears
+/// and answers with no files, which is what a cancel looks like, so the failure
+/// is a button that does nothing and says nothing. Of the 225 extensions this
+/// build claims, exactly one is outside that grammar: the TiVo demuxer's `ty+`.
+///
+/// So the drop is here rather than at each of the three pickers that build a
+/// filter out of this — the Open dialog, the Sources stage's Browse, the
+/// supercut window's Add files — because three copies of a character class is
+/// three chances for one of them to be silently dead again. Every one of them
+/// pairs this with an `All files|*` entry, which is what keeps a `.ty+`
+/// reachable and is why dropping it costs nothing.
+export function pickerPattern() {
+    return [...mediaExtensions()]
+        .filter((e) => /^[A-Za-z0-9_.-]+$/.test(e))
+        .sort().join(';');
+}
+
 /// Does this path carry an extension some demuxer in this build claims?
 ///
 /// A pre-filter over a directory and never a verdict: a file that passes may

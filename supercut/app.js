@@ -251,14 +251,15 @@ function doRender() {
         return;
     }
     if (!project.clips.length) { flash('nothing in the mix'); return; }
-    // **One name and one extension.** The filter is SDL's, and it validates the
-    // pattern before it opens anything: `[a-zA-Z0-9_.-]` or a bare `*`, and
-    // nothing else. `'MP4|mp4|All files|*'` — the Windows spelling of two
-    // filters — is one filter whose pattern contains a `|`, which is refused,
-    // and a refused dialog is the one thing this call cannot report: it answers
-    // the callback once, with an error, and the window sat there until it was
-    // killed. Fixed in bro as well (`waitForDialog`), because a hang with
-    // nothing on the screen is the worst answer any call can give.
+    // **One name and one extension**, because there is one thing this writes.
+    // The filter is SDL's and it validates the pattern before it opens
+    // anything: `[a-zA-Z0-9_.-]`, `;` between extensions, or a bare `*`, and
+    // nothing else. `'MP4|mp4|All files|*'` — several filters, names and
+    // patterns alternating — is what bro now reads it as; it used to split at
+    // the first `|` and hand SDL a pattern with the rest inside it, which was
+    // refused, and a refused dialog is one that never appears. Both halves of
+    // that are fixed in bro (`filtersFrom`, and a refusal is thrown rather than
+    // returned as an empty list, which is what a cancel is).
     const path = showSaveFileDialog('MP4|mp4', settings.path || 'supercut.mp4');
     if (!path) return;
     settings.path = /\.[A-Za-z0-9]+$/.test(path) ? path : `${path}.mp4`;

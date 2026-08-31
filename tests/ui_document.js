@@ -414,6 +414,31 @@ pump(80);
 ok(!doc.isModified(), 'Save writes to where it came from without asking');
 ok(fs.existsSync(path), 'and the file is still there');
 
+// ── the filter the picker is given ─────────────────────────────────────────
+//
+// Open cannot be pressed here, but the string it hands SDL can be read — and
+// that string is the one part of a dialog that fails *before* anything appears.
+// SDL validates it against a grammar it will not bend: names and patterns
+// alternating on `|`, a pattern being `[a-zA-Z0-9_.-]` extensions separated by
+// `;` or a bare `*`. A pattern it refuses is answered with no files, which is
+// exactly what a cancel looks like, so the whole failure is a button that does
+// nothing and says nothing. It happened twice at once: bro split the string at
+// the first `|` and gave SDL the rest as one pattern, and this build's demuxer
+// list carries `ty+` — the TiVo extension — whose `+` refused all 225 of them.
+
+const parts = doc.openFilter().split('|');
+ok(parts.length >= 2 && parts.length % 2 === 0,
+   `the filter is names and patterns in pairs (${parts.length} parts)`);
+for (let i = 0; i < parts.length; i += 2) {
+    ok(parts[i].length > 0, `filter ${i / 2} is named`);
+    const pattern = parts[i + 1];
+    ok(pattern === '*' || /^[A-Za-z0-9_.-]+(;[A-Za-z0-9_.-]+)*$/.test(pattern),
+       `filter ${i / 2}'s pattern is one SDL accepts: ${pattern.slice(0, 60)}`);
+}
+ok(parts[parts.length - 1] === '*',
+   'and the last one is everything, so no format this build opens is out of reach');
+ok(doc.openFilter().indexOf('fbro') >= 0, 'documents are in it');
+
 // ── undo ───────────────────────────────────────────────────────────────────
 //
 // The second thing the object is for. A step of history is a snapshot minus its

@@ -764,13 +764,23 @@ export function save(path) {
 /// folder with it — and what is here is only the punctuation SDL wants. The
 /// final "All files" entry is what covers the demuxers that claim no extension
 /// at all — a raw stream, an `.mkv` named anything — so nothing is *only*
-/// reachable through the list.
-function extensionFilter() {
-    return [...inputsModel.mediaExtensions()].sort().join(';');
-}
-
-function openFilter() {
-    const media = extensionFilter();
+/// reachable through the list. What SDL's own grammar cannot express is
+/// dropped by `pickerPattern` rather than here, because three pickers build a
+/// filter out of that set and one of them being silently refused is exactly
+/// what happened.
+///
+/// **Names and patterns alternate**, which is how a native dialog has spelled
+/// several filters since the eighties and what bro reads this as. The first
+/// entry is the one it opens on and is deliberately both kinds: an Open that
+/// started on documents alone would hide every recording from the button
+/// people press to add one.
+///
+/// **Exported for the suite**, which is the one thing about a picker a test can
+/// check: `openDialog` blocks the JS thread waiting for a person, but the
+/// string handed to it is refused or accepted without anybody there — and a
+/// refusal is silent, so nothing else would ever have said it was wrong.
+export function openFilter() {
+    const media = inputsModel.pickerPattern();
     return `ffmpeg-bro files|${EXTENSION};${media}` +
            `|ffmpeg-bro documents|${EXTENSION}` +
            `|Media files|${media}` +

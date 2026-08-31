@@ -18,7 +18,8 @@ import { devicesFor, deviceNamed, decodeCost, deviceIndices,
          unknownDeviceIndex } from './hardware.js';
 import { clock, bytes, kbps, basename } from './format.js';
 import { inputs, addInput, updateInput, reprobe, removeInput, summary, schemeOf,
-         lengthOf, kindOf, endless, opening, stopOpening, tickInputs } from './inputs.js';
+         lengthOf, kindOf, endless, opening, stopOpening, tickInputs,
+         pickerPattern } from './inputs.js';
 import { typedSpec, concatSpec, SEQUENCE_FPS } from './sequence.js';
 import { copiesOf, cancel as cancelCopy, tickLocalCopies,
          copyFolder, useCopyFolder, PULL_WORDS } from './localcopy.js';
@@ -65,7 +66,14 @@ export function initSources(nodes, h) {
                 ? showOpenFileDialog
                 : (typeof window !== 'undefined' && typeof window.showOpenFileDialog === 'function' ? window.showOpenFileDialog : null);
             if (openFn) {
-                const res = openFn("Media Files|mp4;mkv;mov;avi;mp3;wav;png;jpg;webp;*", true);
+                // **Asked, and in two filters.** The nine extensions written
+                // here by hand were the mistake `containersFor` names — MXF and
+                // MPEG-TS compiled in and unreachable from the one button that
+                // browses for them — and the `*` on the end was worse than
+                // useless: SDL takes `*` only as a whole pattern, so it refused
+                // the filter, and a refused dialog never opens and answers with
+                // no files. This press did nothing at all.
+                const res = openFn(`Media files|${pickerPattern()}|All files|*`, true);
                 const paths = Array.isArray(res) ? res : (res ? [res] : []);
                 for (const p of paths) {
                     const inp = addInput(typedSpec(p));

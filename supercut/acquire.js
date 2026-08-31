@@ -80,7 +80,7 @@ import { writeManifest } from '../corpus/index.js';
 import { exists, sizeOf, gb } from '../corpus/files.js';
 import * as local from '../corpus/local.js';
 import * as library from '../ui/library.js';
-import { mediaExtensions } from '../ui/inputs.js';
+import { pickerPattern } from '../ui/inputs.js';
 
 /// How many of the newest broadcasts a look-up asks Twitch for.
 ///
@@ -241,9 +241,13 @@ export async function lookUp(name) {
 /// up what has been added to it without disturbing anything transcribed.
 ///
 /// Answers the sentence to say, or '' when the dialog was cancelled.
+///
+/// The folder picker's first argument is **where to start**, not a title — the
+/// one written here read as a directory that does not exist — so it is left to
+/// the dialog's own last place, which is where somebody's footage was.
 export function addFolder() {
     let picked = null;
-    try { picked = showOpenFolderDialog('Add a folder of footage', false); }
+    try { picked = showOpenFolderDialog(null, false); }
     catch (e) { said = String((e && e.message) || e); return said; }
     if (!picked || !picked.length) return '';
     return take(() => local.adoptFolder(picked[0]));
@@ -256,8 +260,7 @@ export function addFolder() {
 export function addFiles() {
     let picked = null;
     try {
-        picked = showOpenFileDialog(
-            `Media files|${[...mediaExtensions()].sort().join(';')}|All files|*`, true);
+        picked = showOpenFileDialog(`Media files|${pickerPattern()}|All files|*`, true);
     } catch (e) { said = String((e && e.message) || e); return said; }
     if (!picked || !picked.length) return '';
     return take(() => local.adopt(picked, local.LOOSE));
