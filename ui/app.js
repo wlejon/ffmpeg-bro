@@ -1835,9 +1835,12 @@ function updateCropUI() {
 // ── keyboard ───────────────────────────────────────────────────────────────
 
 document.addEventListener('keydown', (e) => {
-    // Let form controls keep their own keys.
     const tag = e.target && e.target.tagName;
-    if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return;
+    const active = document.activeElement;
+    const activeTag = active && active.tagName;
+    if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA' ||
+        activeTag === 'SELECT' || activeTag === 'INPUT' || activeTag === 'TEXTAREA' ||
+        (active && active.isContentEditable)) return;
 
     // Along the chain, wherever you are.
     if (e.key === '[' || e.key === ']') {

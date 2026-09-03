@@ -196,7 +196,7 @@ function applySearch() {
         const els = cardsFor(k);
         if (!els || !els.length) continue;
         
-        const n = lastGraph.node(b.node.id);
+        const n = (lastGraph && lastGraph.node(b.node.id)) || b.node;
         if (!n) continue;
 
         let text = (n.name || '').toLowerCase() + ' ';
@@ -463,6 +463,9 @@ function bindViewport() {
     });
 
     refs.viewport.addEventListener('click', (e) => {
+        if (document.activeElement && document.activeElement.blur && document.activeElement !== refs.viewport) {
+            document.activeElement.blur();
+        }
         if (inNode(e.target) || e.target === refs.mini || swallowClick) return;
         const rect = refs.viewport.getBoundingClientRect();
         const hit = canvas.wireAt(placed, e.clientX - rect.left, e.clientY - rect.top, view());
@@ -1179,6 +1182,7 @@ export function drawGraph() {
     markSelection();
     cards.restoreFocus(refs.nodes);
     syncPreviews();
+    if (refs.search && refs.search.value) applySearch();
 }
 
 /// The insert points, on the wire each one names.
