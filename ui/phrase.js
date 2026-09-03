@@ -121,8 +121,33 @@ export function find(stream, phrase, opts = {}) {
     const hits = [];
 
     for (const alt of String(phrase).split('|')) {
-        const needle = bare(alt);
-        if (!needle) continue;
+        const trimmed = alt.trim();
+        const isExclamationOnly = trimmed === '!';
+        const wantsExclamation = trimmed.endsWith('!');
+        const needle = bare(trimmed);
+        if (!needle && !isExclamationOnly) continue;
+
+        if (isExclamationOnly) {
+            for (let i = 0; i < stream.words.length; i++) {
+                if ((stream.words[i].text || '').includes('!')) {
+                    if (seen.has(i)) continue;
+                    seen.add(i);
+                    const w = stream.words;
+                    hits.push({
+                        phrase,
+                        matched: w[i].text,
+                        at: w[i].from,
+                        says: w[i].to,
+                        first: i,
+                        last: i,
+                        context: w.slice(Math.max(0, i - contextWords), i + 1 + contextWords)
+                                  .map((x) => x.text).join(' '),
+                    });
+                }
+            }
+            continue;
+        }
+
         let from = 0;
         for (;;) {
             const c = stream.text.indexOf(needle, from);
@@ -134,13 +159,16 @@ export function find(stream, phrase, opts = {}) {
             const firstWord = stream.wordAt[c];
             const lastWord = stream.wordAt[e - 1];
             if (firstWord === undefined || lastWord === undefined) continue;
-            // A phrase listed twice under two spellings must not be cut twice.
             if (seen.has(firstWord)) continue;
-            seen.add(firstWord);
+
             const w = stream.words;
+            const matchText = w.slice(firstWord, lastWord + 1).map((x) => x.text).join(' ');
+            if (wantsExclamation && !matchText.includes('!')) continue;
+
+            seen.add(firstWord);
             hits.push({
                 phrase,
-                matched: w.slice(firstWord, lastWord + 1).map((x) => x.text).join(' '),
+                matched: matchText,
                 at: w[firstWord].from,
                 says: w[lastWord].to,
                 first: firstWord,
@@ -201,16 +229,22 @@ export function spaced(hits, spacing = 2) {
 // at every hesitation. It is a control rather than a constant because the right
 // value is a property of how somebody talks.
 
-/// Every unbroken stretch of talking, longest first.
+/// Every unbroken stretch of talking, ranked by length, pace, or energy.
 ///
-/// Answers `{ at, to, seconds, words, rate, opening }` per run. `rate` is words
-/// per second, which is what separates a dense stretch from a slow one covering
-/// the same minute, and `opening` is the first few words — enough to recognise a
-/// run you are looking for without playing it, and never enough to read instead
-/// of playing it.
+/// Answers `{ at, to, seconds, words, rate, exclamations, caps, energyScore, opening }`
+/// per run. `rate` is words per second, `exclamations` is the count of `!`, and
+/// `energyScore` measures speech activation (rapid delivery, exclamations, and emphatic capitalization).
+///
+/// `opts`:
+///   - `gap`: max pause between words (default 2s)
+///   - `min`: min duration in seconds (default 30s)
+///   - `mode`: 'longest' (default) | 'activated' | 'yelling'
+///   - `minRate`: minimum cadence filter (e.g. 2.5 w/s for activated speaking)
 export function monologues(words, opts = {}) {
     const gap = opts.gap === undefined ? 2 : opts.gap;
     const min = opts.min === undefined ? 30 : opts.min;
+    const mode = opts.mode || 'longest';
+    const minRate = opts.minRate === undefined ? (mode === 'activated' ? 2.5 : 0) : opts.minRate;
     const runs = [];
     if (!words.length) return runs;
 
@@ -226,14 +260,42 @@ export function monologues(words, opts = {}) {
         const seconds = b.to - a.from;
         const n = i - from;
         if (seconds >= min && n > 1) {
-            runs.push({
-                at: a.from, to: b.to, seconds, words: n,
-                rate: n / seconds,
-                opening: words.slice(from, Math.min(i, from + 12))
-                              .map((w) => w.text).join(' '),
-            });
+            const rate = n / seconds;
+            if (rate >= minRate) {
+                let exclamations = 0;
+                let caps = 0;
+                for (let k = from; k < i; k++) {
+                    const txt = words[k].text || '';
+                    if (txt.includes('!')) exclamations++;
+                    const letters = txt.replace(/[^a-zA-Z]/g, '');
+                    if (letters.length >= 2 && letters === letters.toUpperCase()) caps++;
+                }
+                const exclamationRatio = exclamations / n;
+                const capsRatio = caps / n;
+                // Energy score combines speaking cadence (rate) and emphatic/yelling markers
+                const energyScore = rate * (1.0 + 2.0 * exclamationRatio + 1.2 * capsRatio);
+
+                if (mode !== 'yelling' || exclamations > 0 || caps > 0 || energyScore >= 3.2) {
+                    runs.push({
+                        at: a.from, to: b.to, seconds, words: n,
+                        rate,
+                        exclamations,
+                        caps,
+                        energyScore,
+                        opening: words.slice(from, Math.min(i, from + 12))
+                                      .map((w) => w.text).join(' '),
+                    });
+                }
+            }
         }
         from = i;
+    }
+
+    if (mode === 'activated') {
+        return runs.sort((x, y) => y.rate - x.rate || y.seconds - x.seconds);
+    }
+    if (mode === 'yelling') {
+        return runs.sort((x, y) => y.energyScore - x.energyScore || y.rate - x.rate || y.seconds - x.seconds);
     }
     return runs.sort((x, y) => y.seconds - x.seconds);
 }

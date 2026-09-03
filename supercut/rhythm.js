@@ -15,13 +15,13 @@
 // lengths are exact multiples of the grid and whose in-points are the moments
 // those words were said.
 //
-// ── The notation, and why each of the three tokens exists ─────────────────
+// ── The notation, and why each of the tokens exists ───────────────────────
 //
 //     no  no  no  no
 //     what . the -  hell . . -
 //
 // A token is one **step**, and a step is `60 / tempo / stepsPerBeat` seconds.
-// Three kinds:
+// Four kinds of syntax:
 //
 //   - a **word** starts a new piece on this step. `what|wot` is an alternation
 //     and is `ui/phrase.js`'s own syntax, unchanged and not re-implemented here;
@@ -31,6 +31,12 @@
 //   - `.` **holds**: the piece before it is one step longer. Not a repeat and
 //     not a rest — the same clip, running on.
 //   - `-` **rests**: a step of black and silence.
+//   - `[...]` **directives and labels**: inline square brackets change tempo or
+//     meter subdivision on subsequent steps, e.g. `[140]` or `[140 bpm]`,
+//     `[:3]` or `[/3]` or `[3 steps]` (triplets), or both: `[140, 3]`. Text
+//     that does not describe tempo or meter (e.g. `[verse 1]`, `[chorus]`)
+//     acts as a section annotation and is ignored by the grid rather than
+//     searched as missing words.
 //
 // A line break is nothing but a line break; the grid runs across it. Bars are
 // what lines are for, and there is deliberately no bar character — `|` is
@@ -194,29 +200,79 @@ function remember() {
 
 // ── the parse ──────────────────────────────────────────────────────────────
 
-/// Split a score into tokens, keeping a quoted phrase whole.
+/// Parse an inline directive inside brackets `[...]`.
 ///
-/// Whitespace separates, `"` groups, and a line break is whitespace like any
-/// other — see the header for why there is no bar character.
+/// Directives can set tempo, meter/subdivision (steps a beat), or both:
+///   - `[140]` or `[140 bpm]` or `[tempo: 140]` -> tempo 140 bpm
+///   - `[:3]` or `[/3]` or `[3 steps]` or `[triplets]` -> 3 steps per beat
+///   - `[140, 3]` or `[140:3]` or `[140 / 3]` -> tempo 140, 3 steps per beat
+///
+/// Text that does not describe tempo or meter (e.g. `[verse 1]`, `[intro]`,
+/// `[chorus]`) is treated as an annotation/comment and ignored by the grid.
+function parseDirective(str) {
+    const s = String(str || '').trim().toLowerCase();
+    if (!s) return null;
+
+    if (s === 'triplets' || s === 'triplet') return { per: 3 };
+    if (s === 'sixteenths' || s === '16ths') return { per: 4 };
+    if (s === 'eighths' || s === '8ths') return { per: 2 };
+
+    const two = /^(?:tempo[:=\s]+)?(\d+(?:\.\d+)?)\s*(?:bpm)?\s*[,:/]\s*(?:steps?[:=\s]+|per[:=\s]+)?(\d+)\s*(?:steps?|per\s*beat|\/beat)?$/i.exec(s);
+    if (two) {
+        const t = Math.min(600, Math.max(20, Number(two[1])));
+        const p = Math.min(16, Math.max(1, Math.round(Number(two[2]))));
+        return { tempo: t, per: p };
+    }
+
+    const tExplicit = /^(?:tempo[:=\s]+|bpm[:=\s]+|t=)(\d+(?:\.\d+)?)$/i.exec(s)
+                   || /^(\d+(?:\.\d+)?)\s*bpm$/i.exec(s);
+    if (tExplicit) {
+        return { tempo: Math.min(600, Math.max(20, Number(tExplicit[1]))) };
+    }
+
+    const pExplicit = /^(?:steps?[:=\s]+|per[:=\s]+|s=|\/|:)(\d+)$/i.exec(s)
+                   || /^(\d+)\s*(?:steps?|per\s*beat|\/beat)$/i.exec(s);
+    if (pExplicit) {
+        return { per: Math.min(16, Math.max(1, Math.round(Number(pExplicit[1])))) };
+    }
+
+    const single = /^(\d+(?:\.\d+)?)$/.exec(s);
+    if (single) {
+        const num = Number(single[1]);
+        if (num >= 20) return { tempo: Math.min(600, Math.max(20, num)) };
+        if (num >= 1 && num <= 16) return { per: Math.round(num) };
+    }
+
+    return { label: s };
+}
+
+/// Split a score into tokens, keeping a quoted phrase whole and capturing directives.
+///
+/// Whitespace separates, `"` groups phrases, `[...]` sets tempo/meter or labels,
+/// and a line break is whitespace like any other — see the header for why there
+/// is no bar character.
 function tokensOf(src) {
     const out = [];
-    const re = /"([^"]*)"|(\S+)/g;
+    const re = /"([^"]*)"|\[([^\]]*)\]|(\S+)/g;
     let m;
     while ((m = re.exec(String(src || '')))) {
-        const quoted = m[1] !== undefined;
-        const t = quoted ? m[1] : m[2];
-        if (quoted) out.push({ text: t, quoted: true });
-        else out.push({ text: t, quoted: false });
+        if (m[1] !== undefined) {
+            out.push({ text: m[1], quoted: true, directive: false });
+        } else if (m[2] !== undefined) {
+            out.push({ text: m[2], quoted: false, directive: true });
+        } else {
+            out.push({ text: m[3], quoted: false, directive: false });
+        }
     }
     return out;
 }
 
 /// A score as pieces, before anything has been looked up.
 ///
-/// Answers `[{ kind, phrase, take, steps }]` where `kind` is `'word'` or
-/// `'rest'`. A hold is not a piece — it is a step added to the piece before it,
-/// which is what makes the length arithmetic one multiplication and not a
-/// second pass.
+/// Answers `[{ kind, phrase, take, steps, tempo, stepsPerBeat, stepSec, seconds }]`
+/// where `kind` is `'word'` or `'rest'`. A hold is not a piece — it is a step added
+/// to the piece before it, which is what makes the length arithmetic one
+/// multiplication and not a second pass.
 ///
 /// **A hold with nothing before it is a rest**, and that is the only forgiving
 /// thing in here: a score beginning with `.` is somebody lining a line up under
@@ -224,15 +280,39 @@ function tokensOf(src) {
 /// can see.
 export function parse(src) {
     const pieces = [];
+    let curTempo = tempo;
+    let curPer = per;
+    const curStepSec = () => 60 / Math.max(1, curTempo) / Math.max(1, curPer);
+
     for (const tok of tokensOf(src)) {
+        if (tok.directive) {
+            const dir = parseDirective(tok.text);
+            if (dir) {
+                if (dir.tempo) curTempo = dir.tempo;
+                if (dir.per) curPer = dir.per;
+            }
+            continue;
+        }
         const t = tok.text;
+        const stepSec = curStepSec();
         if (!tok.quoted && (t === '.' || t === '..')) {
-            if (pieces.length) pieces[pieces.length - 1].steps++;
-            else pieces.push({ kind: 'rest', phrase: '', take: 0, steps: 1 });
+            if (pieces.length) {
+                const prev = pieces[pieces.length - 1];
+                prev.steps++;
+                prev.seconds = prev.steps * prev.stepSec;
+            } else {
+                pieces.push({
+                    kind: 'rest', phrase: '', take: 0, steps: 1,
+                    tempo: curTempo, stepsPerBeat: curPer, stepSec, seconds: stepSec,
+                });
+            }
             continue;
         }
         if (!tok.quoted && (t === '-' || t === '_')) {
-            pieces.push({ kind: 'rest', phrase: '', take: 0, steps: 1 });
+            pieces.push({
+                kind: 'rest', phrase: '', take: 0, steps: 1,
+                tempo: curTempo, stepsPerBeat: curPer, stepSec, seconds: stepSec,
+            });
             continue;
         }
         // `#2` pins a take. Read off the end and only when it is digits, so a
@@ -242,7 +322,10 @@ export function parse(src) {
         let take = 0;
         const pin = /^(.*[^#])#(\d+)$/.exec(t);
         if (!tok.quoted && pin) { phrase = pin[1]; take = +pin[2]; }
-        pieces.push({ kind: 'word', phrase, take, steps: 1 });
+        pieces.push({
+            kind: 'word', phrase, take, steps: 1,
+            tempo: curTempo, stepsPerBeat: curPer, stepSec, seconds: stepSec,
+        });
     }
     return pieces;
 }
@@ -272,9 +355,11 @@ export function resolve(src = text) {
     const cursor = new Map();
     const missing = [];
     let steps = 0;
+    let seconds = 0;
 
     for (const p of pieces) {
         steps += p.steps;
+        seconds += p.seconds;
         if (p.kind !== 'word') continue;
         if (!found.has(p.phrase))
             found.set(p.phrase, library.searchWords(p.phrase, { loose }));
@@ -304,7 +389,7 @@ export function resolve(src = text) {
         p.at = hits[n].at;
         p.take = n + 1;
     }
-    return { pieces, missing, steps, seconds: steps * stepSeconds() };
+    return { pieces, missing, steps, seconds };
 }
 
 /// The last plan, for the tab to draw. Recomputed when the score changes rather
@@ -315,9 +400,14 @@ export function plan() { return planned; }
 
 /// Work out what the score would build, and answer it.
 export function replan() {
-    planned = library.available() ? resolve()
-                                  : { pieces: parse(text), missing: [], steps: 0,
-                                      seconds: 0 };
+    if (!library.available()) {
+        const pieces = parse(text);
+        let steps = 0, seconds = 0;
+        for (const p of pieces) { steps += p.steps; seconds += p.seconds; }
+        planned = { pieces, missing: [], steps, seconds };
+    } else {
+        planned = resolve();
+    }
     return planned;
 }
 
@@ -391,11 +481,11 @@ export function build() {
 /// begins with a rest would otherwise size the project from a `color` filter
 /// this file chose the dimensions of.
 function lay() {
-    const step = stepSeconds();
     let laid = 0;
     for (const p of job.pieces) {
+        const dur = p.seconds;
         if (p.kind === 'rest') {
-            if (rest(p.steps * step)) laid++;
+            if (rest(dur)) laid++;
             continue;
         }
         // **The in-point is the word's own start and nothing is subtracted from
@@ -408,7 +498,7 @@ function lay() {
             path: p.hit.vod.media,
             name: `${p.hit.vod.id} ${p.phrase}`,
             from: Math.max(0, p.at),
-            to: Math.max(0, p.at) + p.steps * step,
+            to: Math.max(0, p.at) + dur,
             vod: p.hit.vod.id,
             title: p.hit.vod.title || '',
         });
@@ -484,10 +574,10 @@ function startRead() {
     try {
         next.read = bro.ffmpeg.marks.reads.start(
             { path: next.path, ss, t: (next.want - ss) + TOLERANCE },
-            // Only the transient. A tonal run and a sound gate are measurements
-            // of other questions and every one of them is more DSP and a longer
-            // list to walk.
-            { onsets: true, tonal: false, sound: false });
+            // Onsets and sound runs (the energy VAD). Sound activity gates
+            // onsets so speech consonant/plosive attacks are preferred over
+            // background noise or music transients outside the speech window.
+            { onsets: true, tonal: false, sound: true });
         next.ss = ss;
         reading = next;
     } catch (e) {
@@ -536,7 +626,8 @@ export function tick() {
     return moved;
 }
 
-/// Move one piece onto the transient nearest its word.
+/// Move one piece onto the transient nearest its word, weighted by speech
+/// presence and transient saliency (spectral flux).
 ///
 /// **A slip, so the grid does not move** — see the header. Answers whether it
 /// moved anything, which is the difference between a redraw and a frame spent
@@ -544,19 +635,58 @@ export function tick() {
 function apply(item, result) {
     const clip = project.clips.find((c) => c.id === item.clip);
     if (!clip) return false;
-    let best = 0;
-    let by = Infinity;
-    for (const m of result.marks || []) {
-        if (m.kind !== 'onset') continue;
-        // `at` is on the analysed window's clock, which begins at `ss`.
+
+    const onsets = [];
+    const soundRuns = [];
+    for (const m of (result && result.marks) || []) {
+        if (m.kind === 'onset') onsets.push(m);
+        else if (m.kind === 'sound') soundRuns.push(m);
+    }
+
+    // Identify active speech sound runs near the word timestamp (`want`).
+    const speechRuns = [];
+    for (const s of soundRuns) {
+        const start = item.ss + s.at;
+        const end = start + s.length;
+        if (end >= item.want - 0.15 && start <= item.want + 0.35) {
+            speechRuns.push({ start, end });
+        }
+    }
+
+    const candidates = [];
+    let maxFlux = 0.01;
+    for (const m of onsets) {
         const t = item.ss + m.at;
         const d = Math.abs(t - item.want);
-        if (d < by) { by = d; best = t; }
+        if (d > TOLERANCE) continue;
+        const flux = Math.max(0, m.flux || 0);
+        if (flux > maxFlux) maxFlux = flux;
+
+        let inSound = !speechRuns.length;
+        for (const sr of speechRuns) {
+            if (t >= sr.start - 0.04 && t <= sr.end) {
+                inSound = true;
+                break;
+            }
+        }
+        candidates.push({ t, d, flux, inSound });
     }
-    // Nothing near enough is a real answer and the ordinary one for a word in
-    // the middle of a sentence: the piece keeps the transcript's timing, which
-    // is what it already had.
-    if (by > TOLERANCE) return false;
+
+    if (!candidates.length) return false;
+
+    let best = candidates[0].t;
+    let bestScore = -1;
+    for (const c of candidates) {
+        const sDist = 1.0 - (c.d / TOLERANCE);
+        const sFlux = (c.flux + 0.1) / (maxFlux + 0.1);
+        const sSound = c.inSound ? 1.0 : 0.35;
+        const score = (0.45 * sDist + 0.55 * sFlux) * sSound;
+        if (score > bestScore) {
+            bestScore = score;
+            best = c.t;
+        }
+    }
+
     const delta = best - item.want;
     if (Math.abs(delta) < 1e-4) return false;
     slipClip(clip, delta);

@@ -334,6 +334,28 @@ Anything a gesture cannot do, it stops short of doing rather than refusing: an
 edge that will not go further has run out of footage, and a speed that will not
 go further has hit the range the model holds (0.05× to 20×).
 
+## Finding talking, yelling, and activated speaking
+
+The **Talking** tab finds unbroken stretches of speech, defined by how long a
+speaker went without a pause greater than `gap` seconds (default 2s) and lasting at
+least `min` seconds.
+
+The mode selector offers three distinct ways to audition and rank speech:
+
+| Mode | What it finds and ranks |
+|---|---|
+| **Longest stretches** | Longest unbroken monologues first |
+| **Activated / fast pace** | Fast delivery and high cadence (ranked by words per second, with configurable `min pace` filter) |
+| **Yelling / high energy** | Shouted outbursts, high vocal intensity, and exclamations (ranked by combined energy score and acoustic peak volume) |
+
+Each row displays the duration, word count, speaking cadence (`words/s`), and badges
+for fast delivery (`fast`), exclamation count (`!`), and acoustic loudness (`loud`).
+
+In the **Words** tab:
+- Searching for `!` matches every exclamation or shouted word in the corpus.
+- Appending an exclamation point to a word (e.g. `stop!`) searches specifically for
+  the yelled/exclaimed take of that word.
+
 ## Words on a beat
 
 The **Rhythm** tab is for the mix you can already hear: you know what it should
@@ -355,8 +377,12 @@ second.
 | a word | starts a new piece on this step |
 | `.` | **holds** — the piece before it lasts one step longer |
 | `-` | **rests** — a step of black and silence |
+| `[140]` | sets the **tempo** to 140 bpm from this point forward |
+| `[:3]` | sets the **subdivision** to 3 steps per beat (triplets) |
+| `[140, 3]` | sets both tempo and subdivision together |
+| `[verse 1]` | **section label** — an annotation ignored by the grid |
 
-Two spellings of the same word go in one token: `what\|wot` finds either. A
+Two spellings of the same word go in one token: `what|wot` finds either. A
 phrase with a space in it goes in quotes: `"you cross"`. Lines are only lines —
 the grid runs straight across them, so use one per bar if that helps you read it.
 
@@ -381,11 +407,14 @@ drag its rate badge afterwards.
 
 **Where the word starts is measured, not guessed.** A transcript knows roughly
 where a word is — near enough to find it, not near enough to hit a beat with —
-so after the pieces are laid, each one is moved onto the loudest change in the
-sound nearest its word. That is the difference between on the beat and nearly on
-it. It happens quietly in the background, moves the footage inside each card and
-never the card itself, and the row says `finding the beat in 6` while it is going
-on. Whatever it finds, the grid does not move.
+so after the pieces are laid, each one is moved onto the transient nearest its
+word. That is the difference between on the beat and nearly on it. The detector
+gates transients against speech presence (bro's energy VAD) and weights by
+transient flux so that speech consonant/plosive attacks take precedence over
+background noise or music transients outside the voice. It happens quietly in
+the background, moves the footage inside each card and never the card itself,
+and the row says `finding the beat in 6` while it is going on. Whatever it finds,
+the grid does not move.
 
 The score is remembered between sessions but it is **not in the document** — what
 a `.fbro` holds is the mix it built. Building again appends; **Clear** empties

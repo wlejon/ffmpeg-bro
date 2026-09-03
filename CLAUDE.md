@@ -489,16 +489,18 @@ application assembles by finding — a hit, a listen, a press — which is right
 until you can already hear the thing: `no no no no, on the beat` is twenty
 presses and then a trim per piece to a length nobody hits by eye. So a **score**
 is a tempo, a grid and a line of words, and a token is one step: a word starts a
-piece, `.` holds, `-` rests. Five decisions. A **rest is a generator clip**
-(`color`), because `mix.js`'s sequence is packed and there is nowhere for an
-absence to be. A word is **cut to the step and never stretched** — the speed
-alternative moves the pitch, and `setSpeed` is one drag away for the one piece
-that wants it. Repeats **walk the takes** rather than repeating one clip, which
-is the whole point of building it out of a corpus. A missing word **refuses the
-whole build, naming every one**, because a rhythm with a hole in it and nothing
-saying which word went missing is worse than one that will not build. And the
-score is a workspace preference and **not in the document**: what a `.fbro` holds
-is the mix it produced, which is a mix like any other from the moment it exists.
+piece, `.` holds, `-` rests, and `[...]` directives change tempo (`[140]`),
+subdivision (`[:3]`), or both (`[140, 3]`), while labels (`[verse 1]`) annotate.
+Five decisions. A **rest is a generator clip** (`color`), because `mix.js`'s
+sequence is packed and there is nowhere for an absence to be. A word is **cut to
+the step and never stretched** — the speed alternative moves the pitch, and
+`setSpeed` is one drag away for the one piece that wants it. Repeats **walk the
+takes** rather than repeating one clip, which is the whole point of building it
+out of a corpus. A missing word **refuses the whole build, naming every one**,
+because a rhythm with a hole in it and nothing saying which word went missing is
+worse than one that will not build. And the score is a workspace preference and
+**not in the document**: what a `.fbro` holds is the mix it produced, which is a
+mix like any other from the moment it exists.
 
 **Where the beat is, is measured** — and it is the first reader
 `bro.ffmpeg.marks` has ever had. A transcript's time is Parakeet's frame (0.08 s)
@@ -512,12 +514,28 @@ an EMA starting at zero — the first half-second of anything analysed carries
 marks that are not in it, and the lead puts that before the word rather than on
 it. The offset is applied **relative**, so it composes with `cuts.js` repointing
 the clip mid-flight. And **an onset is a transient and is not "the word"**:
-what is claimed is that the piece moved to the loudest change nearby, which is
-what `TOLERANCE` keeps small. Finding this needed a real fix one layer down —
-`SourceAudio::open` moved the clock for an input's `-ss` and never seeked, so a
-windowed `marks` read analysed the file from zero to `ss + t` and put every `at`
-on the wrong clock. Silent for as long as nothing asked for a window; measured at
-940 ms against 28 for the same answer.
+what is claimed is that the piece moved to the transient nearest its word,
+gated against speech presence (energy VAD) and weighted by PCEN spectral flux so
+that vocal attacks are preferred over background noise or music transients.
+Finding this needed a real fix one layer down — `SourceAudio::open` moved the clock
+for an input's `-ss` and never seeked, so a windowed `marks` read analysed the
+file from zero to `ss + t` and put every `at` on the wrong clock. Silent for as
+long as nothing asked for a window; measured at 940 ms against 28 for the same
+answer.
+
+**Tracking higher energy speaking, yelling, and activated speaking** (`ui/phrase.js`,
+`ui/library.js`, `supercut/results.js`). Beyond searching for specific words or
+longest monologues, speech energy and delivery pace are tracked natively:
+- **Speech activation & cadence**: `monologues()` computes words per second (`rate`)
+  for every run. In `activated` mode, runs are ranked by cadence (with an optional
+  `min pace` filter, e.g. 2.8 w/s), surfacing rapid-fire rants and breathless delivery.
+- **Yelling & high vocal energy**: Combines lexical/prosodic markers (exclamations `!`,
+  emphatic all-caps tokens) with acoustic measurement (`bro.media.peaks`) when media is
+  available on disk. `energyScore = rate * (1 + 2 * exclamations/n + 1.2 * caps/n)`
+  weighted by peak RMS loudness ($> 0.25$ RMS).
+- **Exclamation search in Words**: Typing `!` in the Words search box matches all
+  exclaimed words across transcripts, while appending `!` (e.g. `stop!`) searches
+  specifically for yelled/exclaimed instances.
 
 **A moment added to the mix is cut out of its recording** (`supercut/cuts.js`).
 `+` puts the clip in the row on the frame it is pressed, against the recording,

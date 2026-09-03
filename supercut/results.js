@@ -64,6 +64,8 @@ let phrase = '';
 let loose = false;
 let gap = 2;
 let least = 30;
+let talkingMode = 'longest';
+let minPace = 2.8;
 
 export function initResults(refs, h) {
     nodes = refs;
@@ -126,7 +128,13 @@ function search() {
     results = tab === 'recordings' ? acquire.list()
             : tab === 'words'      ? library.searchWords(phrase, { loose })
             : tab === 'rhythm'     ? steps()
-                                   : library.searchTalking({ gap, min: least });
+                                   : library.searchTalking({
+                                       gap,
+                                       min: least,
+                                       mode: talkingMode,
+                                       minRate: talkingMode === 'activated' ? minPace : 0,
+                                       acoustic: true,
+                                   });
     drawNote();
     drawRows();
 }
@@ -146,11 +154,10 @@ function search() {
 /// as they do for a recording that has been deleted off the disk.
 function steps() {
     const plan = rhythm.replan();
-    const step = rhythm.stepSeconds();
     let at = 0;
     let onStep = 1;
     return plan.pieces.map((p) => {
-        const seconds = p.steps * step;
+        const seconds = p.seconds;
         const was = at;
         const wasStep = onStep;
         at += seconds;
@@ -160,13 +167,15 @@ function steps() {
             at: p.hit ? p.hit.at : 0,
             to: p.hit ? p.hit.at + seconds : seconds,
         };
+        const dynamic = p.tempo !== rhythm.tempoOf() || p.stepsPerBeat !== rhythm.stepsPerBeat();
+        const tempoTag = dynamic ? ` · ${p.tempo} bpm (${p.stepsPerBeat}/beat)` : '';
         if (p.kind === 'rest')
             return { ...base, vod: { id: '', media: '', title: '' },
-                     label: '—', detail: 'rest' };
+                     label: '—', detail: `rest${tempoTag}` };
         if (!p.hit)
             return { ...base, vod: { id: '', media: '', title: '' },
-                     label: p.phrase, detail: p.why || 'nothing says that' };
-        return { ...base, vod: p.hit.vod, label: p.phrase, detail: p.hit.detail };
+                     label: p.phrase, detail: (p.why || 'nothing says that') + tempoTag };
+        return { ...base, vod: p.hit.vod, label: p.phrase, detail: (p.hit.detail || '') + tempoTag };
     });
 }
 
@@ -471,20 +480,44 @@ function drawControls() {
             ]);
             return [box, check];
         }
+        const modeSelect = el('select', {
+            id: 'f-talking-mode',
+            on: { change: () => {
+                talkingMode = modeSelect.value;
+                if (talkingMode === 'yelling' && least > 15) least = 10;
+                else if (talkingMode === 'activated' && least > 20) least = 15;
+                else if (talkingMode === 'longest' && least < 20) least = 30;
+                search();
+                drawControls();
+            } },
+        }, [
+            el('option', { value: 'longest', selected: talkingMode === 'longest' ? 'selected' : null }, 'Longest stretches'),
+            el('option', { value: 'activated', selected: talkingMode === 'activated' ? 'selected' : null }, 'Activated / fast pace'),
+            el('option', { value: 'yelling', selected: talkingMode === 'yelling' ? 'selected' : null }, 'Yelling / high energy'),
+        ]);
         const g = el('input', {
             type: 'number', id: 'f-gap', step: '0.5', min: '0.5', value: String(gap),
             on: { change: () => { gap = Number(g.value) || 2; search(); } },
         });
         const m = el('input', {
-            type: 'number', id: 'f-least', step: '10', min: '5', value: String(least),
-            on: { change: () => { least = Number(m.value) || 30; search(); } },
+            type: 'number', id: 'f-least', step: '5', min: '3', value: String(least),
+            on: { change: () => { least = Number(m.value) || 10; search(); } },
         });
-        return [
+        const kids = [
+            modeSelect,
             el('span', { cls: 'dim', text: 'pause under' }), g,
             el('span', { cls: 'dim', text: 's · at least' }), m,
             el('span', { cls: 'dim', text: 's' }),
-            el('button', { cls: 'text', text: 'Find', on: { click: search } }),
         ];
+        if (talkingMode === 'activated') {
+            const p = el('input', {
+                type: 'number', id: 'f-min-pace', step: '0.2', min: '1.5', value: String(minPace),
+                on: { change: () => { minPace = Number(p.value) || 2.5; search(); } },
+            });
+            kids.push(el('span', { cls: 'dim', text: '· min pace' }), p, el('span', { cls: 'dim', text: 'w/s' }));
+        }
+        kids.push(el('button', { cls: 'text', text: 'Find', on: { click: search } }));
+        return kids;
     });
 }
 
@@ -508,7 +541,15 @@ function drawNote() {
         const bits = [];
         if (!library.available()) bits.push('no corpus');
         if (plan.steps) bits.push(`${plan.steps} steps · ${plan.seconds.toFixed(2)}s`);
-        bits.push(`${(rhythm.stepSeconds() * 1000).toFixed(0)} ms a step`);
+        const uniform = plan.pieces.length > 0 && plan.pieces.every(
+            (p) => Math.abs(p.stepSec - plan.pieces[0].stepSec) < 1e-6);
+        if (uniform && plan.pieces.length) {
+            bits.push(`${(plan.pieces[0].stepSec * 1000).toFixed(0)} ms a step`);
+        } else if (plan.pieces.length) {
+            bits.push('dynamic grid');
+        } else {
+            bits.push(`${(rhythm.stepSeconds() * 1000).toFixed(0)} ms a step`);
+        }
         if (plan.missing.length)
             bits.push(`nothing says ${plan.missing.map((w) => `"${w}"`).join(', ')}`);
         const snapping = rhythm.snapping();
@@ -534,6 +575,16 @@ function drawNote() {
     // whose Add buttons are half dead with nothing saying why is worse than a
     // number.
     const gone = results.filter((r) => !r.vod.media).length;
+    if (tab === 'talking') {
+        const modeLabel = talkingMode === 'activated' ? 'activated stretches'
+                        : talkingMode === 'yelling'   ? 'yelling / high-energy stretches'
+                        : 'stretches';
+        nodes.note.textContent =
+            `${results.length} ${modeLabel} found` +
+            (results.length > SHOWN ? ` · ${SHOWN} shown` : '') +
+            (gone ? ` · ${gone} not on disk` : '');
+        return;
+    }
     nodes.note.textContent =
         `${results.length} found` +
         (results.length > SHOWN ? ` · ${SHOWN} shown` : '') +
@@ -818,7 +869,8 @@ function drawRows() {
             ]);
         }
 
-        return div('row' + (isPlaying(item) ? ' playing' : ''), [
+        return div('row' + (item.kind === 'run' ? ' run' : '') +
+                   (isPlaying(item) ? ' playing' : ''), [
             listen,
             el('span', { cls: 'at mono', text: clock(item.at) }),
             el('span', { cls: 'label', text: item.label }),

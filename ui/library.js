@@ -246,7 +246,7 @@ export function recordings() {
 export function searchWords(phrase, opts = {}) {
     const out = [];
     if (!channel || !phrase) return out;
-    if (phrase.replace(/[^a-z0-9|]/gi, '').length < 2) return out;
+    if (phrase.trim() !== '!' && phrase.replace(/[^a-z0-9|]/gi, '').length < 2) return out;
     for (const v of searched()) {
         // Spaced for the same reason `tools/corpus.js` spaces: a phrase said
         // three times for emphasis is one moment, and the two must not come to
@@ -265,25 +265,75 @@ export function searchWords(phrase, opts = {}) {
                            || a.at - b.at);
 }
 
-/// Every stretch of talking in the corpus at these settings, longest first.
+/// Every stretch of talking in the corpus at these settings.
 ///
-/// Longest first because the whole point of the list is that you cannot know
-/// what is in a stretch before playing it, so the only ranking available is
-/// size.
+/// Supports `opts.mode`:
+///   - 'longest' (default): longest stretches first
+///   - 'activated': fast cadence / rapid delivery first
+///   - 'yelling': highest vocal energy / exclamations / shouting first
 export function searchTalking(opts = {}) {
     const out = [];
     if (!channel) return out;
+    const mode = opts.mode || 'longest';
     for (const v of searched()) {
         for (const m of monologues(streamFor(v).words, opts)) {
+            let tag = '';
+            if (m.exclamations > 0) tag += ` · ${m.exclamations}!`;
+            if (m.rate >= 3.2) tag += ` · ${m.rate.toFixed(1)}/s fast`;
+            else tag += ` · ${m.rate.toFixed(1)}/s`;
+
             out.push({
                 kind: 'run', vod: v, at: m.at, to: m.to,
-                label: `${Math.round(m.seconds)}s · ${m.words} words · ` +
-                       `${m.rate.toFixed(1)}/s`,
+                label: `${Math.round(m.seconds)}s · ${m.words} words${tag}`,
                 detail: m.opening,
                 seconds: m.seconds,
+                words: m.words,
+                rate: m.rate,
+                exclamations: m.exclamations,
+                caps: m.caps,
+                energyScore: m.energyScore,
+                peakRms: 0,
             });
         }
     }
+
+    if (mode === 'activated') {
+        return out.sort((a, b) => b.rate - a.rate || b.seconds - a.seconds);
+    }
+
+    if (mode === 'yelling') {
+        // Initial instant rank by lexical/prosodic energy score
+        out.sort((a, b) => b.energyScore - a.energyScore || b.rate - a.rate || b.seconds - a.seconds);
+
+        // Acoustic verification on top candidate runs (up to 24) to confirm physical audio loudness
+        // without stalling the UI on thousands of decodes across long recordings.
+        if (typeof bro !== 'undefined' && bro.media && typeof bro.media.peaks === 'function') {
+            const probeCount = Math.min(out.length, 24);
+            for (let i = 0; i < probeCount; i++) {
+                const item = out[i];
+                if (!item.vod.media) continue;
+                try {
+                    const p = bro.media.peaks(item.vod.media, { from: item.at, to: item.to, buckets: 32 });
+                    if (p && p.rms && p.rms.length) {
+                        let peakRms = 0;
+                        for (let k = 0; k < p.rms.length; k++) {
+                            if (p.rms[k] > peakRms) peakRms = p.rms[k];
+                        }
+                        item.peakRms = peakRms;
+                        if (peakRms > 0) {
+                            item.energyScore *= (1.0 + Math.min(3.0, peakRms * 4.0));
+                            if (peakRms >= 0.25 && !item.label.includes('loud')) {
+                                item.label += ' · loud';
+                            }
+                        }
+                    }
+                } catch (e) { /* unreadable or remote */ }
+            }
+            out.sort((a, b) => b.energyScore - a.energyScore || b.rate - a.rate || b.seconds - a.seconds);
+        }
+        return out;
+    }
+
     return out.sort((a, b) => b.seconds - a.seconds);
 }
 

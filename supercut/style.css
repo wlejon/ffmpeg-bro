@@ -112,6 +112,7 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .row .at { font-size: 11px; color: var(--blue); flex: 0 0 auto; }
 .row .label { font-size: 12px; flex: 0 0 auto; max-width: 140px;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.run .label { max-width: 220px; }
 .row .detail { font-size: 11px; flex: 1 1 auto;
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .where { font-size: 10px; flex: 0 0 auto; opacity: .7; }

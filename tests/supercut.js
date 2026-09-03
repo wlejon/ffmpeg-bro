@@ -28,6 +28,7 @@ assert(media, 'pass a media file: ... tests/supercut.js -- <file>');
 // it. Modules are one instance to a realm, so this is the library the window is
 // using and not a second copy of it.
 import * as library from '/app/../ui/library.js';
+import * as phrase from '/app/../ui/phrase.js';
 // Where this checkout is, which is the one thing the fixture paths below have to
 // agree with the application about — see `dir`.
 import { ROOT, abs } from '/app/../corpus/files.js';
@@ -1045,6 +1046,131 @@ console.log('\nwords on a beat');
     const after = A.mix.sequence().map((c) => `${c.start}:${c.length}`).join('|');
     ok(before === after,
        'and not one card moved or changed length — snapping to the beat is a slip');
+
+    // ── dynamic tempo, meter and section directives ────────────────────────
+    type(score, '[160] cross [120] line');
+    pump(60);
+    const dplan = A.rhythm.plan();
+    ok(dplan.pieces.length === 2, 'two pieces in dynamic tempo score');
+    ok(Math.abs(dplan.pieces[0].stepSec - (60 / 160 / 4)) < 1e-6,
+       `first piece step is 160 bpm sixteenth (${dplan.pieces[0].stepSec})`);
+    ok(Math.abs(dplan.pieces[1].stepSec - (60 / 120 / 4)) < 1e-6,
+       `second piece step is 120 bpm sixteenth (${dplan.pieces[1].stepSec})`);
+
+    // Meter subdivision change (triplets)
+    type(score, 'cross [:3] line');
+    pump(60);
+    const tplan = A.rhythm.plan();
+    ok(tplan.pieces[1].stepsPerBeat === 3, 'triplet directive sets 3 steps per beat');
+    ok(Math.abs(tplan.pieces[1].stepSec - (60 / 120 / 3)) < 1e-6,
+       `triplet step is 60/120/3 (${tplan.pieces[1].stepSec})`);
+
+    // Section annotations in brackets: produce no clips and are not searched as words
+    type(score, '[intro] cross . [verse 1] line');
+    pump(60);
+    const cplan = A.rhythm.plan();
+    ok(cplan.pieces.length === 2, 'bracket section annotations produce no pieces');
+    ok(cplan.missing.length === 0, 'and are not treated as missing words');
+
+    // Building a score with dynamic tempo/meter places clips of the exact distinct durations
+    document.getElementById('btn-clear').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(60);
+    type(score, 'cross [160] line');
+    pump(60);
+    ok(A.rhythm.build() === '', 'dynamic score builds');
+    for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
+    const dynSeq = A.mix.sequence();
+    ok(dynSeq.length === 2, 'dynamic score placed two clips');
+    ok(Math.abs(dynSeq[0].length - (60 / 120 / 4)) < 1e-6,
+       `first clip is 120 bpm sixteenth (${dynSeq[0].length})`);
+    ok(Math.abs(dynSeq[1].length - (60 / 160 / 4)) < 1e-6,
+       `second clip is 160 bpm sixteenth (${dynSeq[1].length})`);
+    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
+    ok(!A.rhythm.snapping(), 'dynamic score onset reads finished');
+}
+
+// ── tracking higher energy speaking: yelling & activated speaking ──────────
+console.log('\ntracking higher energy speaking');
+{
+    const sampleWords = [
+        // Run 1: Calm speech (10 words in 5.0s, rate = 2.0/s)
+        { from: 0.0, to: 0.4, text: 'hello' },
+        { from: 0.5, to: 0.9, text: 'there' },
+        { from: 1.0, to: 1.4, text: 'this' },
+        { from: 1.5, to: 1.9, text: 'is' },
+        { from: 2.0, to: 2.4, text: 'a' },
+        { from: 2.5, to: 2.9, text: 'calm' },
+        { from: 3.0, to: 3.4, text: 'and' },
+        { from: 3.5, to: 3.9, text: 'steady' },
+        { from: 4.0, to: 4.4, text: 'talking' },
+        { from: 4.5, to: 5.0, text: 'pace' },
+
+        // Hole of 4 seconds (forces new run)
+
+        // Run 2: Activated speech (12 words in 2.4s, rate = 5.0/s)
+        { from: 9.0, to: 9.15, text: 'we' },
+        { from: 9.2, to: 9.35, text: 'have' },
+        { from: 9.4, to: 9.55, text: 'to' },
+        { from: 9.6, to: 9.75, text: 'run' },
+        { from: 9.8, to: 9.95, text: 'faster' },
+        { from: 10.0, to: 10.15, text: 'and' },
+        { from: 10.2, to: 10.35, text: 'keep' },
+        { from: 10.4, to: 10.55, text: 'moving' },
+        { from: 10.6, to: 10.75, text: 'right' },
+        { from: 10.8, to: 10.95, text: 'now' },
+        { from: 11.0, to: 11.15, text: 'do' },
+        { from: 11.2, to: 11.4, text: 'it' },
+
+        // Hole of 4 seconds (forces new run)
+
+        // Run 3: Yelled / High energy speech (6 words in 2.0s, rate = 3.0/s, exclamations & all-caps)
+        { from: 16.0, to: 16.3, text: 'NO!' },
+        { from: 16.4, to: 16.7, text: 'STOP!' },
+        { from: 16.8, to: 17.1, text: 'WATCH' },
+        { from: 17.2, to: 17.5, text: 'OUT!' },
+        { from: 17.6, to: 17.8, text: 'GET' },
+        { from: 17.9, to: 18.0, text: 'DOWN!' },
+    ];
+
+    // Longest mode: Run 1 (5.0s) wins over Run 2 (2.4s) and Run 3 (2.0s)
+    const longest = phrase.monologues(sampleWords, { gap: 2, min: 1.5, mode: 'longest' });
+    ok(longest.length === 3, 'three speech runs detected');
+    ok(longest[0].seconds >= 4.9, `longest monologue is first (${longest[0].seconds.toFixed(1)}s)`);
+
+    // Activated mode: Run 2 (5.0 words/s) wins over Run 3 (3.0 words/s) and Run 1 (2.0 words/s)
+    const activated = phrase.monologues(sampleWords, { gap: 2, min: 1.5, mode: 'activated', minRate: 2.5 });
+    ok(activated.length === 2, 'two runs beat the 2.5 words/s activated threshold');
+    ok(Math.abs(activated[0].rate - 5.0) < 0.1,
+       `activated mode ranks highest cadence first (${activated[0].rate.toFixed(1)}/s)`);
+
+    // Yelling mode: Run 3 (exclamations and all-caps shouting) has highest energyScore
+    const yelling = phrase.monologues(sampleWords, { gap: 2, min: 1.5, mode: 'yelling' });
+    ok(yelling[0].exclamations >= 3,
+       `yelling mode ranks exclamation/shouting run first (${yelling[0].exclamations}!)`);
+    ok(yelling[0].energyScore > yelling[1].energyScore,
+       'yelled run has higher energyScore than calm run');
+
+    // Exclamation search in find():
+    const stream = phrase.streamOf(sampleWords);
+    const exclamations = phrase.find(stream, '!');
+    ok(exclamations.length === 4, `find('!') matches all 4 exclamation words (${exclamations.length})`);
+    ok(exclamations.some((h) => h.matched === 'STOP!'), 'matches STOP!');
+
+    // Specific word exclamation filter: "stop!" vs "stop"
+    const stopYelled = phrase.find(stream, 'stop!');
+    ok(stopYelled.length === 1 && stopYelled[0].matched === 'STOP!', 'find("stop!") finds the yelled take');
+
+    // UI integration: Results tab switching to talking and changing mode
+    A.results.setTab('talking');
+    pump(60);
+    ok(A.results.currentTab() === 'talking', 'switched to talking tab');
+    const modeSelect = document.getElementById('f-talking-mode');
+    ok(modeSelect !== null, 'f-talking-mode select element exists');
+    modeSelect.value = 'activated';
+    modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(60);
+    ok(document.getElementById('f-min-pace') !== null, 'min pace control appears in activated mode');
 }
 
 console.log(`\n${checks} checks passed`);
