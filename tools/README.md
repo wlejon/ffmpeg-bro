@@ -26,11 +26,12 @@ hours of somebody talking has to be able to make the transcript it searches.
 | [`transcribe.js`](transcribe.js) | one file's words, with times, as cues |
 | [`montage.js`](montage.js) | a rhythmic montage of a phrase, on a beat grid |
 | `corpus.js` `clips.js` `flipbook.js` `weave.js` `speech.js` `transcript.js` `drive.js` | the parts they share |
-| [`../corpus/`](../corpus/) `vod.js` `store.js` `pull.js` `srt.js` `words.js` `index.js` `files.js` | the parts they share with the supercut application |
+| [`../corpus/`](../corpus/) `vod.js` `store.js` `pull.js` `srt.js` `words.js` `model.js` `index.js` `files.js` | the parts they share with the supercut application |
 
 ## supercut.js
 
 ```
+ffmpeg-bro-headless ui/ tools/supercut.js -- model
 ffmpeg-bro-headless ui/ tools/supercut.js -- adopt D:/footage/interviews
 ffmpeg-bro-headless ui/ tools/supercut.js -- list turk --last 5
 ffmpeg-bro-headless ui/ tools/supercut.js -- pull turk --last 4 --skip 1
@@ -43,16 +44,30 @@ ffmpeg-bro-headless ui/ tools/supercut.js -- weave turk "you cross"
 ffmpeg-bro-headless ui/ tools/supercut.js -- index turk
 ```
 
-Twelve verbs, none of which redoes what a previous run finished. They are
-separate because their costs are: `pull` is the network, `transcribe` is the
-GPU, and `search`, `phrases` and `clips` are cheap and are the ones you actually
-iterate on. Welding them together would mean re-pulling seventeen gigabytes to
-try a different phrase.
+Thirteen verbs, none of which redoes what a previous run finished. They are
+separate because their costs are: `model` is 2.5 GB once, `pull` is the network,
+`transcribe` is the GPU, and `search`, `phrases` and `clips` are cheap and are
+the ones you actually iterate on. Welding them together would mean re-pulling
+seventeen gigabytes to try a different phrase.
 
 `adopt` is `pull` for footage that is already on this disk: a folder becomes a
 channel named after itself, and **the files are not copied** — the store keeps a
 record and the transcript, and the recordings stay where they are. Everything
 after it is the same, `transcribe` included.
+
+`transcribe` needs a Parakeet checkpoint and prints the one it is reading with.
+Three places are looked in: a `models/parakeet` folder beside the application,
+and `brosoundml/weights/parakeet` in a brosoundml checkout or in bro's own. With
+none of them holding one the verb refuses on the command that started it, naming
+every place it looked; `--model DIR` is the way to a checkpoint somewhere else.
+
+`model` is the verb that goes and gets one, into the first of those places:
+2.5 GB from Hugging Face, in ranges, written `.part` and renamed when whole, so
+an interrupted run carries on where it stopped rather than starting again.
+`--out DIR` puts it somewhere else and `--again` re-fetches one that is already
+there. It is separate from `transcribe` for the reason every verb here is
+separate from every other: a mistyped channel name should not start a
+multi-gigabyte download.
 
 ```
 build/corpus/<login>/channel.json          what the channel has, newest first

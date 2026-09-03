@@ -128,6 +128,7 @@
 // a file that finished. A session killed mid-copy used to leave a truncated file
 // under the name the next press looked for.
 
+import { ROOT } from '../ui/root.js';
 import { project, applyInput, clipsOf, changed } from '../ui/project.js';
 import * as inputsModel from '../ui/inputs.js';
 import { copyRowsOf } from '../ui/export/copy.js';
@@ -184,19 +185,20 @@ const jobs = new Map();
 /// `making` | `ready` | `failed` | `long`.
 const proxies = new Map();
 
-/// Where cuts are written. Under the repository root rather than beside the
-/// document, because `require('fs')` resolves a relative path against the *app*
-/// directory (`supercut/`) and a cut written to `supercut/build/` is a cut
-/// nobody can find. Same root `build/corpus/` is read from.
-let root = '';
+/// Where cuts are written. Under the application's own root rather than beside
+/// the document, because `require('fs')` resolves a relative path against the
+/// *app* directory (`supercut/`) and a cut written to `supercut/build/` is a cut
+/// nobody can find. `ui/root.js` is that root, and is the same one `build/corpus`
+/// is read and written under — it used to be derived here as well as there,
+/// which is how the two came to disagree.
+let made = false;
 function dir() {
-    if (!root) {
-        try { root = fs.realpathSync(`${bro.appDir}/..`).replace(/\\/g, '/'); }
-        catch (e) { root = '.'; }
-        try { fs.mkdirSync(`${root}/build`); } catch (e) { /* there already */ }
-        try { fs.mkdirSync(`${root}/build/cuts`); } catch (e) { /* there already */ }
+    if (!made) {
+        made = true;
+        try { fs.mkdirSync(`${ROOT}/build`); } catch (e) { /* there already */ }
+        try { fs.mkdirSync(`${ROOT}/build/cuts`); } catch (e) { /* there already */ }
     }
-    return `${root}/build/cuts`;
+    return `${ROOT}/build/cuts`;
 }
 
 /// What a card asks to know: is this clip a cut, is one being made, did one fail.

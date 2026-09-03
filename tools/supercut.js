@@ -23,7 +23,7 @@
 //   ffmpeg-bro-headless ui/ tools/supercut.js -- flipbook turk "you cross"
 //
 // **The verbs are separate because their costs are.** `pull` is network and runs
-// at whatever the CDN gives; `transcribe` is the GPU and runs at about 11×
+// at whatever the CDN gives; `transcribe` is the GPU and runs at about 81×
 // realtime; `search` is instant and is the one anybody actually iterates on.
 // Welding them into one command would mean re-pulling seventeen gigabytes to try
 // a different phrase, which is the whole thing this store exists to avoid.
@@ -49,7 +49,9 @@ import { refresh, loadChannel, vodsOf, transcribed,
          isPulled } from './corpus.js';
 import { planPull, startPull, pollPull, running } from '../corpus/pull.js';
 import { startTranscribe, pollTranscribe, running as transcribing,
-         SPEECH_MODEL } from '../corpus/words.js';
+         speechModel, speechRefusal } from '../corpus/words.js';
+import { startModel, pollModel, modelNote,
+         fetching as fetchingModel } from '../corpus/model.js';
 import { writeManifest } from '../corpus/index.js';
 import * as local from '../corpus/local.js';
 import { readSrt, countPhrases, ranked } from './transcript.js';
@@ -65,6 +67,7 @@ const verb = (args[0] || '').toLowerCase();
 
 const USAGE = `usage: ffmpeg-bro-headless ui/ tools/supercut.js -- <verb> …
 
+  model                            the speech model itself, 2.5 GB, once
   adopt <folder>                   the videos in it, as a channel of its own
   list <channel> [--last N]        what the channel has, newest first
   pull <channel> [--last N]        the recording of each, by stream copy
@@ -87,6 +90,8 @@ const USAGE = `usage: ffmpeg-bro-headless ui/ tools/supercut.js -- <verb> …
   --limit N       stop after N hits.
   --spacing S     collapse hits closer together than S seconds. Default 2.
   --device cpu|cuda   which device the model runs on.
+  --model DIR     the Parakeet checkpoint. Default: whichever of the places
+                  corpus/words.js searches holds one.
   --again         redo a step the store has already finished.
   --brief         print hits without the words either side of them.
 
@@ -229,6 +234,31 @@ async function doPull() {
     console.log(`${done} recording${done === 1 ? '' : 's'} on disk · ${gb(bytes)}`);
 }
 
+// ── model ──────────────────────────────────────────────────────────────────
+
+/// The weights, fetched into the first place `corpus/words.js` looks.
+///
+/// **A verb of its own for the reason every verb here is one**: it is a cost of
+/// a different kind — 2.5 GB, once, ever — and welding it onto `transcribe`
+/// would mean a typo'd channel name starting a download. Nothing else in this
+/// file needs it to have happened; `transcribe` refuses by name when it has not.
+function doModel() {
+    const job = startModel({ again: flag('again'),
+                             size: opt('size', '') || undefined,
+                             dir: opt('out', '') ? abs(opt('out', '')) : undefined });
+    if (job.state === 'skipped') {
+        console.log(`  already here: ${job.dir}`);
+        return;
+    }
+    console.log(`  ${job.dir}`);
+    driver.until('the model', () => { pollModel(job); return !fetchingModel(job); },
+                 6 * 60 * 60 * 1000,
+                 () => console.log(`  ${modelNote(job)}`));
+    assert(job.state === 'done',
+           `could not fetch it: ${job.error || job.state}`);
+    console.log(`  ${modelNote(job)}`);
+}
+
 // ── transcribe ─────────────────────────────────────────────────────────────
 
 /// Every word of each, with a time — one recording at a time.
@@ -252,14 +282,20 @@ function doTranscribe() {
     if (ready.length < vods.length)
         console.log(`  ${vods.length - ready.length} of ${vods.length} not pulled yet ` +
                     '— transcribing the rest');
-    console.log(`  ${SPEECH_MODEL}`);
+    // Which checkpoint, resolved before the first recording rather than per read:
+    // this is the line that says where the words came from, and a run of five
+    // recordings that could not have read one of them should refuse on the
+    // command that started it. `speechRefusal` names every place it looked.
+    const model = speechModel(opt('model', ''));
+    assert(model, `${speechRefusal()}\n  or run: … tools/supercut.js -- model`);
+    console.log(`  ${model}`);
     const began = Date.now();
     let words = 0;
     for (let i = 0; i < ready.length; i++) {
         const v = ready[i];
         console.log(`[${i + 1}/${ready.length}] ${v.id} · ${v.title.slice(0, 56)}`);
         const job = startTranscribe(channel, v, {
-            again: flag('again'), device: device || undefined,
+            again: flag('again'), device: device || undefined, model,
         });
         if (job.state === 'skipped') {
             console.log(`  already transcribed · ${job.words} words`);
@@ -587,6 +623,7 @@ function doWeave() {
 // ── go ─────────────────────────────────────────────────────────────────────
 
 const VERBS = {
+    model: doModel,
     adopt: doAdopt,
     list: doList, pull: doPull, transcribe: doTranscribe, status: doStatus,
     search: doSearch, phrases: doPhrases, clips: doClips, flipbook: doFlipbook,

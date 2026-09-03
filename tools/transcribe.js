@@ -34,10 +34,11 @@
 // Usage:
 //   ffmpeg-bro-headless ui/ tools/transcribe.js -- <media> [options]
 //     --out <path>       where the .srt goes. Default: <media>.srt
-//     --model <dir>      the Parakeet checkpoint. Default: beside the repo.
+//     --model <dir>      the Parakeet checkpoint. Default: whichever of the
+//                        places `corpus/words.js` searches holds one.
 //     --device cpu|cuda  Default: whatever the build picks — cuda when built.
 
-import { startRead, pollRead, reading, SPEECH_MODEL } from '../corpus/words.js';
+import { startRead, pollRead, reading, speechModel } from '../corpus/words.js';
 import { writeSrt } from '../corpus/srt.js';
 import { abs, positionals, opt, driver, span, clock } from './drive.js';
 
@@ -51,7 +52,10 @@ const probe = bro.ffmpeg.probe(abs(media));
 assert(probe.audio, `${media} has no soundtrack to transcribe`);
 const total = probe.format.duration;
 console.log(`${abs(media)}`);
-console.log(`  ${span(total)} · ${SPEECH_MODEL}`);
+// The checkpoint that will actually be read with, resolved here so the line says
+// where the words came from rather than where they were meant to come from. An
+// absent one prints nothing and `startRead` refuses below, naming every place.
+console.log(`  ${span(total)} · ${speechModel(opt('model', '')) || 'no model'}`);
 
 const device = opt('device', '');
 const job = startRead(abs(media), {
@@ -61,8 +65,8 @@ const job = startRead(abs(media), {
 });
 assert(job.state !== 'failed', `could not start reading it: ${job.error}`);
 
-// Once a second, because the read runs at about 11× realtime on a 4090 and a
-// six-hour file is half an hour of it. `read` is how far down the file the
+// Once a second, because the read runs at about 81× realtime on a 4090 and a
+// six-hour file is five minutes of it. `read` is how far down the file the
 // reader has got — the one number that makes a partial answer honest.
 // Started at now, not at zero: the first poll lands before the reader has opened
 // the file, and "0% · 0 words · 0.0× realtime · 40.7 min left" about a

@@ -395,6 +395,24 @@ for a 2296-segment VOD, matching the manifest's own `#EXTINF` sum exactly — th
 playlist sum is kept anyway, because it is arithmetic where a probe is a report
 and because `segments` is a fact only the manifest holds.
 
+**The speech model is looked for rather than computed, and the application
+fetches it** (`corpus/words.js`, `corpus/model.js`). Where a checkpoint is was one
+expression — a size directory under a standalone brosoundml beside the repo — and
+every part of it was a guess: it named `0.6b-v3`, so another size was invisible;
+it named the standalone clone, so bro's own submodule, which is what
+`--recursive` produces, resolved to nothing; and being one path it could only be
+wrong, never say where it had looked. Now three named places are searched for a
+directory holding the *three files `loadModel` names*, `useSpeechModel` is the
+way out (`useCorpus`'s shape, and the window remembers it, not `corpus/`), and
+`speechRefusal` names every place. `startRead` refuses on the press rather than
+letting the native loader refuse minutes later about the one path it was handed.
+**And `corpus/model.js` goes and gets one**: `bro.ffmpeg.fetch` is the packet path
+and refuses a spec it cannot perform, so a 2.5 GB safetensors is not its job —
+what is needed is `fetch` with a `Range` header, measured here at 9.4 MB/s for a
+32 MB range, appended to a `.part` and renamed when whole (`proxy_queue.h`'s
+rule), resumed from what is on disk (`pull.js`'s). A chunk loop rather than one
+request because the body is one `ArrayBuffer`. Nothing starts it but a press.
+
 The split between `library.js` and its views is the load-bearing part and was
 learned the expensive way: **everything that decides what the answer is lives in
 the library or in `phrase.js` beneath it, and a view may decide only how to draw

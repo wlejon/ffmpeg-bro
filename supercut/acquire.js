@@ -75,7 +75,11 @@
 import { loadChannel, refresh, transcribed, isPulled, loadState,
          vodPaths, mediaOf } from '../corpus/store.js';
 import { planPull, startPull, pollPull, stopPull } from '../corpus/pull.js';
-import { startTranscribe, pollTranscribe, stopTranscribe } from '../corpus/words.js';
+import { startTranscribe, pollTranscribe, stopTranscribe,
+         foundSpeechModel, useSpeechModel, chosenSpeechModel,
+         speechRefusal } from '../corpus/words.js';
+import { startModel, pollModel, stopModel, modelNote,
+         fetching as fetchingModel } from '../corpus/model.js';
 import { writeManifest } from '../corpus/index.js';
 import { exists, sizeOf, gb } from '../corpus/files.js';
 import * as local from '../corpus/local.js';
@@ -160,13 +164,26 @@ export function list() { return rows; }
 export function note() {
     if (looking) return `looking up ${looking}…`;
     if (said) return said;
-    if (!login) return library.available() ? '' : 'no corpus yet';
-    if (!rows.length) return `nothing listed for ${login} yet`;
+    // The model is the machine's condition rather than the channel's, so it is
+    // added to the line rather than replacing it — except where there is no line
+    // for it to be added to, which is a window somebody has opened and pressed
+    // **Get model** on before typing anything.
+    const onModel = (model && (fetchingModel(model) || model.state === 'failed'))
+        ? `speech model · ${modelNote(model)}` : '';
+    if (!login) return onModel || (library.available() ? '' : 'no corpus yet');
+    if (!rows.length) return onModel || `nothing listed for ${login} yet`;
     const disk = rows.filter((r) => r.vod.media).length;
     const words = rows.filter((r) => r.state === 'transcribed').length;
     const being = local.measuring();
+    // **The missing model is said where there is something it would have read.**
+    // A channel nobody has fetched anything of has nothing to transcribe, and a
+    // line about a checkpoint on it would be a warning about work nobody has
+    // started. `Model…` beside the channel box is the press either way.
+    const noModel = disk > words && !speech() && !onModel;
     return `${rows.length} recordings · ${disk} on disk · ${words} transcribed` +
-           (being ? ` · measuring ${being}` : '');
+           (being ? ` · measuring ${being}` : '') +
+           (noModel ? ' · no speech model' : '') +
+           (onModel ? ` · ${onModel}` : '');
 }
 
 /// Show what is already known about a channel. Synchronous, and touches no
@@ -585,6 +602,99 @@ export function get(id) {
     });
 }
 
+// ── the speech model, which is a condition of the machine ──────────────────
+//
+// **Not a condition of a recording**, which is why it is one statement on the
+// tab and one control beside the channel box rather than a badge on twenty rows:
+// with no checkpoint every row is equally unreadable, and the press that mends
+// it is the same press whichever row somebody was looking at. `corpus/words.js`
+// searches three named places for one; what is here is the way to say it is
+// somewhere else, and the memory of that answer.
+//
+// **Remembered here rather than in `corpus/`.** Nothing in there may reach a
+// window's storage, and the same question is answered by a `--model` argument on
+// the command line. So this is a workspace preference like the split height and
+// the score, and it is read back the way CLAUDE.md says every one of those is:
+// version-tolerant, and **dropped when what it names has stopped holding a
+// checkpoint**, because a directory somebody has deleted must not stand in front
+// of the three real places for ever.
+
+const MODEL_KEY = 'sc.speech-model';
+let restored = false;
+
+function restoreModel() {
+    if (restored) return;
+    restored = true;
+    let saved = '';
+    try { saved = localStorage.getItem(MODEL_KEY) || ''; } catch (e) { saved = ''; }
+    if (saved && !useSpeechModel(saved)) useSpeechModel('');
+}
+
+/// Which checkpoint a read would be made with: `{ from, path }`, or null when
+/// there is none anywhere. What the tab draws its statement and its control from.
+export function speech() {
+    restoreModel();
+    return foundSpeechModel();
+}
+
+/// Why there is none, naming every place that was looked in. Worth drawing only
+/// when `speech()` is null.
+export const speechWhy = () => speechRefusal();
+
+/// The checkpoint being fetched, if one is. One at a time, because there is one
+/// model and a second press while it runs means the first one.
+let model = null;
+
+/// Go and get the weights. Returns on the frame it is pressed; `corpus/model.js`
+/// runs the ranges off it.
+///
+/// **The one download this application starts that is not something somebody
+/// pointed at**, so it is a press and nothing else: nothing here fetches a
+/// checkpoint on its own, on a schedule, or because a `Transcribe` was wanted.
+/// 2.5 GB arriving unasked is the thing a tool is remembered for.
+export function getModel() {
+    restoreModel();
+    if (fetchingModel(model)) return modelNote(model);
+    model = startModel({});
+    said = '';
+    needRows = true;
+    return modelNote(model);
+}
+
+/// Stop it. The part-file stays and the next press carries on from it.
+export function stopModelFetch() {
+    stopModel(model);
+    needRows = true;
+}
+
+/// Is a checkpoint being fetched, and how far has it got? `null` when none is.
+export const gettingModel = () => (fetchingModel(model) ? model : null);
+
+/// Point at a checkpoint somewhere else. A dialog, so a press and never a frame.
+///
+/// Answers '' when it was cancelled or when it worked, and the refusal when what
+/// was picked holds none. **A wrong folder is refused rather than remembered**:
+/// the alternative is a press that appears to have done something and has
+/// actually put a dead path in front of every real one.
+export function chooseSpeechModel() {
+    restoreModel();
+    let picked = null;
+    try { picked = showOpenFolderDialog(null, false); }
+    catch (e) { said = String((e && e.message) || e); return said; }
+    if (!picked || !picked.length) return '';
+    if (!useSpeechModel(picked[0])) {
+        useSpeechModel('');
+        said = `no Parakeet checkpoint in ${picked[0]}`;
+        needRows = true;
+        return said;
+    }
+    try { localStorage.setItem(MODEL_KEY, chosenSpeechModel()); }
+    catch (e) { /* no store; it is still good for this session */ }
+    said = '';
+    needRows = true;
+    return '';
+}
+
 // ── transcribing ───────────────────────────────────────────────────────────
 
 /// Read one pulled recording's words. Queued behind any read already running.
@@ -678,6 +788,14 @@ export function inFlight() {
         out.push({ key: `look:${looking}`, kind: 'Looking up', name: looking,
                    note: 'asking Twitch', progress: 0, stop: null });
 
+    // The checkpoint, for the same reason: it belongs to no channel and no row,
+    // it is minutes long, and a panel that answers "what is running" and left
+    // out the 2.5 GB currently arriving would be answering it wrongly.
+    if (fetchingModel(model))
+        out.push({ key: 'model', kind: 'Getting', name: 'speech model',
+                   note: modelNote(model), progress: model.progress || 0,
+                   stop: () => stopModelFetch() });
+
     for (const [id, w] of work) {
         const c = conditionOf(w);
         const pct = `${Math.round((c.progress || 0) * 100)}%`;
@@ -755,6 +873,17 @@ export function tick() {
     // the store rather than to a channel. Its answer goes on disk, so the only
     // thing owed here is to read the disk again when one lands.
     if (local.tick()) settled = true;
+
+    // The checkpoint. Polled rather than waited on, and `pollModel` is what
+    // drops `words.js`'s cached answer on the frame the last file lands — which
+    // is the frame every row's `Transcribe` has to appear on, since nothing else
+    // about those rows changed.
+    if (model) {
+        const was = model.state;
+        pollModel(model);
+        if (fetchingModel(model)) needNumbers = true;
+        else if (was === 'fetching') { model = model.state === 'done' ? null : model; settled = true; }
+    }
 
     for (const [id, w] of [...work]) {
         if (w.phase !== 'running') continue;

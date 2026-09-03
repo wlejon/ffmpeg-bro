@@ -30,14 +30,19 @@
 // make a stale copy the first time a recording was transcribed again.
 
 import { clock } from './format.js';
+import { abs } from './root.js';
 import { parseSrtFrom, emptyStream, growStream, find, spaced, monologues } from './phrase.js';
 import * as loudness from './loudness.js';
 
 const fs = require('fs');
 
-/// The one well-known path. Relative to the working directory, which is where
-/// `build/` is for anybody running either application out of the repository.
-const ROLL = 'build/corpus/find.json';
+/// The one well-known path, against the application rather than against the
+/// shell — see `ui/root.js`, which is where that distinction is written down and
+/// why. It used to be the bare relative string, which meant the directory the
+/// window happened to be started from: a double-clicked application found no
+/// corpus and said so over a full one, and everything it then transcribed went
+/// into a store this could not read.
+const ROLL = abs('build/corpus/find.json');
 
 /// How close two hits have to be to count as one moment. The same default
 /// `tools/supercut.js` uses for `--spacing`, and the same rule — see `spaced`.

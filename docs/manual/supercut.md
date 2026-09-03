@@ -13,11 +13,17 @@ together — and it is separate from `ffmpeg-bro` because that job is a loop
 between three things (find a moment, hear it, put it in the row) and none of the
 workbench's six stages is on that loop.
 
-**Run it from the repository root**, because the corpus it reads and writes is
-under `build/corpus/`, a path relative to the working directory. With no corpus
+**Start it however you like** — a double-click is fine, and where you were
+standing when you did makes no difference. The corpus it reads and writes is
+`build/corpus/` beside the application itself, not beside the shell. With none
 there yet, either type a channel's name into the Recordings tab and it will go
 and get one, or point it at a folder of footage you already have; you can also
 open recordings by hand and cut them.
+
+Nothing in this window needs a terminal: getting the speech model, getting a
+recording, reading its words, finding a moment, cutting it and writing the file
+out are all presses. [`tools/supercut.js`](../../tools/README.md) does the same
+work in batches for anybody who prefers one.
 
 ## What is shared with ffmpeg-bro, and what is not
 
@@ -116,6 +122,26 @@ far down the recording it has got, and the multiplier is how fast. Six hours at
 
 **When one finishes it is searchable immediately.** The Words and Talking tabs
 pick up the new transcript with nothing to press and nothing to restart.
+
+**With no speech model there is no Transcribe.** Reading words needs a Parakeet
+checkpoint on this machine, and three places are looked in for one: a
+`models/parakeet` folder beside the application, and `brosoundml/weights/parakeet`
+in a brosoundml checkout or in bro's own. With none of them holding one, no row
+offers to be read and the line at the top says `no speech model` — a button that
+could only fail is worse than no button.
+
+Two presses stand beside the channel box while that is true, because there are
+two answers. **Get model** fetches the weights, 2.5 GB, into the first of those
+places: it runs beside everything else, says where it has got to on the same line
+and in the running list, and **Stop** leaves what it has so the next press
+carries on from there rather than starting again. It is the only download this
+application ever starts that nobody pointed at, so it happens on that press and
+on nothing else. **Model…** is the other answer: point at a checkpoint you
+already have, anywhere on this disk, and it is remembered. Nothing is copied.
+
+When the last file lands, every row grows its **Transcribe** on that frame.
+`brosoundml/scripts/download-parakeet.sh` writes the same checkpoint from a
+shell, for a machine where that is easier.
 
 **The tick at the left of a row says whether searches run over it.** They all
 start ticked, because they are all being searched. Untick the ones you do not

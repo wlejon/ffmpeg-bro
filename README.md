@@ -71,8 +71,12 @@ The nightly compiles brotensor's GPU backend in, CUDA on Windows and Linux and
 Metal on macOS, which is what makes supercut's transcription quick: about 81x
 realtime on an RTX 4090, so a six-hour recording is roughly five minutes. On a
 CPU it is much slower, which is what a card is for here. The speech model weights
-are not in the zip and are fetched separately; supercut says so, by name, when
-you ask it to transcribe without one.
+are not in the zip: with none on this machine supercut offers no **Transcribe**,
+and **Get model** beside the channel box fetches them, 2.5 GB, resumable and
+stoppable, into a `models/parakeet` folder beside the binaries. **Model…** points
+at a checkpoint you already have instead. Those, plus
+`brosoundml/weights/parakeet` in a brosoundml checkout or in bro's own, are the
+three places looked in.
 
 ## Building
 
@@ -154,11 +158,13 @@ onto the nearest measured transient so the cuts land on the beat rather than nea
 it.
 
 It shares this application's clips, edits, render and **document**, so a `.fbro`
-written in one opens in the other, and none of its interface. Run it from the
-repository root, because the corpus lives under `build/corpus/`. The same corpus
-can be built and searched from the command line with
-[`tools/supercut.js`](tools/README.md), which is what a folder of five hundred
-clips wants. [The manual part](docs/manual/supercut.md) is the detail.
+written in one opens in the other, and none of its interface. Nothing in it needs
+a terminal: the model, the recordings, the transcripts, the search, the cuts and
+the file it writes are all presses, and the corpus lives in `build/corpus/`
+beside the application wherever you start it from. The same corpus can be built
+and searched from the command line with [`tools/supercut.js`](tools/README.md),
+which is what a folder of five hundred clips wants. [The manual
+part](docs/manual/supercut.md) is the detail.
 
 ## Keyboard
 

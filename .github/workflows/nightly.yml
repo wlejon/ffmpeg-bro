@@ -115,11 +115,11 @@ jobs:
       # ── the GPU backend, which is what makes transcription usable ──────────
       #
       # `supercut` offers to transcribe a recording (`supercut/acquire.js`), and
-      # that is Whisper through brosoundml on brotensor. Measured on an RTX
-      # 4090, large-v3 runs at 4.0x realtime, so a six-hour VOD is about ninety
-      # minutes; the same model on the CPU is days. A nightly built without a
-      # backend therefore ships a button nobody can usefully press, which is
-      # what every nightly before this one did.
+      # that is Parakeet through brosoundml on brotensor. Measured on an RTX
+      # 4090 it runs at 81x realtime, so a six-hour VOD is about five minutes;
+      # the same model on the CPU is a different kind of afternoon. A nightly
+      # built without a backend therefore ships a button nobody can usefully
+      # press, which is what every nightly before this one did.
       #
       # **One download per platform, not a CPU one and a GPU one.** brotensor
       # falls back when there is no device, and the runner proves it: there is
@@ -144,10 +144,11 @@ jobs:
       # binary has to rediscover them. Worth moving down rather than copying a
       # third time.
       #
-      # The weights are still not shipped and cannot be: an absent model is
-      # refused by name, and `brosoundml/scripts/download-whisper.sh` is what
-      # puts one on disk. This makes the GPU path exist, not the download bigger
-      # by several gigabytes.
+      # The weights are still not shipped and cannot be: with no checkpoint in
+      # any of the places `corpus/words.js` searches, supercut offers no
+      # `Transcribe` and says so, and `brosoundml/scripts/download-parakeet.sh`
+      # is what puts one on disk. This makes the GPU path exist, not the
+      # download bigger by several gigabytes.
       - name: CUDA toolkit
         if: matrix.gpu == 'cuda'
         uses: Jimver/cuda-toolkit@v0.2.36
@@ -501,7 +502,7 @@ jobs:
 
           Two applications, one build. \`ffmpeg-bro\` is the workbench over ffmpeg's whole model, from capture through the filter graph to the muxer. \`supercut\` is the second one: search hours of transcribed recordings for what somebody said, hear it, and cut it together. They share the render and the document format, so a \`.fbro\` written in either opens in the other. \`ffmpeg-bro-headless\` is the same engine driven by a script.
 
-          Transcription runs on the GPU: CUDA on Windows and Linux, Metal on macOS. There is one download per platform and it runs with or without a card, falling back on its own. The Whisper weights are not in the zip and are fetched separately; supercut says so when you ask it to transcribe. On an RTX 4090 a six-hour recording is about ninety minutes, and on a CPU it is days, so a card is what makes that feature worth using.
+          Transcription runs on the GPU: CUDA on Windows and Linux, Metal on macOS. There is one download per platform and it runs with or without a card, falling back on its own. On an RTX 4090 a six-hour recording is about five minutes, and on a CPU it is far slower, so a card is what makes that feature worth using. The Parakeet weights are not in the zip and are fetched separately: with none on this machine supercut offers no Transcribe, and its \`Model…\` button points at a checkpoint wherever you put one. A \`models/parakeet\` folder beside the binaries is where it looks first.
 
           The Windows binaries are code-signed. The Linux and macOS ones are not, so macOS will quarantine them until you run \`xattr -dr com.apple.quarantine\` on the folder; the README.txt in each zip says so too.
 

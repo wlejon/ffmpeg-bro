@@ -59,27 +59,161 @@
 
 import { vodPaths, loadState, saveState, isPulled, mediaOf } from './store.js';
 import { readSrt, writeSrt } from './srt.js';
-import { ROOT, exists } from './files.js';
+import { ROOT, abs, exists, listDir } from './files.js';
 
 // ── where the model is ─────────────────────────────────────────────────────
+//
+// **One home for this**, which it did not have: `loadSpeech` in
+// `tools/speech.js` derived it from a `root` argument its three callers each
+// passed, so the answer was written down once and reached four ways. It is here
+// because this is the file that reads speech, and `tools/speech.js` now asks.
+//
+// It used to be one expression — `<beside the repo>/brosoundml/weights/parakeet/
+// 0.6b-v3` — and every part of that was a guess this file had no way to check.
+// It named the size, so a checkpoint the download script had put beside it under
+// another name was invisible; it named the *standalone* brosoundml, so a
+// `git clone --recursive` of bro alone, which is the clone the build documents
+// and which puts brosoundml in bro's tree, resolved to nothing; and being one
+// expression it could only ever be wrong, never say where it had looked. What
+// came back was the native loader's refusal about the single path it was handed,
+// minutes later, on a job somebody had queued.
+//
+// So: a **search of named places, in order, for a directory that really holds a
+// checkpoint**, an answer that says which place it was found in, and a refusal
+// that names every place looked. `useSpeechModel` is the way out when it is
+// somewhere else entirely, and it is deliberately the same shape as `useCorpus`
+// in `ui/library.js` — a caller that says where a thing is beats a cleverer
+// guess made here, which is the note `corpus/files.js` ends on.
 
-/// The Parakeet checkpoint, beside this repository rather than inside it.
+/// The three files `loadModel` names one at a time in `spoken_words.cpp`.
 ///
-/// **One home for this path**, which it did not have: `loadSpeech` in
-/// `tools/speech.js` derived it from a `root` argument its three callers each
-/// passed, so the answer was written down once and reached four ways. It is here
-/// because this is the file that reads speech, and `tools/speech.js` now asks.
-///
-/// Beside the repo, the way CLAUDE.md's build instructions expect bro to be —
-/// `brosoundml/scripts/download-parakeet.sh` puts one there. Nothing downloads
-/// it and nothing ships it; an absent one is refused **by name** by the native
-/// side, naming the file it could not find, which is a better answer than
-/// anything this file could check for.
-export const SPEECH_MODEL =
-    `${ROOT.slice(0, ROOT.lastIndexOf('/'))}/brosoundml/weights/parakeet/0.6b-v3`;
+/// Written down so that *found* on this side means what *loads* means on that
+/// one. A directory holding two of them is an interrupted download, and picking
+/// it would be this file choosing the checkpoint the native side then refuses.
+const CHECKPOINT = ['config.json', 'model.safetensors', 'tokenizer.json'];
 
-/// The model directory to read with: what the caller named, or the one above.
-export const speechModel = (over) => String(over || SPEECH_MODEL);
+/// Does this directory hold a checkpoint itself?
+export const isCheckpoint = (dir) =>
+    !!dir && CHECKPOINT.every((f) => exists(`${dir}/${f}`));
+
+/// The one a caller has named, `useSpeechModel`'s. Empty when nobody has.
+let chosen = '';
+
+/// What `foundSpeechModel` last answered, because it is asked per row per
+/// redraw: twenty rows against four places is 240 `existsSync` calls for a
+/// question whose answer changes when somebody presses something. `undefined`
+/// is "not asked yet" and `null` is "looked, and there is none".
+let found;
+
+/// The directory holding this application, whatever shape it was installed in.
+///
+/// `ROOT` is `bro.appDir/..`, which is the repository root in a checkout (the
+/// interfaces are `ui/` and `supercut/`) and `<package>/app` in a packaged tree
+/// (they are `app/ui` and `app/supercut`, `scripts/package-release.sh`). So one
+/// level above it is *beside the repository* in one layout and *the root of the
+/// download* in the other, which is the level both of them keep things next to
+/// the application at. That equivalence was load-bearing and unwritten.
+const BESIDE = ROOT.slice(0, ROOT.lastIndexOf('/')) || ROOT;
+
+/// Where a checkpoint this application fetched itself goes, and the first place
+/// looked in. `corpus/model.js` is the one writer; it is here because this is
+/// the file that says where a model lives and there may be only one such file.
+export const modelHome = () => `${BESIDE}/models/parakeet`;
+
+/// Where a checkpoint is looked for, in order, each with the name of the place
+/// so a refusal can say where it has been.
+///
+/// The last two are the two clones the build accepts and CMake resolves in this
+/// same order (`CMakeLists.txt`: `../<name>` against this project first, bro's
+/// submodule as the fallback), so a tree that builds is a tree this finds. The
+/// first is for a downloaded nightly, which has no brosoundml tree at all and
+/// whose owner should not have to make one to put a model in.
+function places() {
+    const out = [];
+    if (chosen) out.push({ from: 'chosen', path: chosen });
+    out.push({ from: 'beside the application', path: modelHome() },
+             { from: 'a brosoundml checkout', path: `${BESIDE}/brosoundml/weights/parakeet` },
+             { from: "bro's brosoundml", path: `${BESIDE}/bro/brosoundml/weights/parakeet` });
+    return out;
+}
+
+/// The checkpoint at `dir`, or the newest one directly inside it, or ''.
+///
+/// **One level down, because `weights/parakeet` holds a directory per size** and
+/// which sizes are there is the download script's business rather than this
+/// file's — naming `0.6b-v3` here made this repository the second place a
+/// filename was written down, and the one that could not be checked. Reverse
+/// alphabetical so a `-v3` beside a `-v2` wins, which is the only ordering these
+/// names carry.
+export function checkpointIn(dir) {
+    const at = String(dir || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!at) return '';
+    if (isCheckpoint(at)) return at;
+    for (const name of listDir(at).slice().sort().reverse())
+        if (isCheckpoint(`${at}/${name}`)) return `${at}/${name}`;
+    return '';
+}
+
+/// The checkpoint that will be read with, and which of the places it is in.
+/// `null` when there is none anywhere.
+export function foundSpeechModel() {
+    if (found !== undefined) return found;
+    found = null;
+    for (const place of places()) {
+        const at = checkpointIn(place.path);
+        if (at) { found = { from: place.from, path: at }; break; }
+    }
+    return found;
+}
+
+/// Is there one at all? What the supercut window asks before offering to read.
+export const haveSpeechModel = () => !!foundSpeechModel();
+
+/// Look somewhere else, and remember it for this session. '' goes back to the
+/// search.
+///
+/// **Answers about the directory it was given and not about the search**, which
+/// is the difference between a press that can refuse and one that cannot: with a
+/// checkpoint already found somewhere, "is there one now" is true whatever
+/// anybody points at, and a caller asking that question would remember every
+/// wrong folder as a success.
+///
+/// **Persisting it is the caller's**, exactly as `useCorpus` leaves the corpus
+/// path to whoever knows where it is: nothing in `corpus/` may reach a window's
+/// storage, and the command line's answer is an argument rather than a memory.
+export function useSpeechModel(dir) {
+    chosen = dir ? abs(String(dir)).replace(/\/+$/, '') : '';
+    found = undefined;
+    return chosen ? !!checkpointIn(chosen) : haveSpeechModel();
+}
+
+/// What a caller named, or ''.
+export const chosenSpeechModel = () => chosen;
+
+/// Look again on the next ask. The one caller is `corpus/model.js`, on the frame
+/// a download lands: a checkpoint that has just appeared where the search
+/// already looked and found nothing is exactly the case the cache gets wrong,
+/// and it is the frame `Transcribe` has to come back on.
+export function forgetSpeechModel() { found = undefined; }
+
+/// The model directory to read with: what the caller named, or what the search
+/// found, or '' when there is none. A named one is answered **as given** when it
+/// holds no checkpoint, so the native refusal is about the path somebody typed
+/// rather than about a place they never mentioned.
+export const speechModel = (over) =>
+    (over ? (checkpointIn(over) || String(over)) : (foundSpeechModel() || {}).path || '');
+
+/// Why there is nothing to read with, naming every place that was looked in.
+///
+/// One sentence, because it is drawn on a control and printed by a command line
+/// both. **It names no press**, and that is deliberate: the window's answer is
+/// `Get model` and `Model…` standing beside this line, the command line's is its
+/// own `model` verb, and a sentence naming one of them is wrong wherever the
+/// other is reading it. What it owes is where it looked, which neither face can
+/// work out for itself.
+export const speechRefusal = () =>
+    `no Parakeet checkpoint in ${places().map((p) => p.path).join(', ')} — one ` +
+    'can be fetched into the first of those, or point at one somewhere else';
 
 // ── one read, whatever it is over ──────────────────────────────────────────
 
@@ -99,15 +233,28 @@ export const speechModel = (over) => String(over || SPEECH_MODEL);
 /// soundtrack" by name, which is 130 ms of blocking on an 18 GB Matroska for a
 /// refusal the native reader already makes by name a moment later, on its own
 /// thread. A caller who is going to open the file anyway passes `duration`.
+///
+/// **The missing model is refused here even so, and it is not the same kind of
+/// question.** No file is touched to answer it — it is three `existsSync` calls
+/// against a directory, cached — and the refusal it replaces was the native
+/// one's, which names only the single path it was handed and arrives on a
+/// thread, minutes into a job somebody queued. This one names every place looked
+/// and lands on the press.
 export function startRead(source, opts = {}) {
     const job = { source, id: 0, state: 'reading',
                   read: 0, duration: opts.duration || 0,
                   words: 0, total: 0, truncated: false,
                   realtime: 0, elapsed: 0, error: '',
                   began: Date.now(), said: [], result: null };
+    const model = speechModel(opts.model);
+    if (!model) {
+        job.state = 'failed';
+        job.error = speechRefusal();
+        return job;
+    }
     try {
         job.id = bro.ffmpeg.words.reads.start(source, {
-            model: speechModel(opts.model),
+            model,
             device: opts.device || '',
         });
     } catch (e) {

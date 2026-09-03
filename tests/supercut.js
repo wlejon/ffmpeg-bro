@@ -38,6 +38,10 @@ import { ROOT, abs } from '/app/../corpus/files.js';
 // using rather than second copies of them.
 import * as local from '/app/../corpus/local.js';
 import * as store from '/app/../corpus/store.js';
+// Where the speech model is looked for, which is a question about this machine
+// rather than about the corpus — see the section that drives it.
+import * as words from '/app/../corpus/words.js';
+import * as model from '/app/../corpus/model.js';
 
 const fs = require('fs');
 const A = globalThis.__supercut;
@@ -942,6 +946,115 @@ console.log('\nfootage already here');
 
     rmrf(`${ROOT}/build/corpus/${CHAN}`);
     try { fs.unlinkSync(junk); } catch (e) { /* fine */ }
+}
+
+// ── the checkpoint a read needs ────────────────────────────────────────────
+//
+// Where the speech model is looked for, and what the window does when there is
+// none. **No read is started here** — none could be, on a machine with no
+// checkpoint and no card — so what is checked is the resolution and the two
+// faces it turns: a named directory answered as given, a wrong one refused, and
+// the `Model…` press standing exactly where a `Transcribe` cannot.
+//
+// **Both branches of the last part run somewhere**, which is the point of
+// writing it as a branch rather than a skip: a development machine has a
+// checkpoint beside it and takes the first, CI has none and takes the second.
+// An arrangement where one of them is never exercised anywhere is the thing
+// CLAUDE.md's note about `BRO_WITH_SOUNDML=OFF` is about.
+
+console.log('\nthe checkpoint a read needs');
+{
+    // Restored from the workspace before anything here moves it, because
+    // `acquire.js` restores once and would otherwise do it in the middle of
+    // this section and put a remembered directory back over the fixture.
+    A.acquire.speech();
+
+    const before = words.chosenSpeechModel();
+    const fake = `${dir}/fixture-model`;
+    const inner = `${fake}/0.6b-v9`;
+    const rmrf = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); }
+                          catch (e) { /* never existed */ } };
+    rmrf(fake);
+
+    ok(words.speechModel('D:/nowhere/parakeet') === 'D:/nowhere/parakeet',
+       'a directory somebody named is answered as given, so the native refusal ' +
+       'is about their path');
+
+    ok(words.useSpeechModel(dir) === false,
+       'a directory holding no checkpoint is refused rather than remembered');
+    ok(words.speechRefusal().indexOf(dir) >= 0,
+       'and the refusal names it, along with everywhere else it looked');
+    words.useSpeechModel('');
+    ok(words.speechRefusal().split(', ').length >= 3,
+       'three places are searched with nobody choosing one');
+
+    // Two of the three files, which is what an interrupted download leaves.
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(`${inner}/config.json`, '{}', 'utf-8');
+    fs.writeFileSync(`${inner}/tokenizer.json`, '{}', 'utf-8');
+    ok(words.useSpeechModel(fake) === false,
+       'a half-finished download is not a checkpoint on this side either');
+
+    fs.writeFileSync(`${inner}/model.safetensors`, 'x', 'utf-8');
+    ok(words.useSpeechModel(fake) === true,
+       'and the whole three are, one level down from what was pointed at');
+    const found = words.foundSpeechModel();
+    ok(!!found && found.path === inner && found.from === 'chosen',
+       `the size directory is what is read with (${found && found.path})`);
+
+    // Where a fetched one goes: the first place the search looks, which is what
+    // makes `Get model` and the search one arrangement rather than two.
+    // **Nothing is downloaded here** — a suite may not pull 2.5 GB, and the
+    // network half is exercised by hand against the real repository.
+    ok(model.modelDir().indexOf(words.modelHome()) === 0,
+       `a fetched checkpoint lands under the first place looked in (${model.modelDir()})`);
+    const already = model.startModel({ dir: fake });
+    ok(already.state === 'skipped',
+       'and a fetch into a directory that already holds one does nothing');
+
+    // The window's half. `Model…` is drawn only where there is nothing to read
+    // with, which is the same rule the row states by carrying no `Transcribe`.
+    words.useSpeechModel(before);
+    A.results.setTab('recordings');
+    pump(60);
+    if (words.foundSpeechModel())
+        ok(!document.getElementById('f-model'),
+           'with a checkpoint on this machine, nothing asks for one');
+    else
+        ok(!!document.getElementById('f-model'),
+           'with none, the press that mends every row stands beside the channel box');
+
+    rmrf(fake);
+    words.useSpeechModel(before);
+}
+
+// ── where the corpus is ────────────────────────────────────────────────────
+//
+// **Against the application, not against the shell.** The default manifest path
+// was a bare relative string, which `require('fs')` resolves against the process
+// — so a window started from anywhere but the repository root found no corpus
+// and said so, over a `build/corpus` full of recordings, while `corpus/store.js`
+// went on writing to the absolute one. A double-clicked application is exactly
+// that case, and "run it from the repository root" is a thing only a terminal
+// can be told.
+//
+// The assertion is portable because it is a comparison rather than a count: what
+// the library says it has must be what is on the disk **at the application's own
+// path**, which is true on a machine with a corpus and on one without.
+
+console.log('\nwhere the corpus is');
+{
+    library.useCorpus('');       // back to the well-known one
+    library.reload();
+    const there = fs.existsSync(`${ROOT}/build/corpus/find.json`);
+    ok(library.available() === there,
+       `the default corpus is the one beside the application (${there ? 'one here' : 'none here'})`);
+
+    // And back to the fixture, which every section after this one is about.
+    A.results.useCorpus(`${dir}/find.json`);
+    A.results.start();
+    pump(120);
+    ok(A.results.available(), 'and a named one is still read from where it was named');
 }
 
 // ── words on a beat ────────────────────────────────────────────────────────

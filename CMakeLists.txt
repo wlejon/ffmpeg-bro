@@ -58,8 +58,13 @@ endif()
 # `bro.sense` is bro's model-free acoustic sensor bus — level, voice,
 # spectral-flux onset and autocorrelation tonality, one reading per 10 ms frame
 # over a shared PCEN mel front-end. `src/native/sound_marks.cpp` drives the same
-# `brosoundml::SensorHub` over a decoded soundtrack, which is what `Find sounds`
-# on the Sources stage *is*. bro installs that namespace as *unavailable*
+# `brosoundml::SensorHub` over a decoded soundtrack, which is what
+# `bro.ffmpeg.marks` is — the onsets `supercut/rhythm.js` slips a cut onto, so
+# that a piece lands on the transient rather than on the transcript's 0.08 s
+# grid. The same library is `brosoundml::Parakeet` and `brosoundml::Whisper`,
+# which is what `bro.ffmpeg.words` and `bro.ffmpeg.transcribe` read a recording's
+# words with — every transcript the supercut application searches. bro installs
+# that namespace as *unavailable*
 # (`src/js/feature_stubs.cpp`) unless `BRO_WITH_SOUNDML` is on, and it is off in
 # bro's default `app` profile, so a plain `cmake -B build` used to produce a
 # binary in which the call threw "built without BRO_WITH_SOUNDML".
@@ -100,14 +105,16 @@ set(BRO_WITH_SOUNDML ON CACHE BOOL "brosoundml — the sensors behind bro.sense"
 # `option()` leaving an existing cache entry alone is exactly why the line above
 # is not the last word: `-DBRO_WITH_SOUNDML=OFF` on the command line writes the
 # cache entry before this file is read, so `set(... CACHE ...)` stands aside and
-# the flag really is off. Without this refusal that is a *build* — one whose
-# `Find sounds` is gone and whose difference from every other build of this
-# application shows up nowhere until somebody presses something.
+# the flag really is off. Without this refusal that is a *build* — one that
+# cannot read a word of a recording and cannot put a cut on a beat, and whose
+# difference from every other build of this application shows up nowhere until
+# somebody presses something.
 #
 # It used to be a supported configuration, described in six places: a conditional
 # link, an `#if` compiling `sound_marks.cpp` to a refusal, a runtime throw in the
-# binding, `bro.ffmpeg.marks.available()` answering false so Sources drew no
-# control, a second path in two test suites, and paragraphs in README.md,
+# binding, `bro.ffmpeg.marks.available()` answering false so the reader of the
+# day drew no control, a second path in two test suites, and paragraphs in
+# README.md,
 # CLAUDE.md, docs/api.md and two parts of the manual. It was never once
 # configured, built or run — only checked by compiling two translation units with
 # the macro forced off — so what all of that documented was a claim with nothing
@@ -117,15 +124,17 @@ set(BRO_WITH_SOUNDML ON CACHE BOOL "brosoundml — the sensors behind bro.sense"
 #
 # The cost it buys out of is real and small: 27 s of build and 2.7 MB of binary,
 # measured below. Nobody sensibly declines that for an ordinary part of the
-# application, which is what `Find sounds` now is.
+# application, which is what reading a soundtrack now is.
 if(NOT BRO_WITH_SOUNDML)
     message(FATAL_ERROR
         "BRO_WITH_SOUNDML is OFF, and this application does not build without it.\n"
-        "brosoundml is bro's acoustic sensor bus, and src/native/sound_marks.cpp "
-        "drives it directly — it is what `Find sounds` on the Sources stage is, "
-        "and it is an ordinary part of this application rather than an optional "
-        "extra. It costs 27 s of build and 2.7 MB of binary, downloads nothing "
-        "and adds no vcpkg port.\n"
+        "brosoundml is bro's acoustic sensor bus and its speech models, and "
+        "src/native/sound_marks.cpp and src/native/spoken_words.cpp drive them "
+        "directly — they are what bro.ffmpeg.marks and bro.ffmpeg.words are, so "
+        "without them the supercut application cannot read a word of a recording "
+        "or put a cut on a beat. They are an ordinary part of this application "
+        "rather than an optional extra, and cost 27 s of build and 2.7 MB of "
+        "binary, downloading nothing and adding no vcpkg port.\n"
         "Remove -DBRO_WITH_SOUNDML=OFF, or clear it from the cache with "
         "-DBRO_WITH_SOUNDML=ON.")
 endif()

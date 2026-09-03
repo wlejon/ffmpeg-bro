@@ -178,8 +178,10 @@ nothing on your PATH is used or needed.
 docs/manual/README.md is the manual, one part per stage. docs/api.md is the
 bro.ffmpeg surface the headless binary drives.
 
-supercut reads its corpus from build/corpus/find.json, relative to the
-directory you run it from. With none there it can go and get one.
+supercut keeps its corpus in app/build/corpus, beside the application rather
+than beside the shell, so it can be started from anywhere. With none there it
+can go and get one: a channel to look up, a folder of your own footage, and a
+button that fetches the 2.5 GB speech model that reads the words.
 
 Licensed GPL-3.0-or-later; see LICENSE.
 EOF

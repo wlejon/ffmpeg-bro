@@ -245,6 +245,16 @@ function steps() {
 /// the caret away every time a progress bar moved a percent.
 export function refresh() {
     if (tab === 'recordings') results = acquire.list();
+    // **Except the two the machine changes by itself.** A checkpoint landing
+    // takes the model controls away and starting to fetch one turns them into a
+    // Stop, and neither is a press on this row — so what the row *should* be
+    // offering is compared with what is there, and it is rebuilt only when they
+    // disagree. Two lookups against the caret in the channel box, which is what
+    // the paragraph above is protecting.
+    if (tab === 'recordings' &&
+        (!acquire.speech() !== !!document.getElementById('f-model') ||
+         !!acquire.gettingModel() !== !!document.getElementById('f-model-stop')))
+        drawControls();
     drawNote();
     drawRows();
 }
@@ -458,6 +468,49 @@ function drawControls() {
                     on: { click: () => adopt(acquire.addFiles) },
                 }),
             ])];
+            // **Only when there is none**, which is what makes these an
+            // affordance rather than a setting: a machine with a checkpoint
+            // where the search looks never sees them, and one without has the
+            // two presses that mend every row on the list standing beside the
+            // statement saying so. `acquire.js` says why they are here and not
+            // on a row.
+            //
+            // **Two presses, because there are two answers.** The weights are
+            // 2.5 GB and either you have them somewhere already, in which case
+            // pointing at them is instant and copies nothing, or you do not, in
+            // which case somebody has to go and get them — and sending a person
+            // to a shell script for that is what this pair replaces. `Get` is
+            // first because it is the one that works on a machine that has
+            // nothing.
+            if (!acquire.speech()) {
+                const done = (run) => () => {
+                    run();
+                    drawRows();
+                    drawControls();
+                    drawNote();
+                };
+                const pair = [];
+                if (acquire.gettingModel())
+                    // The same rule the row states: while it runs, the button is
+                    // the one that stops it, so a second press means the first.
+                    pair.push(el('button', {
+                        cls: 'text', id: 'f-model-stop', text: 'Stop',
+                        title: 'Stop fetching the speech model',
+                        on: { click: done(acquire.stopModelFetch) },
+                    }));
+                else
+                    pair.push(el('button', {
+                        cls: 'text', id: 'f-model-get', text: 'Get model',
+                        title: 'Fetch the speech model (2.5 GB)',
+                        on: { click: done(acquire.getModel) },
+                    }));
+                pair.push(el('button', {
+                    cls: 'text', id: 'f-model', text: 'Model…',
+                    title: acquire.speechWhy(),
+                    on: { click: done(acquire.chooseSpeechModel) },
+                }));
+                kids.push(el('span', { cls: 'pair' }, pair));
+            }
             // The way back, and only when there is something to come back from.
             // What is *currently* being searched is said by `about()` in the
             // header — a statement that changes — so this is the control and
@@ -785,6 +838,14 @@ function recording(item, listen, put_) {
     let control = null;
     let running = false;
 
+    // **No Transcribe without a checkpoint to read with**, which is the rule two
+    // cases below state about a soundless file, arriving from the other
+    // direction: there the file can never be read, here nothing on this machine
+    // can read it yet. Either way a button that could only fail is worse than no
+    // button, and what mends this one is `Model…` beside the channel box rather
+    // than anything on a row. The statement is on the tab, said once.
+    const canRead = !!acquire.speech();
+
     // What the row *does*, which is the half that needs building. What it
     // *says* is `whereOf` above and is written in place.
     switch (item.state) {
@@ -810,8 +871,9 @@ function recording(item, listen, put_) {
         running = true;
         break;
     case 'pulled':
-        control = act('Transcribe', 'Read every word of it',
-                      () => { acquire.transcribe(id); refresh(); });
+        if (canRead)
+            control = act('Transcribe', 'Read every word of it',
+                          () => { acquire.transcribe(id); refresh(); });
         break;
     case 'queued':
         // **Not a throttle and not a wait to be apologised for**: one read runs
@@ -847,8 +909,8 @@ function recording(item, listen, put_) {
         // The control beside the error is the one that tries again, which is the
         // press that failed.
         control = item.failedAt === 'words'
-            ? act('Transcribe', 'Try reading it again',
-                  () => { acquire.transcribe(id); refresh(); })
+            ? (canRead ? act('Transcribe', 'Try reading it again',
+                             () => { acquire.transcribe(id); refresh(); }) : null)
             : act('Get', 'Try fetching it again', () => { acquire.get(id); refresh(); });
         break;
     default:

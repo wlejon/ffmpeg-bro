@@ -21,38 +21,21 @@
 
 const fs = require('fs');
 
-/// The repository root, with forward slashes.
+/// Where the application's own `build/` is, and a path made absolute against it.
 ///
-/// **`require('fs')` resolves a relative path against the *app* directory**,
-/// not the working directory the command was typed in — so `--out out/x.mp4`
-/// writes to `ui/out/x.mp4` and the printed path and the written path are
-/// different files. Everything here is made absolute against this instead,
-/// which is what makes those two the same again.
+/// **Re-exported rather than derived**, which it was until the same fact turned
+/// out to be needed by a file that may not import this one: `ui/library.js`
+/// reads the manifest and the workbench's `ui/` imports nothing from `corpus/`.
+/// `ui/root.js` is the one home now and its header carries the reasoning —
+/// including the bug that a *relative* path here means the shell's directory and
+/// not the application's, which is what made "run it from the repository root" a
+/// thing anybody had to know.
 ///
-/// **`bro.appDir` differs between the applications and the answer does not**,
-/// which is the one thing to check before importing this into a window: the
-/// workbench's app directory is `ui/`, the supercut application's is
-/// `supercut/`, and the headless runner is given `ui/` — all three are one
-/// directory below the repository root, so `..` is the same place from every
-/// one of them. `supercut/cuts.js` already depends on exactly that to find
-/// `build/cuts/`. If an application is ever installed somewhere that stops
-/// being true, the honest fix is a caller that says where the corpus is — the
-/// way `useCorpus` in `ui/library.js` takes a path — rather than a guess made
-/// here from a directory name.
-///
-/// Guarded, because this runs at import time in a window: a throw here would be
-/// an application that does not start, over a corpus nobody has asked for yet.
-function repoRoot() {
-    try { return fs.realpathSync(`${bro.appDir}/..`).replace(/\\/g, '/'); }
-    catch (e) { return '.'; }
-}
-
-export const ROOT = repoRoot();
-
-/// A path as given if it is already absolute, and against the repo root if not.
-export const abs = (p) =>
-    (/^([a-z]:[\\/]|[\\/])/i.test(String(p)) ? String(p) : `${ROOT}/${p}`)
-        .replace(/\\/g, '/');
+/// Imported and then exported rather than passed straight through, because
+/// every read and write below is written against `abs` and a bare re-export
+/// binds no local name.
+import { ROOT, abs } from '../ui/root.js';
+export { ROOT, abs };
 
 // ── saying how big and how long ────────────────────────────────────────────
 
@@ -96,6 +79,17 @@ export function mkdirp(dir) {
 export const exists = (p) => {
     try { return fs.existsSync(abs(p)); } catch (e) { return false; }
 };
+
+/// What is directly inside a directory, names only, or nothing at all when
+/// there is no such directory.
+///
+/// **Absent and empty answer the same thing**, which is the rule every read here
+/// keeps: a caller looking for something inside a directory has the same work to
+/// do either way, and a throw would make "there is no such folder" a failure of
+/// the application rather than an answer about the disk.
+export function listDir(p) {
+    try { return fs.readdirSync(abs(p)) || []; } catch (e) { return []; }
+}
 
 /// How big a file is, or 0 if it is not there.
 export function sizeOf(p) {
