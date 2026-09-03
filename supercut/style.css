@@ -101,6 +101,14 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 #f-controls input[type=number] { width: 62px; }
 .note { padding: 0 10px 8px; font-size: 11px; }
 
+/* Two pixels, because it is a statement about a search and not a control: it
+   says the list is still filling in and it is never the thing being looked at. */
+#f-progress {
+    height: 2px; margin: 0 10px 8px;
+    background: var(--line); border-radius: 1px; overflow: hidden;
+}
+#f-progress > i { display: block; height: 100%; width: 0; background: var(--accent); }
+
 #f-list { flex: 1 1 auto; overflow-y: auto; padding: 0 6px 10px; }
 
 .row {

@@ -42,6 +42,13 @@ const SHOWN = 300;
 let host = null;          // { addToMix }
 let tab = 'words';
 let results = [];
+/// The search in flight, or null. **A reading rather than an answer**, because a
+/// corpus is somebody's fifty hours and walking it is not something that can
+/// happen between two keystrokes — see the block above `beginSearch` in
+/// `ui/library.js`. `results` is its `hits`, which the library grows and reorders
+/// in place, so the list on the screen is the search so far rather than a copy of
+/// an older one.
+let reading = null;
 let audition = null;      // { item, stopAt, from }
 let loaded = '';          // which recording the shared element holds
 
@@ -56,6 +63,7 @@ export function initFind(opts) {
         head: document.getElementById('find-head'),
         controls: document.getElementById('find-controls'),
         note: document.getElementById('find-note'),
+        progress: document.getElementById('find-progress'),
         list: document.getElementById('find-list'),
         video: document.getElementById('find-video'),
     };
@@ -69,6 +77,8 @@ export function initFind(opts) {
 /// `library.useCorpus`, which is where the reason for it is.
 export function useCorpus(path) {
     library.useCorpus(path);
+    library.cancelSearch(reading);
+    reading = null;
     results = [];
 }
 
@@ -84,8 +94,9 @@ export function setOn(on) {
     nodes.panel.hidden = !on;
     // Nothing may go on playing behind a closed panel: the audition element is
     // a decoder like any other and it is the one thing here that costs while
-    // nobody is looking at it.
-    if (!on) stopAudition();
+    // nobody is looking at it. A search in flight is the second thing — it is a
+    // worker decoding spans of a six-hour file for a list nobody can see.
+    if (!on) { stopAudition(); library.cancelSearch(reading); }
     else {
         library.pick();
         draw();
@@ -94,19 +105,28 @@ export function setOn(on) {
 
 // ── searching ──────────────────────────────────────────────────────────────
 
-function runWords(phrase, loose) {
-    results = library.searchWords(phrase, { loose });
+/// Ask a question of the corpus. Whatever was being asked is abandoned first:
+/// a phrase typed over is a question nobody is waiting for the answer to any
+/// more, and the recording its reading was in the middle of is work thrown away
+/// rather than work finished for nothing.
+function ask(kind, opts) {
+    library.cancelSearch(reading);
+    reading = library.beginSearch(kind, opts);
+    results = reading.hits;
 }
+
+function runWords(phrase, loose) { ask('words', { phrase, loose }); }
 
 /// Every stretch of talking in the corpus at these settings, longest first.
 ///
 /// Separate from the drawing so that a caller can ask the question without the
-/// panel having to be showing an answer to it.
+/// panel having to be showing an answer to it. **Answered in one call**, because
+/// a caller that wanted it a frame at a time would have asked for a reading;
+/// what this costs is what a corpus search costs, and the panel itself no longer
+/// pays it that way.
 export function runsFor(opts = {}) { return library.searchTalking(opts); }
 
-function runTalking(gap, min) {
-    results = library.searchTalking({ gap, min });
-}
+function runTalking(gap, min) { ask('talking', { gap, min }); }
 
 // ── auditioning ────────────────────────────────────────────────────────────
 
@@ -174,6 +194,8 @@ export function currentTab() { return tab; }
 export function setTab(next) {
     if (tab === next) return;
     tab = next;
+    library.cancelSearch(reading);
+    reading = null;
     results = [];
     draw();
 }
@@ -194,7 +216,13 @@ function draw() {
         const here = library.current();
         if (chans.length > 1) {
             const sel = el('select', {
-                on: { change: () => { library.pick(sel.value); results = []; draw(); } },
+                on: { change: () => {
+                    library.pick(sel.value);
+                    library.cancelSearch(reading);
+                    reading = null;
+                    results = [];
+                    draw();
+                } },
             }, chans.map((c) => el('option', {
                 value: c.channel, text: c.channel,
                 selected: here && c.channel === here.channel,
@@ -258,12 +286,40 @@ function rerun() {
     drawRows();
 }
 
+/// How far a search has got, as a bar and as nothing else.
+///
+/// **The bar is what says the window is not broken.** A list that fills in over
+/// two seconds and a list that has finished look the same from the outside, and
+/// the difference matters most on exactly the corpus this is for: fifty hours is
+/// long enough that "nothing says that" arriving early and being wrong is a
+/// tool somebody stops believing. So the bar is on whenever a reading is, and
+/// off — not empty, off — the moment there is nothing left to wait for.
+function drawProgress() {
+    const bar = nodes.progress;
+    if (!bar) return;
+    const on = !!(reading && !reading.done);
+    bar.hidden = !on;
+    if (on) bar.firstChild.style.width = `${library.searchProgress(reading) * 100}%`;
+}
+
 /// What the list is, and what it is not. A statement rather than an
 /// explanation: the numbers change with every search.
 function drawNote() {
     if (!nodes.note) return;
     const base = library.about();
+    drawProgress();
     if (!base) { nodes.note.textContent = ''; return; }
+    if (reading && !reading.done) {
+        // **What it is doing, and what it has so far.** A count that only
+        // appeared at the end would make every long search look like a search
+        // that had found nothing.
+        nodes.note.textContent =
+            (reading.phase === 'sound'
+                ? `listening · ${reading.heard} of ${reading.hearing} stretches`
+                : `searching · ${reading.read} of ${reading.total} recordings`) +
+            ` · ${results.length} so far · ${base}`;
+        return;
+    }
     if (!results.length) {
         nodes.note.textContent = tab === 'words' && phraseValue
             ? `nothing says that · ${base}` : base;
@@ -319,9 +375,37 @@ export function playFound(n) {
     return true;
 }
 
+/// How long a frame may spend walking the corpus. A frame is 16 ms and the
+/// window has a timeline and a viewer to draw in it, so half of one — and a step
+/// always finishes the recording it started, so this is where a step *stops*
+/// rather than a promise about how long one takes.
+const BUDGET_MS = 8;
+
+/// And how long a frame may spend reading the corpus with nothing being asked of
+/// it. Half of the above, because nobody is waiting for it: the whole point of
+/// reading ahead is that the cost lands on frames where it is not noticed, and a
+/// frame that gave a background read the same room as a search somebody typed
+/// would be spending the budget on the wrong one.
+const IDLE_MS = 4;
+
 /// Called from the frame loop, which is what ends an audition where the moment
-/// ends. Cheap enough to run every frame and does nothing at all when the panel
-/// is closed or nothing is playing.
+/// ends and what advances a search. Cheap enough to run every frame and does
+/// nothing at all when the panel is closed, nothing is playing and nothing is
+/// being looked for.
 export function tick() {
     if (audition) watchAudition();
+    // Redrawn only when the reading says something moved: a search whose worker
+    // is still on its first span changes nothing on the screen, and rebuilding
+    // three hundred rows to say so is the cost this whole arrangement exists to
+    // avoid.
+    if (reading && !reading.done) {
+        if (library.stepSearch(reading, BUDGET_MS)) { drawNote(); drawRows(); }
+        return;
+    }
+    // Nothing being looked for: read the corpus instead, so that the calls which
+    // cannot be readings are not the ones that pay for it. **Only while the
+    // panel is open** — a window on the Compose stage with the finder closed has
+    // asked no question and should not be reading a hundred megabytes of
+    // transcript to be ready for one.
+    if (isOn()) library.warmSome(IDLE_MS);
 }

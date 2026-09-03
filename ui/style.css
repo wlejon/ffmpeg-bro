@@ -4042,6 +4042,16 @@ select.when-op { height: 22px; font-size: 11px; }
     margin-bottom: 8px;
 }
 #find-note { font-size: var(--fs-sm); margin-bottom: 6px; }
+/* Two pixels, because it is a statement about a search and not a control: it
+   says the list is still filling in and it is never the thing being looked at. */
+#find-progress {
+    height: 2px;
+    background: var(--line);
+    border-radius: 1px;
+    margin-bottom: 6px;
+    overflow: hidden;
+}
+#find-progress > i { display: block; height: 100%; width: 0; background: var(--accent); }
 #find-list { flex: 1; overflow-y: auto; }
 .find-row {
     display: flex;

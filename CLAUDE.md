@@ -537,6 +537,49 @@ longest monologues, speech energy and delivery pace are tracked natively:
   exclaimed words across transcripts, while appending `!` (e.g. `stop!`) searches
   specifically for yelled/exclaimed instances.
 
+**The acoustic half is a second phase off a worker, and `searchTalking` no longer
+has it.** A span of a six-hour recording is a decode, and two dozen of them is
+1.28 s measured — which is what the press cost with them where they were first
+written, on the thread drawing the window. `ui/loudness.js` reads them off
+`ui/analyze-worker.js` (a second `Worker` over the one script, not a second
+script; the block at its top says why it is not `ui/analysis.js`'s), one span in
+flight so that abandoning a ranking costs one span rather than twenty-four. Two
+things about the answer are load-bearing. **A measurement weights the words
+rather than replacing them** — the pace and the exclamation marks are a real
+signal and a list that reordered itself wholesale the moment a number arrived
+would be moving under a hand for a reason nobody could see. And **`peakRms` has
+three states**: `null` is a span nobody listened to, `0` is one that could not be
+read, and a number is a measurement — a ranking that read the first as silence
+would push every unheard stretch to the bottom and call that an answer, which is
+also why `· loud` appears only on a stretch that was actually heard.
+
+**A corpus search is a *reading*, because a corpus is a hundred hours**
+(`beginSearch`/`stepSearch`/`cancelSearch`/`searchProgress` in `ui/library.js`,
+drawn by `ui/find.js` and `supercut/results.js`). Every call above answers on the
+line it is made, which is right for a script and is a frozen window here: on the
+real corpus (11 recordings, 99.3 h, 787 k words) the *first* search of a session
+was 11.1 s — the transcripts being read — and every keystroke after it 97 ms, and
+the energy press added 1.28 s of decoding on top. So a view asks for a reading
+and the frame loop steps it with an 8 ms budget: **median step 9 ms, p99 57 ms,
+worst 103 ms**, with 19 steps of 1179 over one frame. Five things are
+load-bearing. **The answer is the same answer** — `wordsIn` and `talkingIn` are
+what both paths walk and the partial list is sorted by the rule the finished one
+is sorted by, so a reading is the whole search made visible rather than a second
+search that can disagree with the first. **The parse is stepped too, not just the
+walk**: a step that finished the recording it started was still 1.6 s, so
+`parseSrtFrom`/`growStream` read an `.srt` `CUES` at a time and a stream half
+built is a correct stream of the words in it. **A step always does at least one
+slice** whatever the budget says, because a search a busy machine can starve into
+never finishing is worse than one that blocks. **A frame with nothing to look for
+reads the corpus anyway** (`warmSome`), which is what keeps the calls that
+*cannot* be readings — `supercut/rhythm.js` resolving every word of a score on
+the keystroke that changed it, and `build()` needing the whole answer — off the
+8.9 s: nothing about reading a transcript depends on the question, so the only
+decision was which moment paid. And **an answer is remembered** (`answered`, and
+`forget()` is the one place that drops it), because a score is a dozen searches
+of one corpus asked again on every keystroke and eleven of them have the answer
+they had on the frame before — 85 ms each becomes 0.
+
 **A moment added to the mix is cut out of its recording** (`supercut/cuts.js`).
 `+` puts the clip in the row on the frame it is pressed, against the recording,
 and starts a `bro.ffmpeg.fetch` stream copy of the moment with `PAD` (10 s)

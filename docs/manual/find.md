@@ -59,6 +59,15 @@ it should have been there.
   times for emphasis is one thing that happened, and listing it three times means
   cutting three clips out of the same breath.
 
+**The list fills in while you type.** A thin bar under the note is on while the
+search is still walking the corpus, and the note says which recording it has
+reached and how many hits it has so far. On a hundred hours the whole walk is
+about ten seconds the first time — the transcripts are being read — and a
+fraction of a second after that. Results above the bar are real; results are only
+ever missing from the *end* of the list, so a hit that is already showing is not
+going to move. If a phrase seems to find nothing, check whether the bar is still
+on before believing it.
+
 This is the same search `tools/supercut.js` cuts clips with — one
 implementation, so the list on the screen and the files on disk can never
 describe different sets of moments. That is not a theoretical worry: when the

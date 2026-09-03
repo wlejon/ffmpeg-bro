@@ -58,19 +58,71 @@ export const bare = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
 /// monitor, so a transcript that arrives as cues is one every part of the app
 /// can already use.
 export function parseSrt(text) {
+    return parseSrtFrom(String(text), 0).words;
+}
+
+/// The same read, a fixed number of cues at a time.
+///
+/// **Because a hundred hours of transcript is eleven seconds of parsing**, and
+/// eleven seconds is not something that can happen between two keystrokes: a
+/// caller stepping a search over frames has to be able to stop in the middle of
+/// a file, not merely in the middle of a corpus. Measured on a real corpus of
+/// eleven recordings, one recording is about a second of this — so a step that
+/// finished the file it started was a second of frozen window, which is the same
+/// failure one size down. See `beginSearch` in `ui/library.js`.
+///
+/// Answers `{ words, next }`: the cues read, and where to carry on from. `next`
+/// at the end of the text is what says there is no more.
+///
+/// **Not `split`.** Splitting a five-megabyte transcript makes ninety thousand
+/// substrings before the first one is looked at, which is a large part of the
+/// second this is trying to break up and cannot be stopped in the middle of.
+export function parseSrtFrom(text, from = 0, maxCues = Infinity) {
+    const src = String(text);
+    const out = [];
+    let i = Math.max(0, from);
+    let n = 0;
+    while (i < src.length && n < maxCues) {
+        const edge = blockEnd(src, i);
+        n++;
+        const cue = cueOf(src.slice(i, edge.at));
+        if (cue) out.push(cue);
+        i = edge.next;
+    }
+    return { words: out, next: i };
+}
+
+/// Where the block starting at `from` ends, and where the next one begins.
+///
+/// The separator the whole-file read used is `/\r?\n\r?\n/`, and this finds
+/// exactly that by hand: the optional `\r` before the first newline is not part
+/// of the block, and everything through the second newline is skipped.
+function blockEnd(text, from) {
+    let i = from;
+    for (;;) {
+        const nl = text.indexOf('\n', i);
+        if (nl < 0) return { at: text.length, next: text.length };
+        let j = nl + 1;
+        if (text.charCodeAt(j) === 13) j++;          // \r
+        if (text.charCodeAt(j) === 10) {             // \n — a blank line
+            const at = text.charCodeAt(nl - 1) === 13 ? nl - 1 : nl;
+            return { at, next: j + 1 };
+        }
+        i = nl + 1;
+    }
+}
+
+/// One `.srt` block as a word, or null for anything that is not a cue.
+function cueOf(block) {
     const at = (s) => {
         const m = /(\d+):(\d+):(\d+)[,.](\d+)/.exec(s);
         return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / 1000 : 0;
     };
-    const out = [];
-    for (const block of String(text).split(/\r?\n\r?\n/)) {
-        const lines = block.split(/\r?\n/).filter((l) => l.trim());
-        const arrow = lines.findIndex((l) => l.includes('-->'));
-        if (arrow < 0 || arrow + 1 >= lines.length) continue;
-        const [a, b] = lines[arrow].split('-->');
-        out.push({ from: at(a), to: at(b), text: lines.slice(arrow + 1).join(' ') });
-    }
-    return out;
+    const lines = block.split(/\r?\n/).filter((l) => l.trim());
+    const arrow = lines.findIndex((l) => l.includes('-->'));
+    if (arrow < 0 || arrow + 1 >= lines.length) return null;
+    const [a, b] = lines[arrow].split('-->');
+    return { from: at(a), to: at(b), text: lines.slice(arrow + 1).join(' ') };
 }
 
 /// The words flattened into one searchable stream.
@@ -81,24 +133,44 @@ export function parseSrt(text) {
 /// far more in the panel than at the command line: somebody typing into a search
 /// box asks a new phrase of the same ninety thousand words on every keystroke.
 export function streamOf(words) {
-    let text = '';
-    const startOf = [];      // char offset each word begins at
-    const endOf = [];        // char offset one past each word's last character
-    const wordAt = [];       // for each char, the word it came from
+    return growStream(emptyStream(), words);
+}
+
+/// A stream with nothing in it yet, for a caller filling one in over frames.
+export function emptyStream() {
+    // The boundary rule needs membership rather than order, and it is asked once
+    // per candidate match. Held here rather than built in `find` because the
+    // panel asks a *new phrase of the same stream* on every keystroke, and
+    // rebuilding two ninety-thousand-entry sets per keystroke is the whole cost
+    // of the search several times over.
+    return { words: [], text: '', startOf: [], endOf: [], wordAt: [],
+             startSet: new Set(), endSet: new Set() };
+}
+
+/// Add more words to a stream, in place.
+///
+/// **A stream is grown rather than built** because the file it is read from is
+/// read a piece at a time — see `parseSrtFrom` for why. The arithmetic is
+/// unchanged: every offset is against the flattened text as it stands, and text
+/// only ever grows at the end, so a stream half built is a correct stream of the
+/// words that are in it. That is what lets a search run over a corpus that is
+/// still being read, and it is the reason the *first* search of a session is no
+/// longer eleven seconds of nothing.
+export function growStream(stream, words) {
+    let text = stream.text;
     for (let i = 0; i < words.length; i++) {
         const piece = bare(words[i].text);
-        startOf.push(text.length);
-        for (let c = 0; c < piece.length; c++) wordAt.push(i);
+        const at = stream.words.length;
+        stream.words.push(words[i]);
+        stream.startOf.push(text.length);
+        stream.startSet.add(text.length);
+        for (let c = 0; c < piece.length; c++) stream.wordAt.push(at);
         text += piece;
-        endOf.push(text.length);
+        stream.endOf.push(text.length);
+        stream.endSet.add(text.length);
     }
-    // The boundary rule needs membership rather than order, and it is asked once
-    // per candidate match. Built here rather than in `find` because the panel
-    // asks a *new phrase of the same stream* on every keystroke, and rebuilding
-    // two ninety-thousand-entry sets per keystroke is the whole cost of the
-    // search several times over.
-    return { words, text, startOf, endOf, wordAt,
-             startSet: new Set(startOf), endSet: new Set(endOf) };
+    stream.text = text;
+    return stream;
 }
 
 /// Every place a phrase is said, in time order.

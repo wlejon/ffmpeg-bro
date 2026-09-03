@@ -1173,4 +1173,132 @@ console.log('\ntracking higher energy speaking');
     ok(document.getElementById('f-min-pace') !== null, 'min pace control appears in activated mode');
 }
 
+// ── a search that answers over frames ──────────────────────────────────────
+//
+// The corpus this application is actually pointed at is a hundred hours, and
+// every call that answered on the line it was made froze the window for as long
+// as it took: 11 s for the first search of a session, which is the read of the
+// transcripts, and ~100 ms for every keystroke after it. What is asserted here
+// is that the stepped search is *the same search* — that a reading walked to the
+// end finds exactly what the one-call version finds — because a progress bar
+// over a different set of answers would be worse than the freeze.
+
+console.log('\na search that answers over frames');
+{
+    A.results.setTab('recordings');
+    A.results.useCorpus(`${dir}/find.json`);
+    library.pick('turkey');
+
+    // Reading an `.srt` a slice at a time is what breaks up the freeze, and it
+    // has to agree to the word with reading it whole.
+    const srt = fs.readFileSync(`${dir}/words.srt`, 'utf-8');
+    const whole = phrase.parseSrt(srt);
+    const sliced = [];
+    let at = 0;
+    for (let n = 0; n < 500 && at < srt.length; n++) {
+        const got = phrase.parseSrtFrom(srt, at, 3);
+        sliced.push(...got.words);
+        at = got.next;
+    }
+    ok(sliced.length === whole.length,
+       `sliced three cues at a time reads the same count (${sliced.length})`);
+    ok(sliced.every((w, i) => w.text === whole[i].text &&
+                    Math.abs(w.from - whole[i].from) < 1e-9),
+       'and the same words at the same times');
+
+    /// Walk a reading to the end, pumping frames so that anything read off a
+    /// worker can land. Bounded, because a reading that never finishes is the
+    /// failure this is checking for.
+    const settle = (r) => {
+        for (let i = 0; i < 400 && !r.done; i++) { library.stepSearch(r, 8); pump(20); }
+        return r;
+    };
+
+    // **An answer already given is handed back rather than walked again**, which
+    // is what keeps a score — a dozen searches of one corpus, asked again on
+    // every keystroke — off the corpus. Asserted as `done` on the frame it
+    // begins, because the weaker "it agrees once it finishes" passed for a
+    // version in which the key written and the key read were different strings.
+    const once = library.searchWords('you cross');
+    const stepped = library.beginSearch('words', { phrase: 'you cross' });
+    ok(stepped.done, 'a reading of a phrase already answered is finished on the frame it began');
+    ok(stepped.hits.length === once.length && once.length === 2,
+       `and carries the same hits (${stepped.hits.length})`);
+    // The other direction: what a reading finished is what the one-call search
+    // then answers without walking anything.
+    library.useCorpus(`${dir}/find.json`);
+    library.pick('turkey');
+    const walked = library.beginSearch('words', { phrase: 'crossing' });
+    for (let i = 0; i < 200 && !walked.done; i++) library.stepSearch(walked, 8);
+    ok(library.beginSearch('words', { phrase: 'crossing' }).done,
+       'and a reading that finished is an answer the next one starts from');
+
+    // A phrase nothing has asked before, so the walk is real.
+    const fresh = library.beginSearch('words', { phrase: 'once more' });
+    ok(!fresh.done, 'a reading of a new phrase has not finished on the frame it began');
+    ok(library.searchProgress(fresh) < 1, 'and says so');
+    settle(fresh);
+    ok(fresh.done, 'stepping it finishes it');
+    ok(library.searchProgress(fresh) === 1, 'and the progress is then whole');
+    ok(fresh.hits.length === library.searchWords('once more').length && fresh.hits.length === 1,
+       `and it finds exactly what the one-call search finds (${fresh.hits.length})`);
+
+    // Abandoning one is safe and is what a keystroke does to the search before
+    // it. What must not happen is a cancelled reading going on reading.
+    const dropped = library.beginSearch('talking', { gap: 2, min: 5 });
+    library.cancelSearch(dropped);
+    ok(dropped.done, 'a cancelled reading is finished, whatever it had left');
+
+    // The acoustic half needs something the energy modes will actually list, and
+    // the corpus above is a calm one on purpose — so this is a second fixture of
+    // its own rather than exclamation marks bolted onto the words every
+    // assertion above counts.
+    const YELLED = [
+        ['what', 0.0, 0.3], ['are', 0.4, 0.6], ['you', 0.7, 0.9],
+        ['DOING!', 1.0, 1.5], ['stop!', 1.6, 2.0], ['right', 2.1, 2.4],
+        ['NOW!', 2.5, 3.0], ['i', 3.1, 3.3], ['cannot', 3.4, 3.8],
+        ['believe', 3.9, 4.4], ['this', 4.5, 4.8], ['happened', 4.9, 5.6],
+    ];
+    fs.writeFileSync(`${dir}/yelled.srt`,
+        YELLED.map((w, i) => `${i + 1}\n${stamp(w[1])} --> ${stamp(w[2])}\n${w[0]}\n`).join('\n'),
+        'utf-8');
+    fs.writeFileSync(`${dir}/yelled-chan.json`, JSON.stringify({
+        channel: 'yelled', built: new Date().toISOString(),
+        vods: [{ id: 'y1', title: 'a loud fixture', publishedAt: '2026-01-02',
+                 seconds: 60, srt: `${dir}/yelled.srt`, media, words: YELLED.length }],
+    }), 'utf-8');
+    fs.writeFileSync(`${dir}/yelled.json`, JSON.stringify({
+        channels: [{ channel: 'yelled', manifest: `${dir}/yelled-chan.json`,
+                     vods: 1, words: YELLED.length, built: '' }],
+    }), 'utf-8');
+    library.useCorpus(`${dir}/yelled.json`);
+    library.pick('yelled');
+
+    // **A stretch that was listened to carries a number and one that was not
+    // carries null**, which is the distinction the ranking is built on — an
+    // unread span is not a silent one. Skipped where there is no worker to read
+    // with, which is a real configuration and not a failure.
+    const loud = library.beginSearch('talking', { gap: 2, min: 5, mode: 'yelling' });
+    settle(loud);
+    ok(loud.done, 'an energy search finishes');
+    ok(loud.hits.length >= 1, `and finds the stretch of talking (${loud.hits.length})`);
+    if (typeof Worker === 'function') {
+        ok(loud.hits[0].peakRms !== null,
+           `the top stretch was listened to (rms ${loud.hits[0].peakRms})`);
+        ok(loud.heard === loud.hearing && loud.hearing >= 1,
+           `every span it meant to hear was heard (${loud.heard} of ${loud.hearing})`);
+    } else {
+        ok(loud.hits[0].peakRms === null,
+           'with no worker nothing is listened to, and the words still rank it');
+    }
+
+    // Reading the corpus while nothing is being asked of it, which is what keeps
+    // the calls that cannot be readings — a score resolving — off the 8.9 s.
+    library.useCorpus(`${dir}/find.json`);
+    library.pick('turkey');
+    ok(library.warmSome(8) === true, 'there is a corpus to read before anything asks');
+    for (let i = 0; i < 200 && library.warmSome(8); i++) { /* read it */ }
+    ok(library.warmSome(8) === false, 'and once it is read there is nothing left to do');
+}
+
 console.log(`\n${checks} checks passed`);

@@ -346,10 +346,23 @@ The mode selector offers three distinct ways to audition and rank speech:
 |---|---|
 | **Longest stretches** | Longest unbroken monologues first |
 | **Activated / fast pace** | Fast delivery and high cadence (ranked by words per second, with configurable `min pace` filter) |
-| **Yelling / high energy** | Shouted outbursts, high vocal intensity, and exclamations (ranked by combined energy score and acoustic peak volume) |
+| **Yelling / high energy** | Shouted outbursts, high vocal intensity, and exclamations (ranked first by delivery, then re-ranked by what the sound actually measures) |
 
 Each row displays the duration, word count, speaking cadence (`words/s`), and badges
 for fast delivery (`fast`), exclamation count (`!`), and acoustic loudness (`loud`).
+
+**Yelling answers twice.** The list arrives on what the words say — pace,
+exclamation marks, words written in capitals — and then the top two dozen
+stretches are *listened to* and the order settles, which is when `loud` appears
+on the ones that earn it. The bar under the note says which half is happening:
+`searching · 3 of 11 recordings`, then `listening · 7 of 24 stretches`. Nothing
+below the top two dozen is listened to, so the absence of `loud` further down the
+list means nobody measured it rather than that it was quiet.
+
+**Every search fills in rather than blocking.** On a hundred-hour corpus the
+first search of a session is about ten seconds of reading the transcripts and the
+window stays usable throughout; searches after it are a fraction of a second. The
+list is complete when the bar goes away.
 
 In the **Words** tab:
 - Searching for `!` matches every exclamation or shouted word in the corpus.

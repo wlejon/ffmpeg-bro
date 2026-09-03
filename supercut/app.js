@@ -48,6 +48,7 @@ import * as documentModel from '../ui/document.js';
 import { settings } from '../ui/export/state.js';
 import { buildSpec } from '../ui/export/spec.js';
 import { tickAnalysis, readCount, useWorker } from '../ui/analysis.js';
+import * as loudness from '../ui/loudness.js';
 import { transport } from '../ui/transport.js';
 import { clock } from '../ui/format.js';
 import { byId, setText } from '../ui/dom.js';
@@ -65,6 +66,11 @@ import * as inflight from './inflight.js';
 // concatenation, so this is a path out of `supercut/` and into the one home that
 // script has. Said before the first analysis, which is what builds it.
 useWorker('../ui/analyze-worker.js');
+// The energy search reads spans of a recording off the *same* script, for the
+// same reason and with the same path — see the block at the top of
+// ui/loudness.js for why it is a second worker over one script rather than a
+// second script.
+loudness.useWorker('../ui/analyze-worker.js');
 
 const nodes = {
     about: byId('about'), doc: byId('doc'),
@@ -72,7 +78,7 @@ const nodes = {
     flight: byId('btn-flight'), flightList: byId('flight'),
     chanWrap: byId('chan-wrap'),
     tabs: byId('f-tabs'), controls: byId('f-controls'),
-    note: byId('f-note'), list: byId('f-list'),
+    note: byId('f-note'), progress: byId('f-progress'), list: byId('f-list'),
     stage: byId('stage'), stageNote: byId('stage-note'),
     home: byId('t-home'), play: byId('t-play'), end: byId('t-end'),
     time: byId('t-time'), what: byId('t-what'), mute: byId('t-mute'),
@@ -353,6 +359,7 @@ mix.initMix({
 
 results.initResults({
     tabs: nodes.tabs, controls: nodes.controls, note: nodes.note,
+    progress: nodes.progress,
     list: nodes.list, channel: nodes.chanWrap, about: nodes.about,
 }, {
     audition: (path, from, until) => { screen.audition(path, from, until); drawBar(); },
@@ -544,6 +551,13 @@ function frame() {
     const moved = acquire.tick();
     if (moved === 'rows') results.refresh();
     else if (moved === 'numbers') results.repaint();
+
+    // The search itself, a recording at a time. **On the frame loop for the
+    // reason the reader above it is**: a corpus is fifty hours and walking it
+    // between two keystrokes is the frozen window this arrangement exists to
+    // remove. It draws its own list when it has something new and nothing at all
+    // when it has not — see `results.tick`.
+    results.tick();
 
     // The score's two jobs: the inputs a build is waiting on, and the onset read
     // that puts each piece on the transient nearest its word. A slip moves no

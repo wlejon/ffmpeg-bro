@@ -52,6 +52,17 @@ let nodes = null;
 let hooks = {};
 let tab = 'recordings';
 let results = [];
+/// The search in flight, or null.
+///
+/// **A corpus is fifty hours and a keystroke is not long enough to walk it** —
+/// the block above `beginSearch` in `ui/library.js` has the measurements. So the
+/// two tabs that ask the corpus a question ask for a reading and `tick()`
+/// advances it; `results` is that reading's `hits`, which the library grows and
+/// reorders in place, so what is drawn is the search so far rather than a copy
+/// of an older answer. The other two tabs answer instantly and are not readings:
+/// the inventory is a listing, and the score is arithmetic over answers the
+/// library has already given.
+let reading = null;
 
 /// The nodes on each recording row that carry a number, by VOD id — what
 /// `repaint()` writes into. Rebuilt with the rows and cleared with them, so it
@@ -96,6 +107,8 @@ export function available() { return library.available(); }
 /// store kept somewhere else. See `library.useCorpus`.
 export function useCorpus(path) {
     library.useCorpus(path);
+    library.cancelSearch(reading);
+    reading = null;
     results = [];
 }
 
@@ -120,23 +133,67 @@ export function found() { return results.slice(); }
 export function runsFor(opts) { return library.searchTalking(opts); }
 
 function search() {
+    // Whatever was being looked for is abandoned first: a phrase typed over is a
+    // question nobody is waiting for an answer to, and the recording its reading
+    // was in the middle of is work thrown away rather than work finished for
+    // nothing.
+    library.cancelSearch(reading);
+    reading = null;
     // **The first tab is the inventory and not `library.recordings()`.** The
     // manifest knows about a recording that has words; the tab is about every
     // recording the channel has, including the five nobody has fetched. The
     // inventory is a superset of the manifest and its rows are the same shape,
     // which is why one list still draws all three tabs.
-    results = tab === 'recordings' ? acquire.list()
-            : tab === 'words'      ? library.searchWords(phrase, { loose })
-            : tab === 'rhythm'     ? steps()
-                                   : library.searchTalking({
-                                       gap,
-                                       min: least,
-                                       mode: talkingMode,
-                                       minRate: talkingMode === 'activated' ? minPace : 0,
-                                       acoustic: true,
-                                   });
+    if (tab === 'recordings') results = acquire.list();
+    else if (tab === 'rhythm') results = steps();
+    else {
+        reading = tab === 'words'
+            ? library.beginSearch('words', { phrase, loose })
+            : library.beginSearch('talking', {
+                gap,
+                min: least,
+                mode: talkingMode,
+                minRate: talkingMode === 'activated' ? minPace : 0,
+            });
+        results = reading.hits;
+    }
     drawNote();
     drawRows();
+}
+
+/// How long a frame may spend walking the corpus — `ui/find.js`'s number and its
+/// reason. This window has less to draw than the workbench does and could afford
+/// more; it is the same number anyway, because the two are the same search and a
+/// list that filled in at two different speeds in two windows would be one of
+/// them looking broken.
+const BUDGET_MS = 8;
+
+/// And how long a frame may spend reading the corpus with nothing being asked of
+/// it — `ui/find.js`'s number and its reason: nobody is waiting for a read
+/// nobody asked for, and it must not take the room a search somebody typed
+/// would use.
+const IDLE_MS = 4;
+
+/// Advance the search, and say whether the list moved. Called from the frame
+/// loop, which is the only thing that advances a reading — see `search`.
+///
+/// **Redrawn only when something changed.** A reading whose worker is still on
+/// its first span moves nothing on the screen, and rebuilding three hundred rows
+/// to say so is exactly the cost `repaint()` exists to refuse one storey along.
+export function tick() {
+    if (!reading || reading.done) {
+        // Nothing being looked for: read the corpus instead, so that the calls
+        // which cannot be readings do not pay for it. The score is the one that
+        // matters here — `supercut/rhythm.js` resolves every word of it through
+        // `searchWords` on the keystroke that changed it, and what made that
+        // slow was the first read of the transcripts and never the search.
+        library.warmSome(IDLE_MS);
+        return false;
+    }
+    if (!library.stepSearch(reading, BUDGET_MS)) return false;
+    drawNote();
+    drawRows();
+    return true;
 }
 
 /// The score, resolved, as rows this list can already draw.
@@ -523,9 +580,26 @@ function drawControls() {
 
 /// What the list is, and what it is not. A statement rather than an explanation:
 /// the numbers change with every search.
+/// How far a search has got, as a bar and as nothing else.
+///
+/// **The bar is what says the window is not broken.** A list that fills in over
+/// two seconds and a list that has finished look the same from the outside, and
+/// on the corpus this application is for — hours of somebody talking, not
+/// minutes — that is the difference between a tool that is thinking and a tool
+/// that is wrong. So it is on whenever a reading is, and off, not empty, the
+/// moment there is nothing left to wait for.
+function drawProgress() {
+    const bar = nodes && nodes.progress;
+    if (!bar) return;
+    const on = !!(reading && !reading.done);
+    bar.hidden = !on;
+    if (on) bar.firstChild.style.width = `${library.searchProgress(reading) * 100}%`;
+}
+
 function drawNote() {
     const base = library.about();
     if (nodes.about) setText(nodes.about, base);
+    drawProgress();
     // **The first tab says its own line**, because it is the one that has
     // something to report before there is a corpus at all — what a look-up is
     // doing, what it refused, and how much of the channel is actually here.
@@ -563,6 +637,18 @@ function drawNote() {
         // The other two questions cannot be asked of a corpus that does not
         // exist, and saying so is not the same as saying nothing.
         setText(nodes.note, 'no corpus');
+        return;
+    }
+    if (reading && !reading.done) {
+        // **What it is doing, and what it has so far.** A count that appeared
+        // only at the end would make every long search look like a search that
+        // had found nothing — which on fifty hours is the reading somebody
+        // takes, and then stops trusting the tool.
+        setText(nodes.note,
+            (reading.phase === 'sound'
+                ? `listening · ${reading.heard} of ${reading.hearing} stretches`
+                : `searching · ${reading.read} of ${reading.total} recordings`) +
+            ` · ${results.length} so far`);
         return;
     }
     if (!results.length) {
