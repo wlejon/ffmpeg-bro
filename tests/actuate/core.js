@@ -42,6 +42,9 @@ export function rectOf(target) {
 }
 
 export function centerOf(target) {
+    if (target && typeof target === 'object' && 'x' in target && 'y' in target && !target.nodeType) {
+        return { x: target.x, y: target.y };
+    }
     const r = rectOf(target);
     return {
         x: r.x + r.width / 2,
@@ -50,14 +53,20 @@ export function centerOf(target) {
 }
 
 export function click(target, opts = {}) {
-    const node = el(target);
-    globalThis.assert(node, 'click target not found: ' + target);
-    const rect = node.getBoundingClientRect();
-    globalThis.assert(rect.width > 0 && rect.height > 0, 'click target has zero size: ' + target);
-    const center = {
-        x: rect.x + rect.width / 2,
-        y: rect.y + rect.height / 2
-    };
+    let center;
+    let node = null;
+    if (target && typeof target === 'object' && 'x' in target && 'y' in target && !target.nodeType) {
+        center = { x: target.x, y: target.y };
+    } else {
+        node = el(target);
+        globalThis.assert(node, 'click target not found: ' + target);
+        const rect = node.getBoundingClientRect();
+        globalThis.assert(rect.width > 0 && rect.height > 0, 'click target has zero size: ' + target);
+        center = {
+            x: rect.x + (opts.x !== undefined ? opts.x : rect.width / 2),
+            y: rect.y + (opts.y !== undefined ? opts.y : rect.height / 2)
+        };
+    }
     const btn = opts.button !== undefined ? opts.button : 0;
     globalThis.mouseMove(center.x, center.y);
     globalThis.mouseDown(center.x, center.y, btn);
@@ -67,8 +76,18 @@ export function click(target, opts = {}) {
     return node;
 }
 
-export function drag(fromTarget, toTargetOrOffset, steps = 10) {
-    const start = centerOf(fromTarget);
+export function drag(fromTarget, toTargetOrOffset, steps = 10, opts = {}) {
+    let start;
+    if (fromTarget && typeof fromTarget === 'object' && 'x' in fromTarget && 'y' in fromTarget && !fromTarget.nodeType) {
+        start = { x: fromTarget.x, y: fromTarget.y };
+    } else {
+        const node = el(fromTarget);
+        const rect = node.getBoundingClientRect();
+        start = {
+            x: rect.x + (opts.fromX !== undefined ? opts.fromX : rect.width / 2),
+            y: rect.y + (opts.fromY !== undefined ? opts.fromY : rect.height / 2)
+        };
+    }
     let end;
     if (toTargetOrOffset && typeof toTargetOrOffset === 'object' && ('dx' in toTargetOrOffset || 'dy' in toTargetOrOffset)) {
         end = {

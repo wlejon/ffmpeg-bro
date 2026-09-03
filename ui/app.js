@@ -2166,12 +2166,12 @@ syncVolume();
 function setCropMode(on) {
     cropMode = on;
     document.body.classList.toggle('cropping', on);
+    const btn = el('btn-crop');
+    if (btn) btn.classList.toggle('on', on);
     updateCropUI();
     if (project.selected) showTransform(project.selected);
     flash(on ? 'Crop handles on' : 'Crop handles off');
 }
-
-// ── zoom controls ──────────────────────────────────────────────────────────
 
 el('btn-zoom-in').addEventListener('click', () => timeline.zoomBy(1 / 1.5, transport.t));
 el('btn-zoom-out').addEventListener('click', () => timeline.zoomBy(1.5, transport.t));
@@ -2180,6 +2180,7 @@ for (const b of document.querySelectorAll('[data-edit-mode]'))
     b.addEventListener('click', () => timeline.setEditMode(b.dataset.editMode));
 
 el('btn-split').addEventListener('click', splitAtPlayhead);
+el('btn-crop').addEventListener('click', () => setCropMode(!cropMode));
 el('btn-grid').addEventListener('click',
     () => setLayout(project.layout === 'grid' ? 'stack' : 'grid'));
 el('btn-output').addEventListener('click', () => setOutputPreview(!output.isOn()));

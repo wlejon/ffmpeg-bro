@@ -71,6 +71,7 @@ body { display: flex; flex-direction: column; }
    and to look at, one panel at a time, rather than as a side effect of fixing a
    drawer. */
 .hidden { display: none; }
+[hidden] { display: none; }
 
 /* ── top bar ─────────────────────────────────────────────────────────── */
 
@@ -398,6 +399,7 @@ button.st.on .st-key {
     position: absolute;
     border: 1px solid var(--accent);
     pointer-events: none;
+    z-index: 50;
 }
 #cropbox .ch {
     position: absolute;
@@ -4024,6 +4026,7 @@ select.when-op { height: 22px; font-size: 11px; }
     z-index: 940;
     padding: 8px;
 }
+#find[hidden], #find.hidden { display: none; }
 #find-head { display: flex; align-items: center; margin-bottom: 8px; }
 #find-controls { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 #find-controls input[type="text"] { flex: 1; }
