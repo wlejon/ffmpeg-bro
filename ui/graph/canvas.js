@@ -275,7 +275,11 @@ export function socketAt(placed, px, py, view, tol = 14) {
                 const d = dx * dx + dy * dy;
                 if (d >= bestD) continue;
                 bestD = d;
-                best = { box, node: box.node, dir, port, at: p };
+                const n = box.node || {};
+                const stream = dir === 'in'
+                    ? ((n.ins && n.ins[port] && n.ins[port].stream) || n.stream || '')
+                    : ((n.outs && n.outs[port] && n.outs[port].stream) || n.stream || '');
+                best = { box, node: box.node, dir, port, at: p, stream };
             }
         }
     }

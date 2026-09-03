@@ -46,6 +46,7 @@ import { print } from './print.js';
 import { layout, NODE_W } from './layout.js';
 import * as canvas from './canvas.js';
 import * as cards from './card.js';
+import { padTakes, streamWord } from './model.js';
 import { padsOf as filterPads } from './filters.js';
 import { inputs as documentInputs, streamKinds } from '../inputs.js';
 import * as overlay from './overlay.js';
@@ -799,13 +800,21 @@ function startWire(key, dir, port, stream, e) {
     paint();
 }
 
+function canConnect(fromDir, fromStream, toDir, toStream) {
+    const carried = fromDir === 'out' ? fromStream : toStream;
+    const wanted = fromDir === 'in' ? fromStream : toStream;
+    if (!carried || !wanted) return true;
+    return padTakes(carried, wanted);
+}
+
 function dragWire(e) {
     wiring.x = e.clientX;
     wiring.y = e.clientY;
     const rect = refs.viewport.getBoundingClientRect();
     const hit = canvas.socketAt(placed, e.clientX - rect.left, e.clientY - rect.top, view());
-    wiring.over = hit && hit.dir !== wiring.dir && panel.keyOf(hit.node) !== wiring.key
-                ? hit : null;
+    const valid = hit && hit.dir !== wiring.dir && panel.keyOf(hit.node) !== wiring.key &&
+                  canConnect(wiring.dir, wiring.stream, hit.dir, hit.stream);
+    wiring.over = valid ? hit : null;
     paint();
 }
 
@@ -835,8 +844,18 @@ function endWire(e) {
         selectedWire = `${into.key}#${into.port}`;
         return drawGraph();
     }
-    if (!moved || !refs.viewport) return paint();
     const rect = refs.viewport.getBoundingClientRect();
+    const hit = canvas.socketAt(placed, e.clientX - rect.left, e.clientY - rect.top, view());
+    if (hit && hit.dir !== w.dir && panel.keyOf(hit.node) !== w.key) {
+        if (!canConnect(w.dir, w.stream, hit.dir, hit.stream)) {
+            const carried = w.dir === 'out' ? w.stream : hit.stream;
+            const wanted = w.dir === 'in' ? w.stream : hit.stream;
+            if (outer.flash)
+                outer.flash(`Cannot connect ${streamWord(carried)} to a ${streamWord(wanted)} socket`);
+            return paint();
+        }
+    }
+    if (!moved || !refs.viewport) return paint();
     const at = { x: (e.clientX - rect.left - panX) / zoom, y: (e.clientY - rect.top - panY) / zoom };
     // Dropped on nothing: what can go here? The palette is filtered to filters
     // with a pad of the right stream on the opposite side, which is the same

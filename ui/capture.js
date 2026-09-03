@@ -1887,6 +1887,9 @@ function alsoRows() {
             'and only a recording has it: a second muxer open beside the first, of another ' +
             'end of the same graph. The cameras into one file, a cropped copy into the ' +
             'next — one reading of the devices, because there is no second one to have.' })));
+        rows.push(row('', div('btns', [el('button', {
+            cls: 'tiny', 'data-f': 'capalso-add', text: '+ File', on: { click: addAlso },
+        })])));
         return rows;
     }
 
@@ -2181,8 +2184,8 @@ export function drawRecording() {
         put(refs.note, () => {
             if (recording)
                 return [el('div', {
-                    cls: 'cap-note dim', text: 'Previews are dark while recording.',
-                    title: 'Previews disabled while recording',
+                    cls: 'cap-note dim', text: 'Previews are dark while recording (hardware devices in exclusive use).',
+                    title: 'Hardware capture devices are opened exclusively by the recording encoder.',
                 })];
             return [];
         });

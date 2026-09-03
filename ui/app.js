@@ -341,6 +341,7 @@ initGraphView({
     zoomOut: el('gr-zoom-out'),
     zoomLabel: el('gr-zoom'),
 }, {
+    flash,
     // A node preview is the least important render in the application, so it
     // waits for anything that wants the host's one job slot.
     busy: () => !exporter.canLeave() || exporter.isOpen(),
