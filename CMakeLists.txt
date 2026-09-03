@@ -729,3 +729,27 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 set_tests_properties(export capabilities sequences hardware proxy ui-player ui-sources ui-hardware ui-export
                      ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find supercut
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_test(NAME actuate-nav COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_nav_topbar.js")
+add_test(NAME actuate-compose-transport COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_compose_transport.js")
+add_test(NAME actuate-compose-timeline COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_compose_timeline.js")
+add_test(NAME actuate-compose-viewer COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_compose_viewer.js")
+add_test(NAME actuate-sources COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_sources.js")
+add_test(NAME actuate-capture COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_capture.js")
+add_test(NAME actuate-graph COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_graph.js")
+add_test(NAME actuate-export COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_export.js")
+add_test(NAME actuate-shortcuts COMMAND ffmpeg-bro-headless
+         "${CMAKE_CURRENT_SOURCE_DIR}/ui/" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actuate/suite_shortcuts.js")
+set_tests_properties(actuate-nav actuate-compose-transport actuate-compose-timeline actuate-compose-viewer
+                     actuate-sources actuate-capture actuate-graph actuate-export actuate-shortcuts
+                     PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEOUT 300
+                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+

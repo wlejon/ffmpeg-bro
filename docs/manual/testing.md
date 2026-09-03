@@ -6,13 +6,12 @@
 cmake --build build --config Release && ctest --test-dir build -C Release
 ```
 
-Every push and pull request builds on Windows, Linux and macOS and runs this
-same line on Linux, under Xvfb so the headless binary uses the GL path that
-ships. So a suite that only passes on the machine that wrote it will be caught,
-and a suite whose fixture, device or model weights are absent has to *skip* and
-say so rather than fail: a runner has no camera, no graphics card and no Whisper
-checkpoint, and every section here is written to survive that. Keep that
-property when adding tests.
+Every push and pull request builds on Windows, Linux and macOS and runs this same line on
+Linux, under Xvfb so the headless binary uses the GL path that ships. So a suite that only
+passes on the machine that wrote it will be caught, and a suite whose fixture, device or model
+weights are absent has to *skip* and say so rather than fail: a runner has no camera, no
+graphics card and no Whisper checkpoint, and every section here is written to survive that.
+Keep that property when adding tests.
 
 `ctest` generates its own media — two files with known content, a moving bar over a
 gradient and a tone at a known level, differing in size, aspect, frame rate and length,
@@ -33,17 +32,17 @@ rotated one, a track full of bytes is not a track something can still find by
 name or read, and a text track with an odd payload is still a text track. Nothing is checked in and nothing depends on what a file you happened to have
 lying around contains.
 
-A UI suite is given one more thing before it starts: **no leftovers**. `localStorage`
-is written beside the application, so `ui/.storage.json` outlives the run that wrote
-it — which is what makes remembered settings work and what makes a suite unrepeatable,
-since every reader in `ui/` is written to sanitise a blob left by an older version of
-this code and a suite that finds one is not testing the input it states. `ctest`
-removes the file first, as a fixture of the same kind as the media. Running a suite by
-hand does not, so delete it yourself if a result surprises you — a failure caused this
-way names whatever the leftover state confused, not the file that confused it.
+A UI suite is given one more thing before it starts: **no leftovers**. `localStorage` is
+written beside the application, so `ui/.storage.json` outlives the run that wrote it — which is
+what makes remembered settings work and what makes a suite unrepeatable, since every reader in
+`ui/` is written to sanitise a blob left by an older version of this code and a suite that
+finds one is not testing the input it states. `ctest` removes the file first, as a fixture of
+the same kind as the media. Running a suite by hand does not, so delete it yourself if a result
+surprises you — a failure caused this way names whatever the leftover state confused, not the
+file that confused it.
 
-Each suite also runs standalone against any real file, which is how to check behaviour
-against footage the fixtures do not resemble:
+Each suite also runs standalone against any real file, which is how to check behaviour against
+footage the fixtures do not resemble:
 
 ```
 ./build/Release/ffmpeg-bro-decodetest <file> [--rotated <file>] [--sound-only <file>]
@@ -91,13 +90,12 @@ hardware, which is the line this whole suite is drawn along. The numbers are
 statement about the machine rather than about the code; where they belong is
 this README, beside the name of the hardware they came from.
 
-The one equivalence check is worth its own note. **A hardware decoder is not
-bit-exact with a software one and is not required to be** — NVDEC and the CPU
-implement the same standard and differ in rounding and in deblocking arithmetic,
-all of it within what H.264 permits — so what is asserted is a PSNR floor of 40
-dB. Two conformant decoders of one bitstream land in the forties; every mistake
-that could be made here (a frame out of step, a plane swapped, a download that
-lost the colour tags) lands under twenty. There is a great deal of room between
+The one equivalence check is worth its own note. **A hardware decoder is not bit-exact with a
+software one and is not required to be** — NVDEC and the CPU implement the same standard and
+differ in rounding and in deblocking arithmetic, all of it within what H.264 permits — so what
+is asserted is a PSNR floor of 40 dB. Two conformant decoders of one bitstream land in the
+forties; every mistake that could be made here (a frame out of step, a plane swapped, a
+download that lost the colour tags) lands under twenty. There is a great deal of room between
 those and the threshold sits in it.
 
 `capturetest` and `ui_capture.js` have a problem the others do not: **CI has no
@@ -110,12 +108,11 @@ mechanism as a source filter inside a filtergraph, which the Graph stage also ha
 *device* wraps a whole graph up as a demuxer so libavformat can read it as an `-i`.
 Two different places in the pipeline spelt almost identically.
 
-Being the vehicle makes it worth one assertion of its own: the card's `<video>` is
-required to reach a picture **1280 wide**, which is a claim about the crossing rather
-than about the UI. lavfi's packets are still `wrapped_avframe` — the probe is asserted
-to say so — so what changed is that such a frame now survives the trip into the
-engine, and a preview that came back empty would fail here rather than be worked
-around with a refusal on the card.
+Being the vehicle makes it worth one assertion of its own: the card's `<video>` is required to
+reach a picture **1280 wide**, which is a claim about the crossing rather than about the UI.
+lavfi's packets are still `wrapped_avframe` — the probe is asserted to say so — so what changed
+is that such a frame now survives the trip into the engine, and a preview that came back empty
+would fail here rather than be worked around with a refusal on the card.
 
 The machine's real devices are asked about as well, and whatever the answer is it is
 *asserted* rather than skipped: gdigrab is either in this build or it is not, and if
@@ -124,16 +121,15 @@ quietly passed because it found no camera would be worse than no test. On Window
 with a desktop session, gdigrab opens — including headless — so what runs here is the
 real screen grabber.
 
-A **session** — several devices at once — needs one thing more from the vehicle:
-a lavfi input produces as fast as it can be read, and two of them free-running
-would exercise none of what several inputs are about. So the session sections
-pace each one with the `realtime`/`arealtime` filter, which is what makes the
-wall clock the thing under test rather than a formality, and they skip by name
-where a build has not got it. What they assert is what several inputs added:
-that two pictures composited by the graph both reach the file, that two sounds
-mixed by it do, that a session of picture and sound together lines up, and that
-the refusals fire — several inputs with no graph, and a device that produces
-nothing failing the job naming itself rather than waiting for ever.
+A **session** — several devices at once — needs one thing more from the vehicle: a lavfi input
+produces as fast as it can be read, and two of them free-running would exercise none of what
+several inputs are about. So the session sections pace each one with the `realtime`/`arealtime`
+filter, which is what makes the wall clock the thing under test rather than a formality, and
+they skip by name where a build has not got it. What they assert is what several inputs added:
+that two pictures composited by the graph both reach the file, that two sounds mixed by it do,
+that a session of picture and sound together lines up, and that the refusals fire — several
+inputs with no graph, and a device that produces nothing failing the job naming itself rather
+than waiting for ever.
 
 **Several files out of one recording** is asserted by reading them back, because a
 size check alone passes for a second copy of the master and the whole claim is that
@@ -156,23 +152,21 @@ transport buttons are one width, that the transport is on the window's centre
 line and the zoom controls on the timeline's left edge — because a mistyped
 icon name or a stray width breaks none of the behaviour and all of the look.
 
-Its last section needs **no fixture at all**, which is the whole point of it: a
-[generator laid out on the timeline](timeline.md#a-generator-laid-out-like-a-clip)
-is a clip whose pictures libavfilter makes, so it is dragged, trimmed and played
-with nothing on disk involved. Four things there are checked because they are the
-four places a generator is not a file — the list of them is libavfilter's registry
-and not a table here, its length is a decision that a trim *raises*, it takes no
-`-i` number, and it is never the master clock. What it derives to is in
-`ui_graph.js`, what a document does with it in `ui_document.js`, and the render it
-produces in `ui_export.js`.
+Its last section needs **no fixture at all**, which is the whole point of it: a [generator laid
+out on the timeline](timeline.md#a-generator-laid-out-like-a-clip) is a clip whose pictures
+libavfilter makes, so it is dragged, trimmed and played with nothing on disk involved. Four
+things there are checked because they are the four places a generator is not a file — the list
+of them is libavfilter's registry and not a table here, its length is a decision that a trim
+*raises*, it takes no `-i` number, and it is never the master clock. What it derives to is in
+`ui_graph.js`, what a document does with it in `ui_document.js`, and the render it produces in
+`ui_export.js`.
 
-Its second-to-last section needs **no network**, which is the same trick the
-other way round: reading a clip for the span on screen rather than whole is
-decided by one flag on the input (`remote`, `ui/inputs.js`), so the section sets
-it by hand on a ten-second fixture and everything downstream of it — the settle,
-the grid, the strips, the honest blank where nothing has been read — is the code
-a Twitch VOD goes through, against a file whose content a test can check. The
-assertion the whole design is for is the one that pumps a second and a half of a
+Its second-to-last section needs **no network**, which is the same trick the other way round:
+reading a clip for the span on screen rather than whole is decided by one flag on the input
+(`remote`, `ui/inputs.js`), so the section sets it by hand on a ten-second fixture and
+everything downstream of it — the settle, the grid, the strips, the honest blank where nothing
+has been read — is the code a Twitch VOD goes through, against a file whose content a test can
+check. The assertion the whole design is for is the one that pumps a second and a half of a
 timeline that is holding still and requires that **nothing was read**.
 
 `ui_subtitles.js` is the three things people mean by subtitles, each of which is
@@ -184,37 +178,33 @@ escaped the way libavfilter needs it. It renders both and reads the results
 back, because a subtitle track that is described correctly and not written is
 the failure worth catching.
 
-Both burn-in points are driven: the one over the whole canvas from the Sources
-stage, and the one on a clip from its properties panel — where what is checked
-is the anchor (above the `setpts`, which is the clock the cues are on), the
-`si=` that is *not* written because the track is the first of its kind despite
-being stream 2, and the clip's element ending up pointed at a `/@fx/` view whose
-chain starts with the filter. The stream that proves `si=` counts subtitle
-streams rather than streams is written out in the test as a shape rather than
-made as a file, because two subtitle tracks in one container is not a fact any
-fixture here exists for; the end-to-end half runs against the mp4 the same test
-rendered a page earlier.
+Both burn-in points are driven: the one over the whole canvas from the Sources stage, and the
+one on a clip from its properties panel — where what is checked is the anchor (above the
+`setpts`, which is the clock the cues are on), the `si=` that is *not* written because the
+track is the first of its kind despite being stream 2, and the clip's element ending up pointed
+at a `/@fx/` view whose chain starts with the filter. The stream that proves `si=` counts
+subtitle streams rather than streams is written out in the test as a shape rather than made as
+a file, because two subtitle tracks in one container is not a fact any fixture here exists for;
+the end-to-end half runs against the mp4 the same test rendered a page earlier.
 
-The window is driven twice over the same two numbers, once with the row
-carrying and once with it converting, because the two keep different cues: at
-an in-point of 4.5 s a conversion keeps one of the fixture's three and zeroes
-the output at 4.5, and a copy keeps two and zeroes it at 4. Both claims are
-made against a rendered file in the export suite as well as against the panel
-here, since which cues survive a window is exactly the sort of thing a UI can
-be confidently wrong about on its own.
+The window is driven twice over the same two numbers, once with the row carrying and once with
+it converting, because the two keep different cues: at an in-point of 4.5 s a conversion keeps
+one of the fixture's three and zeroes the output at 4.5, and a copy keeps two and zeroes it at
+4. Both claims are made against a rendered file in the export suite as well as against the
+panel here, since which cues survive a window is exactly the sort of thing a UI can be
+confidently wrong about on its own.
 
-The fixture generator writes `cues.srt` and `cues.ass` beside the video, with
-the cues placed so that a burn-in is **measurable**: a second of picture with
-nothing over it, a second with a line over it, a second with nothing again. The
-export suite renders the same seconds with the filter and without it and
-compares them at both moments — 99 dB apart before the cue and 31 dB during it.
-Either half alone proves nothing, because a filter that did nothing passes the
-first and a filter that ruined every frame passes the second.
+The fixture generator writes `cues.srt` and `cues.ass` beside the video, with the cues placed
+so that a burn-in is **measurable**: a second of picture with nothing over it, a second with a
+line over it, a second with nothing again. The export suite renders the same seconds with the
+filter and without it and compares them at both moments — 99 dB apart before the cue and 31 dB
+during it. Either half alone proves nothing, because a filter that did nothing passes the first
+and a filter that ruined every frame passes the second.
 
-One of `cues.srt`'s three cues is **marked up** (`<i>third cue</i>`), which is
-there for the decoded half: a cue does not arrive as its words but as an ASS
-dialogue line, so a reader that printed the `{\i1}` override codes instead of
-the line passes against the two plain cues and fails only against that one.
+One of `cues.srt`'s three cues is **marked up** (`<i>third cue</i>`), which is there for the
+decoded half: a cue does not arrive as its words but as an ASS dialogue line, so a reader that
+printed the `{\i1}` override codes instead of the line passes against the two plain cues and
+fails only against that one.
 
 `picture-cues.mkv` is the fixture for the other family — a `dvdsub` track beside
 a picture, written by the generator with libavcodec's own dvdsub encoder. It is
@@ -225,12 +215,11 @@ is still a text track. Its cues are at the same three moments the sidecars use,
 each an opaque box in the lower third: what a check can ask about a picture of
 text is that pixels changed where the box is and did not change where it is not.
 
-The drawn half is measured **three** times rather than twice, and the third is the
-one nothing else would catch: two renders of the same seconds, one with the
-input's cues pad wired into an `overlay` and one without, compared before the cue
-(99 dB), during it (14 dB) and *after it expires* (99 dB again). A sub2video that
-paints each cue and never sends the cleared frame that ends one passes the first
-two and leaves the subtitle on screen for the rest of the render.
+The drawn half is measured **three** times rather than twice, and the third is the one nothing
+else would catch: two renders of the same seconds, one with the input's cues pad wired into an
+`overlay` and one without, compared before the cue (99 dB), during it (14 dB) and *after it
+expires* (99 dB again). A sub2video that paints each cue and never sends the cleared frame that
+ends one passes the first two and leaves the subtitle on screen for the rest of the render.
 
 `ui_document.js` is the whole edit through a file and back — see
 [The document](document.md). The shape is a round trip, and the step that makes
@@ -239,50 +228,46 @@ document, opens a *different* file, and only then reads the saved one back. Skip
 that and every assertion below passes for free, because the model was never
 actually cleared.
 
-What it checks is mostly **identity**, which is why it takes two videos rather
-than one. A filter is inserted against `clip:<id>/after-scale` and a source node
-is placed naming the second input's id; after the round trip both have to point
-at the same shot and the same file, and one file cannot tell a renumbering from a
-correct answer. It also asserts the two negatives that the design turns on — that
-a clip in the file carries no probe and no name, because both are its input's
-answer, and that a snapshot does not change when the model does, because an undo
-stack is a list of them and one that shared its objects would be N copies of the
-present. The failure cases are driven too: a document whose input path has been
-edited to something that is not there opens *short*, with the input carrying
-libav's message and the clips of it named as left out, and a file that is not
-JSON at all is refused by name rather than by a stack trace.
+What it checks is mostly **identity**, which is why it takes two videos rather than one. A
+filter is inserted against `clip:<id>/after-scale` and a source node is placed naming the
+second input's id; after the round trip both have to point at the same shot and the same file,
+and one file cannot tell a renumbering from a correct answer. It also asserts the two negatives
+that the design turns on — that a clip in the file carries no probe and no name, because both
+are its input's answer, and that a snapshot does not change when the model does, because an
+undo stack is a list of them and one that shared its objects would be N copies of the present.
+The failure cases are driven too: a document whose input path has been edited to something that
+is not there opens *short*, with the input carrying libav's message and the clips of it named
+as left out, and a file that is not JSON at all is refused by name rather than by a stack
+trace.
 
-The **cues** section of it is the same identity argument applied to the one part
-of a document that is content rather than a description of a file. Two tracks are
-made rather than one, so that "the ids come back" is a fact and not a coincidence
-about the number 1; a cue is given a dialogue line with `{\i1}` and a non-default
-style in it, so that what is asserted after the round trip is the *styling* and
-not only the words; a track made after the open has to take an id the document
-did not use, which is the check a fresh counter would fail; and the reader is
-handed a hand-edited `subtitles` list — an id that is a word, a start that is a
-letter, a negative end, a null and a string among the cues — because a document
-is a text file people open.
+The **cues** section of it is the same identity argument applied to the one part of a document
+that is content rather than a description of a file. Two tracks are made rather than one, so
+that "the ids come back" is a fact and not a coincidence about the number 1; a cue is given a
+dialogue line with `{\i1}` and a non-default style in it, so that what is asserted after the
+round trip is the *styling* and not only the words; a track made after the open has to take an
+id the document did not use, which is the check a fresh counter would fail; and the reader is
+handed a hand-edited `subtitles` list — an id that is a word, a start that is a letter, a
+negative end, a null and a string among the cues — because a document is a text file people
+open.
 
-The undo half of the same suite drives the three rules that decide what a step
-is, in the change channel's own vocabulary rather than through a synthesised
-drag: twenty `move` events and one `moved` are one step, three `edit`s inside
-half a second are one and three either side of the gap are two, and a change that
-changed nothing is none. The assertion worth naming is the cheap-looking one —
-that a clip is still being decoded by the same element after an undo — because
-that is the whole reason `open()` reconciles instead of rebuilding, and nothing
-else in the suite would notice if it stopped.
+The undo half of the same suite drives the three rules that decide what a step is, in the
+change channel's own vocabulary rather than through a synthesised drag: twenty `move` events
+and one `moved` are one step, three `edit`s inside half a second are one and three either side
+of the gap are two, and a change that changed nothing is none. The assertion worth naming is
+the cheap-looking one — that a clip is still being decoded by the same element after an undo —
+because that is the whole reason `open()` reconciles instead of rebuilding, and nothing else in
+the suite would notice if it stopped.
 
-Then **the other track**, which is the boundary asserted from both sides: a press
-on a stage about the timeline leaves the form alone, and a press on the encode
-side is about the form and adds no step to the edit's stack at all. It is driven
-through the *Start from* row, because a preset is the press this exists for — the
-test walks the row until one of them actually changes what will be written, since
-which preset differs from the default depends on what this build can encode. What
-comes back has to be the codec, the rate control and the quality it was, and the
-control in front of you has to be showing it: the form draws from `settings`, so
-an undo changes the model behind its back and a redraw that stopped happening
-would leave the preset's value on screen under the old settings. Arriving on the
-encode side is asserted *not* to be a step.
+Then **the other track**, which is the boundary asserted from both sides: a press on a stage
+about the timeline leaves the form alone, and a press on the encode side is about the form and
+adds no step to the edit's stack at all. It is driven through the *Start from* row, because a
+preset is the press this exists for — the test walks the row until one of them actually changes
+what will be written, since which preset differs from the default depends on what this build
+can encode. What comes back has to be the codec, the rate control and the quality it was, and
+the control in front of you has to be showing it: the form draws from `settings`, so an undo
+changes the model behind its back and a redraw that stopped happening would leave the preset's
+value on screen under the old settings. Arriving on the encode side is asserted *not* to be a
+step.
 
 `data_test.cpp` is a data track read, and it is the one suite here whose bulk is
 about **input nobody wrote in good faith**. Every length, repeat count and
@@ -308,76 +293,69 @@ something and 92 are refused. After each one, whatever survived is checked for
 internal consistency — an item whose value count disagreed with its own sample
 and component counts would be a caller indexing off the end of it.
 
-The rest of it is the format, each rule with a value that says the rule was
-followed: a broadcast `SCAL` over three components (an axis that is exactly 9.81
-was divided and one that is 981 was not), a per-component `SCAL` with five
-different divisors in it (an altitude of 123.456 m proves the *third* was used
-and not the first), a float under a divisor that must come back undivided, a
-`SCAL` whose count fits nothing and must therefore be applied to nothing, an item
-of repeat zero that must advance the cursor rather than loop it, and a `?`
+The rest of it is the format, each rule with a value that says the rule was followed: a
+broadcast `SCAL` over three components (an axis that is exactly 9.81 was divided and one that
+is 981 was not), a per-component `SCAL` with five different divisors in it (an altitude of
+123.456 m proves the *third* was used and not the first), a float under a divisor that must
+come back undivided, a `SCAL` whose count fits nothing and must therefore be applied to
+nothing, an item of repeat zero that must advance the cursor rather than loop it, and a `?`
 complex item that must be stepped over by its declared length rather than read.
 
-The **second argument is a real camera file** and there is deliberately no
-fixture for it: a fixture is written by this repository and therefore cannot
-prove that a real HERO8 payload parses. Given one, the suite prints every series
-it found with its sample count, rate, units and range, and asserts the two things
-about a real recording that are checkable without knowing where the camera was —
-an accelerometer that reaches a number an accelerometer has rather than one in
-the hundreds of thousands, and a latitude that is on the Earth rather than in the
-hundreds of millions. Without one it says so and skips, so the suite runs on a
-machine with no GoPro in the drawer. `-DGOPRO_FILE=<path>` at configure time is
-how a machine that has one points `ctest` at it.
+The **second argument is a real camera file** and there is deliberately no fixture for it: a
+fixture is written by this repository and therefore cannot prove that a real HERO8 payload
+parses. Given one, the suite prints every series it found with its sample count, rate, units
+and range, and asserts the two things about a real recording that are checkable without knowing
+where the camera was — an accelerometer that reaches a number an accelerometer has rather than
+one in the hundreds of thousands, and a latitude that is on the Earth rather than in the
+hundreds of millions. Without one it says so and skips, so the suite runs on a machine with no
+GoPro in the drawer. `-DGOPRO_FILE=<path>` at configure time is how a machine that has one
+points `ctest` at it.
 
-A file that carries a data track nothing here parses is **skipped and not
-failed**, and that distinction was found by running this over seventy-one real
-files rather than reasoned about: an older GoPro, or a newer one with telemetry
-switched off, writes a `tmcd` and no `gpmd`, and "this file has no track a parser
-answers for" is a true thing about the file rather than a fault. The skip names
-the tags that got no parser, so the seam is as visible there as it is with a
-`gpmd` present. Of those seventy-one files, twenty-one carry real GPMF and **all
-twenty-one parse with no packet refused** — 40 series each, and the largest (a
-4 GB recording, 1058 payloads) read in 45 ms.
+A file that carries a data track nothing here parses is **skipped and not failed**, and that
+distinction was found by running this over seventy-one real files rather than reasoned about:
+an older GoPro, or a newer one with telemetry switched off, writes a `tmcd` and no `gpmd`, and
+"this file has no track a parser answers for" is a true thing about the file rather than a
+fault. The skip names the tags that got no parser, so the seam is as visible there as it is
+with a `gpmd` present. Of those seventy-one files, twenty-one carry real GPMF and **all twenty-
+one parse with no packet refused** — 40 series each, and the largest (a 4 GB recording, 1058
+payloads) read in 45 ms.
 
 ## Finding things by sound
 
 `markstest` is the native measurement suite.
 
-The measurement is almost entirely **a number of seconds**, because that is what
-the feature is: a mark is a place, and a detector that finds a transient a second
-late is worse than useless. `marks.m4a` is the only fixture here in which
-anything ever *happens* — three broadband transients at 1, 3 and 5 seconds, a
-1000 Hz tone from 6.0 to 7.5, and two seconds of quiet after it — and each of
-those parts is there for one assertion. The clicks are two seconds apart, which
-is forty times the detector's own refractory period, so a mark near one is
-unambiguously about that one. The tolerance is 120 ms and it is arithmetic
-rather than tuning: a 25 ms analysis window, a mark stamped at its start so it
-lands early rather than late, and an AAC transform of 1024 samples on top. The
-tone's frequency is the one *physical* measurement in the whole feature — a
-detector that reports a run and gets the pitch wrong is the failure that still
-looks plausible — and the two seconds of bed after it are what separates a
-detector from one that marks everything.
+The measurement is almost entirely **a number of seconds**, because that is what the feature
+is: a mark is a place, and a detector that finds a transient a second late is worse than
+useless. `marks.m4a` is the only fixture here in which anything ever *happens* — three
+broadband transients at 1, 3 and 5 seconds, a 1000 Hz tone from 6.0 to 7.5, and two seconds of
+quiet after it — and each of those parts is there for one assertion. The clicks are two seconds
+apart, which is forty times the detector's own refractory period, so a mark near one is
+unambiguously about that one. The tolerance is 120 ms and it is arithmetic rather than tuning:
+a 25 ms analysis window, a mark stamped at its start so it lands early rather than late, and an
+AAC transform of 1024 samples on top. The tone's frequency is the one *physical* measurement in
+the whole feature — a detector that reports a run and gets the pitch wrong is the failure that
+still looks plausible — and the two seconds of bed after it are what separates a detector from
+one that marks everything.
 
-The bed being **stationary** noise rather than a quiet tone is not a detail. The
-first version of the fixture used a 137 Hz tone amplitude-modulated at 3.1 Hz,
-and PCEN — which divides each mel channel by its own smoothed energy — turned
-that swell into real spectral flux: eight onsets came out of the first second of
-"silence", and the refractory period of the last of them swallowed the genuine
-transient at 1.0 s. The suite passed, on a spurious mark. Anything added to that
-file has to be stationary or has to be one of the things being detected.
+The bed being **stationary** noise rather than a quiet tone is not a detail. The first version
+of the fixture used a 137 Hz tone amplitude-modulated at 3.1 Hz, and PCEN — which divides each
+mel channel by its own smoothed energy — turned that swell into real spectral flux: eight
+onsets came out of the first second of "silence", and the refractory period of the last of them
+swallowed the genuine transient at 1.0 s. The suite passed, on a spurious mark. Anything added
+to that file has to be stationary or has to be one of the things being detected.
 
-Two onsets in the first quarter-second survive even with a stationary bed, and
-they are asserted rather than suppressed: the flux baseline is an EMA starting
-at zero, so the earliest frames clear the bar trivially. What is required is that
-they are *distinguishable* — flux 0.055 and 0.077 against 3.4–3.5 for a real
-transient — because filtering them out here would make this and
-`bro.sense.analyze()` disagree about the same file.
+Two onsets in the first quarter-second survive even with a stationary bed, and they are
+asserted rather than suppressed: the flux baseline is an EMA starting at zero, so the earliest
+frames clear the bar trivially. What is required is that they are *distinguishable* — flux
+0.055 and 0.077 against 3.4–3.5 for a real transient — because filtering them out here would
+make this and `bro.sense.analyze()` disagree about the same file.
 
 Both halves of this suite used to carry a second path, for a build configured
-`-DBRO_WITH_SOUNDML=OFF`, and both are gone: that configuration is refused at
-configure time now, so there is one behaviour to assert. It was worth removing
-for a reason worth remembering — the branch was never once configured, built or
-run, only checked by compiling two files with the macro forced off, so the suite
-that asserted it was asserting a claim nothing had ever exercised.
+`-DBRO_WITH_SOUNDML=OFF`, and both are gone: that configuration is refused at configure time
+now, so there is one behaviour to assert. It was worth removing for a reason worth remembering
+— the branch was never once configured, built or run, only checked by compiling two files with
+the macro forced off, so the suite that asserted it was asserting a claim nothing had ever
+exercised.
 
 
 `ui_find.js` is the [Find panel](find.md), and it is the one suite here that
@@ -388,15 +366,14 @@ there would overwrite somebody's actual manifest. `useCorpus` exists for exactly
 that: the suite writes a manifest and a nineteen-word transcript beside the
 fixtures and points the panel at it.
 
-Every word in that transcript is there for one assertion. The phrase is said
-three times and one of them is written `youcross`, which is the flattening; a
-fourth is `you crossing`, which the boundary rule has to exclude; and the last
-three words sit forty seconds after the rest, so there are two stretches of
-talking and the gap between them is what decides whether that is one run or two.
-The cues point at the ordinary fixture, so `Add` really opens a file and really
-lays out a clip — **what is not checked is that the words match the sound**, and
-they do not. Whether a transcript is right is `transcribe`'s question; the
-panel's is whether a time in one becomes a clip of that time.
+Every word in that transcript is there for one assertion. The phrase is said three times and
+one of them is written `youcross`, which is the flattening; a fourth is `you crossing`, which
+the boundary rule has to exclude; and the last three words sit forty seconds after the rest, so
+there are two stretches of talking and the gap between them is what decides whether that is one
+run or two. The cues point at the ordinary fixture, so `Add` really opens a file and really
+lays out a clip — **what is not checked is that the words match the sound**, and they do not.
+Whether a transcript is right is `transcribe`'s question; the panel's is whether a time in one
+becomes a clip of that time.
 
 `supercut.js` is the [other application](supercut.md), and it is the one suite
 whose first argument is a different app directory — `supercut/` rather than
@@ -412,12 +389,11 @@ Two moves per drag rather than one, because the first has to cross the few pixel
 that separate a click from a drag: a gesture that only works when the pointer
 teleports is not a gesture.
 
-The assertion to keep is the one about **growing** a clip. `ui/project.js` stops
-a trim at the neighbour, which is right on a timeline and would mean no clip
-could ever be made longer in a packed sequence — so `mix.js` moves the
-neighbours out of reach, runs the real edit and packs the result. Every section
-of that suite ends by checking the row is still butted end to end, because every
-edit in it could break that and nothing else would notice.
+The assertion to keep is the one about **growing** a clip. `ui/project.js` stops a trim at the
+neighbour, which is right on a timeline and would mean no clip could ever be made longer in a
+packed sequence — so `mix.js` moves the neighbours out of reach, runs the real edit and packs
+the result. Every section of that suite ends by checking the row is still butted end to end,
+because every edit in it could break that and nothing else would notice.
 
 `ui_output.js` is the render on the program monitor instead of the clips — see
 [The output, instead of the clips](playback.md#the-output-instead-of-the-clips).
@@ -430,30 +406,26 @@ source rather than a seek, that the clips underneath are parked and not playing,
 and that a graph libavfilter refuses arrives as libavfilter's own sentence on the
 stage rather than as black.
 
-Two of the checks are there because the behaviour broke in review rather than
-because it looked interesting: an edit made *while* the preview is playing has to
-go on playing — a re-point hands the element a new src, and a new src is a paused
-element at zero — and a preview whose range ends before the timeline does has to
-stop there rather than hand over to the clip after it.
+Two of the checks are there because the behaviour broke in review rather than because it looked
+interesting: an edit made *while* the preview is playing has to go on playing — a re-point
+hands the element a new src, and a new src is a paused element at zero — and a preview whose
+range ends before the timeline does has to stop there rather than hand over to the clip after
+it.
 
-A third is there because it broke in *use*: the picture has to go on being made.
-It plays for four seconds and watches the element's own clock, and what it
-asserts is only that the moment never stands still — no rate, because a machine
-that renders at a tenth of the speed should pass. `playbacktest` is the same
-failure taken one layer down and made deterministic: `OutputReader` driven by
-hand, with the screen readings a real element would have produced, asserting
-which calls make a picture and which moment each is for. The two are worth having
-separately — the invariant is a property of the reader and can be pinned exactly
-there, but nothing at that layer can see the deadlock between three threads that
-made it matter.
+A third is there because it broke in *use*: the picture has to go on being made. It plays for
+four seconds and watches the element's own clock, and what it asserts is only that the moment
+never stands still — no rate, because a machine that renders at a tenth of the speed should
+pass. `playbacktest` is the same failure taken one layer down and made deterministic:
+`OutputReader` driven by hand, with the screen readings a real element would have produced,
+asserting which calls make a picture and which moment each is for. The two are worth having
+separately — the invariant is a property of the reader and can be pinned exactly there, but
+nothing at that layer can see the deadlock between three threads that made it matter.
 
-The three sections in the middle are the three things one element per clip
-structurally cannot show, driven one at a time: a filter over the whole canvas, a
-filter that resizes a clip's picture below the point where the clip is placed —
-asserted from *both* ends, the viewer refusing it by name and the render showing
-it without complaint — and a
-`testsrc` with nothing on the timeline at all, which is a picture where the
-viewer has no element to put one in.
+The three sections in the middle are the three things one element per clip structurally cannot
+show, driven one at a time: a filter over the whole canvas, a filter that resizes a clip's
+picture below the point where the clip is placed — asserted from *both* ends, the viewer
+refusing it by name and the render showing it without complaint — and a `testsrc` with nothing
+on the timeline at all, which is a picture where the viewer has no element to put one in.
 
 The **level strip** beside the viewer is asserted for the one thing a strip of bars
 cannot say about itself, which is *which* of two things it is reading — see
@@ -476,15 +448,14 @@ file cut many times, because residency is about how many decoders are open and a
 decoder per clip is a decoder per clip whether or not two of them read the same
 path.
 
-Its timing assertions are all **ratios or worst frames, never totals**. The same
-total spread over a hundred frames and delivered in one are the same number and
-completely different to use, so what is asserted is the worst single frame; and
-"this is not quadratic" has no honest form other than asking the same question of
-two sizes and comparing, so the graph's derivation is timed at the full edit and
-at a fifth of it and checked against how much bigger the graph actually got. That
-one fails at about 20× on the array-walking model and passes at about 5× on the
-indexed one, which is a threshold that cannot be met by a fast machine or missed
-by a slow one.
+Its timing assertions are all **ratios or worst frames, never totals**. The same total spread
+over a hundred frames and delivered in one are the same number and completely different to use,
+so what is asserted is the worst single frame; and "this is not quadratic" has no honest form
+other than asking the same question of two sizes and comparing, so the graph's derivation is
+timed at the full edit and at a fifth of it and checked against how much bigger the graph
+actually got. That one fails at about 20× on the array-walking model and passes at about 5× on
+the indexed one, which is a threshold that cannot be met by a fast machine or missed by a slow
+one.
 
 The last section is the fold — a clip's derived run drawn as one card, see [When
 there is too much of it to read](graph.md#when-there-is-too-much-of-it-to-read).
@@ -512,38 +483,33 @@ with the key named, `-ss` and `-t` moving the input's own clock — checked in
 pixels, by asking a seeked reader for its zero and an unseeked one for the same
 moment — and the token bro's media backend opens a registered input by.
 
-The last third of it is the other token: **an input with filters on it**, which
-is what a `<video>` on the timeline plays when the clip carries any. Asserted by
-decoding the frames back through bro's own registry rather than by reading a
-size, because a chain that quietly did nothing would report the same width as
-one that worked. `negate` is the filter, because its effect can be *predicted* —
-the picture that comes out has to be 255 minus the one that went in, which a
-chain that ran nothing cannot land on by accident — and then the same filter
-carrying `enable='gt(t,10)'` twice with nothing changed but the view's `shift`,
-which is the only way to see from outside that a filter is on the render's clock
-and not the file's: at zero the first frame is before the span and comes back
-untouched, and moved twenty seconds along it comes back inverted. Three things
-are asserted about that one, because a clock has three ways to be wrong — the
-frame is inverted, it comes back stamped at *its own* second rather than the
-render's, and the same filter written in front of the `setpts` instead of behind
-it is untouched again, which is where the render puts a filter inserted after
-the decode.
+The last third of it is the other token: **an input with filters on it**, which is what a
+`<video>` on the timeline plays when the clip carries any. Asserted by decoding the frames back
+through bro's own registry rather than by reading a size, because a chain that quietly did
+nothing would report the same width as one that worked. `negate` is the filter, because its
+effect can be *predicted* — the picture that comes out has to be 255 minus the one that went
+in, which a chain that ran nothing cannot land on by accident — and then the same filter
+carrying `enable='gt(t,10)'` twice with nothing changed but the view's `shift`, which is the
+only way to see from outside that a filter is on the render's clock and not the file's: at zero
+the first frame is before the span and comes back untouched, and moved twenty seconds along it
+comes back inverted. Three things are asserted about that one, because a clock has three ways
+to be wrong — the frame is inverted, it comes back stamped at *its own* second rather than the
+render's, and the same filter written in front of the `setpts` instead of behind it is
+untouched again, which is where the render puts a filter inserted after the decode.
 
-Then a **`subtitles` burn-in**, which is the only filter here whose whole job is
-to be different at different moments: the same view is decoded inside a cue and
-between two, and it has to differ from the file at the first and equal it
-exactly at the second. Either check alone passes for a bug — one that never drew
-passes the second, one hard-wired to draw always fails it, and one whose clock is
-out by seconds fails both. The path is escaped by hand in C++ rather than by
-calling the UI's `filterPath`, so that the escaping is *stated* in both
-languages rather than agreed with itself.
+Then a **`subtitles` burn-in**, which is the only filter here whose whole job is to be
+different at different moments: the same view is decoded inside a cue and between two, and it
+has to differ from the file at the first and equal it exactly at the second. Either check alone
+passes for a bug — one that never drew passes the second, one hard-wired to draw always fails
+it, and one whose clock is out by seconds fails both. The path is escaped by hand in C++ rather
+than by calling the UI's `filterPath`, so that the escaping is *stated* in both languages
+rather than agreed with itself.
 
-Then a `crop` for the sizes, a seek for the graph being rebuilt across one,
-`volume=0` for the sound half with the *picture* checked to be untouched and
-undecoded beside it, a filter option nothing has for the refusal, and a clip shot
-sideways for the turn: the chain sees the picture the right way up and the track
-then asks for no turn of its own, both halves asserted because either alone
-passes for a bug.
+Then a `crop` for the sizes, a seek for the graph being rebuilt across one, `volume=0` for the
+sound half with the *picture* checked to be untouched and undecoded beside it, a filter option
+nothing has for the refusal, and a clip shot sideways for the turn: the chain sees the picture
+the right way up and the track then asks for no turn of its own, both halves asserted because
+either alone passes for a bug.
 
 `seqtest` is the inputs whose content is assembled, and most of what it asserts
 is what the grouping *refuses*: a lone numbered file is a still, a folder of two
@@ -671,27 +637,24 @@ those two — 3040 ms for two seconds trimmed one second in against 2038 ms
 untrimmed, and 2024 ms for a graph render paced by the device — are in `deviceClip`
 in `src/native/ffmpeg_export.h`.
 
-The session half adds a second input and follows what changes: the card and the
-column that say which input they are about, the refusal at two inputs with no graph
-asserted **twice** — once as the disabled button and once from `record.start`, so
-that a button which stopped asking would still be caught — and then the graph, built
-the way a person builds one: two `addSource` calls naming the devices' input ids, an
-`hstack` placed, three wires. Nothing in that sequence knows what a recording is,
-which is the point of it. What is asserted off the other end is the chain
-(`[0:v][1:v]hstack=inputs=2[vout]`), the pad it is mapped by, two `-f`/`-i` pairs and
-one exact `-filter_complex` in the command bar, and then a real recording of two
-paced lavfi devices whose file comes back **640 wide from two 320-wide pictures**.
-That last number is the assertion worth having: nothing but the graph could have
-produced it, so a session that quietly recorded one device would fail rather than
-pass with a plausible file.
+The session half adds a second input and follows what changes: the card and the column that say
+which input they are about, the refusal at two inputs with no graph asserted **twice** — once
+as the disabled button and once from `record.start`, so that a button which stopped asking
+would still be caught — and then the graph, built the way a person builds one: two `addSource`
+calls naming the devices' input ids, an `hstack` placed, three wires. Nothing in that sequence
+knows what a recording is, which is the point of it. What is asserted off the other end is the
+chain (`[0:v][1:v]hstack=inputs=2[vout]`), the pad it is mapped by, two `-f`/`-i` pairs and one
+exact `-filter_complex` in the command bar, and then a real recording of two paced lavfi
+devices whose file comes back **640 wide from two 320-wide pictures**. That last number is the
+assertion worth having: nothing but the graph could have produced it, so a session that quietly
+recorded one device would fail rather than pass with a plausible file.
 
-The **composition preview** is asserted the same way and before any file exists: the
-picture below the cards has to be exactly twice the width of the picture on one of
-them. Measured against the card rather than written down, because the two are made of
-the same devices and a constant would only say whether somebody had edited the test.
-The session behind it is asked directly too — three pads over two `-i`s, two of them
-devices — which is the assertion that one open per device is what is actually
-happening rather than what is intended.
+The **composition preview** is asserted the same way and before any file exists: the picture
+below the cards has to be exactly twice the width of the picture on one of them. Measured
+against the card rather than written down, because the two are made of the same devices and a
+constant would only say whether somebody had edited the test. The session behind it is asked
+directly too — three pads over two `-i`s, two of them devices — which is the assertion that one
+open per device is what is actually happening rather than what is intended.
 
 **Several destinations** is driven through the picker and the rows and asserted off
 the disk. `tee` has to be *in* the container list — it would be filtered out, being a
@@ -705,33 +668,29 @@ kind of argument. Then a real recording, and both files are probed: **the same w
 in each**, which is what makes it one encode rather than two. Switching the container
 back has to leave the single path where it was.
 
-The **meters** are checked against arithmetic rather than against a file. `aevalsrc`
-puts the amplitude in the expression, so a sine at 0.5 must read exactly `-6.0` dBFS
-on the number, put its bar at the RMS — which for a sine is peak over root two — and
-its mark 3 dB above that; halving it must read `-12.0`, because a halving is 6.02 dB
-wherever on the scale it lands. The bar is sampled at its *ceiling* over a moment
-rather than once, since it falls between blocks of sound on purpose and one sample of
-a falling bar has a tick count in it — and it is bounded tightly above and loosely
-below, which is the shape of that claim: a falling bar can never be higher than the
-level it was last driven to, so anything over is a real disagreement, while under it
-can only mean the sample landed on a tick that had not heard anything yet. Then 1.5,
-which is a source past full scale:
-the light latches, the bar changes colour, the number goes above zero rather than
-pinning to it, one click forgets both latches, and both fill again from what is
-actually arriving.
+The **meters** are checked against arithmetic rather than against a file. `aevalsrc` puts the
+amplitude in the expression, so a sine at 0.5 must read exactly `-6.0` dBFS on the number, put
+its bar at the RMS — which for a sine is peak over root two — and its mark 3 dB above that;
+halving it must read `-12.0`, because a halving is 6.02 dB wherever on the scale it lands. The
+bar is sampled at its *ceiling* over a moment rather than once, since it falls between blocks
+of sound on purpose and one sample of a falling bar has a tick count in it — and it is bounded
+tightly above and loosely below, which is the shape of that claim: a falling bar can never be
+higher than the level it was last driven to, so anything over is a real disagreement, while
+under it can only mean the sample landed on a tick that had not heard anything yet. Then 1.5,
+which is a source past full scale: the light latches, the bar changes colour, the number goes
+above zero rather than pinning to it, one click forgets both latches, and both fill again from
+what is actually arriving.
 
-Two claims about what *kind* of reading it is are checked the same way. Two
-expressions twelve decibels apart is **a bar per channel** reading its own number,
-which a mono summary of the two could not produce — and the two are named `FL` and
-`FR` out of libav's own layout. Then a **true** peak: 12 kHz at 48 kHz with a
-quarter-cycle offset puts every sample on ±sin 45°, so the loudest *sample* is 3 dB
-below the loudest *point*, and the meter reads `-0.1` where a sample-peak meter would
-read `-3.1`. The latch is cleared first, because a signal that starts abruptly is a
-step and an oversampling filter rings on a step — what is being measured is the steady
-state after it. Every sine source here carries `arealtime` for a related reason: a
-`lavfi` device left to generate as fast as it can overflows the reader's sound queue,
-whose oldest blocks are then dropped, and a meter handed a signal with cuts in it reads
-the cuts.
+Two claims about what *kind* of reading it is are checked the same way. Two expressions twelve
+decibels apart is **a bar per channel** reading its own number, which a mono summary of the two
+could not produce — and the two are named `FL` and `FR` out of libav's own layout. Then a
+**true** peak: 12 kHz at 48 kHz with a quarter-cycle offset puts every sample on ±sin 45°, so
+the loudest *sample* is 3 dB below the loudest *point*, and the meter reads `-0.1` where a
+sample-peak meter would read `-3.1`. The latch is cleared first, because a signal that starts
+abruptly is a step and an oversampling filter rings on a step — what is being measured is the
+steady state after it. Every sine source here carries `arealtime` for a related reason: a
+`lavfi` device left to generate as fast as it can overflows the reader's sound queue, whose
+oldest blocks are then dropped, and a meter handed a signal with cuts in it reads the cuts.
 
 **Monitoring is asserted at bro's mixer and not at the element.** An element with a
 src on it says nothing about whether anything is audible, so `Listen` is checked by
@@ -744,24 +703,23 @@ monitoring off to begin with, the element removed rather than muted (because the
 element *is* the listening), the feedback sentence naming the input it is warning
 about, and the whole thing stopping with the session when the stage is left.
 
-Then the states either side of a graph that works. Widening the `hstack` to three
-inputs leaves a pad nothing arrives at, and that is a *refusal* — the button goes
-dead, the stage names the empty pad in the Graph stage's own words, and the command
-bar prints no `-filter_complex` at all rather than a line that cannot be run.
-Releasing an input takes the node reading it with it, which leaves the same refusal
-from the other direction. Clearing the graph is the third state and the commonest:
-`recordGraph` answers null, which is not a broken graph, and one device is written as
-it comes.
+Then the states either side of a graph that works. Widening the `hstack` to three inputs leaves
+a pad nothing arrives at, and that is a *refusal* — the button goes dead, the stage names the
+empty pad in the Graph stage's own words, and the command bar prints no `-filter_complex` at
+all rather than a line that cannot be run. Releasing an input takes the node reading it with
+it, which leaves the same refusal from the other direction. Clearing the graph is the third
+state and the commonest: `recordGraph` answers null, which is not a broken graph, and one
+device is written as it comes.
 
-Which pad the recording writes is followed through the whole gesture. With no output
-of its own the graph offers no choice and there is **no picker** at all; placing one
-and moving the `hstack` onto it puts a two-option picker on the stage, and until it is
-picked the recording still writes the now-unfed video out and says so — the refusal
-naming the choice rather than quietly following the wire. Picked, the same chain runs
-and comes out ending in `[vout]` with the name it has on the stage appearing **nowhere**
-in what runs, which is the relabelling asserted rather than assumed. Deleting the
-output from the Graph stage drops the recording back to video out and takes the picker
-with it, because nothing on that stage knows a recording was pointed at it.
+Which pad the recording writes is followed through the whole gesture. With no output of its own
+the graph offers no choice and there is **no picker** at all; placing one and moving the
+`hstack` onto it puts a two-option picker on the stage, and until it is picked the recording
+still writes the now-unfed video out and says so — the refusal naming the choice rather than
+quietly following the wire. Picked, the same chain runs and comes out ending in `[vout]` with
+the name it has on the stage appearing **nowhere** in what runs, which is the relabelling
+asserted rather than assumed. Deleting the output from the Graph stage drops the recording back
+to video out and takes the picker with it, because nothing on that stage knows a recording was
+pointed at it.
 
 `ui_filtergraph.js` needs no media at all: `buildSpec()`'s output is a plain object and
 the translation into a filter graph is a pure function of it, so the graph is checked
@@ -779,13 +737,12 @@ nothing; a split copies both halves' filters and a delete takes them away; and
 the run graph differs from the printed one by exactly one chain with the
 inserted filter in both.
 
-It also holds the checks on **a value written as an expression**, which need no
-media because an expression is a string: the four states libav's evaluator puts
-one in, the round-trip through the points printer and parser at two, three and
-four points, the refusals for an expression it did not write and for a nest whose
-halves do not join up, and the sampled values themselves — which are the one
-claim that could not be checked by reading the code, since they come out of
-`av_expr_eval` rather than out of anything here. The last of it wants a file,
+It also holds the checks on **a value written as an expression**, which need no media because
+an expression is a string: the four states libav's evaluator puts one in, the round-trip
+through the points printer and parser at two, three and four points, the refusals for an
+expression it did not write and for a nest whose halves do not join up, and the sampled values
+themselves — which are the one claim that could not be checked by reading the code, since they
+come out of `av_expr_eval` rather than out of anything here. The last of it wants a file,
 because the printed chain has to be read off a real node.
 
 Given a file it goes on to the wiring gesture on the real stage, and then to
@@ -823,12 +780,12 @@ takes its row away. The lane's *existence* is checked in both directions (no
 spans, no lane; the last span off, no lane), and a span dragged there is read back
 out of the workspace and out of a document, which are the overlay's two reads.
 
-One section is about the **other clock** and is the reason a span is clamped
-against a window with a start rather than a bare length: on a clip cut from two
-seconds in and laid down at one, a filter above the derivation's `setpts` written
-`between(t,3,3.5)` has to be drawn at the edit's second 2 and a region dropped at
-the edit's second 4 has to be written back as the file's second 5. Both directions,
-because that is what makes the two clocks one map rather than two.
+One section is about the **other clock** and is the reason a span is clamped against a window
+with a start rather than a bare length: on a clip cut from two seconds in and laid down at one,
+a filter above the derivation's `setpts` written `between(t,3,3.5)` has to be drawn at the
+edit's second 2 and a region dropped at the edit's second 4 has to be written back as the
+file's second 5. Both directions, because that is what makes the two clocks one map rather than
+two.
 
 `ui_measure.js` is the half above that: a measurement started, run, read and
 acted on. It clicks `Crop` and finds `cropdetect` on the graph and in the
@@ -896,21 +853,19 @@ checked too — a pass 2 with no statistics, a bitstream filter this build lacks
 an option it does not have, an expression that will not parse, a decoder option
 no decoder takes.
 
-And **`-fps_mode vfr`**, which is about timestamps rather than about bytes and is
-checked by reading them out of the container. The graph is deliberately *unevenly*
-spaced — a 50 fps source with `select` keeping two frames in every four, so the
-gaps are one fiftieth then three — because anything constant would pass under
-either mode and prove nothing: what is asserted is that the first gap is a
-fiftieth and the second is three of them, which no frame number can express, and
-that the same graph under `cfr` comes back on an even grid. The container's own
-time base has to be fine enough to hold those, which is the second half of the
-same check. The soundtrack is compared against the *other* walk rather than
-against a number, because the paced walk covers up to each frame's own moment and
-owes whatever the last frame lasts — so the two must come out the same length,
-and it must reach past the last picture to the end of the range. All three
-refusals are checked by their sentences: a composited render, a render mapping a
-graph pad, and a mode this renderer does not perform (`passthrough`), which is
-refused by name rather than mapped onto one it does.
+And **`-fps_mode vfr`**, which is about timestamps rather than about bytes and is checked by
+reading them out of the container. The graph is deliberately *unevenly* spaced — a 50 fps
+source with `select` keeping two frames in every four, so the gaps are one fiftieth then three
+— because anything constant would pass under either mode and prove nothing: what is asserted is
+that the first gap is a fiftieth and the second is three of them, which no frame number can
+express, and that the same graph under `cfr` comes back on an even grid. The container's own
+time base has to be fine enough to hold those, which is the second half of the same check. The
+soundtrack is compared against the *other* walk rather than against a number, because the paced
+walk covers up to each frame's own moment and owes whatever the last frame lasts — so the two
+must come out the same length, and it must reach past the last picture to the end of the range.
+All three refusals are checked by their sentences: a composited render, a render mapping a
+graph pad, and a mode this renderer does not perform (`passthrough`), which is refused by name
+rather than mapped onto one it does.
 
 `exporttest` renders a timeline and then opens what it wrote, which is the only
 way to check the things nobody can see until the render is over: that a clip
@@ -935,18 +890,16 @@ a filename somebody hopes will be guessed, that a muxer which never answered
 does not have the codec taken off it, and that the muxer's own options reach
 the spec, the command and a file that opens as an MPEG-TS.
 
-And where the render goes: that the shape of a destination is *asked* — a URL
-is a stream because of its scheme, `segment` is a set of files because it says
-`AVFMT_NOFILE`, a frame pattern is a set because the numbering is in the name,
-and `C:/` is a path and not a protocol — that a URL's own protocol options are
-offered beside the muxer's and reach the same bag, the spec and the printed
-command; that the `-f tee` argument is built with tee's escaping (a `|` in a
-target, a `:` and a `]` in an option value) and then quoted for the shell, so
-what is printed can be pasted and run; that picking `tee` makes the file already
-named the first destination rather than throwing it away; that a two-destination
-render writes both and reports two; and that the progress panel says something
-different and true for each shape — the count of files for a set, "sent" and no
-offer to open anything for a stream.
+And where the render goes: that the shape of a destination is *asked* — a URL is a stream
+because of its scheme, `segment` is a set of files because it says `AVFMT_NOFILE`, a frame
+pattern is a set because the numbering is in the name, and `C:/` is a path and not a protocol —
+that a URL's own protocol options are offered beside the muxer's and reach the same bag, the
+spec and the printed command; that the `-f tee` argument is built with tee's escaping (a `|` in
+a target, a `:` and a `]` in an option value) and then quoted for the shell, so what is printed
+can be pasted and run; that picking `tee` makes the file already named the first destination
+rather than throwing it away; that a two-destination render writes both and reports two; and
+that the progress panel says something different and true for each shape — the count of files
+for a set, "sent" and no offer to open anything for a stream.
 
 **Keep trying if it drops** is asserted without streaming anywhere, which is most
 of what there is to say about it: that a local file gets no `fifo` however the
@@ -967,13 +920,12 @@ about the container, and `fifo` answers `AVERROR_PATCHWELCOME` to every
 is a destination that actually drops and comes back: that needs a server to take
 away.
 
-That section puts the **whole stored blob** back when it is done rather than the
-fields it named. `ui/.storage.json` is one workspace shared by every suite and
-every run, and changing the container rewrites the stream rows' codecs on the way
-past — which is remembered. Left behind, it broke an assertion four thousand
-lines earlier on the *next* run of this suite, and then a subtitle row in
-`ui_subtitles.js`, which had never heard of any of it. Restoring the bytes is the
-only repair that covers what a setting quietly changed on its way past; restoring
+That section puts the **whole stored blob** back when it is done rather than the fields it
+named. `ui/.storage.json` is one workspace shared by every suite and every run, and changing
+the container rewrites the stream rows' codecs on the way past — which is remembered. Left
+behind, it broke an assertion four thousand lines earlier on the *next* run of this suite, and
+then a subtitle row in `ui_subtitles.js`, which had never heard of any of it. Restoring the
+bytes is the only repair that covers what a setting quietly changed on its way past; restoring
 the *fields* is what did not.
 
 It also drives everything on the encode side that is not an encoder option: that
@@ -988,3 +940,38 @@ the spec and prints without an `-r` the moment there is a filter on the graph; a
 that a bitstream filter chain is offered only for the codec the stream is encoded
 with, runs in the order shown, carries libavcodec's own option table and prints as
 one `-bsf:v` the way `av_bsf_list_parse_str` takes it.
+
+
+## UI Actuation Test Suite
+
+The UI actuation suite validates interactive user journeys through the application's DOM and canvas components using the Bro QuickJS runtime. Rather than calling internal functions directly, actuation tests dispatch real pointer, mouse, and keyboard input events to verify the interface in its true operating state.
+
+Nine dedicated suites exercise complete workflows:
+1. suite_nav_topbar.js: Stage switching across the spine navigation bar, document actions (new, save, open), undo/redo.
+2. suite_compose_transport.js: Transport playback, playhead scrubbing, step navigation, loop, mute, volume, and playback rate.
+3. suite_compose_timeline.js: Tool modes (select, ripple, slip, rate), clip selection, dragging, edge trimming, splitting, and zooming.
+4. suite_compose_viewer.js: Interactive viewer crop tool actuation and handle adjustments.
+5. suite_sources.js: Input path entry, demuxer and decoder option tables, in/out trim controls, and timeline placement.
+6. suite_capture.js: Capture device selection, live preview decoding, device options, audio monitoring, and recording cycles.
+7. suite_graph.js: Graph canvas zoom and fit, fold toggling, node search filtering, palette additions, and wire deletion.
+8. suite_export.js: Intent presets, range handles, output path setting, stream management, and render execution.
+9. suite_shortcuts.js: Global keyboard shortcut dispatch, input focus suppression, and cross-stage shortcut isolation.
+
+Run all actuation suites via CTest:
+
+```
+ctest --test-dir build -C Release -R actuate --output-on-failure
+```
+
+Or run them sequentially using the PowerShell runner, which automatically clears ui/.storage.json between runs to isolate state:
+
+```
+pwsh tests/actuate/run_all.ps1
+```
+
+Individual suites can also be executed directly against headless bro:
+
+```
+.\build\Release\ffmpeg-bro-headless.exe ui/ tests/actuate/suite_nav_topbar.js
+```
+
