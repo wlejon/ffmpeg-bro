@@ -1480,6 +1480,77 @@ console.log('\nwords on a beat');
        'an older workspace holding notation is read as the pattern it describes');
     A.rhythm.setTempo(120);
     A.rhythm.clearWords();
+
+    // ── a plan is about a corpus ───────────────────────────────────────────
+    // Restored before a channel is open — the first frame of a session — every
+    // word of a pattern was reported missing, and stayed so: the window said
+    // `nothing says "hello"` over a corpus that says it 171 times. The plan
+    // now says what it was made over and is made again when that moves.
+    A.results.useCorpus(`${dir}/nowhere.json`);
+    A.rhythm.setScore('cross');
+    ok(A.rhythm.plan().missing.length === 0 && !A.rhythm.pieceOf(0).hit,
+       'with no corpus open a word is unresolved rather than missing');
+    A.results.useCorpus(`${dir}/find.json`);
+    A.results.start();
+    pump(60);
+    ok(!!A.rhythm.pieceOf(0).hit && A.rhythm.plan().missing.length === 0,
+       'and resolves once one is, with nobody asking');
+    A.rhythm.clearWords();
+
+    // ── what can be typed ──────────────────────────────────────────────────
+    const vocab = library.vocabulary();
+    ok(vocab.length > 2 && vocab.every((e) => e.n > 0) && vocab[0].n >= vocab[vocab.length - 1].n,
+       `the corpus has a vocabulary with counts, most said first (${vocab.length} words)`);
+    ok(library.saidCount('cross') >= 2 && library.saidCount('zzzz') === 0,
+       'a word is counted and a word nothing says counts 0');
+    ok(library.suggest('cr').length >= 1 && library.suggest('cr')[0].word === 'cross',
+       'the words beginning with what was typed');
+
+    A.pattern.draw();
+    pump(30);
+    press(document.querySelector('#r-grid .r-cell'));
+    edit = document.querySelector('#r-grid .r-edit');
+    edit.value = 'cr';
+    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    pump(30);
+    let hints = document.querySelectorAll('#r-grid .r-hint');
+    ok(hints.length >= 2 && hints[0].textContent.startsWith('cr') && hints[0].textContent.endsWith('×0') &&
+       hints[1].textContent.startsWith('cross') && !hints[1].textContent.endsWith('×0'),
+       'typing shows what was typed and the words that begin with it, each with a count');
+    keyIn(edit, 'ArrowDown');
+    keyIn(edit, 'ArrowDown');
+    ok(document.querySelectorAll('#r-grid .r-hint.on').length === 1 &&
+       document.querySelector('#r-grid .r-hint.on').textContent.startsWith('cross'),
+       'the arrows pick one');
+    keyIn(edit, 'Enter');
+    ok(A.rhythm.words().length === 1 && A.rhythm.words()[0].phrase === 'cross',
+       'and Enter lands the one picked');
+    ok(parseFloat(document.querySelector('#r-grid .r-word .txt').style.width) > 100,
+       'a word followed by rests is given their width to be read on');
+
+    // A word nothing says, landed anyway: the panel offers the nearest it has.
+    press(document.querySelectorAll('#r-grid .r-cell')[2]);
+    edit = document.querySelector('#r-grid .r-edit');
+    edit.value = 'crozz';
+    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    pump(30);
+    hints = document.querySelectorAll('#r-grid .r-hint');
+    ok(hints.length >= 1 && hints[0].classList.contains('none'),
+       'a word nothing says is marked before it is landed');
+    keyIn(edit, 'Enter');
+    ok(A.rhythm.words().length === 2 && A.rhythm.plan().missing.indexOf('crozz') >= 0,
+       'landed as typed all the same');
+    A.pattern.select(1);
+    pump(30);
+    const near = document.querySelectorAll('#r-panel .r-near button');
+    ok(near.length >= 1 && near[0].textContent.startsWith('cross'),
+       'and the panel offers the nearest word the corpus has');
+    near[0].dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(40);
+    ok(A.rhythm.words()[1].phrase === 'cross' && A.rhythm.plan().missing.length === 0,
+       'which a press puts in its place');
+    A.pattern.select(-1);
+    A.rhythm.clearWords();
 }
 
 // ── tracking higher energy speaking: yelling & activated speaking ──────────

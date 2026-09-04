@@ -536,7 +536,13 @@ moves the pitch. The audition plays exactly what the mix would hold. Repeats
 **walk the takes** rather than repeating one clip, which is the whole point of
 building it out of a corpus. A missing word **refuses the whole build, naming
 every one**, because a rhythm with a hole in it and nothing saying which word
-went missing is worse than one that will not build. And the pattern is a
+went missing is worse than one that will not build — and **what can be typed
+is the library's** (`vocabulary`, `saidCount`, `suggest`), so the cell's field
+shows `hello · 171` as it is typed and the refusal is rarely reached; the field
+draws that and decides nothing. **A plan is an answer about a corpus** and
+`plan()` re-resolves when the corpus under it moves (`corpusKey`: the channel
+and the confinement): a pattern restored on the first frame, before a channel
+was open, once reported every word missing for the rest of the session. And the pattern is a
 workspace preference and **not in the document**: what a `.fbro` holds is the
 mix it produced, which is a mix like any other from the moment it exists.
 

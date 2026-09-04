@@ -421,11 +421,16 @@ cell, so the first thing to do is type:
 | drag a **word** | moves it to another step, on any bar |
 | double-click a word, or **Enter** | changes what it says |
 | **Delete** | takes the selected word off |
+| look under the field while typing | what you have typed and the words that begin with it, each with how often it is said; **↓** and **↑** pick one and space or Enter lands it |
 
 A step no word is on is a rest — a step of black and silence — so there is
 nothing to type for one. A word cannot be dropped onto another; the drop is
 refused and the word stays where it was. There is always an empty cell after the
 last word, and a full bar is followed by an empty one.
+
+A word nothing in the corpus says shows `×0` under the field before it lands,
+and lands anyway if you let it — it is drawn red, and its panel offers the
+nearest words the corpus does have, each a press away from taking its place.
 
 **Pressing a word plays it and selects it.** The panel under the grid is about
 the selected word: what it says, which take, how it fits, and how far it is

@@ -31,7 +31,7 @@
 
 import { clock } from './format.js';
 import { abs } from './root.js';
-import { parseSrtFrom, emptyStream, growStream, find, spaced, monologues } from './phrase.js';
+import { parseSrtFrom, emptyStream, growStream, find, spaced, monologues, bare } from './phrase.js';
 import * as loudness from './loudness.js';
 
 const fs = require('fs');
@@ -85,6 +85,7 @@ const REMEMBERED = 200;
 function forget() {
     streams.clear();
     answered.clear();
+    vocab = null;
     warmAt = 0;
 }
 /// The recordings a search is confined to, as a Set of ids — or null, which is
@@ -205,6 +206,7 @@ export function choose(ids) {
     // background read is an index into the list that just changed, so it starts
     // again — which costs nothing for the recordings it has already read.
     answered.clear();
+    vocab = null;
     warmAt = 0;
     return chosen();
 }
@@ -338,6 +340,57 @@ export function searchWords(phrase, opts = {}) {
     const sorted = out.sort(byRecordingThenTime);
     remember(keyOf(phrase, opts), sorted);
     return sorted.slice();
+}
+
+/// Every distinct word the corpus holds and how often, most often first.
+///
+/// **The answer to what can be typed.** A pattern is words typed into cells,
+/// and the corpus is the only thing that knows which words it has — a field
+/// that shows `hello · 171` as it is typed is a field nobody puts a word into
+/// that nothing says, where a refusal after the fact is exactly what happened
+/// with the first grid. Built once over the parsed streams and kept until they
+/// go (`forget`) or the confinement moves (`choose`), for `answered`'s reason:
+/// the answer is a property of the corpus and of what is being looked at.
+///
+/// A count here is of the *word*, and a take count is of *moments*:
+/// `searchWords` collapses a word said three times in one breath into one
+/// take, so the panel's number is the smaller one. Both are right; they are
+/// answers to different questions and neither is drawn as the other.
+let vocab = null;
+export function vocabulary() {
+    if (vocab) return vocab.list;
+    const counts = new Map();
+    for (const v of searched())
+        for (const w of streamFor(v).words) {
+            const key = bare(w.text);
+            if (key) counts.set(key, (counts.get(key) || 0) + 1);
+        }
+    const list = [...counts].map(([word, n]) => ({ word, n }))
+        .sort((a, b) => b.n - a.n || (a.word < b.word ? -1 : a.word > b.word ? 1 : 0));
+    vocab = { list, counts };
+    return list;
+}
+
+/// How often one word is said, as `vocabulary` counts it. 0 for a word nothing
+/// says, and for a phrase of several — that is `searchWords`'s question.
+export function saidCount(word) {
+    const key = bare(word);
+    if (!key || !channel) return 0;
+    vocabulary();
+    return vocab.counts.get(key) || 0;
+}
+
+/// The words that begin with what was typed, most often first, at most `limit`.
+export function suggest(prefix, limit = 6) {
+    const key = bare(prefix);
+    if (!key || !channel) return [];
+    const out = [];
+    for (const e of vocabulary()) {
+        if (!e.word.startsWith(key)) continue;
+        out.push(e);
+        if (out.length >= limit) break;
+    }
+    return out;
 }
 
 /// Is this even a question? A phrase of one character finds most of the corpus

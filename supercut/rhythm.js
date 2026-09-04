@@ -550,7 +550,10 @@ export function resolve() {
     const cursor = new Map();
     const missing = [];
     const stepSec = stepSeconds();
-    const have = library.available();
+    // A corpus with no channel open yet is not a corpus that says nothing: the
+    // words are unresolved rather than missing, and `plan` asks again once one
+    // is open.
+    const have = library.available() && !!library.current();
     let at = 0;
 
     for (let i = 0; i < laid.length; i++) {
@@ -626,17 +629,38 @@ export function resolve() {
 /// rather than on every frame: a resolve is a search of the whole corpus per
 /// distinct word, which is milliseconds and is not free.
 let planned = { pieces: [], missing: [], steps: 0, seconds: 0 };
-export function plan() { return planned; }
+/// What the pattern would build.
+///
+/// **Re-resolved when the corpus under it has moved** — a channel opened after
+/// the pattern was restored, another picked since, a confinement changed —
+/// because a plan is an answer about a corpus, and one kept across a change of
+/// corpus was the bug that reported every word of a restored pattern missing:
+/// it had been resolved on the first frame, against no channel at all, and
+/// nothing ever asked again. What the plan was made over is written down with
+/// it, and a plan over something else is made again on the read.
+export function plan() {
+    if (plannedOver !== corpusKey()) replan();
+    return planned;
+}
+
+/// The corpus a plan is an answer about: the channel and the recordings a
+/// search is confined to. Cheap enough to ask on every read.
+function corpusKey() {
+    const c = library.current();
+    return `${c ? c.channel : ''}|${library.chosen().join(',')}`;
+}
+let plannedOver = null;
 
 /// The plan's piece for a word of the pattern, or null.
 export function pieceOf(i) {
-    for (const p of planned.pieces) if (p.kind === 'word' && p.word === i) return p;
+    for (const p of plan().pieces) if (p.kind === 'word' && p.word === i) return p;
     return null;
 }
 
 /// Work out what the pattern would build, and answer it.
 export function replan() {
     planned = resolve();
+    plannedOver = corpusKey();
     return planned;
 }
 

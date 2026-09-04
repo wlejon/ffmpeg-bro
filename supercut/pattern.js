@@ -42,7 +42,8 @@
 // for. The cost of that honesty is a seam at every step — the element seeks —
 // which is audible and is also the truth about what the words are.
 
-import { el, div, put, setText } from '../ui/dom.js';
+import { el, div, put, setText, add } from '../ui/dom.js';
+import { bare } from '../ui/phrase.js';
 import * as library from '../ui/library.js';
 import * as rhythm from './rhythm.js';
 
@@ -274,7 +275,10 @@ function grid() {
             if (i >= 0) {
                 const w = words[i];
                 const to = Math.min(w.at + w.steps, stop);
-                cells.push(block(i, w, pieces.get(i), s, to - s, w.at < s, w.at + w.steps > stop, per));
+                // The rests after it in this bar, which its label may run over.
+                let free = 0;
+                while (to + free < stop && rhythm.wordAt(to + free) < 0) free++;
+                cells.push(block(i, w, pieces.get(i), s, to - s, w.at < s, w.at + w.steps > stop, per, free));
                 s = to;
             } else {
                 cells.push(cell(s, per));
@@ -292,7 +296,7 @@ function grid() {
 /// An empty step. Click it and type.
 function cell(s, per) {
     const c = div('r-cell' + (s % per === 0 ? ' beat' : ''));
-    if (editing && editing.word < 0 && editing.at === s) c.append(editor(s));
+    if (editing && editing.word < 0 && editing.at === s) add(c, editor(s));
     else c.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -304,7 +308,13 @@ function cell(s, per) {
 /// A word, over the steps it holds in this bar. `cont` is a word that began in
 /// the bar above; `more` is one that goes on into the bar below. The handle is
 /// on the last segment only, because that is the edge a length lives on.
-function block(i, w, p, s, span, cont, more, per) {
+///
+/// **The label runs over the rests that follow**, `free` of them, because a
+/// step is thirty pixels and a word is longer than that: a block exactly its
+/// steps wide showed `hel` for `hello`, and a grid whose words cannot be read is
+/// a grid nobody can check. The block stays its steps wide — the beats line up
+/// — and only the text spills, to where the next word begins.
+function block(i, w, p, s, span, cont, more, per, free = 0) {
     const cls = ['r-word'];
     if (s % per === 0) cls.push('beat');
     if (cont) cls.push('cont');
@@ -316,7 +326,13 @@ function block(i, w, p, s, span, cont, more, per) {
     if (w.stretch && p && p.canStretch) cls.push('stretched');
     const kids = [];
     if (editing && editing.word === i && !cont) kids.push(editor(w.at));
-    else kids.push(el('span', { cls: 'txt', text: cont ? '' : w.phrase }));
+    else {
+        const txt = el('span', { cls: 'txt', text: cont ? '' : w.phrase });
+        // As a share of the block, so it needs no measurement: its own steps
+        // and the free ones after, less a margin before the next word.
+        txt.style.width = `${(((span + free) / span) * 100 - 8).toFixed(1)}%`;
+        kids.push(txt);
+    }
     if (!more) {
         const grab = div('grab');
         grab.addEventListener('mousedown', (e) => {
@@ -358,26 +374,98 @@ function openEditor(at, word) {
 /// The field itself. **Space lands the word and moves on**, which is what makes
 /// the grid typeable: `no no no no` is four presses of space. Inside an open
 /// quote it is a space, so `"you cross"` is one phrase.
+///
+/// **Under it, what the corpus says about what is being typed**: the word so
+/// far with how often it is said, then the words that begin with it. `hello ·
+/// 0` while it is being typed is what stops a pattern being built out of words
+/// nothing says and refused afterwards. The arrows pick one and Enter, Tab or
+/// space land it; with nothing picked, what was typed lands as typed, so a
+/// list can never put a word in that nobody wrote.
 function editor(at) {
     const ed = editing;
     const S = rhythm.stepsPerBar();
     const right = (at % S) >= (S * 2) / 3;
+    ed.hint = -1;
+    ed.hints = hintsFor(ed.value);
+    const hints = div('r-hints' + (right ? ' right' : ''));
+    const showHints = () => put(hints, () => ed.hints.map((h, n) => {
+        const row = div('r-hint' + (n === ed.hint ? ' on' : '') + (h.n ? '' : ' none'), [
+            el('span', { cls: 'w', text: h.word }),
+            el('span', { cls: 'n mono', text: `×${h.n}` }),
+        ]);
+        // On the press rather than the click: the press takes the caret off
+        // the field, and the field's own answer to that is deferred below so
+        // that this one lands first.
+        row.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            ed.value = h.word;
+            commit(true);
+        });
+        return row;
+    }));
+    showHints();
     const input = el('input', {
         type: 'text', cls: 'r-edit' + (right ? ' right' : ''), value: ed.value,
         placeholder: 'word',
         on: {
-            input: () => { ed.value = input.value; },
+            input: () => {
+                ed.value = input.value;
+                ed.hint = -1;
+                ed.hints = hintsFor(ed.value);
+                showHints();
+            },
             keydown: (e) => {
                 e.stopPropagation();
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const n = ed.hints.length;
+                    if (!n) return;
+                    ed.hint = e.key === 'ArrowDown' ? (ed.hint + 1) % n : (ed.hint - 1 + n) % n;
+                    showHints();
+                    return;
+                }
+                const lands = e.key === 'Enter' || e.key === 'Tab' ||
+                              (e.key === ' ' && !openQuote(input.value));
+                if (lands && ed.hint >= 0) ed.value = ed.hints[ed.hint].word;
                 if (e.key === 'Enter') { e.preventDefault(); commit(false); }
                 else if (e.key === 'Tab') { e.preventDefault(); commit(true); }
                 else if (e.key === ' ' && !openQuote(input.value)) { e.preventDefault(); commit(true); }
                 else if (e.key === 'Escape') { e.preventDefault(); close(); }
             },
-            blur: () => { if (editing === ed && !ed.done) commit(false); },
+            // Deferred by a turn, because the engine moves the caret *before* it
+            // delivers the press that moved it: a press on a suggestion blurs
+            // this field first, and committing here would land what was typed
+            // over what was pressed. A turn later the press has had its say.
+            blur: () => { setTimeout(() => { if (editing === ed && !ed.done) commit(false); }, 0); },
         },
     });
-    return input;
+    return [input, hints];
+}
+
+/// What the field could mean, with how often each is said. Nothing for a
+/// quoted phrase or one with `|` in it, whose count is a search's question.
+function hintsFor(value) {
+    const typed = String(value || '').trim();
+    if (!typed || typed.includes('"') || typed.includes('|')) return [];
+    if (!library.available() || !library.current()) return [];
+    const key = bare(typed);
+    if (key.length < 2) return [];
+    const out = [{ word: key, n: library.saidCount(typed) }];
+    for (const s of library.suggest(typed, 6)) if (s.word !== key) out.push(s);
+    return out.slice(0, 6);
+}
+
+/// The words the corpus does have that come nearest to one it does not: the
+/// longest beginning of it that begins anything.
+function nearest(phrase) {
+    const key = bare(phrase);
+    if (!library.available() || !library.current()) return [];
+    for (let n = key.length; n >= 2; n--) {
+        const got = library.suggest(key.slice(0, n), 5).filter((s) => s.word !== key);
+        if (got.length) return got;
+    }
+    return [];
 }
 
 const openQuote = (v) => (String(v).split('"').length - 1) % 2 === 1;
@@ -693,6 +781,13 @@ function bodyOf(w, p) {
         const why = p && p.why ? `"${w.phrase}" — ${p.why}`
                   : library.available() ? `nothing says "${w.phrase}"` : 'no corpus';
         rows.push(div('r-line bad', [el('span', { text: why })]));
+        // The nearest words it does have, as things to press: a refusal with
+        // nothing beside it is a dead end, and the corpus knows the way out.
+        const near = p && !p.why ? nearest(w.phrase) : [];
+        if (near.length) rows.push(div('r-line r-near', near.map((s) => el('button', {
+            cls: 'tiny', text: `${s.word} ×${s.n}`,
+            on: { click: () => { rhythm.setPhrase(i, s.word); draw(); drawNote(); } },
+        }))));
         rows.push(div('r-line', [
             el('span', { cls: 'spacer' }),
             el('button', { cls: 'tiny', text: 'Remove', on: { click: () => remove(i) } }),

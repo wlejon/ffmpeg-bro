@@ -96,6 +96,9 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
     min-height: 0; background: var(--panel);
     border-right: 1px solid var(--line);
 }
+/* The grid is sixteen cells across and a cell has a word on it: at 520 a
+   step is twenty-eight pixels and three letters. The one tab that is wider. */
+#finder.rhythm { flex-basis: 700px; width: 700px; }
 .tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
 .tabs button { border-radius: 4px 4px 0 0; }
 
@@ -220,13 +223,17 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
     position: relative; flex: 1 1 0; min-width: 0;
     font-size: 11px; color: var(--text);
     background: #2c3342; border-left: 1px solid var(--line);
-    cursor: grab; overflow: hidden;
+    cursor: grab;
 }
 /* Out of the flow, so the word never widens its block: a block is exactly the
-   steps it holds, whatever is written on it, or the beats stop lining up. */
+   steps it holds, whatever is written on it, or the beats stop lining up. The
+   width is set on the label by `pattern.js` — its steps and the rests after
+   them — and the block does not clip it, which is what lets `hello` be read on
+   one step. */
 .r-word .txt {
-    position: absolute; left: 5px; right: 9px; top: 0; bottom: 0; line-height: 32px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    position: absolute; left: 5px; top: 0; bottom: 0; line-height: 32px; z-index: 1;
+    width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    pointer-events: none;
 }
 /* The half of a word that began in the bar above. */
 .r-word.cont { border-left: 1px dashed #4a5361; }
@@ -260,6 +267,23 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
     z-index: 5; font-size: 12px; padding: 2px 6px;
 }
 .r-edit.right { left: auto; right: -1px; }
+/* What the corpus says about what is being typed, under the field. */
+.r-hints {
+    position: absolute; left: -1px; top: 36px; min-width: 120px; z-index: 6;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+}
+.r-hints.right { left: auto; right: -1px; }
+.r-hints:empty { display: none; }
+.r-hint {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 3px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.r-hint:hover, .r-hint.on { background: var(--accent-dim); }
+.r-hint .n { color: var(--dim); }
+.r-hint.none .n { color: var(--bad); }
+/* The words the corpus does have, beside a word it does not. */
+.r-near { flex-wrap: wrap; gap: 4px; }
 
 /* The panel about the selected word. Under the grid rather than over it, so
    the grid holds still while a word is dialled in. */
