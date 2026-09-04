@@ -153,6 +153,11 @@ export function warm() {
     for (const p of paths.slice(0, Math.max(1, room() - 1))) elementFor(p);
 }
 
+/// Pre-warm a specific media path into the video pool.
+export function warmPath(path) {
+    if (path) elementFor(path);
+}
+
 /// Show exactly one pooled element, or none.
 function reveal(path) {
     if (shown === path) return;

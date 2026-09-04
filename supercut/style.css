@@ -315,6 +315,87 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .row.step button.tiny {
     flex: 0 0 auto;
 }
+.row.step.selected {
+    background: rgba(255, 140, 66, 0.12);
+    border-left: 2px solid var(--accent);
+    padding-left: 4px;
+}
+
+.badge.slip-badge {
+    color: #60a5fa;
+    background: rgba(96, 165, 250, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.3);
+}
+
+.r-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding-top: 2px;
+}
+#r-listen-all.on {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.r-inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 0 10px 8px;
+    padding: 7px 9px;
+    background: var(--panel-hi);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+}
+.r-inspect-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+}
+.r-inspect-title {
+    color: var(--text);
+}
+.r-inspect-title strong {
+    color: var(--accent);
+}
+.r-inspect-take {
+    font-size: 11px;
+    color: var(--dim);
+}
+.r-inspect-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+}
+.r-inspect-row button.tiny {
+    padding: 2px 5px;
+    font-size: 11px;
+}
+.r-inspect-row button.tiny.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text);
+}
+.r-inspect-row button.tiny.on {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text);
+}
+.r-val {
+    min-width: 48px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text);
+    padding: 0 2px;
+}
+.sep {
+    padding: 0 2px;
+}
 
 /* ── the picture ──────────────────────────────────────────────────────── */
 

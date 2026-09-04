@@ -167,6 +167,9 @@ export function setScore(t) {
         text = s;
         said = '';
         stepPins.clear();
+        stepOffsets.clear();
+        stepDurDeltas.clear();
+        stepRates.clear();
         remember();
     }
 }
@@ -227,6 +230,77 @@ export function cycleStepTake(index, delta = 1) {
 /// Clear all interactive step pins.
 export function clearStepPins() {
     stepPins.clear();
+    replan();
+}
+
+const stepOffsets = new Map();     // index -> offset in seconds (slip)
+const stepDurDeltas = new Map();   // index -> delta in seconds
+const stepRates = new Map();       // index -> playback rate
+
+/// Slipped in-point offset (in seconds) for step piece `index`.
+export function stepOffsetOf(index) {
+    return stepOffsets.get(index) || 0;
+}
+
+/// Set slipped in-point offset (in seconds) for step piece `index`.
+export function setStepOffset(index, sec) {
+    const val = Number(sec) || 0;
+    stepOffsets.set(index, Math.max(-5.0, Math.min(5.0, val)));
+    replan();
+    return stepOffsets.get(index);
+}
+
+/// Nudge in-point offset by delta seconds (e.g. +0.005 for +5ms).
+export function nudgeStepOffset(index, deltaSec) {
+    const cur = stepOffsetOf(index);
+    return setStepOffset(index, cur + Number(deltaSec || 0));
+}
+
+/// Duration adjustment delta (in seconds) for step piece `index`.
+export function stepDurDeltaOf(index) {
+    return stepDurDeltas.get(index) || 0;
+}
+
+/// Set duration adjustment delta (in seconds) for step piece `index`.
+export function setStepDurDelta(index, sec) {
+    const val = Number(sec) || 0;
+    stepDurDeltas.set(index, Math.max(-5.0, Math.min(5.0, val)));
+    replan();
+    return stepDurDeltas.get(index);
+}
+
+/// Nudge duration adjustment by delta seconds.
+export function nudgeStepDurDelta(index, deltaSec) {
+    const cur = stepDurDeltaOf(index);
+    return setStepDurDelta(index, cur + Number(deltaSec || 0));
+}
+
+/// Playback rate override for step piece `index` (0 if using default/flex).
+export function stepRateOf(index) {
+    return stepRates.get(index) || 0;
+}
+
+/// Set playback rate override for step piece `index`.
+export function setStepRate(index, rate) {
+    const r = Math.max(0.25, Math.min(4.0, Number(rate) || 1.0));
+    stepRates.set(index, r);
+    replan();
+    return r;
+}
+
+/// Reset fine adjustments for step piece `index`.
+export function resetStepFine(index) {
+    stepOffsets.delete(index);
+    stepDurDeltas.delete(index);
+    stepRates.delete(index);
+    replan();
+}
+
+/// Clear all fine adjustments.
+export function clearStepFine() {
+    stepOffsets.clear();
+    stepDurDeltas.clear();
+    stepRates.clear();
     replan();
 }
 
@@ -474,12 +548,30 @@ export function resolve(src = text) {
         }
         const chosen = p.candidates[n];
         p.hit = chosen.hit;
-        p.at = chosen.hit.at;
         p.take = chosen.take;
-        p.dur = chosen.dur;
         p.fitRatio = chosen.ratio;
         p.fitScore = chosen.score;
         p.origTake = chosen.origTake;
+        p.naturalDur = chosen.dur;
+
+        const offset = stepOffsets.get(i) || 0;
+        const durDelta = stepDurDeltas.get(i) || 0;
+        const customRate = stepRates.get(i) || 0;
+
+        p.offset = offset;
+        p.durDelta = durDelta;
+        p.at = Math.max(0, chosen.hit.at + offset);
+        p.dur = Math.max(0.02, chosen.dur + durDelta);
+
+        let rate = 1.0;
+        if (customRate) {
+            rate = customRate;
+        } else if (p.fitRatio && p.fitRatio > 1.12 && p.fitRatio <= 1.5) {
+            rate = p.fitRatio;
+        } else if (p.fitRatio && p.fitRatio < 0.88 && p.fitRatio >= 0.75) {
+            rate = p.fitRatio;
+        }
+        p.rate = rate;
     }
     return { pieces, missing, steps, seconds };
 }
@@ -597,10 +689,12 @@ function lay() {
         if (!clip) continue;
         laid++;
         // The onset read for this piece, queued rather than started: one runs at
-        // a time process-wide. `want` is the transcript's number, which is what
-        // the answer is measured against.
-        queue.push({ clip: clip.id, path: p.hit.vod.media, want: Math.max(0, p.at),
-                     read: 0, phrase: p.phrase });
+        // a time process-wide. A piece with an explicit slip offset is respected
+        // as-is and skipped by auto-onset snapping.
+        if (!p.offset) {
+            queue.push({ clip: clip.id, path: p.hit.vod.media, want: Math.max(0, p.at),
+                         read: 0, phrase: p.phrase });
+        }
     }
     job = null;
     said = `${laid} pieces on the grid`;

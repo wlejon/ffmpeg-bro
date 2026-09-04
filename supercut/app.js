@@ -314,6 +314,16 @@ function seek(t) {
 /// Pressing the one key everything else stops with, and being answered by a
 /// second recording, is the failure this avoids.
 function togglePlay() {
+    if (results.isScorePlaying && results.isScorePlaying()) {
+        results.stopScore();
+        drawBar();
+        return;
+    }
+    if (results.isStepLooping && results.isStepLooping()) {
+        results.stopStepLoop();
+        drawBar();
+        return;
+    }
     if (results.auditioning()) { results.hush(); drawBar(); return; }
     if (screen.isPlaying()) screen.play(false);
     else if (!screen.play(true)) flash('nothing in the mix');
@@ -365,6 +375,7 @@ results.initResults({
     audition: (path, from, until, rate) => { screen.audition(path, from, until, rate); drawBar(); },
     hush: () => { screen.stopAudition(); drawBar(); },
     add: addMoment,
+    warmPath: (path) => { screen.warmPath(path); },
 });
 
 // The builder, which is the one part of this application that lays several
@@ -455,6 +466,39 @@ document.addEventListener('keydown', (e) => {
     // The list of what is running is a thing put over the window, so it closes
     // the way everything put over a window closes.
     if (e.key === 'Escape' && inflight.isOpen()) { inflight.toggle(false); return; }
+    if (results.currentTab && results.currentTab() === 'rhythm') {
+        if (e.key === ' ') {
+            results.toggleScorePlay();
+            drawBar();
+            e.preventDefault();
+            return;
+        }
+        if (e.key === 'l' || e.key === 'L') {
+            results.toggleScoreLoop();
+            e.preventDefault();
+            return;
+        }
+        if (e.key === 'ArrowUp') {
+            results.selectRelativeStep(-1);
+            e.preventDefault();
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            results.selectRelativeStep(1);
+            e.preventDefault();
+            return;
+        }
+        if (e.key === ',' || e.key === '<') {
+            results.nudgeActiveStepOffset(e.shiftKey ? -0.025 : -0.005);
+            e.preventDefault();
+            return;
+        }
+        if (e.key === '.' || e.key === '>') {
+            results.nudgeActiveStepOffset(e.shiftKey ? 0.025 : 0.005);
+            e.preventDefault();
+            return;
+        }
+    }
     if (e.key === ' ') { togglePlay(); e.preventDefault(); return; }
     if (e.key === 'Home') { seek(0); return; }
     if (e.key === 'End') { seek(duration()); return; }

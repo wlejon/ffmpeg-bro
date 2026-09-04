@@ -84,6 +84,11 @@ export function initResults(refs, h) {
     hooks = h || {};
     for (const b of nodes.tabs.querySelectorAll('[data-tab]'))
         b.addEventListener('click', () => setTab(b.dataset.tab));
+    nodes.inspector = el('div', { id: 'r-inspector', cls: 'r-inspector' });
+    nodes.inspector.hidden = true;
+    if (nodes.list && nodes.list.parentNode) {
+        nodes.list.parentNode.insertBefore(nodes.inspector, nodes.list);
+    }
 }
 
 /// Open the corpus and draw. Answers false when there is none.
@@ -118,6 +123,11 @@ export function currentTab() { return tab; }
 export function setTab(next) {
     if (tab === next) return;
     tab = next;
+    stopScore();
+    stopStepLoop();
+    if (tab !== 'rhythm' && nodes.inspector) {
+        nodes.inspector.hidden = true;
+    }
     // **Answered on arrival, not on a press.** Two of the three questions have an
     // answer already — what is in the corpus, and where the talking is — and a
     // tab that came up empty with a Find button beside it would be asking
@@ -159,6 +169,7 @@ function search() {
         results = reading.hits;
     }
     drawNote();
+    drawInspector();
     drawRows();
 }
 
@@ -327,18 +338,13 @@ export function play(n) {
         if (item.pieceIndex !== undefined) lastStepIndex = item.pieceIndex;
         if (item.piece && item.piece.kind === 'word') {
             const p = item.piece;
-            const from = Math.max(0, item.at);
+            const from = Math.max(0, p.at);
             const naturalDur = p.dur || (item.to - item.at);
-            // Play at fitted rate via broaudio resampler if slight stretch/compression improves fit
-            let rate = 1.0;
-            if (p.fitRatio && p.fitRatio > 1.12 && p.fitRatio <= 1.5) {
-                rate = p.fitRatio; // slight speedup to fit slot
-            } else if (p.fitRatio && p.fitRatio < 0.88 && p.fitRatio >= 0.75) {
-                rate = p.fitRatio; // slight slowdown to fill slot
-            }
+            const rate = p.rate || 1.0;
             const until = from + naturalDur;
             hooks.audition(item.vod.media, from, until, rate);
         }
+        drawInspector();
     } else {
         const lead = item.kind === 'word' ? library.WORD_PAD : 0;
         hooks.audition(item.vod.media, Math.max(0, item.at - lead), item.to + lead);
@@ -367,6 +373,7 @@ export function cycleActiveTake(delta = 1) {
     rhythm.cycleStepTake(targetPieceIdx, delta);
     results = steps();
     drawNote();
+    drawInspector();
     const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === targetPieceIdx);
     if (rowIdx >= 0) {
         if (!play(rowIdx)) drawRows();
@@ -374,6 +381,242 @@ export function cycleActiveTake(delta = 1) {
         drawRows();
     }
     return true;
+}
+
+let scorePlaying = false;
+let scoreLooping = false;
+let scoreTimer = null;
+let stepLooping = false;
+let stepLoopTimer = null;
+
+export function isScorePlaying() { return scorePlaying; }
+export function isScoreLooping() { return scoreLooping; }
+export function setScoreLooping(on) {
+    scoreLooping = !!on;
+    const chk = document.getElementById('r-loop');
+    if (chk && chk.checked !== scoreLooping) chk.checked = scoreLooping;
+}
+export function toggleScoreLoop() {
+    setScoreLooping(!scoreLooping);
+    return scoreLooping;
+}
+
+function updateListenButton() {
+    const btn = document.getElementById('r-listen-all');
+    if (btn) {
+        btn.textContent = scorePlaying ? '■ Stop' : '▶ Listen all';
+        btn.classList.toggle('on', scorePlaying);
+        btn.title = scorePlaying ? 'Stop listening (Space)' : 'Listen to whole score in tempo (Space)';
+    }
+}
+
+export function stopScore() {
+    if (!scorePlaying && !scoreTimer) return;
+    scorePlaying = false;
+    if (scoreTimer) { clearTimeout(scoreTimer); scoreTimer = null; }
+    if (hooks.hush) hooks.hush();
+    playing = null;
+    updateListenButton();
+    drawRows();
+    drawInspector();
+}
+
+export function isStepLooping() { return stepLooping; }
+export function stopStepLoop() {
+    if (!stepLooping && !stepLoopTimer) return;
+    stepLooping = false;
+    if (stepLoopTimer) { clearTimeout(stepLoopTimer); stepLoopTimer = null; }
+    if (hooks.hush) hooks.hush();
+    playing = null;
+    drawRows();
+    drawInspector();
+}
+
+export function loopStep(pieceIdx) {
+    if (stepLooping && lastStepIndex === pieceIdx) {
+        stopStepLoop();
+        return false;
+    }
+    stopScore();
+    stopStepLoop();
+    stepLooping = true;
+    lastStepIndex = pieceIdx;
+
+    function nextIter() {
+        if (!stepLooping) return;
+        const plan = rhythm.plan();
+        const p = plan.pieces[pieceIdx];
+        if (!p || p.kind !== 'word' || !p.hit || !p.hit.vod.media) {
+            stopStepLoop();
+            return;
+        }
+
+        const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === pieceIdx);
+        if (rowIdx >= 0) {
+            playing = results[rowIdx];
+            drawRows();
+        }
+
+        const from = Math.max(0, p.at);
+        const dur = Math.max(0.04, p.dur || p.seconds);
+        const rate = p.rate || 1.0;
+        hooks.audition(p.hit.vod.media, from, from + dur, rate);
+
+        const repeatMs = Math.max((p.seconds || 0.2) * 1000, (dur / rate) * 1000 + 80);
+        stepLoopTimer = setTimeout(() => {
+            if (!stepLooping) return;
+            nextIter();
+        }, repeatMs);
+    }
+
+    drawInspector();
+    nextIter();
+    return true;
+}
+
+export function playScore(startIndex = 0) {
+    if (tab !== 'rhythm') return false;
+    stopStepLoop();
+    stopScore();
+
+    const plan = rhythm.plan();
+    if (!plan || !plan.pieces.length) return false;
+
+    for (const p of plan.pieces) {
+        if (p.hit && p.hit.vod.media && hooks.warmPath) {
+            hooks.warmPath(p.hit.vod.media);
+        }
+    }
+
+    scorePlaying = true;
+    updateListenButton();
+
+    let curIdx = Math.max(0, Math.min(plan.pieces.length - 1, startIndex));
+
+    function stepLoop(idx) {
+        if (!scorePlaying) return;
+        if (idx >= plan.pieces.length) {
+            if (scoreLooping) {
+                stepLoop(0);
+                return;
+            }
+            stopScore();
+            return;
+        }
+
+        const p = plan.pieces[idx];
+        lastStepIndex = idx;
+        const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === idx);
+        if (rowIdx >= 0) {
+            playing = results[rowIdx];
+            drawRows();
+            drawInspector();
+        }
+
+        const stepSec = Math.max(0.04, p.seconds || (60 / rhythm.tempoOf() / rhythm.stepsPerBeat()));
+        const stepMs = stepSec * 1000;
+
+        if (p.kind === 'word' && p.hit && p.hit.vod.media) {
+            const from = Math.max(0, p.at);
+            const dur = Math.max(0.02, p.dur || stepSec);
+            const rate = p.rate || 1.0;
+            hooks.audition(p.hit.vod.media, from, from + dur, rate);
+        } else {
+            if (hooks.hush) hooks.hush();
+        }
+
+        scoreTimer = setTimeout(() => {
+            if (!scorePlaying) return;
+            stepLoop(idx + 1);
+        }, stepMs);
+    }
+
+    stepLoop(curIdx);
+    return true;
+}
+
+export function toggleScorePlay() {
+    if (scorePlaying) {
+        stopScore();
+        return false;
+    }
+    return playScore(0);
+}
+
+export function selectRelativeStep(delta = 1) {
+    if (tab !== 'rhythm') return false;
+    const plan = rhythm.plan();
+    if (!plan.pieces.length) return false;
+    const cur = lastStepIndex >= 0 ? lastStepIndex : 0;
+    const next = Math.max(0, Math.min(plan.pieces.length - 1, cur + delta));
+    lastStepIndex = next;
+    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === next);
+    drawInspector();
+    if (rowIdx >= 0) {
+        play(rowIdx);
+    } else {
+        drawRows();
+    }
+    return true;
+}
+
+export function nudgeActiveStepOffset(deltaSec) {
+    if (tab !== 'rhythm' || lastStepIndex < 0) return 0;
+    const nextOffset = rhythm.nudgeStepOffset(lastStepIndex, deltaSec);
+    results = steps();
+    drawNote();
+    drawInspector();
+    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
+    if (rowIdx >= 0) {
+        if (!play(rowIdx)) drawRows();
+    } else {
+        drawRows();
+    }
+    return nextOffset;
+}
+
+export function nudgeActiveStepDur(deltaSec) {
+    if (tab !== 'rhythm' || lastStepIndex < 0) return 0;
+    const nextDur = rhythm.nudgeStepDurDelta(lastStepIndex, deltaSec);
+    results = steps();
+    drawNote();
+    drawInspector();
+    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
+    if (rowIdx >= 0) {
+        if (!play(rowIdx)) drawRows();
+    } else {
+        drawRows();
+    }
+    return nextDur;
+}
+
+export function setActiveStepRate(rate) {
+    if (tab !== 'rhythm' || lastStepIndex < 0) return 1.0;
+    rhythm.setStepRate(lastStepIndex, rate);
+    results = steps();
+    drawNote();
+    drawInspector();
+    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
+    if (rowIdx >= 0) {
+        if (!play(rowIdx)) drawRows();
+    } else {
+        drawRows();
+    }
+    return rate;
+}
+
+export function resetActiveStepFine() {
+    if (tab !== 'rhythm' || lastStepIndex < 0) return;
+    rhythm.resetStepFine(lastStepIndex);
+    results = steps();
+    drawNote();
+    drawInspector();
+    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
+    if (rowIdx >= 0) {
+        if (!play(rowIdx)) drawRows();
+    } else {
+        drawRows();
+    }
 }
 
 /// Stop the audition, whichever row it is on. The app's `Space` reaches this too.
@@ -409,6 +652,7 @@ const isPlaying = (item) =>
 /// The audition ended, wherever it ended. Called by the app.
 export function stopped() {
     if (!playing) return;
+    if (scorePlaying || stepLooping) return;
     playing = null;
     drawRows();
 }
@@ -420,6 +664,7 @@ function draw() {
         b.classList.toggle('on', b.dataset.tab === tab);
     drawControls();
     drawNote();
+    drawInspector();
     drawRows();
     drawChannel();
 }
@@ -619,6 +864,27 @@ function drawControls() {
                     go.disabled = rhythm.busy();
                 } },
             });
+            const listenAll = el('button', {
+                cls: 'tiny' + (scorePlaying ? ' on' : ''),
+                id: 'r-listen-all',
+                text: scorePlaying ? '■ Stop' : '▶ Listen all',
+                title: scorePlaying ? 'Stop listening (Space)' : 'Listen to whole score in tempo (Space)',
+                on: { click: () => toggleScorePlay() },
+            });
+            const loopCheck = el('label', { cls: 'check' }, [
+                el('input', {
+                    type: 'checkbox',
+                    id: 'r-loop',
+                    checked: scoreLooping,
+                    on: { change: (e) => { setScoreLooping(e.target.checked); } },
+                }),
+                'loop all',
+            ]);
+            const actions = el('div', { cls: 'r-actions' }, [
+                go,
+                listenAll,
+                loopCheck,
+            ]);
             // **Build comes after the box, not before it.** The order on the
             // screen is the order of the work: set the grid, write the words,
             // press it.
@@ -640,7 +906,7 @@ function drawControls() {
                     'sort takes by fit',
                 ]),
                 box,
-                go,
+                actions,
             ];
         }
         if (tab === 'words') {
@@ -1028,6 +1294,134 @@ function span(seconds) {
                       : `${s}s`;
 }
 
+function drawInspector() {
+    if (!nodes || !nodes.inspector) return;
+    if (tab !== 'rhythm') {
+        nodes.inspector.hidden = true;
+        return;
+    }
+    const plan = rhythm.plan();
+    if (!plan || !plan.pieces || !plan.pieces.length) {
+        nodes.inspector.hidden = true;
+        return;
+    }
+    if (lastStepIndex < 0 || lastStepIndex >= plan.pieces.length) {
+        lastStepIndex = 0;
+    }
+    const p = plan.pieces[lastStepIndex];
+    if (!p || p.kind !== 'word' || !p.hit) {
+        nodes.inspector.hidden = true;
+        return;
+    }
+    nodes.inspector.hidden = false;
+
+    put(nodes.inspector, () => {
+        const headKids = [
+            el('span', { cls: 'r-inspect-title' }, [
+                `Step ${lastStepIndex + 1}: `,
+                el('strong', { text: p.phrase }),
+            ]),
+            el('span', { cls: 'r-inspect-take mono', text: `take ${p.take}/${p.takes || 1}` }),
+        ];
+        if (p.fitScore !== undefined) {
+            const badgeCls = p.fitScore >= 85 ? 'fit-good' : (p.fitScore >= 65 ? 'fit-med' : 'fit-poor');
+            headKids.push(el('span', { cls: `badge ${badgeCls} mono`, text: `${p.fitScore}%` }));
+        }
+        headKids.push(el('span', { cls: 'spacer' }));
+        headKids.push(el('button', {
+            cls: 'tiny text', text: '▲', title: 'Previous step (Up)',
+            disabled: lastStepIndex <= 0,
+            on: { click: () => selectRelativeStep(-1) },
+        }));
+        headKids.push(el('button', {
+            cls: 'tiny text', text: '▼', title: 'Next step (Down)',
+            disabled: lastStepIndex >= plan.pieces.length - 1,
+            on: { click: () => selectRelativeStep(1) },
+        }));
+
+        const offsetMs = Math.round((p.offset || 0) * 1000);
+        const offsetText = `${offsetMs > 0 ? '+' : ''}${offsetMs} ms`;
+
+        // Slip row
+        const slipRow = [
+            el('span', { cls: 'dim', text: 'slip' }),
+            el('button', { cls: 'tiny text', text: '-50ms', on: { click: () => nudgeActiveStepOffset(-0.050) } }),
+            el('button', { cls: 'tiny text', text: '-10ms', on: { click: () => nudgeActiveStepOffset(-0.010) } }),
+            el('button', { cls: 'tiny text', text: '-5ms', on: { click: () => nudgeActiveStepOffset(-0.005) } }),
+            el('span', { cls: 'mono r-val', text: offsetText, title: 'In-point offset relative to speech onset' }),
+            el('button', { cls: 'tiny text', text: '+5ms', on: { click: () => nudgeActiveStepOffset(0.005) } }),
+            el('button', { cls: 'tiny text', text: '+10ms', on: { click: () => nudgeActiveStepOffset(0.010) } }),
+            el('button', { cls: 'tiny text', text: '+50ms', on: { click: () => nudgeActiveStepOffset(0.050) } }),
+            el('button', {
+                cls: 'tiny text', text: '↺', title: 'Reset slip offset to 0',
+                disabled: (p.offset || 0) === 0,
+                on: { click: () => {
+                    rhythm.setStepOffset(lastStepIndex, 0);
+                    results = steps(); drawNote(); drawInspector(); play(lastStepIndex);
+                } },
+            }),
+        ];
+
+        // Length & Flex row
+        const durMs = Math.round((p.dur || 0) * 1000);
+        const curRate = p.rate || 1.0;
+        const isLoopingThis = stepLooping && lastStepIndex === p.pieceIndex;
+
+        const lenRow = [
+            el('span', { cls: 'dim', text: 'len' }),
+            el('button', { cls: 'tiny text', text: '-25ms', on: { click: () => nudgeActiveStepDur(-0.025) } }),
+            el('button', { cls: 'tiny text', text: '-5ms', on: { click: () => nudgeActiveStepDur(-0.005) } }),
+            el('span', { cls: 'mono r-val', text: `${durMs} ms`, title: 'Audition length' }),
+            el('button', { cls: 'tiny text', text: '+5ms', on: { click: () => nudgeActiveStepDur(0.005) } }),
+            el('button', { cls: 'tiny text', text: '+25ms', on: { click: () => nudgeActiveStepDur(0.025) } }),
+            el('button', {
+                cls: 'tiny text', text: '↺', title: 'Reset length',
+                disabled: !p.durDelta,
+                on: { click: () => {
+                    rhythm.setStepDurDelta(lastStepIndex, 0);
+                    results = steps(); drawNote(); drawInspector(); play(lastStepIndex);
+                } },
+            }),
+            el('span', { cls: 'dim sep', text: '·' }),
+            el('span', { cls: 'dim', text: 'flex' }),
+            el('button', {
+                cls: 'tiny text' + (Math.abs(curRate - 0.9) < 0.02 ? ' active' : ''),
+                text: '0.9×', on: { click: () => setActiveStepRate(0.9) },
+            }),
+            el('button', {
+                cls: 'tiny text' + (Math.abs(curRate - 1.0) < 0.02 ? ' active' : ''),
+                text: '1.0×', on: { click: () => setActiveStepRate(1.0) },
+            }),
+            el('button', {
+                cls: 'tiny text' + (Math.abs(curRate - 1.1) < 0.02 ? ' active' : ''),
+                text: '1.1×', on: { click: () => setActiveStepRate(1.1) },
+            }),
+            el('button', {
+                cls: 'tiny text' + (p.fitRatio && Math.abs(curRate - p.fitRatio) < 0.02 ? ' active' : ''),
+                text: 'fit', title: `Fit rate: ${(p.fitRatio || 1.0).toFixed(2)}×`,
+                on: { click: () => setActiveStepRate(p.fitRatio || 1.0) },
+            }),
+            el('span', { cls: 'spacer' }),
+            el('button', {
+                cls: 'tiny', text: '▶ Play', title: 'Audition this word',
+                on: { click: () => { stopStepLoop(); play(lastStepIndex); } },
+            }),
+            el('button', {
+                cls: 'tiny' + (isLoopingThis ? ' on' : ''),
+                text: isLoopingThis ? '■ Loop' : '🔁 Loop',
+                title: isLoopingThis ? 'Stop looping' : 'Loop this word continuously to dial in slip and attack',
+                on: { click: () => loopStep(lastStepIndex) },
+            }),
+        ];
+
+        return [
+            el('div', { cls: 'r-inspect-head' }, headKids),
+            el('div', { cls: 'r-inspect-row' }, slipRow),
+            el('div', { cls: 'r-inspect-row' }, lenRow),
+        ];
+    });
+}
+
 function drawRows() {
     // Whatever the last list left behind is gone with it. Cleared here rather
     // than in `repaint()` so that a row taken off the screen can never be
@@ -1139,6 +1533,16 @@ function drawRows() {
                     });
                     rowKids.push(fitBadge);
                 }
+
+                if (p.offset) {
+                    const offMs = Math.round(p.offset * 1000);
+                    const slipBadge = el('span', {
+                        cls: 'badge slip-badge mono',
+                        text: `${offMs > 0 ? '+' : ''}${offMs}ms`,
+                        title: `In-point offset: ${offMs}ms`,
+                    });
+                    rowKids.push(slipBadge);
+                }
             }
 
             rowKids.push(el('span', { cls: 'detail dim', text: item.detail }));
@@ -1146,11 +1550,17 @@ function drawRows() {
                          text: `${p.steps} step${p.steps === 1 ? '' : 's'}` }));
             rowKids.push(put_);
 
+            const isSelected = (pieceIdx === lastStepIndex);
             const rowNode = div('row step' + (isPlaying(item) ? ' playing' : '') +
+                                (isSelected ? ' selected' : '') +
                                 (p.kind === 'rest' ? ' rest' : '') +
                                 (p.kind === 'word' && !p.hit ? ' bad' : ''), rowKids);
             rowNode.dataset.pieceIndex = String(pieceIdx);
-            rowNode.addEventListener('click', () => { lastStepIndex = pieceIdx; });
+            rowNode.addEventListener('click', () => {
+                lastStepIndex = pieceIdx;
+                drawInspector();
+                drawRows();
+            });
             return rowNode;
         }
 

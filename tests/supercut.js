@@ -1255,6 +1255,86 @@ console.log('\nwords on a beat');
        `second clip is 160 bpm sixteenth (${dynSeq[1].length})`);
     for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
     ok(!A.rhythm.snapping(), 'dynamic score onset reads finished');
+
+    // ── score audition, looping and fine slip / playback controls ──────────
+    console.log('\nscore audition, looping, and fine controls');
+    type(score, 'cross line');
+    pump(60);
+    const inspectEl = document.getElementById('r-inspector');
+    ok(inspectEl && !inspectEl.hidden, 'rhythm inspector element is visible for active step');
+    ok(inspectEl.querySelector('.r-inspect-title'), 'inspector shows active step title');
+
+    // Score playback controls
+    const listenAllBtn = document.getElementById('r-listen-all');
+    ok(listenAllBtn !== null, 'r-listen-all button exists');
+    ok(!A.results.isScorePlaying(), 'score is not playing initially');
+
+    // Toggle score play
+    ok(A.results.toggleScorePlay() === true, 'toggleScorePlay starts playback');
+    ok(A.results.isScorePlaying(), 'score is marked as playing');
+    ok(listenAllBtn.textContent.includes('Stop'), 'listen button displays Stop during playback');
+
+    // Looping toggle
+    ok(!A.results.isScoreLooping(), 'score looping initially false');
+    A.results.toggleScoreLoop();
+    ok(A.results.isScoreLooping(), 'toggleScoreLoop enabled looping');
+    const loopAllCheck = document.getElementById('r-loop');
+    ok(loopAllCheck && loopAllCheck.checked, 'loop all checkbox reflects looping state');
+    A.results.setScoreLooping(false);
+    ok(!A.results.isScoreLooping(), 'setScoreLooping disables looping');
+
+    // Stop playback
+    A.results.stopScore();
+    ok(!A.results.isScorePlaying(), 'stopScore stops playback');
+    ok(listenAllBtn.textContent.includes('Listen all'), 'listen button resets to Listen all');
+
+    // Fine positional controls: in-point slip nudging
+    ok(A.rhythm.stepOffsetOf(0) === 0, 'step 0 initial offset is 0');
+    A.results.nudgeActiveStepOffset(0.015); // +15ms
+    pump(30);
+    ok(Math.abs(A.rhythm.stepOffsetOf(0) - 0.015) < 1e-6, 'step offset nudged to +15ms');
+    const p0 = A.rhythm.plan().pieces[0];
+    ok(Math.abs(p0.offset - 0.015) < 1e-6, 'plan piece reflects 15ms offset');
+    ok(Math.abs(p0.at - (p0.hit.at + 0.015)) < 1e-6, 'plan piece at is shifted by 15ms');
+
+    // List row shows slip badge
+    const slipBadges = [...document.querySelectorAll('#f-list .slip-badge')];
+    ok(slipBadges.length >= 1, 'slip badge is rendered in the list');
+    ok(slipBadges[0].textContent.includes('+15ms'), 'slip badge displays +15ms');
+
+    // Duration delta & rate flex controls
+    ok(A.rhythm.stepDurDeltaOf(0) === 0, 'initial step duration delta is 0');
+    A.rhythm.nudgeStepDurDelta(0, 0.020);
+    A.rhythm.setStepRate(0, 1.1);
+    const p0Adjusted = A.rhythm.plan().pieces[0];
+    ok(Math.abs(p0Adjusted.durDelta - 0.020) < 1e-6, 'duration delta is +20ms');
+    ok(p0Adjusted.rate === 1.1, 'playback rate is 1.1x');
+
+    // Single step audition and loop
+    ok(A.results.loopStep(0) === true, 'loopStep starts single-step loop');
+    ok(A.results.isStepLooping(), 'isStepLooping is true');
+    A.results.stopStepLoop();
+    ok(!A.results.isStepLooping(), 'stopStepLoop stops single-step loop');
+
+    // Step navigation
+    ok(A.results.selectRelativeStep(1) === true, 'selectRelativeStep navigates to next step');
+    ok(A.results.activeStepIndex() === 1, 'active step index is 1');
+
+    // Building preserves the manual slip offset in the sequence clip
+    document.getElementById('btn-clear').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(60);
+    const expectedAt0 = A.rhythm.plan().pieces[0].at;
+    ok(A.rhythm.build() === '', 'score with slip builds');
+    for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
+    const builtClips = A.mix.sequence();
+    ok(builtClips.length === 2, 'two clips built');
+    ok(Math.abs(builtClips[0].inPoint - expectedAt0) < 1e-6,
+       `built clip inPoint matches slipped at timestamp (${builtClips[0].inPoint} vs ${expectedAt0})`);
+    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
+    ok(!A.rhythm.snapping(), 'onset reads finished');
+    ok(Math.abs(builtClips[0].inPoint - expectedAt0) < 1e-6,
+       'manual slip offset was not overridden by auto onset detector');
 }
 
 // ── tracking higher energy speaking: yelling & activated speaking ──────────
