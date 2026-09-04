@@ -124,7 +124,7 @@
 // Three columns, in the order somebody works: what to capture, the pictures and
 // the act, what comes out.
 
-import { div, span, el, put, row, head } from './dom.js';
+import { div, span, el, put, row, head, setText } from './dom.js';
 import { clock, bytes, basename, shellArg } from './format.js';
 import { createMeter } from './meter.js';
 import { optionColumn } from './opttable.js';
@@ -1499,7 +1499,7 @@ export function tick() {
     let p = null;
     try { p = bro.ffmpeg.render.poll(); } catch (e) { return; }
     status = p;
-    if (p.state === 'running') { drawRecording(); return; }
+    if (p.state === 'running') { tickRecording(); return; }
 
     recording = false;
     // What there is to look at afterwards, which for a tee is not what was
@@ -2115,28 +2115,62 @@ function destinationName() {
     return { text: `${n} destination${n === 1 ? '' : 's'}`, title: recordTarget() };
 }
 
+/// The bar's readouts while a recording runs, written into place once a frame.
+///
+/// **The Stop button is built once and the numbers are written into it**, and
+/// this used to be the other way round: `drawRecording()` ran on every frame of
+/// a recording and `put()` emptied the bar and built a fresh Stop button each
+/// time. A hand holds a button for a frame or more, so by the release the node
+/// that was pressed was gone and a stranger stood in its place — and a press
+/// and a release on two different elements is a click on the nearest element
+/// containing both, which for a node that has left the tree is nothing. So
+/// Stop could not be pressed, ever, and the suite never saw it because it
+/// stopped recordings with a synthesised `.click()`, which asks nobody where
+/// the press landed. `tests/ui_capture.js` now presses it through the engine.
+/// `ui/dom.js`'s `setText` says the rest: a readout rewritten to say the same
+/// thing is a layout for nothing.
+let barMode = '';
+let readouts = null;
+
+function tickRecording() {
+    if (barMode !== 'recording' || !readouts) { drawRecording(); return; }
+    const st = status || {};
+    setText(readouts.elapsed, clock(st.elapsed || 0));
+    setText(readouts.frames, `${st.frames || 0} frames`);
+    setText(readouts.bytes, bytes(st.bytes || 0));
+    setText(readouts.until, st.openEnded
+        ? 'runs until you stop it'
+        : `${Math.round((st.progress || 0) * 100)}% of ${clock(shortest())}`);
+}
+
 export function drawRecording() {
     if (!refs.bar) return;
+    barMode = recording ? 'recording' : 'idle';
+    readouts = null;
     put(refs.bar, () => {
         const out = [];
         if (recording) {
             const st = status || {};
+            readouts = {
+                elapsed: span(clock(st.elapsed || 0), 'cap-elapsed mono'),
+                frames: span(`${st.frames || 0} frames`, 'dim mono'),
+                bytes: span(bytes(st.bytes || 0), 'dim mono'),
+                until: el('span', {
+                    cls: 'dim',
+                    text: st.openEnded
+                        ? 'runs until you stop it'
+                        : `${Math.round((st.progress || 0) * 100)}% of ${clock(shortest())}`,
+                    title: st.openEnded ? 'No duration limit set' : undefined,
+                }),
+            };
             out.push(el('button', {
                 cls: 'cap-go', 'data-f': 'capstop',
                 title: 'Stop recording',
                 on: { click: stopRecording },
             }, [div('cap-go-dot stop'), span('Stop')]));
-            out.push(span(clock(st.elapsed || 0), 'cap-elapsed mono'));
-            out.push(span(`${st.frames || 0} frames`, 'dim mono'));
-            out.push(span(bytes(st.bytes || 0), 'dim mono'));
+            out.push(readouts.elapsed, readouts.frames, readouts.bytes);
             out.push(div('spacer'));
-            out.push(el('span', {
-                cls: 'dim',
-                text: st.openEnded
-                    ? 'runs until you stop it'
-                    : `${Math.round((st.progress || 0) * 100)}% of ${clock(shortest())}`,
-                title: st.openEnded ? 'No duration limit set' : undefined,
-            }));
+            out.push(readouts.until);
         } else {
             const b = blockerInfo();
             const why = b ? b.text : '';

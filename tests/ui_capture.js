@@ -226,8 +226,22 @@ console.log('\na recording with no end');
     ok(!A.shell.goTo('encode'), 'the other stages are refused while it runs');
     same(A.shell.currentStage(), 'capture', 'and it stays where it was');
 
-    q('[data-f="capstop"]').click();
-    ok(waitFor('the recording to finish', () => !cap.isRecording()), 'stopping ends it');
+    // Pressed through the engine, with a frame between the press and the
+    // release, because that is what a hand does and what the synthesised
+    // `.click()` below cannot ask: the bar used to be rebuilt on every frame of
+    // a recording, so the button that was pressed was gone by the release and
+    // Stop could not be pressed at all — while `.click()` went on passing.
+    {
+        const before = q('[data-f="capstop"]');
+        pump(100);
+        same(q('[data-f="capstop"]'), before,
+             'the Stop button is the same element from one frame to the next');
+        const r = before.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        mouseDown(cx, cy); pump(60); mouseUp(cx, cy);
+    }
+    ok(waitFor('the recording to finish', () => !cap.isRecording()),
+       'stopping ends it — pressed and released across a frame, as a hand does');
     pump(200);
 
     const done = bro.ffmpeg.render.poll();

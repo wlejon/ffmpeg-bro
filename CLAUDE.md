@@ -166,6 +166,21 @@ is bro's own `click(x, y)`, `textInput(text)`, `keyDown`/`keyUp` and
 test and focus exactly as a hand does; anything that is a press-and-type should
 be asserted through them at least once, beside the synthesised version.
 
+The third is the Capture stage's Stop button, and it is the one to remember
+before writing anything into a frame loop. `tick()` redrew the recording bar
+on every frame with `put()`, so the button that was pressed was gone by the
+release and a stranger stood where it stood; a click is on the nearest element
+containing both the press and the release (bro's rule now, and the UI Events
+one — it used to require the same element, which dropped a press on a button's
+icon that released a pixel later on the button), and a node that has left the
+tree is contained by nothing. So Stop could not be pressed at all, and
+`.click()` in the suite went on passing because it asks nobody where the press
+landed. The rule is `ui/dom.js`'s `setText`: a control is built when its
+*mode* changes and its readouts are written into it, never rebuilt to move a
+number. A browser drops that press too, so this is not a gap to fix in bro —
+putting the click on whatever now stands there would press controls nobody
+pressed.
+
 ## The model everything is arranged around
 
 ffmpeg's model is inputs → streams → a filter graph → encoders → a muxer → an
