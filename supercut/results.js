@@ -70,6 +70,7 @@ let reading = null;
 /// a hit says a timecode and a phrase, and neither of those moves.
 const moving = new Map();
 let playing = null;      // the item being auditioned, for the row to show it
+let lastStepIndex = -1;  // last clicked/auditioned step piece index
 
 let phrase = '';
 let loose = false;
@@ -213,16 +214,16 @@ function steps() {
     const plan = rhythm.replan();
     let at = 0;
     let onStep = 1;
-    return plan.pieces.map((p) => {
+    return plan.pieces.map((p, pieceIdx) => {
         const seconds = p.seconds;
         const was = at;
         const wasStep = onStep;
         at += seconds;
         onStep += p.steps;
         const base = {
-            kind: 'step', piece: p, from: was, step: wasStep, seconds,
+            kind: 'step', piece: p, pieceIndex: pieceIdx, from: was, step: wasStep, seconds,
             at: p.hit ? p.hit.at : 0,
-            to: p.hit ? p.hit.at + seconds : seconds,
+            to: p.hit ? p.hit.at + (p.dur || seconds) : seconds,
         };
         const dynamic = p.tempo !== rhythm.tempoOf() || p.stepsPerBeat !== rhythm.stepsPerBeat();
         const tempoTag = dynamic ? ` · ${p.tempo} bpm (${p.stepsPerBeat}/beat)` : '';
@@ -313,10 +314,54 @@ export function play(n) {
     const item = results[n];
     if (!item || !item.vod.media) return false;
     if (isPlaying(item)) { hush(); return true; }
-    const lead = item.kind === 'word' ? library.WORD_PAD : 0;
     playing = item;
-    hooks.audition(item.vod.media, Math.max(0, item.at - lead), item.to + lead);
+    if (item.kind === 'step') {
+        if (item.pieceIndex !== undefined) lastStepIndex = item.pieceIndex;
+        if (item.piece && item.piece.kind === 'word') {
+            const p = item.piece;
+            const from = Math.max(0, item.at);
+            const naturalDur = p.dur || (item.to - item.at);
+            // Play at fitted rate via broaudio resampler if slight stretch/compression improves fit
+            let rate = 1.0;
+            if (p.fitRatio && p.fitRatio > 1.12 && p.fitRatio <= 1.5) {
+                rate = p.fitRatio; // slight speedup to fit slot
+            } else if (p.fitRatio && p.fitRatio < 0.88 && p.fitRatio >= 0.75) {
+                rate = p.fitRatio; // slight slowdown to fill slot
+            }
+            const until = from + naturalDur;
+            hooks.audition(item.vod.media, from, until, rate);
+        }
+    } else {
+        const lead = item.kind === 'word' ? library.WORD_PAD : 0;
+        hooks.audition(item.vod.media, Math.max(0, item.at - lead), item.to + lead);
+    }
     drawRows();
+    return true;
+}
+
+/// Active step piece index for keyboard cycling.
+export function activeStepIndex() { return lastStepIndex; }
+
+/// Cycle through takes for the active (or playing) step piece, re-searching and auditioning.
+export function cycleActiveTake(delta = 1) {
+    if (tab !== 'rhythm') return false;
+    let targetPieceIdx = -1;
+    if (playing && playing.kind === 'step' && playing.pieceIndex !== undefined) {
+        targetPieceIdx = playing.pieceIndex;
+    } else if (lastStepIndex >= 0) {
+        targetPieceIdx = lastStepIndex;
+    } else {
+        const first = results.find((r) => r.kind === 'step' && r.piece && r.piece.kind === 'word');
+        if (first) targetPieceIdx = first.pieceIndex;
+    }
+    if (targetPieceIdx < 0) return false;
+    lastStepIndex = targetPieceIdx;
+    rhythm.cycleStepTake(targetPieceIdx, delta);
+    search();
+    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === targetPieceIdx);
+    if (rowIdx >= 0) {
+        play(rowIdx);
+    }
     return true;
 }
 
@@ -570,6 +615,13 @@ function drawControls() {
                         on: { change: (e) => { rhythm.setLoose(e.target.checked); search(); } },
                     }),
                     'inside longer words',
+                ]),
+                el('label', { cls: 'check' }, [
+                    el('input', {
+                        type: 'checkbox', checked: rhythm.sortByFitOf(),
+                        on: { change: (e) => { rhythm.setSortByFit(e.target.checked); search(); } },
+                    }),
+                    'sort takes by fit',
                 ]),
                 box,
                 go,
@@ -997,11 +1049,8 @@ function drawRows() {
         // six-hour recording the word came from is the last thing you look at.
         if (item.kind === 'step') {
             const p = item.piece;
-            const takes = p.kind === 'word' && p.takes
-                ? ` · take ${p.take} of ${p.takes}` : '';
-            return div('row step' + (isPlaying(item) ? ' playing' : '') +
-                       (p.kind === 'rest' ? ' rest' : '') +
-                       (p.kind === 'word' && !p.hit ? ' bad' : ''), [
+            const pieceIdx = item.pieceIndex !== undefined ? item.pieceIndex : n;
+            const rowKids = [
                 listen,
                 // **The step it lands on, not the second.** `clock()` is what
                 // every other row in this window leads with and it is the wrong
@@ -1010,11 +1059,75 @@ function drawRows() {
                 // rhythm is counted in is steps, so that is what the column says.
                 el('span', { cls: 'at mono', text: String(item.step) }),
                 el('span', { cls: 'label', text: item.label }),
-                el('span', { cls: 'detail dim', text: item.detail }),
-                el('span', { cls: 'where dim',
-                             text: `${p.steps} step${p.steps === 1 ? '' : 's'}${takes}` }),
-                put_,
-            ]);
+            ];
+
+            if (p.kind === 'word' && p.takes > 0) {
+                // Stepper: ◀ take X/Y ▶
+                const prevBtn = el('button', {
+                    cls: 'tiny take-nav', text: '◀', title: 'Previous take',
+                    on: {
+                        click: (e) => {
+                            e.stopPropagation();
+                            lastStepIndex = pieceIdx;
+                            rhythm.cycleStepTake(pieceIdx, -1);
+                            search();
+                            play(n);
+                        },
+                    },
+                });
+                const nextBtn = el('button', {
+                    cls: 'tiny take-nav', text: '▶', title: 'Next take',
+                    on: {
+                        click: (e) => {
+                            e.stopPropagation();
+                            lastStepIndex = pieceIdx;
+                            rhythm.cycleStepTake(pieceIdx, 1);
+                            search();
+                            play(n);
+                        },
+                    },
+                });
+                const sortMode = rhythm.sortByFitOf() ? 'best fit' : 'chronological';
+                const takeLabel = el('span', {
+                    cls: 'take-label mono',
+                    text: `${p.take}/${p.takes}`,
+                    title: `Take ${p.take} of ${p.takes} (${sortMode} — click for next)`,
+                    on: {
+                        click: (e) => {
+                            e.stopPropagation();
+                            lastStepIndex = pieceIdx;
+                            rhythm.cycleStepTake(pieceIdx, 1);
+                            search();
+                            play(n);
+                        },
+                    },
+                });
+                rowKids.push(div('take-stepper', [prevBtn, takeLabel, nextBtn]));
+
+                // Fit Rating Badge
+                if (p.fitScore !== undefined) {
+                    const badgeCls = p.fitScore >= 85 ? 'fit-good' : (p.fitScore >= 65 ? 'fit-med' : 'fit-poor');
+                    const star = p.fitScore >= 85 ? ' ★' : '';
+                    const fitBadge = el('span', {
+                        cls: `badge ${badgeCls} mono`,
+                        text: `${p.fitScore}%${star}`,
+                        title: `Fit rating: ${p.fitScore}% (natural: ${(p.dur * 1000).toFixed(0)} ms, step: ${(p.seconds * 1000).toFixed(0)} ms, ratio: ${p.fitRatio.toFixed(2)}×)`,
+                    });
+                    rowKids.push(fitBadge);
+                }
+            }
+
+            rowKids.push(el('span', { cls: 'detail dim', text: item.detail }));
+            rowKids.push(el('span', { cls: 'where dim',
+                         text: `${p.steps} step${p.steps === 1 ? '' : 's'}` }));
+            rowKids.push(put_);
+
+            const rowNode = div('row step' + (isPlaying(item) ? ' playing' : '') +
+                                (p.kind === 'rest' ? ' rest' : '') +
+                                (p.kind === 'word' && !p.hit ? ' bad' : ''), rowKids);
+            rowNode.dataset.pieceIndex = String(pieceIdx);
+            rowNode.addEventListener('click', () => { lastStepIndex = pieceIdx; });
+            return rowNode;
         }
 
         return div('row' + (item.kind === 'run' ? ' run' : '') +

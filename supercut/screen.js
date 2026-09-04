@@ -178,7 +178,7 @@ function seek(video, t) {
 
 /// Play a span of a recording, with its own sound. Stops the mix first: two
 /// things playing is two things to listen to.
-export function audition(path, from, until) {
+export function audition(path, from, until, rate = 1.0) {
     if (!path) return false;
     stop();
     // **The one already running, first.** A second row pressed while the first
@@ -189,6 +189,7 @@ export function audition(path, from, until) {
     const video = elementFor(path);
     auditioning = { path, until };
     video.muted = false;
+    try { video.playbackRate = Math.min(4.0, Math.max(0.25, rate || 1.0)); } catch (e) { /* fine */ }
     reveal(path);
     seek(video, Math.max(0, from));
     const go = () => { try { video.play(); } catch (e) { /* not open yet */ } };
@@ -203,7 +204,10 @@ export function stopAudition() {
     if (!auditioning) return;
     const held = pool.get(auditioning.path);
     if (held) {
-        try { held.video.pause(); } catch (e) { /* fine */ }
+        try {
+            held.video.pause();
+            held.video.playbackRate = 1.0;
+        } catch (e) { /* fine */ }
         held.video.muted = true;
     }
     auditioning = null;

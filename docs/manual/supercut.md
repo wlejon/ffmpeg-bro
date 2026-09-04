@@ -426,11 +426,17 @@ phrase with a space in it goes in quotes: `"you cross"`. Lines are only lines �
 the grid runs straight across them, so use one per bar if that helps you read it.
 
 The list under the box is what the score resolved to, a row a step, in the order
-it will play. `▶` plays a step before anything is built and `+` drops that one
-piece into the mix on its own, which is what you want when one take is wrong and
-the rest is right. **The same word typed twice takes two different takes** — that
-is the whole point of it, and `hell#2` pins a particular one when the walk gives
-you the wrong one.
+it will play. `▶` auditions a step clamped to its fitted word boundary before
+anything is built, and `+` drops that one piece into the mix on its own.
+
+**Each word displays a fit rating badge** (e.g. `95% ★` 🟢 for natural matches,
+`80%` 🟡 for gentle flexes, `50%` 🔴 for drawn-out monologues), comparing its natural
+duration to the step length. When multiple takes exist, **`◀` and `▶` steppers** let
+you cycle takes in-place with instant audition playback, so you can rapidly audition
+takes and pick the one with the right delivery. Pressing **`[`** and **`]`** cycles
+takes directly from the keyboard. The **`sort takes by fit`** toggle sorts available
+takes with best-fitting candidates first, so repetitions and next-take presses walk
+naturally suitable takes without sifting through mismatches. Typing `hell#2` pins take 2 directly.
 
 **Build** puts the lot in the mix. Every piece comes out an exact number of
 steps long, so the words land on the grid rather than near it.
@@ -473,6 +479,7 @@ The render is the same one the workbench performs, from the same spec.
 
 | | |
 |---|---|
+| `[` `]` | previous / next take for active rhythm step |
 | `Space` | play / stop — or stop what a row is playing, if a row is playing |
 | `Home` `End` | start, end |
 | `←` `→` | one frame; with `Shift`, one second |

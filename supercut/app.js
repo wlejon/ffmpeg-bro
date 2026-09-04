@@ -362,7 +362,7 @@ results.initResults({
     progress: nodes.progress,
     list: nodes.list, channel: nodes.chanWrap, about: nodes.about,
 }, {
-    audition: (path, from, until) => { screen.audition(path, from, until); drawBar(); },
+    audition: (path, from, until, rate) => { screen.audition(path, from, until, rate); drawBar(); },
     hush: () => { screen.stopAudition(); drawBar(); },
     add: addMoment,
 });
@@ -471,6 +471,14 @@ document.addEventListener('keydown', (e) => {
         mix.draw();
         screen.refresh();
         return;
+    }
+    if (e.key === '[' || e.key === ']') {
+        if (results.currentTab && results.currentTab() === 'rhythm') {
+            if (results.cycleActiveTake(e.key === ']' ? 1 : -1)) {
+                e.preventDefault();
+                return;
+            }
+        }
     }
     if (e.key === '/') {
         // The box only exists on the Words tab, so `/` is what *goes* there —

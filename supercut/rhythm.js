@@ -161,7 +161,14 @@ export function tempoOf() { return tempo; }
 export function stepsPerBeat() { return per; }
 export function looseOf() { return loose; }
 
-export function setScore(t) { text = String(t == null ? '' : t); remember(); }
+export function setScore(t) {
+    const s = String(t == null ? '' : t);
+    if (s !== text) {
+        text = s;
+        stepPins.clear();
+        remember();
+    }
+}
 export function setTempo(v) {
     const n = Number(v);
     if (Number.isFinite(n) && n > 0) tempo = Math.min(600, Math.max(20, n));
@@ -173,6 +180,54 @@ export function setStepsPerBeat(v) {
     remember();
 }
 export function setLoose(on) { loose = !!on; remember(); }
+
+let sortByFit = true;
+
+/// Whether candidate takes are sorted by best duration fit to the step.
+export function sortByFitOf() { return sortByFit; }
+
+/// Toggle or set sorting of candidate takes by fit.
+export function setSortByFit(on) {
+    const next = !!on;
+    if (next !== sortByFit) {
+        sortByFit = next;
+        stepPins.clear();
+        remember();
+        replan();
+    }
+}
+
+const stepPins = new Map();
+
+/// Pinned take for a step piece, or 0 if unpinned.
+export function stepTakeOf(index) {
+    return stepPins.get(index) || 0;
+}
+
+/// Pin a specific take number (1-based) for step piece `index`.
+export function setStepTake(index, take) {
+    const n = Math.max(1, Math.round(Number(take) || 1));
+    stepPins.set(index, n);
+    replan();
+    return n;
+}
+
+/// Cycle through available takes for step piece `index` by delta (-1 or +1).
+export function cycleStepTake(index, delta = 1) {
+    const p = planned.pieces[index];
+    if (!p || p.kind !== 'word' || !p.takes) return 0;
+    const cur = stepPins.has(index) ? stepPins.get(index) : (p.take || 1);
+    const next = ((cur - 1 + delta) % p.takes + p.takes) % p.takes + 1;
+    stepPins.set(index, next);
+    replan();
+    return next;
+}
+
+/// Clear all interactive step pins.
+export function clearStepPins() {
+    stepPins.clear();
+    replan();
+}
 
 /// Read back what was last typed.
 ///
@@ -189,12 +244,13 @@ export function restore() {
     setTempo(blob.tempo);
     setStepsPerBeat(blob.per);
     setLoose(blob.loose);
+    if (blob.sortByFit !== undefined) setSortByFit(blob.sortByFit);
     setScore(typeof blob.text === 'string' ? blob.text : '');
 }
 
 function remember() {
     try {
-        localStorage.setItem(KEY, JSON.stringify({ tempo, per, loose, text }));
+        localStorage.setItem(KEY, JSON.stringify({ tempo, per, loose, sortByFit, text }));
     } catch (e) { /* no store; the score is still good for this session */ }
 }
 
@@ -357,7 +413,8 @@ export function resolve(src = text) {
     let steps = 0;
     let seconds = 0;
 
-    for (const p of pieces) {
+    for (let i = 0; i < pieces.length; i++) {
+        const p = pieces[i];
         steps += p.steps;
         seconds += p.seconds;
         if (p.kind !== 'word') continue;
@@ -370,24 +427,58 @@ export function resolve(src = text) {
             if (missing.indexOf(p.phrase) < 0) missing.push(p.phrase);
             continue;
         }
+
+        // Rank candidate takes against the target duration of this piece
+        const targetSec = p.seconds;
+        let candidates = hits.map((h, idx) => {
+            const cueDur = Math.max(0.04, (h.to || h.says || (h.at + 0.2)) - h.at);
+            const ratio = cueDur / Math.max(0.01, targetSec);
+            const penalty = Math.abs(1.0 - ratio);
+            const score = Math.max(0, Math.min(100, Math.round((1.0 - 1.6 * penalty) * 100)));
+            return {
+                origTake: idx + 1,
+                hit: h,
+                dur: cueDur,
+                ratio,
+                score,
+            };
+        });
+
+        if (sortByFit) {
+            candidates.sort((a, b) => b.score - a.score || a.origTake - b.origTake);
+        }
+
+        p.candidates = candidates.map((c, idx) => ({
+            ...c,
+            take: idx + 1,
+        }));
+
         let n;
-        if (p.take > 0) {
+        if (stepPins.has(i)) {
+            const pin = stepPins.get(i);
+            n = Math.min(p.candidates.length - 1, Math.max(0, pin - 1));
+        } else if (p.take > 0) {
             // A pin past the end is not silently wrapped: somebody who typed
             // `#7` was looking at a list, and giving them take 1 instead would
             // be the tool answering a different question without saying so.
-            if (p.take > hits.length) {
+            if (p.take > p.candidates.length) {
                 p.hit = null;
-                p.why = `only ${hits.length} take${hits.length === 1 ? '' : 's'}`;
+                p.why = `only ${p.candidates.length} take${p.candidates.length === 1 ? '' : 's'}`;
                 continue;
             }
             n = p.take - 1;
         } else {
-            n = (cursor.get(p.phrase) || 0) % hits.length;
+            n = (cursor.get(p.phrase) || 0) % p.candidates.length;
             cursor.set(p.phrase, n + 1);
         }
-        p.hit = hits[n];
-        p.at = hits[n].at;
-        p.take = n + 1;
+        const chosen = p.candidates[n];
+        p.hit = chosen.hit;
+        p.at = chosen.hit.at;
+        p.take = chosen.take;
+        p.dur = chosen.dur;
+        p.fitRatio = chosen.ratio;
+        p.fitScore = chosen.score;
+        p.origTake = chosen.origTake;
     }
     return { pieces, missing, steps, seconds };
 }
@@ -684,6 +775,17 @@ function apply(item, result) {
         if (score > bestScore) {
             bestScore = score;
             best = c.t;
+        }
+    }
+
+    // Preserve initial consonant cluster: if speech activity started just before
+    // the onset transient (fricatives / sibilants / pre-voicing), retain up to 60ms
+    // lead so the initial consonant is preserved rather than cut off.
+    for (const sr of speechRuns) {
+        if (sr.start < best && (best - sr.start) <= 0.12) {
+            const lead = Math.min(0.06, best - sr.start);
+            best = Math.max(item.ss, best - lead);
+            break;
         }
     }
 

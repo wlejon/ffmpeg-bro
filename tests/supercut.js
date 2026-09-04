@@ -1115,6 +1115,38 @@ console.log('\nwords on a beat');
     ok(document.querySelectorAll('#f-list .row.step').length === 4,
        'the list under it is what the score resolved to, a row a step');
 
+    // Candidate ratings and fit scores
+    ok(typeof plan.pieces[0].fitScore === 'number' && plan.pieces[0].fitScore >= 0,
+       `pieces carry a fit score (${plan.pieces[0].fitScore}%)`);
+    ok(Array.isArray(plan.pieces[0].candidates) && plan.pieces[0].candidates.length === 2,
+       `and candidate list for take selection (${plan.pieces[0].candidates.length} candidates)`);
+    ok(document.querySelectorAll('#f-list .take-stepper').length >= 1,
+       'words with multiple takes render take steppers');
+    ok(document.querySelectorAll('#f-list .badge[class*="fit-"]').length >= 1,
+       'and fit rating badges are drawn on step rows');
+
+    // Interactive take stepping and candidate sorting by fit
+    ok(A.rhythm.sortByFitOf() === true, 'takes are sorted by fit by default');
+    const initialTake = plan.pieces[0].take;
+    A.rhythm.cycleStepTake(0, 1);
+    ok(A.rhythm.plan().pieces[0].take !== initialTake,
+       'cycleStepTake swaps the step to the next take');
+    A.rhythm.cycleStepTake(0, -1);
+    ok(A.rhythm.plan().pieces[0].take === initialTake,
+       'and cycling backwards restores the previous take');
+
+    // Keyboard take cycling via cycleActiveTake
+    ok(A.results.cycleActiveTake(1) === true, 'cycleActiveTake cycles take on active step');
+    ok(A.results.cycleActiveTake(-1) === true, 'cycleActiveTake cycles back on active step');
+
+    // Toggle sort by fit off and on
+    A.rhythm.setSortByFit(false);
+    ok(!A.rhythm.sortByFitOf(), 'sort by fit can be toggled off');
+    const unsortedPlan = A.rhythm.plan();
+    ok(unsortedPlan.pieces[0].candidates.length === 2, 'candidates remain available when unsorted');
+    A.rhythm.setSortByFit(true);
+    ok(A.rhythm.sortByFitOf(), 'sort by fit toggles back on');
+
     // A word nothing said refuses the whole build, naming it. **Refuses rather
     // than approximating**: a build that quietly left a hole would be a rhythm
     // with a gap in it and nothing on the screen saying which word went missing.
