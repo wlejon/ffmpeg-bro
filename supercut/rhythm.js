@@ -165,6 +165,7 @@ export function setScore(t) {
     const s = String(t == null ? '' : t);
     if (s !== text) {
         text = s;
+        said = '';
         stepPins.clear();
         remember();
     }
@@ -690,8 +691,9 @@ export function tick() {
         // Still opening. An input that refused is not a reason to lose the
         // score — the piece is laid against a file that will not play, which is
         // visible — so what is waited for is an *answer*, either way.
-        if (job.inputs.every((i) => !i || i.probe || i.error)) {
-            const bad = job.inputs.filter((i) => i && i.error);
+        const timedOut = (Date.now() - job.began) > 8000;
+        if (timedOut || job.inputs.every((i) => !i || i.probe || i.error)) {
+            const bad = job.inputs.filter((i) => !i || i.error || (!i.probe && timedOut));
             lay();
             if (bad.length) said += ` · ${bad.length} would not open`;
             moved = true;

@@ -281,7 +281,15 @@ export function repaint() {
     // steps are what the score says and the score has not been typed into — so
     // this is one write per frame rather than a list rebuilt to say that two
     // fewer reads are outstanding.
-    if (tab === 'rhythm') { drawNote(); return; }
+    if (tab === 'rhythm') {
+        const buildBtn = document.getElementById('r-build');
+        if (buildBtn) {
+            const isBusy = rhythm.busy();
+            if (buildBtn.disabled !== isBusy) buildBtn.disabled = isBusy;
+        }
+        drawNote();
+        return;
+    }
     if (tab !== 'recordings') return;
     for (const item of results) {
         const node = moving.get(item.id);
@@ -357,10 +365,13 @@ export function cycleActiveTake(delta = 1) {
     if (targetPieceIdx < 0) return false;
     lastStepIndex = targetPieceIdx;
     rhythm.cycleStepTake(targetPieceIdx, delta);
-    search();
+    results = steps();
+    drawNote();
     const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === targetPieceIdx);
     if (rowIdx >= 0) {
-        play(rowIdx);
+        if (!play(rowIdx)) drawRows();
+    } else {
+        drawRows();
     }
     return true;
 }
@@ -591,7 +602,12 @@ function drawControls() {
             const box = el('textarea', {
                 id: 'r-score', rows: '4', value: rhythm.score(),
                 placeholder: 'no no no no\nwhat . the -  hell . . -',
-                on: { input: () => { rhythm.setScore(box.value); search(); } },
+                on: { input: () => {
+                    rhythm.setScore(box.value);
+                    search();
+                    const b = document.getElementById('r-build');
+                    if (b) b.disabled = rhythm.busy();
+                } },
             });
             const go = el('button', {
                 cls: 'go', id: 'r-build', text: 'Build',
@@ -600,7 +616,7 @@ function drawControls() {
                     const why = rhythm.build();
                     if (why) { setText(nodes.note, why); nodes.note.classList.add('bad'); }
                     else { nodes.note.classList.remove('bad'); drawNote(); }
-                    drawControls();
+                    go.disabled = rhythm.busy();
                 } },
             });
             // **Build comes after the box, not before it.** The order on the
@@ -1065,25 +1081,31 @@ function drawRows() {
                 // Stepper: ◀ take X/Y ▶
                 const prevBtn = el('button', {
                     cls: 'tiny take-nav', text: '◀', title: 'Previous take',
+                    disabled: p.takes <= 1,
                     on: {
                         click: (e) => {
                             e.stopPropagation();
+                            if (p.takes <= 1) return;
                             lastStepIndex = pieceIdx;
                             rhythm.cycleStepTake(pieceIdx, -1);
-                            search();
-                            play(n);
+                            results = steps();
+                            drawNote();
+                            if (!play(n)) drawRows();
                         },
                     },
                 });
                 const nextBtn = el('button', {
                     cls: 'tiny take-nav', text: '▶', title: 'Next take',
+                    disabled: p.takes <= 1,
                     on: {
                         click: (e) => {
                             e.stopPropagation();
+                            if (p.takes <= 1) return;
                             lastStepIndex = pieceIdx;
                             rhythm.cycleStepTake(pieceIdx, 1);
-                            search();
-                            play(n);
+                            results = steps();
+                            drawNote();
+                            if (!play(n)) drawRows();
                         },
                     },
                 });
@@ -1095,10 +1117,12 @@ function drawRows() {
                     on: {
                         click: (e) => {
                             e.stopPropagation();
+                            if (p.takes <= 1) return;
                             lastStepIndex = pieceIdx;
                             rhythm.cycleStepTake(pieceIdx, 1);
-                            search();
-                            play(n);
+                            results = steps();
+                            drawNote();
+                            if (!play(n)) drawRows();
                         },
                     },
                 });

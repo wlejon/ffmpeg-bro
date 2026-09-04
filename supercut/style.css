@@ -185,8 +185,26 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 /* A step of the score. Denser than a recording and lighter than a hit: there
    are as many rows as there are steps and they are read as a column of words,
    so the step's own moment leads in the accent and everything else recedes. */
-.row.step .at { color: var(--dim); }
-.row.step .label { font-size: 12px; color: var(--text); max-width: 160px; }
+.row.step {
+    align-items: center;
+    gap: 6px;
+}
+.row.step .at {
+    font-size: 11px;
+    color: var(--dim);
+    width: 18px;
+    flex: 0 0 18px;
+    text-align: right;
+}
+.row.step .label {
+    font-size: 12px;
+    color: var(--text);
+    width: 64px;
+    flex: 0 0 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 /* A rest has nothing in it and says so by being the quietest row on the list —
    it is a step of black, and a row that shouted would be a silence competing
    with the words around it. */
@@ -199,59 +217,103 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .take-stepper {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
     background: var(--line);
     border-radius: 3px;
-    padding: 1px 3px;
     font-size: 11px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    user-select: none;
 }
 .take-stepper button.take-nav {
-    padding: 0 4px;
-    height: 18px;
-    line-height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    margin: 0;
     background: transparent;
     border: none;
+    border-radius: 0;
     cursor: pointer;
     color: var(--dim);
+    font-size: 10px;
+    flex: 0 0 20px;
+    transition: background 0.1s, color 0.1s;
 }
-.take-stepper button.take-nav:hover {
+.take-stepper button.take-nav:hover:not(:disabled) {
     color: var(--text);
-    background: var(--panel);
+    background: rgba(255, 255, 255, 0.08);
+}
+.take-stepper button.take-nav:active:not(:disabled) {
+    background: rgba(255, 255, 255, 0.15);
+}
+.take-stepper button.take-nav:disabled {
+    opacity: 0.25;
+    cursor: default;
 }
 .take-label {
+    display: inline-block;
     cursor: pointer;
-    padding: 0 3px;
+    padding: 0 2px;
+    min-width: 44px;
+    text-align: center;
     color: var(--text);
     user-select: none;
+    flex: 0 0 auto;
+    font-size: 11px;
+    line-height: 20px;
 }
 .take-label:hover {
     color: var(--accent);
 }
 
 /* Fit rating badge */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 10px;
+    min-width: 46px;
+    text-align: center;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
 .badge.fit-good {
     color: #4ade80;
     background: rgba(74, 222, 128, 0.12);
     border: 1px solid rgba(74, 222, 128, 0.3);
-    border-radius: 3px;
-    padding: 1px 4px;
-    font-size: 10px;
 }
 .badge.fit-med {
     color: #facc15;
     background: rgba(250, 204, 21, 0.12);
     border: 1px solid rgba(250, 204, 21, 0.3);
-    border-radius: 3px;
-    padding: 1px 4px;
-    font-size: 10px;
 }
 .badge.fit-poor {
     color: #f87171;
     background: rgba(248, 113, 113, 0.12);
     border: 1px solid rgba(248, 113, 113, 0.3);
-    border-radius: 3px;
-    padding: 1px 4px;
+}
+
+.row.step .detail {
+    font-size: 11px;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.row.step .where {
     font-size: 10px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    opacity: .7;
+}
+.row.step button.tiny {
+    flex: 0 0 auto;
 }
 
 /* ── the picture ──────────────────────────────────────────────────────── */

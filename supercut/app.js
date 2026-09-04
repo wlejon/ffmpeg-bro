@@ -630,7 +630,7 @@ requestAnimationFrame(frame);
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
     results, acquire, mix, screen, cuts, rhythm, inflight, doc: documentModel,
-    addMoment, seek, togglePlay, flash, buildSpec,
+    addMoment, removeClip, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,
     changed,

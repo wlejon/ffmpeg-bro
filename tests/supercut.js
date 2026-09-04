@@ -1147,6 +1147,17 @@ console.log('\nwords on a beat');
     A.rhythm.setSortByFit(true);
     ok(A.rhythm.sortByFitOf(), 'sort by fit toggles back on');
 
+    // Stepper DOM interaction and stability
+    const firstStepper = document.querySelector('#f-list .take-stepper');
+    ok(firstStepper, 'take stepper element exists in DOM');
+    const navButtons = firstStepper.querySelectorAll('button.take-nav');
+    ok(navButtons.length === 2, 'take stepper has prev and next take buttons');
+    const labelBefore = firstStepper.querySelector('.take-label').textContent;
+    navButtons[1].click();
+    pump(60);
+    const labelAfter = document.querySelector('#f-list .take-stepper .take-label').textContent;
+    ok(labelAfter !== labelBefore, `clicking next take button advances take label (${labelBefore} -> ${labelAfter})`);
+
     // A word nothing said refuses the whole build, naming it. **Refuses rather
     // than approximating**: a build that quietly left a hole would be a rhythm
     // with a gap in it and nothing on the screen saying which word went missing.
@@ -1191,6 +1202,17 @@ console.log('\nwords on a beat');
     const after = A.mix.sequence().map((c) => `${c.start}:${c.length}`).join('|');
     ok(before === after,
        'and not one card moved or changed length — snapping to the beat is a slip');
+
+    // Build button re-enabling and rebuild after deletion
+    const buildBtn = document.getElementById('r-build');
+    ok(buildBtn && !buildBtn.disabled, 'Build button is re-enabled once the build job completes');
+    for (const c of A.mix.sequence().slice()) A.removeClip(c);
+    ok(A.mix.sequence().length === 0, 'sequence clips deleted');
+    buildBtn.click();
+    pump(30);
+    for (let i = 0; i < 200 && A.mix.sequence().length < 4; i++) pump(30);
+    ok(A.mix.sequence().length === 4, 're-clicking Build rebuilds the clips into the sequence');
+    ok(!buildBtn.disabled, 'and Build button is re-enabled after rebuilding');
 
     // ── dynamic tempo, meter and section directives ────────────────────────
     type(score, '[160] cross [120] line');
