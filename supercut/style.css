@@ -267,6 +267,14 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
     z-index: 5; font-size: 12px; padding: 2px 6px;
 }
 .r-edit.right { left: auto; right: -1px; }
+/* The line, first and the whole width: it is the way in. */
+.r-sayrow { flex: 1 0 100%; display: flex; }
+#r-say { flex: 1 1 auto; min-width: 0; font-size: 13px; padding: 6px 9px; }
+#r-pace { width: 90px; }
+/* Every take of the selected word, as buttons. */
+.r-takes { gap: 3px; }
+.r-takes .r-takebtn { padding: 1px 6px; min-width: 22px; font-size: 10px; }
+.r-takes .r-takebtn.on { background: var(--accent); color: #21160c; border-color: var(--accent); }
 /* What the corpus says about what is being typed, under the field. */
 .r-hints {
     position: absolute; left: -1px; top: 36px; min-width: 120px; z-index: 6;

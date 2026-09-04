@@ -519,32 +519,49 @@ material rather than the reverse** (`supercut/rhythm.js`). The rest of that
 application assembles by finding — a hit, a listen, a press — which is right
 until you can already hear the thing: `no no no no, on the beat` is twenty
 presses and then a trim per piece to a length nobody hits by eye. So a **score**
-is a tempo, a grid and words placed on steps — `rhythm.js` holds `{ phrase, at,
-steps }` per word, sorted and never overlapping, and a rest is a step no word
-covers. `supercut/pattern.js` draws it as a step sequencer (a row a bar, a cell
-a step) and owns the gestures: type into a cell, drag an edge to hold, drag a
-word to move. The typed notation (`what . the - hell . . -`) survives as
-`parse`/`serialize` for the suite and is drawn nowhere — it was replaced because
-a rhythm is tapped and dots are arithmetic. Which take a word is, its slip and
-whether it is stretched live **on the word object**, not in a map keyed by
-position, so moving a word keeps its choices. Five decisions. A **rest is a
-generator clip** (`color`), because `mix.js`'s sequence is packed and there is
-nowhere for an absence to be. A word is **cut to the step by default**, and
-**stretched only per word** — `stretch` sets the clip's speed so its own span
-fills the step, applied in `lay()` and heard in the audition, because the speed
-moves the pitch. The audition plays exactly what the mix would hold. Repeats
-**walk the takes** rather than repeating one clip, which is the whole point of
-building it out of a corpus. A missing word **refuses the whole build, naming
-every one**, because a rhythm with a hole in it and nothing saying which word
-went missing is worse than one that will not build — and **what can be typed
-is the library's** (`vocabulary`, `saidCount`, `suggest`), so the cell's field
-shows `hello · 171` as it is typed and the refusal is rarely reached; the field
-draws that and decides nothing. **A plan is an answer about a corpus** and
-`plan()` re-resolves when the corpus under it moves (`corpusKey`: the channel
-and the confinement): a pattern restored on the first frame, before a channel
-was open, once reported every word missing for the rest of the session. And the pattern is a
+is a tempo, a grid and words placed on steps — `rhythm.js` holds `{ id, phrase,
+at, steps }` per word, sorted and never overlapping, and a rest is a step no
+word covers. **The way in is a line** (`say`): the sentence typed whole, each
+word found, given the take it is *typically* said in — the median length over
+every take, because a transcript's word runs to the next token and a
+best-fitting rule laid `what` as sixteen steps of somebody pausing — and the
+steps that take was said in at a **pace**, which is realised as each word's
+stretch and is therefore heard. Punctuation is pacing: a comma a step of rest,
+a full stop two. `supercut/pattern.js` draws the pattern as a step sequencer (a
+row a bar, a cell a step) and owns the gestures for adjusting it: type into a
+cell, drag an edge to hold, drag a word to move. The typed notation (`what .
+the - hell . . -`) survives as `parse`/`serialize` for the suite and is drawn
+nowhere — it was replaced because a rhythm is tapped and dots are arithmetic.
+Which take a word is, its slip and whether it is stretched live **on the word
+object**, not in a map keyed by position, so moving a word keeps its choices.
+
+**The mix mirrors the pattern, and there is no Build** (`sync`/`lay` in
+`rhythm.js`, run by `tick` once a frame when an edit has marked it `dirty`).
+Every clip the pattern owns is tagged with its word's id (`clip.word`;
+`clip.rest` for a rest), so an edit *adjusts* the clip — slipped by how far its
+in-point moved, its speed and length set — and only a different take is a new
+clip, the cut behind the old one forgotten with it. The pattern's clips are one
+block of the row in pattern order, standing where the first of them stood, and
+a clip added by hand keeps its place beside them. A word nothing says has no
+clip and is named on the line rather than refusing the whole pattern, because
+a hole somebody can see is the state they fix one word at a time. A pattern
+restored on the first frame is not laid until it is edited (`synced`), because
+a document opened beside it may already hold those clips. Five more decisions.
+A **rest is a generator clip** (`color`), because `mix.js`'s sequence is packed
+and there is nowhere for an absence to be. A word laid from a line is
+**stretched when the stretch is within a quarter** (`STRETCH_NEAR_*`) and cut
+when it is not, and one put on a cell by hand is **cut**; either way it is the
+word's own choice — `stretch` sets the clip's speed so its own span fills the
+step, and the audition plays exactly what the mix holds. Repeats **walk the
+takes** rather than repeating one clip, which is the whole point of building it
+out of a corpus. **What can be typed is the library's** (`vocabulary`,
+`saidCount`, `suggest`), so the cell's field shows `hello · 171` as it is typed;
+the field draws that and decides nothing. **A plan is an answer about a corpus**
+and `plan()` re-resolves when the corpus under it moves (`corpusKey`: the
+channel and the confinement): a pattern restored before a channel was open once
+reported every word missing for the rest of the session. And the pattern is a
 workspace preference and **not in the document**: what a `.fbro` holds is the
-mix it produced, which is a mix like any other from the moment it exists.
+mix, which is a mix like any other from the moment it exists.
 
 **Where the beat is, is measured** — and it is the first reader
 `bro.ffmpeg.marks` has ever had. A transcript's time is Parakeet's frame (0.08 s)

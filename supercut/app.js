@@ -378,10 +378,18 @@ results.initResults({
 rhythm.initRhythm({
     openInput,
     place: (spec) => placeMoment(spec, openInput(spec)),
+    // A clip the pattern no longer describes goes the way a card does: the cut
+    // behind it is stopped first.
+    drop: (clip) => mix.drop(clip),
     // A rest is a clip added straight to the model rather than through
     // `mix.append`, so the one rule the mix adds has to be applied after it.
     packed: () => mix.reflow(),
+    // Clips came or went: the row is redrawn and refitted. Clips were only
+    // adjusted — a take repointed, a step held — so the row is redrawn where it
+    // stands, because a hand dragging an edge must not have the row zoom under
+    // it.
     edited: () => { touched(); mix.draw(); mix.fit(); screen.refresh(); },
+    changed: () => { touched(); mix.draw(); screen.refresh(); },
 });
 
 inflight.initFlight({ button: nodes.flight, panel: nodes.flightList },

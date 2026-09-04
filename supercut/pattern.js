@@ -182,20 +182,47 @@ export function drawControls() {
                 drawNote();
             } },
         });
-        const go = el('button', {
-            cls: 'go', id: 'r-build', text: 'Build',
-            disabled: rhythm.busy(),
-            on: { click: () => {
-                const why = rhythm.build();
-                if (why) refuse(why); else drawNote();
-                go.disabled = rhythm.busy();
+        // The line. Enter lays it; the field keeps it, so the line is edited
+        // as text and said again.
+        const say = el('input', {
+            type: 'text', id: 'r-say', value: rhythm.lineOf(), placeholder: 'line',
+            on: { keydown: (e) => {
+                e.stopPropagation();
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                stopAll();
+                if (editing) close();
+                selected = -1;
+                const n = rhythm.say(say.value);
+                if (!n) { rhythm.clearWords(); }
+                drawControls();
+                draw();
+                drawNote();
             } },
         });
+        // The pace: the rate the line is laid at, heard as each word's stretch.
+        const paceVal = el('span', { cls: 'r-val mono', text: `${rhythm.paceOf().toFixed(2)}×` });
+        const paceIn = el('input', {
+            type: 'range', id: 'r-pace', min: String(rhythm.STRETCH_MIN), max: String(rhythm.STRETCH_MAX),
+            step: '0.05', value: String(rhythm.paceOf()),
+            on: {
+                input: () => {
+                    const v = rhythm.setPace(Number(paceIn.value));
+                    setText(paceVal, `${v.toFixed(2)}×`);
+                    redrawGrid();
+                    redrawPanel();
+                    drawNote();
+                },
+                change: () => { if (rhythm.words().length) listen(); },
+            },
+        });
         return [
+            div('r-sayrow', [say]),
             el('span', { cls: 'dim', text: 'tempo' }), bpm, tap,
             el('span', { cls: 'dim', text: '· grid' }), steps, bars,
+            el('span', { cls: 'dim', text: '· pace' }), paceIn, paceVal,
             loose,
-            div('r-actions', [listen, loop, el('span', { cls: 'spacer' }), clear, go]),
+            div('r-actions', [listen, loop, el('span', { cls: 'spacer' }), clear]),
         ];
     });
 }
@@ -819,6 +846,7 @@ function bodyOf(w, p) {
             'best fit first',
         ]),
     ]));
+    if (p.takes > 1) rows.push(takesOf(p));
 
     // The slip. Dragged, and heard on release.
     const offMs = Math.round((w.offset || 0) * 1000);
@@ -873,15 +901,28 @@ function bodyOf(w, p) {
             title: stepLooping ? 'Stop looping' : 'Loop this word',
             on: { click: () => loopWord(i) },
         }),
-        el('button', {
-            cls: 'tiny', id: 'r-add', text: '+', title: 'Add this word to the mix',
-            disabled: !p.hit.vod.media || rhythm.busy(),
-            on: { click: () => { const why = rhythm.build(i); if (why) refuse(why); else drawNote(); } },
-        }),
         el('span', { cls: 'spacer' }),
         el('button', { cls: 'tiny', text: 'Remove', on: { click: () => remove(i) } }),
     ]));
     return rows;
+}
+
+/// Every take of the word, as things to press: the one in the row is marked,
+/// and pressing another puts it in the row and plays it. The stepper above
+/// walks them one at a time; this is the whole list at once, for the case
+/// where the third one is right and the way to know is to hear them.
+function takesOf(p) {
+    const list = p.candidates || [];
+    const shown = list.slice(0, 24);
+    const kids = shown.map((c) => el('button', {
+        cls: 'tiny r-takebtn' + (c.take === p.take ? ' on' : ''),
+        text: `${c.take}`,
+        title: `${Math.round(c.dur * 1000)} ms · ${c.score}%`,
+        on: { click: () => { rhythm.setTake(selected, c.take); redrawGrid(); redrawPanel(); drawNote(); hear(selected); } },
+    }));
+    if (list.length > shown.length)
+        kids.push(el('span', { cls: 'dim', text: `+${list.length - shown.length}` }));
+    return div('r-line r-takes', kids);
 }
 
 function remove(i) {
@@ -932,8 +973,6 @@ export function nudgeOffset(deltaSec) {
 
 /// Called every frame the tab is showing: the build's button and its line.
 export function repaint() {
-    const go = document.getElementById('r-build');
-    if (go && go.disabled !== rhythm.busy()) go.disabled = rhythm.busy();
     drawNote();
 }
 

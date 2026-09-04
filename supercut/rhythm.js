@@ -11,9 +11,12 @@
 // twenty presses and then a trim per piece to a length nobody can hit by eye.
 //
 // So the shape is laid out and the finding is done for you. A **pattern** is a
-// tempo, a grid, and words — each on a step and each some steps long; a
-// **build** is that pattern turned into clips whose lengths are exact multiples
-// of the step and whose in-points are the moments those words were said.
+// tempo, a grid, and words — each on a step and each some steps long — and the
+// **mix mirrors it**: every word is a clip whose length is an exact number of
+// steps and whose in-point is the moment that word was said, kept up to the
+// pattern on every frame (`sync`). The way in is a **line** (`say`): the
+// sentence typed whole, each word found and given the steps its take was said
+// in, at a **pace**; the grid is where the line is then adjusted, word by word.
 //
 // ── A word is on a step, and a rest is where no word is ───────────────────
 //
@@ -113,8 +116,10 @@
 // added — and the mix outlives it in exactly the same way, because it is a mix
 // like any other from the moment it exists. So the pattern is a working
 // preference in `localStorage` beside the split height, and the artifact is the
-// clips. Building again does not remember what it built last time and does not
-// try to: it appends, and `Clear` on the mix is one press.
+// clips. What ties the two together is a tag on each clip (`clip.word`, the
+// word's id) that lives only as long as the session: a document opened later
+// holds the clips and not the pattern, and a pattern restored on the first
+// frame is not laid into the mix until it is edited — see `synced`.
 
 import { project, projectFps, duration, makeGenerator, addClip, slipClip, setSpeed, changed }
     from '../ui/project.js';
@@ -168,10 +173,30 @@ let bar = BAR;
 let loose = false;
 let sortByFit = true;
 
-/// The pattern: `{ phrase, at, steps, pin, offset, stretch }`, sorted by `at`,
-/// never overlapping. See the header for why the rests are not in it. `words()`
-/// is what everything outside reads, as copies.
+/// The rate a line is laid at: 1 is as it was said, 1.5 is half again as fast.
+/// Realised through each word's stretch, so it is a change to the sound and not
+/// to the grid alone. See `say`.
+let pace = 1;
+/// The line last said, kept for the field it was typed into.
+let line = '';
+
+/// The pattern: `{ id, phrase, at, steps, pin, offset, stretch }`, sorted by
+/// `at`, never overlapping. See the header for why the rests are not in it.
+/// `words()` is what everything outside reads, as copies. `id` is what a clip
+/// in the mix is tagged with, so a word moved or renamed keeps its clip.
 let laid = [];
+let nextId = 1;
+
+/// Is the mix behind the pattern? Every edit says so, and `tick` catches up —
+/// once a frame at most, which is what makes a drag answered per pixel cost one
+/// pass rather than one per pixel.
+let dirty = false;
+/// Has the pattern been laid into the mix this session? A pattern restored on
+/// the first frame is not: what a session opens with is what it saved, and a
+/// mix that appeared beside it would be a second copy of clips a document may
+/// already hold.
+let synced = false;
+function touch() { dirty = true; }
 
 const KEY = 'supercut.score';
 
@@ -193,20 +218,23 @@ export function setTempo(v) {
     if (Number.isFinite(n) && n > 0) tempo = Math.min(600, Math.max(20, n));
     replan();
     remember();
+    touch();
 }
 export function setStepsPerBeat(v) {
     const n = Math.round(Number(v));
     if (Number.isFinite(n) && n > 0) per = Math.min(16, Math.max(1, n));
     replan();
     remember();
+    touch();
 }
 export function setBeatsPerBar(v) {
     const n = Math.round(Number(v));
     if (Number.isFinite(n) && n > 0) bar = Math.min(16, Math.max(1, n));
     replan();
     remember();
+    touch();
 }
-export function setLoose(on) { loose = !!on; replan(); remember(); }
+export function setLoose(on) { loose = !!on; replan(); remember(); touch(); }
 
 /// Whether the takes of a word are offered best-fitting first, or in the order
 /// they were said. A property of the whole pattern rather than of a word,
@@ -219,6 +247,7 @@ export function setSortByFit(on) {
     for (const w of laid) w.pin = 0;
     replan();
     remember();
+    touch();
 }
 
 // ── the words ──────────────────────────────────────────────────────────────
@@ -254,7 +283,7 @@ export function whereIs(step) {
 }
 
 function fresh(phrase, at, steps) {
-    return { phrase: String(phrase), at, steps, pin: 0, offset: 0, stretch: false };
+    return { id: nextId++, phrase: String(phrase), at, steps, pin: 0, offset: 0, stretch: false };
 }
 
 /// Keep the list sorted and answer where one word ended up in it.
@@ -262,6 +291,7 @@ function settle(w) {
     laid.sort((a, b) => a.at - b.at);
     replan();
     remember();
+    touch();
     return laid.indexOf(w);
 }
 
@@ -305,6 +335,7 @@ export function setPhrase(i, phrase) {
     if (w.phrase !== p) { w.phrase = p; w.pin = 0; }
     replan();
     remember();
+    touch();
     return true;
 }
 
@@ -316,7 +347,7 @@ export function setSteps(i, steps) {
     if (!w) return 0;
     let n = Math.max(1, Math.round(Number(steps) || 1));
     for (const o of laid) if (o !== w && o.at >= w.at + 1) n = Math.min(n, o.at - w.at);
-    if (n !== w.steps) { w.steps = n; replan(); remember(); }
+    if (n !== w.steps) { w.steps = n; replan(); remember(); touch(); }
     return w.steps;
 }
 
@@ -338,13 +369,175 @@ export function removeWord(i) {
     laid.splice(i, 1);
     replan();
     remember();
+    touch();
     return true;
 }
 
 export function clearWords() {
     laid = [];
+    line = '';
     replan();
     remember();
+    touch();
+}
+
+// ── saying a line ──────────────────────────────────────────────────────────
+
+/// Lay a whole line: every word found, a take chosen for each, and each given
+/// the steps it was said in.
+///
+/// **This is the way in**, and the cell-by-cell grid is the way to adjust: a
+/// person who knows the sentence should type the sentence, and the finding and
+/// the pacing are the engine's — which is the reason `rhythm.js` exists at all,
+/// stated one level up. Four decisions.
+///
+/// The take is the one that **fits its own steps best**: each take's length is
+/// rounded to steps at the pace, and the take whose length is nearest a whole
+/// number of them wins, so what is stretched to fill the step is stretched
+/// least. Repeats of a word walk to a take not yet used on this line, because a
+/// word said four times by one clip is not a supercut.
+///
+/// A word laid this way is **stretched when the stretch is small**, because
+/// the alternative — cut to the step — takes the end off every word that was
+/// longer and lets the next syllable in on every word that was shorter, and a
+/// line of those is not the line. The pitch moves by the same ratio, so past a
+/// quarter either way (`STRETCH_NEAR_*`) the word is cut instead: a short word
+/// on a long step is better heard whole with a little of what followed than
+/// slowed to somebody else's voice. The panel changes either.
+///
+/// **Punctuation is pacing.** A comma is a step of rest after the word, a full
+/// stop, a question mark or a semicolon two — and they are taken off the word,
+/// so `hell,` finds `hell`. `!` stays, because to the corpus it means the word
+/// was shouted (`ui/phrase.js`).
+///
+/// And **the line replaces the pattern**, takes, slips and all; the field it
+/// came from keeps it, so an edit to the line is an edit to the text.
+export function say(text) {
+    const src = String(text || '');
+    line = src;
+    forget();
+    const list = [];
+    const used = new Map();
+    let at = 0;
+    for (const tok of tokensOf(src)) {
+        let t = tok.text;
+        let restAfter = 0;
+        if (!tok.quoted) {
+            const m = /^(.*?)([,;:.?]+)$/.exec(t);
+            if (m) { t = m[1]; restAfter = /[.?;]/.test(m[2]) ? 2 : 1; }
+            t = t.replace(/^[("']+|[)"']+$/g, '');
+            if (t === '-' || t === '_') { at++; continue; }
+        }
+        if (t) {
+            const w = fresh(t, at, 1);
+            const pick = chooseTake(w.phrase, used);
+            if (pick) {
+                w.pin = pick.pin;
+                w.steps = pick.steps;
+                w.stretch = pick.ratio >= STRETCH_NEAR_MIN && pick.ratio <= STRETCH_NEAR_MAX;
+            }
+            list.push(w);
+            at += w.steps;
+        }
+        at += restAfter;
+    }
+    laid = list;
+    replan();
+    remember();
+    touch();
+    return list.length;
+}
+
+/// The line last said. The field draws it; nothing else reads it.
+export function lineOf() { return line; }
+
+export function paceOf() { return pace; }
+
+/// Set the pace and lay every word again at it: each keeps its take and its
+/// rests, and gets the steps its take is said in at the new rate. Clamped to
+/// the stretch range, because that is what realises it.
+export function setPace(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return pace;
+    pace = Math.min(STRETCH_MAX, Math.max(STRETCH_MIN, n));
+    relay();
+    return pace;
+}
+
+/// How many steps a take of `dur` seconds is at the pace. At least one.
+function stepsFor(dur) {
+    return Math.max(1, Math.round(dur / pace / stepSeconds()));
+}
+
+/// The take of a phrase said in the length the word is **typically** said in,
+/// avoiding takes already `used` on this line. Answers its pin — a position in
+/// the list the panel walks — and its steps, or null when nothing says it.
+///
+/// **Typical, and not best-fitting.** The first rule here was the take whose
+/// length was nearest a whole number of steps, and on a real corpus it laid
+/// `what` as sixteen steps: a transcript's word runs to the next token, so a
+/// word before a pause is two seconds long, and two seconds quantises to the
+/// grid more exactly than a fifth of one ever will. The length a word is
+/// usually said in is the median over every take of it, and the take chosen is
+/// the one nearest that — then, among takes about that long, the one that
+/// fills its steps with the least stretch.
+function chooseTake(phrase, used) {
+    if (!library.available() || !library.current()) return null;
+    const hits = library.searchWords(phrase, { loose });
+    if (!hits.length) return null;
+    const taken = used.get(phrase) || new Set();
+    const durOf = (h) => Math.max(0.04, (h.to || (h.at + 0.2)) - h.at);
+    const durs = hits.filter((h) => h.vod.media).map(durOf).sort((a, b) => a - b);
+    if (!durs.length) return null;
+    const typical = durs[Math.floor(durs.length / 2)];
+    let best = null;
+    for (let i = 0; i < hits.length; i++) {
+        const h = hits[i];
+        if (!h.vod.media) continue;
+        const dur = durOf(h);
+        const steps = stepsFor(dur);
+        // How far from the usual length, as a ratio either way, and how far
+        // the stretch that fills the steps is from the pace. The first is
+        // what decides; the second separates takes that are about as long.
+        const usual = Math.abs(Math.log(dur / typical));
+        const off = Math.abs(Math.log((dur / (steps * stepSeconds())) / pace));
+        const cost = usual * 2 + off;
+        const again = taken.has(i) ? 1 : 0;
+        if (!best || again < best.again || (again === best.again && cost < best.cost))
+            best = { said: i, dur, steps, cost, again };
+    }
+    if (!best) return null;
+    taken.add(best.said);
+    used.set(phrase, taken);
+    // The pin is a position in the list as the panel orders it, which for a
+    // best-fit ordering depends on the steps just chosen.
+    const order = candidatesFor(hits, best.steps * stepSeconds());
+    const pin = order.findIndex((c) => c.said === best.said + 1) + 1;
+    return { pin: pin || 1, steps: best.steps, ratio: best.dur / (best.steps * stepSeconds()) };
+}
+
+/// How far a word laid from a line may be stretched to fill its steps before
+/// it is cut instead. A quarter either way: past that the pitch is a different
+/// voice, and `the` — eighty milliseconds, one transcript frame, on a step of a
+/// hundred and twenty-five — was coming out at two thirds speed on every line.
+const STRETCH_NEAR_MIN = 0.8;
+const STRETCH_NEAR_MAX = 1.25;
+
+/// Lay every word again at the pace, keeping takes, order and rests.
+function relay() {
+    let end = 0;
+    let prevEnd = 0;
+    for (const w of laid) {
+        const gap = w.at - prevEnd;
+        prevEnd = w.at + w.steps;
+        const p = pieceOf(laid.indexOf(w));
+        w.at = end + Math.max(0, gap);
+        if (p && p.hit) w.steps = stepsFor(p.naturalDur);
+        end = w.at + w.steps;
+    }
+    replan();
+    remember();
+    touch();
 }
 
 // ── what belongs to a word ─────────────────────────────────────────────────
@@ -358,6 +551,7 @@ export function setTake(i, take) {
     w.pin = Math.max(1, Math.round(Number(take) || 1));
     replan();
     remember();
+    touch();
     return w.pin;
 }
 
@@ -381,6 +575,7 @@ export function setOffset(i, sec) {
     if (Math.abs(w.offset) < 1e-6) w.offset = 0;
     replan();
     remember();
+    touch();
     return w.offset;
 }
 
@@ -396,6 +591,7 @@ export function setStretch(i, on) {
     w.stretch = !!on;
     replan();
     remember();
+    touch();
     return w.stretch;
 }
 
@@ -469,6 +665,7 @@ export function setScore(t) {
     laid = parse(t);
     replan();
     remember();
+    touch();
 }
 
 // ── the workspace ──────────────────────────────────────────────────────────
@@ -495,6 +692,8 @@ export function restore() {
     bar = Math.round(n(blob.bar, 1, 16, BAR));
     loose = !!blob.loose;
     sortByFit = blob.sortByFit === undefined ? true : !!blob.sortByFit;
+    pace = n(blob.pace, STRETCH_MIN, STRETCH_MAX, 1);
+    line = typeof blob.line === 'string' ? blob.line : '';
     laid = [];
     if (Array.isArray(blob.words)) {
         for (const item of blob.words) {
@@ -518,7 +717,7 @@ export function restore() {
 
 function remember() {
     try {
-        localStorage.setItem(KEY, JSON.stringify({ tempo, per, bar, loose, sortByFit, words: laid }));
+        localStorage.setItem(KEY, JSON.stringify({ tempo, per, bar, loose, sortByFit, pace, line, words: laid }));
     } catch (e) { /* no store; the pattern is still good for this session */ }
 }
 
@@ -581,17 +780,7 @@ export function resolve() {
             continue;
         }
 
-        // Every take, rated against the step it is being asked to fill: how
-        // far the word's own length is from the piece's. The rating is what
-        // `sortByFit` orders by and what the badge says.
-        const candidates = hits.map((h, idx) => {
-            const dur = Math.max(0.04, (h.to || (h.at + 0.2)) - h.at);
-            const ratio = dur / Math.max(0.01, p.seconds);
-            const score = Math.max(0, Math.min(100, Math.round((1 - 1.6 * Math.abs(1 - ratio)) * 100)));
-            return { said: idx + 1, hit: h, dur, ratio, score };
-        });
-        if (sortByFit) candidates.sort((a, b) => b.score - a.score || a.said - b.said);
-        p.candidates = candidates.map((c, idx) => ({ ...c, take: idx + 1 }));
+        p.candidates = candidatesFor(hits, p.seconds);
 
         let n;
         if (w.pin > 0) {
@@ -629,6 +818,21 @@ export function resolve() {
 /// rather than on every frame: a resolve is a search of the whole corpus per
 /// distinct word, which is milliseconds and is not free.
 let planned = { pieces: [], missing: [], steps: 0, seconds: 0 };
+/// Every take of a word, rated against the step it is being asked to fill: how
+/// far the word's own length is from the piece's. The rating is what `sortByFit`
+/// orders by and what the badge says. One home, because `say` has to know where
+/// in this list the take it chose will stand.
+function candidatesFor(hits, seconds) {
+    const candidates = hits.map((h, idx) => {
+        const dur = Math.max(0.04, (h.to || (h.at + 0.2)) - h.at);
+        const ratio = dur / Math.max(0.01, seconds);
+        const score = Math.max(0, Math.min(100, Math.round((1 - 1.6 * Math.abs(1 - ratio)) * 100)));
+        return { said: idx + 1, hit: h, dur, ratio, score };
+    });
+    if (sortByFit) candidates.sort((a, b) => b.score - a.score || a.said - b.said);
+    return candidates.map((c, idx) => ({ ...c, take: idx + 1 }));
+}
+
 /// What the pattern would build.
 ///
 /// **Re-resolved when the corpus under it has moved** — a channel opened after
@@ -639,7 +843,12 @@ let planned = { pieces: [], missing: [], steps: 0, seconds: 0 };
 /// nothing ever asked again. What the plan was made over is written down with
 /// it, and a plan over something else is made again on the read.
 export function plan() {
-    if (plannedOver !== corpusKey()) replan();
+    if (plannedOver !== corpusKey()) {
+        replan();
+        // A corpus that arrived can resolve a word that was not: what is in
+        // the mix follows, if the pattern is in it at all.
+        if (synced) touch();
+    }
     return planned;
 }
 
@@ -680,76 +889,127 @@ export function initRhythm(h) {
 /// What the tab says about the build. '' when nothing is happening.
 export function note() { return said; }
 
-/// Is a build waiting on anything? The press that started it is not repeatable.
+/// Is the mix waiting on a recording to open?
 export function busy() { return !!job; }
 
-/// Turn the pattern into clips — the whole of it, or one word of it.
+/// Bring the mix up to the pattern.
 ///
-/// Answers '' when it started and a sentence when it refused.
+/// **The mix mirrors the pattern**, and there is no Build: a word typed is a
+/// clip in the row on the next frame, a take cycled is that clip repointed, a
+/// word held a step longer is that clip a step longer, a word taken off is its
+/// clip gone. That is what makes adjusting a line a loop rather than a form —
+/// the earlier version asked for a press after every change and appended a
+/// second copy of everything on each one. Four things about it.
 ///
-/// **It refuses rather than approximating**, which is `ui/graph/derive.js`'s rule
-/// in another place: a build that quietly left out the two words nothing said
-/// would produce a rhythm with two holes in it and nothing on the screen saying
-/// which. Every missing word is named at once, because fixing them one press at
-/// a time is the version of this nobody would use twice.
+/// **Every clip the pattern owns is tagged with its word's id** (`clip.word`,
+/// `clip.rest` for a rest), so a word moved, renamed or given another take
+/// keeps its clip, and a clip that is the same take is *adjusted* — slipped by
+/// how far its in-point moved, its speed and length set — rather than replaced.
+/// A different take is a different moment of the recording and is a new clip;
+/// the cut behind the old one is forgotten with it.
 ///
-/// **The press returns.** Opening a recording is a probe on a thread and a
-/// six-hour file takes a moment, so the build is a job the frame loop finishes:
-/// the inputs are asked for here and the clips are laid when every one of them
-/// has answered. They are laid **all at once, in pattern order** — not one per
-/// probe as it lands — because the order of a mix is the order of the words and
-/// probes land in whatever order the disk feels like.
+/// **A word nothing says has no clip and is named**, rather than refusing the
+/// whole line: the grid shows it red and the row shows the hole, which is the
+/// state somebody fixes one word at a time — and nothing else on the line waits.
 ///
-/// `only` is one word's index: that piece alone, with no rests, which is what
-/// somebody does when one take is right and the rest of the pattern is not.
-export function build(only) {
-    if (job) return 'still building';
-    if (!library.available()) return 'no corpus to build from';
-
-    const got = replan();
-    let pieces = got.pieces;
-    if (only !== undefined && only !== null)
-        pieces = pieces.filter((p) => p.kind === 'word' && p.word === only);
-    if (!pieces.length) return 'nothing on the grid';
-
-    const missing = [];
-    for (const p of pieces)
-        if (p.kind === 'word' && !p.hit && !p.why && missing.indexOf(p.phrase) < 0)
-            missing.push(p.phrase);
-    if (missing.length)
-        return `nothing says ${missing.map((w) => `"${w}"`).join(', ')}`;
-    const pinned = pieces.filter((p) => p.kind === 'word' && !p.hit && p.why);
-    if (pinned.length)
-        return pinned.map((p) => `"${p.phrase}" — ${p.why}`).join(' · ');
-    const noMedia = pieces.filter((p) => p.kind === 'word' && p.hit && !p.hit.vod.media);
-    if (noMedia.length)
-        return `${noMedia.length} of those are in recordings that are not on disk`;
+/// **Opening a recording is a probe on a thread**, so a word whose recording
+/// is not open yet is a job the frame loop finishes, and the whole pattern is
+/// laid when every recording has answered — all at once, in pattern order,
+/// because the order of a mix is the order of the words and probes land in
+/// whatever order the disk feels like.
+///
+/// **The pattern's clips are one block of the row**, in pattern order, standing
+/// where the first of them stood; a clip added from the Words tab keeps its
+/// place before or after the block. Trimming or reordering one of the block's
+/// clips by hand is undone by the next edit to the pattern, because the
+/// pattern is what they are a picture of.
+///
+/// Answers whether the mix changed.
+function sync() {
+    dirty = false;
+    if (job) return false;
+    if (!library.available() || !library.current()) return false;
+    const pieces = plan().pieces;
 
     // One input per distinct recording, asked for now so the opens overlap.
-    const paths = [];
-    for (const p of pieces)
-        if (p.kind === 'word' && paths.indexOf(p.hit.vod.media) < 0)
-            paths.push(p.hit.vod.media);
-    const inputs = paths.map((path) => hooks.openInput({ path, name: path }));
-
-    job = { pieces, inputs, began: Date.now() };
-    said = `building ${pieces.length} piece${pieces.length === 1 ? '' : 's'}…`;
-    return '';
+    const inputs = new Map();
+    for (const p of pieces) {
+        if (p.kind !== 'word' || !p.hit || !p.hit.vod.media) continue;
+        const path = p.hit.vod.media;
+        if (!inputs.has(path)) inputs.set(path, hooks.openInput({ path, name: path }));
+    }
+    const pending = [...inputs.values()].filter((i) => i && !i.probe && !i.error);
+    if (pending.length) {
+        job = { inputs: pending, began: Date.now() };
+        said = `opening ${pending.length} recording${pending.length === 1 ? '' : 's'}…`;
+        return false;
+    }
+    return lay(pieces);
 }
 
-/// Every input the build is waiting on has answered — lay the whole pattern.
+/// The clips the pattern owns, in play order.
+function mine() {
+    return project.clips.filter((c) => c.track === 0 && (c.word || c.rest))
+                        .sort((a, b) => a.start - b.start);
+}
+
+/// Every recording has answered — reconcile the row with the pieces.
 ///
 /// The canvas is settled from the first piece that has a picture, which is
 /// `app.js`'s rule for the first clip of a mix and is stated there; a pattern
 /// that begins with a rest would otherwise size the project from a `color`
 /// filter this file chose the dimensions of.
-function lay() {
-    let laid = 0;
-    for (const p of job.pieces) {
+function lay(pieces) {
+    const before = mine();
+    const spare = before.filter((c) => c.rest);
+    const byWord = new Map();
+    for (const c of before) if (c.word) byWord.set(c.word, c);
+    const keep = [];
+    let replaced = false;
+    let adjusted = false;
+    const missing = [];
+
+    for (const p of pieces) {
         if (p.kind === 'rest') {
-            if (rest(p.seconds)) laid++;
+            let c = spare.shift();
+            if (!c) {
+                c = rest(p.seconds);
+                if (!c) continue;
+                replaced = true;
+            } else if (Math.abs(c.length - p.seconds) > 1e-6) {
+                c.media = Math.max(c.media, p.seconds);
+                c.length = p.seconds;
+                adjusted = true;
+            }
+            keep.push(c);
             continue;
         }
+        if (!p.hit) {
+            if (!p.why && missing.indexOf(p.phrase) < 0) missing.push(p.phrase);
+            continue;
+        }
+        if (!p.hit.vod.media) continue;
+        const w = laid[p.word];
+        if (!w) continue;
+        const path = p.hit.vod.media;
+        const held = byWord.get(w.id);
+        byWord.delete(w.id);
+        if (held && held.laid && held.laid.path === path && held.laid.hitAt === p.hit.at) {
+            // The same take: adjusted in place. The slip is relative, so it
+            // composes with the onset read and with a cut landing.
+            const by = p.at - held.laid.at;
+            if (Math.abs(by) > 1e-6) { slipClip(held, by); held.laid.at = p.at; adjusted = true; }
+            const room = Math.max(0, (held.media - held.inPoint) / p.rate);
+            const length = Math.max(1 / Math.max(1, held.fps || 25), Math.min(p.seconds, room));
+            if (Math.abs(held.speed - p.rate) > 1e-9 || Math.abs(held.length - length) > 1e-6) {
+                held.speed = p.rate;
+                held.length = length;
+                adjusted = true;
+            }
+            keep.push(held);
+            continue;
+        }
+        if (held) { hooks.drop(held); replaced = true; }
         // **The in-point is the word's own start and nothing is subtracted from
         // it.** `library.asClip` pads a single word by `WORD_PAD` because a word
         // taken to its edge arrives half said — which is right when the moment
@@ -758,7 +1018,7 @@ function lay() {
         // material, not in-point. The span is the step's at the piece's rate,
         // so a stretched word brings the footage its speed will fit.
         const clip = hooks.place({
-            path: p.hit.vod.media,
+            path,
             name: `${p.hit.vod.id} ${p.phrase}`,
             from: p.at,
             to: p.at + p.span,
@@ -766,26 +1026,42 @@ function lay() {
             title: p.hit.vod.title || '',
         });
         if (!clip) continue;
-        laid++;
-        if (p.rate !== 1) {
-            // The speed that makes the span fill the step. `setSpeed` keeps the
-            // source span and works the length out from it, which lands on
-            // exactly `seconds`; the pack afterwards is for the clips behind.
-            setSpeed(clip, p.rate);
-            if (hooks.packed) hooks.packed();
-        }
+        clip.word = w.id;
+        clip.laid = { path, at: p.at, hitAt: p.hit.at };
+        // The speed that makes the span fill the step. `setSpeed` keeps the
+        // source span and works the length out from it, which lands on exactly
+        // `seconds`.
+        if (p.rate !== 1) setSpeed(clip, p.rate);
         // The onset read for this piece, queued rather than started: one runs at
         // a time process-wide. A word slipped by hand is not measured — see the
         // header.
-        if (!p.offset) {
-            queue.push({ clip: clip.id, path: p.hit.vod.media, want: p.at,
-                         read: 0, phrase: p.phrase });
-        }
+        if (!p.offset) queue.push({ clip: clip.id, path, want: p.at, read: 0, phrase: p.phrase });
+        keep.push(clip);
+        replaced = true;
     }
-    job = null;
-    said = `${laid} piece${laid === 1 ? '' : 's'} on the grid`;
-    if (hooks.edited) hooks.edited();
-    return laid;
+    for (const c of byWord.values()) { hooks.drop(c); replaced = true; }
+    for (const c of spare) { hooks.drop(c); replaced = true; }
+
+    if (replaced || adjusted) order(keep);
+    synced = true;
+    said = keep.length ? `${keep.length} in the mix` : '';
+    if (missing.length) said += `${said ? ' · ' : ''}nothing says ${missing.map((m) => `"${m}"`).join(', ')}`;
+    if (replaced && hooks.edited) hooks.edited();
+    else if (adjusted && hooks.changed) hooks.changed();
+    return replaced || adjusted;
+}
+
+/// Put the pattern's clips in pattern order as one block of the row, where
+/// the first of them stood, and pack everything.
+function order(block) {
+    const seq = project.clips.filter((c) => c.track === 0).sort((a, b) => a.start - b.start);
+    const others = seq.filter((c) => block.indexOf(c) < 0);
+    let at = 0;
+    for (const c of seq) { if (block.indexOf(c) >= 0) break; if (others.indexOf(c) >= 0) at++; }
+    const merged = others.slice(0, at).concat(block, others.slice(at));
+    let t = 0;
+    for (const c of merged) { c.start = t; t += c.length; }
+    if (hooks.packed) hooks.packed();
 }
 
 /// One step of black.
@@ -806,10 +1082,11 @@ function rest(seconds) {
         fps: projectFps(),
     });
     const settled = generators.settle(spec);
-    if (!settled.ok) { said = `no rest: ${settled.why}`; return false; }
+    if (!settled.ok) { said = `no rest: ${settled.why}`; return null; }
     const clip = makeGenerator(settled);
     clip.track = 0;
     clip.muted = true;
+    clip.rest = true;
     // A generator has no length of its own — `media` is the edit's number, which
     // is what `makeGenerator` says at length — so it is set to what is being
     // asked for rather than trimmed down to it.
@@ -817,8 +1094,7 @@ function rest(seconds) {
     clip.length = seconds;
     clip.start = duration();
     addClip(clip);
-    if (hooks.packed) hooks.packed();
-    return true;
+    return clip;
 }
 
 // ── snapping to the sound ──────────────────────────────────────────────────
@@ -874,10 +1150,13 @@ export function tick() {
         const timedOut = (Date.now() - job.began) > 8000;
         if (timedOut || job.inputs.every((i) => !i || i.probe || i.error)) {
             const bad = job.inputs.filter((i) => !i || i.error || (!i.probe && timedOut));
-            lay();
+            job = null;
+            lay(plan().pieces);
             if (bad.length) said += ` · ${bad.length} would not open`;
             moved = true;
         }
+    } else if (dirty) {
+        if (sync()) moved = true;
     }
 
     if (reading) {

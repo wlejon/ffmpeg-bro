@@ -399,17 +399,38 @@ In the **Words** tab:
 ## Words on a beat
 
 The **Rhythm** tab is for the mix you can already hear: you know what it should
-say and when each word should land, and what you need is for somebody to go and
-find every one of them.
+say, and what you need is for somebody to go and find every word of it and put
+them in a row.
 
-The tab is a step sequencer. One row is a bar, one cell is a step, and the
-heavier lines are the beats. Set the **tempo** — type it, or press **Tap** in
-time — and the **grid**: how many steps a beat and how many beats a bar. At 120
-with four steps a beat, a step is an eighth of a second, and the line under the
-controls says so.
+**Type the line and press Enter.** The box at the top takes a whole sentence.
+Every word is found in the corpus, given the take it is usually said in, and
+laid one after another at the length it was said — and the mix under the picture
+fills with the clips as you watch. A comma is a step of rest after the word and a
+full stop two, so `what the hell, are you doing.` breathes where the text does.
+`"you cross"` in quotes is one word with a space in it, and `what|wot` is either
+spelling. The line stays in the box, so changing a word is editing the text and
+pressing Enter again.
 
-Then put words on it. An empty grid opens with the caret already in its first
-cell, so the first thing to do is type:
+**Pace** lays the same line tighter or looser: at 1.5× every word is said half
+again as fast, which you hear, because it is the sound that is stretched and
+not only the grid. The takes stay; the steps and the rests follow.
+
+**There is no Build.** The row under the picture *is* the line: a word changed,
+held, moved, given another take or taken off is that clip changed, held, moved,
+replaced or gone on the next frame, in place, with the rest of the row closing
+up. A clip you add from the Words tab keeps its place before or after the line's
+block — but trimming or reordering one of the line's own clips by hand lasts
+only until the next edit to the line, because the line is what they are a
+picture of.
+
+**Under the box is the grid**, where the line is adjusted a word at a time. One
+row is a bar, one cell is a step, and the heavier lines are the beats. Set the
+**tempo** — type it, or press **Tap** in time — and the **grid**: how many steps
+a beat and how many beats a bar. At 120 with four steps a beat, a step is an
+eighth of a second, and the line under the controls says so.
+
+Words can also be put on it one at a time. An empty grid opens with the caret
+already in its first cell:
 
 | Do | Gets |
 |---|---|
@@ -438,37 +459,36 @@ slipped. `←` `→` walk the words.
 
 **Takes.** A word said three thousand times has three thousand takes, and the
 panel steps through them with `◀` `▶` — or `[` `]` — playing each one as it
-lands. Repeats of the same word walk the takes rather than repeating one. The
-takes are offered **best fit first**: the badge is how close the take's own
-length is to the step it has been given, and unticking the box offers them in
-the order they were said instead.
+lands and putting it in the row. Under the stepper every take is a numbered
+button, so the third one is one press away when the way to find it is to hear
+them; hovering one says how long it is. Repeats of the same word walk the takes
+rather than repeating one. The takes are offered **best fit first**: the badge
+is how close the take's own length is to the step it has been given, and
+unticking the box offers them in the order they were said instead.
 
 **Slip.** The slider moves the word's start by up to a fifth of a second either
 way, and releasing it plays the result; `,` and `.` nudge by five milliseconds,
 twenty-five with `Shift`. A word slipped by hand is marked on the grid, and the
 beat-finding below leaves it alone.
 
-**Fit.** By default a word is **cut** to its step: a long one is cut off and a
-short one runs on into whatever followed it. **Stretch** sets the piece's speed
-so the word's own length fills the step instead — its pitch moves with it, which
-is why this is a choice per word and off to begin with. A word that would need
+**Fit.** **Stretch** sets the piece's speed so the word's own length fills its
+steps, and its pitch moves with it. **Cut** trims it to the step instead: a long
+word is cut off and a short one runs on into whatever followed it. A word laid
+from the line is stretched when that is within a quarter either way and cut when
+it is not — `the` is one transcript frame long and would come out at two thirds
+speed — and a word put on the grid by hand starts cut. A word that would need
 more than double speed or less than half is cut whatever the setting says.
 
 **Listen** plays the whole pattern in tempo, out of the recordings, lighting
-each word as it goes; **loop** plays it round. It is not the render — nothing
-has been built yet — so there is a seam at every step, which is also what the
-words sound like. `Space` starts and stops it. `⟳ loop` on the panel plays one
-word over and over, for dialling in its slip.
+each word as it goes; **loop** plays it round. It is a preview of the clips
+rather than the render, so there is a seam at every step, which is also what
+the words sound like. `Space` starts and stops it. `⟳ loop` on the panel plays
+one word over and over, for dialling in its slip. Playing the mix itself, under
+the picture, is the render.
 
-**Build** puts the lot in the mix. Every piece comes out an exact number of
-steps long, so the words land on the grid rather than near it, and a stretched
-word comes out at the speed that made it fit. **+** on the panel puts that one
-word in the mix on its own.
-
-**A word nothing said refuses the whole build**, naming every one of them at
-once. A rhythm with a hole in it and nothing saying which word went missing is
-worse than a rhythm that will not build. A word nothing said is red on the grid
-before you press anything.
+**A word nothing said is a hole, and it is named.** It is red on the grid, it
+has no clip in the row, and the line under the controls says which. Everything
+else on the line is in the row regardless; fix the word, or take it off.
 
 **Where the word starts is measured, not guessed.** A transcript knows roughly
 where a word is — near enough to find it, not near enough to hit a beat with —
@@ -479,8 +499,10 @@ itself, and the line says `finding the beat in 6` while it is going on. Whatever
 it finds, the grid does not move.
 
 The pattern is remembered between sessions but it is **not in the document** —
-what a `.fbro` holds is the mix it built. Building again appends; **Clear** on
-the tab empties the grid, and **Clear** on the mix empties the mix.
+what a `.fbro` holds is the mix. A pattern remembered from last time is not put
+back in the row when the window opens; the first edit to it is. **Clear** on the
+tab empties the grid and takes its clips out of the row; **Clear** on the mix
+empties the mix and leaves the grid.
 
 ## Writing the file
 
