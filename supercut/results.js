@@ -13,10 +13,11 @@
 //     else; see `monologues` in `ui/phrase.js` for why it is named after the
 //     measurement and claims nothing about what is in it.
 //   - **Rhythm** — you know what it should say and when each word should land.
-//     The one tab whose text is an *instruction* rather than a search, and the
-//     list under it is what that instruction resolved to: one row a step, in the
-//     order they will play. `supercut/rhythm.js` decides every word of that and
-//     this draws it, which is the same split the other three keep.
+//     The one tab whose input is an *instruction* rather than a search: a grid
+//     of steps with words on it, and what a build makes of it. `supercut/rhythm.js`
+//     decides every word of that and `supercut/pattern.js` draws it, which is
+//     the same split the other three keep with `ui/library.js`; this file only
+//     hands the tab over.
 //
 // **The list is never empty when there is a corpus, and that is the point of the
 // first tab.** This opened on Words with nothing typed, which meant a window
@@ -42,7 +43,7 @@ import { clock } from '../ui/format.js';
 import { gb } from '../corpus/files.js';
 import * as library from '../ui/library.js';
 import * as acquire from './acquire.js';
-import * as rhythm from './rhythm.js';
+import * as pattern from './pattern.js';
 
 /// A found list is long and the interesting part is the top of it. The cap is on
 /// what is *drawn* rather than on what is found, so the count stays honest.
@@ -70,7 +71,6 @@ let reading = null;
 /// a hit says a timecode and a phrase, and neither of those moves.
 const moving = new Map();
 let playing = null;      // the item being auditioned, for the row to show it
-let lastStepIndex = -1;  // last clicked/auditioned step piece index
 
 let phrase = '';
 let loose = false;
@@ -84,11 +84,12 @@ export function initResults(refs, h) {
     hooks = h || {};
     for (const b of nodes.tabs.querySelectorAll('[data-tab]'))
         b.addEventListener('click', () => setTab(b.dataset.tab));
-    nodes.inspector = el('div', { id: 'r-inspector', cls: 'r-inspector' });
-    nodes.inspector.hidden = true;
-    if (nodes.list && nodes.list.parentNode) {
-        nodes.list.parentNode.insertBefore(nodes.inspector, nodes.list);
-    }
+    // The fourth tab draws into the same three nodes and is told which they are
+    // once; the finder itself is handed over so the tab can ask for more width.
+    pattern.initPattern({
+        controls: nodes.controls, note: nodes.note, list: nodes.list,
+        finder: nodes.tabs.parentNode,
+    }, hooks);
 }
 
 /// Open the corpus and draw. Answers false when there is none.
@@ -122,18 +123,20 @@ export function currentTab() { return tab; }
 
 export function setTab(next) {
     if (tab === next) return;
+    if (tab === 'rhythm') pattern.leave();
     tab = next;
-    stopScore();
-    stopStepLoop();
-    if (tab !== 'rhythm' && nodes.inspector) {
-        nodes.inspector.hidden = true;
-    }
     // **Answered on arrival, not on a press.** Two of the three questions have an
     // answer already — what is in the corpus, and where the talking is — and a
     // tab that came up empty with a Find button beside it would be asking
     // somebody to confirm they meant to press the tab they just pressed.
     search();
     draw();
+    // The one tab that needs typing before it answers, and the box is the
+    // whole of it: the caret goes there on arrival so the press is the search.
+    if (tab === 'words') {
+        const box = document.getElementById('f-phrase');
+        if (box) box.focus();
+    }
 }
 
 /// What the list is showing, for a caller that has to check it rather than read
@@ -156,7 +159,7 @@ function search() {
     // inventory is a superset of the manifest and its rows are the same shape,
     // which is why one list still draws all three tabs.
     if (tab === 'recordings') results = acquire.list();
-    else if (tab === 'rhythm') results = steps();
+    else if (tab === 'rhythm') results = [];
     else {
         reading = tab === 'words'
             ? library.beginSearch('words', { phrase, loose })
@@ -169,7 +172,6 @@ function search() {
         results = reading.hits;
     }
     drawNote();
-    drawInspector();
     drawRows();
 }
 
@@ -208,46 +210,6 @@ export function tick() {
     return true;
 }
 
-/// The score, resolved, as rows this list can already draw.
-///
-/// **A step of the score is a hit with a step number on it**, which is why the
-/// same row, the same `▶` and the same `+` work on it without any of them
-/// learning what a score is: `resolve()` hands back `ui/library.js`'s own item
-/// for the moment each word is taken from. So a word can be auditioned before
-/// anything is built, and one of them can be dropped straight into the mix on
-/// its own — which is what somebody does when a take is wrong and the rest is
-/// right.
-///
-/// A rest and an unresolved word have no moment, so they carry an item shaped
-/// the same way with nothing in it: the controls go dead on `vod.media` exactly
-/// as they do for a recording that has been deleted off the disk.
-function steps() {
-    const plan = rhythm.replan();
-    let at = 0;
-    let onStep = 1;
-    return plan.pieces.map((p, pieceIdx) => {
-        const seconds = p.seconds;
-        const was = at;
-        const wasStep = onStep;
-        at += seconds;
-        onStep += p.steps;
-        const base = {
-            kind: 'step', piece: p, pieceIndex: pieceIdx, from: was, step: wasStep, seconds,
-            at: p.hit ? p.hit.at : 0,
-            to: p.hit ? p.hit.at + (p.dur || seconds) : seconds,
-        };
-        const dynamic = p.tempo !== rhythm.tempoOf() || p.stepsPerBeat !== rhythm.stepsPerBeat();
-        const tempoTag = dynamic ? ` · ${p.tempo} bpm (${p.stepsPerBeat}/beat)` : '';
-        if (p.kind === 'rest')
-            return { ...base, vod: { id: '', media: '', title: '' },
-                     label: '—', detail: `rest${tempoTag}` };
-        if (!p.hit)
-            return { ...base, vod: { id: '', media: '', title: '' },
-                     label: p.phrase, detail: (p.why || 'nothing says that') + tempoTag };
-        return { ...base, vod: p.hit.vod, label: p.phrase, detail: (p.hit.detail || '') + tempoTag };
-    });
-}
-
 /// Draw the list again because something landed — a copy advanced, a read
 /// finished, a look-up answered. Called from the frame loop when `acquire.tick()`
 /// says so, and never on a frame where nothing moved.
@@ -257,6 +219,8 @@ function steps() {
 /// the caret away every time a progress bar moved a percent.
 export function refresh() {
     if (tab === 'recordings') results = acquire.list();
+    // A transcription landing changes what every word on the grid resolves to.
+    if (tab === 'rhythm') { pattern.reload(); return; }
     // **Except the two the machine changes by itself.** A checkpoint landing
     // takes the model controls away and starting to fetch one turns them into a
     // Stop, and neither is a press on this row — so what the row *should* be
@@ -287,20 +251,12 @@ export function refresh() {
 /// button that became a Stop — is not this; that is `refresh()`, and
 /// `acquire.tick()` answers `'rows'` for it.
 export function repaint() {
-    // **The Rhythm tab's moving part is one line and no rows.** A build's inputs
+    // **The Rhythm tab's moving part is one line and no grid.** A build's inputs
     // opening and its onset reads landing change the note and nothing else — the
-    // steps are what the score says and the score has not been typed into — so
-    // this is one write per frame rather than a list rebuilt to say that two
-    // fewer reads are outstanding.
-    if (tab === 'rhythm') {
-        const buildBtn = document.getElementById('r-build');
-        if (buildBtn) {
-            const isBusy = rhythm.busy();
-            if (buildBtn.disabled !== isBusy) buildBtn.disabled = isBusy;
-        }
-        drawNote();
-        return;
-    }
+    // grid is what was laid on it and nobody has touched it — so this is one
+    // write per frame rather than a grid rebuilt to say that two fewer reads are
+    // outstanding.
+    if (tab === 'rhythm') { pattern.repaint(); return; }
     if (tab !== 'recordings') return;
     for (const item of results) {
         const node = moving.get(item.id);
@@ -334,294 +290,17 @@ export function play(n) {
     if (!item || !item.vod.media) return false;
     if (isPlaying(item)) { hush(); return true; }
     playing = item;
-    if (item.kind === 'step') {
-        if (item.pieceIndex !== undefined) lastStepIndex = item.pieceIndex;
-        if (item.piece && item.piece.kind === 'word') {
-            const p = item.piece;
-            const from = Math.max(0, p.at);
-            const naturalDur = p.dur || (item.to - item.at);
-            const rate = p.rate || 1.0;
-            const until = from + naturalDur;
-            hooks.audition(item.vod.media, from, until, rate);
-        }
-        drawInspector();
-    } else {
-        const lead = item.kind === 'word' ? library.WORD_PAD : 0;
-        hooks.audition(item.vod.media, Math.max(0, item.at - lead), item.to + lead);
-    }
+    const lead = item.kind === 'word' ? library.WORD_PAD : 0;
+    hooks.audition(item.vod.media, Math.max(0, item.at - lead), item.to + lead);
     drawRows();
     return true;
 }
 
-/// Active step piece index for keyboard cycling.
-export function activeStepIndex() { return lastStepIndex; }
-
-/// Cycle through takes for the active (or playing) step piece, re-searching and auditioning.
-export function cycleActiveTake(delta = 1) {
-    if (tab !== 'rhythm') return false;
-    let targetPieceIdx = -1;
-    if (playing && playing.kind === 'step' && playing.pieceIndex !== undefined) {
-        targetPieceIdx = playing.pieceIndex;
-    } else if (lastStepIndex >= 0) {
-        targetPieceIdx = lastStepIndex;
-    } else {
-        const first = results.find((r) => r.kind === 'step' && r.piece && r.piece.kind === 'word');
-        if (first) targetPieceIdx = first.pieceIndex;
-    }
-    if (targetPieceIdx < 0) return false;
-    lastStepIndex = targetPieceIdx;
-    rhythm.cycleStepTake(targetPieceIdx, delta);
-    results = steps();
-    drawNote();
-    drawInspector();
-    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === targetPieceIdx);
-    if (rowIdx >= 0) {
-        if (!play(rowIdx)) drawRows();
-    } else {
-        drawRows();
-    }
-    return true;
-}
-
-let scorePlaying = false;
-let scoreLooping = false;
-let scoreTimer = null;
-let stepLooping = false;
-let stepLoopTimer = null;
-
-export function isScorePlaying() { return scorePlaying; }
-export function isScoreLooping() { return scoreLooping; }
-export function setScoreLooping(on) {
-    scoreLooping = !!on;
-    const chk = document.getElementById('r-loop');
-    if (chk && chk.checked !== scoreLooping) chk.checked = scoreLooping;
-}
-export function toggleScoreLoop() {
-    setScoreLooping(!scoreLooping);
-    return scoreLooping;
-}
-
-function updateListenButton() {
-    const btn = document.getElementById('r-listen-all');
-    if (btn) {
-        btn.textContent = scorePlaying ? '■ Stop' : '▶ Listen all';
-        btn.classList.toggle('on', scorePlaying);
-        btn.title = scorePlaying ? 'Stop listening (Space)' : 'Listen to whole score in tempo (Space)';
-    }
-}
-
-export function stopScore() {
-    if (!scorePlaying && !scoreTimer) return;
-    scorePlaying = false;
-    if (scoreTimer) { clearTimeout(scoreTimer); scoreTimer = null; }
-    if (hooks.hush) hooks.hush();
-    playing = null;
-    updateListenButton();
-    drawRows();
-    drawInspector();
-}
-
-export function isStepLooping() { return stepLooping; }
-export function stopStepLoop() {
-    if (!stepLooping && !stepLoopTimer) return;
-    stepLooping = false;
-    if (stepLoopTimer) { clearTimeout(stepLoopTimer); stepLoopTimer = null; }
-    if (hooks.hush) hooks.hush();
-    playing = null;
-    drawRows();
-    drawInspector();
-}
-
-export function loopStep(pieceIdx) {
-    if (stepLooping && lastStepIndex === pieceIdx) {
-        stopStepLoop();
-        return false;
-    }
-    stopScore();
-    stopStepLoop();
-    stepLooping = true;
-    lastStepIndex = pieceIdx;
-
-    function nextIter() {
-        if (!stepLooping) return;
-        const plan = rhythm.plan();
-        const p = plan.pieces[pieceIdx];
-        if (!p || p.kind !== 'word' || !p.hit || !p.hit.vod.media) {
-            stopStepLoop();
-            return;
-        }
-
-        const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === pieceIdx);
-        if (rowIdx >= 0) {
-            playing = results[rowIdx];
-            drawRows();
-        }
-
-        const from = Math.max(0, p.at);
-        const dur = Math.max(0.04, p.dur || p.seconds);
-        const rate = p.rate || 1.0;
-        hooks.audition(p.hit.vod.media, from, from + dur, rate);
-
-        const repeatMs = Math.max((p.seconds || 0.2) * 1000, (dur / rate) * 1000 + 80);
-        stepLoopTimer = setTimeout(() => {
-            if (!stepLooping) return;
-            nextIter();
-        }, repeatMs);
-    }
-
-    drawInspector();
-    nextIter();
-    return true;
-}
-
-export function playScore(startIndex = 0) {
-    if (tab !== 'rhythm') return false;
-    stopStepLoop();
-    stopScore();
-
-    const plan = rhythm.plan();
-    if (!plan || !plan.pieces.length) return false;
-
-    for (const p of plan.pieces) {
-        if (p.hit && p.hit.vod.media && hooks.warmPath) {
-            hooks.warmPath(p.hit.vod.media);
-        }
-    }
-
-    scorePlaying = true;
-    updateListenButton();
-
-    let curIdx = Math.max(0, Math.min(plan.pieces.length - 1, startIndex));
-
-    function stepLoop(idx) {
-        if (!scorePlaying) return;
-        if (idx >= plan.pieces.length) {
-            if (scoreLooping) {
-                stepLoop(0);
-                return;
-            }
-            stopScore();
-            return;
-        }
-
-        const p = plan.pieces[idx];
-        lastStepIndex = idx;
-        const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === idx);
-        if (rowIdx >= 0) {
-            playing = results[rowIdx];
-            drawRows();
-            drawInspector();
-        }
-
-        const stepSec = Math.max(0.04, p.seconds || (60 / rhythm.tempoOf() / rhythm.stepsPerBeat()));
-        const stepMs = stepSec * 1000;
-
-        if (p.kind === 'word' && p.hit && p.hit.vod.media) {
-            const from = Math.max(0, p.at);
-            const dur = Math.max(0.02, p.dur || stepSec);
-            const rate = p.rate || 1.0;
-            hooks.audition(p.hit.vod.media, from, from + dur, rate);
-        } else {
-            if (hooks.hush) hooks.hush();
-        }
-
-        scoreTimer = setTimeout(() => {
-            if (!scorePlaying) return;
-            stepLoop(idx + 1);
-        }, stepMs);
-    }
-
-    stepLoop(curIdx);
-    return true;
-}
-
-export function toggleScorePlay() {
-    if (scorePlaying) {
-        stopScore();
-        return false;
-    }
-    return playScore(0);
-}
-
-export function selectRelativeStep(delta = 1) {
-    if (tab !== 'rhythm') return false;
-    const plan = rhythm.plan();
-    if (!plan.pieces.length) return false;
-    const cur = lastStepIndex >= 0 ? lastStepIndex : 0;
-    const next = Math.max(0, Math.min(plan.pieces.length - 1, cur + delta));
-    lastStepIndex = next;
-    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === next);
-    drawInspector();
-    if (rowIdx >= 0) {
-        play(rowIdx);
-    } else {
-        drawRows();
-    }
-    return true;
-}
-
-export function nudgeActiveStepOffset(deltaSec) {
-    if (tab !== 'rhythm' || lastStepIndex < 0) return 0;
-    const nextOffset = rhythm.nudgeStepOffset(lastStepIndex, deltaSec);
-    results = steps();
-    drawNote();
-    drawInspector();
-    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
-    if (rowIdx >= 0) {
-        if (!play(rowIdx)) drawRows();
-    } else {
-        drawRows();
-    }
-    return nextOffset;
-}
-
-export function nudgeActiveStepDur(deltaSec) {
-    if (tab !== 'rhythm' || lastStepIndex < 0) return 0;
-    const nextDur = rhythm.nudgeStepDurDelta(lastStepIndex, deltaSec);
-    results = steps();
-    drawNote();
-    drawInspector();
-    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
-    if (rowIdx >= 0) {
-        if (!play(rowIdx)) drawRows();
-    } else {
-        drawRows();
-    }
-    return nextDur;
-}
-
-export function setActiveStepRate(rate) {
-    if (tab !== 'rhythm' || lastStepIndex < 0) return 1.0;
-    rhythm.setStepRate(lastStepIndex, rate);
-    results = steps();
-    drawNote();
-    drawInspector();
-    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
-    if (rowIdx >= 0) {
-        if (!play(rowIdx)) drawRows();
-    } else {
-        drawRows();
-    }
-    return rate;
-}
-
-export function resetActiveStepFine() {
-    if (tab !== 'rhythm' || lastStepIndex < 0) return;
-    rhythm.resetStepFine(lastStepIndex);
-    results = steps();
-    drawNote();
-    drawInspector();
-    const rowIdx = results.findIndex((r) => r.kind === 'step' && r.pieceIndex === lastStepIndex);
-    if (rowIdx >= 0) {
-        if (!play(rowIdx)) drawRows();
-    } else {
-        drawRows();
-    }
-}
-
-/// Stop the audition, whichever row it is on. The app's `Space` reaches this too.
+/// Stop the audition, whichever row it is on — or whichever word of the grid.
+/// The app's `Space` reaches this too.
 export function hush() {
-    if (!playing) return false;
+    const grid = pattern.hush();
+    if (!playing) return grid;
     if (hooks.hush) hooks.hush();
     playing = null;
     drawRows();
@@ -630,7 +309,7 @@ export function hush() {
 
 /// Is anything being auditioned? For the caller that has to decide what a key
 /// means — see `app.js`.
-export function auditioning() { return !!playing; }
+export function auditioning() { return !!playing || pattern.auditioning(); }
 
 /// Put it at the end of the mix.
 export function add(n) {
@@ -651,8 +330,8 @@ const isPlaying = (item) =>
 
 /// The audition ended, wherever it ended. Called by the app.
 export function stopped() {
+    pattern.stopped();
     if (!playing) return;
-    if (scorePlaying || stepLooping) return;
     playing = null;
     drawRows();
 }
@@ -662,9 +341,11 @@ export function stopped() {
 function draw() {
     for (const b of nodes.tabs.querySelectorAll('[data-tab]'))
         b.classList.toggle('on', b.dataset.tab === tab);
+    // The grid is sixteen cells across and wants the room; the other three are
+    // lists and do not.
+    if (nodes.tabs.parentNode) nodes.tabs.parentNode.classList.toggle('rhythm', tab === 'rhythm');
     drawControls();
     drawNote();
-    drawInspector();
     drawRows();
     drawChannel();
 }
@@ -823,92 +504,7 @@ function drawControls() {
                 }));
             return kids;
         }
-        if (tab === 'rhythm') {
-            // **The two numbers are controls and the score is a field**, which
-            // is the split that keeps the notation to three tokens: a tempo and
-            // a subdivision typed into the same box as the words would be a
-            // header line to get wrong, and they are the two things somebody
-            // changes without touching a word.
-            const bpm = el('input', {
-                type: 'number', id: 'r-tempo', step: '1', min: '20', max: '600',
-                value: String(rhythm.tempoOf()),
-                on: { change: () => { rhythm.setTempo(bpm.value); search(); drawNote(); } },
-            });
-            const sub = el('input', {
-                type: 'number', id: 'r-steps', step: '1', min: '1', max: '16',
-                value: String(rhythm.stepsPerBeat()),
-                on: { change: () => { rhythm.setStepsPerBeat(sub.value); search(); drawNote(); } },
-            });
-            // **Committed on `input`, per keystroke.** The score is not a
-            // network round trip and the list under it is the answer to what has
-            // been typed so far — a field that waited for `change` would be a
-            // list describing the score before the last word, which is the exact
-            // failure CLAUDE.md's note about `change` names.
-            const box = el('textarea', {
-                id: 'r-score', rows: '4', value: rhythm.score(),
-                placeholder: 'no no no no\nwhat . the -  hell . . -',
-                on: { input: () => {
-                    rhythm.setScore(box.value);
-                    search();
-                    const b = document.getElementById('r-build');
-                    if (b) b.disabled = rhythm.busy();
-                } },
-            });
-            const go = el('button', {
-                cls: 'go', id: 'r-build', text: 'Build',
-                disabled: rhythm.busy(),
-                on: { click: () => {
-                    const why = rhythm.build();
-                    if (why) { setText(nodes.note, why); nodes.note.classList.add('bad'); }
-                    else { nodes.note.classList.remove('bad'); drawNote(); }
-                    go.disabled = rhythm.busy();
-                } },
-            });
-            const listenAll = el('button', {
-                cls: 'tiny' + (scorePlaying ? ' on' : ''),
-                id: 'r-listen-all',
-                text: scorePlaying ? '■ Stop' : '▶ Listen all',
-                title: scorePlaying ? 'Stop listening (Space)' : 'Listen to whole score in tempo (Space)',
-                on: { click: () => toggleScorePlay() },
-            });
-            const loopCheck = el('label', { cls: 'check' }, [
-                el('input', {
-                    type: 'checkbox',
-                    id: 'r-loop',
-                    checked: scoreLooping,
-                    on: { change: (e) => { setScoreLooping(e.target.checked); } },
-                }),
-                'loop all',
-            ]);
-            const actions = el('div', { cls: 'r-actions' }, [
-                go,
-                listenAll,
-                loopCheck,
-            ]);
-            // **Build comes after the box, not before it.** The order on the
-            // screen is the order of the work: set the grid, write the words,
-            // press it.
-            return [
-                el('span', { cls: 'dim', text: 'tempo' }), bpm,
-                el('span', { cls: 'dim', text: '· steps a beat' }), sub,
-                el('label', { cls: 'check' }, [
-                    el('input', {
-                        type: 'checkbox', checked: rhythm.looseOf(),
-                        on: { change: (e) => { rhythm.setLoose(e.target.checked); search(); } },
-                    }),
-                    'inside longer words',
-                ]),
-                el('label', { cls: 'check' }, [
-                    el('input', {
-                        type: 'checkbox', checked: rhythm.sortByFitOf(),
-                        on: { change: (e) => { rhythm.setSortByFit(e.target.checked); search(); } },
-                    }),
-                    'sort takes by fit',
-                ]),
-                box,
-                actions,
-            ];
-        }
+        if (tab === 'rhythm') { pattern.drawControls(); return []; }
         if (tab === 'words') {
             const box = el('input', {
                 type: 'text', id: 'f-phrase', value: phrase,
@@ -947,20 +543,23 @@ function drawControls() {
             type: 'number', id: 'f-least', step: '5', min: '3', value: String(least),
             on: { change: () => { least = Number(m.value) || 10; search(); } },
         });
+        // Each number with its unit, as one thing that wraps whole: a row that
+        // broke between `30` and `s` read as a stray letter on a line of its own.
         const kids = [
             modeSelect,
-            el('span', { cls: 'dim', text: 'pause under' }), g,
-            el('span', { cls: 'dim', text: 's · at least' }), m,
-            el('span', { cls: 'dim', text: 's' }),
+            el('span', { cls: 'pair' }, [el('span', { cls: 'dim', text: 'pause under' }), g,
+                                         el('span', { cls: 'dim', text: 's' })]),
+            el('span', { cls: 'pair' }, [el('span', { cls: 'dim', text: 'at least' }), m,
+                                         el('span', { cls: 'dim', text: 's' })]),
         ];
         if (talkingMode === 'activated') {
             const p = el('input', {
                 type: 'number', id: 'f-min-pace', step: '0.2', min: '1.5', value: String(minPace),
                 on: { change: () => { minPace = Number(p.value) || 2.5; search(); } },
             });
-            kids.push(el('span', { cls: 'dim', text: '· min pace' }), p, el('span', { cls: 'dim', text: 'w/s' }));
+            kids.push(el('span', { cls: 'pair' }, [el('span', { cls: 'dim', text: 'faster than' }), p,
+                                                   el('span', { cls: 'dim', text: 'words/s' })]));
         }
-        kids.push(el('button', { cls: 'text', text: 'Find', on: { click: search } }));
         return kids;
     });
 }
@@ -991,35 +590,7 @@ function drawNote() {
     // something to report before there is a corpus at all — what a look-up is
     // doing, what it refused, and how much of the channel is actually here.
     if (tab === 'recordings') { setText(nodes.note, acquire.note()); return; }
-    // **The score's line is a statement about the score**, and every number in
-    // it changes as it is typed: how long it will be, how many words nothing
-    // said, and what a build is still doing. The one thing it must always carry
-    // is the length, because that is the number nobody can work out by eye and
-    // is the whole reason for typing a rhythm rather than trimming to one.
-    if (tab === 'rhythm') {
-        nodes.note.classList.remove('bad');
-        const plan = rhythm.plan();
-        const bits = [];
-        if (!library.available()) bits.push('no corpus');
-        if (plan.steps) bits.push(`${plan.steps} steps · ${plan.seconds.toFixed(2)}s`);
-        const uniform = plan.pieces.length > 0 && plan.pieces.every(
-            (p) => Math.abs(p.stepSec - plan.pieces[0].stepSec) < 1e-6);
-        if (uniform && plan.pieces.length) {
-            bits.push(`${(plan.pieces[0].stepSec * 1000).toFixed(0)} ms a step`);
-        } else if (plan.pieces.length) {
-            bits.push('dynamic grid');
-        } else {
-            bits.push(`${(rhythm.stepSeconds() * 1000).toFixed(0)} ms a step`);
-        }
-        if (plan.missing.length)
-            bits.push(`nothing says ${plan.missing.map((w) => `"${w}"`).join(', ')}`);
-        const snapping = rhythm.snapping();
-        if (snapping) bits.push(`finding the beat in ${snapping}`);
-        const said = rhythm.note();
-        if (said) bits.push(said);
-        setText(nodes.note, bits.join(' · '));
-        return;
-    }
+    if (tab === 'rhythm') { pattern.drawNote(); return; }
     if (!base) {
         // The other two questions cannot be asked of a corpus that does not
         // exist, and saying so is not the same as saying nothing.
@@ -1294,139 +865,13 @@ function span(seconds) {
                       : `${s}s`;
 }
 
-function drawInspector() {
-    if (!nodes || !nodes.inspector) return;
-    if (tab !== 'rhythm') {
-        nodes.inspector.hidden = true;
-        return;
-    }
-    const plan = rhythm.plan();
-    if (!plan || !plan.pieces || !plan.pieces.length) {
-        nodes.inspector.hidden = true;
-        return;
-    }
-    if (lastStepIndex < 0 || lastStepIndex >= plan.pieces.length) {
-        lastStepIndex = 0;
-    }
-    const p = plan.pieces[lastStepIndex];
-    if (!p || p.kind !== 'word' || !p.hit) {
-        nodes.inspector.hidden = true;
-        return;
-    }
-    nodes.inspector.hidden = false;
-
-    put(nodes.inspector, () => {
-        const headKids = [
-            el('span', { cls: 'r-inspect-title' }, [
-                `Step ${lastStepIndex + 1}: `,
-                el('strong', { text: p.phrase }),
-            ]),
-            el('span', { cls: 'r-inspect-take mono', text: `take ${p.take}/${p.takes || 1}` }),
-        ];
-        if (p.fitScore !== undefined) {
-            const badgeCls = p.fitScore >= 85 ? 'fit-good' : (p.fitScore >= 65 ? 'fit-med' : 'fit-poor');
-            headKids.push(el('span', { cls: `badge ${badgeCls} mono`, text: `${p.fitScore}%` }));
-        }
-        headKids.push(el('span', { cls: 'spacer' }));
-        headKids.push(el('button', {
-            cls: 'tiny text', text: '▲', title: 'Previous step (Up)',
-            disabled: lastStepIndex <= 0,
-            on: { click: () => selectRelativeStep(-1) },
-        }));
-        headKids.push(el('button', {
-            cls: 'tiny text', text: '▼', title: 'Next step (Down)',
-            disabled: lastStepIndex >= plan.pieces.length - 1,
-            on: { click: () => selectRelativeStep(1) },
-        }));
-
-        const offsetMs = Math.round((p.offset || 0) * 1000);
-        const offsetText = `${offsetMs > 0 ? '+' : ''}${offsetMs} ms`;
-
-        // Slip row
-        const slipRow = [
-            el('span', { cls: 'dim', text: 'slip' }),
-            el('button', { cls: 'tiny text', text: '-50ms', on: { click: () => nudgeActiveStepOffset(-0.050) } }),
-            el('button', { cls: 'tiny text', text: '-10ms', on: { click: () => nudgeActiveStepOffset(-0.010) } }),
-            el('button', { cls: 'tiny text', text: '-5ms', on: { click: () => nudgeActiveStepOffset(-0.005) } }),
-            el('span', { cls: 'mono r-val', text: offsetText, title: 'In-point offset relative to speech onset' }),
-            el('button', { cls: 'tiny text', text: '+5ms', on: { click: () => nudgeActiveStepOffset(0.005) } }),
-            el('button', { cls: 'tiny text', text: '+10ms', on: { click: () => nudgeActiveStepOffset(0.010) } }),
-            el('button', { cls: 'tiny text', text: '+50ms', on: { click: () => nudgeActiveStepOffset(0.050) } }),
-            el('button', {
-                cls: 'tiny text', text: '↺', title: 'Reset slip offset to 0',
-                disabled: (p.offset || 0) === 0,
-                on: { click: () => {
-                    rhythm.setStepOffset(lastStepIndex, 0);
-                    results = steps(); drawNote(); drawInspector(); play(lastStepIndex);
-                } },
-            }),
-        ];
-
-        // Length & Flex row
-        const durMs = Math.round((p.dur || 0) * 1000);
-        const curRate = p.rate || 1.0;
-        const isLoopingThis = stepLooping && lastStepIndex === p.pieceIndex;
-
-        const lenRow = [
-            el('span', { cls: 'dim', text: 'len' }),
-            el('button', { cls: 'tiny text', text: '-25ms', on: { click: () => nudgeActiveStepDur(-0.025) } }),
-            el('button', { cls: 'tiny text', text: '-5ms', on: { click: () => nudgeActiveStepDur(-0.005) } }),
-            el('span', { cls: 'mono r-val', text: `${durMs} ms`, title: 'Audition length' }),
-            el('button', { cls: 'tiny text', text: '+5ms', on: { click: () => nudgeActiveStepDur(0.005) } }),
-            el('button', { cls: 'tiny text', text: '+25ms', on: { click: () => nudgeActiveStepDur(0.025) } }),
-            el('button', {
-                cls: 'tiny text', text: '↺', title: 'Reset length',
-                disabled: !p.durDelta,
-                on: { click: () => {
-                    rhythm.setStepDurDelta(lastStepIndex, 0);
-                    results = steps(); drawNote(); drawInspector(); play(lastStepIndex);
-                } },
-            }),
-            el('span', { cls: 'dim sep', text: '·' }),
-            el('span', { cls: 'dim', text: 'flex' }),
-            el('button', {
-                cls: 'tiny text' + (Math.abs(curRate - 0.9) < 0.02 ? ' active' : ''),
-                text: '0.9×', on: { click: () => setActiveStepRate(0.9) },
-            }),
-            el('button', {
-                cls: 'tiny text' + (Math.abs(curRate - 1.0) < 0.02 ? ' active' : ''),
-                text: '1.0×', on: { click: () => setActiveStepRate(1.0) },
-            }),
-            el('button', {
-                cls: 'tiny text' + (Math.abs(curRate - 1.1) < 0.02 ? ' active' : ''),
-                text: '1.1×', on: { click: () => setActiveStepRate(1.1) },
-            }),
-            el('button', {
-                cls: 'tiny text' + (p.fitRatio && Math.abs(curRate - p.fitRatio) < 0.02 ? ' active' : ''),
-                text: 'fit', title: `Fit rate: ${(p.fitRatio || 1.0).toFixed(2)}×`,
-                on: { click: () => setActiveStepRate(p.fitRatio || 1.0) },
-            }),
-            el('span', { cls: 'spacer' }),
-            el('button', {
-                cls: 'tiny', text: '▶ Play', title: 'Audition this word',
-                on: { click: () => { stopStepLoop(); play(lastStepIndex); } },
-            }),
-            el('button', {
-                cls: 'tiny' + (isLoopingThis ? ' on' : ''),
-                text: isLoopingThis ? '■ Loop' : '🔁 Loop',
-                title: isLoopingThis ? 'Stop looping' : 'Loop this word continuously to dial in slip and attack',
-                on: { click: () => loopStep(lastStepIndex) },
-            }),
-        ];
-
-        return [
-            el('div', { cls: 'r-inspect-head' }, headKids),
-            el('div', { cls: 'r-inspect-row' }, slipRow),
-            el('div', { cls: 'r-inspect-row' }, lenRow),
-        ];
-    });
-}
-
 function drawRows() {
     // Whatever the last list left behind is gone with it. Cleared here rather
     // than in `repaint()` so that a row taken off the screen can never be
     // written to afterwards.
     moving.clear();
+    // The grid is not a list, and the fourth tab draws it into the same node.
+    if (tab === 'rhythm') { pattern.draw(); return; }
     put(nodes.list, () => results.slice(0, SHOWN).map((item, n) => {
         const dead = !item.vod.media;
         const on = isPlaying(item);
@@ -1451,118 +896,6 @@ function drawRows() {
         // what it has is a date, a name, a size and a *condition*, and those are
         // what the columns are.
         if (item.kind === 'vod') return recording(item, listen, put_);
-
-        // A step of the score. **The columns are the ones a rhythm is read in**
-        // — where it lands, what it says, which take it is — and the timecode a
-        // hit's row leads with is deliberately not among them: on this tab the
-        // number that matters is the moment in the *mix*, and where in a
-        // six-hour recording the word came from is the last thing you look at.
-        if (item.kind === 'step') {
-            const p = item.piece;
-            const pieceIdx = item.pieceIndex !== undefined ? item.pieceIndex : n;
-            const rowKids = [
-                listen,
-                // **The step it lands on, not the second.** `clock()` is what
-                // every other row in this window leads with and it is the wrong
-                // number here — a mix on a sixteenth grid puts eight pieces
-                // inside one second, and all eight read `00:00:00`. What the
-                // rhythm is counted in is steps, so that is what the column says.
-                el('span', { cls: 'at mono', text: String(item.step) }),
-                el('span', { cls: 'label', text: item.label }),
-            ];
-
-            if (p.kind === 'word' && p.takes > 0) {
-                // Stepper: ◀ take X/Y ▶
-                const prevBtn = el('button', {
-                    cls: 'tiny take-nav', text: '◀', title: 'Previous take',
-                    disabled: p.takes <= 1,
-                    on: {
-                        click: (e) => {
-                            e.stopPropagation();
-                            if (p.takes <= 1) return;
-                            lastStepIndex = pieceIdx;
-                            rhythm.cycleStepTake(pieceIdx, -1);
-                            results = steps();
-                            drawNote();
-                            if (!play(n)) drawRows();
-                        },
-                    },
-                });
-                const nextBtn = el('button', {
-                    cls: 'tiny take-nav', text: '▶', title: 'Next take',
-                    disabled: p.takes <= 1,
-                    on: {
-                        click: (e) => {
-                            e.stopPropagation();
-                            if (p.takes <= 1) return;
-                            lastStepIndex = pieceIdx;
-                            rhythm.cycleStepTake(pieceIdx, 1);
-                            results = steps();
-                            drawNote();
-                            if (!play(n)) drawRows();
-                        },
-                    },
-                });
-                const sortMode = rhythm.sortByFitOf() ? 'best fit' : 'chronological';
-                const takeLabel = el('span', {
-                    cls: 'take-label mono',
-                    text: `${p.take}/${p.takes}`,
-                    title: `Take ${p.take} of ${p.takes} (${sortMode} — click for next)`,
-                    on: {
-                        click: (e) => {
-                            e.stopPropagation();
-                            if (p.takes <= 1) return;
-                            lastStepIndex = pieceIdx;
-                            rhythm.cycleStepTake(pieceIdx, 1);
-                            results = steps();
-                            drawNote();
-                            if (!play(n)) drawRows();
-                        },
-                    },
-                });
-                rowKids.push(div('take-stepper', [prevBtn, takeLabel, nextBtn]));
-
-                // Fit Rating Badge
-                if (p.fitScore !== undefined) {
-                    const badgeCls = p.fitScore >= 85 ? 'fit-good' : (p.fitScore >= 65 ? 'fit-med' : 'fit-poor');
-                    const star = p.fitScore >= 85 ? ' ★' : '';
-                    const fitBadge = el('span', {
-                        cls: `badge ${badgeCls} mono`,
-                        text: `${p.fitScore}%${star}`,
-                        title: `Fit rating: ${p.fitScore}% (natural: ${(p.dur * 1000).toFixed(0)} ms, step: ${(p.seconds * 1000).toFixed(0)} ms, ratio: ${p.fitRatio.toFixed(2)}×)`,
-                    });
-                    rowKids.push(fitBadge);
-                }
-
-                if (p.offset) {
-                    const offMs = Math.round(p.offset * 1000);
-                    const slipBadge = el('span', {
-                        cls: 'badge slip-badge mono',
-                        text: `${offMs > 0 ? '+' : ''}${offMs}ms`,
-                        title: `In-point offset: ${offMs}ms`,
-                    });
-                    rowKids.push(slipBadge);
-                }
-            }
-
-            rowKids.push(el('span', { cls: 'detail dim', text: item.detail }));
-            rowKids.push(el('span', { cls: 'where dim',
-                         text: `${p.steps} step${p.steps === 1 ? '' : 's'}` }));
-            rowKids.push(put_);
-
-            const isSelected = (pieceIdx === lastStepIndex);
-            const rowNode = div('row step' + (isPlaying(item) ? ' playing' : '') +
-                                (isSelected ? ' selected' : '') +
-                                (p.kind === 'rest' ? ' rest' : '') +
-                                (p.kind === 'word' && !p.hit ? ' bad' : ''), rowKids);
-            rowNode.dataset.pieceIndex = String(pieceIdx);
-            rowNode.addEventListener('click', () => {
-                lastStepIndex = pieceIdx;
-                drawInspector();
-                drawRows();
-            });
-            return rowNode;
-        }
 
         return div('row' + (item.kind === 'run' ? ' run' : '') +
                    (isPlaying(item) ? ' playing' : ''), [

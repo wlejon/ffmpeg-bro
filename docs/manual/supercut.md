@@ -52,8 +52,8 @@ but a stack is not a sequence, and saving afterwards saves the flattened one.
   folder of footage you already have.
 - **Words** — every place a phrase was said.
 - **Talking** — the stretches where somebody talked without stopping.
-- **Rhythm** — words and a beat, typed; it finds each word and cuts the mix to
-  the grid.
+- **Rhythm** — words laid on a beat grid; it finds each word and cuts the mix
+  to the grid.
 
 Words and Talking are the same questions the workbench's panel asks, with the
 same answers, because [the search is one implementation](find.md). All four list
@@ -362,16 +362,17 @@ go further has hit the range the model holds (0.05× to 20×).
 
 ## Finding talking, yelling, and activated speaking
 
-The **Talking** tab finds unbroken stretches of speech, defined by how long a
-speaker went without a pause greater than `gap` seconds (default 2s) and lasting at
-least `min` seconds.
+The **Talking** tab finds unbroken stretches of speech: a stretch is however
+long somebody went with every **pause under** the number of seconds set (two to
+begin with), and only stretches of **at least** the other number are listed.
+Changing either number searches again.
 
 The mode selector offers three distinct ways to audition and rank speech:
 
 | Mode | What it finds and ranks |
 |---|---|
 | **Longest stretches** | Longest unbroken monologues first |
-| **Activated / fast pace** | Fast delivery and high cadence (ranked by words per second, with configurable `min pace` filter) |
+| **Activated / fast pace** | Fast delivery and high cadence, ranked by words per second; a third number, **faster than**, sets the floor |
 | **Yelling / high energy** | Shouted outbursts, high vocal intensity, and exclamations (ranked first by delivery, then re-ranked by what the sound actually measures) |
 
 Each row displays the duration, word count, speaking cadence (`words/s`), and badges
@@ -401,69 +402,79 @@ The **Rhythm** tab is for the mix you can already hear: you know what it should
 say and when each word should land, and what you need is for somebody to go and
 find every one of them.
 
-Type a **tempo**, how many **steps a beat**, and the words:
+The tab is a step sequencer. One row is a bar, one cell is a step, and the
+heavier lines are the beats. Set the **tempo** — type it, or press **Tap** in
+time — and the **grid**: how many steps a beat and how many beats a bar. At 120
+with four steps a beat, a step is an eighth of a second, and the line under the
+controls says so.
 
-```
-no  no  no  no
-what . the -  hell . . -
-```
+Then put words on it:
 
-A token is one step. At 120 with four steps a beat, a step is an eighth of a
-second.
-
-| Token | Does |
+| Do | Gets |
 |---|---|
-| a word | starts a new piece on this step |
-| `.` | **holds** — the piece before it lasts one step longer |
-| `-` | **rests** — a step of black and silence |
-| `[140]` | sets the **tempo** to 140 bpm from this point forward |
-| `[:3]` | sets the **subdivision** to 3 steps per beat (triplets) |
-| `[140, 3]` | sets both tempo and subdivision together |
-| `[verse 1]` | **section label** — an annotation ignored by the grid |
+| press an empty cell and type | the word lands on that step |
+| press **space** while typing | lands the word and moves to the next cell, so `no no no no` is four spaces |
+| type a phrase in quotes, `"you cross"` | one word with a space in it |
+| `what\|wot` | either spelling |
+| drag a word's **right edge** | holds it for more steps, or fewer |
+| drag a **word** | moves it to another step, on any bar |
+| double-click a word, or **Enter** | changes what it says |
+| **Delete** | takes the selected word off |
 
-Two spellings of the same word go in one token: `what|wot` finds either. A
-phrase with a space in it goes in quotes: `"you cross"`. Lines are only lines —
-the grid runs straight across them, so use one per bar if that helps you read it.
+A step no word is on is a rest — a step of black and silence — so there is
+nothing to type for one. A word cannot be dropped onto another; the drop is
+refused and the word stays where it was. There is always an empty cell after the
+last word, and a full bar is followed by an empty one.
 
-The list under the box is what the score resolved to, a row a step, in the order
-it will play. `▶` auditions a step clamped to its fitted word boundary before
-anything is built, and `+` drops that one piece into the mix on its own.
+**Pressing a word plays it and selects it.** The panel under the grid is about
+the selected word: what it says, which take, how it fits, and how far it is
+slipped. `←` `→` walk the words.
 
-**Each word displays a fit rating badge** (e.g. `95% ★` 🟢 for natural matches,
-`80%` 🟡 for gentle flexes, `50%` 🔴 for drawn-out monologues), comparing its natural
-duration to the step length. When multiple takes exist, **`◀` and `▶` steppers** let
-you cycle takes in-place with instant audition playback, so you can rapidly audition
-takes and pick the one with the right delivery. Pressing **`[`** and **`]`** cycles
-takes directly from the keyboard. The **`sort takes by fit`** toggle sorts available
-takes with best-fitting candidates first, so repetitions and next-take presses walk
-naturally suitable takes without sifting through mismatches. Typing `hell#2` pins take 2 directly.
+**Takes.** A word said three thousand times has three thousand takes, and the
+panel steps through them with `◀` `▶` — or `[` `]` — playing each one as it
+lands. Repeats of the same word walk the takes rather than repeating one. The
+takes are offered **best fit first**: the badge is how close the take's own
+length is to the step it has been given, and unticking the box offers them in
+the order they were said instead.
+
+**Slip.** The slider moves the word's start by up to a fifth of a second either
+way, and releasing it plays the result; `,` and `.` nudge by five milliseconds,
+twenty-five with `Shift`. A word slipped by hand is marked on the grid, and the
+beat-finding below leaves it alone.
+
+**Fit.** By default a word is **cut** to its step: a long one is cut off and a
+short one runs on into whatever followed it. **Stretch** sets the piece's speed
+so the word's own length fills the step instead — its pitch moves with it, which
+is why this is a choice per word and off to begin with. A word that would need
+more than double speed or less than half is cut whatever the setting says.
+
+**Listen** plays the whole pattern in tempo, out of the recordings, lighting
+each word as it goes; **loop** plays it round. It is not the render — nothing
+has been built yet — so there is a seam at every step, which is also what the
+words sound like. `Space` starts and stops it. `⟳ loop` on the panel plays one
+word over and over, for dialling in its slip.
 
 **Build** puts the lot in the mix. Every piece comes out an exact number of
-steps long, so the words land on the grid rather than near it.
+steps long, so the words land on the grid rather than near it, and a stretched
+word comes out at the speed that made it fit. **+** on the panel puts that one
+word in the mix on its own.
 
 **A word nothing said refuses the whole build**, naming every one of them at
 once. A rhythm with a hole in it and nothing saying which word went missing is
-worse than a rhythm that will not build.
-
-**The words are cut to the step, not stretched into it.** A word longer than its
-step is cut off; a short one runs on into whatever followed it in the recording.
-Nothing changes pitch. If you want a particular piece stretched to fill its step,
-drag its rate badge afterwards.
+worse than a rhythm that will not build. A word nothing said is red on the grid
+before you press anything.
 
 **Where the word starts is measured, not guessed.** A transcript knows roughly
 where a word is — near enough to find it, not near enough to hit a beat with —
 so after the pieces are laid, each one is moved onto the transient nearest its
-word. That is the difference between on the beat and nearly on it. The detector
-gates transients against speech presence (bro's energy VAD) and weights by
-transient flux so that speech consonant/plosive attacks take precedence over
-background noise or music transients outside the voice. It happens quietly in
-the background, moves the footage inside each card and never the card itself,
-and the row says `finding the beat in 6` while it is going on. Whatever it finds,
-the grid does not move.
+word. That is the difference between on the beat and nearly on it. It happens
+quietly in the background, moves the footage inside each card and never the card
+itself, and the line says `finding the beat in 6` while it is going on. Whatever
+it finds, the grid does not move.
 
-The score is remembered between sessions but it is **not in the document** — what
-a `.fbro` holds is the mix it built. Building again appends; **Clear** empties
-the mix.
+The pattern is remembered between sessions but it is **not in the document** —
+what a `.fbro` holds is the mix it built. Building again appends; **Clear** on
+the tab empties the grid, and **Clear** on the mix empties the mix.
 
 ## Writing the file
 
@@ -479,17 +490,26 @@ The render is the same one the workbench performs, from the same spec.
 
 | | |
 |---|---|
-| `[` `]` | previous / next take for active rhythm step |
 | `Space` | play / stop — or stop what a row is playing, if a row is playing |
 | `Home` `End` | start, end |
-| `←` `→` | one frame; with `Shift`, one second |
+| `←` `→` | one frame; with `Shift`, one second — on the Rhythm tab, the previous / next word |
 | `+` `-` | zoom the mix in, out |
 | `0` | fit the whole mix on the screen |
 | `M` | mute |
-| `Delete` | remove the selected clip and close the gap |
+| `Delete` | remove the selected clip and close the gap — on the Rhythm tab, the selected word |
 | `/` | jump to the search box |
 | `Esc` | close the list of what is running |
 | `Ctrl+S` `Ctrl+O` `Ctrl+R` | save, open, render |
+
+On the Rhythm tab, with nothing being typed into:
+
+| | |
+|---|---|
+| `Space` | listen to the pattern / stop |
+| `L` | loop it |
+| `[` `]` | previous / next take of the selected word |
+| `,` `.` | slip the selected word 5 ms earlier / later; 25 ms with `Shift` |
+| `Enter` | change what the selected word says |
 
 ## Getting a corpus in a batch
 

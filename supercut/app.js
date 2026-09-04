@@ -59,6 +59,7 @@ import * as mix from './mix.js';
 import * as screen from './screen.js';
 import * as cuts from './cuts.js';
 import * as rhythm from './rhythm.js';
+import * as pattern from './pattern.js';
 import * as inflight from './inflight.js';
 
 // **The analysis worker is `ui/`'s and is not copied here.** bro resolves a
@@ -314,16 +315,9 @@ function seek(t) {
 /// Pressing the one key everything else stops with, and being answered by a
 /// second recording, is the failure this avoids.
 function togglePlay() {
-    if (results.isScorePlaying && results.isScorePlaying()) {
-        results.stopScore();
-        drawBar();
-        return;
-    }
-    if (results.isStepLooping && results.isStepLooping()) {
-        results.stopStepLoop();
-        drawBar();
-        return;
-    }
+    // The grid's listen and its loop are the same kind of noise as an audition
+    // and stop the same way.
+    if (pattern.stopAll()) { drawBar(); return; }
     if (results.auditioning()) { results.hush(); drawBar(); return; }
     if (screen.isPlaying()) screen.play(false);
     else if (!screen.play(true)) flash('nothing in the mix');
@@ -466,38 +460,13 @@ document.addEventListener('keydown', (e) => {
     // The list of what is running is a thing put over the window, so it closes
     // the way everything put over a window closes.
     if (e.key === 'Escape' && inflight.isOpen()) { inflight.toggle(false); return; }
-    if (results.currentTab && results.currentTab() === 'rhythm') {
-        if (e.key === ' ') {
-            results.toggleScorePlay();
-            drawBar();
-            e.preventDefault();
-            return;
-        }
-        if (e.key === 'l' || e.key === 'L') {
-            results.toggleScoreLoop();
-            e.preventDefault();
-            return;
-        }
-        if (e.key === 'ArrowUp') {
-            results.selectRelativeStep(-1);
-            e.preventDefault();
-            return;
-        }
-        if (e.key === 'ArrowDown') {
-            results.selectRelativeStep(1);
-            e.preventDefault();
-            return;
-        }
-        if (e.key === ',' || e.key === '<') {
-            results.nudgeActiveStepOffset(e.shiftKey ? -0.025 : -0.005);
-            e.preventDefault();
-            return;
-        }
-        if (e.key === '.' || e.key === '>') {
-            results.nudgeActiveStepOffset(e.shiftKey ? 0.025 : 0.005);
-            e.preventDefault();
-            return;
-        }
+    // The grid's own keys, while it is the tab showing: the words are what the
+    // hand is on, so the arrows walk them and Delete takes one off. What it
+    // does not claim falls through to the transport below.
+    if (results.currentTab() === 'rhythm' && pattern.key(e)) {
+        e.preventDefault();
+        drawBar();
+        return;
     }
     if (e.key === ' ') { togglePlay(); e.preventDefault(); return; }
     if (e.key === 'Home') { seek(0); return; }
@@ -515,14 +484,6 @@ document.addEventListener('keydown', (e) => {
         mix.draw();
         screen.refresh();
         return;
-    }
-    if (e.key === '[' || e.key === ']') {
-        if (results.currentTab && results.currentTab() === 'rhythm') {
-            if (results.cycleActiveTake(e.key === ']' ? 1 : -1)) {
-                e.preventDefault();
-                return;
-            }
-        }
     }
     if (e.key === '/') {
         // The box only exists on the Words tab, so `/` is what *goes* there —
@@ -673,7 +634,7 @@ requestAnimationFrame(frame);
 /// door, kept to what a test actually has to reach.
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
-    results, acquire, mix, screen, cuts, rhythm, inflight, doc: documentModel,
+    results, acquire, mix, screen, cuts, rhythm, pattern, inflight, doc: documentModel,
     addMoment, removeClip, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,

@@ -1,5 +1,5 @@
-// Words on a beat: a score typed as text, cut out of the corpus, packed onto a
-// grid.
+// Words on a beat: a pattern laid on a grid, cut out of the corpus, packed into
+// the mix.
 //
 // ── What this is for ──────────────────────────────────────────────────────
 //
@@ -10,38 +10,32 @@
 // before they have found a single one of them, and building it by hand is
 // twenty presses and then a trim per piece to a length nobody can hit by eye.
 //
-// So the shape is typed and the finding is done for you. A **score** is a tempo,
-// a grid, and a line of words; a **build** is that score turned into clips whose
-// lengths are exact multiples of the grid and whose in-points are the moments
-// those words were said.
+// So the shape is laid out and the finding is done for you. A **pattern** is a
+// tempo, a grid, and words — each on a step and each some steps long; a
+// **build** is that pattern turned into clips whose lengths are exact multiples
+// of the step and whose in-points are the moments those words were said.
 //
-// ── The notation, and why each of the tokens exists ───────────────────────
+// ── A word is on a step, and a rest is where no word is ───────────────────
 //
-//     no  no  no  no
-//     what . the -  hell . . -
+// The model is the grid's. `words` is a list of `{ phrase, at, steps }` sorted
+// by `at`, where `at` is the step a word starts on and `steps` is how many it
+// holds for. Nothing is written down for a rest: a rest is a step no word
+// covers, which is what a step sequencer means by an empty cell and is why two
+// words can never be on one step.
 //
-// A token is one **step**, and a step is `60 / tempo / stepsPerBeat` seconds.
-// Four kinds of syntax:
+// The first version of this was a *notation* typed into a box —
+// `what . the - hell . . -`, a dot to hold and a dash to rest — and it was a
+// good notation and a bad control: a rhythm is a thing somebody taps out, and
+// counting dots to move a word two steps later is arithmetic the grid does by
+// being looked at. The notation survives as `parse` and `serialize`, because a
+// line of text is still the quickest way for a suite — or a paste — to describe
+// a pattern; nothing in the window draws it any more.
 //
-//   - a **word** starts a new piece on this step. `what|wot` is an alternation
-//     and is `ui/phrase.js`'s own syntax, unchanged and not re-implemented here;
-//     `"you cross"` in quotes is a phrase with a space in it, which is the one
-//     thing the token split would otherwise take apart. `hell#2` pins the second
-//     take rather than taking the next one.
-//   - `.` **holds**: the piece before it is one step longer. Not a repeat and
-//     not a rest — the same clip, running on.
-//   - `-` **rests**: a step of black and silence.
-//   - `[...]` **directives and labels**: inline square brackets change tempo or
-//     meter subdivision on subsequent steps, e.g. `[140]` or `[140 bpm]`,
-//     `[:3]` or `[/3]` or `[3 steps]` (triplets), or both: `[140, 3]`. Text
-//     that does not describe tempo or meter (e.g. `[verse 1]`, `[chorus]`)
-//     acts as a section annotation and is ignored by the grid rather than
-//     searched as missing words.
-//
-// A line break is nothing but a line break; the grid runs across it. Bars are
-// what lines are for, and there is deliberately no bar character — `|` is
-// already alternation and a second meaning for it would be a score that
-// searched for something nobody typed.
+// **Which take a word is, how far it is slipped and whether it is stretched
+// belong to the word**, on the word object, and not in a map keyed by position.
+// A word moved two steps later is the same word with the same take, and a map
+// keyed by index forgot that on every edit — which is also what made the
+// notation's `hell#2` a dead end: retyping the line threw every choice away.
 //
 // ── A rest is a real clip, because a mix has no holes ─────────────────────
 //
@@ -52,16 +46,21 @@
 // `ui/generator.js` and `makeGenerator` are the model's. A silence in a supercut
 // is a picture of nothing for exactly one step, which is what a rest is.
 //
-// ── Cut to the step, and never stretched ──────────────────────────────────
+// ── Cut to the step, or stretched into it, and the choice is the word's ───
 //
-// A word is longer or shorter than the step it is given, always. The piece is
-// **cut to the step**: the clip is exactly `steps × step` seconds long, so a long
-// word is cut off mid-syllable and a short one runs on into whatever followed it
-// in the recording. The alternative was to set the clip's speed so the word's own
-// span filled the step, and it is not the default because the pitch moves with
-// it — audibly past about ±15%, and a supercut where every word is a different
-// person is a supercut of nobody. `setSpeed` is one drag away on any card
-// afterwards, which is where a decision about *one* piece belongs.
+// A word is longer or shorter than the step it is given, always. By default the
+// piece is **cut to the step**: the clip is exactly `steps × step` seconds long,
+// so a long word is cut off mid-syllable and a short one runs on into whatever
+// followed it in the recording. A word can instead be **stretched**: its speed
+// is set so its own span fills the step. That moves the pitch — audibly past
+// about ±15%, and a supercut where every word is a different person is a
+// supercut of nobody — which is why it is off by default and decided per word,
+// and why a word that would need more than `STRETCH_MAX` or less than
+// `STRETCH_MIN` is cut instead.
+//
+// **What the audition plays is exactly what the mix would hold**: the step's
+// span at the piece's rate. An earlier version played the whole word at a rate
+// the build never applied, which was a preview of a different mix.
 //
 // ── Where the beat actually is, which is the whole of "precisely" ─────────
 //
@@ -96,6 +95,9 @@
 //     it cannot exceed is what keeps that claim small. `sound_marks.h` names its
 //     marks after the measurement for this reason and so does this.
 //
+// A word somebody has slipped by hand is not measured: the hand's number is
+// the answer, and a read that moved it again would be the tool arguing.
+//
 // ── One read at a time, because brotensor says so ─────────────────────────
 //
 // The mel front-end reaches brotensor's CPU pool, which is a process-wide
@@ -104,17 +106,17 @@
 // mutex, and this queues them one deep exactly as `supercut/acquire.js` queues
 // transcriptions and for the same reason.
 //
-// ── The score is not in the document ──────────────────────────────────────
+// ── The pattern is not in the document ────────────────────────────────────
 //
-// A `.fbro` holds the *edit*: inputs, clips, canvas, graph, output. The score is
-// what produced one, the way a search box is what produced a clip somebody
+// A `.fbro` holds the *edit*: inputs, clips, canvas, graph, output. The pattern
+// is what produced one, the way a search box is what produced a clip somebody
 // added — and the mix outlives it in exactly the same way, because it is a mix
-// like any other from the moment it exists. So the score is a working
+// like any other from the moment it exists. So the pattern is a working
 // preference in `localStorage` beside the split height, and the artifact is the
 // clips. Building again does not remember what it built last time and does not
-// try to: it appends, and `Clear` is one press.
+// try to: it appends, and `Clear` on the mix is one press.
 
-import { project, projectFps, duration, makeGenerator, addClip, slipClip, changed }
+import { project, projectFps, duration, makeGenerator, addClip, slipClip, setSpeed, changed }
     from '../ui/project.js';
 import * as generators from '../ui/generator.js';
 import * as library from '../ui/library.js';
@@ -126,10 +128,27 @@ import * as library from '../ui/library.js';
 /// in and short enough that four of them are a bar.
 const TEMPO = 120;
 
-/// Steps a beat. Four, so a token is a sixteenth and the two things people
-/// actually type — one word a beat with three holds, or four words a beat — are
-/// both sayable without changing it.
+/// Steps a beat. Four, so a step is a sixteenth and the two things people
+/// actually tap — one word a beat, or four words a beat — are both on the grid
+/// without changing it.
 const STEPS = 4;
+
+/// Beats a bar. Four, because it is what a bar is until somebody says otherwise.
+const BAR = 4;
+
+/// The grids offered: what a beat may be divided into. Six and eight are there
+/// for a triplet feel at speed and for the one person who needs thirty-seconds;
+/// anything finer is a step shorter than a syllable.
+export const GRIDS = [1, 2, 3, 4, 6, 8];
+
+/// How far a word may be stretched to fill its step, either way. Half speed and
+/// double: past those a word is a sound effect, and the cut is the better lie.
+export const STRETCH_MIN = 0.5;
+export const STRETCH_MAX = 2.0;
+
+/// How far a word may be slipped by hand, in seconds either way. Half a second
+/// is the whole of the word before or after it.
+export const OFFSET_MAX = 0.5;
 
 /// The window a piece's onsets are looked for in, in seconds either side of the
 /// word's transcript time. Small on purpose: this is a refinement of a number
@@ -145,320 +164,362 @@ const WARMUP = 0.6;
 
 let tempo = TEMPO;
 let per = STEPS;
-let text = '';
+let bar = BAR;
 let loose = false;
+let sortByFit = true;
+
+/// The pattern: `{ phrase, at, steps, pin, offset, stretch }`, sorted by `at`,
+/// never overlapping. See the header for why the rests are not in it. `words()`
+/// is what everything outside reads, as copies.
+let laid = [];
 
 const KEY = 'supercut.score';
 
 /// How long one step is, in seconds. The one home for the arithmetic — the
-/// parse, the placement, the tab's own note and the suite all ask here.
+/// parse, the placement, the tab's own line and the suite all ask here.
 export function stepSeconds() {
     return 60 / Math.max(1, tempo) / Math.max(1, per);
 }
 
-export function score() { return text; }
 export function tempoOf() { return tempo; }
 export function stepsPerBeat() { return per; }
+export function beatsPerBar() { return bar; }
+export function stepsPerBar() { return per * bar; }
 export function looseOf() { return loose; }
+export function sortByFitOf() { return sortByFit; }
 
-export function setScore(t) {
-    const s = String(t == null ? '' : t);
-    if (s !== text) {
-        text = s;
-        said = '';
-        stepPins.clear();
-        stepOffsets.clear();
-        stepDurDeltas.clear();
-        stepRates.clear();
-        remember();
-    }
-}
 export function setTempo(v) {
     const n = Number(v);
     if (Number.isFinite(n) && n > 0) tempo = Math.min(600, Math.max(20, n));
+    replan();
     remember();
 }
 export function setStepsPerBeat(v) {
     const n = Math.round(Number(v));
     if (Number.isFinite(n) && n > 0) per = Math.min(16, Math.max(1, n));
+    replan();
     remember();
 }
-export function setLoose(on) { loose = !!on; remember(); }
+export function setBeatsPerBar(v) {
+    const n = Math.round(Number(v));
+    if (Number.isFinite(n) && n > 0) bar = Math.min(16, Math.max(1, n));
+    replan();
+    remember();
+}
+export function setLoose(on) { loose = !!on; replan(); remember(); }
 
-let sortByFit = true;
-
-/// Whether candidate takes are sorted by best duration fit to the step.
-export function sortByFitOf() { return sortByFit; }
-
-/// Toggle or set sorting of candidate takes by fit.
+/// Whether the takes of a word are offered best-fitting first, or in the order
+/// they were said. A property of the whole pattern rather than of a word,
+/// because it is a way of walking the corpus and not a choice about one piece.
 export function setSortByFit(on) {
     const next = !!on;
-    if (next !== sortByFit) {
-        sortByFit = next;
-        stepPins.clear();
-        remember();
-        replan();
-    }
-}
-
-const stepPins = new Map();
-
-/// Pinned take for a step piece, or 0 if unpinned.
-export function stepTakeOf(index) {
-    return stepPins.get(index) || 0;
-}
-
-/// Pin a specific take number (1-based) for step piece `index`.
-export function setStepTake(index, take) {
-    const n = Math.max(1, Math.round(Number(take) || 1));
-    stepPins.set(index, n);
+    if (next === sortByFit) return;
+    sortByFit = next;
+    // A pin is a position in a list, and the list has just been reordered.
+    for (const w of laid) w.pin = 0;
     replan();
-    return n;
+    remember();
 }
 
-/// Cycle through available takes for step piece `index` by delta (-1 or +1).
-export function cycleStepTake(index, delta = 1) {
-    const p = planned.pieces[index];
-    if (!p || p.kind !== 'word' || !p.takes) return 0;
-    const cur = stepPins.has(index) ? stepPins.get(index) : (p.take || 1);
+// ── the words ──────────────────────────────────────────────────────────────
+
+/// The pattern, as copies. What the grid draws.
+export function words() { return laid.map((w) => ({ ...w })); }
+
+/// The step after the last word, which is how long the pattern is in steps.
+export function lastStep() {
+    let end = 0;
+    for (const w of laid) end = Math.max(end, w.at + w.steps);
+    return end;
+}
+
+/// Which word covers a step, or -1. The grid asks per cell.
+export function wordAt(step) {
+    for (let i = 0; i < laid.length; i++) {
+        const w = laid[i];
+        if (step >= w.at && step < w.at + w.steps) return i;
+    }
+    return -1;
+}
+
+/// Where a step is, the way a musician counts it: bar, beat and step within the
+/// beat, all from one.
+export function whereIs(step) {
+    const s = Math.max(0, Math.round(step));
+    return {
+        bar: Math.floor(s / (per * bar)) + 1,
+        beat: Math.floor((s % (per * bar)) / per) + 1,
+        step: (s % per) + 1,
+    };
+}
+
+function fresh(phrase, at, steps) {
+    return { phrase: String(phrase), at, steps, pin: 0, offset: 0, stretch: false };
+}
+
+/// Keep the list sorted and answer where one word ended up in it.
+function settle(w) {
+    laid.sort((a, b) => a.at - b.at);
+    replan();
+    remember();
+    return laid.indexOf(w);
+}
+
+/// Is a span free of every word but `except`?
+function free(at, steps, except) {
+    if (at < 0) return false;
+    for (const w of laid) {
+        if (w === except) continue;
+        if (at < w.at + w.steps && w.at < at + steps) return false;
+    }
+    return true;
+}
+
+/// Put a word on a step. Answers its index, or -1 for a step something is on.
+///
+/// One step long, always: a length is a drag on the grid, and a word that
+/// arrived at some other length would be a guess about the rhythm nobody typed.
+export function putWord(at, phrase) {
+    const p = String(phrase || '').trim();
+    const s = Math.max(0, Math.round(Number(at) || 0));
+    if (!p) return -1;
+    const on = wordAt(s);
+    if (on >= 0) {
+        // Typed onto the first step of a word: that word, renamed. Anywhere
+        // else inside one is refused — the cell is not empty.
+        if (laid[on].at !== s) return -1;
+        setPhrase(on, p);
+        return on;
+    }
+    const w = fresh(p, s, 1);
+    laid.push(w);
+    return settle(w);
+}
+
+/// Rename a word. The take is dropped with the old phrase, because it was a
+/// position in a list of moments *that* word was said at.
+export function setPhrase(i, phrase) {
+    const w = laid[i];
+    const p = String(phrase || '').trim();
+    if (!w || !p) return false;
+    if (w.phrase !== p) { w.phrase = p; w.pin = 0; }
+    replan();
+    remember();
+    return true;
+}
+
+/// How many steps a word holds for. Clamped to at least one and to the step
+/// before the next word, so a hold can never run over a neighbour. Answers the
+/// length it ended up with.
+export function setSteps(i, steps) {
+    const w = laid[i];
+    if (!w) return 0;
+    let n = Math.max(1, Math.round(Number(steps) || 1));
+    for (const o of laid) if (o !== w && o.at >= w.at + 1) n = Math.min(n, o.at - w.at);
+    if (n !== w.steps) { w.steps = n; replan(); remember(); }
+    return w.steps;
+}
+
+/// Move a word to another step. Answers its new index, or -1 when the span it
+/// would take is not free — in which case nothing moved, which is what lets a
+/// drag be answered per pixel and refused per pixel.
+export function moveWord(i, at) {
+    const w = laid[i];
+    const s = Math.round(Number(at));
+    if (!w || !Number.isFinite(s)) return -1;
+    if (s === w.at) return i;
+    if (!free(s, w.steps, w)) return -1;
+    w.at = s;
+    return settle(w);
+}
+
+export function removeWord(i) {
+    if (!laid[i]) return false;
+    laid.splice(i, 1);
+    replan();
+    remember();
+    return true;
+}
+
+export function clearWords() {
+    laid = [];
+    replan();
+    remember();
+}
+
+// ── what belongs to a word ─────────────────────────────────────────────────
+
+/// The take pinned on a word, one-based, or 0 when it walks the takes.
+export function takeOf(i) { return laid[i] ? laid[i].pin : 0; }
+
+export function setTake(i, take) {
+    const w = laid[i];
+    if (!w) return 0;
+    w.pin = Math.max(1, Math.round(Number(take) || 1));
+    replan();
+    remember();
+    return w.pin;
+}
+
+/// The next take, or the one before. Wraps, so pressing on is never a dead end.
+export function cycleTake(i, delta = 1) {
+    const p = pieceOf(i);
+    if (!p || !p.takes) return 0;
+    const cur = laid[i].pin || p.take || 1;
     const next = ((cur - 1 + delta) % p.takes + p.takes) % p.takes + 1;
-    stepPins.set(index, next);
+    return setTake(i, next);
+}
+
+export function offsetOf(i) { return laid[i] ? laid[i].offset : 0; }
+
+/// Slip a word's in-point by hand, in seconds. Clamped; answers the offset set.
+export function setOffset(i, sec) {
+    const w = laid[i];
+    if (!w) return 0;
+    const v = Number(sec) || 0;
+    w.offset = Math.max(-OFFSET_MAX, Math.min(OFFSET_MAX, v));
+    if (Math.abs(w.offset) < 1e-6) w.offset = 0;
     replan();
-    return next;
+    remember();
+    return w.offset;
 }
 
-/// Clear all interactive step pins.
-export function clearStepPins() {
-    stepPins.clear();
+export function nudgeOffset(i, deltaSec) {
+    return setOffset(i, offsetOf(i) + (Number(deltaSec) || 0));
+}
+
+export function stretchOf(i) { return laid[i] ? !!laid[i].stretch : false; }
+
+export function setStretch(i, on) {
+    const w = laid[i];
+    if (!w) return false;
+    w.stretch = !!on;
     replan();
+    remember();
+    return w.stretch;
 }
 
-const stepOffsets = new Map();     // index -> offset in seconds (slip)
-const stepDurDeltas = new Map();   // index -> delta in seconds
-const stepRates = new Map();       // index -> playback rate
+// ── the notation ───────────────────────────────────────────────────────────
 
-/// Slipped in-point offset (in seconds) for step piece `index`.
-export function stepOffsetOf(index) {
-    return stepOffsets.get(index) || 0;
-}
-
-/// Set slipped in-point offset (in seconds) for step piece `index`.
-export function setStepOffset(index, sec) {
-    const val = Number(sec) || 0;
-    stepOffsets.set(index, Math.max(-5.0, Math.min(5.0, val)));
-    replan();
-    return stepOffsets.get(index);
-}
-
-/// Nudge in-point offset by delta seconds (e.g. +0.005 for +5ms).
-export function nudgeStepOffset(index, deltaSec) {
-    const cur = stepOffsetOf(index);
-    return setStepOffset(index, cur + Number(deltaSec || 0));
-}
-
-/// Duration adjustment delta (in seconds) for step piece `index`.
-export function stepDurDeltaOf(index) {
-    return stepDurDeltas.get(index) || 0;
-}
-
-/// Set duration adjustment delta (in seconds) for step piece `index`.
-export function setStepDurDelta(index, sec) {
-    const val = Number(sec) || 0;
-    stepDurDeltas.set(index, Math.max(-5.0, Math.min(5.0, val)));
-    replan();
-    return stepDurDeltas.get(index);
-}
-
-/// Nudge duration adjustment by delta seconds.
-export function nudgeStepDurDelta(index, deltaSec) {
-    const cur = stepDurDeltaOf(index);
-    return setStepDurDelta(index, cur + Number(deltaSec || 0));
-}
-
-/// Playback rate override for step piece `index` (0 if using default/flex).
-export function stepRateOf(index) {
-    return stepRates.get(index) || 0;
-}
-
-/// Set playback rate override for step piece `index`.
-export function setStepRate(index, rate) {
-    const r = Math.max(0.25, Math.min(4.0, Number(rate) || 1.0));
-    stepRates.set(index, r);
-    replan();
-    return r;
-}
-
-/// Reset fine adjustments for step piece `index`.
-export function resetStepFine(index) {
-    stepOffsets.delete(index);
-    stepDurDeltas.delete(index);
-    stepRates.delete(index);
-    replan();
-}
-
-/// Clear all fine adjustments.
-export function clearStepFine() {
-    stepOffsets.clear();
-    stepDurDeltas.clear();
-    stepRates.clear();
-    replan();
-}
-
-/// Read back what was last typed.
-///
-/// **A version-tolerant read**, which is the rule for everything in the
-/// workspace: what is in there was written by an earlier version of this code
-/// and every field is sanitised through the same setters a person's typing goes
-/// through, so a tempo of `"fast"` or of `1e9` is the default rather than a grid
-/// nothing can be placed on.
-export function restore() {
-    let blob = null;
-    try { blob = JSON.parse(localStorage.getItem(KEY) || 'null'); }
-    catch (e) { blob = null; }
-    if (!blob || typeof blob !== 'object') return;
-    setTempo(blob.tempo);
-    setStepsPerBeat(blob.per);
-    setLoose(blob.loose);
-    if (blob.sortByFit !== undefined) setSortByFit(blob.sortByFit);
-    setScore(typeof blob.text === 'string' ? blob.text : '');
-}
-
-function remember() {
-    try {
-        localStorage.setItem(KEY, JSON.stringify({ tempo, per, loose, sortByFit, text }));
-    } catch (e) { /* no store; the score is still good for this session */ }
-}
-
-// ── the parse ──────────────────────────────────────────────────────────────
-
-/// Parse an inline directive inside brackets `[...]`.
-///
-/// Directives can set tempo, meter/subdivision (steps a beat), or both:
-///   - `[140]` or `[140 bpm]` or `[tempo: 140]` -> tempo 140 bpm
-///   - `[:3]` or `[/3]` or `[3 steps]` or `[triplets]` -> 3 steps per beat
-///   - `[140, 3]` or `[140:3]` or `[140 / 3]` -> tempo 140, 3 steps per beat
-///
-/// Text that does not describe tempo or meter (e.g. `[verse 1]`, `[intro]`,
-/// `[chorus]`) is treated as an annotation/comment and ignored by the grid.
-function parseDirective(str) {
-    const s = String(str || '').trim().toLowerCase();
-    if (!s) return null;
-
-    if (s === 'triplets' || s === 'triplet') return { per: 3 };
-    if (s === 'sixteenths' || s === '16ths') return { per: 4 };
-    if (s === 'eighths' || s === '8ths') return { per: 2 };
-
-    const two = /^(?:tempo[:=\s]+)?(\d+(?:\.\d+)?)\s*(?:bpm)?\s*[,:/]\s*(?:steps?[:=\s]+|per[:=\s]+)?(\d+)\s*(?:steps?|per\s*beat|\/beat)?$/i.exec(s);
-    if (two) {
-        const t = Math.min(600, Math.max(20, Number(two[1])));
-        const p = Math.min(16, Math.max(1, Math.round(Number(two[2]))));
-        return { tempo: t, per: p };
-    }
-
-    const tExplicit = /^(?:tempo[:=\s]+|bpm[:=\s]+|t=)(\d+(?:\.\d+)?)$/i.exec(s)
-                   || /^(\d+(?:\.\d+)?)\s*bpm$/i.exec(s);
-    if (tExplicit) {
-        return { tempo: Math.min(600, Math.max(20, Number(tExplicit[1]))) };
-    }
-
-    const pExplicit = /^(?:steps?[:=\s]+|per[:=\s]+|s=|\/|:)(\d+)$/i.exec(s)
-                   || /^(\d+)\s*(?:steps?|per\s*beat|\/beat)$/i.exec(s);
-    if (pExplicit) {
-        return { per: Math.min(16, Math.max(1, Math.round(Number(pExplicit[1])))) };
-    }
-
-    const single = /^(\d+(?:\.\d+)?)$/.exec(s);
-    if (single) {
-        const num = Number(single[1]);
-        if (num >= 20) return { tempo: Math.min(600, Math.max(20, num)) };
-        if (num >= 1 && num <= 16) return { per: Math.round(num) };
-    }
-
-    return { label: s };
-}
-
-/// Split a score into tokens, keeping a quoted phrase whole and capturing directives.
-///
-/// Whitespace separates, `"` groups phrases, `[...]` sets tempo/meter or labels,
-/// and a line break is whitespace like any other — see the header for why there
-/// is no bar character.
+/// Split a line into tokens, keeping a quoted phrase whole and dropping
+/// bracketed text. Whitespace separates, `"` groups, and a line break is
+/// whitespace like any other.
 function tokensOf(src) {
     const out = [];
     const re = /"([^"]*)"|\[([^\]]*)\]|(\S+)/g;
     let m;
     while ((m = re.exec(String(src || '')))) {
-        if (m[1] !== undefined) {
-            out.push({ text: m[1], quoted: true, directive: false });
-        } else if (m[2] !== undefined) {
-            out.push({ text: m[2], quoted: false, directive: true });
-        } else {
-            out.push({ text: m[3], quoted: false, directive: false });
-        }
+        if (m[1] !== undefined) out.push({ text: m[1], quoted: true });
+        else if (m[2] !== undefined) continue;
+        else out.push({ text: m[3], quoted: false });
     }
     return out;
 }
 
-/// A score as pieces, before anything has been looked up.
+/// A pattern from a line of notation.
 ///
-/// Answers `[{ kind, phrase, take, steps, tempo, stepsPerBeat, stepSec, seconds }]`
-/// where `kind` is `'word'` or `'rest'`. A hold is not a piece — it is a step added
-/// to the piece before it, which is what makes the length arithmetic one
-/// multiplication and not a second pass.
-///
-/// **A hold with nothing before it is a rest**, and that is the only forgiving
-/// thing in here: a score beginning with `.` is somebody lining a line up under
-/// the one above, and refusing it would be pedantry about a step of silence they
-/// can see.
+/// A token is one step: a word starts a piece, `.` holds the piece before it a
+/// step longer, `-` rests, `"you cross"` is a phrase with a space in it, and
+/// `hell#2` pins the second take. A hold with nothing before it is a rest, and
+/// `[...]` is ignored — an older version used it for tempo changes inside a
+/// score, which a grid with one tempo has no place for.
 export function parse(src) {
-    const pieces = [];
-    let curTempo = tempo;
-    let curPer = per;
-    const curStepSec = () => 60 / Math.max(1, curTempo) / Math.max(1, curPer);
-
+    const out = [];
+    let at = 0;
     for (const tok of tokensOf(src)) {
-        if (tok.directive) {
-            const dir = parseDirective(tok.text);
-            if (dir) {
-                if (dir.tempo) curTempo = dir.tempo;
-                if (dir.per) curPer = dir.per;
-            }
-            continue;
-        }
         const t = tok.text;
-        const stepSec = curStepSec();
         if (!tok.quoted && (t === '.' || t === '..')) {
-            if (pieces.length) {
-                const prev = pieces[pieces.length - 1];
-                prev.steps++;
-                prev.seconds = prev.steps * prev.stepSec;
-            } else {
-                pieces.push({
-                    kind: 'rest', phrase: '', take: 0, steps: 1,
-                    tempo: curTempo, stepsPerBeat: curPer, stepSec, seconds: stepSec,
-                });
-            }
+            const last = out[out.length - 1];
+            if (last && last.at + last.steps === at) last.steps++;
+            at++;
             continue;
         }
-        if (!tok.quoted && (t === '-' || t === '_')) {
-            pieces.push({
-                kind: 'rest', phrase: '', take: 0, steps: 1,
-                tempo: curTempo, stepsPerBeat: curPer, stepSec, seconds: stepSec,
-            });
-            continue;
-        }
-        // `#2` pins a take. Read off the end and only when it is digits, so a
-        // phrase that genuinely contains a hash is still searchable — the
-        // matcher flattens it away in any case (`bare` in `ui/phrase.js`).
+        if (!tok.quoted && (t === '-' || t === '_')) { at++; continue; }
         let phrase = t;
-        let take = 0;
-        const pin = /^(.*[^#])#(\d+)$/.exec(t);
-        if (!tok.quoted && pin) { phrase = pin[1]; take = +pin[2]; }
-        pieces.push({
-            kind: 'word', phrase, take, steps: 1,
-            tempo: curTempo, stepsPerBeat: curPer, stepSec, seconds: stepSec,
-        });
+        let pin = 0;
+        const pinned = /^(.*[^#])#(\d+)$/.exec(t);
+        if (!tok.quoted && pinned) { phrase = pinned[1]; pin = +pinned[2]; }
+        const w = fresh(phrase, at, 1);
+        w.pin = pin;
+        out.push(w);
+        at++;
     }
-    return pieces;
+    return out;
+}
+
+/// The same line back. Not a bar structure — spaces between tokens, and that is
+/// all — because what reads it is the parse above and not a person.
+export function serialize(list = laid) {
+    const out = [];
+    let at = 0;
+    for (const w of list) {
+        while (at < w.at) { out.push('-'); at++; }
+        const phrase = /\s/.test(w.phrase) ? `"${w.phrase}"` : w.phrase;
+        out.push(w.pin > 0 && !/\s/.test(w.phrase) ? `${phrase}#${w.pin}` : phrase);
+        for (let k = 1; k < w.steps; k++) out.push('.');
+        at = w.at + w.steps;
+    }
+    return out.join(' ');
+}
+
+export function score() { return serialize(); }
+
+/// Replace the pattern with what a line of notation says.
+export function setScore(t) {
+    laid = parse(t);
+    replan();
+    remember();
+}
+
+// ── the workspace ──────────────────────────────────────────────────────────
+
+/// Read back what was last laid out.
+///
+/// **A version-tolerant read**, which is the rule for everything in the
+/// workspace: what is in there was written by an earlier version of this code
+/// and every field is sanitised — a tempo of `"fast"` or of `1e9` is the default
+/// rather than a grid nothing can be placed on, a word off the grid or on top of
+/// another is dropped, and a blob holding the notation the previous version
+/// wrote is parsed rather than lost.
+export function restore() {
+    let blob = null;
+    try { blob = JSON.parse(localStorage.getItem(KEY) || 'null'); }
+    catch (e) { blob = null; }
+    if (!blob || typeof blob !== 'object') return;
+    const n = (v, lo, hi, dflt) => {
+        const x = Number(v);
+        return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : dflt;
+    };
+    tempo = n(blob.tempo, 20, 600, TEMPO);
+    per = Math.round(n(blob.per, 1, 16, STEPS));
+    bar = Math.round(n(blob.bar, 1, 16, BAR));
+    loose = !!blob.loose;
+    sortByFit = blob.sortByFit === undefined ? true : !!blob.sortByFit;
+    laid = [];
+    if (Array.isArray(blob.words)) {
+        for (const item of blob.words) {
+            if (!item || typeof item !== 'object') continue;
+            const phrase = String(item.phrase || '').trim();
+            const at = Math.round(n(item.at, 0, 1e6, -1));
+            const steps = Math.round(n(item.steps, 1, 1e4, 1));
+            if (!phrase || at < 0 || !free(at, steps, null)) continue;
+            const w = fresh(phrase, at, steps);
+            w.pin = Math.round(n(item.pin, 0, 1e4, 0));
+            w.offset = n(item.offset, -OFFSET_MAX, OFFSET_MAX, 0);
+            w.stretch = !!item.stretch;
+            laid.push(w);
+        }
+        laid.sort((a, b) => a.at - b.at);
+    } else if (typeof blob.text === 'string') {
+        laid = parse(blob.text);
+    }
+    replan();
+}
+
+function remember() {
+    try {
+        localStorage.setItem(KEY, JSON.stringify({ tempo, per, bar, loose, sortByFit, words: laid }));
+    } catch (e) { /* no store; the pattern is still good for this session */ }
 }
 
 // ── resolving ──────────────────────────────────────────────────────────────
@@ -466,8 +527,11 @@ export function parse(src) {
 /// The plan: every piece with the moment it will be cut from, or the reason it
 /// cannot be.
 ///
-/// Answers `{ pieces, missing, steps, seconds }`. `missing` is the phrases
-/// nothing said, which is what a refusal names.
+/// Answers `{ pieces, missing, steps, seconds }`: the pattern as a packed list
+/// of words and rests in the order they play — `pieces` — and `missing`, the
+/// phrases nothing said, which is what a refusal names. A word piece carries
+/// `word`, its index in the pattern, which is how the grid and the plan agree
+/// about which is which.
 ///
 /// **Repeats take a different moment each time.** `no no no no` off one hit four
 /// times is one clip repeated, which is not what anybody means by it and is
@@ -480,118 +544,99 @@ export function parse(src) {
 /// whatever the finder is confined to. **Nothing about what counts as an
 /// instance is decided here**, which is the rule this repository has already paid
 /// for breaking once.
-export function resolve(src = text) {
-    const pieces = parse(src);
+export function resolve() {
+    const pieces = [];
     const found = new Map();     // phrase (as typed) → hits
     const cursor = new Map();
     const missing = [];
-    let steps = 0;
-    let seconds = 0;
+    const stepSec = stepSeconds();
+    const have = library.available();
+    let at = 0;
 
-    for (let i = 0; i < pieces.length; i++) {
-        const p = pieces[i];
-        steps += p.steps;
-        seconds += p.seconds;
-        if (p.kind !== 'word') continue;
-        if (!found.has(p.phrase))
-            found.set(p.phrase, library.searchWords(p.phrase, { loose }));
-        const hits = found.get(p.phrase);
+    for (let i = 0; i < laid.length; i++) {
+        const w = laid[i];
+        if (w.at > at) {
+            const n = w.at - at;
+            pieces.push({ kind: 'rest', word: -1, phrase: '', from: at, steps: n,
+                          seconds: n * stepSec });
+        }
+        const p = {
+            kind: 'word', word: i, phrase: w.phrase, from: w.at, steps: w.steps,
+            seconds: w.steps * stepSec, offset: w.offset, stretch: w.stretch,
+            hit: null, takes: 0, take: 0, rate: 1, span: w.steps * stepSec,
+        };
+        pieces.push(p);
+        at = w.at + w.steps;
+        if (!have) continue;
+
+        if (!found.has(w.phrase))
+            found.set(w.phrase, library.searchWords(w.phrase, { loose }));
+        const hits = found.get(w.phrase);
         p.takes = hits.length;
         if (!hits.length) {
-            p.hit = null;
-            if (missing.indexOf(p.phrase) < 0) missing.push(p.phrase);
+            if (missing.indexOf(w.phrase) < 0) missing.push(w.phrase);
             continue;
         }
 
-        // Rank candidate takes against the target duration of this piece
-        const targetSec = p.seconds;
-        let candidates = hits.map((h, idx) => {
-            const cueDur = Math.max(0.04, (h.to || h.says || (h.at + 0.2)) - h.at);
-            const ratio = cueDur / Math.max(0.01, targetSec);
-            const penalty = Math.abs(1.0 - ratio);
-            const score = Math.max(0, Math.min(100, Math.round((1.0 - 1.6 * penalty) * 100)));
-            return {
-                origTake: idx + 1,
-                hit: h,
-                dur: cueDur,
-                ratio,
-                score,
-            };
+        // Every take, rated against the step it is being asked to fill: how
+        // far the word's own length is from the piece's. The rating is what
+        // `sortByFit` orders by and what the badge says.
+        const candidates = hits.map((h, idx) => {
+            const dur = Math.max(0.04, (h.to || (h.at + 0.2)) - h.at);
+            const ratio = dur / Math.max(0.01, p.seconds);
+            const score = Math.max(0, Math.min(100, Math.round((1 - 1.6 * Math.abs(1 - ratio)) * 100)));
+            return { said: idx + 1, hit: h, dur, ratio, score };
         });
-
-        if (sortByFit) {
-            candidates.sort((a, b) => b.score - a.score || a.origTake - b.origTake);
-        }
-
-        p.candidates = candidates.map((c, idx) => ({
-            ...c,
-            take: idx + 1,
-        }));
+        if (sortByFit) candidates.sort((a, b) => b.score - a.score || a.said - b.said);
+        p.candidates = candidates.map((c, idx) => ({ ...c, take: idx + 1 }));
 
         let n;
-        if (stepPins.has(i)) {
-            const pin = stepPins.get(i);
-            n = Math.min(p.candidates.length - 1, Math.max(0, pin - 1));
-        } else if (p.take > 0) {
-            // A pin past the end is not silently wrapped: somebody who typed
-            // `#7` was looking at a list, and giving them take 1 instead would
-            // be the tool answering a different question without saying so.
-            if (p.take > p.candidates.length) {
-                p.hit = null;
+        if (w.pin > 0) {
+            // A pin past the end is not silently wrapped: somebody who pinned
+            // take 7 was looking at a list, and giving them take 1 instead
+            // would be the tool answering a different question without saying so.
+            if (w.pin > p.candidates.length) {
                 p.why = `only ${p.candidates.length} take${p.candidates.length === 1 ? '' : 's'}`;
                 continue;
             }
-            n = p.take - 1;
+            n = w.pin - 1;
         } else {
-            n = (cursor.get(p.phrase) || 0) % p.candidates.length;
-            cursor.set(p.phrase, n + 1);
+            n = (cursor.get(w.phrase) || 0) % p.candidates.length;
+            cursor.set(w.phrase, n + 1);
         }
         const chosen = p.candidates[n];
         p.hit = chosen.hit;
         p.take = chosen.take;
+        p.said = chosen.said;
         p.fitRatio = chosen.ratio;
         p.fitScore = chosen.score;
-        p.origTake = chosen.origTake;
         p.naturalDur = chosen.dur;
-
-        const offset = stepOffsets.get(i) || 0;
-        const durDelta = stepDurDeltas.get(i) || 0;
-        const customRate = stepRates.get(i) || 0;
-
-        p.offset = offset;
-        p.durDelta = durDelta;
-        p.at = Math.max(0, chosen.hit.at + offset);
-        p.dur = Math.max(0.02, chosen.dur + durDelta);
-
-        let rate = 1.0;
-        if (customRate) {
-            rate = customRate;
-        } else if (p.fitRatio && p.fitRatio > 1.12 && p.fitRatio <= 1.5) {
-            rate = p.fitRatio;
-        } else if (p.fitRatio && p.fitRatio < 0.88 && p.fitRatio >= 0.75) {
-            rate = p.fitRatio;
-        }
-        p.rate = rate;
+        p.at = Math.max(0, chosen.hit.at + w.offset);
+        // Stretched: the word's own span fills the step, at the speed that
+        // makes it. Outside the range it is cut like any other, and `canStretch`
+        // is what the control reads to say so.
+        p.canStretch = chosen.ratio >= STRETCH_MIN && chosen.ratio <= STRETCH_MAX;
+        p.rate = w.stretch && p.canStretch ? chosen.ratio : 1;
+        p.span = p.seconds * p.rate;
     }
-    return { pieces, missing, steps, seconds };
+    return { pieces, missing, steps: at, seconds: at * stepSec };
 }
 
-/// The last plan, for the tab to draw. Recomputed when the score changes rather
-/// than on every frame: a resolve is a search of the whole corpus per distinct
-/// word, which is milliseconds and is not free.
+/// The last plan, for the tab to draw. Recomputed when the pattern changes
+/// rather than on every frame: a resolve is a search of the whole corpus per
+/// distinct word, which is milliseconds and is not free.
 let planned = { pieces: [], missing: [], steps: 0, seconds: 0 };
 export function plan() { return planned; }
 
-/// Work out what the score would build, and answer it.
+/// The plan's piece for a word of the pattern, or null.
+export function pieceOf(i) {
+    for (const p of planned.pieces) if (p.kind === 'word' && p.word === i) return p;
+    return null;
+}
+
+/// Work out what the pattern would build, and answer it.
 export function replan() {
-    if (!library.available()) {
-        const pieces = parse(text);
-        let steps = 0, seconds = 0;
-        for (const p of pieces) { steps += p.steps; seconds += p.seconds; }
-        planned = { pieces, missing: [], steps, seconds };
-    } else {
-        planned = resolve();
-    }
+    planned = resolve();
     return planned;
 }
 
@@ -614,7 +659,7 @@ export function note() { return said; }
 /// Is a build waiting on anything? The press that started it is not repeatable.
 export function busy() { return !!job; }
 
-/// Turn the score into clips.
+/// Turn the pattern into clips — the whole of it, or one word of it.
 ///
 /// Answers '' when it started and a sentence when it refused.
 ///
@@ -627,49 +672,58 @@ export function busy() { return !!job; }
 /// **The press returns.** Opening a recording is a probe on a thread and a
 /// six-hour file takes a moment, so the build is a job the frame loop finishes:
 /// the inputs are asked for here and the clips are laid when every one of them
-/// has answered. They are laid **all at once, in score order** — not one per
+/// has answered. They are laid **all at once, in pattern order** — not one per
 /// probe as it lands — because the order of a mix is the order of the words and
 /// probes land in whatever order the disk feels like.
-export function build() {
+///
+/// `only` is one word's index: that piece alone, with no rests, which is what
+/// somebody does when one take is right and the rest of the pattern is not.
+export function build(only) {
     if (job) return 'still building';
     if (!library.available()) return 'no corpus to build from';
 
     const got = replan();
-    if (!got.pieces.length) return 'nothing typed';
-    if (got.missing.length)
-        return `nothing says ${got.missing.map((w) => `"${w}"`).join(', ')}`;
-    const pinned = got.pieces.filter((p) => p.kind === 'word' && !p.hit && p.why);
+    let pieces = got.pieces;
+    if (only !== undefined && only !== null)
+        pieces = pieces.filter((p) => p.kind === 'word' && p.word === only);
+    if (!pieces.length) return 'nothing on the grid';
+
+    const missing = [];
+    for (const p of pieces)
+        if (p.kind === 'word' && !p.hit && !p.why && missing.indexOf(p.phrase) < 0)
+            missing.push(p.phrase);
+    if (missing.length)
+        return `nothing says ${missing.map((w) => `"${w}"`).join(', ')}`;
+    const pinned = pieces.filter((p) => p.kind === 'word' && !p.hit && p.why);
     if (pinned.length)
         return pinned.map((p) => `"${p.phrase}" — ${p.why}`).join(' · ');
-    const noMedia = got.pieces.filter(
-        (p) => p.kind === 'word' && p.hit && !p.hit.vod.media);
+    const noMedia = pieces.filter((p) => p.kind === 'word' && p.hit && !p.hit.vod.media);
     if (noMedia.length)
         return `${noMedia.length} of those are in recordings that are not on disk`;
 
     // One input per distinct recording, asked for now so the opens overlap.
     const paths = [];
-    for (const p of got.pieces)
+    for (const p of pieces)
         if (p.kind === 'word' && paths.indexOf(p.hit.vod.media) < 0)
             paths.push(p.hit.vod.media);
     const inputs = paths.map((path) => hooks.openInput({ path, name: path }));
 
-    job = { pieces: got.pieces, inputs, began: Date.now() };
-    said = `building ${got.pieces.length} pieces…`;
+    job = { pieces, inputs, began: Date.now() };
+    said = `building ${pieces.length} piece${pieces.length === 1 ? '' : 's'}…`;
     return '';
 }
 
-/// Every input the build is waiting on has answered — lay the whole score.
+/// Every input the build is waiting on has answered — lay the whole pattern.
 ///
 /// The canvas is settled from the first piece that has a picture, which is
-/// `app.js`'s rule for the first clip of a mix and is stated there; a score that
-/// begins with a rest would otherwise size the project from a `color` filter
-/// this file chose the dimensions of.
+/// `app.js`'s rule for the first clip of a mix and is stated there; a pattern
+/// that begins with a rest would otherwise size the project from a `color`
+/// filter this file chose the dimensions of.
 function lay() {
     let laid = 0;
     for (const p of job.pieces) {
-        const dur = p.seconds;
         if (p.kind === 'rest') {
-            if (rest(dur)) laid++;
+            if (rest(p.seconds)) laid++;
             continue;
         }
         // **The in-point is the word's own start and nothing is subtracted from
@@ -677,27 +731,35 @@ function lay() {
         // taken to its edge arrives half said — which is right when the moment
         // is what matters and is exactly wrong here, where the beat *is* the
         // word's start. The pad the cut takes either side is `cuts.js`'s and is
-        // material, not in-point.
+        // material, not in-point. The span is the step's at the piece's rate,
+        // so a stretched word brings the footage its speed will fit.
         const clip = hooks.place({
             path: p.hit.vod.media,
             name: `${p.hit.vod.id} ${p.phrase}`,
-            from: Math.max(0, p.at),
-            to: Math.max(0, p.at) + dur,
+            from: p.at,
+            to: p.at + p.span,
             vod: p.hit.vod.id,
             title: p.hit.vod.title || '',
         });
         if (!clip) continue;
         laid++;
+        if (p.rate !== 1) {
+            // The speed that makes the span fill the step. `setSpeed` keeps the
+            // source span and works the length out from it, which lands on
+            // exactly `seconds`; the pack afterwards is for the clips behind.
+            setSpeed(clip, p.rate);
+            if (hooks.packed) hooks.packed();
+        }
         // The onset read for this piece, queued rather than started: one runs at
-        // a time process-wide. A piece with an explicit slip offset is respected
-        // as-is and skipped by auto-onset snapping.
+        // a time process-wide. A word slipped by hand is not measured — see the
+        // header.
         if (!p.offset) {
-            queue.push({ clip: clip.id, path: p.hit.vod.media, want: Math.max(0, p.at),
+            queue.push({ clip: clip.id, path: p.hit.vod.media, want: p.at,
                          read: 0, phrase: p.phrase });
         }
     }
     job = null;
-    said = `${laid} pieces on the grid`;
+    said = `${laid} piece${laid === 1 ? '' : 's'} on the grid`;
     if (hooks.edited) hooks.edited();
     return laid;
 }
@@ -711,7 +773,7 @@ function lay() {
 ///
 /// **A build that cannot make one goes on without it**, saying so — a filter
 /// this build does not have is a real possibility (`whyNotAClip` refuses by
-/// name) and losing the whole score to a missing `color` would be worse than a
+/// name) and losing the whole pattern to a missing `color` would be worse than a
 /// mix that is short a silence.
 function rest(seconds) {
     const spec = generators.makeSpec('color', {
@@ -760,9 +822,9 @@ function startRead() {
     try {
         next.read = bro.ffmpeg.marks.reads.start(
             { path: next.path, ss, t: (next.want - ss) + TOLERANCE },
-            // Onsets and sound runs (the energy VAD). Sound activity gates
-            // onsets so speech consonant/plosive attacks are preferred over
-            // background noise or music transients outside the speech window.
+            // Onsets and sound runs (the energy gate). A run of sound gates the
+            // onsets so that a word's own attack is preferred over a transient
+            // in the room around it.
             { onsets: true, tonal: false, sound: true });
         next.ss = ss;
         reading = next;
@@ -775,7 +837,7 @@ function startRead() {
     return true;
 }
 
-/// Advance the onset reads. Answers true when a piece moved.
+/// Advance the build and the onset reads. Answers true when a piece moved.
 ///
 /// Synchronous and idempotent, the shape every poll in this application has.
 export function tick() {
@@ -783,8 +845,8 @@ export function tick() {
 
     if (job) {
         // Still opening. An input that refused is not a reason to lose the
-        // score — the piece is laid against a file that will not play, which is
-        // visible — so what is waited for is an *answer*, either way.
+        // pattern — the piece is laid against a file that will not play, which
+        // is visible — so what is waited for is an *answer*, either way.
         const timedOut = (Date.now() - job.began) > 8000;
         if (timedOut || job.inputs.every((i) => !i || i.probe || i.error)) {
             const bad = job.inputs.filter((i) => !i || i.error || (!i.probe && timedOut));
@@ -813,8 +875,8 @@ export function tick() {
     return moved;
 }
 
-/// Move one piece onto the transient nearest its word, weighted by speech
-/// presence and transient saliency (spectral flux).
+/// Move one piece onto the transient nearest its word, weighted by the sound
+/// gate and by how loud a change each transient was.
 ///
 /// **A slip, so the grid does not move** — see the header. Answers whether it
 /// moved anything, which is the difference between a redraw and a frame spent
@@ -824,20 +886,18 @@ function apply(item, result) {
     if (!clip) return false;
 
     const onsets = [];
-    const soundRuns = [];
+    const runs = [];
     for (const m of (result && result.marks) || []) {
         if (m.kind === 'onset') onsets.push(m);
-        else if (m.kind === 'sound') soundRuns.push(m);
+        else if (m.kind === 'sound') runs.push(m);
     }
 
-    // Identify active speech sound runs near the word timestamp (`want`).
-    const speechRuns = [];
-    for (const s of soundRuns) {
+    // The runs of sound near the word: what the gate is.
+    const near = [];
+    for (const s of runs) {
         const start = item.ss + s.at;
         const end = start + s.length;
-        if (end >= item.want - 0.15 && start <= item.want + 0.35) {
-            speechRuns.push({ start, end });
-        }
+        if (end >= item.want - 0.15 && start <= item.want + 0.35) near.push({ start, end });
     }
 
     const candidates = [];
@@ -848,39 +908,30 @@ function apply(item, result) {
         if (d > TOLERANCE) continue;
         const flux = Math.max(0, m.flux || 0);
         if (flux > maxFlux) maxFlux = flux;
-
-        let inSound = !speechRuns.length;
-        for (const sr of speechRuns) {
-            if (t >= sr.start - 0.04 && t <= sr.end) {
-                inSound = true;
-                break;
-            }
+        let inSound = !near.length;
+        for (const sr of near) {
+            if (t >= sr.start - 0.04 && t <= sr.end) { inSound = true; break; }
         }
         candidates.push({ t, d, flux, inSound });
     }
-
     if (!candidates.length) return false;
 
     let best = candidates[0].t;
     let bestScore = -1;
     for (const c of candidates) {
-        const sDist = 1.0 - (c.d / TOLERANCE);
+        const sDist = 1 - (c.d / TOLERANCE);
         const sFlux = (c.flux + 0.1) / (maxFlux + 0.1);
-        const sSound = c.inSound ? 1.0 : 0.35;
+        const sSound = c.inSound ? 1 : 0.35;
         const score = (0.45 * sDist + 0.55 * sFlux) * sSound;
-        if (score > bestScore) {
-            bestScore = score;
-            best = c.t;
-        }
+        if (score > bestScore) { bestScore = score; best = c.t; }
     }
 
-    // Preserve initial consonant cluster: if speech activity started just before
-    // the onset transient (fricatives / sibilants / pre-voicing), retain up to 60ms
-    // lead so the initial consonant is preserved rather than cut off.
-    for (const sr of speechRuns) {
+    // Keep the consonant: sound that began just before the transient is the
+    // fricative or the pre-voicing of the word, so up to 60 ms of it is kept
+    // rather than cut off at the loudest change.
+    for (const sr of near) {
         if (sr.start < best && (best - sr.start) <= 0.12) {
-            const lead = Math.min(0.06, best - sr.start);
-            best = Math.max(item.ss, best - lead);
+            best = Math.max(item.ss, best - Math.min(0.06, best - sr.start));
             break;
         }
     }

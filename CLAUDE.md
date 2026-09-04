@@ -506,19 +506,26 @@ material rather than the reverse** (`supercut/rhythm.js`). The rest of that
 application assembles by finding — a hit, a listen, a press — which is right
 until you can already hear the thing: `no no no no, on the beat` is twenty
 presses and then a trim per piece to a length nobody hits by eye. So a **score**
-is a tempo, a grid and a line of words, and a token is one step: a word starts a
-piece, `.` holds, `-` rests, and `[...]` directives change tempo (`[140]`),
-subdivision (`[:3]`), or both (`[140, 3]`), while labels (`[verse 1]`) annotate.
-Five decisions. A **rest is a generator clip** (`color`), because `mix.js`'s
-sequence is packed and there is nowhere for an absence to be. A word is **cut to
-the step and never stretched** — the speed alternative moves the pitch, and
-`setSpeed` is one drag away for the one piece that wants it. Repeats **walk the
-takes** rather than repeating one clip, which is the whole point of building it
-out of a corpus. A missing word **refuses the whole build, naming every one**,
-because a rhythm with a hole in it and nothing saying which word went missing is
-worse than one that will not build. And the score is a workspace preference and
-**not in the document**: what a `.fbro` holds is the mix it produced, which is a
-mix like any other from the moment it exists.
+is a tempo, a grid and words placed on steps — `rhythm.js` holds `{ phrase, at,
+steps }` per word, sorted and never overlapping, and a rest is a step no word
+covers. `supercut/pattern.js` draws it as a step sequencer (a row a bar, a cell
+a step) and owns the gestures: type into a cell, drag an edge to hold, drag a
+word to move. The typed notation (`what . the - hell . . -`) survives as
+`parse`/`serialize` for the suite and is drawn nowhere — it was replaced because
+a rhythm is tapped and dots are arithmetic. Which take a word is, its slip and
+whether it is stretched live **on the word object**, not in a map keyed by
+position, so moving a word keeps its choices. Five decisions. A **rest is a
+generator clip** (`color`), because `mix.js`'s sequence is packed and there is
+nowhere for an absence to be. A word is **cut to the step by default**, and
+**stretched only per word** — `stretch` sets the clip's speed so its own span
+fills the step, applied in `lay()` and heard in the audition, because the speed
+moves the pitch. The audition plays exactly what the mix would hold. Repeats
+**walk the takes** rather than repeating one clip, which is the whole point of
+building it out of a corpus. A missing word **refuses the whole build, naming
+every one**, because a rhythm with a hole in it and nothing saying which word
+went missing is worse than one that will not build. And the pattern is a
+workspace preference and **not in the document**: what a `.fbro` holds is the
+mix it produced, which is a mix like any other from the moment it exists.
 
 **Where the beat is, is measured** — and it is the first reader
 `bro.ffmpeg.marks` has ever had. A transcript's time is Parakeet's frame (0.08 s)

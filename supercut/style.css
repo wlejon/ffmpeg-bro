@@ -85,8 +85,14 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 
 #body { flex: 1 1 auto; display: flex; min-height: 0; }
 
+/* One width on every tab. It used to be 440 and to *grow*: a recording's title
+   is long and its row does not wrap, so the Recordings tab pushed the finder
+   out to nine hundred pixels and the Words tab snapped it back, and the picture
+   changed size with every tab press. The width is stated twice — a basis and a
+   width — because the flex basis alone was what the titles overruled. */
 #finder {
-    flex: 0 0 440px; display: flex; flex-direction: column;
+    flex: 0 0 520px; width: 520px; min-width: 0; overflow: hidden;
+    display: flex; flex-direction: column;
     min-height: 0; background: var(--panel);
     border-right: 1px solid var(--line);
 }
@@ -114,6 +120,7 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .row {
     display: flex; align-items: baseline; gap: 7px;
     padding: 5px 6px; border-radius: 4px; cursor: default;
+    min-width: 0; overflow: hidden;
 }
 .row:hover { background: var(--panel-hi); }
 .row.playing { background: var(--accent-dim); }
@@ -123,7 +130,7 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .row.run .label { max-width: 220px; }
 .row .detail { font-size: 11px; flex: 1 1 auto;
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .where { font-size: 10px; flex: 0 0 auto; opacity: .7; }
+.row .where { font-size: 10px; flex: 0 0 auto; opacity: .7; white-space: nowrap; }
 
 /* A recording is a bigger thing than a hit and there are four of them rather
    than three hundred, so it gets the room to read as one. */
@@ -169,104 +176,105 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .row.rec .pick:checked { opacity: .45; }
 #finder:hover .row.rec .pick:checked, .row.rec .pick:hover { opacity: 1; }
 
-/* ── the score ───────────────────────────────────────────────────────── */
-
-/* The words and the rhythm, which is the one field in this window that is
-   several lines long — a score is read as lines, and a line is a bar. It takes
-   the whole width under the two numbers rather than sitting between them,
-   because it is the thing being written and they are two settings. */
-#r-score {
-    flex: 1 1 100%; min-height: 62px; resize: vertical;
-    font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5;
-}
 /* Two pickers for one offer — they wrap together or not at all. */
-#f-controls .pair { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+#f-controls .pair { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+/* A refusal on the tab's own line: what a build would not do, and why. */
+.note.bad { color: var(--bad); }
 
-/* A step of the score. Denser than a recording and lighter than a hit: there
-   are as many rows as there are steps and they are read as a column of words,
-   so the step's own moment leads in the accent and everything else recedes. */
-.row.step {
-    align-items: center;
-    gap: 6px;
-}
-.row.step .at {
-    font-size: 11px;
-    color: var(--dim);
-    width: 18px;
-    flex: 0 0 18px;
-    text-align: right;
-}
-.row.step .label {
-    font-size: 12px;
-    color: var(--text);
-    width: 64px;
-    flex: 0 0 64px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-/* A rest has nothing in it and says so by being the quietest row on the list —
-   it is a step of black, and a row that shouted would be a silence competing
-   with the words around it. */
-.row.step.rest .label, .row.step.rest .detail { opacity: .45; }
-/* A word nothing said. The one row on this tab that is a refusal, and it is
-   drawn as one because a build will refuse for exactly these. */
-.row.step.bad .label { color: var(--bad); }
+/* ── the pattern ─────────────────────────────────────────────────────── */
 
-/* Take stepper on step rows */
-.take-stepper {
-    display: inline-flex;
-    align-items: center;
-    background: var(--line);
-    border-radius: 3px;
-    font-size: 11px;
-    flex: 0 0 auto;
-    overflow: hidden;
-    user-select: none;
+#f-controls select { padding: 4px 6px; }
+#f-controls #r-tempo { width: 62px; }
+#f-controls #r-tap { padding: 5px 8px; }
+
+.r-actions {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding-top: 2px;
 }
-.take-stepper button.take-nav {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    margin: 0;
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    cursor: pointer;
-    color: var(--dim);
-    font-size: 10px;
-    flex: 0 0 20px;
-    transition: background 0.1s, color 0.1s;
+#r-listen-all.on { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
+
+#r-grid { padding: 4px 4px 6px; }
+
+/* One row a bar. The height is fixed so a drag across rows can be measured
+   against it — `pattern.js` reads the pitch off the rows themselves. */
+.r-bar { display: flex; align-items: stretch; gap: 6px; height: 34px; margin-bottom: 5px; }
+.r-barno { flex: 0 0 16px; font-size: 10px; color: var(--dim); text-align: right; line-height: 34px; }
+.r-cells {
+    flex: 1 1 auto; display: flex; min-width: 0;
+    background: #14161a; border: 1px solid var(--line); border-radius: 4px;
 }
-.take-stepper button.take-nav:hover:not(:disabled) {
-    color: var(--text);
-    background: rgba(255, 255, 255, 0.08);
+
+/* An empty step. It is where a word goes, and the pointer says so. */
+.r-cell {
+    position: relative; flex: 1 1 0; min-width: 0;
+    border-left: 1px solid #1d2027; cursor: text;
 }
-.take-stepper button.take-nav:active:not(:disabled) {
-    background: rgba(255, 255, 255, 0.15);
+.r-cell:hover { background: rgba(255,255,255,.06); }
+/* A beat is a heavier line than a step, so the bar is countable by eye. */
+.r-cell.beat, .r-word.beat { border-left-color: #3a4150; }
+.r-cells > :first-child { border-left: 0; }
+
+/* A word, over the steps it holds. The hand cursor is the one every editor
+   uses for a thing that can be picked up. */
+.r-word {
+    position: relative; flex: 1 1 0; min-width: 0;
+    font-size: 11px; color: var(--text);
+    background: #2c3342; border-left: 1px solid var(--line);
+    cursor: grab; overflow: hidden;
 }
-.take-stepper button.take-nav:disabled {
-    opacity: 0.25;
-    cursor: default;
+/* Out of the flow, so the word never widens its block: a block is exactly the
+   steps it holds, whatever is written on it, or the beats stop lining up. */
+.r-word .txt {
+    position: absolute; left: 5px; right: 9px; top: 0; bottom: 0; line-height: 32px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.take-label {
-    display: inline-block;
-    cursor: pointer;
-    padding: 0 2px;
-    min-width: 44px;
-    text-align: center;
-    color: var(--text);
-    user-select: none;
-    flex: 0 0 auto;
-    font-size: 11px;
-    line-height: 20px;
+/* The half of a word that began in the bar above. */
+.r-word.cont { border-left: 1px dashed #4a5361; }
+.r-word.sel { background: var(--accent-dim); box-shadow: 0 0 0 1px var(--accent) inset; }
+.r-word.playing { background: var(--accent); color: #21160c; }
+/* A word nothing said: the one block that is a refusal, drawn as one because a
+   build will refuse for exactly it. */
+.r-word.bad { background: rgba(255,107,107,.16); color: var(--bad); }
+/* Slipped by hand, or stretched to its step: a mark in the corner, because the
+   panel says how much and the grid only needs to say that it was. */
+.r-word.slipped::before, .r-word.stretched::after {
+    content: ''; position: absolute; top: 3px; width: 5px; height: 5px; border-radius: 3px;
 }
-.take-label:hover {
-    color: var(--accent);
+.r-word.slipped::before { left: 3px; background: var(--blue); }
+.r-word.stretched::after { right: 3px; background: var(--good); }
+.r-word.stretched .grab::after { display: none; }
+/* The length lives on the right edge. Seven pixels, because it is the gesture
+   that gets asked for a step at a time and a hairline is a target to aim at. */
+.r-word .grab { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
+.r-word .grab::after {
+    content: ''; position: absolute; right: 2px; top: 9px; bottom: 9px; width: 2px;
+    background: rgba(255,255,255,.2);
 }
+.r-word:hover .grab::after { background: var(--accent); }
+
+/* The field a word is typed into, over the cell it lands on. Wider than the
+   cell, because a cell is a step and a word is longer than that; anchored to
+   the right in the last third of a bar so it stays on the grid. */
+.r-edit {
+    position: absolute; left: -1px; top: -1px; height: 36px; min-width: 120px;
+    z-index: 5; font-size: 12px; padding: 2px 6px;
+}
+.r-edit.right { left: auto; right: -1px; }
+
+/* The panel about the selected word. Under the grid rather than over it, so
+   the grid holds still while a word is dialled in. */
+.r-piece {
+    display: flex; flex-direction: column; gap: 6px;
+    margin: 2px 4px 10px; padding: 8px 9px;
+    background: var(--panel-hi); border: 1px solid var(--line); border-radius: 5px;
+}
+.r-line { display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap; }
+.r-line.bad { color: var(--bad); }
+.r-line #r-phrase { flex: 1 1 110px; min-width: 0; }
+.r-line input[type=range] { width: 150px; }
+.r-line button.tiny { padding: 2px 7px; font-size: 11px; }
+.r-take { min-width: 52px; text-align: center; }
+.r-val { min-width: 52px; text-align: center; }
 
 /* Fit rating badge */
 .badge {
@@ -296,105 +304,6 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
     color: #f87171;
     background: rgba(248, 113, 113, 0.12);
     border: 1px solid rgba(248, 113, 113, 0.3);
-}
-
-.row.step .detail {
-    font-size: 11px;
-    flex: 1 1 0;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.row.step .where {
-    font-size: 10px;
-    flex: 0 0 auto;
-    white-space: nowrap;
-    opacity: .7;
-}
-.row.step button.tiny {
-    flex: 0 0 auto;
-}
-.row.step.selected {
-    background: rgba(255, 140, 66, 0.12);
-    border-left: 2px solid var(--accent);
-    padding-left: 4px;
-}
-
-.badge.slip-badge {
-    color: #60a5fa;
-    background: rgba(96, 165, 250, 0.12);
-    border: 1px solid rgba(96, 165, 250, 0.3);
-}
-
-.r-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding-top: 2px;
-}
-#r-listen-all.on {
-    background: var(--accent-dim);
-    border-color: var(--accent);
-    color: var(--text);
-}
-
-.r-inspector {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    margin: 0 10px 8px;
-    padding: 7px 9px;
-    background: var(--panel-hi);
-    border: 1px solid var(--line);
-    border-radius: 5px;
-}
-.r-inspect-head {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12px;
-}
-.r-inspect-title {
-    color: var(--text);
-}
-.r-inspect-title strong {
-    color: var(--accent);
-}
-.r-inspect-take {
-    font-size: 11px;
-    color: var(--dim);
-}
-.r-inspect-row {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-}
-.r-inspect-row button.tiny {
-    padding: 2px 5px;
-    font-size: 11px;
-}
-.r-inspect-row button.tiny.active {
-    background: var(--accent-dim);
-    border-color: var(--accent);
-    color: var(--text);
-}
-.r-inspect-row button.tiny.on {
-    background: var(--accent-dim);
-    border-color: var(--accent);
-    color: var(--text);
-}
-.r-val {
-    min-width: 48px;
-    text-align: center;
-    font-size: 11px;
-    color: var(--text);
-    padding: 0 2px;
-}
-.sep {
-    padding: 0 2px;
 }
 
 /* ── the picture ──────────────────────────────────────────────────────── */

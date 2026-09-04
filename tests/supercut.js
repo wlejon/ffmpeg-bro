@@ -1059,13 +1059,18 @@ console.log('\nwhere the corpus is');
 
 // ── words on a beat ────────────────────────────────────────────────────────
 //
-// The score, resolved and built. **What is asserted is the grid**: every piece's
-// length is an exact multiple of the step, because that is the one property that
-// makes the mix play on the beat and the one a hand trimming by eye cannot
-// produce. The words themselves are the fixture's, whose transcript is not the
-// sound — which does not matter here for `tests/ui_find.js`'s reason, and does
-// mean that whatever the onset pass finds, it must not move a card: a slip is a
-// slip whether or not there was a transient to slip to.
+// The pattern, laid on the grid and built. **What is asserted is the grid**:
+// every piece's length is an exact multiple of the step, because that is the one
+// property that makes the mix play on the beat and the one a hand trimming by
+// eye cannot produce. The words themselves are the fixture's, whose transcript
+// is not the sound — which does not matter here for `tests/ui_find.js`'s reason,
+// and does mean that whatever the onset pass finds, it must not move a card: a
+// slip is a slip whether or not there was a transient to slip to.
+//
+// **The grid is driven the way a hand drives it** — a cell pressed, a word
+// typed, a block's edge dragged — for the reason the four card gestures are: the
+// gestures are the tab, and a suite that only called `putWord` would pass with
+// every cell wired to nothing.
 
 console.log('\nwords on a beat');
 {
@@ -1074,7 +1079,7 @@ console.log('\nwords on a beat');
     A.results.start();
     pump(120);
 
-    // A clean mix, so the pieces asserted are the pieces the score made.
+    // A clean mix, so the pieces asserted are the pieces the pattern made.
     document.getElementById('btn-clear').dispatchEvent(
         new MouseEvent('click', { bubbles: true, button: 0 }));
     pump(60);
@@ -1082,24 +1087,113 @@ console.log('\nwords on a beat');
 
     A.results.setTab('rhythm');
     pump(80);
+    A.rhythm.clearWords();
+    A.pattern.draw();
+    pump(30);
 
-    const score = document.getElementById('r-score');
     const tempo = document.getElementById('r-tempo');
     const steps = document.getElementById('r-steps');
-    ok(!!score && !!tempo && !!steps, 'the score has a field and the grid has two numbers');
+    const bar = document.getElementById('r-bar');
+    ok(!!tempo && !!steps && !!bar, 'the grid has a tempo, a division and a bar');
+    ok(!!document.getElementById('r-grid'), 'and is drawn');
 
     type(tempo, '120');
     type(steps, '4');
+    type(bar, '4');
     ok(Math.abs(A.rhythm.stepSeconds() - 0.125) < 1e-9,
        `120 bpm in sixteenths is an eighth of a second (${A.rhythm.stepSeconds()})`);
+    ok(document.querySelectorAll('#r-grid .r-bar').length === 1 &&
+       document.querySelectorAll('#r-grid .r-cell').length === 16,
+       'an empty pattern is one bar of sixteen empty cells');
 
-    // Three kinds of token, one line. `cross` is said twice in the fixture and
-    // typed twice, so it is the one that proves takes are walked rather than
-    // repeated.
-    type(score, 'cross . cross -  line . . .');
+    // ── typing onto the grid ───────────────────────────────────────────────
+    // Press a cell, type a word, press space: the word lands and the caret is
+    // on the next cell. `cross` is said twice in the fixture and typed twice,
+    // so it is the one that proves takes are walked rather than repeated.
+    const press = (node) => {
+        node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+        node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+        pump(40);
+    };
+    const keyIn = (node, key) => {
+        node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+        pump(40);
+    };
+    press(document.querySelector('#r-grid .r-cell'));
+    let edit = document.querySelector('#r-grid .r-edit');
+    ok(!!edit, 'pressing an empty cell opens a field on it');
+    edit.value = 'cross';
+    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    keyIn(edit, ' ');
+    ok(A.rhythm.words().length === 1 && A.rhythm.words()[0].phrase === 'cross' &&
+       A.rhythm.words()[0].at === 0,
+       'space lands the word on the cell');
+    edit = document.querySelector('#r-grid .r-edit');
+    ok(!!edit && edit.parentNode.classList.contains('r-cell'),
+       'and opens the next cell');
+    edit.value = 'cross';
+    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    keyIn(edit, 'Enter');
+    ok(A.rhythm.words().length === 2 && A.rhythm.words()[1].at === 1,
+       'Enter lands the word and closes the field');
+    ok(!document.querySelector('#r-grid .r-edit'), 'which is gone');
+
+    // A phrase with a space in it is quoted, and space inside the quote is a
+    // space.
+    press(document.querySelectorAll('#r-grid .r-cell')[2]);
+    edit = document.querySelector('#r-grid .r-edit');
+    edit.value = '"the line';
+    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    keyIn(edit, ' ');
+    ok(!!document.querySelector('#r-grid .r-edit') && A.rhythm.words().length === 2,
+       'space inside an open quote does not land the word');
+    keyIn(edit, 'Escape');
+    ok(!document.querySelector('#r-grid .r-edit') && A.rhythm.words().length === 2,
+       'and Escape drops it');
+
+    // ── the two drags ──────────────────────────────────────────────────────
+    // The word's right edge is its length; the word itself is its step.
+    let blocks = document.querySelectorAll('#r-grid .r-word');
+    ok(blocks.length === 2, 'two words are two blocks');
+    const cellW = document.querySelector('#r-grid .r-cell').getBoundingClientRect().width;
+    ok(cellW > 8, `a cell is wide enough to hit (${cellW.toFixed(1)}px)`);
+
+    // Drag the second word's edge two cells right: three steps long.
+    drag(blocks[1].querySelector('.grab'), cellW * 2);
+    pump(40);
+    ok(A.rhythm.words()[1].steps === 3,
+       `dragging the edge holds the word for more steps (${A.rhythm.words()[1].steps})`);
+    // And the first word's edge into the second: stopped at it.
+    blocks = document.querySelectorAll('#r-grid .r-word');
+    drag(blocks[0].querySelector('.grab'), cellW * 3);
+    pump(40);
+    ok(A.rhythm.words()[0].steps === 1, 'a hold stops at the next word');
+
+    // Move the second word four cells right: it starts on step 5, and the
+    // three steps between are rests.
+    blocks = document.querySelectorAll('#r-grid .r-word');
+    drag(blocks[1], cellW * 4);
+    pump(40);
+    ok(A.rhythm.words()[1].at === 5, `dragging a word moves it (${A.rhythm.words()[1].at})`);
+    let plan = A.rhythm.plan();
+    ok(plan.pieces.length === 3 && plan.pieces[1].kind === 'rest' && plan.pieces[1].steps === 4,
+       'and the cells it left are a rest');
+    // Onto the first word: refused, and it stays.
+    blocks = document.querySelectorAll('#r-grid .r-word');
+    drag(blocks[1], -cellW * 5);
+    pump(40);
+    ok(A.rhythm.words()[1].at === 5, 'a drop onto another word is refused');
+
+    // ── the notation, for the rest of this ─────────────────────────────────
+    // `setScore` is the suite's way of laying a pattern in one line; what it
+    // lays is the same model the gestures above edited.
+    A.rhythm.setScore('cross . cross -  line . . .');
+    A.pattern.draw();
     pump(60);
+    ok(A.rhythm.score() === 'cross . cross - line . . .',
+       `the pattern reads back as the line that laid it (${A.rhythm.score()})`);
 
-    const plan = A.rhythm.plan();
+    plan = A.rhythm.plan();
     ok(plan.pieces.length === 4,
        `four pieces: three words and a rest (${plan.pieces.length})`);
     ok(plan.steps === 8, `over eight steps (${plan.steps})`);
@@ -1110,66 +1204,78 @@ console.log('\nwords on a beat');
     ok(plan.pieces[0].hit && plan.pieces[1].hit &&
        plan.pieces[0].hit.at !== plan.pieces[1].hit.at,
        'the same word typed twice takes two different moments');
+    ok(document.querySelectorAll('#r-grid .r-word').length === 3 &&
+       document.querySelectorAll('#r-grid .r-cell').length === 16 - 7,
+       'the grid is the plan: three blocks over seven steps, and the rest of the bar empty');
+    // A pattern that fills the bar exactly gets a second, empty one to go on
+    // with — there is always a cell after the last word.
+    A.rhythm.setScore('cross . . . cross . . . line . . . cross . . .');
+    A.pattern.draw();
+    pump(30);
+    ok(document.querySelectorAll('#r-grid .r-bar').length === 2 &&
+       document.querySelectorAll('#r-grid .r-cell').length === 16,
+       'a full bar is followed by an empty one');
+    A.rhythm.setScore('cross . cross -  line . . .');
+    A.pattern.draw();
+    pump(30);
 
-    // The list is the plan, drawn — one row a step, and the rows work.
-    ok(document.querySelectorAll('#f-list .row.step').length === 4,
-       'the list under it is what the score resolved to, a row a step');
+    // ── the panel ──────────────────────────────────────────────────────────
+    // Pressing a word selects it and the panel under the grid is about it.
+    A.pattern.select(-1);
+    ok(!document.querySelector('#r-panel .r-piece'), 'no word selected, no panel');
+    press(document.querySelector('#r-grid .r-word'));
+    ok(A.pattern.selectedWord() === 0, 'pressing a word selects it');
+    ok(!!document.querySelector('#r-panel .r-piece'), 'and the panel is about it');
+    ok(document.getElementById('r-phrase').value === 'cross', 'starting with the word');
+    ok(A.results.auditioning(), 'and it is heard');
+    A.results.hush();
 
-    // Candidate ratings and fit scores
+    // Takes: rated, sorted, stepped.
     ok(typeof plan.pieces[0].fitScore === 'number' && plan.pieces[0].fitScore >= 0,
        `pieces carry a fit score (${plan.pieces[0].fitScore}%)`);
     ok(Array.isArray(plan.pieces[0].candidates) && plan.pieces[0].candidates.length === 2,
-       `and candidate list for take selection (${plan.pieces[0].candidates.length} candidates)`);
-    ok(document.querySelectorAll('#f-list .take-stepper').length >= 1,
-       'words with multiple takes render take steppers');
-    ok(document.querySelectorAll('#f-list .badge[class*="fit-"]').length >= 1,
-       'and fit rating badges are drawn on step rows');
-
-    // Interactive take stepping and candidate sorting by fit
-    ok(A.rhythm.sortByFitOf() === true, 'takes are sorted by fit by default');
+       `and a candidate list (${plan.pieces[0].candidates.length} candidates)`);
+    ok(!!document.querySelector('#r-panel .badge[class*="fit-"]'), 'the panel says the fit');
+    ok(A.rhythm.sortByFitOf() === true, 'takes are offered best fit first by default');
     const initialTake = plan.pieces[0].take;
-    A.rhythm.cycleStepTake(0, 1);
-    ok(A.rhythm.plan().pieces[0].take !== initialTake,
-       'cycleStepTake swaps the step to the next take');
-    A.rhythm.cycleStepTake(0, -1);
-    ok(A.rhythm.plan().pieces[0].take === initialTake,
-       'and cycling backwards restores the previous take');
-
-    // Keyboard take cycling via cycleActiveTake
-    ok(A.results.cycleActiveTake(1) === true, 'cycleActiveTake cycles take on active step');
-    ok(A.results.cycleActiveTake(-1) === true, 'cycleActiveTake cycles back on active step');
-
-    // Toggle sort by fit off and on
+    A.rhythm.cycleTake(0, 1);
+    ok(A.rhythm.plan().pieces[0].take !== initialTake, 'cycleTake steps to the next take');
+    A.rhythm.cycleTake(0, -1);
+    ok(A.rhythm.plan().pieces[0].take === initialTake, 'and back');
+    ok(A.pattern.cycleTake(1) === true, 'the panel steps the selected word');
+    ok(A.rhythm.takeOf(0) !== 0, 'which pins it');
+    A.pattern.cycleTake(-1);
+    A.results.hush();
     A.rhythm.setSortByFit(false);
-    ok(!A.rhythm.sortByFitOf(), 'sort by fit can be toggled off');
-    const unsortedPlan = A.rhythm.plan();
-    ok(unsortedPlan.pieces[0].candidates.length === 2, 'candidates remain available when unsorted');
+    ok(!A.rhythm.sortByFitOf() && A.rhythm.takeOf(0) === 0,
+       'sorting the other way drops the pins, because they were positions in the list');
     A.rhythm.setSortByFit(true);
-    ok(A.rhythm.sortByFitOf(), 'sort by fit toggles back on');
 
-    // Stepper DOM interaction and stability
-    const firstStepper = document.querySelector('#f-list .take-stepper');
-    ok(firstStepper, 'take stepper element exists in DOM');
-    const navButtons = firstStepper.querySelectorAll('button.take-nav');
-    ok(navButtons.length === 2, 'take stepper has prev and next take buttons');
-    const labelBefore = firstStepper.querySelector('.take-label').textContent;
-    navButtons[1].click();
+    // The take control in the panel is wired.
+    const takeBefore = document.querySelector('#r-panel .r-take').textContent;
+    document.querySelectorAll('#r-panel .r-line')[1].querySelectorAll('button')[1].click();
     pump(60);
-    const labelAfter = document.querySelector('#f-list .take-stepper .take-label').textContent;
-    ok(labelAfter !== labelBefore, `clicking next take button advances take label (${labelBefore} -> ${labelAfter})`);
+    ok(document.querySelector('#r-panel .r-take').textContent !== takeBefore,
+       `pressing ▶ steps the take (${takeBefore} → ${document.querySelector('#r-panel .r-take').textContent})`);
+    A.results.hush();
 
+    // ── the build ──────────────────────────────────────────────────────────
     // A word nothing said refuses the whole build, naming it. **Refuses rather
     // than approximating**: a build that quietly left a hole would be a rhythm
     // with a gap in it and nothing on the screen saying which word went missing.
-    type(score, 'cross zebra line');
+    A.rhythm.setScore('cross zebra line');
+    A.pattern.draw();
     pump(60);
+    ok(document.querySelectorAll('#r-grid .r-word.bad').length === 1,
+       'a word nothing said is drawn as a refusal');
     const why = A.rhythm.build();
-    ok(/zebra/.test(why), `a word nothing said refuses the build by name (${why})`);
-    ok(A.mix.sequence().length === 0, 'and builds nothing at all');
+    ok(/zebra/.test(why), `and refuses the build by name (${why})`);
+    ok(A.mix.sequence().length === 0, 'building nothing at all');
 
-    type(score, 'cross . cross -  line . . .');
+    A.rhythm.setScore('cross . cross -  line . . .');
+    A.pattern.draw();
     pump(60);
-    ok(A.rhythm.build() === '', 'a score that resolves builds');
+    ok(A.rhythm.build() === '', 'a pattern that resolves builds');
 
     // The press returns and the frame loop finishes it: the inputs are opened on
     // a thread, so the pieces are laid when every one of them has answered.
@@ -1203,138 +1309,139 @@ console.log('\nwords on a beat');
     ok(before === after,
        'and not one card moved or changed length — snapping to the beat is a slip');
 
-    // Build button re-enabling and rebuild after deletion
+    // Build is a button again once the job has landed, and builds again.
     const buildBtn = document.getElementById('r-build');
-    ok(buildBtn && !buildBtn.disabled, 'Build button is re-enabled once the build job completes');
+    ok(buildBtn && !buildBtn.disabled, 'Build is enabled once the build has landed');
     for (const c of A.mix.sequence().slice()) A.removeClip(c);
-    ok(A.mix.sequence().length === 0, 'sequence clips deleted');
+    ok(A.mix.sequence().length === 0, 'the clips are taken out');
     buildBtn.click();
     pump(30);
     for (let i = 0; i < 200 && A.mix.sequence().length < 4; i++) pump(30);
-    ok(A.mix.sequence().length === 4, 're-clicking Build rebuilds the clips into the sequence');
-    ok(!buildBtn.disabled, 'and Build button is re-enabled after rebuilding');
+    ok(A.mix.sequence().length === 4, 'pressing Build again lays them again');
+    ok(!buildBtn.disabled, 'and Build is a button again');
 
-    // ── dynamic tempo, meter and section directives ────────────────────────
-    type(score, '[160] cross [120] line');
-    pump(60);
-    const dplan = A.rhythm.plan();
-    ok(dplan.pieces.length === 2, 'two pieces in dynamic tempo score');
-    ok(Math.abs(dplan.pieces[0].stepSec - (60 / 160 / 4)) < 1e-6,
-       `first piece step is 160 bpm sixteenth (${dplan.pieces[0].stepSec})`);
-    ok(Math.abs(dplan.pieces[1].stepSec - (60 / 120 / 4)) < 1e-6,
-       `second piece step is 120 bpm sixteenth (${dplan.pieces[1].stepSec})`);
+    // A pattern is one tempo and one grid: what an older score wrote in brackets
+    // is ignored rather than searched for.
+    A.rhythm.setScore('[intro] cross . [verse 1] line');
+    ok(A.rhythm.plan().pieces.length === 2 && A.rhythm.plan().missing.length === 0,
+       'bracketed text in the notation is not a word');
 
-    // Meter subdivision change (triplets)
-    type(score, 'cross [:3] line');
-    pump(60);
-    const tplan = A.rhythm.plan();
-    ok(tplan.pieces[1].stepsPerBeat === 3, 'triplet directive sets 3 steps per beat');
-    ok(Math.abs(tplan.pieces[1].stepSec - (60 / 120 / 3)) < 1e-6,
-       `triplet step is 60/120/3 (${tplan.pieces[1].stepSec})`);
-
-    // Section annotations in brackets: produce no clips and are not searched as words
-    type(score, '[intro] cross . [verse 1] line');
-    pump(60);
-    const cplan = A.rhythm.plan();
-    ok(cplan.pieces.length === 2, 'bracket section annotations produce no pieces');
-    ok(cplan.missing.length === 0, 'and are not treated as missing words');
-
-    // Building a score with dynamic tempo/meter places clips of the exact distinct durations
+    // ── listening, looping, slipping, stretching ───────────────────────────
+    console.log('\nhearing the pattern');
     document.getElementById('btn-clear').dispatchEvent(
         new MouseEvent('click', { bubbles: true, button: 0 }));
     pump(60);
-    type(score, 'cross [160] line');
+    A.rhythm.setScore('cross line');
+    A.pattern.draw();
     pump(60);
-    ok(A.rhythm.build() === '', 'dynamic score builds');
-    for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
-    const dynSeq = A.mix.sequence();
-    ok(dynSeq.length === 2, 'dynamic score placed two clips');
-    ok(Math.abs(dynSeq[0].length - (60 / 120 / 4)) < 1e-6,
-       `first clip is 120 bpm sixteenth (${dynSeq[0].length})`);
-    ok(Math.abs(dynSeq[1].length - (60 / 160 / 4)) < 1e-6,
-       `second clip is 160 bpm sixteenth (${dynSeq[1].length})`);
-    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
-    ok(!A.rhythm.snapping(), 'dynamic score onset reads finished');
 
-    // ── score audition, looping and fine slip / playback controls ──────────
-    console.log('\nscore audition, looping, and fine controls');
-    type(score, 'cross line');
-    pump(60);
-    const inspectEl = document.getElementById('r-inspector');
-    ok(inspectEl && !inspectEl.hidden, 'rhythm inspector element is visible for active step');
-    ok(inspectEl.querySelector('.r-inspect-title'), 'inspector shows active step title');
+    const listenBtn = document.getElementById('r-listen-all');
+    ok(listenBtn !== null, 'the tab has a Listen');
+    ok(!A.pattern.isListening(), 'and is quiet to begin with');
+    ok(A.pattern.toggleListen() === true, 'pressing it plays the pattern');
+    ok(A.pattern.isListening(), 'which is listening');
+    ok(listenBtn.textContent.includes('Stop'), 'and the button is the Stop');
+    ok(document.querySelectorAll('#r-grid .r-word.playing').length === 1,
+       'the word being heard lights up');
+    ok(!A.pattern.isLooping(), 'not looping');
+    A.pattern.toggleLooping();
+    ok(A.pattern.isLooping() && document.getElementById('r-loop').checked,
+       'L loops, and the box says so');
+    A.pattern.setLooping(false);
+    A.pattern.stopListen();
+    ok(!A.pattern.isListening() && listenBtn.textContent.includes('Listen'),
+       'stopping puts the button back');
+    ok(document.querySelectorAll('#r-grid .r-word.playing').length === 0,
+       'and nothing is lit');
 
-    // Score playback controls
-    const listenAllBtn = document.getElementById('r-listen-all');
-    ok(listenAllBtn !== null, 'r-listen-all button exists');
-    ok(!A.results.isScorePlaying(), 'score is not playing initially');
+    // Slip, by key and by slider. A slipped word is marked on the grid.
+    press(document.querySelector('#r-grid .r-word'));
+    A.results.hush();
+    ok(A.rhythm.offsetOf(0) === 0, 'a word starts unslipped');
+    A.pattern.nudgeOffset(0.015);
+    A.results.hush();
+    ok(Math.abs(A.rhythm.offsetOf(0) - 0.015) < 1e-6, 'a nudge slips it 15 ms');
+    let p0 = A.rhythm.plan().pieces[0];
+    ok(Math.abs(p0.at - (p0.hit.at + 0.015)) < 1e-6, 'and the piece is cut 15 ms later');
+    ok(!!document.querySelector('#r-grid .r-word.slipped'), 'the block says it was slipped');
+    const slider = document.getElementById('r-slip');
+    ok(!!slider && Number(slider.value) === 15, `the slider agrees (${slider && slider.value})`);
+    type(slider, '-40');
+    A.results.hush();
+    ok(Math.abs(A.rhythm.offsetOf(0) + 0.040) < 1e-6, 'and moving the slider slips it');
 
-    // Toggle score play
-    ok(A.results.toggleScorePlay() === true, 'toggleScorePlay starts playback');
-    ok(A.results.isScorePlaying(), 'score is marked as playing');
-    ok(listenAllBtn.textContent.includes('Stop'), 'listen button displays Stop during playback');
+    // Stretch: the word's own span fills the step, at a speed, and the build
+    // applies that speed rather than only the audition.
+    p0 = A.rhythm.plan().pieces[0];
+    ok(p0.rate === 1 && Math.abs(p0.span - p0.seconds) < 1e-9,
+       'cut to the step, the span is the step');
+    const fits = p0.canStretch;
+    A.rhythm.setStretch(0, true);
+    p0 = A.rhythm.plan().pieces[0];
+    if (fits) {
+        ok(Math.abs(p0.rate - p0.fitRatio) < 1e-9 && Math.abs(p0.span - p0.seconds * p0.rate) < 1e-9,
+           `stretched, the span is the word's own at its rate (${p0.rate.toFixed(2)}×)`);
+    } else {
+        ok(p0.rate === 1, `a word outside the stretch range stays cut (${p0.fitRatio.toFixed(2)}×)`);
+    }
+    A.rhythm.setStretch(0, false);
 
-    // Looping toggle
-    ok(!A.results.isScoreLooping(), 'score looping initially false');
-    A.results.toggleScoreLoop();
-    ok(A.results.isScoreLooping(), 'toggleScoreLoop enabled looping');
-    const loopAllCheck = document.getElementById('r-loop');
-    ok(loopAllCheck && loopAllCheck.checked, 'loop all checkbox reflects looping state');
-    A.results.setScoreLooping(false);
-    ok(!A.results.isScoreLooping(), 'setScoreLooping disables looping');
+    // One word, over and over.
+    ok(A.pattern.loopWord(0) === true, 'a word can be looped');
+    ok(A.pattern.isStepLooping(), 'and is');
+    A.pattern.stopStepLoop();
+    ok(!A.pattern.isStepLooping(), 'until it is stopped');
 
-    // Stop playback
-    A.results.stopScore();
-    ok(!A.results.isScorePlaying(), 'stopScore stops playback');
-    ok(listenAllBtn.textContent.includes('Listen all'), 'listen button resets to Listen all');
+    // Walking the words.
+    ok(A.pattern.selectRelative(1) === true && A.pattern.selectedWord() === 1,
+       'the arrow selects the next word');
+    A.results.hush();
 
-    // Fine positional controls: in-point slip nudging
-    ok(A.rhythm.stepOffsetOf(0) === 0, 'step 0 initial offset is 0');
-    A.results.nudgeActiveStepOffset(0.015); // +15ms
-    pump(30);
-    ok(Math.abs(A.rhythm.stepOffsetOf(0) - 0.015) < 1e-6, 'step offset nudged to +15ms');
-    const p0 = A.rhythm.plan().pieces[0];
-    ok(Math.abs(p0.offset - 0.015) < 1e-6, 'plan piece reflects 15ms offset');
-    ok(Math.abs(p0.at - (p0.hit.at + 0.015)) < 1e-6, 'plan piece at is shifted by 15ms');
-
-    // List row shows slip badge
-    const slipBadges = [...document.querySelectorAll('#f-list .slip-badge')];
-    ok(slipBadges.length >= 1, 'slip badge is rendered in the list');
-    ok(slipBadges[0].textContent.includes('+15ms'), 'slip badge displays +15ms');
-
-    // Duration delta & rate flex controls
-    ok(A.rhythm.stepDurDeltaOf(0) === 0, 'initial step duration delta is 0');
-    A.rhythm.nudgeStepDurDelta(0, 0.020);
-    A.rhythm.setStepRate(0, 1.1);
-    const p0Adjusted = A.rhythm.plan().pieces[0];
-    ok(Math.abs(p0Adjusted.durDelta - 0.020) < 1e-6, 'duration delta is +20ms');
-    ok(p0Adjusted.rate === 1.1, 'playback rate is 1.1x');
-
-    // Single step audition and loop
-    ok(A.results.loopStep(0) === true, 'loopStep starts single-step loop');
-    ok(A.results.isStepLooping(), 'isStepLooping is true');
-    A.results.stopStepLoop();
-    ok(!A.results.isStepLooping(), 'stopStepLoop stops single-step loop');
-
-    // Step navigation
-    ok(A.results.selectRelativeStep(1) === true, 'selectRelativeStep navigates to next step');
-    ok(A.results.activeStepIndex() === 1, 'active step index is 1');
-
-    // Building preserves the manual slip offset in the sequence clip
-    document.getElementById('btn-clear').dispatchEvent(
-        new MouseEvent('click', { bubbles: true, button: 0 }));
-    pump(60);
+    // Building keeps a slip made by hand, and the onset pass leaves it alone.
     const expectedAt0 = A.rhythm.plan().pieces[0].at;
-    ok(A.rhythm.build() === '', 'score with slip builds');
+    ok(A.rhythm.build() === '', 'a slipped pattern builds');
     for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
     const builtClips = A.mix.sequence();
     ok(builtClips.length === 2, 'two clips built');
     ok(Math.abs(builtClips[0].inPoint - expectedAt0) < 1e-6,
-       `built clip inPoint matches slipped at timestamp (${builtClips[0].inPoint} vs ${expectedAt0})`);
+       `the clip begins where the slip put it (${builtClips[0].inPoint} vs ${expectedAt0})`);
     for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
     ok(!A.rhythm.snapping(), 'onset reads finished');
     ok(Math.abs(builtClips[0].inPoint - expectedAt0) < 1e-6,
-       'manual slip offset was not overridden by auto onset detector');
+       'and the onset pass did not move a word somebody had placed by hand');
+
+    // One word alone into the mix, from the panel.
+    document.getElementById('btn-clear').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(60);
+    press(document.querySelector('#r-grid .r-word'));
+    A.results.hush();
+    document.getElementById('r-add').click();
+    for (let i = 0; i < 200 && A.mix.sequence().length < 1; i++) pump(30);
+    ok(A.mix.sequence().length === 1, '+ on the panel puts that one word in the mix');
+    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
+
+    // Remove, and the grid closes over nothing: the cells are rests.
+    press(document.querySelector('#r-grid .r-word'));
+    A.results.hush();
+    ok(A.pattern.key({ key: 'Delete' }) === true, 'Delete takes the selected word off');
+    ok(A.rhythm.words().length === 1 && A.rhythm.words()[0].phrase === 'line',
+       'leaving the other where it was');
+    ok(A.pattern.selectedWord() === -1 && !document.querySelector('#r-panel .r-piece'),
+       'and nothing selected');
+
+    // The pattern survives the session: what is remembered is the words, and a
+    // blob written by the version that kept a line of text is read as one.
+    const blob = JSON.parse(localStorage.getItem('supercut.score'));
+    ok(Array.isArray(blob.words) && blob.words.length === 1 && blob.tempo === 120,
+       'the workspace holds the words and the grid');
+    localStorage.setItem('supercut.score', JSON.stringify({ tempo: 90, per: 4, text: 'no . - no' }));
+    A.rhythm.restore();
+    ok(A.rhythm.tempoOf() === 90 && A.rhythm.words().length === 2 &&
+       A.rhythm.words()[0].steps === 2 && A.rhythm.words()[1].at === 3,
+       'an older workspace holding notation is read as the pattern it describes');
+    A.rhythm.setTempo(120);
+    A.rhythm.clearWords();
 }
 
 // ── tracking higher energy speaking: yelling & activated speaking ──────────
