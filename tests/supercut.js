@@ -1085,17 +1085,26 @@ console.log('\nwords on a beat');
     pump(60);
     ok(A.mix.sequence().length === 0, 'the mix is empty to build into');
 
+    A.rhythm.clearWords();
     A.results.setTab('rhythm');
     pump(80);
-    A.rhythm.clearWords();
-    A.pattern.draw();
-    pump(30);
 
     const tempo = document.getElementById('r-tempo');
     const steps = document.getElementById('r-steps');
     const bar = document.getElementById('r-bar');
     ok(!!tempo && !!steps && !!bar, 'the grid has a tempo, a division and a bar');
     ok(!!document.getElementById('r-grid'), 'and is drawn');
+    // A grid with nothing on it and nothing pressed on it says nothing about
+    // being typed on, so it arrives with the caret in its first cell.
+    {
+        const first = document.querySelector('#r-grid .r-cell');
+        const field = document.querySelector('#r-grid .r-edit');
+        ok(!!field && field.parentNode === first && document.activeElement === field,
+           'an empty grid arrives with the caret in its first cell');
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        pump(30);
+        ok(!document.querySelector('#r-grid .r-edit'), 'Escape leaves it empty');
+    }
 
     type(tempo, '120');
     type(steps, '4');
@@ -1150,6 +1159,35 @@ console.log('\nwords on a beat');
     keyIn(edit, 'Escape');
     ok(!document.querySelector('#r-grid .r-edit') && A.rhythm.words().length === 2,
        'and Escape drops it');
+
+    // ── the same, as a hand does it ────────────────────────────────────────
+    // Everything above dispatches its events on the nodes. This presses where
+    // the cell is and types into whatever the engine focused, which is the path
+    // that was dead in the window while every check above passed: an input
+    // made and focused inside the press handler had no control to take the
+    // keys until the next layout pass, so the caret was drawn and the typing
+    // went nowhere. Fixed in bro (`handleProgrammaticFocus`); asserted here.
+    {
+        const empties = document.querySelectorAll('#r-grid .r-cell');
+        const box = empties[2].getBoundingClientRect();
+        click(box.left + box.width / 2, box.top + box.height / 2);
+        pump(40);
+        const field = document.querySelector('#r-grid .r-edit');
+        ok(!!field && document.activeElement === field,
+           'a real press on a cell opens the field with the caret in it');
+        textInput('cross');
+        pump(20);
+        ok(field.value === 'cross', `and what is typed reaches it ("${field.value}")`);
+        keyDown(13); keyUp(13);   // Return
+        pump(60);
+        const landed = A.rhythm.words();
+        ok(landed.length === 3 && landed[2].phrase === 'cross' && landed[2].at === 4,
+           'Return lands it on the step that was pressed');
+        A.rhythm.removeWord(2);
+        A.pattern.select(-1);
+        A.pattern.draw();
+        pump(30);
+    }
 
     // ── the two drags ──────────────────────────────────────────────────────
     // The word's right edge is its length; the word itself is its step.

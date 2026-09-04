@@ -408,7 +408,8 @@ time — and the **grid**: how many steps a beat and how many beats a bar. At 12
 with four steps a beat, a step is an eighth of a second, and the line under the
 controls says so.
 
-Then put words on it:
+Then put words on it. An empty grid opens with the caret already in its first
+cell, so the first thing to do is type:
 
 | Do | Gets |
 |---|---|

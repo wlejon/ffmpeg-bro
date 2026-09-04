@@ -137,6 +137,8 @@ export function setTab(next) {
         const box = document.getElementById('f-phrase');
         if (box) box.focus();
     }
+    // The other one: an empty grid arrives with the caret in its first cell.
+    if (tab === 'rhythm') pattern.arrive();
 }
 
 /// What the list is showing, for a caller that has to check it rather than read

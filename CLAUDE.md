@@ -152,6 +152,19 @@ the control standing where the pressed one stood, and only if the tag and the
 words match. Do not lean on that: a field that can commit on `input` should,
 which is what `ui/sources.js`'s model path does.
 
+The second example is the same shape one layer down, and it is why the supercut
+suite now presses a mouse. The Rhythm tab's cell editor is an `<input>` made
+and focused inside the press handler that opens it; bro creates a control for
+an input on the next layout pass, so `.focus()` on a fresh one moved
+`activeElement` and drew a caret and every keystroke went nowhere — and every
+check in `tests/supercut.js` passed, because a `keydown` dispatched on the node
+never asks the engine who is focused. Fixed in bro's `handleProgrammaticFocus`
+(the control is created on the spot). What the headless harness has for this
+is bro's own `click(x, y)`, `textInput(text)`, `keyDown`/`keyUp` and
+`mouseDown`/`mouseMove`/`mouseUp` globals, which go through the engine's hit
+test and focus exactly as a hand does; anything that is a press-and-type should
+be asserted through them at least once, beside the synthesised version.
+
 ## The model everything is arranged around
 
 ffmpeg's model is inputs → streams → a filter graph → encoders → a muxer → an

@@ -177,7 +177,7 @@ export function drawControls() {
                 selected = -1;
                 editing = null;
                 drawControls();
-                draw();
+                invite();
                 drawNote();
             } },
         });
@@ -364,6 +364,7 @@ function editor(at) {
     const right = (at % S) >= (S * 2) / 3;
     const input = el('input', {
         type: 'text', cls: 'r-edit' + (right ? ' right' : ''), value: ed.value,
+        placeholder: 'word',
         on: {
             input: () => { ed.value = input.value; },
             keydown: (e) => {
@@ -849,10 +850,25 @@ export function reload() {
     drawNote();
 }
 
+/// Arriving on the tab: an empty grid opens with the caret in its first cell.
+export function arrive() {
+    invite();
+}
+
 /// Leaving the tab: nothing it was doing goes on making a noise.
 export function leave() {
     stopAll();
     if (editing) close();
+}
+
+/// An empty grid opens with the caret in its first cell, because a grid with
+/// nothing on it and nothing pressed on it is a grid nobody can tell is typed
+/// on. Only on arrival and after Clear, never on a redraw: a draw that opened
+/// it would take the caret back from whatever had just been pressed.
+function invite() {
+    if (!editing && !gesture && !rhythm.words().length)
+        editing = { at: 0, word: -1, value: '', done: false };
+    draw();
 }
 
 /// A key while the tab is showing and nothing is being typed into. Answers
