@@ -429,13 +429,18 @@ is the rests that close up, so the voice stays the voice.
 
 **Fix it by ear.** Pressing a word plays it and selects it, and the panel under
 the ruler is about it: what it says, which take of how many, how long, and its
-own sound with the recording either side of it, the cut bright in the middle.
+own sound with just over half a second of the recording either side of it. The two bars
+are the cut points, and the strip under the sound counts tenths of a second
+from where the take begins. The takes are the numbered buttons, best first,
+twenty-four to a page; `‹` `›` turn the pages and the count between them says
+which of how many you are looking at.
 
 | Do | Gets |
 |---|---|
 | press a word | plays it; the panel is about it |
 | `[` `]` — or a numbered take in the panel | the next take, played as it lands |
-| drag either edge of the sound in the panel | moves that cut point; drag the middle to slide both |
+| `‹` `›` in the panel | the next page of takes |
+| drag a bar on the sound in the panel | moves that cut point over the recording; drag between them to slide both |
 | `,` `.` | the word five milliseconds earlier or later; twenty-five with `Shift` |
 | drag a word's **right edge** on the ruler | where the word ends |
 | drag the **space after** a word | how long its rest is |

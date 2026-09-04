@@ -279,6 +279,8 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .l-takes { gap: 3px; }
 .l-takes .l-takebtn { padding: 1px 6px; min-width: 22px; font-size: 10px; }
 .l-takes .l-takebtn.on { background: var(--accent); color: #21160c; border-color: var(--accent); }
+.l-takes .l-takepage { padding: 1px 7px; font-size: 12px; min-width: 22px; }
+.l-takes .l-takeno { font-size: 10px; white-space: nowrap; }
 /* The words the corpus does have, beside a word it does not. */
 .l-near { flex-wrap: wrap; gap: 4px; }
 

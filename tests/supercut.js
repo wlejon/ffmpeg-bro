@@ -1249,6 +1249,49 @@ console.log('\nthe line');
     p0 = wordPieces()[0];
     ok(Math.abs(p0.from - from0) < 1e-9 && Math.abs(p0.until - until0) < 1e-9, 'reset puts it back');
 
+    // The bars on the panel's sound are the cut points, and a bar dragged is
+    // a bar that moves: the window under it is the take's and stays put.
+    // Through the engine's own mouse, because a press on a canvas is a hit
+    // test and nothing a dispatched event asks.
+    A.ruler.select(0);
+    pump(40);
+    {
+        const wave = document.getElementById('l-wave');
+        const r = wave.getBoundingClientRect();
+        const a0 = Number(wave.dataset.a), b0 = Number(wave.dataset.b);
+        const scale = r.width / (b0 - a0);
+        ok(r.width > 100 && a0 < p0.from && b0 > p0.until,
+           `the panel draws the take with the recording either side (${a0.toFixed(2)}–${b0.toFixed(2)} s)`);
+        const hx = r.left + (p0.from - a0) * scale, y = r.top + r.height / 2;
+        mouseDown(hx, y);
+        mouseMove(hx + 10, y);
+        mouseMove(hx + 30, y);
+        pump(20);
+        mouseUp(hx + 30, y);
+        pump(60);
+        p0 = wordPieces()[0];
+        const head = A.line.headOf(0);
+        ok(Math.abs(head - 30 / scale) < 0.004 && Math.abs(p0.until - until0) < 1e-9,
+           `dragging the first bar moves where the word starts (${Math.round(head * 1000)} ms)`);
+        const after = document.getElementById('l-wave');
+        ok(Math.abs(Number(after.dataset.a) - a0) < 1e-9 && Math.abs(Number(after.dataset.b) - b0) < 1e-9,
+           'and the recording under it stays where it was');
+        ok(A.ruler.auditioning(), 'and the cut is heard');
+        A.results.hush();
+        const tx = r.left + (p0.until - a0) * scale;
+        mouseDown(tx, y);
+        mouseMove(tx - 20, y);
+        pump(20);
+        mouseUp(tx - 20, y);
+        pump(60);
+        p0 = wordPieces()[0];
+        ok(Math.abs(A.line.tailOf(0) + 20 / scale) < 0.004 && Math.abs(A.line.headOf(0) - head) < 1e-9,
+           `the second bar moves where it ends (${Math.round(A.line.tailOf(0) * 1000)} ms)`);
+        A.results.hush();
+        A.line.reset(0);
+        A.ruler.draw();
+    }
+
     // ── the gestures ───────────────────────────────────────────────────────
     A.ruler.draw();
     pump(30);
@@ -1488,13 +1531,20 @@ console.log('\nthe line');
     const LONG = [['the', 0.0, 0.1], ['the', 3.0, 3.1], ['the', 6.0, 8.0], ['end', 8.6, 8.8]];
     fs.writeFileSync(`${dir}/long.srt`,
         LONG.map((w, i) => `${i + 1}\n${stamp(w[1])} --> ${stamp(w[2])}\n${w[0]}\n`).join('\n'), 'utf-8');
+    // And a second recording that says it thirty times, for the pages of takes.
+    const MANY = [];
+    for (let k = 0; k < 30; k++) MANY.push(['the', 10 + 3 * k, 10.1 + 3 * k]);
+    fs.writeFileSync(`${dir}/many.srt`,
+        MANY.map((w, i) => `${i + 1}\n${stamp(w[1])} --> ${stamp(w[2])}\n${w[0]}\n`).join('\n'), 'utf-8');
     fs.writeFileSync(`${dir}/long-chan.json`, JSON.stringify({
         channel: 'long', built: new Date().toISOString(),
         vods: [{ id: 'l1', title: 'a pause', publishedAt: '2026-01-03',
-                 seconds: 60, srt: `${dir}/long.srt`, media, words: LONG.length }],
+                 seconds: 60, srt: `${dir}/long.srt`, media, words: LONG.length },
+               { id: 'l2', title: 'thirty of them', publishedAt: '2026-01-04',
+                 seconds: 120, srt: `${dir}/many.srt`, media, words: MANY.length }],
     }), 'utf-8');
     fs.writeFileSync(`${dir}/long.json`, JSON.stringify({
-        channels: [{ channel: 'long', manifest: `${dir}/long-chan.json`, vods: 1, words: LONG.length, built: '' }],
+        channels: [{ channel: 'long', manifest: `${dir}/long-chan.json`, vods: 2, words: LONG.length + MANY.length, built: '' }],
     }), 'utf-8');
     A.results.useCorpus(`${dir}/long.json`);
     A.results.start();
@@ -1509,6 +1559,31 @@ console.log('\nthe line');
            `and the take chosen is one said at its usual length (${Math.round((p.until - p.from) * 1000)} ms)`);
         ok(Math.abs(library.naturalGap() - library.NATURAL_GAP) < 1e-9,
            'a transcript whose words abut does not set the pace');
+
+        // ── every take is reachable, a page at a time ──────────────────────
+        A.ruler.select(0);
+        pump(40);
+        A.results.hush();
+        const btns = () => document.querySelectorAll('#l-panel .l-takebtn');
+        const pageNo = () => (document.querySelector('#l-panel .l-takeno') || {}).textContent || '';
+        const tap = (node) => { node.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 })); pump(40); };
+        ok(p.takes === 33 && btns().length === 24 && pageNo() === '1–24 of 33',
+           `thirty-three takes are shown a page of twenty-four at a time (${p.takes}, ${btns().length}, ${pageNo()})`);
+        ok(document.getElementById('l-takes-prev').disabled && !document.getElementById('l-takes-next').disabled,
+           'and only the way forward is open on the first page');
+        tap(document.getElementById('l-takes-next'));
+        ok(btns().length === 9 && pageNo() === '25–33 of 33' && !document.querySelector('#l-panel .l-takebtn.on'),
+           `the next page holds the rest (${btns().length}, ${pageNo()})`);
+        tap(btns()[3]);
+        ok(wordPieces()[0].take === 28 && pageNo() === '25–33 of 33' &&
+           document.querySelector('#l-panel .l-takebtn.on').textContent === '28',
+           `a take on it is chosen where it stands (take ${wordPieces()[0].take})`);
+        A.results.hush();
+        A.line.setTake(0, 2);
+        A.ruler.draw();
+        ok(pageNo() === '1–24 of 33' && document.querySelector('#l-panel .l-takebtn.on').textContent === '2',
+           'and the page turns to the take when the take changes');
+        A.ruler.select(-1);
     }
     A.line.clear();
 

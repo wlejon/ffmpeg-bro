@@ -584,7 +584,13 @@ is the other choice and the rest after a hole. The shape of a word's sound on
 its block and in the panel is `supercut/waves.js`: `ui/loudness.js`'s reader one
 size down, a span keyed by its own numbers off the same worker, one in flight,
 because a word has no clip until the line is in the mix and `ui/analysis.js`
-reads clips. **What can be typed is the library's** (`vocabulary`, `saidCount`,
+reads clips. **The panel's window is the take's and not the cut's**
+(`panelWindow`): the first version re-centred it on the cut on every move, so
+dragging a bar scrolled the recording under a bar that never left its pixel —
+now the window is held while a bar is dragged and only ever widened, and the
+takes are paged (`TAKES_A_PAGE`) rather than truncated at twenty-four with the
+other five thousand written as a number. **What can be typed is the
+library's** (`vocabulary`, `saidCount`,
 `suggest`); the box's hints draw it and decide nothing. **A plan is an answer
 about a corpus** and `plan()` re-resolves when the corpus under it moves
 (`corpusKey`): a line restored before a channel was open once reported every

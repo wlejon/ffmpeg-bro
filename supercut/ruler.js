@@ -79,8 +79,23 @@ let pxPerSec = 150;
 /// How many seconds a row holds when the line is not on a beat. Four: a
 /// sentence a row, and a word of a third of a second is fifty pixels.
 const ROW_SECONDS = 4;
-/// How much of the recording is drawn either side of the word in the panel.
-const CONTEXT = 0.5;
+/// How much of the recording is drawn either side of the take in the panel.
+/// A little over the half-second tick, so that tick's label sits inside.
+const CONTEXT = 0.6;
+/// How near a bar in the panel a press has to be to take hold of it.
+const BAR_REACH = 8;
+/// How many takes a page of the panel's take buttons holds.
+const TAKES_A_PAGE = 24;
+
+/// The span of the recording the panel draws for a word: the *take* with
+/// `CONTEXT` either side, widened to hold the cut if a bar has been dragged
+/// past that. It is a function of the take rather than of the cut so that
+/// dragging a bar moves the bar and not the recording under it.
+function panelWindow(p, w) {
+    const take0 = p.from - w.head;
+    const take1 = take0 + p.natural;
+    return { a: Math.max(0, Math.min(take0, p.from) - CONTEXT), b: Math.max(take1, p.until) + CONTEXT };
+}
 
 export function initRuler(refs, h) {
     nodes = refs;
@@ -832,20 +847,34 @@ function body(w, p) {
     }
 
     // The word's own sound, with the recording either side of it: the cut is
-    // the bright part, and its edges are the cut points.
+    // the bright part, and its edges are the cut points. The window is the
+    // take's and is held while a bar is dragged, so the bar is what moves.
     const wave = el('canvas', { id: 'l-wave' });
+    const win = panelWindow(p, w);
     wave.dataset.path = p.hit.vod.media;
     wave.dataset.from = String(p.from);
     wave.dataset.until = String(p.until);
+    wave.dataset.a = String(win.a);
+    wave.dataset.b = String(win.b);
+    const barAt = (e) => {
+        const r = wave.getBoundingClientRect();
+        const scale = r.width / (win.b - win.a);
+        const q = line.pieceOf(i) || p;
+        const x0 = (q.from - win.a) * scale, x1 = (q.until - win.a) * scale;
+        const x = e.clientX - r.left;
+        const kind = Math.abs(x - x0) <= BAR_REACH ? 'head' : Math.abs(x - x1) <= BAR_REACH ? 'tailw' : 'slide';
+        return { kind, scale };
+    };
     wave.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
-        const r = wave.getBoundingClientRect();
-        const scale = r.width / ((p.until - p.from) + 2 * CONTEXT);
-        const x0 = CONTEXT * scale, x1 = r.width - CONTEXT * scale;
-        const x = e.clientX - r.left;
-        const kind = Math.abs(x - x0) <= 8 ? 'head' : Math.abs(x - x1) <= 8 ? 'tailw' : 'slide';
+        const { kind, scale } = barAt(e);
+        wave.style.cursor = kind === 'slide' ? 'grabbing' : 'ew-resize';
         cutGesture = { kind, i, x0: e.clientX, head0: w.head, tail0: w.tail, scale, moved: false };
+    });
+    wave.addEventListener('mousemove', (e) => {
+        if (cutGesture) return;
+        wave.style.cursor = barAt(e).kind === 'slide' ? 'grab' : 'ew-resize';
     });
     rows_.push(div('l-line l-wavebox', [wave]));
 
@@ -933,11 +962,15 @@ document.addEventListener('mouseup', () => {
     if (!cutGesture) return;
     const g = cutGesture;
     cutGesture = null;
+    const canvas = document.getElementById('l-wave');
+    if (canvas) canvas.style.cursor = '';
     if (g.moved) { redrawPanel(); hear(g.i); }
 });
 
-/// Paint the panel's waveform: the recording either side of the word, the
-/// cut bright in the middle.
+/// Paint the panel's waveform: the take with the recording either side, the
+/// cut bright inside it and a bar at each cut point. The window is the one
+/// the canvas was made with — `panelWindow`'s — and is only widened, never
+/// re-centred, so that a bar being dragged is a bar that moves.
 function paintPanel() {
     const canvas = document.getElementById('l-wave');
     if (!canvas) return;
@@ -945,8 +978,17 @@ function paintPanel() {
     if (!p || !p.hit) return;
     const w = canvas.clientWidth || 640;
     const h = canvas.clientHeight || 56;
-    const a = Math.max(0, p.from - CONTEXT);
-    const b = p.until + CONTEXT;
+    let a = Number(canvas.dataset.a), b = Number(canvas.dataset.b);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
+        const win = panelWindow(p, line.wordsOf()[selected]);
+        a = win.a; b = win.b;
+    }
+    if (p.from < a) a = Math.max(0, p.from - CONTEXT);
+    if (p.until > b) b = p.until + CONTEXT;
+    canvas.dataset.a = String(a);
+    canvas.dataset.b = String(b);
+    canvas.dataset.from = String(p.from);
+    canvas.dataset.until = String(p.until);
     const wv = waves.wave(p.hit.vod.media, a, b, Math.max(64, Math.round(w / 2)));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     const ctx = canvas.getContext('2d');
@@ -957,22 +999,76 @@ function paintPanel() {
     const x0 = (p.from - a) * scale, x1 = (p.until - a) * scale;
     ctx.fillStyle = 'rgba(255,255,255,.05)';
     ctx.fillRect(x0, 0, Math.max(1, x1 - x0), h);
-    if (wv && !wv.error) paintWave(ctx, wv, 0, w, h, [x0, x1]);
+    if (wv && !wv.error) paintWave(ctx, wv, 0, w, h - TICK_H, [x0, x1]);
+    paintTicks(ctx, a, b, w, h, p.from - line.headOf(selected));
     ctx.fillStyle = '#ff9a4a';
-    ctx.fillRect(Math.round(x0), 0, 2, h);
-    ctx.fillRect(Math.round(x1) - 1, 0, 2, h);
+    for (const x of [Math.round(x0), Math.round(x1) - 1]) {
+        ctx.fillRect(x, 0, 2, h);
+        // A tab at each end of the bar, so it reads as something to take hold of.
+        ctx.fillRect(x - 3, 0, 8, 4);
+        ctx.fillRect(x - 3, h - 4, 8, 4);
+    }
 }
 
+/// The strip under the panel's wave: a tick every tenth of a second, a
+/// taller one every half, counted from the start of the take.
+const TICK_H = 9;
+function paintTicks(ctx, a, b, w, h, zero) {
+    const scale = w / (b - a);
+    const top = h - TICK_H;
+    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    ctx.fillRect(0, top, w, TICK_H);
+    const first = Math.ceil((a - zero) / 0.1);
+    const last = Math.floor((b - zero) / 0.1);
+    ctx.font = '9px monospace';
+    ctx.textBaseline = 'top';
+    for (let k = first; k <= last; k++) {
+        const t = zero + k * 0.1;
+        const x = Math.round((t - a) * scale);
+        const major = k % 5 === 0;
+        ctx.fillStyle = major ? 'rgba(255,255,255,.45)' : 'rgba(255,255,255,.18)';
+        ctx.fillRect(x, top, 1, major ? TICK_H : 4);
+        if (major && k !== 0) {
+            ctx.fillStyle = 'rgba(255,255,255,.4)';
+            ctx.fillText(`${k > 0 ? '' : '−'}${Math.abs(k) / 10}`, x + 3, top + 1);
+        }
+    }
+}
+
+/// Which page of takes the panel shows, for which word and which take of it.
+/// The page turns to the take whenever the take changes, and stays where a
+/// hand turned it until then.
+let takePage = { i: -1, page: 0, take: 0 };
+
+/// Every take, ranked, a page at a time: the one in the line marked, any other
+/// a press away, and the pages turned by the arrows at the end.
 function takesOf(p) {
     const list = p.candidates || [];
-    const shown = list.slice(0, 24);
+    const pages = Math.max(1, Math.ceil(list.length / TAKES_A_PAGE));
+    const at = list.findIndex((c) => c.take === p.take);
+    const own = Math.floor(Math.max(0, at) / TAKES_A_PAGE);
+    if (takePage.i !== selected || takePage.take !== p.take) takePage = { i: selected, page: own, take: p.take };
+    takePage.page = Math.max(0, Math.min(pages - 1, takePage.page));
+    const page = takePage.page;
+    const shown = list.slice(page * TAKES_A_PAGE, (page + 1) * TAKES_A_PAGE);
     const kids = shown.map((c) => el('button', {
         cls: 'tiny l-takebtn' + (c.take === p.take ? ' on' : ''),
         text: `${c.take}`,
         title: `${Math.round(c.dur * 1000)} ms · ${c.score}%`,
         on: { click: () => { line.setTake(selected, c.take); redraw(); hear(selected); } },
     }));
-    if (list.length > shown.length) kids.push(el('span', { cls: 'dim', text: `+${list.length - shown.length}` }));
+    if (pages > 1) {
+        const turn = (d) => {
+            takePage = { i: selected, page: Math.max(0, Math.min(pages - 1, page + d)), take: p.take };
+            redrawPanel();
+        };
+        kids.push(el('span', { cls: 'spacer' }));
+        kids.push(el('button', { cls: 'tiny text l-takepage', id: 'l-takes-prev', text: '‹', title: 'Earlier takes',
+                                 disabled: page === 0, on: { click: () => turn(-1) } }));
+        kids.push(el('span', { cls: 'dim l-takeno', text: `${page * TAKES_A_PAGE + 1}–${page * TAKES_A_PAGE + shown.length} of ${list.length}` }));
+        kids.push(el('button', { cls: 'tiny text l-takepage', id: 'l-takes-next', text: '›', title: 'Later takes',
+                                 disabled: page >= pages - 1, on: { click: () => turn(1) } }));
+    }
     return div('l-line l-takes', kids);
 }
 
