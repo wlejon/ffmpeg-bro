@@ -1057,470 +1057,472 @@ console.log('\nwhere the corpus is');
     ok(A.results.available(), 'and a named one is still read from where it was named');
 }
 
-// ── words on a beat ────────────────────────────────────────────────────────
+// ── the line ───────────────────────────────────────────────────────────────
 //
-// The pattern, laid on the grid and built. **What is asserted is the grid**:
-// every piece's length is an exact multiple of the step, because that is the one
-// property that makes the mix play on the beat and the one a hand trimming by
-// eye cannot produce. The words themselves are the fixture's, whose transcript
-// is not the sound — which does not matter here for `tests/ui_find.js`'s reason,
-// and does mean that whatever the onset pass finds, it must not move a card: a
-// slip is a slip whether or not there was a transient to slip to.
+// A sentence typed, found in the corpus, heard, adjusted by ear, and only then
+// put in the mix. **What is asserted is the order of those**: nothing reaches
+// the mix until → Mix is pressed, every word resolves as it is completed, and
+// the word that just landed is the one being heard — because that order is the
+// whole difference between this tab and twenty searches. The words are the
+// fixture's, whose transcript is not the sound, which does not matter here for
+// `tests/ui_find.js`'s reason; it does mean that whatever the onset pass finds,
+// it must not move a card once the line is in the mix.
 //
-// **The grid is driven the way a hand drives it** — a cell pressed, a word
-// typed, a block's edge dragged — for the reason the four card gestures are: the
-// gestures are the tab, and a suite that only called `putWord` would pass with
-// every cell wired to nothing.
+// **The line is driven the way a hand drives it** — typed into the box, a
+// block's edge dragged, the space after a word dragged — for the reason the
+// four card gestures are: the gestures are the tab.
 
-console.log('\nwords on a beat');
+console.log('\nthe line');
 {
     // Back to the one-recording corpus: the counts below are counts of takes.
     A.results.useCorpus(`${dir}/find.json`);
     A.results.start();
     pump(120);
 
-    // A clean mix, so the pieces asserted are the pieces the pattern made.
+    // A clean mix, so what is asserted about it is what the line put there.
     document.getElementById('btn-clear').dispatchEvent(
         new MouseEvent('click', { bubbles: true, button: 0 }));
     pump(60);
-    ok(A.mix.sequence().length === 0, 'the mix is empty to build into');
+    ok(A.mix.sequence().length === 0, 'the mix is empty to begin with');
 
-    A.rhythm.clearWords();
-    A.results.setTab('rhythm');
+    A.line.clear();
+    A.results.setTab('line');
     pump(80);
 
-    const tempo = document.getElementById('r-tempo');
-    const steps = document.getElementById('r-steps');
-    const bar = document.getElementById('r-bar');
-    ok(!!tempo && !!steps && !!bar, 'the grid has a tempo, a division and a bar');
-    ok(!!document.getElementById('r-grid'), 'and is drawn');
-    // A grid with nothing on it and nothing pressed on it says nothing about
-    // being typed on, so it arrives with the caret in its first cell.
-    {
-        const first = document.querySelector('#r-grid .r-cell');
-        const field = document.querySelector('#r-grid .r-edit');
-        ok(!!field && field.parentNode === first && document.activeElement === field,
-           'an empty grid arrives with the caret in its first cell');
-        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        pump(30);
-        ok(!document.querySelector('#r-grid .r-edit'), 'Escape leaves it empty');
-    }
+    const box = document.getElementById('l-text');
+    ok(!!box && !!document.getElementById('l-say') && !!document.getElementById('l-pace') &&
+       !!document.getElementById('l-mix'),
+       'the tab has the box, Say, the pace and → Mix');
+    ok(document.activeElement === box, 'and arrives with the caret in the box');
+    ok(!document.getElementById('l-tempo'), 'with no tempo, because the line is not on a beat');
+    ok(document.getElementById('l-mix').disabled, '→ Mix has nothing to put in the mix yet');
 
-    type(tempo, '120');
-    type(steps, '4');
-    type(bar, '4');
-    ok(Math.abs(A.rhythm.stepSeconds() - 0.125) < 1e-9,
-       `120 bpm in sixteenths is an eighth of a second (${A.rhythm.stepSeconds()})`);
-    ok(document.querySelectorAll('#r-grid .r-bar').length === 1 &&
-       document.querySelectorAll('#r-grid .r-cell').length === 16,
-       'an empty pattern is one bar of sixteen empty cells');
-
-    // ── typing onto the grid ───────────────────────────────────────────────
-    // Press a cell, type a word, press space: the word lands and the caret is
-    // on the next cell. `cross` is said twice in the fixture and typed twice,
-    // so it is the one that proves takes are walked rather than repeated.
-    const press = (node) => {
-        node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
-        node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    const keyIn = (node, key, more = {}) => {
+        node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...more }));
         pump(40);
     };
-    const keyIn = (node, key) => {
-        node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    const press = (node, more = {}) => {
+        node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ...more }));
+        node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ...more }));
         pump(40);
     };
-    press(document.querySelector('#r-grid .r-cell'));
-    let edit = document.querySelector('#r-grid .r-edit');
-    ok(!!edit, 'pressing an empty cell opens a field on it');
-    edit.value = 'cross';
-    edit.dispatchEvent(new Event('input', { bubbles: true }));
-    keyIn(edit, ' ');
-    ok(A.rhythm.words().length === 1 && A.rhythm.words()[0].phrase === 'cross' &&
-       A.rhythm.words()[0].at === 0,
-       'space lands the word on the cell');
-    edit = document.querySelector('#r-grid .r-edit');
-    ok(!!edit && edit.parentNode.classList.contains('r-cell'),
-       'and opens the next cell');
-    edit.value = 'cross';
-    edit.dispatchEvent(new Event('input', { bubbles: true }));
-    keyIn(edit, 'Enter');
-    ok(A.rhythm.words().length === 2 && A.rhythm.words()[1].at === 1,
-       'Enter lands the word and closes the field');
-    ok(!document.querySelector('#r-grid .r-edit'), 'which is gone');
+    const wordPieces = () => A.line.plan().pieces.filter((p) => p.kind === 'word');
+    const blocks = () => document.querySelectorAll('#l-ruler .l-word');
+    const settleReads = () => { for (let i = 0; i < 400 && A.line.snapping(); i++) pump(25); };
 
-    // A phrase with a space in it is quoted, and space inside the quote is a
-    // space.
-    press(document.querySelectorAll('#r-grid .r-cell')[2]);
-    edit = document.querySelector('#r-grid .r-edit');
-    edit.value = '"the line';
-    edit.dispatchEvent(new Event('input', { bubbles: true }));
-    keyIn(edit, ' ');
-    ok(!!document.querySelector('#r-grid .r-edit') && A.rhythm.words().length === 2,
-       'space inside an open quote does not land the word');
-    keyIn(edit, 'Escape');
-    ok(!document.querySelector('#r-grid .r-edit') && A.rhythm.words().length === 2,
-       'and Escape drops it');
+    // ── typing ─────────────────────────────────────────────────────────────
+    // A word is a word when something follows it. Until then nothing has been
+    // found, so the line does not flash a hole for every spelling on the way.
+    type(box, 'cross');
+    ok(A.line.count() === 0, 'a word still being typed is not a word yet');
+    type(box, 'cross ');
+    ok(A.line.count() === 1 && A.line.wordsOf()[0].phrase === 'cross', 'the space completes it');
+    ok(!!wordPieces()[0].hit, 'and it is found on the keystroke');
+    ok(A.ruler.auditioning() && A.ruler.selectedWord() === 0, 'and heard, and is the selected word');
+    ok(A.mix.sequence().length === 0, 'and nothing is in the mix');
+    ok(blocks().length === 1, 'the ruler draws it as one block');
+    ok(!document.getElementById('l-mix').disabled, 'and → Mix is offered');
+    A.results.hush();
+
+    const firstId = A.line.wordsOf()[0].id;
+    type(box, 'cross the ');
+    ok(A.line.count() === 2 && A.line.wordsOf()[0].id === firstId,
+       'the next word is a new word and the first is the same word');
+    A.results.hush();
+    // Retyping the line changes what changed and keeps the rest.
+    A.line.setTake(0, 2);
+    type(box, 'cross a ');
+    ok(A.line.count() === 2 && A.line.wordsOf()[0].id === firstId && A.line.takeOf(0) === 2 &&
+       A.line.wordsOf()[1].phrase === 'a',
+       'a word retyped in the middle keeps the take chosen for the one before it');
+    A.line.reset(0);
+    A.results.hush();
+
+    // Enter says the line, the last word included.
+    box.value = 'cross the line';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    pump(30);
+    ok(A.line.count() === 2, 'the word at the end of the box is still being typed');
+    keyIn(box, 'Enter');
+    ok(A.line.count() === 3, 'Enter makes it a word');
+    ok(A.ruler.isSaying() && document.getElementById('l-say').textContent.includes('Stop'),
+       'and says the line, and the button is the Stop');
+    ok(document.querySelectorAll('#l-ruler .l-word.playing').length === 1, 'the word being heard lights up');
+    ok(A.mix.sequence().length === 0, 'and the mix is still empty');
+    A.ruler.stopSay();
+    ok(!A.ruler.isSaying() && document.getElementById('l-say').textContent.includes('Say'),
+       'stopping puts the button back');
+    ok(document.querySelectorAll('#l-ruler .l-word.playing').length === 0, 'and nothing is lit');
 
     // ── the same, as a hand does it ────────────────────────────────────────
-    // Everything above dispatches its events on the nodes. This presses where
-    // the cell is and types into whatever the engine focused, which is the path
-    // that was dead in the window while every check above passed: an input
-    // made and focused inside the press handler had no control to take the
-    // keys until the next layout pass, so the caret was drawn and the typing
-    // went nowhere. Fixed in bro (`handleProgrammaticFocus`); asserted here.
+    // Pressed where the box is and typed into whatever the engine focused —
+    // the path that is dead when a field is made and focused inside the press
+    // that made it (see the note on `handleProgrammaticFocus` in CLAUDE.md).
     {
-        const empties = document.querySelectorAll('#r-grid .r-cell');
-        const box = empties[2].getBoundingClientRect();
-        click(box.left + box.width / 2, box.top + box.height / 2);
+        document.getElementById('l-clear').click();
+        pump(30);
+        ok(A.line.count() === 0 && document.getElementById('l-text').value === '',
+           'Clear empties the line and the box');
+        const b = document.getElementById('l-text');
+        const r = b.getBoundingClientRect();
+        click(r.left + r.width / 2, r.top + r.height / 2);
         pump(40);
-        const field = document.querySelector('#r-grid .r-edit');
-        ok(!!field && document.activeElement === field,
-           'a real press on a cell opens the field with the caret in it');
-        textInput('cross');
-        pump(20);
-        ok(field.value === 'cross', `and what is typed reaches it ("${field.value}")`);
+        ok(document.activeElement === b, 'a real press on the box puts the caret in it');
+        textInput('cross ');
+        pump(40);
+        ok(b.value === 'cross ' && A.line.count() === 1,
+           `what is typed reaches it and lands the word ("${b.value}")`);
+        textInput('line');
         keyDown(13); keyUp(13);   // Return
         pump(60);
-        const landed = A.rhythm.words();
-        ok(landed.length === 3 && landed[2].phrase === 'cross' && landed[2].at === 4,
-           'Return lands it on the step that was pressed');
-        A.rhythm.removeWord(2);
-        A.pattern.select(-1);
-        A.pattern.draw();
-        pump(30);
+        ok(A.line.count() === 2 && A.ruler.isSaying(), 'Return says the line');
+        A.ruler.stopSay();
+        A.results.hush();
     }
 
-    // ── the two drags ──────────────────────────────────────────────────────
-    // The word's right edge is its length; the word itself is its step.
-    let blocks = document.querySelectorAll('#r-grid .r-word');
-    ok(blocks.length === 2, 'two words are two blocks');
-    const cellW = document.querySelector('#r-grid .r-cell').getBoundingClientRect().width;
-    ok(cellW > 8, `a cell is wide enough to hit (${cellW.toFixed(1)}px)`);
+    // ── what a word is ─────────────────────────────────────────────────────
+    // As long as its take, then the speaker's own gap; a comma a longer rest,
+    // a full stop a longer one still. `library.naturalGap` is the median gap in
+    // the corpus, and this corpus is too small to have one, so it is the floor.
+    A.line.say('cross, line.');
+    let plan = A.line.plan();
+    let pcs = wordPieces();
+    ok(pcs.length === 2 && pcs.every((p) => p.hit), 'two words, both found');
+    ok(plan.pieces.length === 4 && plan.pieces[1].kind === 'rest' && plan.pieces[3].kind === 'rest',
+       'each followed by a rest');
+    const g = library.naturalGap();
+    ok(Math.abs(g - library.NATURAL_GAP) < 1e-9, `a corpus of fourteen words has no gap of its own (${g})`);
+    ok(Math.abs(plan.pieces[1].seconds - Math.max(0.25, 2.5 * g)) < 1e-9 &&
+       Math.abs(plan.pieces[3].seconds - Math.max(0.5, 5 * g)) < 1e-9,
+       `a comma is a short rest and a full stop a long one (${plan.pieces[1].seconds}, ${plan.pieces[3].seconds})`);
+    ok(pcs.every((p) => Math.abs(p.seconds - (p.until - p.from) / p.rate) < 1e-9 && p.rate === 1),
+       'a word is as long as its cut, as recorded');
+    ok(Math.abs(plan.seconds - plan.pieces.reduce((s, p) => s + p.seconds, 0)) < 1e-9 &&
+       plan.pieces.every((p, i) => i === 0 || Math.abs(p.start - (plan.pieces[i - 1].start + plan.pieces[i - 1].seconds)) < 1e-9),
+       'and the line is packed');
+    ok(A.line.wordsOf()[0].stop === ',' && A.line.wordsOf()[0].phrase === 'cross',
+       'the punctuation is taken off the word and kept as its rest');
 
-    // Drag the second word's edge two cells right: three steps long.
-    drag(blocks[1].querySelector('.grab'), cellW * 2);
-    pump(40);
-    ok(A.rhythm.words()[1].steps === 3,
-       `dragging the edge holds the word for more steps (${A.rhythm.words()[1].steps})`);
-    // And the first word's edge into the second: stopped at it.
-    blocks = document.querySelectorAll('#r-grid .r-word');
-    drag(blocks[0].querySelector('.grab'), cellW * 3);
-    pump(40);
-    ok(A.rhythm.words()[0].steps === 1, 'a hold stops at the next word');
+    // The quiet either side of a take is read off the transcript's neighbours,
+    // and it is what ranks the takes.
+    const lineP = pcs[1];
+    ok(Math.abs(lineP.quiet.before - 0.05) < 1e-6 && Math.abs(lineP.quiet.after - 2.9) < 1e-6,
+       `a take knows the quiet either side of it (${lineP.quiet.before}, ${lineP.quiet.after})`);
+    ok(pcs[0].takes === 2 && pcs[0].candidates.length === 2 &&
+       pcs[0].candidates[0].score >= pcs[0].candidates[1].score &&
+       pcs[0].candidates.every((c) => typeof c.clean === 'number' && c.quiet),
+       'every take is ranked, cleanest first');
 
-    // Move the second word four cells right: it starts on step 5, and the
-    // three steps between are rests.
-    blocks = document.querySelectorAll('#r-grid .r-word');
-    drag(blocks[1], cellW * 4);
-    pump(40);
-    ok(A.rhythm.words()[1].at === 5, `dragging a word moves it (${A.rhythm.words()[1].at})`);
-    let plan = A.rhythm.plan();
-    ok(plan.pieces.length === 3 && plan.pieces[1].kind === 'rest' && plan.pieces[1].steps === 4,
-       'and the cells it left are a rest');
-    // Onto the first word: refused, and it stays.
-    blocks = document.querySelectorAll('#r-grid .r-word');
-    drag(blocks[1], -cellW * 5);
-    pump(40);
-    ok(A.rhythm.words()[1].at === 5, 'a drop onto another word is refused');
+    // A word said twice on one line walks to another take.
+    A.line.say('cross cross');
+    pcs = wordPieces();
+    ok(pcs.length === 2 && pcs[0].hit.at !== pcs[1].hit.at, 'the same word twice is two takes');
 
-    // ── the notation, for the rest of this ─────────────────────────────────
-    // `setScore` is the suite's way of laying a pattern in one line; what it
-    // lays is the same model the gestures above edited.
-    A.rhythm.setScore('cross . cross -  line . . .');
-    A.pattern.draw();
-    pump(60);
-    ok(A.rhythm.score() === 'cross . cross - line . . .',
-       `the pattern reads back as the line that laid it (${A.rhythm.score()})`);
+    // ── the pace ───────────────────────────────────────────────────────────
+    // Realised as the rate within a whole tone, and as the gaps beyond it.
+    A.line.say('cross, line.');
+    A.line.setPace(2);
+    plan = A.line.plan();
+    pcs = wordPieces();
+    ok(pcs.every((p) => Math.abs(p.rate - A.line.PITCH_NEAR) < 1e-9),
+       `at twice the pace a word is sped up to the limit of its voice (${pcs[0].rate}×)`);
+    ok(Math.abs(plan.pieces[1].seconds - Math.max(0.25, 2.5 * g) / 2) < 1e-9,
+       'and the rests are halved');
+    A.line.setPace(1);
+    A.ruler.drawControls();
+    ok(document.getElementById('l-text').value === 'cross, line.', 'the box keeps the line');
 
-    plan = A.rhythm.plan();
-    ok(plan.pieces.length === 4,
-       `four pieces: three words and a rest (${plan.pieces.length})`);
-    ok(plan.steps === 8, `over eight steps (${plan.steps})`);
-    ok(Math.abs(plan.seconds - 1) < 1e-9, `which is one second (${plan.seconds})`);
-    ok(plan.pieces[0].steps === 2 && plan.pieces[3].steps === 4,
-       'a hold makes the piece before it longer rather than repeating it');
-    ok(plan.pieces[2].kind === 'rest', 'and a dash is a rest of its own');
-    ok(plan.pieces[0].hit && plan.pieces[1].hit &&
-       plan.pieces[0].hit.at !== plan.pieces[1].hit.at,
-       'the same word typed twice takes two different moments');
-    ok(document.querySelectorAll('#r-grid .r-word').length === 3 &&
-       document.querySelectorAll('#r-grid .r-cell').length === 16 - 7,
-       'the grid is the plan: three blocks over seven steps, and the rest of the bar empty');
-    // A pattern that fills the bar exactly gets a second, empty one to go on
-    // with — there is always a cell after the last word.
-    A.rhythm.setScore('cross . . . cross . . . line . . . cross . . .');
-    A.pattern.draw();
+    // ── the cut points ─────────────────────────────────────────────────────
+    let p0 = wordPieces()[0];
+    const from0 = p0.from, until0 = p0.until;
+    A.line.setHead(0, 0.05);
+    p0 = wordPieces()[0];
+    ok(Math.abs(p0.from - (from0 + 0.05)) < 1e-9 && Math.abs(p0.until - until0) < 1e-9,
+       'the head moves where the word starts and not where it ends');
+    A.line.nudge(0, -0.02);
+    p0 = wordPieces()[0];
+    ok(Math.abs(p0.from - (from0 + 0.03)) < 1e-9 && Math.abs(p0.until - (until0 - 0.02)) < 1e-9,
+       'a nudge slides both');
+    A.ruler.draw();
+    ok(!!document.querySelector('#l-ruler .l-word.slipped'), 'and the block says it was moved');
+    A.line.reset(0);
+    p0 = wordPieces()[0];
+    ok(Math.abs(p0.from - from0) < 1e-9 && Math.abs(p0.until - until0) < 1e-9, 'reset puts it back');
+
+    // ── the gestures ───────────────────────────────────────────────────────
+    A.ruler.draw();
     pump(30);
-    ok(document.querySelectorAll('#r-grid .r-bar').length === 2 &&
-       document.querySelectorAll('#r-grid .r-cell').length === 16,
-       'a full bar is followed by an empty one');
-    A.rhythm.setScore('cross . cross -  line . . .');
-    A.pattern.draw();
+    let bl = blocks();
+    ok(bl.length === 2, 'two words are two blocks');
+    const secW = bl[0].getBoundingClientRect().width / wordPieces()[0].seconds;
+    ok(secW > 20, `a second is wide enough to hit (${secW.toFixed(1)}px)`);
+
+    // The right edge is where the word ends in the recording.
+    drag(bl[0].querySelector('.grab'), secW * 0.1);
+    ok(Math.abs(A.line.tailOf(0) - 0.1) < 0.02,
+       `dragging the edge moves the end of the cut (${A.line.tailOf(0).toFixed(3)})`);
+    ok(A.ruler.auditioning(), 'and the word is heard on the release');
+    A.results.hush();
+    A.line.setTail(0, 0);
+
+    // The space after a word is its rest.
+    A.ruler.draw();
     pump(30);
-
-    // ── the panel ──────────────────────────────────────────────────────────
-    // Pressing a word selects it and the panel under the grid is about it.
-    A.pattern.select(-1);
-    ok(!document.querySelector('#r-panel .r-piece'), 'no word selected, no panel');
-    press(document.querySelector('#r-grid .r-word'));
-    ok(A.pattern.selectedWord() === 0, 'pressing a word selects it');
-    ok(!!document.querySelector('#r-panel .r-piece'), 'and the panel is about it');
-    ok(document.getElementById('r-phrase').value === 'cross', 'starting with the word');
-    ok(A.results.auditioning(), 'and it is heard');
+    const gapEl = document.querySelector('#l-ruler .l-gap');
+    const gap0 = A.line.gapOf(0);
+    drag(gapEl, secW * 0.2);
+    ok(Math.abs(A.line.gapOf(0) - (gap0 + 0.2)) < 0.02,
+       `dragging the space after a word lengthens its rest (${A.line.gapOf(0).toFixed(3)})`);
     A.results.hush();
+    A.line.setGap(0, null);
+    ok(Math.abs(A.line.gapOf(0) - gap0) < 1e-9, 'and nothing puts it back to what the comma means');
 
-    // Takes: rated, sorted, stepped.
-    ok(typeof plan.pieces[0].fitScore === 'number' && plan.pieces[0].fitScore >= 0,
-       `pieces carry a fit score (${plan.pieces[0].fitScore}%)`);
-    ok(Array.isArray(plan.pieces[0].candidates) && plan.pieces[0].candidates.length === 2,
-       `and a candidate list (${plan.pieces[0].candidates.length} candidates)`);
-    ok(!!document.querySelector('#r-panel .badge[class*="fit-"]'), 'the panel says the fit');
-    ok(A.rhythm.sortByFitOf() === true, 'takes are offered best fit first by default');
-    const initialTake = plan.pieces[0].take;
-    A.rhythm.cycleTake(0, 1);
-    ok(A.rhythm.plan().pieces[0].take !== initialTake, 'cycleTake steps to the next take');
-    A.rhythm.cycleTake(0, -1);
-    ok(A.rhythm.plan().pieces[0].take === initialTake, 'and back');
-    ok(A.pattern.cycleTake(1) === true, 'the panel steps the selected word');
-    ok(A.rhythm.takeOf(0) !== 0, 'which pins it');
-    A.pattern.cycleTake(-1);
+    // The top edge moves the word along the line.
+    A.ruler.draw();
+    pump(30);
+    bl = blocks();
+    const w1 = bl[1].getBoundingClientRect();
+    const grip = bl[0].querySelector('.grip');
+    const g0 = grip.getBoundingClientRect();
+    grip.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: g0.left + 10, clientY: g0.top + 3 }));
+    pump(20);
+    document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, button: 0, clientX: g0.left + 30, clientY: g0.top + 3 }));
+    document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, button: 0, clientX: w1.left + w1.width / 2, clientY: w1.top + w1.height / 2 }));
+    pump(20);
+    document.body.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: w1.left + w1.width / 2, clientY: w1.top + w1.height / 2 }));
+    pump(60);
+    ok(A.line.wordsOf()[0].phrase === 'line' && A.line.wordsOf()[1].phrase === 'cross',
+       'dragging a word by its top edge moves it along the line');
+    ok(document.getElementById('l-text').value === 'line. cross,', `and the box follows (${document.getElementById('l-text').value})`);
+    A.line.moveWord(1, 0);
+
+    // ── selecting, and a section ───────────────────────────────────────────
+    A.ruler.select(-1);
+    ok(!document.querySelector('#l-panel .l-piece'), 'no word selected, no panel');
+    press(blocks()[0]);
+    ok(A.ruler.selectedWord() === 0, 'pressing a word selects it');
+    ok(!!document.querySelector('#l-panel .l-piece') && document.getElementById('l-phrase').value === 'cross',
+       'and the panel is about it');
+    ok(A.ruler.auditioning(), 'and it is heard');
+    ok(!!document.getElementById('l-wave'), 'with its own sound drawn');
+    ok(document.querySelectorAll('#l-panel .l-takebtn').length === 2 &&
+       document.querySelectorAll('#l-panel .l-takebtn.on').length === 1,
+       'every take of the word is a button and the one on the line is marked');
     A.results.hush();
-    A.rhythm.setSortByFit(false);
-    ok(!A.rhythm.sortByFitOf() && A.rhythm.takeOf(0) === 0,
-       'sorting the other way drops the pins, because they were positions in the list');
-    A.rhythm.setSortByFit(true);
-
-    // The take control in the panel is wired.
-    const takeBefore = document.querySelector('#r-panel .r-take').textContent;
-    document.querySelectorAll('#r-panel .r-line')[1].querySelectorAll('button')[1].click();
-    pump(60);
-    ok(document.querySelector('#r-panel .r-take').textContent !== takeBefore,
-       `pressing ▶ steps the take (${takeBefore} → ${document.querySelector('#r-panel .r-take').textContent})`);
+    press(blocks()[1], { shiftKey: true });
+    ok(!!A.ruler.sectionOf() && A.ruler.sectionOf().a === 0 && A.ruler.sectionOf().b === 1,
+       'shift-pressing another makes a section');
+    ok(!!document.querySelector('#l-panel .l-secname') && !!document.getElementById('l-match'),
+       'whose panel is about the section');
+    ok(document.querySelectorAll('#l-ruler .l-word.sel').length === 2, 'and both blocks are marked');
     A.results.hush();
+    ok(A.ruler.selectRelative(-1) === true && A.ruler.selectedWord() === 0 && !A.ruler.sectionOf(),
+       'the arrow selects one word again');
+    A.results.hush();
+    const take0 = wordPieces()[0].take;
+    ok(A.ruler.cycleTake(1) === true && wordPieces()[0].take !== take0, '] steps the take');
+    A.ruler.cycleTake(-1);
+    ok(wordPieces()[0].take === take0, 'and [ steps it back');
+    A.results.hush();
+    ok(A.ruler.loopWord(0) === true && A.ruler.isWordLooping(), 'a word can be looped');
+    A.ruler.stopWordLoop();
+    ok(!A.ruler.isWordLooping(), 'until it is stopped');
+    ok(A.ruler.key({ key: 'Delete' }) === true && A.line.count() === 1 && A.line.wordsOf()[0].phrase === 'line',
+       'Delete takes the selected word off and leaves the other');
+    ok(A.ruler.selectedWord() === -1 && !document.querySelector('#l-panel .l-piece'), 'and nothing is selected');
 
-    // ── the mix mirrors the pattern ────────────────────────────────────────
-    // There is no Build. A word on the grid is a clip in the row on the next
-    // frame, and a word nothing said has no clip and is named — the grid shows
-    // it red and the row shows the hole — rather than refusing the whole line.
-    A.rhythm.setScore('cross zebra line');
-    A.pattern.draw();
+    // ── on a beat ──────────────────────────────────────────────────────────
+    // The grid is a quantiser: ticked, every word and every rest is a whole
+    // number of steps and the rows are bars; unticked, nothing is.
+    A.line.say('cross, line.');
+    const beat = document.getElementById('l-beat');
+    beat.checked = true;
+    beat.dispatchEvent(new Event('change', { bubbles: true }));
     pump(60);
-    ok(document.querySelectorAll('#r-grid .r-word.bad').length === 1,
-       'a word nothing said is drawn as a refusal');
-    for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
-    ok(A.mix.sequence().length === 2 && A.mix.sequence().every((c) => c.word),
-       'the two it does say are in the row, with no third');
-    ok(/zebra/.test(A.rhythm.note()), `and the line names the one it does not (${A.rhythm.note()})`);
+    ok(A.line.onBeatOf() && !!document.getElementById('l-tempo') && !!document.getElementById('l-steps'),
+       'on a beat, there is a tempo and a grid');
+    type(document.getElementById('l-tempo'), '120');
+    ok(Math.abs(A.line.stepSeconds() - 0.125) < 1e-9,
+       `120 bpm in sixteenths is an eighth of a second (${A.line.stepSeconds()})`);
+    const step = A.line.stepSeconds();
+    plan = A.line.plan();
+    const off = plan.pieces.map((p) => Math.abs(p.seconds / step - Math.round(p.seconds / step)))
+                    .reduce((a, b) => Math.max(a, b), 0);
+    ok(off < 1e-6, `every piece is a whole number of steps (worst ${off})`);
+    ok(plan.pieces[1].steps >= 1 && plan.pieces[3].steps >= 2,
+       'a comma is at least a step of rest and a full stop at least two');
+    ok(document.querySelectorAll('#l-ruler .l-rowt')[0].querySelectorAll('.l-beat').length === A.line.stepsPerBar() - 1,
+       'and the rows are bars with the beats drawn on them');
+    const p0b = wordPieces()[0];
+    ok(p0b.steps >= 1 && (p0b.stretched ? Math.abs(p0b.rate - 1) > 1e-9 || Math.abs((p0b.until - p0b.from) - p0b.seconds) < 1e-9
+                                        : Math.abs((p0b.until - p0b.from) / p0b.rate - p0b.seconds) < 1e-9),
+       `a word fills its steps by a stretch when that is small and by its cut when it is not (${p0b.stretched ? 'stretched' : 'cut'})`);
+    beat.checked = false;
+    beat.dispatchEvent(new Event('change', { bubbles: true }));
+    pump(30);
+    ok(!A.line.onBeatOf() && !document.getElementById('l-tempo'), 'unticked, the tempo goes');
 
-    A.rhythm.setScore('cross . cross -  line . . .');
-    A.pattern.draw();
-    pump(60);
-
-    // The inputs are opened on a thread, so the pieces are laid when every one
-    // of them has answered.
-    for (let i = 0; i < 200 && A.mix.sequence().length < 4; i++) pump(30);
-    const seq = A.mix.sequence();
-    ok(seq.length === 4, `four clips in the row (${seq.length})`);
-
-    const step = A.rhythm.stepSeconds();
-    const off = seq.map((c) => Math.abs(c.length / step - Math.round(c.length / step)))
-                   .reduce((a, b) => Math.max(a, b), 0);
-    ok(off < 1e-6, `every piece is an exact number of steps (worst ${off})`);
-    ok(Math.abs(seq[0].length - 2 * step) < 1e-9 &&
-       Math.abs(seq[3].length - 4 * step) < 1e-9,
-       'and the ones that were held are as long as they were held for');
-    ok(Math.abs(A.duration() - 1) < 1e-6,
-       `the whole thing is the second it said it would be (${A.duration()})`);
-    ok(!packed('after a build'), packed('after a build') || 'the mix is still packed');
-
-    // The rest is a generator clip, because a packed sequence has nowhere to put
-    // an absence. It is the third piece.
-    ok(!!seq[2].generator, 'the rest is a generator clip and not a gap');
-    ok(!seq[2].path, 'with no file behind it');
+    // ── → Mix ──────────────────────────────────────────────────────────────
+    // The mix is the last step. Nothing above put anything in it; this does,
+    // and what it puts is the line: the words as clips, and the rests as the
+    // recording carried on, muted.
+    ok(A.mix.sequence().length === 0, 'the mix is empty after all of that');
+    A.ruler.commit();
+    for (let i = 0; i < 200 && (A.line.busy() || A.mix.sequence().length < 4); i++) pump(30);
+    let seq = A.mix.sequence();
+    ok(seq.length === 4, `→ Mix puts four clips in the row (${seq.length})`);
+    ok(seq[0].word && seq[2].word && seq[1].rest === seq[0].word && seq[3].rest === seq[2].word,
+       'a word, its rest, a word, its rest — each rest tagged with the word it follows');
+    ok(seq[1].muted && seq[1].path === seq[0].path && !seq[1].generator &&
+       Math.abs(seq[1].inPoint - (seq[0].inPoint + seq[0].length * seq[0].speed)) < 1e-6,
+       'a rest holds the shot: the same recording carried on from where the word ended, muted');
+    ok(!packed('after → Mix'), packed('after → Mix') || 'and the row is packed');
+    ok(A.line.isCommitted() && /4 in the mix/.test(A.line.note()), `and the line says so (${A.line.note()})`);
+    ok(Math.abs(A.duration() - A.line.plan().seconds) < 1e-6,
+       `the mix is as long as the line said it was (${A.duration().toFixed(3)})`);
 
     // **The onset pass is a slip.** It moves the footage inside a card and never
-    // the card, so however it answers the grid is the grid — which is what makes
-    // it safe to run after the mix is already on the screen.
+    // the card.
     const before = seq.map((c) => `${c.start}:${c.length}`).join('|');
-    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
-    ok(!A.rhythm.snapping(), 'every onset read finished');
-    const after = A.mix.sequence().map((c) => `${c.start}:${c.length}`).join('|');
-    ok(before === after,
-       'and not one card moved or changed length — snapping to the beat is a slip');
+    settleReads();
+    ok(!A.line.snapping(), 'every onset read finished');
+    ok(before === A.mix.sequence().map((c) => `${c.start}:${c.length}`).join('|'),
+       'and not one card moved or changed length');
 
-    // **Adjusted in place.** A word held a step longer is the same clip, a step
-    // longer; another take is another clip standing where it stood; a word
-    // taken off is its clip gone — and the row is one block in pattern order
-    // throughout.
-    const id0 = seq[0].id;
-    const idLast = seq[3].id;
-    A.rhythm.setSteps(2, 5);
+    // Between presses the mix is not touched; pressing again reconciles.
+    const id0 = seq[0].id, idRest = seq[1].id, id2 = seq[2].id;
+    A.line.setGap(0, 0.5);
     pump(60);
-    ok(A.mix.sequence()[3].id === idLast && Math.abs(A.mix.sequence()[3].length - 5 * step) < 1e-9,
-       'holding a word a step longer makes its clip a step longer, in place');
-    ok(!packed('after a hold'), packed('after a hold') || 'and the row is still packed');
-    A.rhythm.cycleTake(0, 1);
-    pump(60);
-    ok(A.mix.sequence().length === 4 && A.mix.sequence()[0].id !== id0 &&
-       A.mix.sequence()[0].word === seq[0].word,
+    ok(A.mix.sequence()[1].id === idRest && Math.abs(A.mix.sequence()[1].length - seq[1].length) < 1e-9,
+       'an edit to the line leaves the mix alone');
+    A.ruler.commit();
+    for (let i = 0; i < 100 && A.line.busy(); i++) pump(30);
+    ok(A.mix.sequence()[1].id === idRest && Math.abs(A.mix.sequence()[1].length - 0.5) < 1e-6,
+       'pressed again, the rest is the same clip at its new length');
+    ok(A.mix.sequence()[0].id === id0 && A.mix.sequence()[2].id === id2, 'and the words are the same clips');
+    A.line.cycleTake(0, 1);
+    A.ruler.commit();
+    for (let i = 0; i < 100 && A.line.busy(); i++) pump(30);
+    seq = A.mix.sequence();
+    ok(seq.length === 4 && seq[0].id !== id0 && seq[0].word === A.line.wordsOf()[0].id,
        'another take is another clip in the same place');
-    A.rhythm.removeWord(2);
-    pump(60);
-    // The rest before it goes too: a rest is a step before a word, and there is
-    // no word after it now.
-    ok(A.mix.sequence().length === 2 && !A.mix.sequence().some((c) => c.id === seq[3].id || c.rest),
-       'a word taken off takes its clip with it, and the rest before it');
-    A.rhythm.setScore('cross . cross -  line . . .');
-    for (let i = 0; i < 200 && A.mix.sequence().length < 4; i++) pump(30);
-    ok(A.mix.sequence().length === 4, 'and the line laid again is four clips again, not eight');
-
-    // A pattern is one tempo and one grid: what an older score wrote in brackets
-    // is ignored rather than searched for.
-    A.rhythm.setScore('[intro] cross . [verse 1] line');
-    ok(A.rhythm.plan().pieces.length === 2 && A.rhythm.plan().missing.length === 0,
-       'bracketed text in the notation is not a word');
-
-    // ── listening, looping, slipping, stretching ───────────────────────────
-    console.log('\nhearing the pattern');
-    document.getElementById('btn-clear').dispatchEvent(
-        new MouseEvent('click', { bubbles: true, button: 0 }));
-    pump(60);
-    A.rhythm.setScore('cross line');
-    A.pattern.draw();
-    pump(60);
-
-    const listenBtn = document.getElementById('r-listen-all');
-    ok(listenBtn !== null, 'the tab has a Listen');
-    ok(!A.pattern.isListening(), 'and is quiet to begin with');
-    ok(A.pattern.toggleListen() === true, 'pressing it plays the pattern');
-    ok(A.pattern.isListening(), 'which is listening');
-    ok(listenBtn.textContent.includes('Stop'), 'and the button is the Stop');
-    ok(document.querySelectorAll('#r-grid .r-word.playing').length === 1,
-       'the word being heard lights up');
-    ok(!A.pattern.isLooping(), 'not looping');
-    A.pattern.toggleLooping();
-    ok(A.pattern.isLooping() && document.getElementById('r-loop').checked,
-       'L loops, and the box says so');
-    A.pattern.setLooping(false);
-    A.pattern.stopListen();
-    ok(!A.pattern.isListening() && listenBtn.textContent.includes('Listen'),
-       'stopping puts the button back');
-    ok(document.querySelectorAll('#r-grid .r-word.playing').length === 0,
-       'and nothing is lit');
-
-    // Slip, by key and by slider. A slipped word is marked on the grid.
-    press(document.querySelector('#r-grid .r-word'));
+    ok(!packed('after a take'), packed('after a take') || 'and the row is still packed');
+    // With the hold off, a rest is black.
+    A.line.setRestHold(false);
+    A.ruler.commit();
+    for (let i = 0; i < 100 && A.line.busy(); i++) pump(30);
+    seq = A.mix.sequence();
+    ok(seq.length === 4 && !!seq[1].generator && !seq[1].path && seq[1].rest,
+       'with the hold off a rest is a generator clip');
+    A.line.setRestHold(true);
+    // A word taken off takes its clip with it, and its rest.
+    A.ruler.select(1);
     A.results.hush();
-    ok(A.rhythm.offsetOf(0) === 0, 'a word starts unslipped');
-    A.pattern.nudgeOffset(0.015);
-    A.results.hush();
-    ok(Math.abs(A.rhythm.offsetOf(0) - 0.015) < 1e-6, 'a nudge slips it 15 ms');
-    let p0 = A.rhythm.plan().pieces[0];
-    ok(Math.abs(p0.at - (p0.hit.at + 0.015)) < 1e-6, 'and the piece is cut 15 ms later');
-    ok(!!document.querySelector('#r-grid .r-word.slipped'), 'the block says it was slipped');
-    const slider = document.getElementById('r-slip');
-    ok(!!slider && Number(slider.value) === 15, `the slider agrees (${slider && slider.value})`);
-    type(slider, '-40');
-    A.results.hush();
-    ok(Math.abs(A.rhythm.offsetOf(0) + 0.040) < 1e-6, 'and moving the slider slips it');
-
-    // Stretch: the word's own span fills the step, at a speed, and the build
-    // applies that speed rather than only the audition.
-    p0 = A.rhythm.plan().pieces[0];
-    ok(p0.rate === 1 && Math.abs(p0.span - p0.seconds) < 1e-9,
-       'cut to the step, the span is the step');
-    const fits = p0.canStretch;
-    A.rhythm.setStretch(0, true);
-    p0 = A.rhythm.plan().pieces[0];
-    if (fits) {
-        ok(Math.abs(p0.rate - p0.fitRatio) < 1e-9 && Math.abs(p0.span - p0.seconds * p0.rate) < 1e-9,
-           `stretched, the span is the word's own at its rate (${p0.rate.toFixed(2)}×)`);
-    } else {
-        ok(p0.rate === 1, `a word outside the stretch range stays cut (${p0.fitRatio.toFixed(2)}×)`);
-    }
-    A.rhythm.setStretch(0, false);
-
-    // One word, over and over.
-    ok(A.pattern.loopWord(0) === true, 'a word can be looped');
-    ok(A.pattern.isStepLooping(), 'and is');
-    A.pattern.stopStepLoop();
-    ok(!A.pattern.isStepLooping(), 'until it is stopped');
-
-    // Walking the words.
-    ok(A.pattern.selectRelative(1) === true && A.pattern.selectedWord() === 1,
-       'the arrow selects the next word');
-    A.results.hush();
-
-    // A slip made by hand moves the clip's in-point by exactly that, in place,
-    // and the onset pass leaves a word somebody placed by hand alone.
-    for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
-    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
-    const slipped = A.mix.sequence()[0];
-    const inBefore = slipped.inPoint;
-    A.rhythm.setOffset(0, A.rhythm.offsetOf(0) + 0.1);
-    pump(60);
-    ok(A.mix.sequence()[0].id === slipped.id && Math.abs(slipped.inPoint - inBefore - 0.1) < 1e-6,
-       `slipping the word slips its clip by the same (${(slipped.inPoint - inBefore).toFixed(3)})`);
-    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
-    ok(!A.rhythm.snapping() && Math.abs(slipped.inPoint - inBefore - 0.1) < 1e-6,
-       'and the onset pass did not move a word somebody had placed by hand');
-
-    // The pattern's clips are one block of the row, and a clip somebody added
-    // by hand keeps its place beside them.
-    document.getElementById('btn-clear').dispatchEvent(
-        new MouseEvent('click', { bubbles: true, button: 0 }));
-    pump(60);
-    A.rhythm.setScore('cross line');
-    for (let i = 0; i < 200 && A.mix.sequence().length < 2; i++) pump(30);
+    A.ruler.key({ key: 'Delete' });
+    ok(A.line.count() === 1 && document.getElementById('l-text').value === 'cross,',
+       `Delete takes the word out of the box too (${document.getElementById('l-text').value})`);
+    A.ruler.commit();
+    for (let i = 0; i < 100 && A.line.busy(); i++) pump(30);
+    const held = () => A.mix.sequence().map((c) => `${c.word ? 'w' + c.word : c.rest ? 'r' + c.rest : 'hand'}${c.generator ? '(black)' : ''}`).join(' ');
+    ok(A.mix.sequence().length === 2 && !A.mix.sequence().some((c) => c.id === id2),
+       `a word taken off takes its clip and its rest out of the mix (${held()})`);
+    // A moment added by hand keeps its place beside the block.
     A.addMoment({ path: A.mix.sequence()[0].path, name: 'by hand', from: 0.2, to: 0.8 });
     for (let i = 0; i < 200 && A.mix.sequence().length < 3; i++) pump(30);
     ok(A.mix.sequence().length === 3 && !A.mix.sequence()[2].word, 'a moment added by hand goes after the block');
-    A.rhythm.setSteps(1, 2);
-    pump(60);
-    ok(A.mix.sequence().length === 3 && !A.mix.sequence()[2].word &&
-       A.mix.sequence()[0].word && A.mix.sequence()[1].word,
-       'and stays there when the pattern is edited');
-    A.removeClip(A.mix.sequence()[2]);
+    A.line.say('cross, line.');
+    A.ruler.commit();
+    for (let i = 0; i < 100 && A.line.busy(); i++) pump(30);
+    ok(A.mix.sequence().length === 5 && !A.mix.sequence()[4].word && !A.mix.sequence()[4].rest,
+       'and stays there when the line is put in again');
+    A.removeClip(A.mix.sequence()[4]);
     A.mix.reflow();
     pump(60);
-    for (let i = 0; i < 400 && A.rhythm.snapping(); i++) { pump(25); }
+    settleReads();
 
-    // Remove, and the grid closes over nothing: the cells are rests.
-    press(document.querySelector('#r-grid .r-word'));
+    // A word nothing says is a hole that is named, not a refusal.
+    A.line.say('cross crozz line');
+    A.ruler.draw();
+    ok(A.line.plan().missing.indexOf('crozz') >= 0 && document.querySelectorAll('#l-ruler .l-word.bad').length === 1,
+       'a word nothing says is drawn as a hole');
+    A.ruler.commit();
+    for (let i = 0; i < 100 && A.line.busy(); i++) pump(30);
+    ok(A.mix.sequence().filter((c) => c.word).length === 2 && /crozz/.test(A.line.note()),
+       `the two it does say are in the mix and the hole is named (${A.line.note()})`);
+    A.ruler.select(1);
+    pump(30);
+    const near = document.querySelectorAll('#l-panel .l-near button');
+    ok(near.length >= 1 && near[0].textContent.startsWith('cross'),
+       'and the panel offers the nearest word the corpus has');
+    near[0].dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    pump(40);
+    ok(A.line.wordsOf()[1].phrase === 'cross' && A.line.plan().missing.length === 0,
+       'which a press puts in its place');
     A.results.hush();
-    ok(A.pattern.key({ key: 'Delete' }) === true, 'Delete takes the selected word off');
-    ok(A.rhythm.words().length === 1 && A.rhythm.words()[0].phrase === 'line',
-       'leaving the other where it was');
-    ok(A.pattern.selectedWord() === -1 && !document.querySelector('#r-panel .r-piece'),
-       'and nothing selected');
 
-    // The pattern survives the session: what is remembered is the words, and a
-    // blob written by the version that kept a line of text is read as one.
-    const blob = JSON.parse(localStorage.getItem('supercut.score'));
-    ok(Array.isArray(blob.words) && blob.words.length === 1 && blob.tempo === 120,
-       'the workspace holds the words and the grid');
-    localStorage.setItem('supercut.score', JSON.stringify({ tempo: 90, per: 4, text: 'no . - no' }));
-    A.rhythm.restore();
-    ok(A.rhythm.tempoOf() === 90 && A.rhythm.words().length === 2 &&
-       A.rhythm.words()[0].steps === 2 && A.rhythm.words()[1].at === 3,
-       'an older workspace holding notation is read as the pattern it describes');
-    A.rhythm.setTempo(120);
-    A.rhythm.clearWords();
+    // Clear on the line clears its clips.
+    A.ruler.select(-1);
+    A.line.clear();
+    pump(60);
+    ok(A.mix.sequence().length === 0 && A.line.count() === 0, 'Clear takes the line and its clips off');
+
+    // ── the workspace ──────────────────────────────────────────────────────
+    A.line.say('cross, line.');
+    const blob = JSON.parse(localStorage.getItem('supercut.line'));
+    ok(Array.isArray(blob.words) && blob.words.length === 2 && blob.words[0].stop === ',' && blob.text === 'cross, line.',
+       'the workspace holds the words and the text');
+    localStorage.removeItem('supercut.line');
+    localStorage.setItem('supercut.score', JSON.stringify({ tempo: 90, per: 4, line: 'no, no' }));
+    A.line.restore();
+    ok(A.line.tempoOf() === 90 && A.line.count() === 2 && A.line.wordsOf()[0].stop === ',',
+       'an older workspace holding a grid and a line is read as the line');
+    A.line.setTempo(120);
+    A.line.clear();
+
+    // ── a word before a pause is the pause too ─────────────────────────────
+    // A transcript's word runs to the next token, so its span before a silence
+    // is the silence. Such a take is cut at twice the word's typical length
+    // and the rest is what it was, quiet after the word — and it is not the
+    // take chosen over one said at its usual length.
+    // Three seconds apart, because hits closer than that are one moment.
+    const LONG = [['the', 0.0, 0.1], ['the', 3.0, 3.1], ['the', 6.0, 8.0], ['end', 8.6, 8.8]];
+    fs.writeFileSync(`${dir}/long.srt`,
+        LONG.map((w, i) => `${i + 1}\n${stamp(w[1])} --> ${stamp(w[2])}\n${w[0]}\n`).join('\n'), 'utf-8');
+    fs.writeFileSync(`${dir}/long-chan.json`, JSON.stringify({
+        channel: 'long', built: new Date().toISOString(),
+        vods: [{ id: 'l1', title: 'a pause', publishedAt: '2026-01-03',
+                 seconds: 60, srt: `${dir}/long.srt`, media, words: LONG.length }],
+    }), 'utf-8');
+    fs.writeFileSync(`${dir}/long.json`, JSON.stringify({
+        channels: [{ channel: 'long', manifest: `${dir}/long-chan.json`, vods: 1, words: LONG.length, built: '' }],
+    }), 'utf-8');
+    A.results.useCorpus(`${dir}/long.json`);
+    A.results.start();
+    pump(60);
+    A.line.say('the');
+    {
+        const p = wordPieces()[0];
+        const cut = p.candidates.find((c) => Math.abs(c.hit.at - 6) < 1e-6);
+        ok(!!cut && Math.abs(cut.raw - 2) < 1e-6 && Math.abs(cut.dur - 0.26) < 1e-6 && cut.quiet.after >= 1.7,
+           `a span twenty times the usual is cut at the cap and the rest is quiet after it (${cut && cut.dur}, ${cut && cut.quiet.after.toFixed(2)})`);
+        ok(p.said !== cut.said && Math.abs((p.until - p.from) - 0.1) < 1e-6,
+           `and the take chosen is one said at its usual length (${Math.round((p.until - p.from) * 1000)} ms)`);
+        ok(Math.abs(library.naturalGap() - library.NATURAL_GAP) < 1e-9,
+           'a transcript whose words abut does not set the pace');
+    }
+    A.line.clear();
 
     // ── a plan is about a corpus ───────────────────────────────────────────
-    // Restored before a channel is open — the first frame of a session — every
-    // word of a pattern was reported missing, and stayed so: the window said
-    // `nothing says "hello"` over a corpus that says it 171 times. The plan
-    // now says what it was made over and is made again when that moves.
     A.results.useCorpus(`${dir}/nowhere.json`);
-    A.rhythm.setScore('cross');
-    ok(A.rhythm.plan().missing.length === 0 && !A.rhythm.pieceOf(0).hit,
+    A.line.say('cross');
+    ok(A.line.plan().missing.length === 0 && !A.line.pieceOf(0).hit,
        'with no corpus open a word is unresolved rather than missing');
     A.results.useCorpus(`${dir}/find.json`);
     A.results.start();
     pump(60);
-    ok(!!A.rhythm.pieceOf(0).hit && A.rhythm.plan().missing.length === 0,
+    ok(!!A.line.pieceOf(0).hit && A.line.plan().missing.length === 0,
        'and resolves once one is, with nobody asking');
-    A.rhythm.clearWords();
+    A.line.clear();
 
     // ── what can be typed ──────────────────────────────────────────────────
     const vocab = library.vocabulary();
@@ -1531,117 +1533,38 @@ console.log('\nwords on a beat');
     ok(library.suggest('cr').length >= 1 && library.suggest('cr')[0].word === 'cross',
        'the words beginning with what was typed');
 
-    A.pattern.draw();
+    A.ruler.arrive();
     pump(30);
-    press(document.querySelector('#r-grid .r-cell'));
-    edit = document.querySelector('#r-grid .r-edit');
-    edit.value = 'cr';
-    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    const box2 = document.getElementById('l-text');
+    box2.value = 'cr';
+    box2.dispatchEvent(new Event('input', { bubbles: true }));
     pump(30);
-    let hints = document.querySelectorAll('#r-grid .r-hint');
+    let hints = document.querySelectorAll('#f-controls .l-hint');
     ok(hints.length >= 2 && hints[0].textContent.startsWith('cr') && hints[0].textContent.endsWith('×0') &&
        hints[1].textContent.startsWith('cross') && !hints[1].textContent.endsWith('×0'),
        'typing shows what was typed and the words that begin with it, each with a count');
-    keyIn(edit, 'ArrowDown');
-    keyIn(edit, 'ArrowDown');
-    ok(document.querySelectorAll('#r-grid .r-hint.on').length === 1 &&
-       document.querySelector('#r-grid .r-hint.on').textContent.startsWith('cross'),
+    keyIn(box2, 'ArrowDown');
+    keyIn(box2, 'ArrowDown');
+    ok(document.querySelectorAll('#f-controls .l-hint.on').length === 1 &&
+       document.querySelector('#f-controls .l-hint.on').textContent.startsWith('cross'),
        'the arrows pick one');
-    keyIn(edit, 'Enter');
-    ok(A.rhythm.words().length === 1 && A.rhythm.words()[0].phrase === 'cross',
-       'and Enter lands the one picked');
-    ok(parseFloat(document.querySelector('#r-grid .r-word .txt').style.width) > 100,
-       'a word followed by rests is given their width to be read on');
-
-    // A word nothing says, landed anyway: the panel offers the nearest it has.
-    press(document.querySelectorAll('#r-grid .r-cell')[2]);
-    edit = document.querySelector('#r-grid .r-edit');
-    edit.value = 'crozz';
-    edit.dispatchEvent(new Event('input', { bubbles: true }));
+    keyIn(box2, 'Enter');
+    ok(box2.value === 'cross ' && A.line.count() === 1 && A.line.wordsOf()[0].phrase === 'cross',
+       `Enter puts the one picked in the box and lands it (${box2.value})`);
+    ok(document.querySelectorAll('#f-controls .l-hint').length === 0, 'and the hints are gone');
+    A.results.hush();
+    box2.value = 'cross crozz';
+    box2.dispatchEvent(new Event('input', { bubbles: true }));
     pump(30);
-    hints = document.querySelectorAll('#r-grid .r-hint');
+    hints = document.querySelectorAll('#f-controls .l-hint');
     ok(hints.length >= 1 && hints[0].classList.contains('none'),
        'a word nothing says is marked before it is landed');
-    keyIn(edit, 'Enter');
-    ok(A.rhythm.words().length === 2 && A.rhythm.plan().missing.indexOf('crozz') >= 0,
-       'landed as typed all the same');
-    A.pattern.select(1);
-    pump(30);
-    const near = document.querySelectorAll('#r-panel .r-near button');
-    ok(near.length >= 1 && near[0].textContent.startsWith('cross'),
-       'and the panel offers the nearest word the corpus has');
-    near[0].dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-    pump(40);
-    ok(A.rhythm.words()[1].phrase === 'cross' && A.rhythm.plan().missing.length === 0,
-       'which a press puts in its place');
-    A.pattern.select(-1);
-    A.rhythm.clearWords();
-
-    // ── saying a line ──────────────────────────────────────────────────────
-    // The way in: the sentence typed whole, every word found, a take chosen,
-    // and each given the steps it was said in. A comma is a step of rest, a
-    // full stop two, and both come off the word.
-    const stepNow = A.rhythm.stepSeconds();
-    const stepsOf = (dur, pace = 1) => Math.max(1, Math.round(dur / pace / stepNow));
-    ok(A.rhythm.say('cross, line.') === 2, 'a line of two words is two words');
-    let said = A.rhythm.words();
-    ok(said[0].phrase === 'cross' && said[1].phrase === 'line', 'with the punctuation taken off them');
-    let pcs = A.rhythm.plan().pieces.filter((p) => p.kind === 'word');
-    ok(pcs.length === 2 && pcs.every((p) => p.hit), 'and both found');
-    ok(said[0].steps === stepsOf(pcs[0].naturalDur) && said[1].steps === stepsOf(pcs[1].naturalDur),
-       `each given the steps its take was said in (${said[0].steps}, ${said[1].steps})`);
-    ok(said[1].at === said[0].at + said[0].steps + 1, 'a comma is a step of rest');
-    const nearFit = (p, w) => { const r = p.naturalDur / (w.steps * stepNow); return r >= 0.8 && r <= 1.25; };
-    ok(said[0].stretch === nearFit(pcs[0], said[0]) && said[1].stretch === nearFit(pcs[1], said[1]),
-       `and each is stretched to fill its steps when that is within a quarter (${said[0].stretch}, ${said[1].stretch})`);
-    A.pattern.drawControls();
-    ok(document.getElementById('r-say').value === 'cross, line.', 'the field keeps the line');
-    for (let i = 0; i < 200 && A.mix.sequence().length < 3; i++) pump(30);
-    ok(A.mix.sequence().length === 3 && A.mix.sequence()[1].rest, 'and the row has the two words and the rest');
-
-    // The pace lays the same line tighter or looser: the takes stay, the steps
-    // follow, and the stretch that fills them is what is heard.
-    A.rhythm.setPace(2);
-    said = A.rhythm.words();
-    pcs = A.rhythm.plan().pieces.filter((p) => p.kind === 'word');
-    ok(said[0].steps === stepsOf(pcs[0].naturalDur, 2) && said[1].at === said[0].at + said[0].steps + 1,
-       'at twice the pace a word has half the steps and the rest is kept');
-    A.rhythm.setPace(1);
-
-    // A word said twice on one line walks to another take.
-    A.rhythm.say('cross cross');
-    pcs = A.rhythm.plan().pieces.filter((p) => p.kind === 'word');
-    ok(pcs.length === 2 && pcs[0].hit.at !== pcs[1].hit.at, 'the same word twice is two takes');
-
-    // Typed into the field, Enter says it; a word nothing says is a hole that
-    // is named, not a refusal.
-    const sayBox = document.getElementById('r-say');
-    sayBox.value = 'cross zebra line';
-    sayBox.dispatchEvent(new Event('input', { bubbles: true }));
-    keyIn(sayBox, 'Enter');
-    ok(A.rhythm.words().length === 3 && A.rhythm.plan().missing.indexOf('zebra') >= 0,
-       'Enter on the field says the line');
-    for (let i = 0; i < 200 && A.mix.sequence().filter((c) => c.word).length < 2; i++) pump(30);
-    ok(A.mix.sequence().filter((c) => c.word).length === 2 && /zebra/.test(A.rhythm.note()),
-       `two clips and the hole named (${A.rhythm.note()})`);
-
-    // The takes of a word, all at once: pressing one puts it in the row.
-    press(document.querySelector('#r-grid .r-word'));
-    A.results.hush();
-    const takeBtns = document.querySelectorAll('#r-panel .r-takebtn');
-    ok(takeBtns.length === 2 && document.querySelectorAll('#r-panel .r-takebtn.on').length === 1,
-       'every take of the word is a button and the one in the row is marked');
-    const other = [...takeBtns].find((b) => !b.classList.contains('on'));
-    other.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    keyIn(box2, 'Escape');
+    ok(document.querySelectorAll('#f-controls .l-hint').length === 0, 'Escape drops the hints');
+    A.ruler.select(-1);
+    A.line.clear();
     pump(60);
-    A.results.hush();
-    ok(other.textContent === String(A.rhythm.plan().pieces[0].take) ||
-       document.querySelector('#r-panel .r-takebtn.on').textContent === other.textContent,
-       'pressing another makes it the take');
-    A.pattern.select(-1);
-    A.rhythm.clearWords();
-    pump(60);
-    ok(A.mix.sequence().length === 0, 'Clear on the pattern clears its clips');
+    ok(A.mix.sequence().length === 0, 'and the mix is left empty');
 }
 
 // ── tracking higher energy speaking: yelling & activated speaking ──────────

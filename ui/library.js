@@ -31,7 +31,7 @@
 
 import { clock } from './format.js';
 import { abs } from './root.js';
-import { parseSrtFrom, emptyStream, growStream, find, spaced, monologues, bare } from './phrase.js';
+import { parseSrtFrom, emptyStream, growStream, find, spaced, monologues, bare, gapsOf } from './phrase.js';
 import * as loudness from './loudness.js';
 
 const fs = require('fs');
@@ -371,6 +371,41 @@ export function vocabulary() {
     return list;
 }
 
+/// The gap this speaker leaves between one word and the next, in seconds: the
+/// median over every pair of neighbouring words in the corpus that are within
+/// a second of each other. **What a line is paced at when nothing says
+/// otherwise** — "the pacing that fits them all" is the speaker's own, and it
+/// is a number the transcripts answer. Held with the vocabulary, for the same
+/// reason and cleared with it.
+///
+/// A corpus that cannot say answers the default, which is about what anybody
+/// leaves — and a transcript whose words **abut** cannot say: Parakeet's run
+/// each word to the next token, so every gap is zero and the pauses are inside
+/// the words, and a line paced at that median would be words with no breath
+/// between them. So the pairs that are exactly zero are the transcript's shape
+/// rather than the speaker's, and when they are most of the corpus the answer
+/// is the default. Too few pairs to say is the default too.
+export function naturalGap() {
+    if (vocab && vocab.gap !== undefined) return vocab.gap;
+    vocabulary();
+    const gaps = [];
+    let zero = 0;
+    // Appended one at a time: a recording is a hundred thousand pairs, and
+    // spreading them into one call is more arguments than the engine takes.
+    for (const v of searched()) {
+        for (const g of gapsOf(streamFor(v).words)) {
+            if (g < 0.001) zero++;
+            else gaps.push(g);
+        }
+    }
+    gaps.sort((a, b) => a - b);
+    vocab.gap = gaps.length >= 20 && gaps.length >= zero ? gaps[Math.floor(gaps.length / 2)] : NATURAL_GAP;
+    return vocab.gap;
+}
+
+/// What a speaker leaves between words when the corpus cannot say.
+export const NATURAL_GAP = 0.12;
+
 /// How often one word is said, as `vocabulary` counts it. 0 for a word nothing
 /// says, and for a phrase of several — that is `searchWords`'s question.
 export function saidCount(word) {
@@ -442,6 +477,8 @@ function wordsIn(v, phrase, opts = {}) {
         out.push({
             kind: 'word', vod: v, at: h.at, to: h.says,
             label: h.matched, detail: h.context,
+            // The quiet either side, which is what a line ranks takes by.
+            quiet: { before: h.before, after: h.after },
         });
     }
     return out;

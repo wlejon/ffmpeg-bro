@@ -152,11 +152,11 @@ recordings can go back on the shelf. Downloads, transcriptions and cuts all run
 beside the editing, several at a time, and the count in the top bar is what is
 running.
 
-**The Rhythm tab is the other way to build one.** Type the line, and it finds
-each word, lays them at the length they were said, fills the mix with the clips
-as you watch, and slips every piece onto the nearest measured transient so the
-cuts land on the beat rather than near it. Then adjust it a word at a time: another
-take, a step longer, a pace.
+**The Line tab is the other way to build one.** Type the sentence, and it finds
+each word in this voice as you type it, gives it its cleanest take, and says the
+line back; tune it by ear — another take, a cut point, a pace, a rest — and
+then put it in the mix, where the cuts land on the measured attack of each word
+rather than near it.
 
 It shares this application's clips, edits, render and **document**, so a `.fbro`
 written in one opens in the other, and none of its interface. Nothing in it needs

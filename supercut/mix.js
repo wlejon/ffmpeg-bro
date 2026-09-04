@@ -142,9 +142,9 @@ export function initMix(refs, h) {
     nodes.clear.addEventListener('click', () => {
         for (const c of project.clips.slice()) { cuts.forget(c.id); removeClip(c); }
         // Whatever else was still being worked out about the pieces that have
-        // just gone — the onset reads a rhythm build queued. A hook rather than
-        // an import, because `supercut/rhythm.js` packs the sequence through
-        // this file and a cycle between the two is a cycle nothing needs.
+        // just gone — the onset reads the line queued. A hook rather than an
+        // import, because `supercut/line.js` packs the sequence through this
+        // file and a cycle between the two is a cycle nothing needs.
         if (hooks.cleared) hooks.cleared();
         reflow();
         edited();

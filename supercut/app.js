@@ -58,8 +58,9 @@ import * as acquire from './acquire.js';
 import * as mix from './mix.js';
 import * as screen from './screen.js';
 import * as cuts from './cuts.js';
-import * as rhythm from './rhythm.js';
-import * as pattern from './pattern.js';
+import * as line from './line.js';
+import * as ruler from './ruler.js';
+import * as waves from './waves.js';
 import * as inflight from './inflight.js';
 
 // **The analysis worker is `ui/`'s and is not copied here.** bro resolves a
@@ -72,6 +73,10 @@ useWorker('../ui/analyze-worker.js');
 // ui/loudness.js for why it is a second worker over one script rather than a
 // second script.
 loudness.useWorker('../ui/analyze-worker.js');
+// And the shape of a word's sound, for the line's ruler — a third reader over
+// the same script; the block at the top of `waves.js` says why it is neither
+// of the other two.
+waves.useWorker('../ui/analyze-worker.js');
 
 const nodes = {
     about: byId('about'), doc: byId('doc'),
@@ -114,9 +119,9 @@ const waiting = [];
 
 /// The `-i` for a path — the one already open, or a new one.
 ///
-/// **Split out of `addMoment` for the builder next door.** `supercut/rhythm.js`
-/// lays a whole score at once and therefore has to ask for every recording it
-/// needs *before* it lays anything, so that the pieces go in the order they were
+/// **Split out of `addMoment` for the line next door.** `supercut/line.js` lays
+/// a whole line at once and therefore has to ask for every recording it needs
+/// *before* it lays anything, so that the pieces go in the order they were
 /// typed rather than in the order the probes land. Two callers, one rule about
 /// what counts as the same input.
 function openInput(spec) {
@@ -127,8 +132,8 @@ function openInput(spec) {
 /// Put a moment in the mix against an input that has already answered.
 ///
 /// Answers the clip, which is what a caller that has more to do with it needs —
-/// the rhythm builder measures each piece's onsets afterwards and holds the id.
-/// Answers null when the input never opened.
+/// the line tags each clip with the word it is. Answers null when the input
+/// never opened.
 function placeMoment(spec, input) {
     if (!input || !input.probe) return null;
     const clip = makeClip(input);
@@ -315,9 +320,9 @@ function seek(t) {
 /// Pressing the one key everything else stops with, and being answered by a
 /// second recording, is the failure this avoids.
 function togglePlay() {
-    // The grid's listen and its loop are the same kind of noise as an audition
-    // and stop the same way.
-    if (pattern.stopAll()) { drawBar(); return; }
+    // The line being said and a word looping are the same kind of noise as an
+    // audition and stop the same way.
+    if (ruler.stopAll()) { drawBar(); return; }
     if (results.auditioning()) { results.hush(); drawBar(); return; }
     if (screen.isPlaying()) screen.play(false);
     else if (!screen.play(true)) flash('nothing in the mix');
@@ -358,7 +363,7 @@ mix.initMix({
     moved: () => screen.refresh(),
     edited: () => { touched(); screen.refresh(); },
     resized: () => mix.placePlayhead(transport.t),
-    cleared: () => rhythm.forget(),
+    cleared: () => line.forget(),
 });
 
 results.initResults({
@@ -372,20 +377,20 @@ results.initResults({
     warmPath: (path) => { screen.warmPath(path); },
 });
 
-// The builder, which is the one part of this application that lays several
+// The line, which is the one part of this application that lays several
 // pieces in one frame — so it gets the two halves of `addMoment` rather than
 // `addMoment` itself. See `openInput` above for why the split exists.
-rhythm.initRhythm({
+line.initLine({
     openInput,
     place: (spec) => placeMoment(spec, openInput(spec)),
-    // A clip the pattern no longer describes goes the way a card does: the cut
+    // A clip the line no longer describes goes the way a card does: the cut
     // behind it is stopped first.
     drop: (clip) => mix.drop(clip),
-    // A rest is a clip added straight to the model rather than through
+    // A black rest is a clip added straight to the model rather than through
     // `mix.append`, so the one rule the mix adds has to be applied after it.
     packed: () => mix.reflow(),
     // Clips came or went: the row is redrawn and refitted. Clips were only
-    // adjusted — a take repointed, a step held — so the row is redrawn where it
+    // adjusted — a take repointed, a word held — so the row is redrawn where it
     // stands, because a hand dragging an edge must not have the row zoom under
     // it.
     edited: () => { touched(); mix.draw(); mix.fit(); screen.refresh(); },
@@ -459,6 +464,9 @@ document.addEventListener('keydown', (e) => {
         if (e.key === 's') { doSave(); e.preventDefault(); return; }
         if (e.key === 'o') { doOpen(); e.preventDefault(); return; }
         if (e.key === 'r') { doRender(); e.preventDefault(); return; }
+        // The line into the mix, from anywhere on its tab — the box included,
+        // which stops its own keys and lets this one through.
+        if (e.key === 'Enter' && results.currentTab() === 'line') { ruler.commit(); e.preventDefault(); return; }
         return;
     }
     if (typing) {
@@ -468,10 +476,10 @@ document.addEventListener('keydown', (e) => {
     // The list of what is running is a thing put over the window, so it closes
     // the way everything put over a window closes.
     if (e.key === 'Escape' && inflight.isOpen()) { inflight.toggle(false); return; }
-    // The grid's own keys, while it is the tab showing: the words are what the
+    // The line's own keys, while it is the tab showing: the words are what the
     // hand is on, so the arrows walk them and Delete takes one off. What it
     // does not claim falls through to the transport below.
-    if (results.currentTab() === 'rhythm' && pattern.key(e)) {
+    if (results.currentTab() === 'line' && ruler.key(e)) {
         e.preventDefault();
         drawBar();
         return;
@@ -580,12 +588,13 @@ function frame() {
     // when it has not — see `results.tick`.
     results.tick();
 
-    // The score's two jobs: the inputs a build is waiting on, and the onset read
-    // that puts each piece on the transient nearest its word. A slip moves no
-    // card and changes no length — the grid is the same grid — so what it owes
-    // is a repaint of the pictures and never a rebuild of the row.
-    if (rhythm.tick()) { mix.repaint(); touched(); }
-    if (results.currentTab() === 'rhythm') results.repaint();
+    // The line's two jobs: the inputs a commit is waiting on, and the onset
+    // read that puts each take on the transient nearest its word. A slip moves
+    // no card and changes no length, so what it owes is a repaint of the
+    // pictures and never a rebuild of the row — unless the commit landed, which
+    // is clips arriving and is the row's own hook.
+    if (line.tick()) { mix.repaint(); touched(); }
+    if (results.currentTab() === 'line') results.repaint();
 
     screen.tick();
     // An audition that ran to the end of its moment stops itself, and the row it
@@ -642,7 +651,7 @@ requestAnimationFrame(frame);
 /// door, kept to what a test actually has to reach.
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
-    results, acquire, mix, screen, cuts, rhythm, pattern, inflight, doc: documentModel,
+    results, acquire, mix, screen, cuts, line, ruler, waves, inflight, doc: documentModel,
     addMoment, removeClip, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,

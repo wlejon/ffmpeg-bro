@@ -98,7 +98,7 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 }
 /* The grid is sixteen cells across and a cell has a word on it: at 520 a
    step is twenty-eight pixels and three letters. The one tab that is wider. */
-#finder.rhythm { flex-basis: 700px; width: 700px; }
+#finder.line { flex-basis: 700px; width: 700px; }
 .tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
 .tabs button { border-radius: 4px 4px 0 0; }
 
@@ -184,159 +184,122 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 /* A refusal on the tab's own line: what a build would not do, and why. */
 .note.bad { color: var(--bad); }
 
-/* ── the pattern ─────────────────────────────────────────────────────── */
+/* ── the line ────────────────────────────────────────────────────────── */
 
 #f-controls select { padding: 4px 6px; }
-#f-controls #r-tempo { width: 62px; }
-#f-controls #r-tap { padding: 5px 8px; }
+#f-controls #l-tempo { width: 62px; }
+#f-controls #l-tap { padding: 5px 8px; }
 
-.r-actions {
-    display: flex; align-items: center; gap: 8px;
-    width: 100%; padding-top: 2px;
-}
-#r-listen-all.on { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
+/* The box, first and the whole width: it is the way in. */
+.l-textrow { flex: 1 0 100%; display: flex; position: relative; }
+#l-text { flex: 1 1 auto; min-width: 0; font-size: 13px; padding: 6px 9px; }
+.l-row { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
+#l-pace { width: 90px; }
+#l-say.on { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
+#l-mix { padding: 4px 10px; }
 
-#r-grid { padding: 4px 4px 6px; }
-
-/* One row a bar. The height is fixed so a drag across rows can be measured
-   against it — `pattern.js` reads the pitch off the rows themselves. */
-.r-bar { display: flex; align-items: stretch; gap: 6px; height: 34px; margin-bottom: 5px; }
-.r-barno { flex: 0 0 16px; font-size: 10px; color: var(--dim); text-align: right; line-height: 34px; }
-.r-cells {
-    flex: 1 1 auto; display: flex; min-width: 0;
-    background: #14161a; border: 1px solid var(--line); border-radius: 4px;
-}
-
-/* An empty step. It is where a word goes, and the pointer says so. */
-.r-cell {
-    position: relative; flex: 1 1 0; min-width: 0;
-    border-left: 1px solid #1d2027; cursor: text;
-}
-.r-cell:hover { background: rgba(255,255,255,.06); }
-/* A beat is a heavier line than a step, so the bar is countable by eye. */
-.r-cell.beat, .r-word.beat { border-left-color: #3a4150; }
-.r-cells > :first-child { border-left: 0; }
-
-/* A word, over the steps it holds. The hand cursor is the one every editor
-   uses for a thing that can be picked up. */
-.r-word {
-    position: relative; flex: 1 1 0; min-width: 0;
-    font-size: 11px; color: var(--text);
-    background: #2c3342; border-left: 1px solid var(--line);
-    cursor: grab;
-}
-/* Out of the flow, so the word never widens its block: a block is exactly the
-   steps it holds, whatever is written on it, or the beats stop lining up. The
-   width is set on the label by `pattern.js` — its steps and the rests after
-   them — and the block does not clip it, which is what lets `hello` be read on
-   one step. */
-.r-word .txt {
-    position: absolute; left: 5px; top: 0; bottom: 0; line-height: 32px; z-index: 1;
-    width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    pointer-events: none;
-}
-/* The half of a word that began in the bar above. */
-.r-word.cont { border-left: 1px dashed #4a5361; }
-.r-word.sel { background: var(--accent-dim); box-shadow: 0 0 0 1px var(--accent) inset; }
-.r-word.playing { background: var(--accent); color: #21160c; }
-/* A word nothing said: the one block that is a refusal, drawn as one because a
-   build will refuse for exactly it. */
-.r-word.bad { background: rgba(255,107,107,.16); color: var(--bad); }
-/* Slipped by hand, or stretched to its step: a mark in the corner, because the
-   panel says how much and the grid only needs to say that it was. */
-.r-word.slipped::before, .r-word.stretched::after {
-    content: ''; position: absolute; top: 3px; width: 5px; height: 5px; border-radius: 3px;
-}
-.r-word.slipped::before { left: 3px; background: var(--blue); }
-.r-word.stretched::after { right: 3px; background: var(--good); }
-.r-word.stretched .grab::after { display: none; }
-/* The length lives on the right edge. Seven pixels, because it is the gesture
-   that gets asked for a step at a time and a hairline is a target to aim at. */
-.r-word .grab { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
-.r-word .grab::after {
-    content: ''; position: absolute; right: 2px; top: 9px; bottom: 9px; width: 2px;
-    background: rgba(255,255,255,.2);
-}
-.r-word:hover .grab::after { background: var(--accent); }
-
-/* The field a word is typed into, over the cell it lands on. Wider than the
-   cell, because a cell is a step and a word is longer than that; anchored to
-   the right in the last third of a bar so it stays on the grid. */
-.r-edit {
-    position: absolute; left: -1px; top: -1px; height: 36px; min-width: 120px;
-    z-index: 5; font-size: 12px; padding: 2px 6px;
-}
-.r-edit.right { left: auto; right: -1px; }
-/* The line, first and the whole width: it is the way in. */
-.r-sayrow { flex: 1 0 100%; display: flex; }
-#r-say { flex: 1 1 auto; min-width: 0; font-size: 13px; padding: 6px 9px; }
-#r-pace { width: 90px; }
-/* Every take of the selected word, as buttons. */
-.r-takes { gap: 3px; }
-.r-takes .r-takebtn { padding: 1px 6px; min-width: 22px; font-size: 10px; }
-.r-takes .r-takebtn.on { background: var(--accent); color: #21160c; border-color: var(--accent); }
-/* What the corpus says about what is being typed, under the field. */
-.r-hints {
-    position: absolute; left: -1px; top: 36px; min-width: 120px; z-index: 6;
+/* What the corpus says about the word being typed, under the box. */
+.l-hints {
+    position: absolute; left: 0; top: 34px; min-width: 160px; z-index: 6;
     background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,.4);
 }
-.r-hints.right { left: auto; right: -1px; }
-.r-hints:empty { display: none; }
-.r-hint {
+.l-hints:empty { display: none; }
+.l-hint {
     display: flex; justify-content: space-between; gap: 12px;
     padding: 3px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;
 }
-.r-hint:hover, .r-hint.on { background: var(--accent-dim); }
-.r-hint .n { color: var(--dim); }
-.r-hint.none .n { color: var(--bad); }
+.l-hint:hover, .l-hint.on { background: var(--accent-dim); }
+.l-hint .n { color: var(--dim); }
+.l-hint.none .n { color: var(--bad); }
+
+#l-ruler { padding: 4px 4px 6px; }
+
+/* A row of seconds — or a bar, on a beat. The height is fixed so the blocks
+   line up row to row. */
+.l-rowt { display: flex; align-items: stretch; gap: 6px; height: 40px; margin-bottom: 5px; }
+.l-rowno { flex: 0 0 22px; font-size: 10px; color: var(--dim); text-align: right; line-height: 40px; }
+.l-cells {
+    position: relative; flex: 1 1 auto; display: flex; min-width: 0; overflow: hidden;
+    background: #14161a; border: 1px solid var(--line); border-radius: 4px;
+}
+/* A beat, on the row, behind the words. */
+.l-beat { position: absolute; top: 0; bottom: 0; width: 1px; background: #23272f; }
+.l-beat.major { background: #3a4150; }
+
+/* A word, as wide as it is long. The hand cursor is the one every editor uses
+   for a thing that can be picked up. */
+.l-word {
+    position: relative; flex: 0 0 auto; min-width: 0; overflow: visible;
+    font-size: 11px; color: var(--text);
+    background: #2c3342; border-left: 1px solid var(--line);
+    cursor: pointer;
+}
+/* The shape of its sound, the whole block. */
+.l-word canvas.wave { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+/* Out of the flow, so the word never widens its block: a block is exactly as
+   long as the word, whatever is written on it. The width is set by `ruler.js`
+   — its own and the rest after it — and the block does not clip it, which is
+   what lets `hello` be read on a third of a second. */
+.l-word .txt {
+    position: absolute; left: 5px; top: 0; bottom: 0; line-height: 38px; z-index: 1;
+    width: 96%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    pointer-events: none; text-shadow: 0 0 3px #000, 0 0 3px #000;
+}
+/* The half of a word that began on the row above. */
+.l-word.cont { border-left: 1px dashed #4a5361; }
+.l-word.sel { background: var(--accent-dim); box-shadow: 0 0 0 1px var(--accent) inset; }
+.l-word.playing { background: var(--accent); color: #21160c; }
+/* A word nothing said: a hole, drawn as one. */
+.l-word.bad { background: rgba(255,107,107,.16); color: var(--bad); min-width: 30px; }
+/* Its cut moved by hand, or stretched to a step: a mark in the corner. */
+.l-word.slipped::before, .l-word.stretched::after {
+    content: ''; position: absolute; top: 3px; width: 5px; height: 5px; border-radius: 3px; z-index: 2;
+}
+.l-word.slipped::before { left: 3px; background: var(--blue); }
+.l-word.stretched::after { right: 3px; background: var(--good); }
+/* The top edge moves the word; the right edge is where it ends. */
+.l-word .grip { position: absolute; left: 0; right: 0; top: 0; height: 7px; cursor: grab; z-index: 2; }
+.l-word .grip::after {
+    content: ''; position: absolute; left: 6px; right: 6px; top: 2px; height: 2px;
+    background: rgba(255,255,255,.18);
+}
+.l-word:hover .grip::after { background: var(--accent); }
+.l-word .grab { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 2; }
+.l-word .grab::after {
+    content: ''; position: absolute; right: 2px; top: 11px; bottom: 11px; width: 2px;
+    background: rgba(255,255,255,.2);
+}
+.l-word:hover .grab::after { background: var(--accent); }
+/* The rest after a word: dragged, it is longer or shorter. */
+.l-gap { flex: 0 0 auto; cursor: ew-resize; }
+.l-gap:hover { background: rgba(255,255,255,.05); }
+
+/* Every take of the selected word, as buttons. */
+.l-takes { gap: 3px; }
+.l-takes .l-takebtn { padding: 1px 6px; min-width: 22px; font-size: 10px; }
+.l-takes .l-takebtn.on { background: var(--accent); color: #21160c; border-color: var(--accent); }
 /* The words the corpus does have, beside a word it does not. */
-.r-near { flex-wrap: wrap; gap: 4px; }
+.l-near { flex-wrap: wrap; gap: 4px; }
 
 /* The panel about the selected word. Under the grid rather than over it, so
    the grid holds still while a word is dialled in. */
-.r-piece {
+.l-piece {
     display: flex; flex-direction: column; gap: 6px;
     margin: 2px 4px 10px; padding: 8px 9px;
     background: var(--panel-hi); border: 1px solid var(--line); border-radius: 5px;
 }
-.r-line { display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap; }
-.r-line.bad { color: var(--bad); }
-.r-line #r-phrase { flex: 1 1 110px; min-width: 0; }
-.r-line input[type=range] { width: 150px; }
-.r-line button.tiny { padding: 2px 7px; font-size: 11px; }
-.r-take { min-width: 52px; text-align: center; }
-.r-val { min-width: 52px; text-align: center; }
-
-/* Fit rating badge */
-.badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 3px;
-    padding: 1px 4px;
-    font-size: 10px;
-    min-width: 46px;
-    text-align: center;
-    flex: 0 0 auto;
-    white-space: nowrap;
-    box-sizing: border-box;
-}
-.badge.fit-good {
-    color: #4ade80;
-    background: rgba(74, 222, 128, 0.12);
-    border: 1px solid rgba(74, 222, 128, 0.3);
-}
-.badge.fit-med {
-    color: #facc15;
-    background: rgba(250, 204, 21, 0.12);
-    border: 1px solid rgba(250, 204, 21, 0.3);
-}
-.badge.fit-poor {
-    color: #f87171;
-    background: rgba(248, 113, 113, 0.12);
-    border: 1px solid rgba(248, 113, 113, 0.3);
-}
+.l-line { display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap; }
+.l-line.bad { color: var(--bad); }
+.l-line #l-phrase { flex: 1 1 110px; min-width: 0; }
+.l-line input[type=range] { width: 150px; }
+.l-line button.tiny { padding: 2px 7px; font-size: 11px; }
+.l-val { min-width: 52px; text-align: center; }
+.l-secname { font-weight: 600; }
+/* The word's own sound with the recording either side: the cut is the bright
+   part, and its edges are the cut points. */
+.l-wavebox { display: block; }
+#l-wave { display: block; width: 100%; height: 56px; cursor: ew-resize; border-radius: 3px; }
 
 /* ── the picture ──────────────────────────────────────────────────────── */
 

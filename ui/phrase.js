@@ -180,9 +180,17 @@ export function growStream(stream, words) {
 /// you can know before you have read the transcript, and stating the variants is
 /// honest where a fuzzy matcher guessing at them would not be.
 ///
-/// Answers `{ phrase, matched, at, says, first, last, context }` per hit: `at`
-/// is the start of the first word, which is the attack a cut is placed against,
-/// and `says` is the end of the last.
+/// Answers `{ phrase, matched, at, says, first, last, before, after, context }`
+/// per hit: `at` is the start of the first word, which is the attack a cut is
+/// placed against, and `says` is the end of the last. `before` and `after` are
+/// **the quiet either side** — how long the transcript has nothing between the
+/// previous word's end and this one's start, and between this one's end and the
+/// next one's start, in seconds, `Infinity` at the ends of the recording. That
+/// is what decides whether a word *cuts clean*: one with a fifth of a second of
+/// nothing around it comes out whole, and one in the middle of a run brings its
+/// neighbours' consonants with it. The transcript already knows and is the one
+/// home for it; a reader that measured the sound to find out would be asking a
+/// question it had the answer to.
 export function find(stream, phrase, opts = {}) {
     const loose = !!opts.loose;
     const contextWords = opts.context === undefined ? 5 : opts.context;
@@ -212,6 +220,8 @@ export function find(stream, phrase, opts = {}) {
                         says: w[i].to,
                         first: i,
                         last: i,
+                        before: quietBefore(w, i),
+                        after: quietAfter(w, i),
                         context: w.slice(Math.max(0, i - contextWords), i + 1 + contextWords)
                                   .map((x) => x.text).join(' '),
                     });
@@ -245,6 +255,8 @@ export function find(stream, phrase, opts = {}) {
                 says: w[lastWord].to,
                 first: firstWord,
                 last: lastWord,
+                before: quietBefore(w, firstWord),
+                after: quietAfter(w, lastWord),
                 context: w.slice(Math.max(0, firstWord - contextWords),
                                  lastWord + 1 + contextWords)
                           .map((x) => x.text).join(' '),
@@ -252,6 +264,26 @@ export function find(stream, phrase, opts = {}) {
         }
     }
     return hits.sort((a, b) => a.at - b.at);
+}
+
+function quietBefore(w, i) {
+    return i > 0 ? Math.max(0, w[i].from - w[i - 1].to) : Infinity;
+}
+function quietAfter(w, i) {
+    return i + 1 < w.length ? Math.max(0, w[i + 1].from - w[i].to) : Infinity;
+}
+
+/// The gap between one word and the next, over every pair in the stream that
+/// are near enough to be one breath — `within` seconds. What a line laid at
+/// this speaker's own pace puts between its words: see `naturalGap` in
+/// `ui/library.js`, which takes the median over the corpus.
+export function gapsOf(words, within = 1) {
+    const out = [];
+    for (let i = 1; i < words.length; i++) {
+        const g = words[i].from - words[i - 1].to;
+        if (g >= 0 && g <= within) out.push(g);
+    }
+    return out;
 }
 
 /// Collapse hits closer together than `spacing` seconds into one.

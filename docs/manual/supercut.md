@@ -52,8 +52,8 @@ but a stack is not a sequence, and saving afterwards saves the flattened one.
   folder of footage you already have.
 - **Words** — every place a phrase was said.
 - **Talking** — the stretches where somebody talked without stopping.
-- **Rhythm** — words laid on a beat grid; it finds each word and cuts the mix
-  to the grid.
+- **Line** — a sentence, typed; it finds every word of it in this voice, and
+  you hear it and tune it before it goes in the mix.
 
 Words and Talking are the same questions the workbench's panel asks, with the
 same answers, because [the search is one implementation](find.md). All four list
@@ -202,7 +202,7 @@ recording is already here — and with three conditions a download cannot be in:
 
 **Transcribe** appears once a file has been measured, and from there it is a
 recording like any other: the words are searchable, `+` cuts a moment out of it,
-and the Rhythm tab can build out of it.
+and the Line tab can say things out of it.
 
 **Press the same button again to look at the folder again.** Where a broadcaster
 gets **Look up**, a folder gets **Re-scan**: it takes in whatever has appeared
@@ -396,113 +396,95 @@ In the **Words** tab:
 - Appending an exclamation point to a word (e.g. `stop!`) searches specifically for
   the yelled/exclaimed take of that word.
 
-## Words on a beat
+## The line
 
-The **Rhythm** tab is for the mix you can already hear: you know what it should
-say, and what you need is for somebody to go and find every word of it and put
-them in a row.
+The **Line** tab is for the mix you can already hear: you know what it should
+say, and what you need is for somebody to go and find every word of it in this
+voice and put them in a row. It goes in three steps, and the mix is the last of
+them: write the line and hear it, fix it by ear, then put it in the mix.
 
-**Type the line and press Enter.** The box at the top takes a whole sentence.
-Every word is found in the corpus, given the take it is usually said in, and
-laid one after another at the length it was said — and the mix under the picture
-fills with the clips as you watch. A comma is a step of rest after the word and a
-full stop two, so `what the hell, are you doing.` breathes where the text does.
-`"you cross"` in quotes is one word with a space in it, and `what|wot` is either
-spelling. The line stays in the box, so changing a word is editing the text and
-pressing Enter again.
+**Type.** The box at the top takes a whole sentence. Every word is found as you
+finish typing it and played to you as it lands, so a word this streamer never
+said is one you hear is missing before you have finished the sentence. Nothing
+goes in the mix. Under the box the line is drawn on a ruler of seconds: each
+word a block as wide as it is long, with the shape of its own sound on it, and
+the space after it its rest. A comma is a short rest and a full stop a long one,
+so `what the hell, are you doing.` breathes where the text does. `"you cross"`
+in quotes is one word with a space in it, `what|wot` is either spelling, and a
+new line is the longest rest. While you type, the words the corpus has that
+begin with what you have typed appear under the box, each with how often it is
+said: `↓` `↑` pick one and `Tab` or Enter takes it.
 
-**Pace** lays the same line tighter or looser: at 1.5× every word is said half
-again as fast, which you hear, because it is the sound that is stretched and
-not only the grid. The takes stay; the steps and the rests follow.
+**Enter says the line** — the whole sentence back, out of the recordings,
+lighting each word as it goes. **Say** and `Space` do the same, and **loop**
+plays it round. It is the clips one after another rather than the render, so
+there is a seam at every word, which is also what the words sound like.
 
-**There is no Build.** The row under the picture *is* the line: a word changed,
-held, moved, given another take or taken off is that clip changed, held, moved,
-replaced or gone on the next frame, in place, with the rest of the row closing
-up. A clip you add from the Words tab keeps its place before or after the line's
-block — but trimming or reordering one of the line's own clips by hand lasts
-only until the next edit to the line, because the line is what they are a
-picture of.
+**Each word is given its cleanest take**: the one nearest the length the word is
+usually said in, with the most quiet either side of it. A word said three
+thousand times has three thousand takes, ranked that way, and a word said twice
+on one line takes two of them. **Pace** says the line faster or slower: within
+a whole tone it is the words that are sped up, which you hear, and past that it
+is the rests that close up, so the voice stays the voice.
 
-**Under the box is the grid**, where the line is adjusted a word at a time. One
-row is a bar, one cell is a step, and the heavier lines are the beats. Set the
-**tempo** — type it, or press **Tap** in time — and the **grid**: how many steps
-a beat and how many beats a bar. At 120 with four steps a beat, a step is an
-eighth of a second, and the line under the controls says so.
-
-Words can also be put on it one at a time. An empty grid opens with the caret
-already in its first cell:
+**Fix it by ear.** Pressing a word plays it and selects it, and the panel under
+the ruler is about it: what it says, which take of how many, how long, and its
+own sound with the recording either side of it, the cut bright in the middle.
 
 | Do | Gets |
 |---|---|
-| press an empty cell and type | the word lands on that step |
-| press **space** while typing | lands the word and moves to the next cell, so `no no no no` is four spaces |
-| type a phrase in quotes, `"you cross"` | one word with a space in it |
-| `what\|wot` | either spelling |
-| drag a word's **right edge** | holds it for more steps, or fewer |
-| drag a **word** | moves it to another step, on any bar |
+| press a word | plays it; the panel is about it |
+| `[` `]` — or a numbered take in the panel | the next take, played as it lands |
+| drag either edge of the sound in the panel | moves that cut point; drag the middle to slide both |
+| `,` `.` | the word five milliseconds earlier or later; twenty-five with `Shift` |
+| drag a word's **right edge** on the ruler | where the word ends |
+| drag the **space after** a word | how long its rest is |
+| drag a word by its **top edge** | moves it along the line; the box follows |
+| **gain** | how loud, for the one word |
+| `⟳ loop` | the word over and over, for dialling in a cut |
+| `↺` | the word as it was found |
 | double-click a word, or **Enter** | changes what it says |
-| **Delete** | takes the selected word off |
-| look under the field while typing | what you have typed and the words that begin with it, each with how often it is said; **↓** and **↑** pick one and space or Enter lands it |
+| **Delete** | takes the word off |
 
-A step no word is on is a rest — a step of black and silence — so there is
-nothing to type for one. A word cannot be dropped onto another; the drop is
-refused and the word stays where it was. There is always an empty cell after the
-last word, and a full bar is followed by an empty one.
+Drag across several words — or `Shift`-press the far end — and they are a
+**section**: `Space` says only that, the pace and the gain apply to it, **match
+levels** brings its words to one loudness, and **other takes** gives every word
+in it its next take.
 
-A word nothing in the corpus says shows `×0` under the field before it lands,
-and lands anyway if you let it — it is drawn red, and its panel offers the
-nearest words the corpus does have, each a press away from taking its place.
+A word nothing in the corpus says shows `×0` under the box before you finish
+it, and stays on the line if you let it — drawn as a hole, so the line can be
+read with it in, and its panel offers the nearest words the corpus does have,
+each a press away from taking its place.
 
-**Pressing a word plays it and selects it.** The panel under the grid is about
-the selected word: what it says, which take, how it fits, and how far it is
-slipped. `←` `→` walk the words.
+**On a beat** is for `no no no no` on the beat rather than for a sentence, and
+it is a switch: ticked, every word and every rest is rounded to a step and the
+rows of the ruler become bars with the beats drawn on them; unticked, nothing
+is. Set the **tempo** — type it, or press **Tap** in time — and the grid: how
+many steps a beat and how many beats a bar. At 120 with four steps a beat, a
+step is an eighth of a second, and the line under the controls says so. A word
+fills its steps by being stretched when the stretch is within a quarter, and
+by being cut to them when it is not.
 
-**Takes.** A word said three thousand times has three thousand takes, and the
-panel steps through them with `◀` `▶` — or `[` `]` — playing each one as it
-lands and putting it in the row. Under the stepper every take is a numbered
-button, so the third one is one press away when the way to find it is to hear
-them; hovering one says how long it is. Repeats of the same word walk the takes
-rather than repeating one. The takes are offered **best fit first**: the badge
-is how close the take's own length is to the step it has been given, and
-unticking the box offers them in the order they were said instead.
+**Where a word starts is measured, not guessed.** A transcript knows roughly
+where a word is — near enough to find it, not near enough to cut on — so every
+take is moved onto the transient nearest its word, quietly in the background,
+and the line says `finding the beat in 6` while it is going on. The ruler, the
+audition and the mix all hear the same cut.
 
-**Slip.** The slider moves the word's start by up to a fifth of a second either
-way, and releasing it plays the result; `,` and `.` nudge by five milliseconds,
-twenty-five with `Shift`. A word slipped by hand is marked on the grid, and the
-beat-finding below leaves it alone.
+**→ Mix** puts the line in the mix — `Ctrl+Enter` does the same — and that is
+the first moment anything is: every word a clip, and every rest the same
+recording carried on from where the word ended, muted, so the speaker pauses
+on the screen. Untick **hold** for black instead. The mix does not follow the
+line after that: change a take or a rest and press → Mix again, and the clip
+that changed is the one that changes, in place, with the rest of the row
+closing up; a clip you added from the Words tab keeps its place beside the
+line's block. From there it is a mix like any other — trim a picture, reorder,
+render — and the line stays on its tab to be said again.
 
-**Fit.** **Stretch** sets the piece's speed so the word's own length fills its
-steps, and its pitch moves with it. **Cut** trims it to the step instead: a long
-word is cut off and a short one runs on into whatever followed it. A word laid
-from the line is stretched when that is within a quarter either way and cut when
-it is not — `the` is one transcript frame long and would come out at two thirds
-speed — and a word put on the grid by hand starts cut. A word that would need
-more than double speed or less than half is cut whatever the setting says.
-
-**Listen** plays the whole pattern in tempo, out of the recordings, lighting
-each word as it goes; **loop** plays it round. It is a preview of the clips
-rather than the render, so there is a seam at every step, which is also what
-the words sound like. `Space` starts and stops it. `⟳ loop` on the panel plays
-one word over and over, for dialling in its slip. Playing the mix itself, under
-the picture, is the render.
-
-**A word nothing said is a hole, and it is named.** It is red on the grid, it
-has no clip in the row, and the line under the controls says which. Everything
-else on the line is in the row regardless; fix the word, or take it off.
-
-**Where the word starts is measured, not guessed.** A transcript knows roughly
-where a word is — near enough to find it, not near enough to hit a beat with —
-so after the pieces are laid, each one is moved onto the transient nearest its
-word. That is the difference between on the beat and nearly on it. It happens
-quietly in the background, moves the footage inside each card and never the card
-itself, and the line says `finding the beat in 6` while it is going on. Whatever
-it finds, the grid does not move.
-
-The pattern is remembered between sessions but it is **not in the document** —
-what a `.fbro` holds is the mix. A pattern remembered from last time is not put
-back in the row when the window opens; the first edit to it is. **Clear** on the
-tab empties the grid and takes its clips out of the row; **Clear** on the mix
-empties the mix and leaves the grid.
+The line is remembered between sessions but it is **not in the document** —
+what a `.fbro` holds is the mix. **Clear** on the tab empties the line and
+takes its clips out of the mix; **Clear** on the mix empties the mix and leaves
+the line.
 
 ## Writing the file
 
@@ -520,24 +502,25 @@ The render is the same one the workbench performs, from the same spec.
 |---|---|
 | `Space` | play / stop — or stop what a row is playing, if a row is playing |
 | `Home` `End` | start, end |
-| `←` `→` | one frame; with `Shift`, one second — on the Rhythm tab, the previous / next word |
+| `←` `→` | one frame; with `Shift`, one second — on the Line tab, the previous / next word, and with `Shift` a section |
 | `+` `-` | zoom the mix in, out |
 | `0` | fit the whole mix on the screen |
 | `M` | mute |
-| `Delete` | remove the selected clip and close the gap — on the Rhythm tab, the selected word |
+| `Delete` | remove the selected clip and close the gap — on the Line tab, the selected word or section |
 | `/` | jump to the search box |
 | `Esc` | close the list of what is running |
 | `Ctrl+S` `Ctrl+O` `Ctrl+R` | save, open, render |
 
-On the Rhythm tab, with nothing being typed into:
+On the Line tab, with nothing being typed into:
 
 | | |
 |---|---|
-| `Space` | listen to the pattern / stop |
+| `Space` | say the line, or the section / stop |
 | `L` | loop it |
 | `[` `]` | previous / next take of the selected word |
-| `,` `.` | slip the selected word 5 ms earlier / later; 25 ms with `Shift` |
-| `Enter` | change what the selected word says |
+| `,` `.` | the selected word 5 ms earlier / later; 25 ms with `Shift` |
+| `Enter` | back to the box; `Ctrl+Enter` puts the line in the mix |
+| `Esc` | nothing selected |
 
 ## Getting a corpus in a batch
 

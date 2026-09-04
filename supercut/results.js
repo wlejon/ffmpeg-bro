@@ -12,10 +12,10 @@
 //     worth listening to. A stretch is defined by its *gaps* and by nothing
 //     else; see `monologues` in `ui/phrase.js` for why it is named after the
 //     measurement and claims nothing about what is in it.
-//   - **Rhythm** — you know what it should say and when each word should land.
-//     The one tab whose input is an *instruction* rather than a search: a grid
-//     of steps with words on it, and what a build makes of it. `supercut/rhythm.js`
-//     decides every word of that and `supercut/pattern.js` draws it, which is
+//   - **Line** — you know what it should say. The one tab whose input is a
+//     *sentence* rather than a search: typed whole, every word found and paced,
+//     heard and adjusted by ear, and then put in the mix. `supercut/line.js`
+//     decides every word of that and `supercut/ruler.js` draws it, which is
 //     the same split the other three keep with `ui/library.js`; this file only
 //     hands the tab over.
 //
@@ -43,7 +43,7 @@ import { clock } from '../ui/format.js';
 import { gb } from '../corpus/files.js';
 import * as library from '../ui/library.js';
 import * as acquire from './acquire.js';
-import * as pattern from './pattern.js';
+import * as ruler from './ruler.js';
 
 /// A found list is long and the interesting part is the top of it. The cap is on
 /// what is *drawn* rather than on what is found, so the count stays honest.
@@ -86,7 +86,7 @@ export function initResults(refs, h) {
         b.addEventListener('click', () => setTab(b.dataset.tab));
     // The fourth tab draws into the same three nodes and is told which they are
     // once; the finder itself is handed over so the tab can ask for more width.
-    pattern.initPattern({
+    ruler.initRuler({
         controls: nodes.controls, note: nodes.note, list: nodes.list,
         finder: nodes.tabs.parentNode,
     }, hooks);
@@ -123,7 +123,7 @@ export function currentTab() { return tab; }
 
 export function setTab(next) {
     if (tab === next) return;
-    if (tab === 'rhythm') pattern.leave();
+    if (tab === 'line') ruler.leave();
     tab = next;
     // **Answered on arrival, not on a press.** Two of the three questions have an
     // answer already — what is in the corpus, and where the talking is — and a
@@ -137,8 +137,8 @@ export function setTab(next) {
         const box = document.getElementById('f-phrase');
         if (box) box.focus();
     }
-    // The other one: an empty grid arrives with the caret in its first cell.
-    if (tab === 'rhythm') pattern.arrive();
+    // The other one: the line arrives with the caret in its box.
+    if (tab === 'line') ruler.arrive();
 }
 
 /// What the list is showing, for a caller that has to check it rather than read
@@ -161,7 +161,7 @@ function search() {
     // inventory is a superset of the manifest and its rows are the same shape,
     // which is why one list still draws all three tabs.
     if (tab === 'recordings') results = acquire.list();
-    else if (tab === 'rhythm') results = [];
+    else if (tab === 'line') results = [];
     else {
         reading = tab === 'words'
             ? library.beginSearch('words', { phrase, loose })
@@ -200,7 +200,7 @@ export function tick() {
     if (!reading || reading.done) {
         // Nothing being looked for: read the corpus instead, so that the calls
         // which cannot be readings do not pay for it. The score is the one that
-        // matters here — `supercut/rhythm.js` resolves every word of it through
+        // matters here — `supercut/line.js` resolves every word of it through
         // `searchWords` on the keystroke that changed it, and what made that
         // slow was the first read of the transcripts and never the search.
         library.warmSome(IDLE_MS);
@@ -221,8 +221,8 @@ export function tick() {
 /// the caret away every time a progress bar moved a percent.
 export function refresh() {
     if (tab === 'recordings') results = acquire.list();
-    // A transcription landing changes what every word on the grid resolves to.
-    if (tab === 'rhythm') { pattern.reload(); return; }
+    // A transcription landing changes what every word of the line resolves to.
+    if (tab === 'line') { ruler.reload(); return; }
     // **Except the two the machine changes by itself.** A checkpoint landing
     // takes the model controls away and starting to fetch one turns them into a
     // Stop, and neither is a press on this row — so what the row *should* be
@@ -253,12 +253,12 @@ export function refresh() {
 /// button that became a Stop — is not this; that is `refresh()`, and
 /// `acquire.tick()` answers `'rows'` for it.
 export function repaint() {
-    // **The Rhythm tab's moving part is one line and no grid.** A build's inputs
-    // opening and its onset reads landing change the note and nothing else — the
-    // grid is what was laid on it and nobody has touched it — so this is one
-    // write per frame rather than a grid rebuilt to say that two fewer reads are
-    // outstanding.
-    if (tab === 'rhythm') { pattern.repaint(); return; }
+    // **The Line tab's moving part is its note and the envelopes landing.** A
+    // commit's inputs opening and its onset reads landing change the note and
+    // nothing else — the words are what was typed and nobody has touched them —
+    // so this is one write per frame, and a repaint of the blocks whose sound
+    // just arrived, rather than the ruler rebuilt.
+    if (tab === 'line') { ruler.repaint(); return; }
     if (tab !== 'recordings') return;
     for (const item of results) {
         const node = moving.get(item.id);
@@ -298,11 +298,11 @@ export function play(n) {
     return true;
 }
 
-/// Stop the audition, whichever row it is on — or whichever word of the grid.
+/// Stop the audition, whichever row it is on — or whichever word of the line.
 /// The app's `Space` reaches this too.
 export function hush() {
-    const grid = pattern.hush();
-    if (!playing) return grid;
+    const word = ruler.hush();
+    if (!playing) return word;
     if (hooks.hush) hooks.hush();
     playing = null;
     drawRows();
@@ -311,7 +311,7 @@ export function hush() {
 
 /// Is anything being auditioned? For the caller that has to decide what a key
 /// means — see `app.js`.
-export function auditioning() { return !!playing || pattern.auditioning(); }
+export function auditioning() { return !!playing || ruler.auditioning(); }
 
 /// Put it at the end of the mix.
 export function add(n) {
@@ -332,7 +332,7 @@ const isPlaying = (item) =>
 
 /// The audition ended, wherever it ended. Called by the app.
 export function stopped() {
-    pattern.stopped();
+    ruler.stopped();
     if (!playing) return;
     playing = null;
     drawRows();
@@ -343,9 +343,9 @@ export function stopped() {
 function draw() {
     for (const b of nodes.tabs.querySelectorAll('[data-tab]'))
         b.classList.toggle('on', b.dataset.tab === tab);
-    // The grid is sixteen cells across and wants the room; the other three are
+    // The ruler is a row of seconds and wants the room; the other three are
     // lists and do not.
-    if (nodes.tabs.parentNode) nodes.tabs.parentNode.classList.toggle('rhythm', tab === 'rhythm');
+    if (nodes.tabs.parentNode) nodes.tabs.parentNode.classList.toggle('line', tab === 'line');
     drawControls();
     drawNote();
     drawRows();
@@ -506,7 +506,7 @@ function drawControls() {
                 }));
             return kids;
         }
-        if (tab === 'rhythm') { pattern.drawControls(); return []; }
+        if (tab === 'line') { ruler.drawControls(); return []; }
         if (tab === 'words') {
             const box = el('input', {
                 type: 'text', id: 'f-phrase', value: phrase,
@@ -592,7 +592,7 @@ function drawNote() {
     // something to report before there is a corpus at all — what a look-up is
     // doing, what it refused, and how much of the channel is actually here.
     if (tab === 'recordings') { setText(nodes.note, acquire.note()); return; }
-    if (tab === 'rhythm') { pattern.drawNote(); return; }
+    if (tab === 'line') { ruler.drawNote(); return; }
     if (!base) {
         // The other two questions cannot be asked of a corpus that does not
         // exist, and saying so is not the same as saying nothing.
@@ -872,8 +872,8 @@ function drawRows() {
     // than in `repaint()` so that a row taken off the screen can never be
     // written to afterwards.
     moving.clear();
-    // The grid is not a list, and the fourth tab draws it into the same node.
-    if (tab === 'rhythm') { pattern.draw(); return; }
+    // The line is not a list, and the fourth tab draws it into the same node.
+    if (tab === 'line') { ruler.draw(); return; }
     put(nodes.list, () => results.slice(0, SHOWN).map((item, n) => {
         const dead = !item.vod.media;
         const on = isPlaying(item);
