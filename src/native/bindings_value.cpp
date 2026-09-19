@@ -8,7 +8,9 @@ namespace ffmpegbro {
 
 void setStr(bronze::Value obj, const char* key, const std::string& v) {
     namespace ev = bronze::embed;
-    ev::setProperty(obj, key, ev::fromUtf8(v));
+    ev::Persistent objP(obj);
+    ev::Persistent s(ev::fromUtf8(v));
+    ev::setProperty(objP.get(), key, s.get());
 }
 
 void setNum(bronze::Value obj, const char* key, double val) {
@@ -52,6 +54,20 @@ std::string strProp(bronze::Value obj, const char* key,
     return fallback;
 }
 
+bool isArray(bronze::Value arr) {
+    namespace ev = bronze::embed;
+    if (!ev::isObject(arr)) return false;
+    ev::GlobalValue arrCtor = ev::globalValue("Array");
+    if (!arrCtor.found || !ev::isObject(arrCtor.value)) return false;
+    ev::Persistent ctorP(arrCtor.value);
+    bronze::Value isArrayFn = ev::getProperty(ctorP.get(), "isArray");
+    if (!ev::isFunction(isArrayFn)) return false;
+    ev::Persistent fnP(isArrayFn);
+    bronze::Value target = arr;
+    ev::CallResult res = ev::call(fnP.get(), ev::undefined(), std::span<const bronze::Value>(&target, 1));
+    return !res.thrown && ev::toBool(res.value);
+}
+
 uint32_t arrayLength(bronze::Value arr) {
     namespace ev = bronze::embed;
     if (!ev::isObject(arr)) return 0;
@@ -60,6 +76,11 @@ uint32_t arrayLength(bronze::Value arr) {
     double d = ev::toDouble(lenVal);
     if (d < 0.0 || std::isnan(d)) return 0;
     return static_cast<uint32_t>(d);
+}
+
+bronze::Value createArray() {
+    namespace ev = bronze::embed;
+    return ev::parseJson("[]").value;
 }
 
 bool takeName(bronze::Value v, std::string* out) {

@@ -58,7 +58,7 @@ extern "C" {
 #include <libavutil/eval.h>
 }
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -73,7 +73,7 @@ namespace {
 /// How many samples one call will evaluate. A curve across a two-hundred-pixel
 /// column wants a hundred and change; anything past this is a caller that has
 /// mistaken this for a render loop, and the answer would be a JS array of a
-/// million doubles built one `JS_SetPropertyUint32` at a time.
+/// million doubles built one by one.
 constexpr uint32_t kMaxRows = 4096;
 
 /// And how many variables. libav has no limit; this one is here so that a
@@ -158,20 +158,17 @@ bool libavKnows(const Word& w, const char* const* names) {
 /// The strings are owned by `store` and the pointer array by `ptrs`, both of
 /// which must outlive every use: `av_expr_parse` keeps no copy of the names but
 /// does compare against them while parsing.
-bool takeNames(JSContext* ctx, JSValueConst arr, std::vector<std::string>* store,
+bool takeNames(bronze::Value arr, std::vector<std::string>* store,
                std::vector<const char*>* ptrs) {
-    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { ptrs->push_back(nullptr); return true; }
-    if (!JS_IsArray(arr)) return false;
-    const uint32_t n = std::min(arrayLength(ctx, arr), kMaxNames);
+    namespace ev = bronze::embed;
+    if (ev::isUndefined(arr) || ev::isNull(arr)) { ptrs->push_back(nullptr); return true; }
+    if (!isArray(arr)) return false;
+    const uint32_t n = std::min(arrayLength(arr), kMaxNames);
     store->reserve(n);
     for (uint32_t i = 0; i < n; i++) {
-        JSValue v = JS_GetPropertyUint32(ctx, arr, i);
-        size_t len = 0;
-        const char* s = JS_ToCStringLen(ctx, &len, v);
-        if (s) store->push_back(std::string(s, len));
-        if (s) JS_FreeCString(ctx, s);
-        JS_FreeValue(ctx, v);
-        if (!s) return false;
+        bronze::Value v = ev::getElement(arr, i);
+        if (!ev::isString(v)) return false;
+        store->push_back(ev::toUtf8(v));
     }
     ptrs->reserve(store->size() + 1);
     for (const auto& s : *store) ptrs->push_back(s.c_str());
@@ -182,13 +179,15 @@ bool takeNames(JSContext* ctx, JSValueConst arr, std::vector<std::string>* store
 /// `{ ok: false, reason, unknown: [...] }` — a refusal with libav's verdict on
 /// every word in it. `unknown` empty means the expression is malformed rather
 /// than short of a name, which is a different thing to say to somebody.
-JSValue refusal(JSContext* ctx, const std::string& text, const char* const* names) {
-    JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "ok", JS_FALSE);
+bronze::Value refusal(const std::string& text, const char* const* names) {
+    namespace ev = bronze::embed;
+    ev::Persistent out(ev::createObject());
+    setBool(out.get(), "ok", false);
     std::vector<std::string> unknown;
     for (const auto& w : wordsIn(text))
         if (!libavKnows(w, names)) unknown.push_back(w.text);
-    JS_SetPropertyStr(ctx, out, "unknown", stringsToJs(ctx, unknown));
+    ev::Persistent unk(stringsToJs(unknown));
+    out.set(ev::setProperty(out.get(), "unknown", unk.get()));
 
     std::string reason;
     if (unknown.empty()) {
@@ -199,8 +198,8 @@ JSValue refusal(JSContext* ctx, const std::string& text, const char* const* name
         reason = "libav's evaluator does not know these here: ";
         for (size_t i = 0; i < unknown.size(); i++) reason += (i ? ", " : "") + unknown[i];
     }
-    setStr(ctx, out, "reason", reason);
-    return out;
+    setStr(out.get(), "reason", reason);
+    return out.get();
 }
 
 } // namespace
@@ -227,18 +226,20 @@ void installExpression(Table& ns) {
     /// answer for most of a filter's options — `drawtext`'s `fontfile` is a
     /// path — and a caller asking about each option in turn would be a caller
     /// wrapped in try/catch.
-    expr.function("evaluate", [](JSContext* ctx, JSValue textArg, JSValue namesArg,
-                                 JSValue rowsArg) {
+    expr.function("evaluate", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
         std::string text;
-        if (!takeName(ctx, textArg, &text))
-            return JS_ThrowTypeError(ctx, "expr.evaluate(text, names, rows) requires text");
+        if (args.empty() || !takeName(args[0], &text))
+            return ev::throwTypeError("expr.evaluate(text, names, rows) requires text");
+
+        bronze::Value namesArg = args.size() >= 2 ? args[1] : ev::undefined();
+        bronze::Value rowsArg = args.size() >= 3 ? args[2] : ev::undefined();
 
         std::vector<std::string> nameStore;
         std::vector<const char*> names;
-        if (!takeNames(ctx, namesArg, &nameStore, &names))
-            return JS_ThrowTypeError(ctx,
-                                     "expr.evaluate(text, names, rows) requires an array of "
-                                     "variable names");
+        if (!takeNames(namesArg, &nameStore, &names))
+            return ev::throwTypeError("expr.evaluate(text, names, rows) requires an array of "
+                                      "variable names");
 
         AVExpr* parsed = nullptr;
         // Silenced for the same reason the probes above are: an option being
@@ -248,12 +249,12 @@ void installExpression(Table& ns) {
                                      nullptr, nullptr, 64, nullptr);
         if (rc < 0 || !parsed) {
             if (parsed) av_expr_free(parsed);
-            return refusal(ctx, text, names.data());
+            return refusal(text, names.data());
         }
         const std::unique_ptr<AVExpr, void (*)(AVExpr*)> owned(parsed, av_expr_free);
 
-        JSValue out = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, out, "ok", JS_TRUE);
+        ev::Persistent out(ev::createObject());
+        setBool(out.get(), "ok", true);
 
         // Which of the supplied names actually occur. libav counts into an
         // array indexed the same way `names` is, so an empty name list is an
@@ -264,43 +265,47 @@ void installExpression(Table& ns) {
             av_expr_count_vars(parsed, counts.data(), static_cast<int>(counts.size())) >= 0)
             for (size_t i = 0; i < counts.size(); i++)
                 if (counts[i]) uses.push_back(nameStore[i]);
-        JS_SetPropertyStr(ctx, out, "uses", stringsToJs(ctx, uses));
+        ev::Persistent usesVal(stringsToJs(uses));
+        out.set(ev::setProperty(out.get(), "uses", usesVal.get()));
 
-        JSValue values = JS_NewArray(ctx);
-        if (JS_IsArray(rowsArg)) {
-            const uint32_t rows = std::min(arrayLength(ctx, rowsArg), kMaxRows);
+        ev::Persistent values(createArray());
+        if (isArray(rowsArg)) {
+            ev::Persistent rowsP(rowsArg);
+            const uint32_t rows = std::min(arrayLength(rowsP.get()), kMaxRows);
             std::vector<double> vars(nameStore.size(), 0.0);
             for (uint32_t r = 0; r < rows; r++) {
-                JSValue row = JS_GetPropertyUint32(ctx, rowsArg, r);
+                bronze::Value row = ev::getElement(rowsP.get(), r);
                 std::fill(vars.begin(), vars.end(), 0.0);
-                if (JS_IsArray(row)) {
+                if (isArray(row)) {
+                    ev::Persistent rowP(row);
                     const uint32_t n =
-                        std::min<uint32_t>(arrayLength(ctx, row),
+                        std::min<uint32_t>(arrayLength(rowP.get()),
                                            static_cast<uint32_t>(vars.size()));
                     for (uint32_t i = 0; i < n; i++) {
-                        JSValue cell = JS_GetPropertyUint32(ctx, row, i);
+                        bronze::Value cell = ev::getElement(rowP.get(), i);
                         double d = 0.0;
                         // A cell that is not a number stays zero rather than
                         // becoming NaN — the same rule `bindings_value.h` gives
                         // its two reasons for, and here it is the difference
                         // between one bad sample and a whole curve of NaN.
-                        if (JS_ToFloat64(ctx, &d, cell) == 0 && d == d) vars[i] = d;
-                        JS_FreeValue(ctx, cell);
+                        if (ev::isNumber(cell)) {
+                            d = ev::toDouble(cell);
+                            if (d == d) vars[i] = d;
+                        }
                     }
                 }
-                JS_FreeValue(ctx, row);
                 const double v = av_expr_eval(parsed, vars.data(), nullptr);
                 // NaN and ±inf are what an expression divided by zero comes to,
                 // and JSON has no spelling for either — so they arrive as null,
                 // which a caller draws as a gap rather than as a number.
-                JS_SetPropertyUint32(ctx, values, r,
-                                     (v == v && v > -1e308 && v < 1e308) ? JS_NewFloat64(ctx, v)
-                                                                         : JS_NULL);
+                bronze::Value cellVal = (v == v && v > -1e308 && v < 1e308) ? ev::fromDouble(v)
+                                                                             : ev::null();
+                values.set(ev::setElement(values.get(), r, cellVal));
             }
         }
-        JS_SetPropertyStr(ctx, out, "values", values);
-        return out;
-    });
+        out.set(ev::setProperty(out.get(), "values", values.get()));
+        return out.get();
+    }, 3);
 }
 
 } // namespace ffmpegbro

@@ -42,7 +42,7 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 }
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <cstdint>
 #include <string>
@@ -52,74 +52,84 @@ namespace ffmpegbro {
 
 namespace {
 
-JSValue codecListToJs(JSContext* ctx, const std::vector<CodecOption>& list) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value codecListToJs(const std::vector<CodecOption>& list) {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& c : list) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "id", c.id);
-        setStr(ctx, o, "label", c.label);
-        setStr(ctx, o, "longName", c.longName);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "id", c.id);
+        setStr(o.get(), "label", c.label);
+        setStr(o.get(), "longName", c.longName);
         // The codec, as against the encoder: `libx264` writes `h264`. Anything
         // that talks about codecs rather than encoders — a bitstream filter's
         // list of what it runs on — needs this and cannot derive it.
-        setStr(ctx, o, "codecName", c.codecName);
-        JS_SetPropertyStr(ctx, o, "crf", JS_NewBool(ctx, c.supportsCrf));
-        JS_SetPropertyStr(ctx, o, "preset", JS_NewBool(ctx, c.supportsPreset));
-        JS_SetPropertyStr(ctx, o, "qp", JS_NewBool(ctx, c.supportsQp));
-        JS_SetPropertyStr(ctx, o, "tune", JS_NewBool(ctx, c.supportsTune));
-        JS_SetPropertyStr(ctx, o, "hardware", JS_NewBool(ctx, c.hardware));
-        JS_SetPropertyStr(ctx, o, "intraOnly", JS_NewBool(ctx, c.intraOnly));
+        setStr(o.get(), "codecName", c.codecName);
+        setBool(o.get(), "crf", c.supportsCrf);
+        setBool(o.get(), "preset", c.supportsPreset);
+        setBool(o.get(), "qp", c.supportsQp);
+        setBool(o.get(), "tune", c.supportsTune);
+        setBool(o.get(), "hardware", c.hardware);
+        setBool(o.get(), "intraOnly", c.intraOnly);
         // Subtitles: text rather than pictures. The one fact that decides
         // whether a conversion is possible at all, so it travels with the
         // codec rather than being worked out from its name.
-        JS_SetPropertyStr(ctx, o, "textSub", JS_NewBool(ctx, c.textSub));
-        JS_SetPropertyStr(ctx, o, "lossless", JS_NewBool(ctx, c.lossless));
-        JS_SetPropertyStr(ctx, o, "alwaysLossless", JS_NewBool(ctx, c.alwaysLossless));
-        JS_SetPropertyStr(ctx, o, "losslessOption", JS_NewBool(ctx, c.losslessOption));
-        JS_SetPropertyStr(ctx, o, "crfMin", JS_NewFloat64(ctx, c.crfMin));
-        JS_SetPropertyStr(ctx, o, "crfMax", JS_NewFloat64(ctx, c.crfMax));
-        JS_SetPropertyStr(ctx, o, "crfDefault", JS_NewFloat64(ctx, c.crfDefault));
-        JS_SetPropertyStr(ctx, o, "pixelFormats", stringsToJs(ctx, c.pixelFormats));
-        JS_SetPropertyStr(ctx, o, "presets", stringsToJs(ctx, c.presets));
-        JS_SetPropertyStr(ctx, o, "tunes", stringsToJs(ctx, c.tunes));
-        JS_SetPropertyStr(ctx, o, "profiles", stringsToJs(ctx, c.profiles));
-        JS_SetPropertyStr(ctx, o, "profileLabels", stringsToJs(ctx, c.profileLabels));
-        JS_SetPropertyStr(ctx, o, "sampleRates", intsToJs(ctx, c.sampleRates));
-        JS_SetPropertyStr(ctx, o, "channelCounts", intsToJs(ctx, c.channelCounts));
-        JS_SetPropertyStr(ctx, o, "containers", stringsToJs(ctx, c.containers));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        setBool(o.get(), "textSub", c.textSub);
+        setBool(o.get(), "lossless", c.lossless);
+        setBool(o.get(), "alwaysLossless", c.alwaysLossless);
+        setBool(o.get(), "losslessOption", c.losslessOption);
+        setNum(o.get(), "crfMin", c.crfMin);
+        setNum(o.get(), "crfMax", c.crfMax);
+        setNum(o.get(), "crfDefault", c.crfDefault);
+        ev::Persistent pf(stringsToJs(c.pixelFormats));
+        o.set(ev::setProperty(o.get(), "pixelFormats", pf.get()));
+        ev::Persistent pr(stringsToJs(c.presets));
+        o.set(ev::setProperty(o.get(), "presets", pr.get()));
+        ev::Persistent tu(stringsToJs(c.tunes));
+        o.set(ev::setProperty(o.get(), "tunes", tu.get()));
+        ev::Persistent prof(stringsToJs(c.profiles));
+        o.set(ev::setProperty(o.get(), "profiles", prof.get()));
+        ev::Persistent profl(stringsToJs(c.profileLabels));
+        o.set(ev::setProperty(o.get(), "profileLabels", profl.get()));
+        ev::Persistent sr(intsToJs(c.sampleRates));
+        o.set(ev::setProperty(o.get(), "sampleRates", sr.get()));
+        ev::Persistent cc(intsToJs(c.channelCounts));
+        o.set(ev::setProperty(o.get(), "channelCounts", cc.get()));
+        ev::Persistent co(stringsToJs(c.containers));
+        o.set(ev::setProperty(o.get(), "containers", co.get()));
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
-JSValue optionsToJs(JSContext* ctx, const std::vector<OptionInfo>& opts) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value optionsToJs(const std::vector<OptionInfo>& opts) {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& o : opts) {
-        JSValue e = JS_NewObject(ctx);
-        setStr(ctx, e, "name", o.name);
-        setStr(ctx, e, "help", o.help);
-        setStr(ctx, e, "type", o.type);
-        setStr(ctx, e, "unit", o.unit);
-        setStr(ctx, e, "default", o.defaultValue);
-        JS_SetPropertyStr(ctx, e, "min", JS_NewFloat64(ctx, o.min));
-        JS_SetPropertyStr(ctx, e, "max", JS_NewFloat64(ctx, o.max));
-        JS_SetPropertyStr(ctx, e, "hasRange", JS_NewBool(ctx, o.hasRange));
+        ev::Persistent e(ev::createObject());
+        setStr(e.get(), "name", o.name);
+        setStr(e.get(), "help", o.help);
+        setStr(e.get(), "type", o.type);
+        setStr(e.get(), "unit", o.unit);
+        setStr(e.get(), "default", o.defaultValue);
+        setNum(e.get(), "min", o.min);
+        setNum(e.get(), "max", o.max);
+        setBool(e.get(), "hasRange", o.hasRange);
 
-        JSValue vals = JS_NewArray(ctx);
+        ev::Persistent vals(createArray());
         uint32_t vi = 0;
         for (const auto& v : o.values) {
-            JSValue vo = JS_NewObject(ctx);
-            setStr(ctx, vo, "name", v.name);
-            setStr(ctx, vo, "help", v.help);
-            JS_SetPropertyStr(ctx, vo, "value", JS_NewInt64(ctx, v.value));
-            JS_SetPropertyUint32(ctx, vals, vi++, vo);
+            ev::Persistent vo(ev::createObject());
+            setStr(vo.get(), "name", v.name);
+            setStr(vo.get(), "help", v.help);
+            setNum(vo.get(), "value", static_cast<double>(v.value));
+            vals.set(ev::setElement(vals.get(), vi++, vo.get()));
         }
-        JS_SetPropertyStr(ctx, e, "values", vals);
-        JS_SetPropertyUint32(ctx, arr, i++, e);
+        e.set(ev::setProperty(e.get(), "values", vals.get()));
+        arr.set(ev::setElement(arr.get(), i++, e.get()));
     }
-    return arr;
+    return arr.get();
 }
 
 /// How long a packet walk may take before it gives back what it has.
@@ -156,22 +166,22 @@ struct FileQuery {
     int ms = DEFAULT_WALK_MS;
 };
 
-bool fileQuery(JSContext* ctx, int argc, JSValueConst* argv, FileQuery* q) {
-    if (JS_IsObject(argv[0])) {
-        q->in = inputFromJs(ctx, argv[0]);
+bool fileQuery(std::span<const bronze::Value> args, FileQuery* q) {
+    namespace ev = bronze::embed;
+    if (args.empty()) return false;
+    if (ev::isObject(args[0])) {
+        q->in = inputFromJs(args[0]);
+    } else if (ev::isString(args[0])) {
+        q->in.path = ev::toUtf8(args[0]);
     } else {
-        const char* path = JS_ToCString(ctx, argv[0]);
-        if (!path) return false;
-        q->in.path = path;
-        JS_FreeCString(ctx, path);
+        return false;
     }
-    JSValueConst opts = argc >= 2 ? argv[1] : JS_UNDEFINED;
-    if (JS_IsObject(opts)) {
-        q->stream = static_cast<int>(numProp(ctx, opts, "stream", -1));
-        q->from = numProp(ctx, opts, "from", 0);
-        q->to = numProp(ctx, opts, "to", 0);
-        q->max = static_cast<int>(numProp(ctx, opts, "max", 0));
-        q->ms = static_cast<int>(numProp(ctx, opts, "ms", DEFAULT_WALK_MS));
+    if (args.size() >= 2 && ev::isObject(args[1])) {
+        q->stream = static_cast<int>(numProp(args[1], "stream", -1));
+        q->from = numProp(args[1], "from", 0);
+        q->to = numProp(args[1], "to", 0);
+        q->max = static_cast<int>(numProp(args[1], "max", 0));
+        q->ms = static_cast<int>(numProp(args[1], "ms", DEFAULT_WALK_MS));
     }
     return true;
 }
@@ -192,29 +202,30 @@ bool fileQuery(JSContext* ctx, int argc, JSValueConst* argv, FileQuery* q) {
 /// keyframes that quietly stops is a list somebody would snap to the wrong end
 /// of — which is now also what a scan says when it ran out of the `ms` it was
 /// given, and `DEFAULT_WALK_MS` is why it has one.
-JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1)
-        return JS_ThrowTypeError(ctx, "keyframes(path) requires a path or an input");
+bronze::Value js_keyframes(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty())
+        return ev::throwTypeError("keyframes(path) requires a path or an input");
 
     FileQuery q;
-    if (!fileQuery(ctx, argc, argv, &q)) return JS_EXCEPTION;
+    if (!fileQuery(args, &q)) return ev::throwTypeError("keyframes(path) invalid arguments");
 
     KeyframeList list;
     std::string err;
     if (!keyframesOf(q.in, q.stream, q.from, q.to, q.max, q.ms, &list, &err))
-        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+        return ev::throwTypeError(err);
 
-    JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "stream", JS_NewInt32(ctx, list.stream));
-    setStr(ctx, out, "how", list.how);
-    JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
-    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
-    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
-    JSValue arr = JS_NewArray(ctx);
+    ev::Persistent out(ev::createObject());
+    setNum(out.get(), "stream", list.stream);
+    setStr(out.get(), "how", list.how);
+    setBool(out.get(), "complete", list.complete);
+    setNum(out.get(), "from", list.from);
+    setNum(out.get(), "to", list.to);
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
-    for (double t : list.times) JS_SetPropertyUint32(ctx, arr, i++, JS_NewFloat64(ctx, t));
-    JS_SetPropertyStr(ctx, out, "times", arr);
-    return out;
+    for (double t : list.times) arr.set(ev::setElement(arr.get(), i++, ev::fromDouble(t)));
+    out.set(ev::setProperty(out.get(), "times", arr.get()));
+    return out.get();
 }
 
 /// bro.ffmpeg.cueTimes(path | input, { stream, from, to, max, ms }) — when a
@@ -230,34 +241,35 @@ JSValue js_keyframes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
 /// `dvdsub` track exactly as it answers for an `.srt` — and when a picture
 /// track is on screen is the only thing about it anybody can say. What a cue
 /// *says* is a different question with a different cost.
-JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1)
-        return JS_ThrowTypeError(ctx, "cueTimes(path) requires a path or an input");
+bronze::Value js_cueTimes(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty())
+        return ev::throwTypeError("cueTimes(path) requires a path or an input");
 
     FileQuery q;
-    if (!fileQuery(ctx, argc, argv, &q)) return JS_EXCEPTION;
+    if (!fileQuery(args, &q)) return ev::throwTypeError("cueTimes(path) invalid arguments");
 
     CueTimes list;
     std::string err;
     if (!cueTimesOf(q.in, q.stream, q.from, q.to, q.max, q.ms, &list, &err))
-        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+        return ev::throwTypeError(err);
 
-    JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "stream", JS_NewInt32(ctx, list.stream));
-    JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
-    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
-    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
-    JSValue arr = JS_NewArray(ctx);
+    ev::Persistent out(ev::createObject());
+    setNum(out.get(), "stream", list.stream);
+    setBool(out.get(), "complete", list.complete);
+    setNum(out.get(), "from", list.from);
+    setNum(out.get(), "to", list.to);
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const Cue& c : list.cues) {
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, c.start));
-        JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, c.end));
-        JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt32(ctx, c.bytes));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setNum(o.get(), "start", c.start);
+        setNum(o.get(), "end", c.end);
+        setNum(o.get(), "bytes", c.bytes);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    JS_SetPropertyStr(ctx, out, "cues", arr);
-    return out;
+    out.set(ev::setProperty(out.get(), "cues", arr.get()));
+    return out.get();
 }
 
 /// bro.ffmpeg.cueText(path | input, { stream, from, to, max }) — what a
@@ -285,125 +297,133 @@ JSValue js_cueTimes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
 /// `subtitle_header`. Both are on the same answer rather than behind a flag,
 /// because the cost of this call is the decoder and the walk — the strings are
 /// already in hand by the time either question is asked.
-JSValue js_cueText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1)
-        return JS_ThrowTypeError(ctx, "cueText(path) requires a path or an input");
+bronze::Value js_cueText(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty())
+        return ev::throwTypeError("cueText(path) requires a path or an input");
 
     FileQuery q;
-    if (!fileQuery(ctx, argc, argv, &q)) return JS_EXCEPTION;
+    if (!fileQuery(args, &q)) return ev::throwTypeError("cueText(path) invalid arguments");
 
     CueText list;
     std::string err;
     if (!cueTextOf(q.in, q.stream, q.from, q.to, q.max, &list, &err))
-        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+        return ev::throwTypeError(err);
 
-    JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "stream", JS_NewInt32(ctx, list.stream));
-    setStr(ctx, out, "codec", list.codec);
+    ev::Persistent out(ev::createObject());
+    setNum(out.get(), "stream", list.stream);
+    setStr(out.get(), "codec", list.codec);
     // Whether there are words in this track at all — libavcodec's
     // `AV_CODEC_PROP_TEXT_SUB`, under the name `probe()` reports it per stream
     // by, so the two cannot come to be read as different questions.
-    JS_SetPropertyStr(ctx, out, "textSub", JS_NewBool(ctx, list.text));
-    JS_SetPropertyStr(ctx, out, "complete", JS_NewBool(ctx, list.complete));
-    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, list.from));
-    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, list.to));
+    setBool(out.get(), "textSub", list.text);
+    setBool(out.get(), "complete", list.complete);
+    setNum(out.get(), "from", list.from);
+    setNum(out.get(), "to", list.to);
     // Everything the cues are written *against* — the styles, the resolution
     // the positions are in, and the `Format:` line their fields are ordered by.
-    setStr(ctx, out, "header", list.header);
-    JSValue arr = JS_NewArray(ctx);
+    setStr(out.get(), "header", list.header);
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const CueLine& c : list.cues) {
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, c.start));
-        JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, c.end));
-        setStr(ctx, o, "text", c.text);
-        setStr(ctx, o, "raw", c.raw);
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setNum(o.get(), "start", c.start);
+        setNum(o.get(), "end", c.end);
+        setStr(o.get(), "text", c.text);
+        setStr(o.get(), "raw", c.raw);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    JS_SetPropertyStr(ctx, out, "cues", arr);
-    return out;
+    out.set(ev::setProperty(out.get(), "cues", arr.get()));
+    return out.get();
 }
 
 // The encoder libavformat itself would reach for. `image2`'s extension names a
 // codec rather than a container, so this is what decides whether `out%04d.png`
 // is PNG or the mjpeg its muxer declares as a default.
-JSValue js_guessCodec(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1]))
-        return JS_ThrowTypeError(ctx, "guessCodec(muxer, path) requires both");
-    const char* muxer = JS_ToCString(ctx, argv[0]);
-    const char* path = JS_ToCString(ctx, argv[1]);
-    const bool audio = argc >= 3 && JS_ToBool(ctx, argv[2]);
+bronze::Value js_guessCodec(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.size() < 2 || !ev::isString(args[0]) || !ev::isString(args[1]))
+        return ev::throwTypeError("guessCodec(muxer, path) requires both");
+    std::string muxer = ev::toUtf8(args[0]);
+    std::string path = ev::toUtf8(args[1]);
+    const bool audio = args.size() >= 3 && ev::toBool(args[2]);
     std::string name;
-    if (muxer && path) name = guessEncoder(muxer, path, audio);
-    if (muxer) JS_FreeCString(ctx, muxer);
-    if (path) JS_FreeCString(ctx, path);
-    return JS_NewStringLen(ctx, name.data(), name.size());
+    if (!muxer.empty() && !path.empty()) name = guessEncoder(muxer, path, audio);
+    return ev::fromUtf8(name);
 }
 
 /// The four registries, in the shape a picker wants. One function each rather
 /// than one generic one: they answer different questions, and the fields are
 /// what makes each list navigable — a muxer's are what a picker groups by, a
 /// device's are which half of libavdevice it came from.
-JSValue muxersToJs(JSContext* ctx) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value muxersToJs() {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& m : availableMuxers()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", m.name);
-        setStr(ctx, o, "label", m.label);
-        setStr(ctx, o, "longName", m.longName);
-        setStr(ctx, o, "ext", m.ext);
-        JS_SetPropertyStr(ctx, o, "extensions", stringsToJs(ctx, m.extensions));
-        setStr(ctx, o, "mimeType", m.mimeType);
-        setStr(ctx, o, "videoCodec", m.videoCodec);
-        setStr(ctx, o, "audioCodec", m.audioCodec);
-        setStr(ctx, o, "subtitleCodec", m.subtitleCodec);
-        setStr(ctx, o, "defaultVideo", m.defaultVideo);
-        setStr(ctx, o, "defaultAudio", m.defaultAudio);
-        setStr(ctx, o, "defaultSubtitle", m.defaultSubtitle);
-        JS_SetPropertyStr(ctx, o, "noFile", JS_NewBool(ctx, m.noFile));
-        JS_SetPropertyStr(ctx, o, "globalHeader", JS_NewBool(ctx, m.globalHeader));
-        JS_SetPropertyStr(ctx, o, "noTimestamps", JS_NewBool(ctx, m.noTimestamps));
-        JS_SetPropertyStr(ctx, o, "stills", JS_NewBool(ctx, m.stills));
-        JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, m.device));
-        JS_SetPropertyStr(ctx, o, "videoCodecs", stringsToJs(ctx, m.videoCodecs));
-        JS_SetPropertyStr(ctx, o, "audioCodecs", stringsToJs(ctx, m.audioCodecs));
-        JS_SetPropertyStr(ctx, o, "subtitleCodecs", stringsToJs(ctx, m.subtitleCodecs));
-        JS_SetPropertyStr(ctx, o, "answersCodecs", JS_NewBool(ctx, m.answersCodecs));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "name", m.name);
+        setStr(o.get(), "label", m.label);
+        setStr(o.get(), "longName", m.longName);
+        setStr(o.get(), "ext", m.ext);
+        ev::Persistent exts(stringsToJs(m.extensions));
+        o.set(ev::setProperty(o.get(), "extensions", exts.get()));
+        setStr(o.get(), "mimeType", m.mimeType);
+        setStr(o.get(), "videoCodec", m.videoCodec);
+        setStr(o.get(), "audioCodec", m.audioCodec);
+        setStr(o.get(), "subtitleCodec", m.subtitleCodec);
+        setStr(o.get(), "defaultVideo", m.defaultVideo);
+        setStr(o.get(), "defaultAudio", m.defaultAudio);
+        setStr(o.get(), "defaultSubtitle", m.defaultSubtitle);
+        setBool(o.get(), "noFile", m.noFile);
+        setBool(o.get(), "globalHeader", m.globalHeader);
+        setBool(o.get(), "noTimestamps", m.noTimestamps);
+        setBool(o.get(), "stills", m.stills);
+        setBool(o.get(), "device", m.device);
+        ev::Persistent vc(stringsToJs(m.videoCodecs));
+        o.set(ev::setProperty(o.get(), "videoCodecs", vc.get()));
+        ev::Persistent ac(stringsToJs(m.audioCodecs));
+        o.set(ev::setProperty(o.get(), "audioCodecs", ac.get()));
+        ev::Persistent sc(stringsToJs(m.subtitleCodecs));
+        o.set(ev::setProperty(o.get(), "subtitleCodecs", sc.get()));
+        setBool(o.get(), "answersCodecs", m.answersCodecs);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
-JSValue demuxersToJs(JSContext* ctx) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value demuxersToJs() {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& d : availableDemuxers()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", d.name);
-        setStr(ctx, o, "longName", d.longName);
-        JS_SetPropertyStr(ctx, o, "extensions", stringsToJs(ctx, d.extensions));
-        setStr(ctx, o, "mimeType", d.mimeType);
-        JS_SetPropertyStr(ctx, o, "noFile", JS_NewBool(ctx, d.noFile));
-        JS_SetPropertyStr(ctx, o, "device", JS_NewBool(ctx, d.device));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "name", d.name);
+        setStr(o.get(), "longName", d.longName);
+        ev::Persistent exts(stringsToJs(d.extensions));
+        o.set(ev::setProperty(o.get(), "extensions", exts.get()));
+        setStr(o.get(), "mimeType", d.mimeType);
+        setBool(o.get(), "noFile", d.noFile);
+        setBool(o.get(), "device", d.device);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
-JSValue decodersToJs(JSContext* ctx) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value decodersToJs() {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& d : availableDecoders()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", d.name);
-        setStr(ctx, o, "longName", d.longName);
-        setStr(ctx, o, "type", d.type);
-        JS_SetPropertyStr(ctx, o, "hardware", JS_NewBool(ctx, d.hardware));
-        JS_SetPropertyStr(ctx, o, "experimental", JS_NewBool(ctx, d.experimental));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "name", d.name);
+        setStr(o.get(), "longName", d.longName);
+        setStr(o.get(), "type", d.type);
+        setBool(o.get(), "hardware", d.hardware);
+        setBool(o.get(), "experimental", d.experimental);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
 /// bro.ffmpeg.bitstreamFilters — the stage between the encoder and the muxer.
@@ -411,58 +431,65 @@ JSValue decodersToJs(JSContext* ctx) {
 /// Small enough to build once: thirty-odd names and the codecs each will run
 /// on. The option tables behind them are asked for one at a time, exactly as a
 /// filter's are, because a chain editor only ever shows one.
-JSValue bsfsToJs(JSContext* ctx) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value bsfsToJs() {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& b : availableBitstreamFilters()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", b.name);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "name", b.name);
         // Empty is "any codec" and is a real answer — `setts` and `noise`
         // declare no list at all — so a caller narrowing a menu has to read it
         // as "all of them" rather than as "none".
-        JS_SetPropertyStr(ctx, o, "codecs", stringsToJs(ctx, b.codecs));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent codecs(stringsToJs(b.codecs));
+        o.set(ev::setProperty(o.get(), "codecs", codecs.get()));
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
-JSValue protocolsToJs(JSContext* ctx) {
+bronze::Value protocolsToJs() {
+    namespace ev = bronze::embed;
     const ProtocolList p = availableProtocols();
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "input", stringsToJs(ctx, p.input));
-    JS_SetPropertyStr(ctx, o, "output", stringsToJs(ctx, p.output));
-    return o;
+    ev::Persistent o(ev::createObject());
+    ev::Persistent inp(stringsToJs(p.input));
+    o.set(ev::setProperty(o.get(), "input", inp.get()));
+    ev::Persistent outp(stringsToJs(p.output));
+    o.set(ev::setProperty(o.get(), "output", outp.get()));
+    return o.get();
 }
 
-JSValue devicesToJs(JSContext* ctx) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value devicesToJs() {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& d : availableDevices()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", d.name);
-        setStr(ctx, o, "longName", d.longName);
-        setStr(ctx, o, "kind", d.kind);
-        setStr(ctx, o, "direction", d.direction);
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "name", d.name);
+        setStr(o.get(), "longName", d.longName);
+        setStr(o.get(), "kind", d.kind);
+        setStr(o.get(), "direction", d.direction);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
-JSValue filtersToJs(JSContext* ctx) {
-    JSValue arr = JS_NewArray(ctx);
+bronze::Value filtersToJs() {
+    namespace ev = bronze::embed;
+    ev::Persistent arr(createArray());
     uint32_t i = 0;
     for (const auto& f : availableFilters()) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", f.name);
-        setStr(ctx, o, "description", f.description);
-        setStr(ctx, o, "inputs", f.inputs);
-        setStr(ctx, o, "outputs", f.outputs);
-        JS_SetPropertyStr(ctx, o, "dynamicInputs", JS_NewBool(ctx, f.dynamicInputs));
-        JS_SetPropertyStr(ctx, o, "dynamicOutputs", JS_NewBool(ctx, f.dynamicOutputs));
-        JS_SetPropertyStr(ctx, o, "timeline", JS_NewBool(ctx, f.timeline));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+        ev::Persistent o(ev::createObject());
+        setStr(o.get(), "name", f.name);
+        setStr(o.get(), "description", f.description);
+        setStr(o.get(), "inputs", f.inputs);
+        setStr(o.get(), "outputs", f.outputs);
+        setBool(o.get(), "dynamicInputs", f.dynamicInputs);
+        setBool(o.get(), "dynamicOutputs", f.dynamicOutputs);
+        setBool(o.get(), "timeline", f.timeline);
+        arr.set(ev::setElement(arr.get(), i++, o.get()));
     }
-    return arr;
+    return arr.get();
 }
 
 /// `name(string)` → that thing's option table. Seven calls are this function
@@ -473,23 +500,24 @@ JSValue filtersToJs(JSContext* ctx) {
 /// passed nothing is still told what kind of name was missing.
 void optionTable(Table& ns, const char* name, const char* wants,
                  std::vector<OptionInfo> (*lookup)(const std::string&)) {
-    ns.function(name, [name, wants, lookup](JSContext* ctx, JSValue nameArg) {
+    ns.function(name, [name, wants, lookup](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
         std::string n;
-        if (!takeName(ctx, nameArg, &n))
-            return JS_ThrowTypeError(ctx, "%s(name) requires %s", name, wants);
-        return optionsToJs(ctx, lookup(n));
-    });
+        if (args.empty() || !takeName(args[0], &n))
+            return ev::throwTypeError(std::string(name) + "(name) requires " + wants);
+        return optionsToJs(lookup(n));
+    }, 1);
 }
 
 } // namespace
 
 void installCapabilities(Table& ns) {
-    JSContext* ctx = ns.context();
+    namespace ev = bronze::embed;
 
     ns.value("version", libavVersion());
     ns.value("configuration", libavConfiguration());
 
-    ns.value("hwaccels", stringsToJs(ctx, availableHwAccels()));
+    ns.value("hwaccels", stringsToJs(availableHwAccels()));
 
     /// bro.ffmpeg.hardware() — what this *machine* has, as against what this build
     /// could use.
@@ -505,41 +533,46 @@ void installCapabilities(Table& ns) {
     /// built at startup — the same reason `filterOptions(name)` is a call.
     ///
     /// Cached in the native half, so a UI that asks on every redraw pays once.
-    ns.function("hardware", [](JSContext* ctx) {
-        JSValue arr = JS_NewArray(ctx);
+    ns.function("hardware", [](bronze::Value, std::span<const bronze::Value>) -> bronze::Value {
+        namespace ev = bronze::embed;
+        ev::Persistent arr(createArray());
         uint32_t n = 0;
         for (const auto& d : hwDevices()) {
-            JSValue o = JS_NewObject(ctx);
-            setStr(ctx, o, "name", d.name);
-            JS_SetPropertyStr(ctx, o, "present", JS_NewBool(ctx, d.present));
-            if (!d.error.empty()) setStr(ctx, o, "error", d.error);
+            ev::Persistent o(ev::createObject());
+            setStr(o.get(), "name", d.name);
+            setBool(o.get(), "present", d.present);
+            if (!d.error.empty()) setStr(o.get(), "error", d.error);
             // How many of them there are, by the string `-hwaccel_device`
             // takes. `present` says a card answered; this says whether there
             // is a second one, which is the difference between "which one" as
             // a picker and "which one" as a number typed into a box nothing
             // could check. Empty for a type whose devices are not indices.
-            JS_SetPropertyStr(ctx, o, "devices", stringsToJs(ctx, d.devices));
+            ev::Persistent devs(stringsToJs(d.devices));
+            o.set(ev::setProperty(o.get(), "devices", devs.get()));
             const char* fmt = d.pixelFormat != AV_PIX_FMT_NONE
                                   ? av_get_pix_fmt_name(d.pixelFormat) : nullptr;
-            setStr(ctx, o, "pixelFormat", fmt ? fmt : "");
-            JS_SetPropertyStr(ctx, o, "decoders", stringsToJs(ctx, d.decoders));
-            JS_SetPropertyStr(ctx, o, "encoders", stringsToJs(ctx, d.encoders));
-            JS_SetPropertyStr(ctx, o, "filters", stringsToJs(ctx, d.filters));
-            JS_SetPropertyUint32(ctx, arr, n++, o);
+            setStr(o.get(), "pixelFormat", fmt ? fmt : "");
+            ev::Persistent decs(stringsToJs(d.decoders));
+            o.set(ev::setProperty(o.get(), "decoders", decs.get()));
+            ev::Persistent encs(stringsToJs(d.encoders));
+            o.set(ev::setProperty(o.get(), "encoders", encs.get()));
+            ev::Persistent fils(stringsToJs(d.filters));
+            o.set(ev::setProperty(o.get(), "filters", fils.get()));
+            arr.set(ev::setElement(arr.get(), n++, o.get()));
         }
-        return arr;
+        return arr.get();
     });
 
     // What this build can write, asked of libavcodec rather than assumed: a
     // menu offering H.265 on a build without x265 is a menu that fails at the
     // last step.
-    ns.value("encoders", codecListToJs(ctx, availableVideoEncoders()));
-    ns.value("audioEncoders", codecListToJs(ctx, availableAudioEncoders()));
+    ns.value("encoders", codecListToJs(availableVideoEncoders()));
+    ns.value("audioEncoders", codecListToJs(availableAudioEncoders()));
     // The third list, and the first one that is not a judgement about which
     // entries are worth offering: there are nine subtitle encoders and each is
     // an interchange format asked for by name, so this is the registry walk
     // rather than a candidate list checked against the build.
-    ns.value("subtitleEncoders", codecListToJs(ctx, availableSubtitleEncoders()));
+    ns.value("subtitleEncoders", codecListToJs(availableSubtitleEncoders()));
 
     // Every muxer this build links, by the name `-f` takes. This was four
     // extensions in a table — mp4, mkv, mov, webm — and everything else the
@@ -547,11 +580,11 @@ void installCapabilities(Table& ns) {
     // startup because the entries are small: a hundred and eighty names, long
     // names, extensions and flags. Their *option tables* are the expensive part
     // and are asked for one muxer at a time, exactly as a filter's are.
-    ns.value("muxers", muxersToJs(ctx));
-    ns.value("demuxers", demuxersToJs(ctx));
-    ns.value("decoders", decodersToJs(ctx));
-    ns.value("protocols", protocolsToJs(ctx));
-    ns.value("devices", devicesToJs(ctx));
+    ns.value("muxers", muxersToJs());
+    ns.value("demuxers", demuxersToJs());
+    ns.value("decoders", decodersToJs());
+    ns.value("protocols", protocolsToJs());
+    ns.value("devices", devicesToJs());
 
     /// bro.ffmpeg.encoderOptions(name) — every private option of one encoder.
     /// Looked up on demand rather than built for all of them at startup: x265
@@ -569,7 +602,7 @@ void installCapabilities(Table& ns) {
     optionTable(ns, "demuxerOptions", "a demuxer name", demuxerOptions);
     optionTable(ns, "decoderOptions", "a decoder name", decoderOptions);
     optionTable(ns, "protocolOptions", "a protocol name", protocolOptions);
-    ns.value("bitstreamFilters", bsfsToJs(ctx));
+    ns.value("bitstreamFilters", bsfsToJs());
     optionTable(ns, "bsfOptions", "a bitstream filter name", bsfOptions);
 
     /// bro.ffmpeg.deviceSources(name) — what one capture device can see now.
@@ -579,27 +612,29 @@ void installCapabilities(Table& ns) {
     /// every camera driver on the machine. A device with nothing to enumerate
     /// answers with `ok: false` and a reason, because an empty list reads as a
     /// machine with no cameras in it.
-    ns.function("deviceSources", [](JSContext* ctx, JSValue nameArg) {
+    ns.function("deviceSources", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
         std::string name;
-        if (!takeName(ctx, nameArg, &name))
-            return JS_ThrowTypeError(ctx, "deviceSources(name) requires a device name");
+        if (args.empty() || !takeName(args[0], &name))
+            return ev::throwTypeError("deviceSources(name) requires a device name");
         const DeviceSourceList list = deviceSources(name);
 
-        JSValue out = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, out, "ok", JS_NewBool(ctx, list.ok));
-        setStr(ctx, out, "error", list.error);
-        JSValue arr = JS_NewArray(ctx);
+        ev::Persistent out(ev::createObject());
+        setBool(out.get(), "ok", list.ok);
+        setStr(out.get(), "error", list.error);
+        ev::Persistent arr(createArray());
         uint32_t n = 0;
         for (const auto& s : list.sources) {
-            JSValue o = JS_NewObject(ctx);
-            setStr(ctx, o, "name", s.name);
-            setStr(ctx, o, "description", s.description);
-            JS_SetPropertyStr(ctx, o, "mediaTypes", stringsToJs(ctx, s.mediaTypes));
-            JS_SetPropertyUint32(ctx, arr, n++, o);
+            ev::Persistent o(ev::createObject());
+            setStr(o.get(), "name", s.name);
+            setStr(o.get(), "description", s.description);
+            ev::Persistent mt(stringsToJs(s.mediaTypes));
+            o.set(ev::setProperty(o.get(), "mediaTypes", mt.get()));
+            arr.set(ev::setElement(arr.get(), n++, o.get()));
         }
-        JS_SetPropertyStr(ctx, out, "sources", arr);
-        return out;
-    });
+        out.set(ev::setProperty(out.get(), "sources", arr.get()));
+        return out.get();
+    }, 1);
 
     // Where a copy can start. A query about an input rather than a capability
     // of the build, and the one thing that makes a lossless cut a decision
@@ -611,29 +646,26 @@ void installCapabilities(Table& ns) {
     /// for this codec, first being what it writes by itself. The `-tag:v hvc1`
     /// control is drawn from this rather than being a four-character text box: a
     /// tag nobody has seen before is a tag nobody types.
-    ns.function("codecTags", [](JSContext* ctx, JSValue containerArg, JSValue codecArg) {
-        if (!JS_IsString(containerArg) || !JS_IsString(codecArg))
-            return JS_ThrowTypeError(ctx, "codecTags(container, codec) requires both names");
+    ns.function("codecTags", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        if (args.size() < 2 || !ev::isString(args[0]) || !ev::isString(args[1]))
+            return ev::throwTypeError("codecTags(container, codec) requires both names");
         // Named `container` and not `ext`: this is the muxer's own name, the thing
         // `-f` takes. Calling it an extension is how a caller comes to pass "mkv"
         // to a function that only knows "matroska".
-        const char* container = JS_ToCString(ctx, containerArg);
-        const char* codec = JS_ToCString(ctx, codecArg);
-        JSValue out = JS_NULL;
-        if (container && codec) out = stringsToJs(ctx, codecTags(container, codec));
-        if (container) JS_FreeCString(ctx, container);
-        if (codec) JS_FreeCString(ctx, codec);
-        return JS_IsNull(out) ? JS_NewArray(ctx) : out;
-    });
+        std::string container = ev::toUtf8(args[0]);
+        std::string codec = ev::toUtf8(args[1]);
+        return stringsToJs(codecTags(container, codec));
+    }, 2);
     ns.function("guessCodec", js_guessCodec, 3);
     // Small enough to build once: thirty-odd names, and every stream row on
     // the Write stage draws a toggle per entry.
-    ns.value("dispositions", stringsToJs(ctx, streamDispositions()));
+    ns.value("dispositions", stringsToJs(streamDispositions()));
 
     // What this build can put a picture *through*, which is the palette the
     // graph stage picks from. A list of names and pad shapes is small; the
     // options behind each are asked for one filter at a time.
-    ns.value("filters", filtersToJs(ctx));
+    ns.value("filters", filtersToJs());
     /// bro.ffmpeg.filterOptions(name) — one filter's arguments, for the same
     /// reason and drawn the same way. On demand for a stronger reason than the
     /// encoders': there are some five hundred filters, and building every option

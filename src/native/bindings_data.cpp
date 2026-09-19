@@ -36,7 +36,7 @@
 #include "ffmpeg_data.h"
 #include "ffmpeg_input.h"
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <cstdint>
 #include <string>
@@ -46,99 +46,113 @@ namespace ffmpegbro {
 
 namespace {
 
-JSValue floatArray(JSContext* ctx, const std::vector<float>& v) {
-    JSValue buf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(v.data()),
-                                        v.size() * sizeof(float));
-    JSValue args[3] = { buf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, buf);
+bronze::Value floatArray(const std::vector<float>& v) {
+    namespace ev = bronze::embed;
+    bronze::Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(v.size()));
+    if (!v.empty()) {
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(v.data()),
+                                       v.size() * sizeof(float));
+        ev::fillTypedArray(arr, bytes);
+    }
     return arr;
 }
 
-JSValue byteArray(JSContext* ctx, const std::vector<uint8_t>& v) {
-    JSValue buf = JS_NewArrayBufferCopy(ctx, v.data(), v.size());
-    JSValue args[3] = { buf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8);
-    JS_FreeValue(ctx, buf);
+bronze::Value byteArray(const std::vector<uint8_t>& v) {
+    namespace ev = bronze::embed;
+    bronze::Value arr = ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(v.size()));
+    if (!v.empty()) {
+        ev::fillTypedArray(arr, std::span<const uint8_t>(v.data(), v.size()));
+    }
     return arr;
 }
 
-JSValue seriesToJs(JSContext* ctx, const DataSeries& s) {
-    JSValue o = JS_NewObject(ctx);
-    setStr(ctx, o, "key", s.key);
-    setStr(ctx, o, "name", s.name);
-    setStr(ctx, o, "units", s.units);
-    JS_SetPropertyStr(ctx, o, "component", JS_NewInt32(ctx, s.component));
-    JS_SetPropertyStr(ctx, o, "components", JS_NewInt32(ctx, s.components));
-    JS_SetPropertyStr(ctx, o, "samples", JS_NewInt64(ctx, s.samples));
-    JS_SetPropertyStr(ctx, o, "min", JS_NewFloat64(ctx, s.min));
-    JS_SetPropertyStr(ctx, o, "max", JS_NewFloat64(ctx, s.max));
-    JS_SetPropertyStr(ctx, o, "rate", JS_NewFloat64(ctx, s.rate));
+bronze::Value seriesToJs(const DataSeries& s) {
+    namespace ev = bronze::embed;
+    ev::Persistent o(ev::createObject());
+    setStr(o.get(), "key", s.key);
+    setStr(o.get(), "name", s.name);
+    setStr(o.get(), "units", s.units);
+    setNum(o.get(), "component", s.component);
+    setNum(o.get(), "components", s.components);
+    setNum(o.get(), "samples", static_cast<double>(s.samples));
+    setNum(o.get(), "min", s.min);
+    setNum(o.get(), "max", s.max);
+    setNum(o.get(), "rate", s.rate);
     // Whether the format's own divisor was found. Reported rather than assumed,
     // because a value that should have been divided and was not is the failure
     // that still looks plausible — a UI that draws one has to be able to say so.
-    JS_SetPropertyStr(ctx, o, "scaled", JS_NewBool(ctx, s.scaled));
-    JS_SetPropertyStr(ctx, o, "lo", floatArray(ctx, s.lo));
-    JS_SetPropertyStr(ctx, o, "hi", floatArray(ctx, s.hi));
-    JS_SetPropertyStr(ctx, o, "mean", floatArray(ctx, s.mean));
+    setBool(o.get(), "scaled", s.scaled);
+    ev::Persistent lo(floatArray(s.lo));
+    o.set(ev::setProperty(o.get(), "lo", lo.get()));
+    ev::Persistent hi(floatArray(s.hi));
+    o.set(ev::setProperty(o.get(), "hi", hi.get()));
+    ev::Persistent mean(floatArray(s.mean));
+    o.set(ev::setProperty(o.get(), "mean", mean.get()));
     // 0 where no sample landed. A gap in a recording is a gap in the line, and
     // a zero drawn in its place is a measurement nobody made.
-    JS_SetPropertyStr(ctx, o, "filled", byteArray(ctx, s.filled));
-    return o;
+    ev::Persistent filled(byteArray(s.filled));
+    o.set(ev::setProperty(o.get(), "filled", filled.get()));
+    return o.get();
 }
 
-JSValue readingToJs(JSContext* ctx, const DataReading& r) {
-    JSValue o = JS_NewObject(ctx);
-    setStr(ctx, o, "tag", r.tag);
-    setStr(ctx, o, "device", r.device);
-    JS_SetPropertyStr(ctx, o, "streamIndex", JS_NewInt32(ctx, r.streamIndex));
-    JS_SetPropertyStr(ctx, o, "t0", JS_NewFloat64(ctx, r.t0));
-    JS_SetPropertyStr(ctx, o, "t1", JS_NewFloat64(ctx, r.t1));
-    JS_SetPropertyStr(ctx, o, "buckets", JS_NewInt32(ctx, r.buckets));
-    JS_SetPropertyStr(ctx, o, "packets", JS_NewInt64(ctx, r.packets));
+bronze::Value readingToJs(const DataReading& r) {
+    namespace ev = bronze::embed;
+    ev::Persistent o(ev::createObject());
+    setStr(o.get(), "tag", r.tag);
+    setStr(o.get(), "device", r.device);
+    setNum(o.get(), "streamIndex", r.streamIndex);
+    setNum(o.get(), "t0", r.t0);
+    setNum(o.get(), "t1", r.t1);
+    setNum(o.get(), "buckets", r.buckets);
+    setNum(o.get(), "packets", static_cast<double>(r.packets));
     // How many packets the parser would not finish, and the first reason. A
     // damaged track is drawn with what survived and *says* that it is a damaged
     // track — the alternative, an empty plot, cannot be told from a file with
     // nothing in it.
-    JS_SetPropertyStr(ctx, o, "refused", JS_NewInt64(ctx, r.refused));
-    setStr(ctx, o, "refusal", r.refusal);
+    setNum(o.get(), "refused", static_cast<double>(r.refused));
+    setStr(o.get(), "refusal", r.refusal);
 
-    JSValue arr = JS_NewArray(ctx);
+    ev::Persistent arr(createArray());
     uint32_t n = 0;
-    for (const DataSeries& s : r.series)
-        JS_SetPropertyUint32(ctx, arr, n++, seriesToJs(ctx, s));
-    JS_SetPropertyStr(ctx, o, "series", arr);
-    return o;
+    for (const DataSeries& s : r.series) {
+        ev::Persistent ser(seriesToJs(s));
+        arr.set(ev::setElement(arr.get(), n++, ser.get()));
+    }
+    o.set(ev::setProperty(o.get(), "series", arr.get()));
+    return o.get();
 }
 
 /// The `-i` and the stream, out of whatever the caller passed. The same reader
 /// `probes.start` uses, for the same reason: a track read from a file opened
 /// with different demuxer options is a different track.
-bool readArgs(JSContext* ctx, int argc, JSValueConst* argv, MediaInput* in,
-              int* streamIndex, int* buckets, double* timeout) {
-    if (argc < 2) {
-        JS_ThrowTypeError(ctx, "data.reads.start(input, streamIndex) needs both");
+bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
+              int* streamIndex, int* buckets, double* timeout, std::string* err) {
+    namespace ev = bronze::embed;
+    if (args.size() < 2) {
+        *err = "data.reads.start(input, streamIndex) needs both";
         return false;
     }
-    if (JS_IsObject(argv[0])) {
-        *in = inputFromJs(ctx, argv[0]);
+    if (ev::isObject(args[0])) {
+        *in = inputFromJs(args[0]);
+    } else if (ev::isString(args[0])) {
+        in->path = ev::toUtf8(args[0]);
     } else {
-        const char* path = JS_ToCString(ctx, argv[0]);
-        if (!path) return false;
-        in->path = path;
-        JS_FreeCString(ctx, path);
+        *err = "data.reads.start() needs a path or an input";
+        return false;
     }
     if (in->path.empty()) {
-        JS_ThrowTypeError(ctx, "data.reads.start() needs a path or an input");
+        *err = "data.reads.start() needs a path or an input";
         return false;
     }
-    int32_t idx = 0;
-    if (JS_ToInt32(ctx, &idx, argv[1]) < 0) return false;
-    *streamIndex = idx;
+    if (!ev::isNumber(args[1])) {
+        *err = "data.reads.start() needs a numeric streamIndex";
+        return false;
+    }
+    *streamIndex = static_cast<int>(ev::toDouble(args[1]));
 
-    if (argc >= 3 && JS_IsObject(argv[2])) {
-        *buckets = int(numProp(ctx, argv[2], "buckets", 0));
-        *timeout = numProp(ctx, argv[2], "timeout", 0);
+    if (args.size() >= 3 && ev::isObject(args[2])) {
+        *buckets = static_cast<int>(numProp(args[2], "buckets", 0));
+        *timeout = numProp(args[2], "timeout", 0);
     }
     return true;
 }
@@ -153,14 +167,15 @@ bool readArgs(JSContext* ctx, int argc, JSValueConst* argv, MediaInput* in,
 // `timeout` is not a demuxer option and never reaches libav — it is the
 // deadline on the interrupt callback, the one mechanism that covers every
 // protocol. See `OpenWatch` in ffmpeg_input.h.
-JSValue js_dataStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+bronze::Value js_dataStart(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
     MediaInput in;
     int streamIndex = 0, buckets = 0;
     double timeout = 0;
-    if (!readArgs(ctx, argc, argv, &in, &streamIndex, &buckets, &timeout))
-        return JS_EXCEPTION;
-    return JS_NewInt64(ctx,
-                       int64_t(startDataRead(in, streamIndex, buckets, timeout)));
+    std::string err;
+    if (!readArgs(args, &in, &streamIndex, &buckets, &timeout, &err))
+        return ev::throwTypeError(err);
+    return ev::fromDouble(static_cast<double>(startDataRead(in, streamIndex, buckets, timeout)));
 }
 
 const char* stateName(DataProgress::State s) {
@@ -179,27 +194,30 @@ const char* stateName(DataProgress::State s) {
 // ordinary case: the answer is handed over once and the entry is forgotten with
 // it, so a caller that polls a finished read twice is a caller that dropped the
 // answer.
-JSValue js_dataPoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "data.reads.poll(id) requires an id");
-    int64_t id = 0;
-    if (JS_ToInt64(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
+bronze::Value js_dataPoll(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty()) return ev::throwTypeError("data.reads.poll(id) requires an id");
+    if (!ev::isNumber(args[0])) return ev::throwTypeError("data.reads.poll(id) requires a numeric id");
+    uint64_t id = static_cast<uint64_t>(ev::toDouble(args[0]));
 
     DataProgress p;
-    if (!dataReadProgress(uint64_t(id), &p)) return JS_NULL;
+    if (!dataReadProgress(id, &p)) return ev::null();
 
-    JSValue o = JS_NewObject(ctx);
-    setStr(ctx, o, "state", stateName(p.state));
-    JS_SetPropertyStr(ctx, o, "reading",
-                      JS_NewBool(ctx, p.state == DataProgress::State::Reading));
-    JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, p.elapsed));
-    JS_SetPropertyStr(ctx, o, "timeout", JS_NewFloat64(ctx, p.timeout));
+    ev::Persistent o(ev::createObject());
+    setStr(o.get(), "state", stateName(p.state));
+    setBool(o.get(), "reading", p.state == DataProgress::State::Reading);
+    setNum(o.get(), "elapsed", p.elapsed);
+    setNum(o.get(), "timeout", p.timeout);
     // A string rather than an exception, for `probes.poll`'s reason: a poll is
     // read every frame by something that has to keep drawing either way.
-    setStr(ctx, o, "error", p.result.error);
-    JS_SetPropertyStr(ctx, o, "result",
-                      p.state == DataProgress::State::Done ? readingToJs(ctx, p.result)
-                                                           : JS_NULL);
-    return o;
+    setStr(o.get(), "error", p.result.error);
+    if (p.state == DataProgress::State::Done) {
+        ev::Persistent res(readingToJs(p.result));
+        o.set(ev::setProperty(o.get(), "result", res.get()));
+    } else {
+        o.set(ev::setProperty(o.get(), "result", ev::null()));
+    }
+    return o.get();
 }
 
 } // namespace
@@ -213,13 +231,9 @@ void installData(Table& ns) {
     /// long today (`gpmd`) and a real GoPro file carries three data tracks, so
     /// the answer is genuinely a filter rather than a formality: `tmcd` and
     /// `fdsc` are told apart from `gpmd` here and nowhere else.
-    data.function("parsers", [](JSContext* ctx) {
+    data.function("parsers", [](bronze::Value, std::span<const bronze::Value>) -> bronze::Value {
         const std::vector<std::string> tags = dataParserTags();
-        JSValue arr = JS_NewArray(ctx);
-        uint32_t n = 0;
-        for (const std::string& t : tags)
-            JS_SetPropertyUint32(ctx, arr, n++, JS_NewStringLen(ctx, t.data(), t.size()));
-        return arr;
+        return stringsToJs(tags);
     });
 
     Table reads(data, "reads");
@@ -227,21 +241,25 @@ void installData(Table& ns) {
     reads.function("poll", js_dataPoll, 1);
     /// Abort the read. Real rather than a hidden spinner: the interrupt
     /// callback reaches libav's own read, so the poll after it says `stopped`.
-    reads.function("cancel", [](JSContext* ctx, JSValue idArg) {
-        int64_t id = 0;
-        if (JS_ToInt64(ctx, &id, idArg) < 0) return JS_EXCEPTION;
-        stopDataRead(uint64_t(id));
-        return JS_UNDEFINED;
-    });
+    reads.function("cancel", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        if (args.empty() || !ev::isNumber(args[0]))
+            return ev::throwTypeError("data.reads.cancel(id) requires a numeric id");
+        uint64_t id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        stopDataRead(id);
+        return ev::undefined();
+    }, 1);
     /// Stop it and never poll again — an input removed while its track was
     /// still being read. Separate from `cancel` for `probes.forget`'s reason:
     /// the two differ in whether anybody is going to be told.
-    reads.function("forget", [](JSContext* ctx, JSValue idArg) {
-        int64_t id = 0;
-        if (JS_ToInt64(ctx, &id, idArg) < 0) return JS_EXCEPTION;
-        abandonDataRead(uint64_t(id));
-        return JS_UNDEFINED;
-    });
+    reads.function("forget", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        if (args.empty() || !ev::isNumber(args[0]))
+            return ev::throwTypeError("data.reads.forget(id) requires a numeric id");
+        uint64_t id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        abandonDataRead(id);
+        return ev::undefined();
+    }, 1);
 }
 
 } // namespace ffmpegbro

@@ -28,7 +28,7 @@
 #include "playback_filter.h"
 #include "playback_output.h"
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <string>
 
@@ -49,19 +49,17 @@ namespace {
 // does not start with `/` or `x:` against the document, so `https://…` would
 // become a path under `ui/`; a token starts with a slash and survives.
 
-JSValue js_inputsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
-        return JS_ThrowTypeError(ctx, "inputs.define(id, input) requires an id and an input");
-    const char* id = JS_ToCString(ctx, argv[0]);
-    if (!id) return JS_EXCEPTION;
-    const MediaInput in = inputFromJs(ctx, argv[1]);
+bronze::Value js_inputsDefine(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.size() < 2 || !ev::isString(args[0]) || !ev::isObject(args[1]))
+        return ev::throwTypeError("inputs.define(id, input) requires an id and an input");
+    const std::string id = ev::toUtf8(args[0]);
+    const MediaInput in = inputFromJs(args[1]);
     if (in.path.empty()) {
-        JS_FreeCString(ctx, id);
-        return JS_ThrowTypeError(ctx, "inputs.define() needs a path or a URL");
+        return ev::throwTypeError("inputs.define() needs a path or a URL");
     }
     const std::string token = defineInput(id, in);
-    JS_FreeCString(ctx, id);
-    return JS_NewStringLen(ctx, token.data(), token.size());
+    return ev::fromUtf8(token);
 }
 
 // ── bro.ffmpeg.views ───────────────────────────────────────────────────────
@@ -82,22 +80,20 @@ JSValue js_inputsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
 //
 // See playback_filter.h for what is and is not in a view, and docs/api.md.
 
-JSValue js_viewsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
-        return JS_ThrowTypeError(ctx, "views.define(id, view) requires an id and a view");
-    const char* id = JS_ToCString(ctx, argv[0]);
-    if (!id) return JS_EXCEPTION;
+bronze::Value js_viewsDefine(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.size() < 2 || !ev::isString(args[0]) || !ev::isObject(args[1]))
+        return ev::throwTypeError("views.define(id, view) requires an id and a view");
+    const std::string id = ev::toUtf8(args[0]);
 
     PlaybackView v;
-    JSValue input = JS_GetPropertyStr(ctx, argv[1], "input");
-    v.input = inputFromJs(ctx, input);
-    JS_FreeValue(ctx, input);
-    v.video = strProp(ctx, argv[1], "video", "");
-    v.audio = strProp(ctx, argv[1], "audio", "");
-    v.shift = numProp(ctx, argv[1], "shift", 0);
+    bronze::Value inputVal = ev::getProperty(args[1], "input");
+    v.input = inputFromJs(inputVal);
+    v.video = strProp(args[1], "video", "");
+    v.audio = strProp(args[1], "audio", "");
+    v.shift = numProp(args[1], "shift", 0);
     if (v.input.path.empty()) {
-        JS_FreeCString(ctx, id);
-        return JS_ThrowTypeError(ctx, "views.define() needs an input with a path in it");
+        return ev::throwTypeError("views.define() needs an input with a path in it");
     }
 
     ViewFacts facts;
@@ -109,23 +105,22 @@ JSValue js_viewsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     // `defineSettled`, which is what makes re-registering on every frame of a
     // drag cost nothing.
     const bool ok = defineSettled(id, v, &facts, &token, &err);
-    JS_FreeCString(ctx, id);
-    if (!ok) return JS_ThrowTypeError(ctx, "%s", err.c_str());
+    if (!ok) return ev::throwTypeError(err);
 
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "src", JS_NewStringLen(ctx, token.data(), token.size()));
-    JS_SetPropertyStr(ctx, o, "video", JS_NewBool(ctx, facts.video));
-    JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, facts.width));
-    JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, facts.height));
+    ev::Persistent o(ev::createObject());
+    setStr(o.get(), "src", token);
+    setBool(o.get(), "video", facts.video);
+    setNum(o.get(), "width", facts.width);
+    setNum(o.get(), "height", facts.height);
     // What went in, so a caller can ask whether the chain changed the shape of
     // the picture without probing the file a second time and applying the
     // display matrix itself.
-    JS_SetPropertyStr(ctx, o, "sourceWidth", JS_NewInt32(ctx, facts.sourceWidth));
-    JS_SetPropertyStr(ctx, o, "sourceHeight", JS_NewInt32(ctx, facts.sourceHeight));
-    JS_SetPropertyStr(ctx, o, "audio", JS_NewBool(ctx, facts.audio));
-    JS_SetPropertyStr(ctx, o, "sampleRate", JS_NewInt32(ctx, facts.sampleRate));
-    JS_SetPropertyStr(ctx, o, "channels", JS_NewInt32(ctx, facts.channels));
-    return o;
+    setNum(o.get(), "sourceWidth", facts.sourceWidth);
+    setNum(o.get(), "sourceHeight", facts.sourceHeight);
+    setBool(o.get(), "audio", facts.audio);
+    setNum(o.get(), "sampleRate", facts.sampleRate);
+    setNum(o.get(), "channels", facts.channels);
+    return o.get();
 }
 
 // ── bro.ffmpeg.output ──────────────────────────────────────────────────────
@@ -146,58 +141,57 @@ JSValue js_viewsDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
 
 /// The two halves of a spec, read exactly as `render.start` reads them. One
 /// place, so a preview cannot be built out of a differently-read spec.
-bool outputViewFromJs(JSContext* ctx, JSValueConst spec, OutputView* v, std::string* err) {
-    if (!outputFromJs(ctx, spec, &v->settings, err)) return false;
-    v->clips = clipsFromJs(ctx, spec);
+bool outputViewFromJs(bronze::Value spec, OutputView* v, std::string* err) {
+    if (!outputFromJs(spec, &v->settings, err)) return false;
+    v->clips = clipsFromJs(spec);
     return true;
 }
 
-JSValue js_outputDefine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
-        return JS_ThrowTypeError(ctx, "output.define(id, spec) requires an id and a spec");
-    const char* id = JS_ToCString(ctx, argv[0]);
-    if (!id) return JS_EXCEPTION;
+bronze::Value js_outputDefine(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.size() < 2 || !ev::isString(args[0]) || !ev::isObject(args[1]))
+        return ev::throwTypeError("output.define(id, spec) requires an id and a spec");
+    const std::string id = ev::toUtf8(args[0]);
 
     OutputView v;
     std::string bad;
-    if (!outputViewFromJs(ctx, argv[1], &v, &bad)) {
-        JS_FreeCString(ctx, id);
-        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
+    if (!outputViewFromJs(args[1], &v, &bad)) {
+        return ev::throwTypeError(bad);
     }
     const std::string token = defineOutput(id, v);
-    JS_FreeCString(ctx, id);
-    return JS_NewStringLen(ctx, token.data(), token.size());
+    return ev::fromUtf8(token);
 }
 
 /// Build the render's source, say what it produces, and throw it away — so that
 /// a graph libavfilter refuses is a sentence the moment somebody wires it rather
 /// than a black rectangle and a line in a log.
-JSValue js_outputSettle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsObject(argv[0]))
-        return JS_ThrowTypeError(ctx, "output.settle(spec) requires a spec object");
+bronze::Value js_outputSettle(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty() || !ev::isObject(args[0]))
+        return ev::throwTypeError("output.settle(spec) requires a spec object");
 
     OutputView v;
     std::string bad;
-    if (!outputViewFromJs(ctx, argv[0], &v, &bad))
-        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
+    if (!outputViewFromJs(args[0], &v, &bad))
+        return ev::throwTypeError(bad);
 
     OutputFacts facts;
     std::string err;
     if (!settleOutput(v, &facts, &err))
-        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+        return ev::throwTypeError(err);
 
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, facts.width));
-    JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, facts.height));
-    JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, facts.fps));
-    JS_SetPropertyStr(ctx, o, "start", JS_NewFloat64(ctx, facts.start));
-    JS_SetPropertyStr(ctx, o, "length", JS_NewFloat64(ctx, facts.length));
+    ev::Persistent o(ev::createObject());
+    setNum(o.get(), "width", facts.width);
+    setNum(o.get(), "height", facts.height);
+    setNum(o.get(), "fps", facts.fps);
+    setNum(o.get(), "start", facts.start);
+    setNum(o.get(), "length", facts.length);
     // Which of the two renderers this preview is of. The compositor and
     // libavfilter agree to 43 dB and are still not the same thing to look at —
     // and it is the one fact a caller cannot work out from the spec without
     // knowing the rule `runExport` decides by.
-    JS_SetPropertyStr(ctx, o, "graph", JS_NewBool(ctx, facts.graph));
-    return o;
+    setBool(o.get(), "graph", facts.graph);
+    return o.get();
 }
 
 /// How loud the render being previewed is, right now — per channel of the
@@ -208,21 +202,23 @@ JSValue js_outputSettle(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
 /// standing would make one moment of clipping look permanent, and two callers
 /// would halve each other's windows and draw two meters that disagree. So there is
 /// one caller — the meter beside the viewer, once a frame.
-JSValue js_outputLevels(JSContext* ctx, JSValue idArg) {
+bronze::Value js_outputLevels(bronze::Value idArg) {
+    namespace ev = bronze::embed;
     std::string name;
-    if (!takeName(ctx, idArg, &name))
-        return JS_ThrowTypeError(ctx, "output.levels(id) requires an id");
+    if (!takeName(idArg, &name))
+        return ev::throwTypeError("output.levels(id) requires an id");
     const OutputLevels l = outputLevels(name);
-    JSValue o = JS_NewObject(ctx);
+    ev::Persistent o(ev::createObject());
     // Three states and not two: no render behind this id, a render with no
     // soundtrack at all, and a render whose sound is being measured. A meter that
     // could not tell the first two apart would draw silence where it should be
     // saying there is nothing to draw.
-    JS_SetPropertyStr(ctx, o, "running", JS_NewBool(ctx, l.running));
-    JS_SetPropertyStr(ctx, o, "heard", JS_NewBool(ctx, l.heard));
-    JS_SetPropertyStr(ctx, o, "rate", JS_NewInt32(ctx, l.rate));
-    JS_SetPropertyStr(ctx, o, "channels", channelsToJs(ctx, l.channels));
-    return o;
+    setBool(o.get(), "running", l.running);
+    setBool(o.get(), "heard", l.heard);
+    setNum(o.get(), "rate", l.rate);
+    ev::Persistent ch(channelsToJs(l.channels));
+    o.set(ev::setProperty(o.get(), "channels", ch.get()));
+    return o.get();
 }
 
 } // namespace
@@ -233,20 +229,22 @@ void installPlayback(Table& ns) {
     {
         Table inputs(ns, "inputs");
         inputs.function("define", js_inputsDefine, 2);
-        inputs.function("forget", [](JSContext* ctx, JSValue id) {
+        inputs.function("forget", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+            namespace ev = bronze::embed;
             std::string name;
-            if (!takeName(ctx, id, &name))
-                return JS_ThrowTypeError(ctx, "inputs.forget(id) requires an id");
+            if (args.empty() || !takeName(args[0], &name))
+                return ev::throwTypeError("inputs.forget(id) requires an id");
             forgetInput(name);
-            return JS_UNDEFINED;
-        });
-        inputs.function("token", [](JSContext* ctx, JSValue id) {
+            return ev::undefined();
+        }, 1);
+        inputs.function("token", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+            namespace ev = bronze::embed;
             std::string name;
-            if (!takeName(ctx, id, &name))
-                return JS_ThrowTypeError(ctx, "inputs.token(id) requires an id");
+            if (args.empty() || !takeName(args[0], &name))
+                return ev::throwTypeError("inputs.token(id) requires an id");
             const std::string token = inputToken(name);
-            return JS_NewStringLen(ctx, token.data(), token.size());
-        });
+            return ev::fromUtf8(token);
+        }, 1);
     }
 
     // The same registry one turn further on: an input with filters on it, which
@@ -254,28 +252,33 @@ void installPlayback(Table& ns) {
     {
         Table views(ns, "views");
         views.function("define", js_viewsDefine, 2);
-        views.function("forget", [](JSContext* ctx, JSValue id) {
+        views.function("forget", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+            namespace ev = bronze::embed;
             std::string name;
-            if (!takeName(ctx, id, &name))
-                return JS_ThrowTypeError(ctx, "views.forget(id) requires an id");
+            if (args.empty() || !takeName(args[0], &name))
+                return ev::throwTypeError("views.forget(id) requires an id");
             forgetView(name);
-            return JS_UNDEFINED;
-        });
+            return ev::undefined();
+        }, 1);
     }
 
     {
         Table output(ns, "output");
         output.function("define", js_outputDefine, 2);
         output.function("settle", js_outputSettle, 1);
-        output.function("levels",
-                        [](JSContext* ctx, JSValue id) { return js_outputLevels(ctx, id); });
-        output.function("forget", [](JSContext* ctx, JSValue id) {
+        output.function("levels", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+            namespace ev = bronze::embed;
+            if (args.empty()) return ev::throwTypeError("output.levels(id) requires an id");
+            return js_outputLevels(args[0]);
+        }, 1);
+        output.function("forget", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+            namespace ev = bronze::embed;
             std::string name;
-            if (!takeName(ctx, id, &name))
-                return JS_ThrowTypeError(ctx, "output.forget(id) requires an id");
+            if (args.empty() || !takeName(args[0], &name))
+                return ev::throwTypeError("output.forget(id) requires an id");
             forgetOutput(name);
-            return JS_UNDEFINED;
-        });
+            return ev::undefined();
+        }, 1);
     }
 }
 

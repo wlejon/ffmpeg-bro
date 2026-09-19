@@ -40,8 +40,14 @@ bool boolProp(bronze::Value obj, const char* key, bool fallback = false);
 std::string strProp(bronze::Value obj, const char* key,
                     const std::string& fallback = "");
 
+/// Whether the value is an Array.
+bool isArray(bronze::Value arr);
+
 /// How long a JS array says it is.
 uint32_t arrayLength(bronze::Value arr);
+
+/// Allocate a new empty JS array.
+bronze::Value createArray();
 
 /// A name argument, or false. Every `(name)` call takes one, and what makes
 /// this a check rather than a conversion is that `undefined` must not become

@@ -205,18 +205,18 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_bindings.cpp
     src/native/bindings_value.cpp
     src/native/bindings_stubs.cpp
-    # Subsystem bindings (to be migrated in subsequent chunks; stubbed above for Chunk 1)
-    # src/native/bindings_spec.cpp
-    # src/native/bindings_probe.cpp
+    # Subsystem bindings
+    src/native/bindings_spec.cpp
+    src/native/bindings_probe.cpp
     # src/native/bindings_render.cpp
     # src/native/bindings_capture.cpp
-    # src/native/bindings_capabilities.cpp
-    # src/native/bindings_expr.cpp
+    src/native/bindings_capabilities.cpp
+    src/native/bindings_expr.cpp
     # src/native/bindings_fetch.cpp
     # src/native/bindings_proxy.cpp
-    # src/native/bindings_data.cpp
+    src/native/bindings_data.cpp
     # src/native/bindings_marks.cpp
-    # src/native/bindings_playback.cpp
+    src/native/bindings_playback.cpp
     # src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_data.cpp

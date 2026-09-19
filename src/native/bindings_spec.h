@@ -16,7 +16,7 @@
 // caller with a reason in it.
 #pragma once
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <string>
 #include <vector>
@@ -28,43 +28,43 @@ namespace ffmpegbro {
 
 /// `{ g: 60, bf: 2, "x264-params": "aq-mode=3" }` — the natural JS shape for a
 /// bag of ffmpeg arguments, read off `owner[key]`.
-std::vector<ExportOption> optionsFromJs(JSContext* ctx, JSValueConst owner, const char* key);
+std::vector<ExportOption> optionsFromJs(bronze::Value owner, const char* key);
 
 /// `{ path, format, options, ss, t, to, itsoffset }` — one `-i`, as JS writes
 /// one.
-MediaInput inputFromJs(JSContext* ctx, JSValueConst o);
+MediaInput inputFromJs(bronze::Value o);
 
 /// One clip out of `spec.clips`, its rectangle already in canvas pixels.
-ExportClip clipFromJs(JSContext* ctx, JSValueConst o);
+ExportClip clipFromJs(bronze::Value o);
 
 /// A `clips` array off whatever object carries one — the spec, or one of its
 /// passes.
-std::vector<ExportClip> clipsFromJs(JSContext* ctx, JSValueConst o);
+std::vector<ExportClip> clipsFromJs(bronze::Value o);
 
 /// `item.bsf` — `[{ name, options }, …]`, in the order they run. `where` names
 /// the thing being read for the error message.
-bool bsfFromJs(JSContext* ctx, JSValueConst item, const std::string& where,
+bool bsfFromJs(bronze::Value item, const std::string& where,
                std::vector<ExportBsf>* out, std::string* err);
 
 /// `spec.streams` — what the muxer maps, and with what.
-bool streamsFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportStream>* out,
+bool streamsFromJs(bronze::Value spec, std::vector<ExportStream>* out,
                    std::string* err);
 
 /// `spec.chapters` — beside the streams rather than among them.
-bool chaptersFromJs(JSContext* ctx, JSValueConst spec, std::vector<ExportChapter>* out,
+bool chaptersFromJs(bronze::Value spec, std::vector<ExportChapter>* out,
                     std::string* err);
 
 /// `spec.filterInputs` — the graph's own input nodes.
-std::vector<ExportGraphInput> graphInputsFromJs(JSContext* ctx, JSValueConst spec);
+std::vector<ExportGraphInput> graphInputsFromJs(bronze::Value spec);
 
 /// `spec.passes` — the reasons one render is several walks over the frames.
-std::vector<ExportPass> passesFromJs(JSContext* ctx, JSValueConst spec);
+std::vector<ExportPass> passesFromJs(bronze::Value spec);
 
 /// `spec.inputs` — the `-i`s, in the order the clips index them by.
-bool inputsFromJs(JSContext* ctx, JSValueConst spec, std::vector<MediaInput>* out,
+bool inputsFromJs(bronze::Value spec, std::vector<MediaInput>* out,
                   std::string* err);
 
 /// The whole of it: one reader for the render, the recording and the preview.
-bool outputFromJs(JSContext* ctx, JSValueConst spec, ExportSettings* out, std::string* err);
+bool outputFromJs(bronze::Value spec, ExportSettings* out, std::string* err);
 
 } // namespace ffmpegbro

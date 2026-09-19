@@ -40,7 +40,7 @@
 #include "ffmpeg_input.h"
 #include "probe_async.h"
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <cstdint>
 #include <string>
@@ -49,83 +49,84 @@ namespace ffmpegbro {
 
 namespace {
 
-JSValue streamToJs(JSContext* ctx, const StreamSummary& s) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "index", JS_NewInt32(ctx, s.index));
-    setStr(ctx, o, "kind", s.kind);
-    setStr(ctx, o, "codec", s.codec);
-    setStr(ctx, o, "codecLong", s.codecLong);
-    setStr(ctx, o, "tag", s.tag);
-    setStr(ctx, o, "profile", s.profile);
-    JS_SetPropertyStr(ctx, o, "bitRate", JS_NewInt64(ctx, s.bitRate));
-    JS_SetPropertyStr(ctx, o, "duration", JS_NewFloat64(ctx, s.duration));
-    JS_SetPropertyStr(ctx, o, "default", JS_NewBool(ctx, s.isDefault));
-    setStr(ctx, o, "language", s.language);
-    setStr(ctx, o, "title", s.title);
+bronze::Value streamToJs(const StreamSummary& s) {
+    namespace ev = bronze::embed;
+    ev::Persistent o(ev::createObject());
+    setNum(o.get(), "index", s.index);
+    setStr(o.get(), "kind", s.kind);
+    setStr(o.get(), "codec", s.codec);
+    setStr(o.get(), "codecLong", s.codecLong);
+    setStr(o.get(), "tag", s.tag);
+    setStr(o.get(), "profile", s.profile);
+    setNum(o.get(), "bitRate", static_cast<double>(s.bitRate));
+    setNum(o.get(), "duration", s.duration);
+    setBool(o.get(), "default", s.isDefault);
+    setStr(o.get(), "language", s.language);
+    setStr(o.get(), "title", s.title);
 
     if (s.kind == "video") {
-        JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, s.width));
-        JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, s.height));
-        JS_SetPropertyStr(ctx, o, "fps", JS_NewFloat64(ctx, s.fps));
-        setStr(ctx, o, "pixFmt", s.pixFmt);
-        setStr(ctx, o, "colorSpace", s.colorSpace);
-        setStr(ctx, o, "colorRange", s.colorRange);
-        setStr(ctx, o, "colorPrimaries", s.colorPrimaries);
-        setStr(ctx, o, "colorTransfer", s.colorTransfer);
-        JS_SetPropertyStr(ctx, o, "sampleAspect", JS_NewFloat64(ctx, s.sampleAspect));
-        JS_SetPropertyStr(ctx, o, "rotation", JS_NewInt32(ctx, s.rotation));
+        setNum(o.get(), "width", s.width);
+        setNum(o.get(), "height", s.height);
+        setNum(o.get(), "fps", s.fps);
+        setStr(o.get(), "pixFmt", s.pixFmt);
+        setStr(o.get(), "colorSpace", s.colorSpace);
+        setStr(o.get(), "colorRange", s.colorRange);
+        setStr(o.get(), "colorPrimaries", s.colorPrimaries);
+        setStr(o.get(), "colorTransfer", s.colorTransfer);
+        setNum(o.get(), "sampleAspect", s.sampleAspect);
+        setNum(o.get(), "rotation", s.rotation);
         // What the frame measures once rotation is applied — the size a UI
         // should actually lay out for.
         const bool swapped = (s.rotation == 90 || s.rotation == 270);
-        JS_SetPropertyStr(ctx, o, "displayWidth",
-                          JS_NewInt32(ctx, swapped ? s.height : s.width));
-        JS_SetPropertyStr(ctx, o, "displayHeight",
-                          JS_NewInt32(ctx, swapped ? s.width : s.height));
+        setNum(o.get(), "displayWidth", swapped ? s.height : s.width);
+        setNum(o.get(), "displayHeight", swapped ? s.width : s.height);
     } else if (s.kind == "audio") {
-        JS_SetPropertyStr(ctx, o, "sampleRate", JS_NewInt32(ctx, s.sampleRate));
-        JS_SetPropertyStr(ctx, o, "channels", JS_NewInt32(ctx, s.channels));
-        setStr(ctx, o, "channelLayout", s.channelLayout);
-        setStr(ctx, o, "sampleFmt", s.sampleFmt);
+        setNum(o.get(), "sampleRate", s.sampleRate);
+        setNum(o.get(), "channels", s.channels);
+        setStr(o.get(), "channelLayout", s.channelLayout);
+        setStr(o.get(), "sampleFmt", s.sampleFmt);
     } else if (s.kind == "subtitle") {
-        JS_SetPropertyStr(ctx, o, "textSub", JS_NewBool(ctx, s.textSub));
+        setBool(o.get(), "textSub", s.textSub);
     }
-    return o;
+    return o.get();
 }
 
 /// A successful probe, as the UI reads one. One builder, two callers — the
 /// synchronous call and the poll — because a URL and a path have to arrive
 /// described identically or every reader of a probe would grow a second branch.
-JSValue probeToJs(JSContext* ctx, const ProbeResult& r) {
-    JSValue out = JS_NewObject(ctx);
-    setStr(ctx, out, "path", r.path);
+bronze::Value probeToJs(const ProbeResult& r) {
+    namespace ev = bronze::embed;
+    ev::Persistent out(ev::createObject());
+    setStr(out.get(), "path", r.path);
 
-    JSValue fmt = JS_NewObject(ctx);
-    setStr(ctx, fmt, "name", r.formatName);
-    setStr(ctx, fmt, "longName", r.formatLongName);
-    JS_SetPropertyStr(ctx, fmt, "duration", JS_NewFloat64(ctx, r.durationSec));
-    JS_SetPropertyStr(ctx, fmt, "bitRate", JS_NewInt64(ctx, r.bitRate));
-    JS_SetPropertyStr(ctx, fmt, "size", JS_NewInt64(ctx, r.sizeBytes));
-    JS_SetPropertyStr(ctx, out, "format", fmt);
+    ev::Persistent fmt(ev::createObject());
+    setStr(fmt.get(), "name", r.formatName);
+    setStr(fmt.get(), "longName", r.formatLongName);
+    setNum(fmt.get(), "duration", r.durationSec);
+    setNum(fmt.get(), "bitRate", static_cast<double>(r.bitRate));
+    setNum(fmt.get(), "size", static_cast<double>(r.sizeBytes));
+    out.set(ev::setProperty(out.get(), "format", fmt.get()));
 
-    JSValue arr = JS_NewArray(ctx);
+    ev::Persistent arr(createArray());
     uint32_t n = 0;
     int firstVideo = -1, firstAudio = -1;
     for (const auto& s : r.streams) {
         if (firstVideo < 0 && s.kind == "video") firstVideo = static_cast<int>(n);
         if (firstAudio < 0 && s.kind == "audio") firstAudio = static_cast<int>(n);
-        JS_SetPropertyUint32(ctx, arr, n++, streamToJs(ctx, s));
+        ev::Persistent item(streamToJs(s));
+        arr.set(ev::setElement(arr.get(), n++, item.get()));
     }
-    JS_SetPropertyStr(ctx, out, "streams", arr);
+    out.set(ev::setProperty(out.get(), "streams", arr.get()));
 
     // Shortcuts to the streams a player actually plays, so callers don't
     // re-scan the array for the common case.
-    JS_SetPropertyStr(ctx, out, "video",
-                      firstVideo >= 0 ? JS_GetPropertyUint32(ctx, arr, firstVideo)
-                                      : JS_NULL);
-    JS_SetPropertyStr(ctx, out, "audio",
-                      firstAudio >= 0 ? JS_GetPropertyUint32(ctx, arr, firstAudio)
-                                      : JS_NULL);
-    return out;
+    out.set(ev::setProperty(out.get(), "video",
+                            firstVideo >= 0 ? ev::getElement(arr.get(), firstVideo)
+                                            : ev::null()));
+    out.set(ev::setProperty(out.get(), "audio",
+                            firstAudio >= 0 ? ev::getElement(arr.get(), firstAudio)
+                                            : ev::null()));
+    return out.get();
 }
 
 /// The `-i` these calls are about, out of whatever the caller passed.
@@ -133,21 +134,21 @@ JSValue probeToJs(JSContext* ctx, const ProbeResult& r) {
 /// One reader, because `probe()` and `probes.start()` take the same two shapes
 /// and a second copy would be the place one of them stopped honouring a forced
 /// demuxer. False leaves `*in` alone and an exception pending.
-bool inputArg(JSContext* ctx, int argc, JSValueConst* argv, MediaInput* in) {
-    if (JS_IsObject(argv[0])) {
-        *in = inputFromJs(ctx, argv[0]);
+bool inputArg(std::span<const bronze::Value> args, MediaInput* in) {
+    namespace ev = bronze::embed;
+    if (args.empty()) return false;
+    if (ev::isObject(args[0])) {
+        *in = inputFromJs(args[0]);
         return true;
     }
-    const char* path = JS_ToCString(ctx, argv[0]);
-    if (!path) return false;
+    if (!ev::isString(args[0])) return false;
     MediaInput built;
-    built.path = path;
-    JS_FreeCString(ctx, path);
+    built.path = ev::toUtf8(args[0]);
     // The second argument is the rest of the `-i`, for a caller that has a
     // path in hand rather than an input record.
-    if (argc >= 2 && JS_IsObject(argv[1])) {
+    if (args.size() >= 2 && ev::isObject(args[1])) {
         const std::string path0 = built.path;
-        built = inputFromJs(ctx, argv[1]);
+        built = inputFromJs(args[1]);
         built.path = path0;
     }
     *in = built;
@@ -169,19 +170,19 @@ bool inputArg(JSContext* ctx, int argc, JSValueConst* argv, MediaInput* in) {
 // A synchronous call cannot have either — there is nobody to press the button
 // and nowhere for the answer to arrive — which is precisely why anything that
 // might wait on a network goes through `probes.start` instead.
-JSValue js_probe(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "probe(path) requires a path or an input");
+bronze::Value js_probe(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty()) return ev::throwTypeError("probe(path) requires a path or an input");
 
     MediaInput in;
-    if (!inputArg(ctx, argc, argv, &in)) return JS_EXCEPTION;
-    if (in.path.empty()) return JS_ThrowTypeError(ctx, "probe() needs a path or a URL");
+    if (!inputArg(args, &in)) return ev::throwTypeError("probe(path) requires a valid path or input");
+    if (in.path.empty()) return ev::throwTypeError("probe() needs a path or a URL");
 
     const ProbeResult r = probeMedia(in);
     if (!r.ok) {
-        return JS_ThrowTypeError(ctx, "cannot open '%s': %s", r.path.c_str(),
-                                 r.error.c_str());
+        return ev::throwTypeError("cannot open '" + r.path + "': " + r.error);
     }
-    return probeToJs(ctx, r);
+    return probeToJs(r);
 }
 
 // bro.ffmpeg.probes.start(path | input, [{ timeout }]) — the same probe, on a
@@ -192,20 +193,21 @@ JSValue js_probe(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 // a demuxer option and never reaches libav: it is the deadline on the interrupt
 // callback, which is one mechanism covering every protocol — see `OpenWatch`
 // in ffmpeg_input.h for what libav's own timeout options do and do not cover.
-JSValue js_probeStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1)
-        return JS_ThrowTypeError(ctx, "probes.start(path) requires a path or an input");
+bronze::Value js_probeStart(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty())
+        return ev::throwTypeError("probes.start(path) requires a path or an input");
 
     MediaInput in;
-    if (!inputArg(ctx, argc, argv, &in)) return JS_EXCEPTION;
+    if (!inputArg(args, &in)) return ev::throwTypeError("probes.start() requires a valid path or input");
     if (in.path.empty())
-        return JS_ThrowTypeError(ctx, "probes.start() needs a path or a URL");
+        return ev::throwTypeError("probes.start() needs a path or a URL");
 
     double timeout = 0;
-    for (int i = 0; i < argc; ++i)
-        if (JS_IsObject(argv[i])) timeout = numProp(ctx, argv[i], "timeout", timeout);
+    for (size_t i = 0; i < args.size(); ++i)
+        if (ev::isObject(args[i])) timeout = numProp(args[i], "timeout", timeout);
 
-    return JS_NewInt64(ctx, static_cast<int64_t>(startProbe(in, timeout)));
+    return ev::fromDouble(static_cast<double>(startProbe(in, timeout)));
 }
 
 const char* probeStateName(ProbeProgress::State s) {
@@ -229,37 +231,40 @@ const char* probeStateName(ProbeProgress::State s) {
 // seconds" can be drawn without the UI keeping a clock of its own — a second
 // clock would drift from the one the deadline is actually measured against,
 // which is libav's monotonic one.
-JSValue js_probePoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "probes.poll(id) requires an id");
-    int64_t id = 0;
-    if (JS_ToInt64(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
+bronze::Value js_probePoll(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty()) return ev::throwTypeError("probes.poll(id) requires an id");
+    if (!ev::isNumber(args[0])) return ev::throwTypeError("probes.poll(id) requires a numeric id");
+    uint64_t id = static_cast<uint64_t>(ev::toDouble(args[0]));
 
     ProbeProgress p;
-    if (!probeProgress(static_cast<uint64_t>(id), &p)) return JS_NULL;
+    if (!probeProgress(id, &p)) return ev::null();
 
-    JSValue o = JS_NewObject(ctx);
-    setStr(ctx, o, "state", probeStateName(p.state));
-    JS_SetPropertyStr(ctx, o, "opening",
-                      JS_NewBool(ctx, p.state == ProbeProgress::State::Opening));
-    JS_SetPropertyStr(ctx, o, "elapsed", JS_NewFloat64(ctx, p.elapsed));
-    JS_SetPropertyStr(ctx, o, "timeout", JS_NewFloat64(ctx, p.timeout));
+    ev::Persistent o(ev::createObject());
+    setStr(o.get(), "state", probeStateName(p.state));
+    setBool(o.get(), "opening", p.state == ProbeProgress::State::Opening);
+    setNum(o.get(), "elapsed", p.elapsed);
+    setNum(o.get(), "timeout", p.timeout);
     // **What a `Stop` beside this will actually do.** False for a device,
     // whose `read_header` never polls the interrupt callback — see `OpenWatch`
     // in ffmpeg_input.h for the measurement. Reported rather than worked out
     // by the caller, because a button that claimed to abort an open it cannot
     // reach would be a lie about what the machine is doing, and the fact
     // belongs to the open rather than to whoever is drawing it.
-    JS_SetPropertyStr(ctx, o, "stoppable", JS_NewBool(ctx, p.stoppable));
+    setBool(o.get(), "stoppable", p.stoppable);
     // The failure is a string here rather than an exception, which is the one
     // place these two calls differ in more than timing: `probe()` throws
     // because a caller that ignored the failure would lay out a file it never
     // read, and a poll is read every frame by something that has to keep
     // drawing either way.
-    setStr(ctx, o, "error", p.result.error);
-    JS_SetPropertyStr(ctx, o, "result",
-                      p.state == ProbeProgress::State::Done ? probeToJs(ctx, p.result)
-                                                            : JS_NULL);
-    return o;
+    setStr(o.get(), "error", p.result.error);
+    if (p.state == ProbeProgress::State::Done) {
+        ev::Persistent res(probeToJs(p.result));
+        o.set(ev::setProperty(o.get(), "result", res.get()));
+    } else {
+        o.set(ev::setProperty(o.get(), "result", ev::null()));
+    }
+    return o.get();
 }
 
 } // namespace
@@ -278,22 +283,26 @@ void installProbe(Table& ns) {
     /// never polls the callback, so this would set a flag and leave the entry
     /// Opening until the driver answered — which is the state the press was
     /// meant to end. `forget` is what a device's Stop is.
-    probes.function("cancel", [](JSContext* ctx, JSValue idArg) {
-        int64_t id = 0;
-        if (JS_ToInt64(ctx, &id, idArg) < 0) return JS_EXCEPTION;
-        stopProbe(static_cast<uint64_t>(id));
-        return JS_UNDEFINED;
-    });
+    probes.function("cancel", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        if (args.empty() || !ev::isNumber(args[0]))
+            return ev::throwTypeError("probes.cancel(id) requires a numeric id");
+        uint64_t id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        stopProbe(id);
+        return ev::undefined();
+    }, 1);
     /// Stop it and never poll again — an input removed while it was still
     /// opening. Separate from `cancel` because the two differ in whether
     /// anybody is going to be told: `cancel` keeps the answer for the press
     /// that asked for it, this one throws it away and reaps the thread.
-    probes.function("forget", [](JSContext* ctx, JSValue idArg) {
-        int64_t id = 0;
-        if (JS_ToInt64(ctx, &id, idArg) < 0) return JS_EXCEPTION;
-        abandonProbe(static_cast<uint64_t>(id));
-        return JS_UNDEFINED;
-    });
+    probes.function("forget", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        if (args.empty() || !ev::isNumber(args[0]))
+            return ev::throwTypeError("probes.forget(id) requires a numeric id");
+        uint64_t id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        abandonProbe(id);
+        return ev::undefined();
+    }, 1);
 }
 
 } // namespace ffmpegbro
