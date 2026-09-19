@@ -22,7 +22,7 @@
 #include "bindings_value.h"
 #include "proxy_queue.h"
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <cstdint>
 #include <string>
@@ -43,20 +43,21 @@ const char* proxyStateName(ProxyStatus::State s) {
     return "queued";
 }
 
-JSValue proxyToJs(JSContext* ctx, const ProxyStatus& p) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "id", JS_NewInt64(ctx, static_cast<int64_t>(p.id)));
-    setStr(ctx, o, "label", p.label);
-    setStr(ctx, o, "path", p.path);
-    setStr(ctx, o, "state", proxyStateName(p.state));
-    JS_SetPropertyStr(ctx, o, "progress", JS_NewFloat64(ctx, p.progress));
-    JS_SetPropertyStr(ctx, o, "position", JS_NewFloat64(ctx, p.position));
-    JS_SetPropertyStr(ctx, o, "span", JS_NewFloat64(ctx, p.span));
-    JS_SetPropertyStr(ctx, o, "elapsedSec", JS_NewFloat64(ctx, p.elapsedSec));
-    JS_SetPropertyStr(ctx, o, "frames", JS_NewInt64(ctx, p.frames));
-    JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, p.bytes));
-    setStr(ctx, o, "error", p.error);
-    return o;
+bronze::Value proxyToJs(const ProxyStatus& p) {
+    namespace ev = bronze::embed;
+    ev::Persistent o(ev::createObject());
+    setNum(o.get(), "id", static_cast<double>(p.id));
+    setStr(o.get(), "label", p.label);
+    setStr(o.get(), "path", p.path);
+    setStr(o.get(), "state", proxyStateName(p.state));
+    setNum(o.get(), "progress", p.progress);
+    setNum(o.get(), "position", p.position);
+    setNum(o.get(), "span", p.span);
+    setNum(o.get(), "elapsedSec", p.elapsedSec);
+    setNum(o.get(), "frames", static_cast<double>(p.frames));
+    setNum(o.get(), "bytes", static_cast<double>(p.bytes));
+    setStr(o.get(), "error", p.error);
+    return o.get();
 }
 
 /// bro.ffmpeg.proxy.start({ path, input, height, label }) → its number.
@@ -64,28 +65,27 @@ JSValue proxyToJs(JSContext* ctx, const ProxyStatus& p) {
 /// `input` is a path or the same input object every other call here takes, so a
 /// proxy of a windowed or force-demuxed input is describable — read through
 /// `inputFromJs`, which is the one reader of that shape.
-JSValue js_proxyStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsObject(argv[0]))
-        return JS_ThrowTypeError(ctx, "proxy.start(request) requires an object");
+bronze::Value js_proxyStart(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty() || !ev::isObject(args[0]))
+        return ev::throwTypeError("proxy.start(request) requires an object");
 
     ProxyRequest r;
-    r.path = strProp(ctx, argv[0], "path", "");
-    r.label = strProp(ctx, argv[0], "label", "");
-    r.height = static_cast<int>(numProp(ctx, argv[0], "height", 720));
+    r.path = strProp(args[0], "path", "");
+    r.label = strProp(args[0], "label", "");
+    r.height = static_cast<int>(numProp(args[0], "height", 720));
 
-    JSValue in = JS_GetPropertyStr(ctx, argv[0], "input");
-    if (JS_IsObject(in)) {
-        r.input = inputFromJs(ctx, in);
-    } else if (JS_IsString(in)) {
-        const char* path = JS_ToCString(ctx, in);
-        if (path) { r.input.path = path; JS_FreeCString(ctx, path); }
+    bronze::Value in = ev::getProperty(args[0], "input");
+    if (ev::isObject(in)) {
+        r.input = inputFromJs(in);
+    } else if (ev::isString(in)) {
+        r.input.path = ev::toUtf8(in);
     }
-    JS_FreeValue(ctx, in);
 
     std::string err;
     const uint64_t id = startProxy(r, &err);
-    if (!id) return JS_ThrowTypeError(ctx, "cannot make a proxy: %s", err.c_str());
-    return JS_NewInt64(ctx, static_cast<int64_t>(id));
+    if (!id) return ev::throwTypeError("cannot make a proxy: " + err);
+    return ev::fromDouble(static_cast<double>(id));
 }
 
 } // namespace
@@ -93,23 +93,33 @@ JSValue js_proxyStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
 void installProxy(Table& ns) {
     Table proxy(ns, "proxy");
     proxy.function("start", js_proxyStart, 1);
-    proxy.function("list", [](JSContext* ctx) {
+    proxy.function("list", [](bronze::Value, std::span<const bronze::Value>) -> bronze::Value {
+        namespace ev = bronze::embed;
         const std::vector<ProxyStatus> all = proxyList();
-        JSValue arr = JS_NewArray(ctx);
+        ev::Persistent arr(createArray());
         uint32_t i = 0;
-        for (const ProxyStatus& p : all) JS_SetPropertyUint32(ctx, arr, i++, proxyToJs(ctx, p));
-        return arr;
+        for (const ProxyStatus& p : all) {
+            ev::Persistent o(proxyToJs(p));
+            arr.set(ev::setElement(arr.get(), i++, o.get()));
+        }
+        return arr.get();
     });
-    proxy.function("status", [](JSContext* ctx, int64_t id) {
-        return proxyToJs(ctx, proxyStatus(static_cast<uint64_t>(id)));
-    });
-    proxy.function("stop", [](JSContext*, int64_t id) {
-        stopProxy(static_cast<uint64_t>(id));
-        return JS_UNDEFINED;
-    });
-    proxy.function("clearFinished", [](JSContext*) {
+    proxy.function("status", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        uint64_t id = 0;
+        if (!args.empty() && ev::isNumber(args[0])) id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        return proxyToJs(proxyStatus(id));
+    }, 1);
+    proxy.function("stop", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        uint64_t id = 0;
+        if (!args.empty() && ev::isNumber(args[0])) id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        stopProxy(id);
+        return ev::undefined();
+    }, 1);
+    proxy.function("clearFinished", [](bronze::Value, std::span<const bronze::Value>) -> bronze::Value {
         clearFinishedProxies();
-        return JS_UNDEFINED;
+        return bronze::embed::undefined();
     });
 }
 

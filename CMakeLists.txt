@@ -204,20 +204,19 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
     src/native/ffmpeg_bindings.cpp
     src/native/bindings_value.cpp
-    src/native/bindings_stubs.cpp
     # Subsystem bindings
     src/native/bindings_spec.cpp
     src/native/bindings_probe.cpp
-    # src/native/bindings_render.cpp
-    # src/native/bindings_capture.cpp
+    src/native/bindings_render.cpp
+    src/native/bindings_capture.cpp
     src/native/bindings_capabilities.cpp
     src/native/bindings_expr.cpp
-    # src/native/bindings_fetch.cpp
-    # src/native/bindings_proxy.cpp
+    src/native/bindings_fetch.cpp
+    src/native/bindings_proxy.cpp
     src/native/bindings_data.cpp
-    # src/native/bindings_marks.cpp
+    src/native/bindings_marks.cpp
     src/native/bindings_playback.cpp
-    # src/native/bindings_sequence.cpp
+    src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_data.cpp
     src/native/data_gpmf.cpp
@@ -233,9 +232,9 @@ add_library(ffmpeg-bro-core STATIC
     src/native/probe_async.cpp
     src/native/sound_marks.cpp
     src/native/transcribe.cpp
-    # src/native/bindings_transcribe.cpp
+    src/native/bindings_transcribe.cpp
     src/native/spoken_words.cpp
-    # src/native/bindings_words.cpp
+    src/native/bindings_words.cpp
     src/native/sound_meter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
@@ -751,7 +750,7 @@ set_tests_properties(ui-graph PROPERTIES FIXTURES_REQUIRED "media;storage" TIMEO
 # The headless binary writes screenshots and renders relative to its working
 # directory, and the tests read them back the same way.
 set_tests_properties(export capabilities sequences hardware proxy ui-player ui-sources ui-hardware ui-export
-                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find supercut
+                     ui-sequence ui-report ui-measure ui-subtitles ui-document ui-output ui-find supercut ui-graph
                      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_test(NAME actuate-nav COMMAND ffmpeg-bro-headless

@@ -13,3 +13,4 @@ supercut/.storage.json
 .supercut_settings.json
 *.log
 out/
+compile_commands.json

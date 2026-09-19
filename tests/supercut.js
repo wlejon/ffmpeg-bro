@@ -1593,6 +1593,8 @@ console.log('\nthe line');
     ok(A.line.plan().missing.length === 0 && !A.line.pieceOf(0).hit,
        'with no corpus open a word is unresolved rather than missing');
     A.results.useCorpus(`${dir}/find.json`);
+    library.useCorpus(`${dir}/find.json`);
+    library.pick();
     A.results.start();
     pump(60);
     ok(!!A.line.pieceOf(0).hit && A.line.plan().missing.length === 0,
@@ -1739,6 +1741,7 @@ console.log('\na search that answers over frames');
 {
     A.results.setTab('recordings');
     A.results.useCorpus(`${dir}/find.json`);
+    library.useCorpus(`${dir}/find.json`);
     library.pick('turkey');
 
     // Reading an `.srt` a slice at a time is what breaks up the freeze, and it

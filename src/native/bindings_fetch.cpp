@@ -24,7 +24,7 @@
 #include "bindings_value.h"
 #include "fetch_queue.h"
 
-#include <quickjs.h>
+#include <embed/embed.h>
 
 #include <cstdint>
 #include <string>
@@ -45,20 +45,21 @@ const char* fetchStateName(FetchStatus::State s) {
     return "queued";
 }
 
-JSValue fetchToJs(JSContext* ctx, const FetchStatus& f) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "id", JS_NewInt64(ctx, static_cast<int64_t>(f.id)));
-    setStr(ctx, o, "label", f.label);
-    setStr(ctx, o, "path", f.path);
-    setStr(ctx, o, "state", fetchStateName(f.state));
-    JS_SetPropertyStr(ctx, o, "progress", JS_NewFloat64(ctx, f.progress));
-    JS_SetPropertyStr(ctx, o, "position", JS_NewFloat64(ctx, f.position));
-    JS_SetPropertyStr(ctx, o, "span", JS_NewFloat64(ctx, f.span));
-    JS_SetPropertyStr(ctx, o, "elapsedSec", JS_NewFloat64(ctx, f.elapsedSec));
-    JS_SetPropertyStr(ctx, o, "packets", JS_NewInt64(ctx, f.packets));
-    JS_SetPropertyStr(ctx, o, "bytes", JS_NewInt64(ctx, f.bytes));
-    setStr(ctx, o, "error", f.error);
-    return o;
+bronze::Value fetchToJs(const FetchStatus& f) {
+    namespace ev = bronze::embed;
+    ev::Persistent o(ev::createObject());
+    setNum(o.get(), "id", static_cast<double>(f.id));
+    setStr(o.get(), "label", f.label);
+    setStr(o.get(), "path", f.path);
+    setStr(o.get(), "state", fetchStateName(f.state));
+    setNum(o.get(), "progress", f.progress);
+    setNum(o.get(), "position", f.position);
+    setNum(o.get(), "span", f.span);
+    setNum(o.get(), "elapsedSec", f.elapsedSec);
+    setNum(o.get(), "packets", static_cast<double>(f.packets));
+    setNum(o.get(), "bytes", static_cast<double>(f.bytes));
+    setStr(o.get(), "error", f.error);
+    return o.get();
 }
 
 /// bro.ffmpeg.fetch.start(spec, { label, soon }) → the number it will be known by.
@@ -66,20 +67,21 @@ JSValue fetchToJs(JSContext* ctx, const FetchStatus& f) {
 /// QuickJS's own signature rather than a typed lambda, for `render.start`'s
 /// reason exactly: there is nothing for `Convert<T>` to do with a render spec,
 /// and this is given the same one.
-JSValue js_fetchStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsObject(argv[0]))
-        return JS_ThrowTypeError(ctx, "fetch.start(spec) requires a spec object");
+bronze::Value js_fetchStart(bronze::Value, std::span<const bronze::Value> args) {
+    namespace ev = bronze::embed;
+    if (args.empty() || !ev::isObject(args[0]))
+        return ev::throwTypeError("fetch.start(spec) requires a spec object");
 
     ExportSettings s;
     std::string bad;
-    if (!outputFromJs(ctx, argv[0], &s, &bad))
-        return JS_ThrowTypeError(ctx, "%s", bad.c_str());
+    if (!outputFromJs(args[0], &s, &bad))
+        return ev::throwTypeError(bad);
 
     std::string label;
     bool soon = false;
-    if (argc >= 2 && JS_IsObject(argv[1])) {
-        label = strProp(ctx, argv[1], "label", "");
-        soon = boolProp(ctx, argv[1], "soon", false);
+    if (args.size() >= 2 && ev::isObject(args[1])) {
+        label = strProp(args[1], "label", "");
+        soon = boolProp(args[1], "soon", false);
     }
 
     std::string err;
@@ -87,8 +89,8 @@ JSValue js_fetchStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     // **Refused rather than queued to fail.** A spec this loop cannot perform is
     // a mistake at the call site, and finding out about it a minute later on a
     // worker thread is finding out from a download that never started.
-    if (!id) return JS_ThrowTypeError(ctx, "cannot fetch: %s", err.c_str());
-    return JS_NewInt64(ctx, static_cast<int64_t>(id));
+    if (!id) return ev::throwTypeError("cannot fetch: " + err);
+    return ev::fromDouble(static_cast<double>(id));
 }
 
 } // namespace
@@ -96,23 +98,33 @@ JSValue js_fetchStart(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
 void installFetch(Table& ns) {
     Table fetch(ns, "fetch");
     fetch.function("start", js_fetchStart, 2);
-    fetch.function("list", [](JSContext* ctx) {
+    fetch.function("list", [](bronze::Value, std::span<const bronze::Value>) -> bronze::Value {
+        namespace ev = bronze::embed;
         const std::vector<FetchStatus> all = fetchList();
-        JSValue arr = JS_NewArray(ctx);
+        ev::Persistent arr(createArray());
         uint32_t i = 0;
-        for (const FetchStatus& f : all) JS_SetPropertyUint32(ctx, arr, i++, fetchToJs(ctx, f));
-        return arr;
+        for (const FetchStatus& f : all) {
+            ev::Persistent o(fetchToJs(f));
+            arr.set(ev::setElement(arr.get(), i++, o.get()));
+        }
+        return arr.get();
     });
-    fetch.function("status", [](JSContext* ctx, int64_t id) {
-        return fetchToJs(ctx, fetchStatus(static_cast<uint64_t>(id)));
-    });
-    fetch.function("stop", [](JSContext*, int64_t id) {
-        stopFetch(static_cast<uint64_t>(id));
-        return JS_UNDEFINED;
-    });
-    fetch.function("clearFinished", [](JSContext*) {
+    fetch.function("status", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        uint64_t id = 0;
+        if (!args.empty() && ev::isNumber(args[0])) id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        return fetchToJs(fetchStatus(id));
+    }, 1);
+    fetch.function("stop", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
+        namespace ev = bronze::embed;
+        uint64_t id = 0;
+        if (!args.empty() && ev::isNumber(args[0])) id = static_cast<uint64_t>(ev::toDouble(args[0]));
+        stopFetch(id);
+        return ev::undefined();
+    }, 1);
+    fetch.function("clearFinished", [](bronze::Value, std::span<const bronze::Value>) -> bronze::Value {
         clearFinishedFetches();
-        return JS_UNDEFINED;
+        return bronze::embed::undefined();
     });
 }
 

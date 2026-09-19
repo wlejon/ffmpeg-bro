@@ -3129,6 +3129,7 @@ if (!media) {
     overlay.clear();
     if (!A.project.clips.length) dropFiles(400, 300, [media]);
     waitFor('a clip on the timeline', () => A.project.clips.length >= 1);
+    ok(A.shell.goTo('compose'), 'the Compose stage opens, which is where the viewer is');
     pump(200);
 
     const clip = A.project.clips[0];
