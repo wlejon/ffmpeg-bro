@@ -15,7 +15,10 @@
 
 #include "bindings_install.h"
 #include "bindings_table.h"
+#include "bindings_value.h"
+#include "util/log.h"
 
+#include <embed/embed.h>
 #include <string>
 
 namespace ffmpegbro {
@@ -26,49 +29,53 @@ std::string g_initialMedia;
 
 void setInitialMedia(const std::string& path) { g_initialMedia = path; }
 
-void installFfmpegBindings(JSContext* ctx) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsNull(broObj)) {
-        JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+void installFfmpegBindings(bro::engine::Engine& /*engine*/) {
+    namespace ev = bronze::embed;
+
+    ev::GlobalValue broGlobal = ev::globalValue("bro");
+    if (!broGlobal.found || !ev::isObject(broGlobal.value)) {
+        LOG_WARN("installFfmpegBindings: 'bro' global not found or not an object");
+        return;
+    }
+
+    ev::Persistent broObj(broGlobal.value);
+    bronze::Value ffmpegVal = ev::getProperty(broObj.get(), "ffmpeg");
+    if (!ev::isObject(ffmpegVal)) {
+        ev::Persistent created(ev::createObject());
+        broObj.set(ev::setProperty(broObj.get(), "ffmpeg", created.get()));
+        ffmpegVal = created.get();
     }
 
     {
-        // Scoped, because a table attaches itself to its parent when it goes
-        // out of scope — `bro.ffmpeg` has to be there before `broObj` is freed.
-        Table ns(ctx, broObj, "ffmpeg");
+        Table rootTable(ffmpegVal);
 
         // Linked in, not looked up on PATH: if this binary runs, ffmpeg is
         // here. The only two properties left at this level that are facts about
         // the binary rather than about libav — everything libav can tell us is
         // `installCapabilities`.
-        ns.value("available", JS_TRUE);
-        ns.value("linked", JS_TRUE);
+        rootTable.value("available", true);
+        rootTable.value("linked", true);
 
-        installProbe(ns);
-        installData(ns);
-        installMarks(ns);
-        installTranscribe(ns);
-        installWords(ns);
-        installCapabilities(ns);
-        installExpression(ns);
-        installSequences(ns);
-        installPlayback(ns);
-        installRender(ns);
-        installFetch(ns);
-        installProxy(ns);
-        installCapture(ns);
+        installProbe(rootTable);
+        installData(rootTable);
+        installMarks(rootTable);
+        installTranscribe(rootTable);
+        installWords(rootTable);
+        installCapabilities(rootTable);
+        installExpression(rootTable);
+        installSequences(rootTable);
+        installPlayback(rootTable);
+        installRender(rootTable);
+        installFetch(rootTable);
+        installProxy(rootTable);
+        installCapture(rootTable);
 
-        ns.value("openOnStart",
-                 g_initialMedia.empty()
-                     ? JS_NULL
-                     : JS_NewStringLen(ctx, g_initialMedia.data(), g_initialMedia.size()));
+        if (g_initialMedia.empty()) {
+            rootTable.value("openOnStart", ev::null());
+        } else {
+            rootTable.value("openOnStart", g_initialMedia);
+        }
     }
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
 }
 
 } // namespace ffmpegbro

@@ -204,18 +204,20 @@ add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
     src/native/ffmpeg_bindings.cpp
     src/native/bindings_value.cpp
-    src/native/bindings_spec.cpp
-    src/native/bindings_probe.cpp
-    src/native/bindings_render.cpp
-    src/native/bindings_capture.cpp
-    src/native/bindings_capabilities.cpp
-    src/native/bindings_expr.cpp
-    src/native/bindings_fetch.cpp
-    src/native/bindings_proxy.cpp
-    src/native/bindings_data.cpp
-    src/native/bindings_marks.cpp
-    src/native/bindings_playback.cpp
-    src/native/bindings_sequence.cpp
+    src/native/bindings_stubs.cpp
+    # Subsystem bindings (to be migrated in subsequent chunks; stubbed above for Chunk 1)
+    # src/native/bindings_spec.cpp
+    # src/native/bindings_probe.cpp
+    # src/native/bindings_render.cpp
+    # src/native/bindings_capture.cpp
+    # src/native/bindings_capabilities.cpp
+    # src/native/bindings_expr.cpp
+    # src/native/bindings_fetch.cpp
+    # src/native/bindings_proxy.cpp
+    # src/native/bindings_data.cpp
+    # src/native/bindings_marks.cpp
+    # src/native/bindings_playback.cpp
+    # src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
     src/native/ffmpeg_data.cpp
     src/native/data_gpmf.cpp
@@ -231,9 +233,9 @@ add_library(ffmpeg-bro-core STATIC
     src/native/probe_async.cpp
     src/native/sound_marks.cpp
     src/native/transcribe.cpp
-    src/native/bindings_transcribe.cpp
+    # src/native/bindings_transcribe.cpp
     src/native/spoken_words.cpp
-    src/native/bindings_words.cpp
+    # src/native/bindings_words.cpp
     src/native/sound_meter.cpp
     src/native/ffmpeg_sequence.cpp
     src/native/export_compositor.cpp
@@ -248,11 +250,21 @@ add_library(ffmpeg-bro-core STATIC
     src/native/fetch_queue.cpp
     src/native/proxy_queue.cpp
 )
+
+if(NOT DEFINED BRONZE_DIR OR NOT EXISTS "${BRONZE_DIR}/src")
+    if(EXISTS "${BRO_DIR}/../bronze/src")
+        set(BRONZE_DIR "${BRO_DIR}/../bronze" CACHE PATH "bronze AOT compiler source tree")
+    elseif(EXISTS "${BRO_DIR}/third_party/bronze/src")
+        set(BRONZE_DIR "${BRO_DIR}/third_party/bronze" CACHE PATH "bronze AOT compiler source tree")
+    endif()
+endif()
+
 target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
+            "${BRONZE_DIR}/src"
     PRIVATE "${BRO_DIR}/src" ${FFMPEG_INCLUDE_DIRS}
 )
-target_link_libraries(ffmpeg-bro-core PRIVATE bro_video qjs qjsbind ${FFMPEG_LIBRARIES})
+target_link_libraries(ffmpeg-bro-core PRIVATE bro_video bronze::runtime_shared ${FFMPEG_LIBRARIES})
 target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 
 # ── bro's acoustic sensors, linked rather than called through JS ───────────
@@ -327,8 +339,9 @@ endif()
 target_link_libraries(ffmpeg-bro-core PUBLIC brolm::brolm)
 
 add_executable(ffmpeg-bro WIN32 src/native/main.cpp)
-target_link_libraries(ffmpeg-bro PRIVATE ffmpeg-bro-core bro_engine)
+target_link_libraries(ffmpeg-bro PRIVATE ${BRO_BRASS_LIB} ffmpeg-bro-core bro_engine bro_bronze_host bro_bronze_js)
 target_include_directories(ffmpeg-bro PRIVATE "${BRO_DIR}/src")
+bro_bronze_stage_runtime(ffmpeg-bro)
 
 # The second application, over the same core and the same UI *model*: finding
 # what was said in a long recording and cutting it together. A separate
@@ -341,14 +354,16 @@ target_include_directories(ffmpeg-bro PRIVATE "${BRO_DIR}/src")
 # types the name of. `ffmpeg-bro-supercut` reads as a variant of the workbench,
 # which is exactly what supercut_main.cpp says it is not.
 add_executable(supercut WIN32 src/native/supercut_main.cpp)
-target_link_libraries(supercut PRIVATE ffmpeg-bro-core bro_engine)
+target_link_libraries(supercut PRIVATE ${BRO_BRASS_LIB} ffmpeg-bro-core bro_engine bro_bronze_host bro_bronze_js)
 target_include_directories(supercut PRIVATE "${BRO_DIR}/src")
+bro_bronze_stage_runtime(supercut)
 
 # The same engine and the same backend, driven by a script. This is what the
 # UI tests run against, and a usable scripted media tool in its own right.
 add_executable(ffmpeg-bro-headless src/native/headless_main.cpp)
-target_link_libraries(ffmpeg-bro-headless PRIVATE ffmpeg-bro-core bro_engine)
+target_link_libraries(ffmpeg-bro-headless PRIVATE ${BRO_BRASS_LIB} ffmpeg-bro-core bro_engine bro_bronze_host bro_bronze_js)
 target_include_directories(ffmpeg-bro-headless PRIVATE "${BRO_DIR}/src")
+bro_bronze_stage_runtime(ffmpeg-bro-headless)
 
 if(MSVC)
     # Same reason bro.exe needs it: QuickJS's interpreter frame is large and

@@ -1,9 +1,11 @@
 // bro.ffmpeg — the JS surface of the linked libav libraries.
 #pragma once
 
-#include <quickjs.h>
-
 #include <string>
+
+namespace bro::engine {
+class Engine;
+}
 
 namespace ffmpegbro {
 
@@ -14,6 +16,6 @@ void setInitialMedia(const std::string& path);
 
 // Install `bro.ffmpeg` into a realm. Wired through
 // EngineConfig::installHostBindings so every realm (reloads, iframes) gets it.
-void installFfmpegBindings(JSContext* ctx);
+void installFfmpegBindings(bro::engine::Engine& engine);
 
 } // namespace ffmpegbro

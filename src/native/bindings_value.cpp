@@ -1,94 +1,119 @@
-// See bindings_value.h for what these are and why they are not qjsbind's.
+// See bindings_value.h for what these are and why they are not QuickJS's.
 
 #include "bindings_value.h"
 
+#include <cmath>
+
 namespace ffmpegbro {
 
-void setStr(JSContext* ctx, JSValue obj, const char* key, const std::string& v) {
-    JS_SetPropertyStr(ctx, obj, key, JS_NewStringLen(ctx, v.data(), v.size()));
+void setStr(bronze::Value obj, const char* key, const std::string& v) {
+    namespace ev = bronze::embed;
+    ev::setProperty(obj, key, ev::fromUtf8(v));
 }
 
-double numProp(JSContext* ctx, JSValueConst obj, const char* key, double fallback) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, key);
-    double out = fallback;
-    if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
-        double d = 0;
-        if (JS_ToFloat64(ctx, &d, v) == 0 && d == d) out = d;
+void setNum(bronze::Value obj, const char* key, double val) {
+    namespace ev = bronze::embed;
+    ev::setProperty(obj, key, ev::fromDouble(val));
+}
+
+void setBool(bronze::Value obj, const char* key, bool val) {
+    namespace ev = bronze::embed;
+    ev::setProperty(obj, key, ev::fromBool(val));
+}
+
+double numProp(bronze::Value obj, const char* key, double fallback) {
+    namespace ev = bronze::embed;
+    if (!ev::isObject(obj)) return fallback;
+    bronze::Value v = ev::getProperty(obj, key);
+    if (ev::isUndefined(v) || ev::isNull(v)) return fallback;
+    if (ev::isNumber(v)) {
+        double d = ev::toDouble(v);
+        if (!std::isnan(d)) return d;
     }
-    JS_FreeValue(ctx, v);
-    return out;
+    return fallback;
 }
 
-bool boolProp(JSContext* ctx, JSValueConst obj, const char* key, bool fallback) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, key);
-    const bool out = (JS_IsUndefined(v) || JS_IsNull(v)) ? fallback : JS_ToBool(ctx, v) == 1;
-    JS_FreeValue(ctx, v);
-    return out;
+bool boolProp(bronze::Value obj, const char* key, bool fallback) {
+    namespace ev = bronze::embed;
+    if (!ev::isObject(obj)) return fallback;
+    bronze::Value v = ev::getProperty(obj, key);
+    if (ev::isUndefined(v) || ev::isNull(v)) return fallback;
+    return ev::toBool(v);
 }
 
-std::string strProp(JSContext* ctx, JSValueConst obj, const char* key,
+std::string strProp(bronze::Value obj, const char* key,
                     const std::string& fallback) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, key);
-    std::string out = fallback;
-    if (JS_IsString(v)) {
-        size_t len = 0;
-        if (const char* s = JS_ToCStringLen(ctx, &len, v)) {
-            out.assign(s, len);
-            JS_FreeCString(ctx, s);
-        }
+    namespace ev = bronze::embed;
+    if (!ev::isObject(obj)) return fallback;
+    bronze::Value v = ev::getProperty(obj, key);
+    if (ev::isString(v)) {
+        return ev::toUtf8(v);
     }
-    JS_FreeValue(ctx, v);
-    return out;
+    return fallback;
 }
 
-uint32_t arrayLength(JSContext* ctx, JSValueConst arr) {
-    JSValue lenv = JS_GetPropertyStr(ctx, arr, "length");
-    uint32_t len = 0;
-    JS_ToUint32(ctx, &len, lenv);
-    JS_FreeValue(ctx, lenv);
-    return len;
+uint32_t arrayLength(bronze::Value arr) {
+    namespace ev = bronze::embed;
+    if (!ev::isObject(arr)) return 0;
+    bronze::Value lenVal = ev::getProperty(arr, "length");
+    if (!ev::isNumber(lenVal)) return 0;
+    double d = ev::toDouble(lenVal);
+    if (d < 0.0 || std::isnan(d)) return 0;
+    return static_cast<uint32_t>(d);
 }
 
-bool takeName(JSContext* ctx, JSValueConst v, std::string* out) {
-    if (!JS_IsString(v)) return false;
-    size_t len = 0;
-    const char* s = JS_ToCStringLen(ctx, &len, v);
-    if (!s) return false;
-    out->assign(s, len);
-    JS_FreeCString(ctx, s);
+bool takeName(bronze::Value v, std::string* out) {
+    namespace ev = bronze::embed;
+    if (!ev::isString(v)) return false;
+    if (out) *out = ev::toUtf8(v);
     return true;
 }
 
-JSValue stringsToJs(JSContext* ctx, const std::vector<std::string>& v) {
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t i = 0;
-    for (const auto& s : v)
-        JS_SetPropertyUint32(ctx, arr, i++, JS_NewStringLen(ctx, s.data(), s.size()));
-    return arr;
-}
-
-JSValue intsToJs(JSContext* ctx, const std::vector<int>& v) {
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t i = 0;
-    for (int n : v) JS_SetPropertyUint32(ctx, arr, i++, JS_NewInt32(ctx, n));
-    return arr;
-}
-
-JSValue channelsToJs(JSContext* ctx, const std::vector<ChannelLevel>& v) {
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t i = 0;
-    for (const ChannelLevel& c : v) {
-        JSValue o = JS_NewObject(ctx);
-        setStr(ctx, o, "name", c.name);
-        // Both peaks, because the distance between them is itself a reading and
-        // because a meter has to be able to say which one it is drawing. See
-        // sound_meter.h.
-        JS_SetPropertyStr(ctx, o, "truePeak", JS_NewFloat64(ctx, c.truePeak));
-        JS_SetPropertyStr(ctx, o, "peak", JS_NewFloat64(ctx, c.peak));
-        JS_SetPropertyStr(ctx, o, "rms", JS_NewFloat64(ctx, c.rms));
-        JS_SetPropertyUint32(ctx, arr, i++, o);
+bronze::Value stringsToJs(const std::vector<std::string>& v) {
+    namespace ev = bronze::embed;
+    ev::CallResult parsed = ev::parseJson("[]");
+    ev::Persistent arr{parsed.value};
+    for (uint32_t i = 0; i < v.size(); ++i) {
+        ev::Persistent s{ev::fromUtf8(v[i])};
+        arr.set(ev::setElement(arr.get(), i, s.get()));
     }
-    return arr;
+    return arr.get();
+}
+
+bronze::Value intsToJs(const std::vector<int>& v) {
+    namespace ev = bronze::embed;
+    ev::CallResult parsed = ev::parseJson("[]");
+    ev::Persistent arr{parsed.value};
+    for (uint32_t i = 0; i < v.size(); ++i) {
+        arr.set(ev::setElement(arr.get(), i, ev::fromDouble(v[i])));
+    }
+    return arr.get();
+}
+
+bronze::Value channelsToJs(const std::vector<ChannelLevel>& v) {
+    namespace ev = bronze::embed;
+    ev::CallResult parsed = ev::parseJson("[]");
+    ev::Persistent arr{parsed.value};
+    for (uint32_t i = 0; i < v.size(); ++i) {
+        ev::Persistent o{ev::createObject()};
+        ev::Persistent nameStr{ev::fromUtf8(v[i].name)};
+        o.set(ev::setProperty(o.get(), "name", nameStr.get()));
+        o.set(ev::setProperty(o.get(), "truePeak", ev::fromDouble(v[i].truePeak)));
+        o.set(ev::setProperty(o.get(), "peak", ev::fromDouble(v[i].peak)));
+        o.set(ev::setProperty(o.get(), "rms", ev::fromDouble(v[i].rms)));
+        arr.set(ev::setElement(arr.get(), i, o.get()));
+    }
+    return arr.get();
+}
+
+bronze::Value channelsToJs(const std::vector<float>& v) {
+    namespace ev = bronze::embed;
+    bronze::Value ta = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(v.size()));
+    if (!v.empty()) {
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(v.data()), v.size() * sizeof(float));
+        ev::fillTypedArray(ta, bytes);
+    }
+    return ta;
 }
 
 } // namespace ffmpegbro

@@ -1,38 +1,102 @@
 // A table of functions hung off another object: `bro.ffmpeg`, and `render`,
 // `record`, `live`, `inputs`, `views` and `output` inside it.
 //
-// This is qjsbind's `Namespace` under a name that says what one of these is.
-// The only thing this surface needed that a namespace did not do was the
-// parent — a namespace attached itself to `globalThis`, and `bro.ffmpeg` is two
-// levels down, because bro owns `bro` and half the calls sit in a table of
-// their own inside `ffmpeg`. That is a parameter of `Namespace` now, so what
-// was a reimplementation of the builder against qjsbind's internals is a name
-// for the builder.
-//
-// Registration is therefore all qjsbind's: the RAII attach, the trampolines,
-// `Convert<T>` on every argument and return, and one callable per registration
-// owned by the function object that calls it — so a helper may register several
-// calls from one lambda expression, which is what `optionTable` in
-// bindings_capabilities.cpp does.
-//
-// A call that reads a whole spec keeps QuickJS's own signature and is
-// registered with the raw overload. There is nothing for `Convert<T>` to do
-// with a render spec, and `(ctx, this, argc, argv)` states plainly that the
-// reading is the function's own business.
+// This is the bronze-backed Table class wrapping bronze::Value.
+// It attaches properties, subtables, and functions onto an object.
 #pragma once
 
-#include <qjsbind/qjsbind.h>
+#include <embed/embed.h>
+#include <embed/embed_handle.h>
+
+#include <functional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace ffmpegbro {
 
-/// One part of `bro.ffmpeg`: `Table(ctx, parent, name)` for a table on a
-/// borrowed object, `Table(parent, name)` for one inside another table. The
-/// property is set when the table goes out of scope, which is what makes the
-/// whole surface one nest of scopes.
-///
-/// A missing argument arrives as `undefined` and converts like one, so a lambda
-/// taking `JSValue` is the way to insist on a type — which is what `takeName`
-/// in bindings_value.h is for.
-using Table = qjsbind::Namespace;
+/// One part of `bro.ffmpeg`: Table wrapping a bronze::Value object, providing
+/// subtable creation, native function registration, and property assignment.
+class Table {
+public:
+    Table() : obj_(bronze::embed::createObject()) {}
+
+    explicit Table(bronze::Value obj) : obj_(obj) {}
+
+    Table(bronze::Value parent, const char* name) {
+        namespace ev = bronze::embed;
+        bronze::Value child = ev::getProperty(parent, name);
+        if (!ev::isObject(child)) {
+            ev::Persistent created(ev::createObject());
+            ev::setProperty(parent, name, created.get());
+            child = created.get();
+        }
+        obj_.set(child);
+    }
+
+    Table(Table& parent, const char* name) : Table(parent.value(), name) {}
+
+    bronze::Value value() const { return obj_.get(); }
+
+    Table subtable(const char* name) {
+        namespace ev = bronze::embed;
+        bronze::Value child = ev::getProperty(obj_.get(), name);
+        if (!ev::isObject(child)) {
+            ev::Persistent created(ev::createObject());
+            obj_.set(ev::setProperty(obj_.get(), name, created.get()));
+            child = created.get();
+        }
+        return Table(child);
+    }
+
+    Table& function(const char* name, int arity,
+                    std::function<bronze::Value(bronze::Value thisVal, std::span<const bronze::Value> args)> fn) {
+        namespace ev = bronze::embed;
+        bronze::Value fnVal = ev::makeFunction(std::move(fn), static_cast<uint32_t>(arity), name);
+        obj_.set(ev::setProperty(obj_.get(), name, fnVal));
+        return *this;
+    }
+
+    Table& function(const char* name,
+                    std::function<bronze::Value(bronze::Value thisVal, std::span<const bronze::Value> args)> fn,
+                    int arity = 0) {
+        return function(name, arity, std::move(fn));
+    }
+
+    Table& value(const char* name, bronze::Value v) {
+        namespace ev = bronze::embed;
+        obj_.set(ev::setProperty(obj_.get(), name, v));
+        return *this;
+    }
+
+    Table& value(const char* name, bool b) {
+        namespace ev = bronze::embed;
+        return value(name, ev::fromBool(b));
+    }
+
+    Table& value(const char* name, double d) {
+        namespace ev = bronze::embed;
+        return value(name, ev::fromDouble(d));
+    }
+
+    Table& value(const char* name, int n) {
+        namespace ev = bronze::embed;
+        return value(name, ev::fromDouble(n));
+    }
+
+    Table& value(const char* name, const std::string& s) {
+        namespace ev = bronze::embed;
+        return value(name, ev::fromUtf8(s));
+    }
+
+    Table& value(const char* name, const char* s) {
+        namespace ev = bronze::embed;
+        return value(name, s ? ev::fromUtf8(s) : ev::null());
+    }
+
+private:
+    bronze::embed::Persistent obj_;
+};
 
 } // namespace ffmpegbro
