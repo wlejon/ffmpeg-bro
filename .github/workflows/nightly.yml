@@ -69,12 +69,11 @@ jobs:
           # platform rather than a CPU one and a GPU one.
           - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4, gpu: cuda  }
           - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4, gpu: cuda  }
-          # **macos-15 and not macos-14, and that is brotensor's requirement
-          # rather than a preference.** Its Metal offset path calls MPSNDArray
+          # **macos-15 or newer, and that is brotensor's requirement rather
+          # than a preference.** Its Metal offset path calls MPSNDArray
           # `-initWithBuffer:offset:descriptor:`, a selector the macOS 14 SDK
-          # does not declare, so the runner one version back does not fail to
-          # link or fail at runtime, it fails to compile. ci.yml stays on
-          # macos-14 because it builds no Metal backend at all.
+          # does not declare, so an older runner does not fail to link or
+          # fail at runtime, it fails to compile.
           - { name: macos,   os: macos-15,     triplet: arm64-osx,   jobs: 3, gpu: metal }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS

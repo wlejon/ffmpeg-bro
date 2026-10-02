@@ -77,7 +77,7 @@ jobs:
           # and OOM-kills the runner. macOS has ~7 GB, so 3; the others 16 GB.
           - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   jobs: 4, test: true  }
           - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4, test: false }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   jobs: 3, test: false }
+          - { name: macos,   os: macos-15,     triplet: arm64-osx,   jobs: 3, test: false }
     steps:
       # bro's AI-tower and flora submodules use git@github.com: URLs. Rewrite
       # them before checkout, while every sibling repo is public, so the default
