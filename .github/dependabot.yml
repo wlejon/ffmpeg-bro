@@ -1,7 +1,8 @@
 version: 2
 updates:
   # Keep the GitHub Actions used by the workflows current. There are no
-  # submodules here: bro is a sibling checkout and the dependency versions are
+  # submodules here: bro is a bro_dependency() pin in CMakeLists.txt, bumped by
+  # hand, and the dependency versions are
   # vcpkg.json's `builtin-baseline`, which is bumped by hand and in step with
   # VCPKG_COMMIT in the workflows.
   - package-ecosystem: github-actions

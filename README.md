@@ -81,8 +81,12 @@ three places looked in.
 ## Building
 
 Requires a C++20 compiler (Visual Studio 2022 on Windows), [CMake
-3.21+](https://cmake.org), [vcpkg](https://vcpkg.io), and a checkout of
-[bro](https://github.com/wlejon/bro) beside this one (or `-DBRO_DIR=<path>`).
+3.24+](https://cmake.org) and [vcpkg](https://vcpkg.io). Nothing else to check
+out: [bro](https://github.com/wlejon/bro) is a `bro_dependency()` pin in
+`CMakeLists.txt` (`cmake/bro_deps.cmake`), taken from a `../bro` working tree
+when there is one and otherwise fetched at configure (override with
+`-DFETCHCONTENT_SOURCE_DIR_BRO=<path>`), and bro resolves its own dependencies
+the same way.
 
 `cmake -B build` finds vcpkg through **`VCPKG_ROOT`**; set it, or pass
 `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake` yourself.
@@ -90,7 +94,6 @@ With neither, the configure stops and says so.
 
 ```
 git clone https://github.com/wlejon/ffmpeg-bro
-git clone --recursive https://github.com/wlejon/bro
 
 cd ffmpeg-bro
 cmake -B build
@@ -105,14 +108,12 @@ microsoft/vcpkg commit bro pins, so your build and CI's link the same libraries
 at the same versions. The first configure builds ffmpeg and its dependencies
 from source and takes a while; every one after it is cached.
 
-`--recursive` matters: this build turns bro's `BRO_WITH_SOUNDML` on, which
-reaches brotensor, brolm and brosoundml in bro's tree. They are MIT like bro,
-nothing is downloaded at configure or build time, and they add no vcpkg port.
-What they buy is the two things this application reads out of a soundtrack that
-libav cannot: the words that were said in it, which is the corpus everything in
-supercut is built on, and the transients a beat-cut snaps to. bro's own preflight
-only checks three of its submodules, so an unrecursed clone fails by naming a
-missing `CMakeLists.txt` rather than a missing submodule.
+This build turns bro's `BRO_WITH_SOUNDML` on, which brings in brotensor, brolm
+and brosoundml through bro's own pins. They are MIT like bro and add no vcpkg
+port. What they buy is the two things this application reads out of a
+soundtrack that libav cannot: the words that were said in it, which is the
+corpus everything in supercut is built on, and the transients a beat-cut snaps
+to.
 
 There is no way out of them: `-DBRO_WITH_SOUNDML=OFF` stops the configure with a
 sentence saying so. Reading a soundtrack is an ordinary part of this application

@@ -5,9 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and test
 
 Requires a C++20 compiler (Visual Studio 2022 on Windows), vcpkg (`VCPKG_ROOT`
-set, or pass the toolchain yourself), and a checkout of
-[bro](https://github.com/wlejon/bro) beside this repo — or `-DBRO_DIR=<path>`,
-**cloned `--recursive`**. There is no `vcpkg install` step: `vcpkg.json` is the
+set, or pass the toolchain yourself). [bro](https://github.com/wlejon/bro) is a
+`bro_dependency()` pin in `CMakeLists.txt` (`cmake/bro_deps.cmake`): the `../bro`
+working tree when there is one, else the pinned commit, fetched at configure
+(`-DFETCHCONTENT_SOURCE_DIR_BRO=<path>` overrides); bro fetches its own
+dependencies the same way, so nothing is cloned by hand. There is no `vcpkg install` step: `vcpkg.json` is the
 one home for what this build links, the toolchain installs it during the
 configure, and `builtin-baseline` pins it to the same microsoft/vcpkg commit
 bro's own manifest pins. bro's five ports are copied into it rather than
@@ -15,7 +17,7 @@ inherited, because vcpkg reads the top-level manifest only; the `!osx` entry
 exists because `nvcodec` and `amf` do not build there. `x264`/`x265` are needed
 for export, not for playback.
 
-`CMakeLists.txt` turns bro's `BRO_WITH_SOUNDML` on before `add_subdirectory`,
+`CMakeLists.txt` turns bro's `BRO_WITH_SOUNDML` on before bro is added,
 which is what makes `bro.sense` a working namespace here rather than the
 *unavailable* stub bro's default `app` profile installs. bro's `_bro_require`
 chain pulls `BRO_WITH_LM` and `BRO_WITH_TENSOR` in behind it, so this is four

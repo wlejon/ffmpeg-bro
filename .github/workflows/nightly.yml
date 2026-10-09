@@ -43,11 +43,6 @@ env:
   # Must match vcpkg.json's builtin-baseline; see the same pin in ci.yml.
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
   SCCACHE_GHA_ENABLED: "true"
-  # Which bro a nightly is built against; see ci.yml's header for why this is a
-  # branch and not a pin. A release built from a moving engine is a real thing
-  # to know about this channel: the smoke test on the packaged tree is what
-  # stands in for the pointer nobody records.
-  BRO_REF: main
 
 jobs:
   build:
@@ -76,24 +71,12 @@ jobs:
           # fail at runtime, it fails to compile.
           - { name: macos,   os: macos-15,     triplet: arm64-osx,   jobs: 3, gpu: metal }
     steps:
-      - name: Rewrite SSH submodule URLs to HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
+      # bro is a bro_dependency() pin in CMakeLists.txt, fetched at configure;
+      # see ci.yml's header.
       - uses: actions/checkout@v7
         with:
           path: ffmpeg-bro
           fetch-depth: 0        # tags, for package-release.sh's version fallback
-
-      # bro is a sibling checkout rather than a submodule, so there is no pointer
-      # pinning it. See ci.yml's header for why that trade is deliberate, and
-      # BRO_REF above for how to hold it still.
-      - name: Check out bro beside it
-        uses: actions/checkout@v7
-        with:
-          repository: wlejon/bro
-          ref: ${{ env.BRO_REF }}
-          path: bro
-          submodules: recursive
 
       - name: Linux build dependencies
         if: runner.os == 'Linux'

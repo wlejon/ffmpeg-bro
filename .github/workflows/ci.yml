@@ -4,29 +4,16 @@ name: CI
 # This is the signal behind the "CI" badge. The nightly builds the same thing and
 # publishes it; nothing here packages or signs.
 #
-# **Two checkouts, not one.** bro is a sibling repo rather than a submodule here
-# (the repo split is the whole point: bro stays MIT and ffmpeg-free, and linking
-# libav* is what makes this binary GPL), so CMake's default BRO_DIR is
-# `<this>/../bro` and the workspace has to have that shape. Both repos are
-# checked out under $GITHUB_WORKSPACE and every build step runs from ffmpeg-bro/.
-#
-# **Which bro is `BRO_REF` below, and it is deliberately a branch.** With no
-# submodule pointer there is nothing pinning the engine, so CI compiles against
-# bro's main as it stands this morning and a breaking change over there turns
-# this red without a commit here. That is the trade a two-repo layout edited as
-# one tree is making, and it is the right one while the two move together: a pin
-# would mean every bro fix this repository needs also needs a commit here to be
-# picked up, which is the friction the split was supposed to avoid. It is a
-# variable rather than a literal so that pinning is one line when a bro
-# regression needs to be waited out (`BRO_REF: <sha>`), and so that the choice
-# is visible at the top of the file instead of buried in a `with:` block.
-#
-# bro is cloned `--recursive`: this build turns BRO_WITH_SOUNDML on, and
-# brotensor, brolm and brosoundml reach it through bro's own submodules. Without
-# them the configure fails naming a missing CMakeLists.txt. Those submodules are
-# pinned even though bro is not, which is why a runner and a developer's machine
-# can disagree: this repository resolves `../<sibling>` against ITSELF, so a
-# standalone checkout beside ffmpeg-bro wins locally and bro's pointer wins here.
+# **One checkout.** bro is a separate repo (the repo split is the whole point:
+# bro stays MIT and ffmpeg-free, and linking libav* is what makes this binary
+# GPL), and it is a bro_dependency() pin in CMakeLists.txt
+# (cmake/bro_deps.cmake): a ../bro working tree when there is one, which a
+# runner never has, else the pinned commit, fetched at configure. bro fetches
+# its own dependencies (brotensor, brolm and brosoundml among them, which
+# BRO_WITH_SOUNDML turns on) at the commits it pins, so a run here is
+# reproducible and moves only when someone bumps the bro pin. A developer's
+# machine can still differ from a runner: a ../<name> working tree beside
+# ffmpeg-bro wins over the pin.
 #
 # **Tests run on Linux only.** They are the same suites everywhere and the cost
 # of running them three times is three times the runner minutes for one answer.
@@ -57,8 +44,6 @@ env:
   # sccache falls back to per-runner local disk, which is wiped between runs, so
   # every object is recompiled and every write thrown away.
   SCCACHE_GHA_ENABLED: "true"
-  # Which bro this builds against. A branch, not a pin; see the header.
-  BRO_REF: main
 
 jobs:
   build:
@@ -79,26 +64,11 @@ jobs:
           - { name: windows, os: windows-2022, triplet: x64-windows, jobs: 4, test: false }
           - { name: macos,   os: macos-15,     triplet: arm64-osx,   jobs: 3, test: false }
     steps:
-      # bro's AI-tower and flora submodules use git@github.com: URLs. Rewrite
-      # them before checkout, while every sibling repo is public, so the default
-      # token can fetch them. Must run before actions/checkout syncs submodule
-      # URLs into .git/config.
-      - name: Rewrite SSH submodule URLs to HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       - uses: actions/checkout@v7
         with:
           path: ffmpeg-bro
 
-      - name: Check out bro beside it
-        uses: actions/checkout@v7
-        with:
-          repository: wlejon/bro
-          ref: ${{ env.BRO_REF }}
-          path: bro
-          submodules: recursive
-
-      # SDL3 builds from bro's third_party/SDL and needs the X11/Wayland/GL and
+      # SDL3 builds from source under bro and needs the X11/Wayland/GL and
       # audio dev headers. nasm is not optional here the way it is for bro: x264,
       # x265, aom and dav1d all assemble. xvfb + mesa-dri are for the test step.
       #

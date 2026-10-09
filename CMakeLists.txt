@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.24)
 
 # vcpkg supplies ffmpeg (and, transitively, what bro's own services need), from
 # the manifest in `vcpkg.json` beside this file — that is the one home for what
@@ -46,12 +46,12 @@ project(ffmpeg-bro VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Where bro lives. A sibling checkout by default, like bro's own multi-repo
-# layout; override with -DBRO_DIR=... to point at a release checkout.
-set(BRO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../bro" CACHE PATH "bro engine source")
-if(NOT EXISTS "${BRO_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR "bro not found at ${BRO_DIR}. Clone it beside this repo or pass -DBRO_DIR=<path>.")
-endif()
+# Where bro lives. A bro_dependency (cmake/bro_deps.cmake): the ../bro working
+# tree beside this repo, like bro's own multi-repo layout, else the commit
+# pinned where bro is added below, fetched at configure;
+# -DFETCHCONTENT_SOURCE_DIR_BRO=<path> picks another tree. bro pins every
+# library it builds itself, so this repo pins only bro.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/bro_deps.cmake)
 
 # ── bro's acoustic sensors, which this application requires ───────────────
 #
@@ -69,7 +69,7 @@ endif()
 # bro's default `app` profile, so a plain `cmake -B build` used to produce a
 # binary in which the call threw "built without BRO_WITH_SOUNDML".
 #
-# **The cache entry has to exist before `add_subdirectory`.** bro declares the
+# **The cache entry has to exist before bro is added.** bro declares the
 # flag with `option()`, which leaves an existing cache entry alone.
 #
 # **One flag rather than `-DBRO_PROFILE=full`.** bro's `_bro_require` chain
@@ -82,12 +82,10 @@ endif()
 # **Nothing is downloaded and no port is added.** brotensor, brolm and
 # brosoundml want nothing from vcpkg beyond what the `app` profile already
 # installs, and all three are MIT like bro: what makes this binary GPL is still
-# libav* and nothing else. Where bro finds them is worth knowing, because it is
-# not where it reads: it resolves `../<name>` against `CMAKE_SOURCE_DIR`, which
-# is *this* project rather than bro, so a standalone checkout beside **this**
-# repo wins and bro's own git submodule is the fallback. A `git clone` of bro
-# without `--recursive` has neither, and bro's submodule preflight only covers
-# quickjs/SDL/jolt — so that failure names a missing `CMakeLists.txt`.
+# libav* and nothing else. Where bro finds them is worth knowing: each is one of
+# bro's bro_dependency() pins, taken from a `../<name>` working tree beside this
+# project (or beside bro) when there is one, and otherwise fetched at configure
+# at the commit bro pins.
 #
 # **What it costs is much less than the source count suggests**, and the reason
 # is worth writing down: those 684 files (bro's own count, docs/build-options.md)
@@ -183,7 +181,8 @@ set(BRO_WITH_FLORA   OFF CACHE BOOL "broflora — nothing here grows anything")
 
 # bro builds as static libraries; BRO_BUILD_EXECUTABLES defaults OFF when bro
 # is not the top-level project, so this does NOT produce a second bro.exe.
-add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")
+bro_dependency(bro GITHUB wlejon/bro REF 9ab08048a8f5ea7247715d821a596f72d68a5405 TARGET bro_engine)
+set(BRO_DIR "${bro_SOURCE_DIR}")
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────
 #
@@ -250,14 +249,7 @@ add_library(ffmpeg-bro-core STATIC
     src/native/proxy_queue.cpp
 )
 
-if(NOT DEFINED BRONZE_DIR OR NOT EXISTS "${BRONZE_DIR}/src")
-    if(EXISTS "${BRO_DIR}/../bronze/src")
-        set(BRONZE_DIR "${BRO_DIR}/../bronze" CACHE PATH "bronze AOT compiler source tree")
-    elseif(EXISTS "${BRO_DIR}/third_party/bronze/src")
-        set(BRONZE_DIR "${BRO_DIR}/third_party/bronze" CACHE PATH "bronze AOT compiler source tree")
-    endif()
-endif()
-
+# BRONZE_DIR: the bronze tree bro chose (bro reports it in the cache).
 target_include_directories(ffmpeg-bro-core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src/native"
             "${BRONZE_DIR}/src"
@@ -276,9 +268,9 @@ target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 # chunking `analyze` is not the fix, is at the top of src/native/sound_marks.h.
 #
 # `brosoundml` is a target in this build tree already: the `BRO_WITH_SOUNDML`
-# cache entry set above makes bro's `third_party/CMakeLists.txt` add it, from the
-# standalone `../brosoundml` beside *this* repo where there is one and from bro's
-# submodule otherwise. `brotensor` comes with it, PUBLIC, because the mel
+# cache entry set above makes bro's `third_party/CMakeLists.txt` add it, from a
+# `../brosoundml` working tree where there is one and from bro's pin otherwise.
+# `brotensor` comes with it, PUBLIC, because the mel
 # front-end is composed of its ops. So this adds no source, no download and no
 # port — only a link line and a name on the include path.
 #
@@ -291,15 +283,14 @@ target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 # this repository reads it.) PUBLIC because ffmpeg-bro-core is a static library
 # and its consumers need brosoundml's archive at link time.
 #
-# The `--recursive` check stays, and it is the one that fires in practice: bro
-# resolves the target from a checkout beside *this* repo or from its own
-# submodule, and a clone with neither leaves the flag ON and the target absent.
+# The target check stays as a guard: with the flag ON, bro adds the target from
+# a ../brosoundml working tree or from its pin, so its absence means bro's
+# feature wiring changed under this file.
 if(NOT TARGET brosoundml::brosoundml)
     message(FATAL_ERROR
         "BRO_WITH_SOUNDML is ON but no brosoundml target was created. bro "
-        "resolves ../brosoundml against ${CMAKE_CURRENT_SOURCE_DIR} and "
-        "falls back to its own submodule, so a `git clone` of bro without "
-        "--recursive and no sibling checkout has neither.")
+        "adds it from a ../brosoundml working tree or from its own pin; check "
+        "how bro's third_party/CMakeLists.txt gates it.")
 endif()
 target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
 

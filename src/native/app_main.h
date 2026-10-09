@@ -33,6 +33,7 @@
 
 #include "engine/engine.h"
 #include "engine/launcher.h"
+#include "util/exe_dir.h"
 #include "util/log.h"
 
 #include "ffmpeg_backend.h"
@@ -51,7 +52,7 @@ namespace ffmpegbro {
 /// (an executable dropped beside a `ui/`) is a reasonable thing to have and
 /// used to be the packaged layout.
 inline bool locateApp(const char* dir, bro::engine::EngineConfig& config) {
-    const std::string exe = bro::engine::executableDir();
+    const std::string exe = bro::util::executableDir();
     for (const char* rel : { "/app/", "/../../", "/" }) {
         if (bro::engine::resolveLaunchTarget(exe + rel + dir, config)) return true;
     }
@@ -86,12 +87,12 @@ inline int runApp(const char* dir, const char* title, const char* settingsFile,
     bro::engine::EngineConfig config;
     config.title = title;
     config.displayMode = bro::engine::DisplayMode::Windowed;
-    config.settingsPath = bro::engine::executableDir() + "/" + settingsFile;
+    config.settingsPath = bro::util::executableDir() + "/" + settingsFile;
     config.installHostBindings = installFfmpegBindings;
 
     if (!locateApp(dir, config)) {
         LOG_ERROR("Cannot find the %s UI next to %s", dir,
-                  bro::engine::executableDir().c_str());
+                  bro::util::executableDir().c_str());
         return 1;
     }
     bro::engine::publishLaunchEnv(config);
