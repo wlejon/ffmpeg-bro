@@ -6,12 +6,13 @@ name: CI
 #
 # **One checkout.** bro is a separate repo (the repo split is the whole point:
 # bro stays MIT and ffmpeg-free, and linking libav* is what makes this binary
-# GPL), and it is a bro_dependency() pin in CMakeLists.txt
+# GPL), and it is a bro_dependency() in CMakeLists.txt
 # (cmake/bro_deps.cmake): a ../bro working tree when there is one, which a
-# runner never has, else the pinned commit, fetched at configure. bro fetches
-# its own dependencies (brotensor, brolm and brosoundml among them, which
-# BRO_WITH_SOUNDML turns on) at the commits it pins, so a run here is
-# reproducible and moves only when someone bumps the bro pin. A developer's
+# runner never has, else the head of bro's main, fetched at configure. bro
+# fetches its own dependencies (brotensor, brolm and brosoundml among them,
+# which BRO_WITH_SOUNDML turns on) at the heads of their main branches, so a
+# run here builds the ecosystem as it is now; a cmake/bro_lock.cmake, when one
+# is committed, fixes every commit instead. A developer's
 # machine can still differ from a runner: a ../<name> working tree beside
 # ffmpeg-bro wins over the pin.
 #

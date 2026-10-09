@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Requires a C++20 compiler (Visual Studio 2022 on Windows), vcpkg (`VCPKG_ROOT`
 set, or pass the toolchain yourself). [bro](https://github.com/wlejon/bro) is a
-`bro_dependency()` pin in `CMakeLists.txt` (`cmake/bro_deps.cmake`): the `../bro`
-working tree when there is one, else the pinned commit, fetched at configure
+`bro_dependency()` in `CMakeLists.txt` (`cmake/bro_deps.cmake`): the `../bro`
+working tree when there is one, else the head of bro's main (a release tag:
+the commit its `cmake/bro_lock.cmake` locks), fetched at configure
 (`-DFETCHCONTENT_SOURCE_DIR_BRO=<path>` overrides); bro fetches its own
 dependencies the same way, so nothing is cloned by hand. There is no `vcpkg install` step: `vcpkg.json` is the
 one home for what this build links, the toolchain installs it during the

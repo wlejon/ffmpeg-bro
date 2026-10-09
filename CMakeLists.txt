@@ -47,10 +47,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Where bro lives. A bro_dependency (cmake/bro_deps.cmake): the ../bro working
-# tree beside this repo, like bro's own multi-repo layout, else the commit
-# pinned where bro is added below, fetched at configure;
-# -DFETCHCONTENT_SOURCE_DIR_BRO=<path> picks another tree. bro pins every
-# library it builds itself, so this repo pins only bro.
+# tree beside this repo, like bro's own multi-repo layout, else the head of
+# bro's main (a release tag: the commit cmake/bro_lock.cmake locks), fetched at
+# configure; -DFETCHCONTENT_SOURCE_DIR_BRO=<path> picks another tree. bro
+# declares every library it builds itself, so this repo declares only bro.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/bro_deps.cmake)
 
 # ── bro's acoustic sensors, which this application requires ───────────────
@@ -83,9 +83,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/bro_deps.cmake)
 # brosoundml want nothing from vcpkg beyond what the `app` profile already
 # installs, and all three are MIT like bro: what makes this binary GPL is still
 # libav* and nothing else. Where bro finds them is worth knowing: each is one of
-# bro's bro_dependency() pins, taken from a `../<name>` working tree beside this
-# project (or beside bro) when there is one, and otherwise fetched at configure
-# at the commit bro pins.
+# bro's bro_dependency() declarations, taken from a `../<name>` working tree
+# beside this project (or beside bro) when there is one, and otherwise fetched
+# at configure at the head of its main.
 #
 # **What it costs is much less than the source count suggests**, and the reason
 # is worth writing down: those 684 files (bro's own count, docs/build-options.md)
@@ -181,7 +181,7 @@ set(BRO_WITH_FLORA   OFF CACHE BOOL "broflora — nothing here grows anything")
 
 # bro builds as static libraries; BRO_BUILD_EXECUTABLES defaults OFF when bro
 # is not the top-level project, so this does NOT produce a second bro.exe.
-bro_dependency(bro GITHUB wlejon/bro REF 9ab08048a8f5ea7247715d821a596f72d68a5405 TARGET bro_engine)
+bro_dependency(bro GITHUB wlejon/bro TARGET bro_engine)
 set(BRO_DIR "${bro_SOURCE_DIR}")
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────
@@ -269,7 +269,7 @@ target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 #
 # `brosoundml` is a target in this build tree already: the `BRO_WITH_SOUNDML`
 # cache entry set above makes bro's `third_party/CMakeLists.txt` add it, from a
-# `../brosoundml` working tree where there is one and from bro's pin otherwise.
+# `../brosoundml` working tree where there is one and from its main otherwise.
 # `brotensor` comes with it, PUBLIC, because the mel
 # front-end is composed of its ops. So this adds no source, no download and no
 # port — only a link line and a name on the include path.
@@ -284,12 +284,12 @@ target_link_directories(ffmpeg-bro-core PRIVATE ${FFMPEG_LIBRARY_DIRS})
 # and its consumers need brosoundml's archive at link time.
 #
 # The target check stays as a guard: with the flag ON, bro adds the target from
-# a ../brosoundml working tree or from its pin, so its absence means bro's
+# a ../brosoundml working tree or from its main, so its absence means bro's
 # feature wiring changed under this file.
 if(NOT TARGET brosoundml::brosoundml)
     message(FATAL_ERROR
         "BRO_WITH_SOUNDML is ON but no brosoundml target was created. bro "
-        "adds it from a ../brosoundml working tree or from its own pin; check "
+        "adds it from a ../brosoundml working tree or from GitHub; check "
         "how bro's third_party/CMakeLists.txt gates it.")
 endif()
 target_link_libraries(ffmpeg-bro-core PUBLIC brosoundml::brosoundml)
