@@ -41,6 +41,10 @@ env:
   # versions; this pins the vcpkg tool and its scripts to the same commit, so a
   # runner-image update cannot drift them apart.
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  # The Windows job configures bro against the LunarG Vulkan SDK (headers +
+  # vulkan-1.lib).
+  VULKAN_SDK_VERSION: 1.4.363.0
+  VULKAN_SDK_SHA256: 94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141
   # Persist sccache's object cache in the GitHub Actions cache. Without it
   # sccache falls back to per-runner local disk, which is wiped between runs, so
   # every object is recompiled and every write thrown away.
@@ -71,7 +75,8 @@ jobs:
 
       # SDL3 builds from source under bro and needs the X11/Wayland/GL and
       # audio dev headers. nasm is not optional here the way it is for bro: x264,
-      # x265, aom and dav1d all assemble. xvfb + mesa-dri are for the test step.
+      # x265, aom and dav1d all assemble. xvfb + mesa-dri + mesa-vulkan-drivers
+      # are for the test step.
       #
       # The autotools four are vcpkg's, not bro's: several ports here build
       # through `vcpkg_make`, which refuses up front unless it can find
@@ -85,14 +90,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build nasm yasm autoconf autoconf-archive automake libtool pkg-config bison flex \
             xvfb libgl1-mesa-dri \
+            libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
-            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
-            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
+            libegl1-mesa-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev \
+            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev \
+            libsystemd-dev libseat-dev libxcb-randr0-dev libxau-dev libinput-dev
 
       - name: macOS build dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config
+        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config molten-vk vulkan-loader vulkan-headers
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -139,6 +146,24 @@ jobs:
         with:
           arch: x64
 
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="$VULKAN_SDK_VERSION"
+          SHA="$VULKAN_SDK_SHA256"
+          EXE="$RUNNER_TEMP/vulkansdk-$VER.exe"
+          ROOT="C:/VulkanSDK/$VER"
+          curl -fsSL --retry 3 -o "$EXE" \
+            "https://sdk.lunarg.com/sdk/download/$VER/windows/vulkansdk-windows-X64-$VER.exe"
+          echo "$SHA  $EXE" | sha256sum -c -
+          "$EXE" --root "$ROOT" --accept-licenses --default-answer --confirm-command install
+          rm -f "$EXE"
+          [[ -f "$ROOT/Include/vulkan/vulkan.h" && -f "$ROOT/Lib/vulkan-1.lib" ]]
+          echo "VULKAN_SDK=$ROOT" >> "$GITHUB_ENV"
+          echo "$ROOT/Bin" >> "$GITHUB_PATH"
+
       # Clone vcpkg at the manifest's own baseline so tool, ports and scripts are
       # pinned together. The runner's preinstalled vcpkg drifts with the image.
       - name: vcpkg (pinned)
@@ -164,6 +189,8 @@ jobs:
             # Embedded debug info (/Z7) rather than a separate PDB (/Zi) is what
             # lets sccache cache MSVC objects at all.
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           cmake -B build \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
