@@ -372,7 +372,7 @@ jobs:
           if [ "$RUNNER_OS" = "Linux" ]; then
             xvfb-run -a "./ffmpeg-bro-headless$EXE" app/ui -e "$PROBE"
           else
-            "./ffmpeg-bro-headless$EXE" app/ui -e "$PROBE"
+            "./ffmpeg-bro-headless$EXE" --no-gpu app/ui -e "$PROBE"
           fi
           rc=$?
           set -e
