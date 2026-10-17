@@ -37,11 +37,13 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   # Must match vcpkg.json's builtin-baseline; see the same pin in ci.yml.
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  VULKAN_SDK_VERSION: 1.4.363.0
+  VULKAN_SDK_SHA256: 94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
@@ -85,14 +87,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build nasm yasm autoconf autoconf-archive automake libtool pkg-config bison flex \
             xvfb libgl1-mesa-dri \
+            libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
-            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
-            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
+            libegl1-mesa-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev \
+            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev \
+            libsystemd-dev libseat-dev libxcb-randr0-dev libxau-dev libinput-dev \
+            libdrm-dev libgbm-dev
 
       - name: macOS build dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config
+        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config molten-vk vulkan-loader vulkan-headers
 
       # ── the GPU backend, which is what makes transcription usable ──────────
       #
@@ -176,6 +181,24 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="$VULKAN_SDK_VERSION"
+          SHA="$VULKAN_SDK_SHA256"
+          EXE="$RUNNER_TEMP/vulkansdk-$VER.exe"
+          ROOT="C:/VulkanSDK/$VER"
+          curl -fsSL --retry 3 -o "$EXE" \
+            "https://sdk.lunarg.com/sdk/download/$VER/windows/vulkansdk-windows-X64-$VER.exe"
+          echo "$SHA  $EXE" | sha256sum -c -
+          "$EXE" --root "$ROOT" --accept-licenses --default-answer --confirm-command install
+          rm -f "$EXE"
+          [[ -f "$ROOT/Include/vulkan/vulkan.h" && -f "$ROOT/Lib/vulkan-1.lib" ]]
+          echo "VULKAN_SDK=$ROOT" >> "$GITHUB_ENV"
+          echo "$ROOT/Bin" >> "$GITHUB_PATH"
 
       - name: vcpkg (pinned)
         shell: bash

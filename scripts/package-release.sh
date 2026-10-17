@@ -138,6 +138,14 @@ if [[ "$PLATFORM" == "win" ]]; then
         done
     done
     shopt -u nullglob nocaseglob
+else
+    shopt -s nullglob
+    for t in "${TARGETS[@]}"; do
+        for lib in "$(dirname "$(bin_path "$t")")"/*.so* "$(dirname "$(bin_path "$t")")"/*.dylib; do
+            cp -a "$lib" "$OUT_DIR/"
+        done
+    done
+    shopt -u nullglob
 fi
 
 # --- Strip our own binaries (Linux/macOS) ---------------------------------
@@ -151,6 +159,50 @@ if [[ "$PLATFORM" != "win" ]]; then
         strip "${STRIP_FLAGS[@]}" "$OUT_DIR/$t" 2>/dev/null \
             || echo "warning: strip failed for $t, shipping unstripped" >&2
     done
+fi
+
+# --- Vulkan runtime & ad-hoc codesign (macOS) -----------------------------
+if [[ "$PLATFORM" == "macos" ]]; then
+    VK_REF="$(otool -L "$OUT_DIR/ffmpeg-bro" | awk '/libvulkan[.0-9]*dylib/ {print $1; exit}')"
+    if [[ -n "$VK_REF" && -f "$VK_REF" ]]; then
+        cp -L "$VK_REF" "$OUT_DIR/libvulkan.1.dylib"
+        chmod u+w "$OUT_DIR/libvulkan.1.dylib"
+        install_name_tool -id "@loader_path/libvulkan.1.dylib" "$OUT_DIR/libvulkan.1.dylib" 2>/dev/null || true
+        codesign --force --sign - "$OUT_DIR/libvulkan.1.dylib"
+    fi
+    MVK="${MOLTENVK_DYLIB:-}"
+    for cand in "${VULKAN_SDK:-/nonexistent}/lib/libMoltenVK.dylib" \
+                "$(brew --prefix molten-vk 2>/dev/null || echo /nonexistent)/lib/libMoltenVK.dylib"; do
+        [[ -z "$MVK" && -f "$cand" ]] && MVK="$cand"
+    done
+    if [[ -n "$MVK" && -f "$MVK" ]]; then
+        mkdir -p "$OUT_DIR/vulkan/icd.d"
+        cp -L "$MVK" "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib"
+        chmod u+w "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib"
+        install_name_tool -id "@loader_path/libMoltenVK.dylib" "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib" 2>/dev/null || true
+        codesign --force --sign - "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib"
+        cat > "$OUT_DIR/vulkan/icd.d/MoltenVK_icd.json" <<ICD
+{
+    "file_format_version": "1.0.0",
+    "ICD": {
+        "library_path": "./libMoltenVK.dylib",
+        "api_version": "1.3.0",
+        "is_portability_driver": true
+    }
+}
+ICD
+    fi
+    for t in "${TARGETS[@]}"; do
+        if [[ -n "$VK_REF" ]]; then
+            install_name_tool -change "$VK_REF" "@loader_path/libvulkan.1.dylib" "$OUT_DIR/$t" 2>/dev/null || true
+        fi
+        codesign --force --sign - "$OUT_DIR/$t"
+    done
+    shopt -s nullglob
+    for lib in "$OUT_DIR"/*.dylib; do
+        codesign --force --sign - "$lib"
+    done
+    shopt -u nullglob
 fi
 
 # --- The interfaces and the manual ----------------------------------------
