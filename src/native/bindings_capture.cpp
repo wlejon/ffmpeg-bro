@@ -45,19 +45,19 @@ bronze::Value js_recordStart(bronze::Value, std::span<const bronze::Value> args)
     namespace ev = bronze::embed;
     if (args.empty() || !ev::isObject(args[0]))
         return ev::throwTypeError("record.start(spec) requires a spec object");
-    bronze::Value spec = args[0];
+    ev::Persistent spec(args[0]);
 
     CaptureSettings c;
     std::string bad;
-    if (!outputFromJs(spec, &c.output, &bad))
+    if (!outputFromJs(spec.get(), &c.output, &bad))
         return ev::throwTypeError(bad);
 
     // Zero rather than 1920×1080 and 30: a capture is not composited into a
     // canvas, so the device's own picture and rate are the answer unless
     // somebody has said otherwise, and only the device knows them.
-    c.output.width = static_cast<int>(numProp(spec, "width", 0));
-    c.output.height = static_cast<int>(numProp(spec, "height", 0));
-    c.output.fps = numProp(spec, "fps", 0);
+    c.output.width = static_cast<int>(numProp(spec.get(), "width", 0));
+    c.output.height = static_cast<int>(numProp(spec.get(), "height", 0));
+    c.output.fps = numProp(spec.get(), "fps", 0);
 
     // **`also` is the other files, and each of them is a whole output spec.**
     // Read through `outputFromJs` — the same reader `render.start` uses and the
@@ -67,21 +67,21 @@ bronze::Value js_recordStart(bronze::Value, std::span<const bronze::Value> args)
     // What it is *not* given is a graph: the graph belongs to the session and
     // one file cannot have another, so `filterGraph` on an `also` entry is
     // simply never read. See `CaptureSettings::outputs`.
-    bronze::Value also = ev::getProperty(spec, "also");
-    if (isArray(also)) {
+    ev::Persistent also(ev::getProperty(spec.get(), "also"));
+    if (isArray(also.get())) {
         c.outputs.push_back(c.output);
-        const uint32_t len = arrayLength(also);
+        const uint32_t len = arrayLength(also.get());
         for (uint32_t i = 0; i < len; ++i) {
-            bronze::Value item = ev::getElement(also, i);
-            if (!ev::isObject(item)) {
+            ev::Persistent item(ev::getElement(also.get(), i));
+            if (!ev::isObject(item.get())) {
                 return ev::throwTypeError("record.start(spec).also[" + std::to_string(i) +
                                           "] is not a file to write");
             }
             ExportSettings out;
-            const bool ok = outputFromJs(item, &out, &bad);
+            const bool ok = outputFromJs(item.get(), &out, &bad);
             if (ok) {
-                out.width = static_cast<int>(numProp(item, "width", 0));
-                out.height = static_cast<int>(numProp(item, "height", 0));
+                out.width = static_cast<int>(numProp(item.get(), "width", 0));
+                out.height = static_cast<int>(numProp(item.get(), "height", 0));
                 // Zero, and not read from the entry: **the rate is the
                 // recording's**. Placing a frame is turning the moment it
                 // arrived into an output frame number, and two files answering
@@ -102,16 +102,16 @@ bronze::Value js_recordStart(bronze::Value, std::span<const bronze::Value> args)
     // `{source}`. Two spellings rather than one because every caller that has
     // ever asked for a recording asked for one device, and a session is the new
     // thing rather than the only thing.
-    bronze::Value list = ev::getProperty(spec, "sources");
-    if (isArray(list)) {
-        const uint32_t len = arrayLength(list);
+    ev::Persistent list(ev::getProperty(spec.get(), "sources"));
+    if (isArray(list.get())) {
+        const uint32_t len = arrayLength(list.get());
         for (uint32_t i = 0; i < len; ++i) {
-            bronze::Value item = ev::getElement(list, i);
-            if (!ev::isObject(item)) {
+            ev::Persistent item(ev::getElement(list.get(), i));
+            if (!ev::isObject(item.get())) {
                 return ev::throwTypeError("record.start(spec).sources[" + std::to_string(i) +
                                           "] is not a device as an -i");
             }
-            MediaInput in = inputFromJs(item);
+            MediaInput in = inputFromJs(item.get());
             if (in.path.empty()) {
                 return ev::throwTypeError("record.start(spec).sources[" + std::to_string(i) +
                                           "] has no device to open");
@@ -120,9 +120,9 @@ bronze::Value js_recordStart(bronze::Value, std::span<const bronze::Value> args)
         }
     }
 
-    bronze::Value src = ev::getProperty(spec, "source");
-    if (ev::isObject(src)) {
-        c.source = inputFromJs(src);
+    ev::Persistent src(ev::getProperty(spec.get(), "source"));
+    if (ev::isObject(src.get())) {
+        c.source = inputFromJs(src.get());
     } else if (c.sources.empty()) {
         return ev::throwTypeError("record.start(spec) needs a source, or a sources list: the "
                                   "device (or devices) as -i");
@@ -150,23 +150,23 @@ bronze::Value js_liveOpen(bronze::Value, std::span<const bronze::Value> args) {
     namespace ev = bronze::embed;
     if (args.empty() || !ev::isObject(args[0]))
         return ev::throwTypeError("live.open(spec) requires a spec object");
-    bronze::Value spec = args[0];
+    ev::Persistent spec(args[0]);
 
     LiveSettings s;
-    s.filterGraph = strProp(spec, "filterGraph", "");
-    s.fps = numProp(spec, "fps", 0);
-    s.audioSampleRate = static_cast<int>(numProp(spec, "audioSampleRate", 48000));
-    s.audioChannels = static_cast<int>(numProp(spec, "audioChannels", 2));
-    s.includeAudio = boolProp(spec, "includeAudio", true);
-    s.scaler = strProp(spec, "scaler", "");
+    s.filterGraph = strProp(spec.get(), "filterGraph", "");
+    s.fps = numProp(spec.get(), "fps", 0);
+    s.audioSampleRate = static_cast<int>(numProp(spec.get(), "audioSampleRate", 48000));
+    s.audioChannels = static_cast<int>(numProp(spec.get(), "audioChannels", 2));
+    s.includeAudio = boolProp(spec.get(), "includeAudio", true);
+    s.scaler = strProp(spec.get(), "scaler", "");
 
-    bronze::Value list = ev::getProperty(spec, "sources");
-    if (isArray(list)) {
-        const uint32_t len = arrayLength(list);
+    ev::Persistent list(ev::getProperty(spec.get(), "sources"));
+    if (isArray(list.get())) {
+        const uint32_t len = arrayLength(list.get());
         for (uint32_t i = 0; i < len; ++i) {
-            bronze::Value item = ev::getElement(list, i);
-            if (ev::isObject(item)) {
-                MediaInput in = inputFromJs(item);
+            ev::Persistent item(ev::getElement(list.get(), i));
+            if (ev::isObject(item.get())) {
+                MediaInput in = inputFromJs(item.get());
                 if (!in.path.empty()) s.sources.push_back(std::move(in));
             }
         }

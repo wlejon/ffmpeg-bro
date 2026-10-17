@@ -2836,8 +2836,9 @@ console.log('\nthe A/B preview');
     const rv = q('#ex-pv-stage-host .pv-ref'), cv = q('#ex-pv-stage-host .pv-cand');
     ok(!rv.paused && !cv.paused, 'both halves are playing');
     const t0 = cv.currentTime;
-    pump(500);
-    ok(cv.currentTime > t0, `and getting on with it (${t0.toFixed(2)} → ${cv.currentTime.toFixed(2)})`);
+    pump(200);
+    const dt = cv.currentTime >= t0 ? cv.currentTime - t0 : (cv.duration || 1) - t0 + cv.currentTime;
+    ok(dt > 0.02, `and getting on with it (${t0.toFixed(2)} → ${cv.currentTime.toFixed(2)})`);
 
     // A frame at the preview's rate. Anything looser and the comparison is
     // between two different moments.

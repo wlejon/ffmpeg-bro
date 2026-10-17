@@ -43,13 +43,14 @@ namespace {
 bronze::Value js_sequences(bronze::Value, std::span<const bronze::Value> args) {
     namespace ev = bronze::embed;
     if (args.empty()) return ev::throwTypeError("sequences(paths) requires paths");
+    ev::Persistent arg0(args[0]);
     std::vector<std::string> paths;
-    if (ev::isString(args[0])) {
-        paths.push_back(ev::toUtf8(args[0]));
-    } else if (isArray(args[0])) {
-        const uint32_t n = arrayLength(args[0]);
+    if (ev::isString(arg0.get())) {
+        paths.push_back(ev::toUtf8(arg0.get()));
+    } else if (isArray(arg0.get())) {
+        const uint32_t n = arrayLength(arg0.get());
         for (uint32_t i = 0; i < n; ++i) {
-            bronze::Value v = ev::getElement(args[0], i);
+            bronze::Value v = ev::getElement(arg0.get(), i);
             if (ev::isString(v)) {
                 paths.push_back(ev::toUtf8(v));
             }
@@ -84,22 +85,24 @@ bronze::Value js_concatList(bronze::Value, std::span<const bronze::Value> args) 
     namespace ev = bronze::embed;
     if (args.size() < 2 || !ev::isString(args[0]))
         return ev::throwTypeError("concatList(path, files) requires a path and files");
-    const std::string path = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args[1]);
+    const std::string path = ev::toUtf8(arg0.get());
     // Either a path or `{ path, duration }`. The duration is worth having and
     // is not decoration: without one the concat demuxer reports no length at
     // all until something has read to the end of the last file — see
     // ffmpeg_sequence.h.
     std::vector<ConcatEntry> files;
-    if (isArray(args[1])) {
-        const uint32_t n = arrayLength(args[1]);
+    if (isArray(arg1.get())) {
+        const uint32_t n = arrayLength(arg1.get());
         for (uint32_t i = 0; i < n; ++i) {
-            bronze::Value v = ev::getElement(args[1], i);
+            ev::Persistent v(ev::getElement(arg1.get(), i));
             ConcatEntry entry;
-            if (ev::isObject(v)) {
-                entry.path = strProp(v, "path", "");
-                entry.duration = numProp(v, "duration", 0);
-            } else if (ev::isString(v)) {
-                entry.path = ev::toUtf8(v);
+            if (ev::isObject(v.get())) {
+                entry.path = strProp(v.get(), "path", "");
+                entry.duration = numProp(v.get(), "duration", 0);
+            } else if (ev::isString(v.get())) {
+                entry.path = ev::toUtf8(v.get());
             }
             if (!entry.path.empty()) files.push_back(std::move(entry));
         }

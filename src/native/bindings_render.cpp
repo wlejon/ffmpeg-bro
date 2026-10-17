@@ -32,14 +32,14 @@ bronze::Value js_renderStart(bronze::Value, std::span<const bronze::Value> args)
     namespace ev = bronze::embed;
     if (args.empty() || !ev::isObject(args[0]))
         return ev::throwTypeError("render.start(spec) requires a spec object");
-    bronze::Value spec = args[0];
+    ev::Persistent spec(args[0]);
 
     ExportSettings s;
     std::string bad;
-    if (!outputFromJs(spec, &s, &bad))
+    if (!outputFromJs(spec.get(), &s, &bad))
         return ev::throwTypeError(bad);
 
-    const std::vector<ExportClip> clips = clipsFromJs(spec);
+    const std::vector<ExportClip> clips = clipsFromJs(spec.get());
 
     std::string err;
     uint64_t jobNumber = 0;
@@ -82,12 +82,13 @@ const char* stateName(ExportStatus::State s) {
 void attachReport(bronze::Value o, bronze::Value since) {
     namespace ev = bronze::embed;
     ev::Persistent out(o);
+    ev::Persistent sinceP(since);
     uint64_t log = 0, meta = 0;
     int max = 512;
-    if (ev::isObject(since)) {
-        log = static_cast<uint64_t>(std::max(0.0, numProp(since, "log", 0)));
-        meta = static_cast<uint64_t>(std::max(0.0, numProp(since, "meta", 0)));
-        max = static_cast<int>(numProp(since, "max", 512));
+    if (ev::isObject(sinceP.get())) {
+        log = static_cast<uint64_t>(std::max(0.0, numProp(sinceP.get(), "log", 0)));
+        meta = static_cast<uint64_t>(std::max(0.0, numProp(sinceP.get(), "meta", 0)));
+        max = static_cast<int>(numProp(sinceP.get(), "max", 512));
     }
     const ReportDrain d = drainReport(log, meta, max);
 
@@ -130,6 +131,7 @@ void attachReport(bronze::Value o, bronze::Value since) {
 
 bronze::Value js_renderPoll(bronze::Value, std::span<const bronze::Value> args) {
     namespace ev = bronze::embed;
+    ev::Persistent sinceArg(args.empty() ? ev::undefined() : args[0]);
     const ExportStatus st = exportStatus();
     ev::Persistent o(ev::createObject());
     setStr(o.get(), "state", stateName(st.state));
@@ -174,7 +176,7 @@ bronze::Value js_renderPoll(bronze::Value, std::span<const bronze::Value> args) 
     // Only when asked. Every caller that wants a progress bar and nothing else
     // — and there are three of them — should not pay for building two arrays
     // sixty times a second.
-    if (!args.empty()) attachReport(o.get(), args[0]);
+    if (!args.empty()) attachReport(o.get(), sinceArg.get());
     return o.get();
 }
 

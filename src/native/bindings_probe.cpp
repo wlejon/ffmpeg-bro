@@ -120,12 +120,10 @@ bronze::Value probeToJs(const ProbeResult& r) {
 
     // Shortcuts to the streams a player actually plays, so callers don't
     // re-scan the array for the common case.
-    out.set(ev::setProperty(out.get(), "video",
-                            firstVideo >= 0 ? ev::getElement(arr.get(), firstVideo)
-                                            : ev::null()));
-    out.set(ev::setProperty(out.get(), "audio",
-                            firstAudio >= 0 ? ev::getElement(arr.get(), firstAudio)
-                                            : ev::null()));
+    ev::Persistent vid(firstVideo >= 0 ? ev::getElement(arr.get(), firstVideo) : ev::null());
+    out.set(ev::setProperty(out.get(), "video", vid.get()));
+    ev::Persistent aud(firstAudio >= 0 ? ev::getElement(arr.get(), firstAudio) : ev::null());
+    out.set(ev::setProperty(out.get(), "audio", aud.get()));
     return out.get();
 }
 
@@ -137,18 +135,20 @@ bronze::Value probeToJs(const ProbeResult& r) {
 bool inputArg(std::span<const bronze::Value> args, MediaInput* in) {
     namespace ev = bronze::embed;
     if (args.empty()) return false;
-    if (ev::isObject(args[0])) {
-        *in = inputFromJs(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args.size() >= 2 ? args[1] : ev::undefined());
+    if (ev::isObject(arg0.get())) {
+        *in = inputFromJs(arg0.get());
         return true;
     }
-    if (!ev::isString(args[0])) return false;
+    if (!ev::isString(arg0.get())) return false;
     MediaInput built;
-    built.path = ev::toUtf8(args[0]);
+    built.path = ev::toUtf8(arg0.get());
     // The second argument is the rest of the `-i`, for a caller that has a
     // path in hand rather than an input record.
-    if (args.size() >= 2 && ev::isObject(args[1])) {
+    if (args.size() >= 2 && ev::isObject(arg1.get())) {
         const std::string path0 = built.path;
-        built = inputFromJs(args[1]);
+        built = inputFromJs(arg1.get());
         built.path = path0;
     }
     *in = built;
@@ -198,14 +198,17 @@ bronze::Value js_probeStart(bronze::Value, std::span<const bronze::Value> args) 
     if (args.empty())
         return ev::throwTypeError("probes.start(path) requires a path or an input");
 
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args.size() >= 2 ? args[1] : ev::undefined());
+
     MediaInput in;
     if (!inputArg(args, &in)) return ev::throwTypeError("probes.start() requires a valid path or input");
     if (in.path.empty())
         return ev::throwTypeError("probes.start() needs a path or a URL");
 
     double timeout = 0;
-    for (size_t i = 0; i < args.size(); ++i)
-        if (ev::isObject(args[i])) timeout = numProp(args[i], "timeout", timeout);
+    if (ev::isObject(arg0.get())) timeout = numProp(arg0.get(), "timeout", timeout);
+    if (args.size() >= 2 && ev::isObject(arg1.get())) timeout = numProp(arg1.get(), "timeout", timeout);
 
     return ev::fromDouble(static_cast<double>(startProbe(in, timeout)));
 }

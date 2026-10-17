@@ -53,8 +53,10 @@ bronze::Value js_inputsDefine(bronze::Value, std::span<const bronze::Value> args
     namespace ev = bronze::embed;
     if (args.size() < 2 || !ev::isString(args[0]) || !ev::isObject(args[1]))
         return ev::throwTypeError("inputs.define(id, input) requires an id and an input");
-    const std::string id = ev::toUtf8(args[0]);
-    const MediaInput in = inputFromJs(args[1]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args[1]);
+    const std::string id = ev::toUtf8(arg0.get());
+    const MediaInput in = inputFromJs(arg1.get());
     if (in.path.empty()) {
         return ev::throwTypeError("inputs.define() needs a path or a URL");
     }
@@ -84,14 +86,16 @@ bronze::Value js_viewsDefine(bronze::Value, std::span<const bronze::Value> args)
     namespace ev = bronze::embed;
     if (args.size() < 2 || !ev::isString(args[0]) || !ev::isObject(args[1]))
         return ev::throwTypeError("views.define(id, view) requires an id and a view");
-    const std::string id = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent viewObj(args[1]);
+    const std::string id = ev::toUtf8(arg0.get());
 
     PlaybackView v;
-    bronze::Value inputVal = ev::getProperty(args[1], "input");
-    v.input = inputFromJs(inputVal);
-    v.video = strProp(args[1], "video", "");
-    v.audio = strProp(args[1], "audio", "");
-    v.shift = numProp(args[1], "shift", 0);
+    ev::Persistent inputVal(ev::getProperty(viewObj.get(), "input"));
+    v.input = inputFromJs(inputVal.get());
+    v.video = strProp(viewObj.get(), "video", "");
+    v.audio = strProp(viewObj.get(), "audio", "");
+    v.shift = numProp(viewObj.get(), "shift", 0);
     if (v.input.path.empty()) {
         return ev::throwTypeError("views.define() needs an input with a path in it");
     }
@@ -142,8 +146,10 @@ bronze::Value js_viewsDefine(bronze::Value, std::span<const bronze::Value> args)
 /// The two halves of a spec, read exactly as `render.start` reads them. One
 /// place, so a preview cannot be built out of a differently-read spec.
 bool outputViewFromJs(bronze::Value spec, OutputView* v, std::string* err) {
-    if (!outputFromJs(spec, &v->settings, err)) return false;
-    v->clips = clipsFromJs(spec);
+    namespace ev = bronze::embed;
+    ev::Persistent specP(spec);
+    if (!outputFromJs(specP.get(), &v->settings, err)) return false;
+    v->clips = clipsFromJs(specP.get());
     return true;
 }
 
@@ -151,11 +157,13 @@ bronze::Value js_outputDefine(bronze::Value, std::span<const bronze::Value> args
     namespace ev = bronze::embed;
     if (args.size() < 2 || !ev::isString(args[0]) || !ev::isObject(args[1]))
         return ev::throwTypeError("output.define(id, spec) requires an id and a spec");
-    const std::string id = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args[1]);
+    const std::string id = ev::toUtf8(arg0.get());
 
     OutputView v;
     std::string bad;
-    if (!outputViewFromJs(args[1], &v, &bad)) {
+    if (!outputViewFromJs(arg1.get(), &v, &bad)) {
         return ev::throwTypeError(bad);
     }
     const std::string token = defineOutput(id, v);

@@ -153,12 +153,12 @@ ExportClip clipFromJs(bronze::Value o) {
     c.muted = boolProp(op.get(), "muted", false);
     c.z = static_cast<int>(numProp(op.get(), "z", 0));
 
-    bronze::Value crop = ev::getProperty(op.get(), "crop");
-    if (ev::isObject(crop)) {
-        c.cropL = numProp(crop, "l", 0);
-        c.cropT = numProp(crop, "t", 0);
-        c.cropR = numProp(crop, "r", 0);
-        c.cropB = numProp(crop, "b", 0);
+    ev::Persistent crop(ev::getProperty(op.get(), "crop"));
+    if (ev::isObject(crop.get())) {
+        c.cropL = numProp(crop.get(), "l", 0);
+        c.cropT = numProp(crop.get(), "t", 0);
+        c.cropR = numProp(crop.get(), "r", 0);
+        c.cropB = numProp(crop.get(), "b", 0);
     }
     return c;
 }
@@ -174,13 +174,12 @@ bool bsfFromJs(bronze::Value item, const std::string& where,
     namespace ev = bronze::embed;
     if (!ev::isObject(item)) return true;
     ev::Persistent itemP(item);
-    bronze::Value arr = ev::getProperty(itemP.get(), "bsf");
-    if (ev::isUndefined(arr) || ev::isNull(arr)) return true;
-    if (!isArray(arr)) {
+    ev::Persistent arrP(ev::getProperty(itemP.get(), "bsf"));
+    if (ev::isUndefined(arrP.get()) || ev::isNull(arrP.get())) return true;
+    if (!isArray(arrP.get())) {
         *err = where + ".bsf has to be an array of bitstream filters";
         return false;
     }
-    ev::Persistent arrP(arr);
     const uint32_t len = arrayLength(arrP.get());
     bool ok = true;
     for (uint32_t i = 0; i < len && ok; ++i) {
@@ -223,14 +222,13 @@ bool streamsFromJs(bronze::Value spec, std::vector<ExportStream>* out,
     namespace ev = bronze::embed;
     if (!ev::isObject(spec)) return true;
     ev::Persistent specP(spec);
-    bronze::Value arr = ev::getProperty(specP.get(), "streams");
-    if (ev::isUndefined(arr) || ev::isNull(arr)) return true;
-    if (!isArray(arr)) {
+    ev::Persistent arrP(ev::getProperty(specP.get(), "streams"));
+    if (ev::isUndefined(arrP.get()) || ev::isNull(arrP.get())) return true;
+    if (!isArray(arrP.get())) {
         *err = "spec.streams has to be an array of streams";
         return false;
     }
 
-    ev::Persistent arrP(arr);
     const uint32_t len = arrayLength(arrP.get());
     bool ok = true;
     for (uint32_t i = 0; i < len && ok; ++i) {
@@ -337,14 +335,13 @@ bool chaptersFromJs(bronze::Value spec, std::vector<ExportChapter>* out,
     namespace ev = bronze::embed;
     if (!ev::isObject(spec)) return true;
     ev::Persistent specP(spec);
-    bronze::Value arr = ev::getProperty(specP.get(), "chapters");
-    if (ev::isUndefined(arr) || ev::isNull(arr)) return true;
-    if (!isArray(arr)) {
+    ev::Persistent arrP(ev::getProperty(specP.get(), "chapters"));
+    if (ev::isUndefined(arrP.get()) || ev::isNull(arrP.get())) return true;
+    if (!isArray(arrP.get())) {
         *err = "spec.chapters has to be an array of chapter marks";
         return false;
     }
 
-    ev::Persistent arrP(arr);
     const uint32_t len = arrayLength(arrP.get());
     bool ok = true;
     for (uint32_t i = 0; i < len && ok; ++i) {
@@ -381,9 +378,8 @@ std::vector<ExportGraphInput> graphInputsFromJs(bronze::Value spec) {
     std::vector<ExportGraphInput> out;
     if (!ev::isObject(spec)) return out;
     ev::Persistent specP(spec);
-    bronze::Value arr = ev::getProperty(specP.get(), "filterInputs");
-    if (isArray(arr)) {
-        ev::Persistent arrP(arr);
+    ev::Persistent arrP(ev::getProperty(specP.get(), "filterInputs"));
+    if (isArray(arrP.get())) {
         const uint32_t len = arrayLength(arrP.get());
         for (uint32_t i = 0; i < len; ++i) {
             bronze::Value item = ev::getElement(arrP.get(), i);
@@ -410,9 +406,8 @@ std::vector<ExportClip> clipsFromJs(bronze::Value o) {
     std::vector<ExportClip> out;
     if (!ev::isObject(o)) return out;
     ev::Persistent op(o);
-    bronze::Value arr = ev::getProperty(op.get(), "clips");
-    if (isArray(arr)) {
-        ev::Persistent arrP(arr);
+    ev::Persistent arrP(ev::getProperty(op.get(), "clips"));
+    if (isArray(arrP.get())) {
         const uint32_t len = arrayLength(arrP.get());
         for (uint32_t i = 0; i < len; ++i) {
             bronze::Value item = ev::getElement(arrP.get(), i);
@@ -436,9 +431,8 @@ std::vector<ExportPass> passesFromJs(bronze::Value spec) {
     std::vector<ExportPass> out;
     if (!ev::isObject(spec)) return out;
     ev::Persistent specP(spec);
-    bronze::Value arr = ev::getProperty(specP.get(), "passes");
-    if (isArray(arr)) {
-        ev::Persistent arrP(arr);
+    ev::Persistent arrP(ev::getProperty(specP.get(), "passes"));
+    if (isArray(arrP.get())) {
         const uint32_t len = arrayLength(arrP.get());
         for (uint32_t i = 0; i < len; ++i) {
             bronze::Value item = ev::getElement(arrP.get(), i);
@@ -479,13 +473,12 @@ bool inputsFromJs(bronze::Value spec, std::vector<MediaInput>* out,
     namespace ev = bronze::embed;
     if (!ev::isObject(spec)) return true;
     ev::Persistent specP(spec);
-    bronze::Value arr = ev::getProperty(specP.get(), "inputs");
-    if (ev::isUndefined(arr) || ev::isNull(arr)) return true;
-    if (!isArray(arr)) {
+    ev::Persistent arrP(ev::getProperty(specP.get(), "inputs"));
+    if (ev::isUndefined(arrP.get()) || ev::isNull(arrP.get())) return true;
+    if (!isArray(arrP.get())) {
         *err = "spec.inputs has to be an array of inputs";
         return false;
     }
-    ev::Persistent arrP(arr);
     const uint32_t len = arrayLength(arrP.get());
     bool ok = true;
     for (uint32_t i = 0; i < len && ok; ++i) {
@@ -548,14 +541,14 @@ bool outputFromJs(bronze::Value spec, ExportSettings* out, std::string* err) {
     // so a spec that says nothing but `on` gets the `fifo` muxer's own answers
     // and this file writes none of them down. See `ExportSettings::FifoSettings`.
     {
-        bronze::Value f = ev::getProperty(specP.get(), "keepTrying");
-        if (ev::isObject(f)) {
-            s.fifo.on = boolProp(f, "on", false);
-            s.fifo.queueSize = static_cast<int>(numProp(f, "queueSize", 0));
-            s.fifo.waitSeconds = numProp(f, "waitSeconds", -1);
-            s.fifo.maxAttempts = static_cast<int>(numProp(f, "maxAttempts", 0));
-            s.fifo.dropOnOverflow = boolProp(f, "dropOnOverflow", false);
-            s.fifo.restartWithKeyframe = boolProp(f, "restartWithKeyframe", false);
+        ev::Persistent f(ev::getProperty(specP.get(), "keepTrying"));
+        if (ev::isObject(f.get())) {
+            s.fifo.on = boolProp(f.get(), "on", false);
+            s.fifo.queueSize = static_cast<int>(numProp(f.get(), "queueSize", 0));
+            s.fifo.waitSeconds = numProp(f.get(), "waitSeconds", -1);
+            s.fifo.maxAttempts = static_cast<int>(numProp(f.get(), "maxAttempts", 0));
+            s.fifo.dropOnOverflow = boolProp(f.get(), "dropOnOverflow", false);
+            s.fifo.restartWithKeyframe = boolProp(f.get(), "restartWithKeyframe", false);
         }
     }
     // The defaults every video stream takes. Named fields rather than option

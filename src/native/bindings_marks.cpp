@@ -154,10 +154,12 @@ bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
         *err = "marks.reads.start(input) needs a path or an input";
         return false;
     }
-    if (ev::isObject(args[0])) {
-        *in = inputFromJs(args[0]);
-    } else if (ev::isString(args[0])) {
-        in->path = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args.size() >= 2 ? args[1] : ev::undefined());
+    if (ev::isObject(arg0.get())) {
+        *in = inputFromJs(arg0.get());
+    } else if (ev::isString(arg0.get())) {
+        in->path = ev::toUtf8(arg0.get());
     } else {
         *err = "marks.reads.start(input) needs a path or an input";
         return false;
@@ -167,18 +169,17 @@ bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
         return false;
     }
 
-    if (args.size() >= 2 && ev::isObject(args[1])) {
-        bronze::Value o = args[1];
-        opts->onsetRatio = knob(o, "onsetRatio");
-        opts->onsetAbs = knob(o, "onsetAbs");
-        opts->tonalMinPeriodicity = knob(o, "tonalMinPeriodicity");
-        opts->tonalFminHz = knob(o, "tonalFminHz");
-        opts->tonalFmaxHz = knob(o, "tonalFmaxHz");
-        opts->minRunSec = numProp(o, "minRunSec", opts->minRunSec);
-        opts->wantOnsets = boolProp(o, "onsets", opts->wantOnsets);
-        opts->wantTonal = boolProp(o, "tonal", opts->wantTonal);
-        opts->wantSound = boolProp(o, "sound", opts->wantSound);
-        *timeout = numProp(o, "timeout", 0);
+    if (args.size() >= 2 && ev::isObject(arg1.get())) {
+        opts->onsetRatio = knob(arg1.get(), "onsetRatio");
+        opts->onsetAbs = knob(arg1.get(), "onsetAbs");
+        opts->tonalMinPeriodicity = knob(arg1.get(), "tonalMinPeriodicity");
+        opts->tonalFminHz = knob(arg1.get(), "tonalFminHz");
+        opts->tonalFmaxHz = knob(arg1.get(), "tonalFmaxHz");
+        opts->minRunSec = numProp(arg1.get(), "minRunSec", opts->minRunSec);
+        opts->wantOnsets = boolProp(arg1.get(), "onsets", opts->wantOnsets);
+        opts->wantTonal = boolProp(arg1.get(), "tonal", opts->wantTonal);
+        opts->wantSound = boolProp(arg1.get(), "sound", opts->wantSound);
+        *timeout = numProp(arg1.get(), "timeout", 0);
     }
     return true;
 }

@@ -162,11 +162,12 @@ bool takeNames(bronze::Value arr, std::vector<std::string>* store,
                std::vector<const char*>* ptrs) {
     namespace ev = bronze::embed;
     if (ev::isUndefined(arr) || ev::isNull(arr)) { ptrs->push_back(nullptr); return true; }
-    if (!isArray(arr)) return false;
-    const uint32_t n = std::min(arrayLength(arr), kMaxNames);
+    ev::Persistent arrP(arr);
+    if (!isArray(arrP.get())) return false;
+    const uint32_t n = std::min(arrayLength(arrP.get()), kMaxNames);
     store->reserve(n);
     for (uint32_t i = 0; i < n; i++) {
-        bronze::Value v = ev::getElement(arr, i);
+        bronze::Value v = ev::getElement(arrP.get(), i);
         if (!ev::isString(v)) return false;
         store->push_back(ev::toUtf8(v));
     }
@@ -229,15 +230,17 @@ void installExpression(Table& ns) {
     expr.function("evaluate", [](bronze::Value, std::span<const bronze::Value> args) -> bronze::Value {
         namespace ev = bronze::embed;
         std::string text;
-        if (args.empty() || !takeName(args[0], &text))
+        if (args.empty())
             return ev::throwTypeError("expr.evaluate(text, names, rows) requires text");
-
-        bronze::Value namesArg = args.size() >= 2 ? args[1] : ev::undefined();
-        bronze::Value rowsArg = args.size() >= 3 ? args[2] : ev::undefined();
+        ev::Persistent arg0(args[0]);
+        ev::Persistent namesArg(args.size() >= 2 ? args[1] : ev::undefined());
+        ev::Persistent rowsP(args.size() >= 3 ? args[2] : ev::undefined());
+        if (!takeName(arg0.get(), &text))
+            return ev::throwTypeError("expr.evaluate(text, names, rows) requires text");
 
         std::vector<std::string> nameStore;
         std::vector<const char*> names;
-        if (!takeNames(namesArg, &nameStore, &names))
+        if (!takeNames(namesArg.get(), &nameStore, &names))
             return ev::throwTypeError("expr.evaluate(text, names, rows) requires an array of "
                                       "variable names");
 
@@ -269,15 +272,13 @@ void installExpression(Table& ns) {
         out.set(ev::setProperty(out.get(), "uses", usesVal.get()));
 
         ev::Persistent values(createArray());
-        if (isArray(rowsArg)) {
-            ev::Persistent rowsP(rowsArg);
+        if (isArray(rowsP.get())) {
             const uint32_t rows = std::min(arrayLength(rowsP.get()), kMaxRows);
             std::vector<double> vars(nameStore.size(), 0.0);
             for (uint32_t r = 0; r < rows; r++) {
-                bronze::Value row = ev::getElement(rowsP.get(), r);
+                ev::Persistent rowP(ev::getElement(rowsP.get(), r));
                 std::fill(vars.begin(), vars.end(), 0.0);
-                if (isArray(row)) {
-                    ev::Persistent rowP(row);
+                if (isArray(rowP.get())) {
                     const uint32_t n =
                         std::min<uint32_t>(arrayLength(rowP.get()),
                                            static_cast<uint32_t>(vars.size()));

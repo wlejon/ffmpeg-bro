@@ -48,22 +48,22 @@ namespace {
 
 bronze::Value floatArray(const std::vector<float>& v) {
     namespace ev = bronze::embed;
-    bronze::Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(v.size()));
+    ev::Persistent arr(ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(v.size())));
     if (!v.empty()) {
         std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(v.data()),
                                        v.size() * sizeof(float));
-        ev::fillTypedArray(arr, bytes);
+        ev::fillTypedArray(arr.get(), bytes);
     }
-    return arr;
+    return arr.get();
 }
 
 bronze::Value byteArray(const std::vector<uint8_t>& v) {
     namespace ev = bronze::embed;
-    bronze::Value arr = ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(v.size()));
+    ev::Persistent arr(ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(v.size())));
     if (!v.empty()) {
-        ev::fillTypedArray(arr, std::span<const uint8_t>(v.data(), v.size()));
+        ev::fillTypedArray(arr.get(), std::span<const uint8_t>(v.data(), v.size()));
     }
-    return arr;
+    return arr.get();
 }
 
 bronze::Value seriesToJs(const DataSeries& s) {
@@ -132,10 +132,13 @@ bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
         *err = "data.reads.start(input, streamIndex) needs both";
         return false;
     }
-    if (ev::isObject(args[0])) {
-        *in = inputFromJs(args[0]);
-    } else if (ev::isString(args[0])) {
-        in->path = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args[1]);
+    ev::Persistent arg2(args.size() >= 3 ? args[2] : ev::undefined());
+    if (ev::isObject(arg0.get())) {
+        *in = inputFromJs(arg0.get());
+    } else if (ev::isString(arg0.get())) {
+        in->path = ev::toUtf8(arg0.get());
     } else {
         *err = "data.reads.start() needs a path or an input";
         return false;
@@ -144,15 +147,15 @@ bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
         *err = "data.reads.start() needs a path or an input";
         return false;
     }
-    if (!ev::isNumber(args[1])) {
+    if (!ev::isNumber(arg1.get())) {
         *err = "data.reads.start() needs a numeric streamIndex";
         return false;
     }
-    *streamIndex = static_cast<int>(ev::toDouble(args[1]));
+    *streamIndex = static_cast<int>(ev::toDouble(arg1.get()));
 
-    if (args.size() >= 3 && ev::isObject(args[2])) {
-        *buckets = static_cast<int>(numProp(args[2], "buckets", 0));
-        *timeout = numProp(args[2], "timeout", 0);
+    if (args.size() >= 3 && ev::isObject(arg2.get())) {
+        *buckets = static_cast<int>(numProp(arg2.get(), "buckets", 0));
+        *timeout = numProp(arg2.get(), "timeout", 0);
     }
     return true;
 }

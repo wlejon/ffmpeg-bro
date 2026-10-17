@@ -169,19 +169,21 @@ struct FileQuery {
 bool fileQuery(std::span<const bronze::Value> args, FileQuery* q) {
     namespace ev = bronze::embed;
     if (args.empty()) return false;
-    if (ev::isObject(args[0])) {
-        q->in = inputFromJs(args[0]);
-    } else if (ev::isString(args[0])) {
-        q->in.path = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args.size() >= 2 ? args[1] : ev::undefined());
+    if (ev::isObject(arg0.get())) {
+        q->in = inputFromJs(arg0.get());
+    } else if (ev::isString(arg0.get())) {
+        q->in.path = ev::toUtf8(arg0.get());
     } else {
         return false;
     }
-    if (args.size() >= 2 && ev::isObject(args[1])) {
-        q->stream = static_cast<int>(numProp(args[1], "stream", -1));
-        q->from = numProp(args[1], "from", 0);
-        q->to = numProp(args[1], "to", 0);
-        q->max = static_cast<int>(numProp(args[1], "max", 0));
-        q->ms = static_cast<int>(numProp(args[1], "ms", DEFAULT_WALK_MS));
+    if (args.size() >= 2 && ev::isObject(arg1.get())) {
+        q->stream = static_cast<int>(numProp(arg1.get(), "stream", -1));
+        q->from = numProp(arg1.get(), "from", 0);
+        q->to = numProp(arg1.get(), "to", 0);
+        q->max = static_cast<int>(numProp(arg1.get(), "max", 0));
+        q->ms = static_cast<int>(numProp(arg1.get(), "ms", DEFAULT_WALK_MS));
     }
     return true;
 }

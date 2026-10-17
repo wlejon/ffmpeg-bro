@@ -15,12 +15,14 @@ void setStr(bronze::Value obj, const char* key, const std::string& v) {
 
 void setNum(bronze::Value obj, const char* key, double val) {
     namespace ev = bronze::embed;
-    ev::setProperty(obj, key, ev::fromDouble(val));
+    ev::Persistent objP(obj);
+    ev::setProperty(objP.get(), key, ev::fromDouble(val));
 }
 
 void setBool(bronze::Value obj, const char* key, bool val) {
     namespace ev = bronze::embed;
-    ev::setProperty(obj, key, ev::fromBool(val));
+    ev::Persistent objP(obj);
+    ev::setProperty(objP.get(), key, ev::fromBool(val));
 }
 
 double numProp(bronze::Value obj, const char* key, double fallback) {
@@ -57,13 +59,14 @@ std::string strProp(bronze::Value obj, const char* key,
 bool isArray(bronze::Value arr) {
     namespace ev = bronze::embed;
     if (!ev::isObject(arr)) return false;
+    ev::Persistent arrP(arr);
     ev::GlobalValue arrCtor = ev::globalValue("Array");
     if (!arrCtor.found || !ev::isObject(arrCtor.value)) return false;
     ev::Persistent ctorP(arrCtor.value);
     bronze::Value isArrayFn = ev::getProperty(ctorP.get(), "isArray");
     if (!ev::isFunction(isArrayFn)) return false;
     ev::Persistent fnP(isArrayFn);
-    bronze::Value target = arr;
+    bronze::Value target = arrP.get();
     ev::CallResult res = ev::call(fnP.get(), ev::undefined(), std::span<const bronze::Value>(&target, 1));
     return !res.thrown && ev::toBool(res.value);
 }

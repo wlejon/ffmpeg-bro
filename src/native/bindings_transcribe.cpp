@@ -105,10 +105,12 @@ bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
         *err = "transcribe.reads.start(input, opts) needs a path or an input";
         return false;
     }
-    if (ev::isObject(args[0])) {
-        *in = inputFromJs(args[0]);
-    } else if (ev::isString(args[0])) {
-        in->path = ev::toUtf8(args[0]);
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args.size() >= 2 ? args[1] : ev::undefined());
+    if (ev::isObject(arg0.get())) {
+        *in = inputFromJs(arg0.get());
+    } else if (ev::isString(arg0.get())) {
+        in->path = ev::toUtf8(arg0.get());
     } else {
         *err = "transcribe.reads.start(input, opts) needs a path or an input";
         return false;
@@ -118,12 +120,11 @@ bool readArgs(std::span<const bronze::Value> args, MediaInput* in,
         return false;
     }
 
-    if (args.size() >= 2 && ev::isObject(args[1])) {
-        bronze::Value o = args[1];
-        opts->modelDir = strProp(o, "model", "");
-        opts->language = strProp(o, "language", opts->language);
-        opts->translate = boolProp(o, "translate", opts->translate);
-        opts->device = strProp(o, "device", "");
+    if (args.size() >= 2 && ev::isObject(arg1.get())) {
+        opts->modelDir = strProp(arg1.get(), "model", "");
+        opts->language = strProp(arg1.get(), "language", opts->language);
+        opts->translate = boolProp(arg1.get(), "translate", opts->translate);
+        opts->device = strProp(arg1.get(), "device", "");
     }
     if (opts->modelDir.empty()) {
         // Named here rather than discovered on the thread, because this one is

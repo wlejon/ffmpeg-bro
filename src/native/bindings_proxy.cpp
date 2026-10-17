@@ -69,17 +69,18 @@ bronze::Value js_proxyStart(bronze::Value, std::span<const bronze::Value> args) 
     namespace ev = bronze::embed;
     if (args.empty() || !ev::isObject(args[0]))
         return ev::throwTypeError("proxy.start(request) requires an object");
+    ev::Persistent req(args[0]);
 
     ProxyRequest r;
-    r.path = strProp(args[0], "path", "");
-    r.label = strProp(args[0], "label", "");
-    r.height = static_cast<int>(numProp(args[0], "height", 720));
+    r.path = strProp(req.get(), "path", "");
+    r.label = strProp(req.get(), "label", "");
+    r.height = static_cast<int>(numProp(req.get(), "height", 720));
 
-    bronze::Value in = ev::getProperty(args[0], "input");
-    if (ev::isObject(in)) {
-        r.input = inputFromJs(in);
-    } else if (ev::isString(in)) {
-        r.input.path = ev::toUtf8(in);
+    ev::Persistent in(ev::getProperty(req.get(), "input"));
+    if (ev::isObject(in.get())) {
+        r.input = inputFromJs(in.get());
+    } else if (ev::isString(in.get())) {
+        r.input.path = ev::toUtf8(in.get());
     }
 
     std::string err;

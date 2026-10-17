@@ -71,17 +71,19 @@ bronze::Value js_fetchStart(bronze::Value, std::span<const bronze::Value> args) 
     namespace ev = bronze::embed;
     if (args.empty() || !ev::isObject(args[0]))
         return ev::throwTypeError("fetch.start(spec) requires a spec object");
+    ev::Persistent arg0(args[0]);
+    ev::Persistent arg1(args.size() >= 2 ? args[1] : ev::undefined());
 
     ExportSettings s;
     std::string bad;
-    if (!outputFromJs(args[0], &s, &bad))
+    if (!outputFromJs(arg0.get(), &s, &bad))
         return ev::throwTypeError(bad);
 
     std::string label;
     bool soon = false;
-    if (args.size() >= 2 && ev::isObject(args[1])) {
-        label = strProp(args[1], "label", "");
-        soon = boolProp(args[1], "soon", false);
+    if (args.size() >= 2 && ev::isObject(arg1.get())) {
+        label = strProp(arg1.get(), "label", "");
+        soon = boolProp(arg1.get(), "soon", false);
     }
 
     std::string err;
