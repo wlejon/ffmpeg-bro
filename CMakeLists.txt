@@ -201,6 +201,7 @@ find_package(FFMPEG REQUIRED)
 # src/native/bindings_install.h.
 add_library(ffmpeg-bro-core STATIC
     src/native/ffmpeg_backend.cpp
+    src/native/ffmpeg_backend_decoders.cpp
     src/native/ffmpeg_bindings.cpp
     src/native/bindings_value.cpp
     # Subsystem bindings
@@ -217,11 +218,14 @@ add_library(ffmpeg-bro-core STATIC
     src/native/bindings_playback.cpp
     src/native/bindings_sequence.cpp
     src/native/ffmpeg_capabilities.cpp
+    src/native/ffmpeg_capabilities_formats.cpp
     src/native/ffmpeg_data.cpp
     src/native/data_gpmf.cpp
     src/native/ffmpeg_capture.cpp
+    src/native/ffmpeg_capture_session.cpp
     src/native/capture_graph.cpp
     src/native/ffmpeg_export.cpp
+    src/native/ffmpeg_export_pass.cpp
     src/native/ffmpeg_hardware.cpp
     src/native/ffmpeg_input.cpp
     src/native/ffmpeg_job.cpp
@@ -245,6 +249,8 @@ add_library(ffmpeg-bro-core STATIC
     src/native/export_subtitle.cpp
     src/native/export_timeline.cpp
     src/native/export_writer.cpp
+    src/native/export_writer_streams.cpp
+    src/native/export_writer_io.cpp
     src/native/fetch_queue.cpp
     src/native/proxy_queue.cpp
 )
