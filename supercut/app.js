@@ -494,7 +494,11 @@ document.addEventListener('keydown', (e) => {
     if (e.key === '-' || e.key === '_') { mix.nudgeZoom(-1, transport.t); return; }
     if (e.key === '0') { mix.fit(); mix.draw(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
-        for (const c of project.selection.slice()) removeClip(c);
+        if (!project.selection.length) return;
+        for (const c of project.selection.slice()) {
+            cuts.forget(c.id);
+            removeClip(c);
+        }
         mix.reflow();
         touched();
         mix.draw();
@@ -652,7 +656,7 @@ requestAnimationFrame(frame);
 globalThis.__supercut = {
     project, inputs: inputsModel.inputs, transport, settings,
     results, acquire, mix, screen, cuts, line, ruler, waves, inflight, doc: documentModel,
-    addMoment, removeClip, seek, togglePlay, flash, buildSpec,
+    addMoment, removeClip, select, seek, togglePlay, flash, buildSpec,
     duration: () => duration(),
     useClipId,
     changed,

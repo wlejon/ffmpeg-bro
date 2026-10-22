@@ -921,23 +921,53 @@ console.log('\na generator clip, round-tripped');
     pump(150);
 }
 
-// ── A4: Keep pitch / atempo user node round-trip ───────────────────────────
+// ── A4: Keep pitch / atempo user node round-trip & inspector button ────────
 {
     doc.reset();
     pump(100);
     const clip = A.addGenerator('testsrc');
+    const clip2 = A.addGenerator('testsrc');
     A.select(clip);
+    A.showProperties();
     pump(50);
 
     const anchor = `clip:${clip.id}/audio`;
-    const node = A.graph.overlay.insert(anchor, 'atempo');
-    ok(node && node.anchor === anchor && node.filter === 'atempo',
-       `atempo node created with proper anchor id (${anchor})`);
+    const anchor2 = `clip:${clip2.id}/audio`;
+    const keepBtn = () => document.querySelector('#transform [data-keep-pitch]') ||
+        Array.from(document.querySelectorAll('#transform button')).find((b) => b.textContent === 'Keep pitch');
+    ok(!!keepBtn(), 'Inspector renders Keep pitch button');
+    ok(!keepBtn().classList.contains('on'), 'Keep pitch button is initially off');
+
+    click(keepBtn());
+    pump(50);
+    const afterFirstClick = A.graph.overlay.inserts().filter((n) => n.anchor === anchor && n.filter === 'atempo');
+    same(afterFirstClick.length, 1, `clicking Keep pitch inserts atempo at ${anchor}`);
+    ok(keepBtn().classList.contains('on'), 'Keep pitch button reflects active state after click');
+
+    // Clicking Keep pitch again on the same clip must not duplicate atempo.
+    click(keepBtn());
+    pump(50);
+    const afterSecondClick = A.graph.overlay.inserts().filter((n) => n.anchor === anchor && n.filter === 'atempo');
+    same(afterSecondClick.length, 1, 'clicking Keep pitch again does not insert duplicate atempo');
+
+    // Multi-select: selecting both clips and clicking Keep pitch adds atempo to the second clip without duplicating on the first.
+    A.selectMany([clip, clip2]);
+    A.showProperties();
+    pump(50);
+    ok(!keepBtn().classList.contains('on'), 'Keep pitch button is off when not all selected clips have atempo');
+    click(keepBtn());
+    pump(50);
+    same(A.graph.overlay.inserts().filter((n) => n.anchor === anchor && n.filter === 'atempo').length, 1,
+         'first selected clip still has exactly one atempo insert');
+    same(A.graph.overlay.inserts().filter((n) => n.anchor === anchor2 && n.filter === 'atempo').length, 1,
+         'second selected clip received atempo insert from multi-select Keep pitch');
+    ok(keepBtn().classList.contains('on'), 'Keep pitch button is on when all selected clips have atempo');
 
     const snap = doc.snapshot();
     const roundTripInserts = snap.graph && snap.graph.inserts;
-    ok(roundTripInserts && roundTripInserts.some((n) => n.anchor === anchor && n.filter === 'atempo'),
-       'atempo user node survives document save/load round-trip');
+    ok(roundTripInserts && roundTripInserts.some((n) => n.anchor === anchor && n.filter === 'atempo') &&
+       roundTripInserts.some((n) => n.anchor === anchor2 && n.filter === 'atempo'),
+       'atempo user nodes survive document save/load round-trip');
 
     doc.reset();
     pump(100);

@@ -1856,4 +1856,46 @@ console.log('\na search that answers over frames');
     ok(library.warmSome(8) === false, 'and once it is read there is nothing left to do');
 }
 
+// ── deleting a selected clip stops its in-flight cut ───────────────────────
+console.log('\ndeleting a clip with an in-flight cut');
+{
+    A.addMoment({ path: media, name: 'delete-cut-test', from: 0.2, to: 0.7 });
+    for (let i = 0; i < 200 && A.mix.sequence().length < 1; i++) pump(30);
+    const clip = A.mix.sequence()[0];
+    ok(!!clip, 'moment clip added to mix');
+
+    // Make the clip appear part of a long recording so cuts.begin queues a cut copy.
+    clip.media = 120;
+    const cutFiles = (() => {
+        try { return fs.readdirSync(`${ROOT}/build/cuts`); } catch (e) { return []; }
+    })();
+    for (const f of cutFiles) {
+        if (f.indexOf('10.700.mkv') >= 0) {
+            try { fs.unlinkSync(`${ROOT}/build/cuts/${f}`); } catch (e) { /* ignore */ }
+        }
+    }
+    A.cuts.begin(clip, { from: 0.2, to: 0.7 });
+    ok(A.cuts.stateOf(clip.id) === 'cutting' || A.cuts.stateOf(clip.id) === 'copied',
+       `cut started for clip ${clip.id} (${A.cuts.stateOf(clip.id)})`);
+
+    A.select(clip);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    pump(40);
+
+    ok(A.mix.sequence().length === 0, 'Delete key removed selected clip from mix');
+    ok(A.cuts.stateOf(clip.id) === null, 'Delete key forgot in-flight cut job for removed clip');
+    ok(!A.cuts.running().some((r) => r.key === `cut:${clip.id}`),
+       'deleted clip has no leaked in-flight cut entry');
+
+    // Pressing Delete when selection is empty must not mark a saved document modified.
+    const emptySavePath = bro.ffmpeg.tempPath('supercut-empty-del.fbro');
+    A.doc.save(emptySavePath);
+    A.select(null);
+    ok(!A.doc.isModified(), 'document is clean after save');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    pump(20);
+    ok(!A.doc.isModified(), 'pressing Delete with empty selection is a no-op and does not dirty document');
+    try { fs.unlinkSync(emptySavePath); } catch (e) { /* ignore */ }
+}
+
 console.log(`\n${checks} checks passed`);

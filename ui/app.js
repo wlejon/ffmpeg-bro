@@ -382,13 +382,25 @@ initInspector({ chips, transform: xformPanel }, {
     cropHandlesOn: () => cropMode,
     toggleCropHandles: () => setCropMode(!cropMode),
     addFilter: (filterName) => {
-        const clip = project.selected;
-        if (!clip) return;
-        const anchor = `clip:${clip.id}/audio`;
-        graph.insert(anchor, filterName);
+        const list = subjects();
+        if (!list.length) return;
+        for (const clip of list) {
+            const anchor = `clip:${clip.id}/audio`;
+            if (!graphOverlay.inserts().some((ins) => ins.anchor === anchor && (ins.filter === filterName || ins.filterName === filterName))) {
+                graphOverlay.insert(anchor, filterName);
+            }
+        }
         changed('edit');
+        showProperties();
         viewer.refreshAll();
         timeline.draw();
+    },
+    hasFilter: (filterName) => {
+        const list = subjects();
+        return list.length > 0 && list.every((clip) => {
+            const anchor = `clip:${clip.id}/audio`;
+            return graphOverlay.inserts().some((ins) => ins.anchor === anchor && (ins.filter === filterName || ins.filterName === filterName));
+        });
     },
     // Which of the panel's controls a lock on the graph has taken over. Asked
     // rather than pushed, because it is a function of the edit and the overlay

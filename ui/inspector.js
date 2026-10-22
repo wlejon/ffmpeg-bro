@@ -323,11 +323,19 @@ function speedRows(again) {
         set(Number(field.value));
     });
 
+    const list = subjects();
+    const hasAtempo = hooks.hasFilter
+        ? hooks.hasFilter('atempo')
+        : (list.length > 0 && list.every((c) =>
+            graph.inserts().some((ins) => ins.anchor === `clip:${c.id}/audio` &&
+                (ins.filter === 'atempo' || ins.filterName === 'atempo'))));
     const chip = span('pitch follows speed', 'gp-badge');
     const keepPitchBtn = el('button', {
-        cls: 'tiny', text: 'Keep pitch',
+        cls: 'tiny' + (hasAtempo ? ' on' : ''), text: 'Keep pitch',
+        'data-keep-pitch': '1',
         on: { click: () => {
             if (hooks.addFilter) hooks.addFilter('atempo');
+            again();
         } }
     });
     const speedInfo = div('gp-speed-info', [chip, keepPitchBtn]);
