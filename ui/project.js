@@ -257,6 +257,7 @@ export function ripplesWith(track) {
     const t = Math.round(Number(track));
     if (!isTrackLocked(t)) return [t];
     return Object.keys(project.trackSettings)
+                 .sort()
                  .map(Number)
                  .filter((n) => isTrackLocked(n))
                  .sort((a, b) => a - b);
@@ -266,7 +267,7 @@ export function ripplesWith(track) {
 export function retainTracks() {
     const lanes = trackCount();
     let dropped = false;
-    for (const key of Object.keys(project.trackSettings)) {
+    for (const key of Object.keys(project.trackSettings).sort()) {
         const n = Number(key);
         const s = project.trackSettings[key];
         const set = !!(s && s.locked);

@@ -430,8 +430,8 @@ export function byId(id) { return inputs.find((i) => i.id === id) || null; }
 export function plainInputFor(path) {
     return inputs.find((i) => i.path === path && !i.format && !i.ss && !i.to &&
                               !i.itsoffset && !i.hwaccel &&
-                              !Object.keys(i.options).length &&
-                              !Object.keys(i.decoderOptions || {}).length) || null;
+                              !Object.keys(i.options).sort().length &&
+                              !Object.keys(i.decoderOptions || {}).sort().length) || null;
 }
 
 /// How long this input is, on its own clock. Zero when it could not be read.
@@ -500,8 +500,8 @@ export function summary(input) {
     if (input.hwaccelDevice) bits.push(`-hwaccel_device ${input.hwaccelDevice}`);
     if (input.hwaccelOutputFormat)
         bits.push(`-hwaccel_output_format ${input.hwaccelOutputFormat}`);
-    for (const k of Object.keys(input.options)) bits.push(`-${k} ${input.options[k]}`);
-    for (const k of Object.keys(input.decoderOptions || {}))
+    for (const k of Object.keys(input.options).sort()) bits.push(`-${k} ${input.options[k]}`);
+    for (const k of Object.keys(input.decoderOptions || {}).sort())
         bits.push(`-${k} ${input.decoderOptions[k]}`);
     if (input.ss) bits.push(`-ss ${input.ss}`);
     if (input.to) bits.push(`-to ${input.to}`);
