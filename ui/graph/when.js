@@ -369,7 +369,8 @@ function strip(spans, clk, commit) {
     track.addEventListener('mousedown', (e) => {
         const edge = e.target && e.target.getAttribute && e.target.getAttribute('data-drag');
         const body = e.target && e.target.getAttribute && e.target.getAttribute('data-span');
-        if (!edge && !body) return;
+        const spanSpec = edge || body;
+        if (!spanSpec) return;
         e.preventDefault();
         e.stopPropagation();
 
@@ -381,7 +382,7 @@ function strip(spans, clk, commit) {
         // the fraction along the *window*, and the window has a start.
         const tAt = (ev) => clk.start + Math.max(0, Math.min(clk.length,
             ((ev.clientX - box.left) / Math.max(1, box.width)) * clk.length));
-        const i = Number((edge || body).split(':')[0]) || 0;
+        const i = Number(spanSpec.split(':')[0]) || 0;
         const which = edge ? edge.split(':')[1] : null;
         const held = spans[i];
         const grabbed = tAt(e);
