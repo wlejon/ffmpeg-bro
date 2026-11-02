@@ -152,9 +152,22 @@ about it instead.
   another way writes them wherever it likes, pass 2 reads nothing useful, and
   the render says so by naming the encoder — there's no way to ask a codec in
   advance whether it supports this.
-- **Data lane and telemetry track visualization in the UI.** Data stream parsing
-  (`ffmpeg_data.h`, `gpmd` telemetry) exists in the native C++ engine (`bro.ffmpeg.data`),
-  but telemetry visualization (Data lane) is not currently surfaced in the UI.
+- **A data stream drawn over the picture, or cut on.** Reading a telemetry
+  track (`bro.ffmpeg.data`) and plotting its series on the timeline's Data lane
+  works now — see [reading a data track](sources.md#reading-a-data-track) and
+  [the Data lane](timeline.md#the-data-lane) — for GoPro's `gpmd` specifically.
+  Other fourccs (`tmcd`, `fdsc`, a phone's `mebx`) are each a different format
+  and are refused by name rather than guessed at. Two things the Data lane
+  cannot yet do:
+
+  - **Burn a live reading onto the picture** — "speed, bottom left, updated
+    four times a second" — as anything other than typed cues.
+  - **Cut on a reading** — "put a cut wherever the accelerometer crosses 20"
+    — there is no threshold or hysteresis cut generator for a data track.
+
+  Two smaller gaps: a reading is decimated to two thousand buckets on the way
+  in, and which series you picked to plot is session state rather than saved in
+  the document.
 - **Hardware filters this build does not have.** `hwupload`, `hwdownload` and
   `hwupload_cuda` are present; `scale_cuda`, `overlay_cuda`, `scale_qsv` and
   the rest of a device family are not, because this build's ffmpeg was
@@ -192,11 +205,20 @@ about it instead.
   machine's whole audio mix, sample peak rather than true peak, two channels
   regardless of the output's own count — labelled `monitor` so it isn't
   mistaken for the real thing. Press `O` before trusting a level.
-- **Find stage, Whisper transcription, and Sound marks in the UI.** Sound marks
-  analysis (`sound_marks.h`, `bro.ffmpeg.marks`) and Whisper speech-to-text
-  transcription (`transcribe.h`, `bro.ffmpeg.transcript`) exist in the native C++
-  engine, but the Find stage node graph, transcript search, and sound marks timeline
-  lane are not currently surfaced in the UI.
+- **Finding things by sound, by *what* made the sound, or timing individual
+  words inside a Whisper segment.** Acoustic marks (`bro.ffmpeg.marks`) are
+  surfaced on the Sources stage and on the timeline's Marks lane (with `,` / `.`
+  navigation and clip/cut snapping), and Whisper speech-to-text transcription
+  and phrase search (`bro.ffmpeg.transcript`) are surfaced on the Sources stage
+  and in the Graph stage node inspector. Two boundaries remain:
+
+  - **Acoustic marks say *when*, never *what*.** `onset`, `tonal` and `voiced`
+    measure spectral flux, harmonicity and voice-band energy rather than
+    classifying sources of sound, and threshold filtering by flux or frequency
+    band is not exposed yet.
+  - **Whisper times segments rather than individual words.** A search hit moves
+    the playhead to the start of the segment in which the phrase was spoken, and
+    the user must supply a local Whisper model directory on disk.
 - **Two renders running at once.** This application runs one render at a
   time. Downloads and live monitoring are not affected — a background fetch
   (see [saving a stream to this

@@ -9,6 +9,7 @@ import { project, projectFps, makeGenerator, applyGenerator,
 import * as generators from './generator.js';
 import * as assemble from './sequence.js';
 import { analyzeClip, pending, tickAnalysis } from './analysis.js';
+import * as marks from './marks.js';
 import * as viewer from './viewer.js';
 import { initResidency, tick as tickResidency } from './residency.js';
 import * as output from './output.js';
@@ -322,6 +323,19 @@ export function updateCropUI() {
 
 // J/L shuttle: each press moves one step through the speed list, playing
 // forward. (Reverse playback needs backwards decode, which is a later job.)
+export function goToMark(dir) {
+    const rows = marks.markRows(project.clips);
+    const next = marks.markNear(rows, transport.t, dir);
+    if (next) {
+        setPlayhead(next.at);
+        ctx.flash(marks.markLabel(next));
+        return;
+    }
+    ctx.flash(rows.length
+                  ? (dir < 0 ? 'No mark before this one' : 'No mark after this one')
+                  : 'Nothing has been listened to yet — Find sounds on the Sources stage');
+}
+
 const RATES = [0.25, 0.5, 1, 1.5, 2, 4];
 function nudgeRate(dir) {
     if (!project.clips.length) return;
@@ -780,6 +794,8 @@ export function initAppControls() {
             case 'k':          pause(); break;
             case 'l':          nudgeRate(1); break;
             case 'm':          btnMute.click(); break;
+            case ',':          goToMark(-1); break;
+            case '.':          goToMark(1); break;
 
             // Stage-local hotkeys (Compose stage only)
             case 'f':          if (shell.currentStage() === 'compose') toggleFullscreen(); else return; break;

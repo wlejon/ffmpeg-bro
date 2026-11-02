@@ -46,8 +46,12 @@ import {
     bindTimelineDrawContext, mixColumns, whenLane, spanStackOf, syncSpanLane,
     drawVideoLane, drawAudioLane, drawSpanLane, drawRuler, drawScrollbar, watchView,
 } from './timeline-draw.js';
+import {
+    bindTimelineLanesContext, syncMarksLane, drawMarksLane, marksLane, markStackOf,
+    syncTelemetryLane, drawTelemetryLane, telemetryLane, telStackOf,
+} from './timeline-lanes.js';
 
-export { mixColumns, whenLane };
+export { mixColumns, whenLane, marksLane, telemetryLane };
 
 let ruler, tracksEl, wave, laneAudio, playhead, scrollTrack, scrollThumb, zoomLabel, timelineEl;
 let lanes = [];                 // [{ row, head, lock, lane, canvas }] bottom track first
@@ -84,6 +88,14 @@ bindTimelineDrawContext({
     tracked: (el, d, m, u) => tracked(el, d, m, u),
     snapTime: (t, ex) => snapTime(t, ex),
     isDragging: () => !!dragging,
+    markRebuilt: () => { rebuilt = true; },
+});
+bindTimelineLanesContext({
+    tracksEl: () => tracksEl,
+    playhead: () => playhead,
+    timeToX: (t) => timeToX(t),
+    xToTime: (x) => xToTime(x),
+    scrubOn: (el) => scrubOn(el),
     markRebuilt: () => { rebuilt = true; },
 });
 
@@ -245,6 +257,8 @@ export function draw() {
     syncLanes();
     syncHeads();
     syncSpanLane();
+    syncMarksLane();
+    syncTelemetryLane();
     fitHeights();
     clampView();
     watchView();
@@ -252,6 +266,8 @@ export function draw() {
     for (const l of lanes) drawVideoLane(l.track, l.canvas);
     drawAudioLane();
     drawSpanLane();
+    drawMarksLane();
+    drawTelemetryLane();
     drawScrollbar();
 
     // A lane created a moment ago has not been through layout yet, so the width
@@ -345,7 +361,7 @@ let laneStack = 0;
 /// The words strip is outside the box of lanes — it is a form and not a lane —
 /// so it is a term on the timeline's own height rather than on `#tracks`'s.
 function fitHeights() {
-    const stack = laneStack + spanStackOf();
+    const stack = laneStack + spanStackOf() + markStackOf() + telStackOf();
     tracksEl.style.height = stack + 'px';
     // Everything above and below the box of lanes: the zoom bar, the ruler, the
     // waveform, the scrollbar and the gaps.
@@ -499,6 +515,7 @@ function snapStart(clip, start, playheadT) {
         if (other === clip) continue;
         targets.push(other.start, other.start + other.length);
     }
+    for (const m of marksLane().rows) targets.push(m.at);
     let best = start, bestD = tolerance;
     for (const t of targets) {
         for (const edge of [start, start + clip.length]) {
@@ -517,6 +534,7 @@ function snapTime(t, exclude) {
         if (other === exclude) continue;
         targets.push(other.start, other.start + other.length);
     }
+    for (const m of marksLane().rows) targets.push(m.at);
     for (const c of targets) {
         const d = Math.abs(t - c);
         if (d < bestD) { bestD = d; best = c; }

@@ -228,6 +228,8 @@ void installTranscribe(Table& ns) {
         abandonTranscribe(id);
         return ev::undefined();
     }, 1);
+
+    bronze::embed::setProperty(ns.value(), "transcript", transcribe.value());
 }
 
 } // namespace ffmpegbro

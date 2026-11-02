@@ -47,6 +47,7 @@ import * as overlay from './overlay.js';
 import { renamePad } from '../export/pads.js';
 import { graphSummary } from './view.js';
 import { namedRows, palette, padPalette, wirePanel, driftRows } from './panel-palette.js';
+import { inputTranscriptRows, summaryTranscriptRows } from './panel-transcript.js';
 
 let refs = {};
 let hooks = {};
@@ -259,6 +260,7 @@ function empty() {
             cls: 'tiny warn', text: 'Clear my filters and locks',
             on: { click: () => { overlay.clear(); sel = null; changed(); } },
         }),
+        ...summaryTranscriptRows(() => draw(graph, trouble, points)),
     ].filter(Boolean);
 }
 
@@ -321,9 +323,13 @@ function nodePanel(node) {
                 }),
                 measureAction(node)
             ]));
+            out.push(...inputTranscriptRows(node, () => draw(graph, trouble, points)));
             return out;
         }
         out.push(div('gp-actions', [measureAction(node)]));
+        if (node.kind === 'input') {
+            out.push(...inputTranscriptRows(node, () => draw(graph, trouble, points)));
+        }
         return out;
     }
 

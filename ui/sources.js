@@ -25,6 +25,10 @@ import { streamsOf } from './export/streams.js';
 import { readsInput } from './export/subtitles.js';
 import { assemblyRows, decodeRows, windowRows, blocked, footRows,
          localCopySection, optionRows, contentRows } from './sources-detail.js';
+import { tickTelemetry } from './telemetry.js';
+import * as marksModel from './marks.js';
+import * as transcriptModel from './transcript.js';
+import { readRows } from './sources-reads.js';
 
 let refs = {};
 let hooks = {};
@@ -160,8 +164,12 @@ const waitingText = new Map();
 
 export function tickSources() {
     const opened = tickInputs();
+    const read = tickTelemetry();
+    const heard = marksModel.tickMarks();
+    const spoken = transcriptModel.tickTranscripts();
+    const winPulled = transcriptModel.tickPulls();
     const pulled = tickLocalCopies();
-    const settled = opened || pulled;
+    const settled = opened || read || heard || spoken || winPulled || pulled;
     if (settled) {
         waitingText.clear();
         drawSources();
@@ -392,6 +400,7 @@ function drawDetail() {
         ...decodeRows(input, detailCtx),
         ...windowRows(input, detailCtx),
         ...contentRows(input),
+        ...readRows(input, detailCtx),
     ]);
 
     put(refs.foot, () => footRows(input, detailCtx));

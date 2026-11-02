@@ -9,6 +9,9 @@ import { project, makeClip, addClip, duration, onChange, changed,
 import * as inputsModel from './inputs.js';
 import * as assemble from './sequence.js';
 import { analyzeClip } from './analysis.js';
+import * as telemetry from './telemetry.js';
+import * as marks from './marks.js';
+import * as transcript from './transcript.js';
 import * as viewer from './viewer.js';
 import * as output from './output.js';
 import * as softcues from './softcues.js';
@@ -696,9 +699,9 @@ export function initAppPlayback() {
         // three is the timeline, and even that is marked rather than drawn, because
         // a hundred and fifty redraws of the same lanes in one frame is the same
         // mistake one level down.
-        if (what === 'analysis') {
-            // ...and the readouts, which count how many clips are still being read.
-            needs('timeline', 'readouts');
+        if (what === 'analysis' || what === 'telemetry' || what === 'marks' || what === 'transcript') {
+            if (what !== 'analysis') drawSources();
+            needs('timeline', 'readouts', 'graph');
             return;
         }
 
@@ -719,8 +722,11 @@ export function initAppPlayback() {
             // stage. The inputs are passed as well as the clips because the graph can
             // now read a file no clip is cut from, which is exactly the file nothing
             // else in this call would have noticed going away.
-            graphOverlay.retain(project.clips.map((c) => c.id),
-                                inputsModel.inputs.map((i) => i.id));
+            const inputIds = inputsModel.inputs.map((i) => i.id);
+            graphOverlay.retain(project.clips.map((c) => c.id), inputIds);
+            telemetry.retain(inputIds);
+            marks.retain(inputIds);
+            transcript.retain(inputIds);
             // And the settings of a track the timeline no longer shows — a sync lock on
             // V4 after the last clip on it was deleted. Here for the same argument as the
             // line above and stated where that argument already is: a track can empty out
@@ -760,7 +766,7 @@ export function initAppPlayback() {
         // `marks` is the fifth and joins it exactly: a detected onset is a
         // measurement of a soundtrack, and undo answers "does this change the
         // clips".
-        if (what !== 'selection' && what !== 'analysis' && what !== 'document' && what !== 'move')
+        if (what !== 'selection' && what !== 'analysis' && what !== 'document' && what !== 'telemetry' && what !== 'marks' && what !== 'transcript' && what !== 'move')
             { doc.touch(); history.record(what); needs('document'); }
         if (what === 'selection' || what === 'moved') {
             showProperties();

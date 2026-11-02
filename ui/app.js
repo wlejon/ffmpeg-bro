@@ -20,6 +20,9 @@ import * as localcopy from './localcopy.js';
 import * as assemble from './sequence.js';
 import { pending } from './analysis.js';
 import * as analysis from './analysis.js';
+import * as telemetry from './telemetry.js';
+import * as marks from './marks.js';
+import * as transcript from './transcript.js';
 import * as viewer from './viewer.js';
 import { pending as decodersPending, resident } from './residency.js';
 import * as output from './output.js';
@@ -74,7 +77,7 @@ import {
     bindAppControlsContext, initAppControls,
     addGenerator, setGeneratorArgs, reloadInput, openBatch,
     removeSelection, splitAtPlayhead, splitAt, setLayout,
-    setControlsEnabled, updateCropUI, syncUI, setCropMode, cropModeOf,
+    setControlsEnabled, updateCropUI, syncUI, setCropMode, cropModeOf, goToMark,
 } from './app-controls.js';
 
 const el = (id) => document.getElementById(id);
@@ -868,6 +871,7 @@ globalThis.__ffmpegBro = {
     // by *when*, and the way to check that two lists line up is to ask both.
     subtitles: { subtitleOrdinal, burnParams, burnAnchor, canBurn, cuesFor, cueWindow,
                  cueTextFor, cueSaying },
+    telemetry, marks, transcript, goToMark,
     exporter, capture,
     // What has been pulled off a page onto this machine, and where each pull has
     // got to. On the surface because the claim it makes is about *order* — the
