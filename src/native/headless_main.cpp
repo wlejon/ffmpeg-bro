@@ -16,6 +16,7 @@ int main(int argc, char* argv[]) {
     bro::engine::HeadlessHooks hooks;
     hooks.programName = "ffmpeg-bro-headless";
     hooks.tagline = "scripted ffmpeg-bro: bro headless with libav linked in";
+    hooks.hostGrants = {"declared"};
     // The log capture first, for the reason main.cpp gives: what a script is
     // testing is often what libav had to say about it.
     hooks.beforeEngine = [] {

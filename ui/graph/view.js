@@ -430,7 +430,6 @@ function bindViewport() {
     });
 
     document.addEventListener('mouseup', (e) => {
-        document.body.style.cursor = '';
         if (wiring) return endWire(e);
         if (scrubbing) {
             const at = scrubbing.at;
@@ -438,18 +437,25 @@ function bindViewport() {
             preview.seekPlay(at);
             return;
         }
-        if (dragging) { swallowClick = dragging.moved; dragging = null; }
+        if (dragging) {
+            swallowClick = dragging.moved;
+            dragging = null;
+            document.body.style.cursor = '';
+            return;
+        }
         if (marquee) {
             const m = marquee;
             marquee = null;
             swallowClick = Math.abs(m.x1 - m.x0) + Math.abs(m.y1 - m.y0) > 4;
             pickInside(m);
+            document.body.style.cursor = '';
             return;
         }
         if (moving) return endMove();
         if (!resizing) return;
         const done = resizing;
         resizing = null;
+        document.body.style.cursor = '';
         overlay.setSize(done.key, done.at);
         drawGraph();
     });
@@ -677,11 +683,15 @@ function reflowWires(only) {
 function endMove() {
     const done = moving;
     moving = null;
-    if (!done.moved) return;
-    for (const [key, at] of done.at) overlay.setPin(key, at.x, at.y);
+    if (!done.moved) {
+        document.body.style.cursor = '';
+        return;
+    }
     growExtent(done.parts.map((p) => p.box));
     refreshInsertPoints();
     paint();
+    for (const [key, at] of done.at) overlay.setPin(key, at.x, at.y);
+    document.body.style.cursor = '';
 }
 
 /// The drawn extent, widened by boxes that have moved.

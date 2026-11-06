@@ -89,6 +89,7 @@ inline int runApp(const char* dir, const char* title, const char* settingsFile,
     config.displayMode = bro::engine::DisplayMode::Windowed;
     config.settingsPath = bro::util::executableDir() + "/" + settingsFile;
     config.installHostBindings = installFfmpegBindings;
+    config.hostGrants = {"declared"};
 
     if (!locateApp(dir, config)) {
         LOG_ERROR("Cannot find the %s UI next to %s", dir,

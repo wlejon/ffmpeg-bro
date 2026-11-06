@@ -300,7 +300,10 @@ export function drawGraph() {
 /// exactly that reason.
 function drawInsertPoints(d, boxes) {
     const refs = ctx.refs();
+    const sel = panel.selectedPoint();
+    if (!sel && !hoverPoint) return;
     for (const p of d.points) {
+        if (sel !== p.id && hoverPoint !== p.id) continue;
         // The pad as well as the node: a file's picture and its sound leave one
         // input node, and a point matched on the node alone would put the `+`
         // for "after decode" on whichever of the two wires came first.
@@ -308,7 +311,6 @@ function drawInsertPoints(d, boxes) {
             (w) => w.edge.from === p.at && (w.edge.fromPort || 0) === (p.atPort || 0));
         const from = boxes.get(p.at);
         if (!from) continue;
-        if (panel.selectedPoint() !== p.id && hoverPoint !== p.id) continue;
         const x = wire ? (wire.x1 + wire.x2) / 2 : from.x + from.w + 20;
         const y = wire ? (wire.y1 + wire.y2) / 2 : from.y + from.h / 2;
         refs.nodes.append(insertButton(p, x - 9, y - 9));
@@ -661,9 +663,9 @@ export function hover(e) {
 export function refreshInsertPoints() {
     const refs = ctx.refs();
     if (!refs.nodes || !placed) return;
-    for (const b of Array.from(refs.nodes.querySelectorAll('.gp-plus')))
-        refs.nodes.removeChild(b);
-    if (!lastPoints) return;
+    const plus = refs.nodes.querySelectorAll('.gp-plus');
+    for (let i = 0; i < plus.length; i++) refs.nodes.removeChild(plus[i]);
+    if (!lastPoints || (!panel.selectedPoint() && !hoverPoint)) return;
     drawInsertPoints({ points: lastPoints },
                      new Map(placed.nodes.map((b) => [b.node.id, b])));
 }
