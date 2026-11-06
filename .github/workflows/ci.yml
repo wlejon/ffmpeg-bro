@@ -49,6 +49,7 @@ env:
   # sccache falls back to per-runner local disk, which is wiped between runs, so
   # every object is recompiled and every write thrown away.
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
   build:
@@ -100,7 +101,7 @@ jobs:
 
       - name: macOS build dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config molten-vk vulkan-loader vulkan-headers
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ninja nasm automake autoconf autoconf-archive libtool pkg-config molten-vk vulkan-loader vulkan-headers
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -185,7 +186,7 @@ jobs:
         shell: bash
         working-directory: ffmpeg-bro
         run: |
-          GEN_ARGS=""
+          GEN_ARGS="-G Ninja"
           if [ "$RUNNER_OS" = "Windows" ]; then
             # Embedded debug info (/Z7) rather than a separate PDB (/Zi) is what
             # lets sccache cache MSVC objects at all.
@@ -196,6 +197,7 @@ jobs:
           cmake -B build \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             $GEN_ARGS
