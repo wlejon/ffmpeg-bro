@@ -240,18 +240,18 @@ console.log(`play() returned in ${pressMs} ms, render took the picture`);
 // there.
 {
     const fps = (A.output.currentFacts() || {}).fps || 25;
-    let shown = 0, last = null;
+    let shown = 0, last = null, advancedMs = 0;
     const began = Date.now();
-    const until = began + 6000;
-    while (Date.now() < until) {
-        const at = Date.now();
+    const until = began + 12000;
+    while (advancedMs < 3000 && Date.now() < until) {
         wallSleep(8);
-        advanceTime(Math.max(1, Date.now() - at));
+        advanceTime(16);
+        advancedMs += 16;
         flush();
         const r = A.output.at();
         if (r !== null && r !== last) { shown++; last = r; }
     }
-    const secs = (Date.now() - began) / 1000;
+    const secs = advancedMs / 1000;
     // **Against the rate the render is making them**, not against the loop's own
     // frame count: the output rate is the ceiling and it is a property of the
     // edit, so a 25 fps fixture can never show one per pass of a loop spinning at
