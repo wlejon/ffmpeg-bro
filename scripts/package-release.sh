@@ -87,7 +87,8 @@ case "$(uname -m)" in
 esac
 
 bin_path() {
-    if [[ "$MULTICONFIG" == "1" ]]; then echo "$BUILD_DIR/$CONFIG/$1$EXE";
+    if [[ -x "$BUILD_DIR/$CONFIG/$1$EXE" ]]; then echo "$BUILD_DIR/$CONFIG/$1$EXE";
+    elif [[ "$MULTICONFIG" == "1" ]]; then echo "$BUILD_DIR/$CONFIG/$1$EXE";
     else echo "$BUILD_DIR/$1$EXE"; fi
 }
 

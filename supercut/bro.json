@@ -6,5 +6,5 @@
     "minWidth": 1040,
     "minHeight": 660,
     "resizable": true,
-    "permissions": ["files"]
+    "permissions": ["files", "net"]
 }

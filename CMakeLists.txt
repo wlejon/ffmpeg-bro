@@ -374,6 +374,49 @@ if(WIN32)
     target_link_libraries(ffmpeg-bro-headless PRIVATE ws2_32)
 endif()
 
+# Single-config generators (Ninja, Makefiles) default to putting executables
+# directly in ${CMAKE_BINARY_DIR} (build/), whereas multi-config generators
+# (Visual Studio) put them in build/<Config>/. Putting the three host
+# executables in build/<Config>/ everywhere matches locateApp()
+# (build/Release/../../<app>), the paths in CLAUDE.md, and keeps
+# util::engineDir() (build/Release) separate from build/corpus, build/cuts, and
+# build/fixtures (which bro's AppPermissions would otherwise block as lying
+# inside util::engineDir()).
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    set(_fbro_cfg "${CMAKE_BUILD_TYPE}")
+    if(NOT _fbro_cfg)
+        set(_fbro_cfg "Release")
+    endif()
+    set(_fbro_exe_dir "${CMAKE_BINARY_DIR}/${_fbro_cfg}")
+    set(_fbro_stage_stamp "${CMAKE_BINARY_DIR}/fbro_bronze_staged_${_fbro_cfg}.stamp")
+    if(WIN32)
+        add_custom_command(
+            OUTPUT "${_fbro_stage_stamp}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${_fbro_exe_dir}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:bronze_runtime_shared> "${_fbro_exe_dir}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_LINKER_FILE:bronze_runtime_shared> "${_fbro_exe_dir}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${_fbro_stage_stamp}"
+            DEPENDS bro_bronze_runtime_staged bronze_runtime_shared
+            VERBATIM)
+    else()
+        add_custom_command(
+            OUTPUT "${_fbro_stage_stamp}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${_fbro_exe_dir}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:bronze_runtime_shared> "${_fbro_exe_dir}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${_fbro_stage_stamp}"
+            DEPENDS bro_bronze_runtime_staged bronze_runtime_shared
+            VERBATIM)
+    endif()
+    add_custom_target(fbro_bronze_runtime_staged DEPENDS "${_fbro_stage_stamp}")
+    foreach(_t ffmpeg-bro supercut ffmpeg-bro-headless)
+        set_target_properties(${_t} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${_fbro_exe_dir}")
+        add_dependencies(${_t} fbro_bronze_runtime_staged)
+    endforeach()
+endif()
+
 # ── tests ─────────────────────────────────────────────────────────────────
 #
 # Decodes a real file through bro's registry, so it exercises exactly the path
