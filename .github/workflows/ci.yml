@@ -213,6 +213,8 @@ jobs:
       - name: Configure
         shell: bash
         working-directory: ffmpeg-bro
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           GEN_ARGS="-G Ninja"
           if [ "$RUNNER_OS" = "Windows" ]; then
